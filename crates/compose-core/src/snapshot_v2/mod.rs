@@ -22,7 +22,7 @@ use crate::collections::map::HashMap; // FUTURE(no_std): replace HashMap/HashSet
 use crate::collections::map::HashSet;
 use crate::snapshot_id_set::{SnapshotId, SnapshotIdSet};
 use crate::snapshot_pinning::{self, PinHandle};
-use crate::state::StateObject;
+use crate::state::{StateObject, StateRecord};
 use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
@@ -386,7 +386,7 @@ static NEXT_OBSERVER_ID: AtomicUsize = AtomicUsize::new(1);
 
 /// Global map of apply observers indexed by unique ID.
 thread_local! {
-    static APPLY_OBSERVERS: RefCell<HashMap<usize, ApplyObserver>> = RefCell::new(HashMap::new());
+    static APPLY_OBSERVERS: RefCell<HashMap<usize, ApplyObserver>> = RefCell::new(HashMap::default());
 }
 
 /// Thread-local last-writer registry used for conflict detection in v2.
@@ -397,7 +397,7 @@ thread_local! {
 ///
 /// Thread-local ensures test isolation - each test thread has its own registry.
 thread_local! {
-    static LAST_WRITES: RefCell<HashMap<StateObjectId, SnapshotId>> = RefCell::new(HashMap::new());
+    static LAST_WRITES: RefCell<HashMap<StateObjectId, SnapshotId>> = RefCell::new(HashMap::default());
 }
 
 /// Thread-local weak set of state objects with multiple records for periodic garbage collection.
@@ -505,6 +505,64 @@ pub(crate) fn process_for_unused_records_locked(state: &Arc<dyn crate::state::St
     }
 }
 
+pub(crate) fn optimistic_merges(
+    current_snapshot_id: SnapshotId,
+    base_parent_id: SnapshotId,
+    modified_objects: &[(StateObjectId, Arc<dyn StateObject>, SnapshotId)],
+    invalid_snapshots: &SnapshotIdSet,
+) -> Option<HashMap<usize, Arc<StateRecord>>> {
+    if modified_objects.is_empty() {
+        return None;
+    }
+
+    let mut result: Option<HashMap<usize, Arc<StateRecord>>> = None;
+
+    for (_, state, writer_id) in modified_objects.iter() {
+        let head = state.first_record();
+
+        let current = match crate::state::readable_record_for(
+            &head,
+            current_snapshot_id,
+            invalid_snapshots,
+        ) {
+            Some(record) => record,
+            None => continue,
+        };
+
+        let (previous_opt, found_base) =
+            mutable::find_previous_record(&head, base_parent_id);
+        let Some(previous) = previous_opt else {
+            return None;
+        };
+
+        if !found_base || previous.snapshot_id() == crate::state::PREEXISTING_SNAPSHOT_ID {
+            continue;
+        }
+
+        if Arc::ptr_eq(&current, &previous) {
+            continue;
+        }
+
+        let Some(applied) = mutable::find_record_by_id(&head, *writer_id) else {
+            return None;
+        };
+
+        let Some(merged) = state.merge_records(
+            Arc::clone(&previous),
+            Arc::clone(&current),
+            Arc::clone(&applied),
+        ) else {
+            return None;
+        };
+
+        result
+            .get_or_insert_with(HashMap::default)
+            .insert(Arc::as_ptr(&current) as usize, merged);
+    }
+
+    result
+}
+
 /// Merge two read observers into one.
 pub fn merge_read_observers(
     a: Option<ReadObserver>,
@@ -577,10 +635,10 @@ impl SnapshotState {
             disposed: Cell::new(false),
             read_observer,
             write_observer,
-            modified: RefCell::new(HashMap::new()),
+            modified: RefCell::new(HashMap::default()),
             on_dispose: RefCell::new(None),
             runtime_tracked,
-            pending_children: RefCell::new(HashSet::new()),
+            pending_children: RefCell::new(HashSet::default()),
         }
     }
 

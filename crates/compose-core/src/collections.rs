@@ -6,6 +6,6 @@ pub mod map {
 
 #[cfg(not(feature = "std-hash"))]
 pub mod map {
-    pub use hashbrown::{HashMap, HashSet};
-    pub use hashbrown::hash_map::Entry;
+    pub use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+    pub use std::collections::hash_map::Entry;
 }

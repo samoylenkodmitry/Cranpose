@@ -22,7 +22,7 @@ struct ParityPolicy;
 impl SlotReusePolicy for ParityPolicy {
     fn get_slots_to_retain(&self, active: &[SlotId]) -> HashSet<SlotId> {
         let _ = active;
-        HashSet::new()
+        HashSet::default()
     }
 
     fn are_compatible(&self, existing: SlotId, requested: SlotId) -> bool {

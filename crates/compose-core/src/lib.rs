@@ -831,7 +831,7 @@ impl SlotTable {
             slots: Vec::new(),
             cursor: 0,
             group_stack: Vec::new(),
-            anchors: HashMap::new(),
+            anchors: HashMap::default(),
             next_anchor_id: Cell::new(1), // Start at 1 (0 is INVALID)
             last_start_was_gap: false,
         }
@@ -3293,7 +3293,7 @@ where
     }
 
     pub fn clear(&self) {
-        self.state.replace(HashMap::new());
+        self.state.replace(HashMap::default());
     }
 
     pub fn retain<F>(&self, mut predicate: F)
@@ -3683,11 +3683,11 @@ impl<A: Applier + 'static> Drop for Composition<A> {
     }
 }
 pub fn location_key(file: &str, line: u32, column: u32) -> Key {
-    let mut hasher = hash::default::new();
-    file.hash(&mut hasher);
-    line.hash(&mut hasher);
-    column.hash(&mut hasher);
-    hasher.finish()
+    let base = file.as_ptr() as u64;
+    base
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15) // cheap mix
+        ^ ((line as u64) << 32)
+        ^ (column as u64)
 }
 
 fn hash_key<K: Hash>(key: &K) -> Key {

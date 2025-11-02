@@ -58,7 +58,7 @@ pub struct DefaultSlotReusePolicy;
 impl SlotReusePolicy for DefaultSlotReusePolicy {
     fn get_slots_to_retain(&self, active: &[SlotId]) -> HashSet<SlotId> {
         let _ = active;
-        HashSet::new()
+        HashSet::default()
     }
 
     fn are_compatible(&self, existing: SlotId, requested: SlotId) -> bool {
@@ -172,7 +172,7 @@ impl SubcomposeState {
             mapping: NodeSlotMapping::default(),
             active_order: Vec::new(),
             reusable_nodes: Vec::new(),
-            precomposed_nodes: HashMap::new(), // FUTURE(no_std): initialize arena-backed precomposition map.
+            precomposed_nodes: HashMap::default(), // FUTURE(no_std): initialize arena-backed precomposition map.
             policy,
             current_index: 0,
             reusable_count: 0,

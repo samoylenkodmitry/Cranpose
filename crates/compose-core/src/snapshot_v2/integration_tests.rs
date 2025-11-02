@@ -154,6 +154,119 @@ mod tests {
     }
 
     #[test]
+    fn test_optimistic_merges_success() {
+        let _guard = reset_runtime();
+        let global = GlobalSnapshot::get_or_create();
+        let state = new_state_with_policy(0, Arc::new(SummingPolicy));
+
+        let snapshot = global.take_nested_mutable_snapshot(None, None);
+        snapshot.enter(|| state.set(10));
+
+        // Competing snapshot advances global state to create a merge scenario.
+        let competitor = global.take_nested_mutable_snapshot(None, None);
+        competitor.enter(|| state.set(5));
+        assert!(competitor.apply().is_success());
+
+        let invalid = super::runtime::open_snapshots().clear(global.snapshot_id());
+        let modified = snapshot.debug_modified_objects();
+        let optimistic = super::optimistic_merges(
+            global.snapshot_id(),
+            snapshot.debug_base_parent_id(),
+            &modified,
+            &invalid,
+        )
+        .expect("expected optimistic merges");
+
+        let head = state.first_record();
+        let current =
+            crate::state::readable_record_for(&head, global.snapshot_id(), &invalid).unwrap();
+        let key = Arc::as_ptr(&current) as usize;
+
+        let merged = optimistic.get(&key).expect("merged value present");
+        let merged_value = merged.with_value(|value: &i32| *value);
+        assert_eq!(
+            merged_value, 15,
+            "Merged value should sum applied and current deltas"
+        );
+    }
+
+    #[test]
+    fn test_optimistic_merges_failure_returns_none() {
+        let _guard = reset_runtime();
+        let global = GlobalSnapshot::get_or_create();
+        let state = new_state(0);
+
+        let snapshot = global.take_nested_mutable_snapshot(None, None);
+        snapshot.enter(|| state.set(10));
+
+        let competitor = global.take_nested_mutable_snapshot(None, None);
+        competitor.enter(|| state.set(5));
+        assert!(competitor.apply().is_success());
+
+        let invalid = super::runtime::open_snapshots().clear(global.snapshot_id());
+        let modified = snapshot.debug_modified_objects();
+        let optimistic = super::optimistic_merges(
+            global.snapshot_id(),
+            snapshot.debug_base_parent_id(),
+            &modified,
+            &invalid,
+        );
+
+        assert!(
+            optimistic.is_none(),
+            "Non-mergeable conflicts should disable optimistic merges"
+        );
+    }
+
+    struct LockDetectPolicy;
+
+    impl MutationPolicy<i32> for LockDetectPolicy {
+        fn equivalent(&self, a: &i32, b: &i32) -> bool {
+            a == b
+        }
+
+        fn merge(&self, previous: &i32, current: &i32, applied: &i32) -> Option<i32> {
+            assert_eq!(
+                super::runtime::runtime_lock_depth(),
+                0,
+                "optimistic merges should execute outside the runtime lock"
+            );
+            let delta_current = *current - *previous;
+            let delta_applied = *applied - *previous;
+            Some(*previous + delta_current + delta_applied)
+        }
+    }
+
+    #[test]
+    fn test_optimistic_merges_runs_outside_runtime_lock() {
+        let _guard = reset_runtime();
+        let global = GlobalSnapshot::get_or_create();
+        let state = new_state_with_policy(0, Arc::new(LockDetectPolicy));
+
+        let snapshot = global.take_nested_mutable_snapshot(None, None);
+        snapshot.enter(|| state.set(10));
+
+        let competitor = global.take_nested_mutable_snapshot(None, None);
+        competitor.enter(|| state.set(5));
+        assert!(competitor.apply().is_success());
+
+        let invalid = super::runtime::open_snapshots().clear(global.snapshot_id());
+        let modified = snapshot.debug_modified_objects();
+        let optimistic = super::optimistic_merges(
+            global.snapshot_id(),
+            snapshot.debug_base_parent_id(),
+            &modified,
+            &invalid,
+        )
+        .expect("expected optimistic merge entries");
+
+        assert!(
+            !optimistic.is_empty(),
+            "Mergeable conflict should yield optimistic results"
+        );
+    }
+
+    #[test]
     fn test_nested_snapshot_applies_to_parent() {
         let _guard = reset_runtime();
 

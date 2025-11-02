@@ -5,7 +5,10 @@ use crate::collections::map::HashMap;
 use crate::state::{StateRecord, PREEXISTING_SNAPSHOT_ID};
 use std::sync::Arc;
 
-fn find_record_by_id(head: &Arc<StateRecord>, target: SnapshotId) -> Option<Arc<StateRecord>> {
+pub(super) fn find_record_by_id(
+    head: &Arc<StateRecord>,
+    target: SnapshotId,
+) -> Option<Arc<StateRecord>> {
     let mut cursor = Some(Arc::clone(head));
     while let Some(record) = cursor {
         if !record.is_tombstone() && record.snapshot_id() == target {
@@ -16,7 +19,7 @@ fn find_record_by_id(head: &Arc<StateRecord>, target: SnapshotId) -> Option<Arc<
     None
 }
 
-fn find_previous_record(
+pub(super) fn find_previous_record(
     head: &Arc<StateRecord>,
     base_snapshot_id: SnapshotId,
 ) -> (Option<Arc<StateRecord>>, bool) {
@@ -272,6 +275,14 @@ impl MutableSnapshot {
         let parent_invalid = parent_snapshot.invalid();
         drop(parent_snapshot);
 
+        let next_invalid = super::runtime::open_snapshots().clear(parent_snapshot_id);
+        let optimistic = super::optimistic_merges(
+            parent_snapshot_id,
+            self.base_parent_id,
+            &modified_objects,
+            &next_invalid,
+        );
+
         let mut operations: Vec<ApplyOperation> = Vec::with_capacity(modified_objects.len());
 
         for (obj_id, state, writer_id) in &modified_objects {
@@ -281,7 +292,12 @@ impl MutableSnapshot {
                 None => return SnapshotApplyResult::Failure,
             };
 
-            let current = state.readable_record(parent_snapshot_id, &parent_invalid);
+            let current = crate::state::readable_record_for(
+                &head,
+                parent_snapshot_id,
+                &next_invalid,
+            )
+            .unwrap_or_else(|| state.readable_record(parent_snapshot_id, &parent_invalid));
             let (previous_opt, found_base) = find_previous_record(&head, self.base_parent_id);
             let Some(previous) = previous_opt else {
                 return SnapshotApplyResult::Failure;
@@ -305,13 +321,21 @@ impl MutableSnapshot {
                 continue;
             }
 
-            let merged = match state.merge_records(
-                Arc::clone(&previous),
-                Arc::clone(&current),
-                Arc::clone(&applied),
-            ) {
-                Some(record) => record,
-                None => return SnapshotApplyResult::Failure,
+            let merged = if let Some(candidate) = optimistic
+                .as_ref()
+                .and_then(|map| map.get(&(Arc::as_ptr(&current) as usize)))
+                .cloned()
+            {
+                candidate
+            } else {
+                match state.merge_records(
+                    Arc::clone(&previous),
+                    Arc::clone(&current),
+                    Arc::clone(&applied),
+                ) {
+                    Some(record) => record,
+                    None => return SnapshotApplyResult::Failure,
+                }
             };
 
             if Arc::ptr_eq(&merged, &applied) {
@@ -493,6 +517,23 @@ impl MutableSnapshot {
             parent_mod.entry(*key).or_insert_with(|| value.clone());
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+impl MutableSnapshot {
+    pub(crate) fn debug_modified_objects(
+        &self,
+    ) -> Vec<(StateObjectId, Arc<dyn StateObject>, SnapshotId)> {
+        let modified = self.state.modified.borrow();
+        modified
+            .iter()
+            .map(|(&obj_id, (state, writer_id))| (obj_id, state.clone(), *writer_id))
+            .collect()
+    }
+
+    pub(crate) fn debug_base_parent_id(&self) -> SnapshotId {
+        self.base_parent_id
     }
 }
 

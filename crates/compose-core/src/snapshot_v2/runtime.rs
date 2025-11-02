@@ -16,6 +16,7 @@
 //! observer dispatch will be translated in follow-up changes.
 
 use super::*;
+use std::cell::Cell;
 use std::sync::{LazyLock, Mutex};
 
 /// Snapshot identifiers less than or equal to this value are considered
@@ -33,6 +34,29 @@ const INITIAL_GLOBAL_SNAPSHOT_ID: SnapshotId = PREEXISTING_SNAPSHOT_ID + 1;
 static SNAPSHOT_RUNTIME: LazyLock<Mutex<SnapshotRuntime>> =
     LazyLock::new(|| Mutex::new(SnapshotRuntime::new()));
 
+thread_local! {
+    static RUNTIME_LOCK_DEPTH: Cell<usize> = Cell::new(0);
+}
+
+struct RuntimeLockGuard;
+
+impl RuntimeLockGuard {
+    fn enter() -> Self {
+        RUNTIME_LOCK_DEPTH.with(|cell| cell.set(cell.get() + 1));
+        Self
+    }
+}
+
+impl Drop for RuntimeLockGuard {
+    fn drop(&mut self) {
+        RUNTIME_LOCK_DEPTH.with(|cell| {
+            let depth = cell.get();
+            debug_assert!(depth > 0, "runtime lock depth underflow");
+            cell.set(depth.saturating_sub(1));
+        });
+    }
+}
+
 /// Helper for temporarily mutating the runtime state.
 ///
 /// This mirrors the `sync { ... }` helper in Kotlin by ensuring exclusive
@@ -43,7 +67,13 @@ pub(crate) fn with_runtime<T>(f: impl FnOnce(&mut SnapshotRuntime) -> T) -> T {
         // use the data. This allows tests to continue even after a panic.
         poisoned.into_inner()
     });
+    let _scope = RuntimeLockGuard::enter();
     f(&mut guard)
+}
+
+#[cfg(test)]
+pub(crate) fn runtime_lock_depth() -> usize {
+    RUNTIME_LOCK_DEPTH.with(|cell| cell.get())
 }
 
 /// Allocate a new snapshot identifier and return it along with the

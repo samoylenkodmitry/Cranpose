@@ -92,7 +92,7 @@ impl StateRecord {
         *self.value.write().unwrap() = Some(Box::new(new_value));
     }
 
-    fn with_value<T: Any, R>(&self, f: impl FnOnce(&T) -> R) -> R {
+    pub(crate) fn with_value<T: Any, R>(&self, f: impl FnOnce(&T) -> R) -> R {
         let guard = self.value.read().unwrap();
         let value = guard
             .as_ref()
@@ -427,7 +427,7 @@ impl<T> SnapshotMutableState<T> {
     fn assert_chain_integrity(&self, caller: &str, snapshot_context: Option<SnapshotId>) {
         let head = self.head.read().unwrap().clone();
         let mut cursor = Some(head);
-        let mut seen = HashSet::new();
+        let mut seen: HashSet<usize> = HashSet::default();
         let mut ids = Vec::new();
 
         while let Some(record) = cursor {
@@ -686,8 +686,8 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
 }
 
 thread_local! {
-    static ACTIVE_UPDATES: RefCell<HashSet<ObjectId>> = RefCell::new(HashSet::new());
-    static PENDING_WRITES: RefCell<HashSet<ObjectId>> = RefCell::new(HashSet::new());
+    static ACTIVE_UPDATES: RefCell<HashSet<ObjectId>> = RefCell::new(HashSet::default());
+    static PENDING_WRITES: RefCell<HashSet<ObjectId>> = RefCell::new(HashSet::default());
 }
 
 pub(crate) struct UpdateScope {

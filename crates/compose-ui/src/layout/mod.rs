@@ -474,7 +474,7 @@ impl LayoutBuilder {
         }
 
         let error = Rc::new(RefCell::new(None));
-        let mut records: HashMap<NodeId, ChildRecord> = HashMap::new();
+        let mut records: HashMap<NodeId, ChildRecord> = HashMap::default();
         let mut measurables: Vec<Box<dyn Measurable>> = Vec::new();
 
         for &child_id in node.children.iter() {
@@ -971,7 +971,7 @@ fn collect_runtime_metadata(
     applier: &mut MemoryApplier,
     node: &MeasuredNode,
 ) -> Result<HashMap<NodeId, RuntimeNodeMetadata>, NodeError> {
-    let mut map = HashMap::new();
+    let mut map = HashMap::default();
     collect_runtime_metadata_inner(applier, node, &mut map)?;
     Ok(map)
 }
