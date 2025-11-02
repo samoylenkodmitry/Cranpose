@@ -1,3 +1,4 @@
+use crate::collections::map::HashSet;
 use crate::snapshot_v2::{
     current_snapshot, register_apply_observer, AnySnapshot, GlobalSnapshot, ReadObserver,
     StateObjectId,
@@ -5,7 +6,6 @@ use crate::snapshot_v2::{
 use crate::state::StateObject;
 use std::any::Any;
 use std::cell::{Cell, RefCell};
-use crate::collections::map::HashSet;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 

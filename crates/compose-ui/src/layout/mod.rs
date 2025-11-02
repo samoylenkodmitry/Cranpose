@@ -1,8 +1,8 @@
 pub mod core;
 pub mod policies;
 
-use compose_core::collections::map::HashMap;
 use compose_core::collections::map::Entry;
+use compose_core::collections::map::HashMap;
 use std::{
     cell::RefCell,
     fmt,

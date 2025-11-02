@@ -44,10 +44,10 @@ pub fn run_in_mutable_snapshot<T>(block: impl FnOnce() -> T) -> Result<T, &'stat
 #[cfg(test)]
 pub use runtime::{TestRuntime, TestScheduler};
 
-use std::any::Any;
-use std::cell::{Cell, Ref, RefCell, RefMut};
 use crate::collections::map::HashMap;
 use crate::collections::map::HashSet;
+use std::any::Any;
+use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
@@ -725,6 +725,8 @@ struct GroupFrame {
     force_children_recompose: bool,
 }
 
+const INVALID_ANCHOR_POS: usize = usize::MAX;
+
 #[derive(Default)]
 pub struct SlotTable {
     slots: Vec<Slot>, // FUTURE(no_std): replace Vec with arena-backed slot storage.
@@ -732,7 +734,7 @@ pub struct SlotTable {
     group_stack: Vec<GroupFrame>, // FUTURE(no_std): switch to small stack buffer.
     /// Maps anchor IDs to their current physical positions in the slots array.
     /// This indirection layer provides positional stability during slot reorganization.
-    anchors: HashMap<AnchorId, usize>,
+    anchors: Vec<usize>, // index = anchor_id.0
     /// Counter for allocating unique anchor IDs.
     next_anchor_id: Cell<usize>,
     /// Tracks whether the most recent start() reused a gap slot.
@@ -831,7 +833,7 @@ impl SlotTable {
             slots: Vec::new(),
             cursor: 0,
             group_stack: Vec::new(),
-            anchors: HashMap::default(),
+            anchors: Vec::new(),
             next_anchor_id: Cell::new(1), // Start at 1 (0 is INVALID)
             last_start_was_gap: false,
         }
@@ -847,7 +849,14 @@ impl SlotTable {
     /// Register an anchor at a specific position in the slots array.
     fn register_anchor(&mut self, anchor: AnchorId, position: usize) {
         debug_assert!(anchor.is_valid(), "attempted to register invalid anchor");
-        self.anchors.insert(anchor, position);
+        let idx = anchor.0;
+        if idx == 0 {
+            return;
+        }
+        if idx >= self.anchors.len() {
+            self.anchors.resize(idx + 1, INVALID_ANCHOR_POS);
+        }
+        self.anchors[idx] = position;
     }
 
     /// Returns whether the most recent `start` invocation reused a gap slot.
@@ -881,7 +890,14 @@ impl SlotTable {
 
     /// Resolve an anchor to its current position in the slots array.
     fn resolve_anchor(&self, anchor: AnchorId) -> Option<usize> {
-        self.anchors.get(&anchor).copied()
+        let idx = anchor.0;
+        if idx == 0 {
+            return None;
+        }
+        self.anchors
+            .get(idx)
+            .copied()
+            .filter(|&pos| pos != INVALID_ANCHOR_POS)
     }
 
     /// Mark a range of slots as gaps instead of truncating.
@@ -1084,9 +1100,27 @@ impl SlotTable {
     /// Update all anchor positions to match their current physical positions in the slots array.
     /// This should be called after any operation that modifies slot positions (insert, remove, etc.)
     fn update_all_anchor_positions(&mut self) {
-        self.anchors.clear();
+        let mut max_anchor = 0usize;
+        for slot in &self.slots {
+            let idx = slot.anchor_id().0;
+            if idx > max_anchor {
+                max_anchor = idx;
+            }
+        }
+        if self.anchors.len() <= max_anchor {
+            self.anchors.resize(max_anchor + 1, INVALID_ANCHOR_POS);
+        }
+
+        for pos in &mut self.anchors {
+            *pos = INVALID_ANCHOR_POS;
+        }
+
         for (position, slot) in self.slots.iter().enumerate() {
-            self.anchors.insert(slot.anchor_id(), position);
+            let idx = slot.anchor_id().0;
+            if idx == 0 {
+                continue;
+            }
+            self.anchors[idx] = position;
         }
     }
 
@@ -3703,5 +3737,6 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/recursive_decrease_increase_test.rs"]
 mod recursive_decrease_increase_test;
+
 pub mod collections;
 pub mod hash;

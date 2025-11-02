@@ -221,7 +221,8 @@ fn recursive_decrease_increase_multiple_cycles() {
         println!("Current keys: {:?}", current_keys);
 
         // Check for duplicate keys
-        let mut key_counts: crate::collections::map::HashMap<u64, i32> = crate::collections::map::HashMap::default();
+        let mut key_counts: crate::collections::map::HashMap<u64, i32> =
+            crate::collections::map::HashMap::default();
         for k in &current_keys {
             *key_counts.entry(*k).or_insert(0) += 1;
         }

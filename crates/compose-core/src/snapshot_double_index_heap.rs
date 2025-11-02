@@ -343,15 +343,25 @@ mod tests {
                 let right_child = 2 * i + 2;
 
                 if left_child < heap.size {
-                    assert!(heap.values[i] <= heap.values[left_child],
+                    assert!(
+                        heap.values[i] <= heap.values[left_child],
                         "Parent {} > left child {} at positions {}, {}",
-                        heap.values[i], heap.values[left_child], i, left_child);
+                        heap.values[i],
+                        heap.values[left_child],
+                        i,
+                        left_child
+                    );
                 }
 
                 if right_child < heap.size {
-                    assert!(heap.values[i] <= heap.values[right_child],
+                    assert!(
+                        heap.values[i] <= heap.values[right_child],
                         "Parent {} > right child {} at positions {}, {}",
-                        heap.values[i], heap.values[right_child], i, right_child);
+                        heap.values[i],
+                        heap.values[right_child],
+                        i,
+                        right_child
+                    );
                 }
             }
         }

@@ -529,8 +529,7 @@ pub(crate) fn optimistic_merges(
             None => continue,
         };
 
-        let (previous_opt, found_base) =
-            mutable::find_previous_record(&head, base_parent_id);
+        let (previous_opt, found_base) = mutable::find_previous_record(&head, base_parent_id);
         let Some(previous) = previous_opt else {
             return None;
         };

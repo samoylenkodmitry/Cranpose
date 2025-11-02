@@ -6,7 +6,7 @@
 //! exact match exists, the [`SlotReusePolicy`] is consulted to determine whether
 //! a node produced for another slot is compatible with the requested slot.
 
-use crate::collections::map::HashMap;// FUTURE(no_std): replace HashMap/HashSet with arena-backed maps.
+use crate::collections::map::HashMap; // FUTURE(no_std): replace HashMap/HashSet with arena-backed maps.
 use crate::collections::map::HashSet;
 use std::fmt;
 

@@ -292,12 +292,9 @@ impl MutableSnapshot {
                 None => return SnapshotApplyResult::Failure,
             };
 
-            let current = crate::state::readable_record_for(
-                &head,
-                parent_snapshot_id,
-                &next_invalid,
-            )
-            .unwrap_or_else(|| state.readable_record(parent_snapshot_id, &parent_invalid));
+            let current =
+                crate::state::readable_record_for(&head, parent_snapshot_id, &next_invalid)
+                    .unwrap_or_else(|| state.readable_record(parent_snapshot_id, &parent_invalid));
             let (previous_opt, found_base) = find_previous_record(&head, self.base_parent_id);
             let Some(previous) = previous_opt else {
                 return SnapshotApplyResult::Failure;
