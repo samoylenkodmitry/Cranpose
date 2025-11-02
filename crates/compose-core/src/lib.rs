@@ -830,6 +830,7 @@ impl Default for Slot {
 
 impl SlotTable {
     const INITIAL_CAP: usize = 32;
+    const GAP_BLOCK: usize = 32; // tune 16/32/64
 
     pub fn new() -> Self {
         Self {
@@ -849,6 +850,71 @@ impl SlotTable {
             self.append_gap_slots(Self::INITIAL_CAP);
         } else if self.cursor == self.slots.len() {
             self.grow_slots();
+        }
+    }
+
+    /// Ensure that at `cursor` there is at least 1 gap slot.
+    /// We do this by pulling a small block of gap slots from the tail forward,
+    /// shifting everything in between once, and fixing frames/anchors.
+    fn ensure_gap_at(&mut self, cursor: usize) {
+        // if already a gap, nothing to do
+        if matches!(self.slots.get(cursor), Some(Slot::Gap { .. })) {
+            return;
+        }
+
+        // make sure we actually have tail gaps to steal from
+        self.ensure_capacity(); // <- your existing one, will append gaps at the end
+                                // after this, the last N slots are guaranteed to be gaps with INVALID anchors
+
+        loop {
+            // how many gaps we want to pull forward
+            let mut tail_start = self.slots.len();
+            let mut block = 0usize;
+
+            while tail_start > cursor && block < Self::GAP_BLOCK {
+                match self.slots.get(tail_start - 1) {
+                    Some(Slot::Gap { anchor, .. }) if *anchor == AnchorId::INVALID => {
+                        tail_start -= 1;
+                        block += 1;
+                    }
+                    _ => break,
+                }
+            }
+
+            if block == 0 {
+                // no tail gaps yet, grow and try again
+                self.grow_slots();
+                continue;
+            }
+
+            if tail_start > cursor {
+                // 1) shift group frames and anchors for the slice [cursor..tail_start)
+                //    because we're about to move it right by `block`.
+                self.shift_group_frames(cursor, block as isize);
+                self.shift_anchor_positions_from(cursor, block as isize);
+            }
+
+            // 2) actually move the slice up in the Vec
+            //
+            // we currently have:
+            //   [ ... cursor | ...... live slots ...... | gap gap gap gap ]
+            // we want:
+            //   [ ... cursor | gap gap gap gap | ...... live slots ...... ]
+            //
+            // we can do that with rotate_right because we already reserved space.
+            self.slots[cursor..].rotate_right(block);
+
+            // 3) now fill [cursor .. cursor+block) with fresh gaps
+            for i in 0..block {
+                self.slots[cursor + i] = Slot::Gap {
+                    anchor: AnchorId::INVALID,
+                    group_key: None,
+                    group_scope: None,
+                    group_len: 0,
+                };
+            }
+            // done: cursor is guaranteed to be a gap now
+            break;
         }
     }
 
@@ -1681,6 +1747,9 @@ impl SlotTable {
     }
 
     fn insert_new_group_at_cursor(&mut self, key: Key) -> usize {
+        // make sure we have space at the tail for pulling gaps
+        self.ensure_capacity();
+
         let cursor = self.cursor;
         let parent_force = self
             .group_stack
@@ -1688,31 +1757,20 @@ impl SlotTable {
             .map(|frame| frame.force_children_recompose)
             .unwrap_or(false);
 
-        let group_anchor = self.allocate_anchor();
         if cursor < self.slots.len() {
-            if matches!(self.slots.get(cursor), Some(Slot::Gap { .. })) {
-                self.slots[cursor] = Slot::Group {
-                    key,
-                    anchor: group_anchor,
-                    len: 0,
-                    scope: None,
-                    has_gap_children: false,
-                };
-            } else {
-                self.shift_group_frames(cursor, 1);
-                self.slots.insert(
-                    cursor,
-                    Slot::Group {
-                        key,
-                        anchor: group_anchor,
-                        len: 0,
-                        scope: None,
-                        has_gap_children: false,
-                    },
-                );
-                self.shift_anchor_positions_from(cursor, 1);
-            }
+            self.ensure_gap_at(cursor);
+            debug_assert!(matches!(self.slots[cursor], Slot::Gap { .. }));
+            let group_anchor = self.allocate_anchor();
+            self.slots[cursor] = Slot::Group {
+                key,
+                anchor: group_anchor,
+                len: 0,
+                scope: None,
+                has_gap_children: false,
+            };
+            self.register_anchor(group_anchor, cursor);
         } else {
+            let group_anchor = self.allocate_anchor();
             self.slots.push(Slot::Group {
                 key,
                 anchor: group_anchor,
@@ -1720,8 +1778,8 @@ impl SlotTable {
                 scope: None,
                 has_gap_children: false,
             });
+            self.register_anchor(group_anchor, cursor);
         }
-        self.register_anchor(group_anchor, cursor);
         self.last_start_was_gap = parent_force;
         self.cursor = cursor + 1;
         self.group_stack.push(GroupFrame {
