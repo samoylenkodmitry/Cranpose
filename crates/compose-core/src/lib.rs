@@ -3703,5 +3703,5 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/recursive_decrease_increase_test.rs"]
 mod recursive_decrease_increase_test;
-pub(crate) mod collections;
-pub(crate) mod hash;
+pub mod collections;
+pub mod hash;

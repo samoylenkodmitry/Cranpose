@@ -1,10 +1,10 @@
 pub mod core;
 pub mod policies;
 
-use std::collections::hash_map::Entry;
+use compose_core::collections::map::HashMap;
+use compose_core::collections::map::Entry;
 use std::{
     cell::RefCell,
-    collections::HashMap,
     fmt,
     rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
