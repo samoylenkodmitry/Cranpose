@@ -902,7 +902,19 @@ impl SlotTable {
             //   [ ... cursor | gap gap gap gap | ...... live slots ...... ]
             //
             // we can do that with rotate_right because we already reserved space.
-            self.slots[cursor..].rotate_right(block);
+            const MAX_ROTATE_WINDOW: usize = 4096; // tune
+
+            let end = tail_start + block;
+            let win = end - cursor;
+            if win > MAX_ROTATE_WINDOW {
+                // too expensive to pull from the tail — just grow and put a gap right here
+                // or fall back to “overwrite here” logic
+                self.force_gap_here(cursor);
+                return;
+            }
+
+            let end = tail_start + block;
+            self.slots[cursor..end].rotate_right(block);
 
             // 3) now fill [cursor .. cursor+block) with fresh gaps
             for i in 0..block {
@@ -916,6 +928,16 @@ impl SlotTable {
             // done: cursor is guaranteed to be a gap now
             break;
         }
+    }
+    fn force_gap_here(&mut self, cursor: usize) {
+        // we *know* we have capacity (ensure_capacity() already ran)
+        // so just overwrite the slot at cursor with a fresh gap
+        self.slots[cursor] = Slot::Gap {
+            anchor: AnchorId::INVALID,
+            group_key: None,
+            group_scope: None,
+            group_len: 0,
+        };
     }
 
     fn find_right_gap_run(&self, from: usize, scan_limit: usize) -> Option<(usize, usize)> {
@@ -955,7 +977,7 @@ impl SlotTable {
             return;
         }
 
-        self.ensure_gap_at(cursor);
+        self.force_gap_here(cursor);
     }
 
     fn append_gap_slots(&mut self, count: usize) {
@@ -1791,6 +1813,7 @@ impl SlotTable {
         self.ensure_capacity();
 
         let cursor = self.cursor;
+        self.ensure_gap_at_local(cursor);
         let parent_force = self
             .group_stack
             .last()
@@ -1798,7 +1821,6 @@ impl SlotTable {
             .unwrap_or(false);
 
         if cursor < self.slots.len() {
-            self.ensure_gap_at_local(cursor);
             debug_assert!(matches!(self.slots[cursor], Slot::Gap { .. }));
             let group_anchor = self.allocate_anchor();
             self.slots[cursor] = Slot::Group {
