@@ -687,12 +687,8 @@ impl GpuRenderer {
                     wgpu::IndexFormat::Uint32,
                 );
 
-                for i in 0..shape_count {
-                    let index_start = (i * 6) as u32;
-                    let index_end = index_start + 6;
-                    let base_vertex = (i * 4) as i32;
-                    render_pass.draw_indexed(index_start..index_end, base_vertex, 0..1);
-                }
+                let index_count = (shape_count * 6) as u32;
+                render_pass.draw_indexed(0..index_count, 0, 0..1);
             }
         }
 
@@ -820,19 +816,19 @@ impl GpuRenderer {
 
             let prepared_texts = prepared_areas.len();
             if total_texts > 0 {
-                log::info!(
-                    "GPU text prepare: prepared {} of {} draw(s) (skipped {} zero scale, {} invalid size, {} clipped)",
-                    prepared_texts,
-                    total_texts,
-                    skipped_zero_scale,
-                    skipped_invalid_size,
-                    skipped_invalid_clip
-                );
                 if prepared_texts == 0 {
                     log::warn!(
                         "GPU text renderer prepared zero draws; text will not appear this frame"
                     );
                 } else if log::log_enabled!(log::Level::Debug) {
+                    log::debug!(
+                        "GPU text prepare: prepared {} of {} draw(s) (skipped {} zero scale, {} invalid size, {} clipped)",
+                        prepared_texts,
+                        total_texts,
+                        skipped_zero_scale,
+                        skipped_invalid_size,
+                        skipped_invalid_clip
+                    );
                     log::debug!(
                         "Preparing {} text area(s) for resolution {}x{}",
                         prepared_texts,
@@ -857,10 +853,12 @@ impl GpuRenderer {
                             default_color: area.color,
                         });
                     } else {
-                        log::warn!(
-                            "GPU text cache entry for \"{}\" was evicted before rendering; reshaping on the fly",
-                            text_preview(&area.key.text)
-                        );
+                        if log::log_enabled!(log::Level::Debug) {
+                            log::debug!(
+                                "GPU text cache entry for \"{}\" was evicted before rendering; reshaping on the fly",
+                                text_preview(&area.key.text)
+                            );
+                        }
 
                         let metrics = Metrics::new(
                             DEFAULT_FONT_SIZE * area.scale,
@@ -981,51 +979,61 @@ fn log_text_glyphs(
     text_draw: &TextDraw,
     text_scale: f32,
 ) {
+    let debug_enabled = log::log_enabled!(log::Level::Debug);
     let mut glyph_total = 0usize;
     let mut run_count = 0usize;
-    let mut fonts: BTreeMap<fontdb::ID, usize> = BTreeMap::new();
+    let mut fonts: Option<BTreeMap<fontdb::ID, usize>> = if debug_enabled {
+        Some(BTreeMap::new())
+    } else {
+        None
+    };
 
     for run in buffer.layout_runs() {
         run_count += 1;
         glyph_total += run.glyphs.len();
-        for glyph in run.glyphs.iter() {
-            *fonts.entry(glyph.font_id).or_insert(0) += 1;
+        if let Some(font_map) = fonts.as_mut() {
+            for glyph in run.glyphs.iter() {
+                *font_map.entry(glyph.font_id).or_insert(0) += 1;
+            }
+        }
+        if glyph_total > 0 && !debug_enabled {
+            // No need to continue collecting data when only warnings would be emitted.
+            break;
         }
     }
-
-    let font_db = font_system.db();
-    let font_details: Vec<String> = fonts
-        .into_iter()
-        .map(|(font_id, count)| {
-            if let Some(face) = font_db.face(font_id) {
-                let family = face
-                    .families
-                    .first()
-                    .map(|(name, _)| name.as_str())
-                    .unwrap_or_else(|| face.post_script_name.as_str());
-                format!(
-                    "{} ({}; id {}) - {} {}",
-                    family,
-                    face.post_script_name,
-                    font_id,
-                    count,
-                    glyph_label(count)
-                )
-            } else {
-                format!("id {} - {} {}", font_id, count, glyph_label(count))
-            }
-        })
-        .collect();
-
-    let fonts_label = if font_details.is_empty() {
-        String::from("none")
-    } else {
-        font_details.join(", ")
-    };
 
     let text_snippet = info_text_preview(&text_draw.text);
 
     if glyph_total == 0 {
+        let fonts_label = if let Some(font_map) = fonts {
+            let font_db = font_system.db();
+            font_map
+                .into_iter()
+                .map(|(font_id, count)| {
+                    if let Some(face) = font_db.face(font_id) {
+                        let family = face
+                            .families
+                            .first()
+                            .map(|(name, _)| name.as_str())
+                            .unwrap_or_else(|| face.post_script_name.as_str());
+                        format!(
+                            "{} ({}; id {}) - {} {}",
+                            family,
+                            face.post_script_name,
+                            font_id,
+                            count,
+                            glyph_label(count)
+                        )
+                    } else {
+                        format!("id {} - {} {}", font_id, count, glyph_label(count))
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        } else {
+            String::from("none")
+        };
+
         log::warn!(
             "GPU text glyphs: no glyphs formed for \"{}\" @ scale {:.2} (rect {:.1}×{:.1} at {:.1},{:.1}); fonts resolved: {} ({} run(s))",
             text_snippet,
@@ -1037,8 +1045,41 @@ fn log_text_glyphs(
             fonts_label,
             run_count
         );
-    } else {
-        log::info!(
+    } else if debug_enabled {
+        let fonts_label = if let Some(font_map) = fonts {
+            let font_db = font_system.db();
+            let font_details: Vec<String> = font_map
+                .into_iter()
+                .map(|(font_id, count)| {
+                    if let Some(face) = font_db.face(font_id) {
+                        let family = face
+                            .families
+                            .first()
+                            .map(|(name, _)| name.as_str())
+                            .unwrap_or_else(|| face.post_script_name.as_str());
+                        format!(
+                            "{} ({}; id {}) - {} {}",
+                            family,
+                            face.post_script_name,
+                            font_id,
+                            count,
+                            glyph_label(count)
+                        )
+                    } else {
+                        format!("id {} - {} {}", font_id, count, glyph_label(count))
+                    }
+                })
+                .collect();
+            if font_details.is_empty() {
+                String::from("none")
+            } else {
+                font_details.join(", ")
+            }
+        } else {
+            String::from("none")
+        };
+
+        log::debug!(
             "GPU text glyphs: formed {} {} across {} run(s) for \"{}\" @ scale {:.2} (rect {:.1}×{:.1} at {:.1},{:.1}); fonts resolved: {}",
             glyph_total,
             glyph_label(glyph_total),
