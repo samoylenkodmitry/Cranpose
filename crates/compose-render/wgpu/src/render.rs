@@ -10,8 +10,8 @@ use glyphon::{
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer,
 };
 use std::collections::BTreeMap;
+use std::mem;
 use std::sync::{Arc, Mutex};
-use wgpu::util::DeviceExt;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
@@ -58,12 +58,216 @@ struct GradientStop {
     color: [f32; 4],
 }
 
+struct ShapeGpuResources {
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    shape_buffer: wgpu::Buffer,
+    gradient_buffer: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+    gradient_capacity: usize,
+}
+
+impl ShapeGpuResources {
+    fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout) -> Self {
+        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Vertex Buffer"),
+            size: (mem::size_of::<Vertex>() * 4) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Index Buffer"),
+            size: (mem::size_of::<u16>() * 6) as u64,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let shape_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Shape Buffer"),
+            size: mem::size_of::<ShapeData>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let gradient_capacity = 1usize;
+        let gradient_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Gradient Buffer"),
+            size: (mem::size_of::<GradientStop>() * gradient_capacity) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Shape Bind Group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: shape_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: gradient_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        Self {
+            vertex_buffer,
+            index_buffer,
+            shape_buffer,
+            gradient_buffer,
+            bind_group,
+            gradient_capacity,
+        }
+    }
+
+    fn ensure_gradient_capacity(
+        &mut self,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        required: usize,
+    ) {
+        let required_capacity = required.max(1);
+        if required_capacity <= self.gradient_capacity {
+            return;
+        }
+
+        let new_capacity = required_capacity.next_power_of_two();
+        self.gradient_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Gradient Buffer"),
+            size: (mem::size_of::<GradientStop>() * new_capacity) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.gradient_capacity = new_capacity;
+        self.bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Shape Bind Group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.shape_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.gradient_buffer.as_entire_binding(),
+                },
+            ],
+        });
+    }
+
+    fn update(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        layout: &wgpu::BindGroupLayout,
+        shape: &DrawShape,
+    ) {
+        let rect = shape.rect;
+
+        let (color, gradient_colors) = match &shape.brush {
+            Brush::Solid(c) => ([c.r(), c.g(), c.b(), c.a()], Vec::new()),
+            Brush::LinearGradient(colors) => {
+                let first = colors.first().unwrap_or(&Color(1.0, 1.0, 1.0, 1.0));
+                ([first.r(), first.g(), first.b(), first.a()], colors.clone())
+            }
+            Brush::RadialGradient { colors, .. } => {
+                let first = colors.first().unwrap_or(&Color(1.0, 1.0, 1.0, 1.0));
+                ([first.r(), first.g(), first.b(), first.a()], colors.clone())
+            }
+        };
+
+        let vertices = [
+            Vertex {
+                position: [rect.x, rect.y],
+                color,
+                uv: [0.0, 0.0],
+            },
+            Vertex {
+                position: [rect.x + rect.width, rect.y],
+                color,
+                uv: [1.0, 0.0],
+            },
+            Vertex {
+                position: [rect.x, rect.y + rect.height],
+                color,
+                uv: [0.0, 1.0],
+            },
+            Vertex {
+                position: [rect.x + rect.width, rect.y + rect.height],
+                color,
+                uv: [1.0, 1.0],
+            },
+        ];
+
+        queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
+
+        let indices: [u16; 6] = [0, 1, 2, 2, 1, 3];
+        queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&indices));
+
+        let radii = if let Some(rounded) = shape.shape {
+            let resolved = rounded.resolve(rect.width, rect.height);
+            [
+                resolved.top_left,
+                resolved.top_right,
+                resolved.bottom_left,
+                resolved.bottom_right,
+            ]
+        } else {
+            [0.0, 0.0, 0.0, 0.0]
+        };
+
+        let (brush_type, gradient_count) = match &shape.brush {
+            Brush::Solid(_) => (0, 0),
+            Brush::LinearGradient(colors) => (1, colors.len() as u32),
+            Brush::RadialGradient { colors, .. } => (2, colors.len() as u32),
+        };
+
+        let shape_data = ShapeData {
+            rect: [rect.x, rect.y, rect.width, rect.height],
+            radii,
+            brush_type,
+            gradient_start: 0,
+            gradient_count,
+            _padding: 0,
+        };
+
+        queue.write_buffer(&self.shape_buffer, 0, bytemuck::cast_slice(&[shape_data]));
+
+        let gradient_stops: Vec<GradientStop> = gradient_colors
+            .iter()
+            .map(|c| GradientStop {
+                color: [c.r(), c.g(), c.b(), c.a()],
+            })
+            .collect();
+
+        self.ensure_gradient_capacity(device, layout, gradient_stops.len());
+
+        if gradient_stops.is_empty() {
+            let zero_stop = GradientStop {
+                color: [0.0, 0.0, 0.0, 0.0],
+            };
+            queue.write_buffer(&self.gradient_buffer, 0, bytemuck::cast_slice(&[zero_stop]));
+        } else {
+            queue.write_buffer(
+                &self.gradient_buffer,
+                0,
+                bytemuck::cast_slice(&gradient_stops),
+            );
+        }
+    }
+}
+
 pub struct GpuRenderer {
     pub(crate) device: Arc<wgpu::Device>,
     pub(crate) queue: Arc<wgpu::Queue>,
     pipeline: wgpu::RenderPipeline,
-    uniform_bind_group_layout: wgpu::BindGroupLayout,
     shape_bind_group_layout: wgpu::BindGroupLayout,
+    uniform_buffer: wgpu::Buffer,
+    uniform_bind_group: wgpu::BindGroup,
+    shape_resources: Vec<ShapeGpuResources>,
     font_system: Arc<Mutex<FontSystem>>,
     text_renderer: TextRenderer,
     text_atlas: TextAtlas,
@@ -165,6 +369,22 @@ impl GpuRenderer {
             multiview: None,
         });
 
+        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Uniform Buffer"),
+            size: mem::size_of::<Uniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Uniform Bind Group"),
+            layout: &uniform_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buffer.as_entire_binding(),
+            }],
+        });
+
         let swash_cache = SwashCache::new();
         let mut text_atlas = TextAtlas::new(&device, &queue, surface_format);
         let text_renderer = TextRenderer::new(
@@ -178,8 +398,10 @@ impl GpuRenderer {
             device,
             queue,
             pipeline,
-            uniform_bind_group_layout,
             shape_bind_group_layout,
+            uniform_buffer,
+            uniform_bind_group,
+            shape_resources: Vec::new(),
             font_system,
             text_renderer,
             text_atlas,
@@ -209,33 +431,33 @@ impl GpuRenderer {
         let mut sorted_texts = texts.to_vec();
         sorted_texts.sort_by_key(|t| t.z_index);
 
-        // Create uniform buffer
         let uniforms = Uniforms {
             viewport: [width as f32, height as f32],
             _padding: [0.0, 0.0],
         };
-        let uniform_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Uniform Buffer"),
-                contents: bytemuck::cast_slice(&[uniforms]),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
+        self.queue
+            .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
-        let uniform_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Uniform Bind Group"),
-            layout: &self.uniform_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
-        });
+        let shape_count = sorted_shapes.len();
+        if self.shape_resources.len() < shape_count {
+            let device = &*self.device;
+            let layout = &self.shape_bind_group_layout;
+            self.shape_resources.extend(
+                (self.shape_resources.len()..shape_count)
+                    .map(|_| ShapeGpuResources::new(device, layout)),
+            );
+        }
 
-        // Prepare all shape buffers
-        let shape_data: Vec<_> = sorted_shapes
+        let device = &*self.device;
+        let queue = &*self.queue;
+        let layout = &self.shape_bind_group_layout;
+        for (shape, resources) in sorted_shapes
             .iter()
-            .map(|shape| self.prepare_shape_buffers(shape))
-            .collect::<Result<_, _>>()?;
+            .zip(self.shape_resources.iter_mut())
+            .take(shape_count)
+        {
+            resources.update(device, queue, layout, shape);
+        }
 
         // Render shapes
         {
@@ -260,13 +482,14 @@ impl GpuRenderer {
             });
 
             render_pass.set_pipeline(&self.pipeline);
-            render_pass.set_bind_group(0, &uniform_bind_group, &[]);
+            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
 
             // Render each shape
-            for (vertex_buffer, index_buffer, shape_bind_group) in &shape_data {
-                render_pass.set_bind_group(1, shape_bind_group, &[]);
-                render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-                render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            for resources in self.shape_resources.iter().take(shape_count) {
+                render_pass.set_bind_group(1, &resources.bind_group, &[]);
+                render_pass.set_vertex_buffer(0, resources.vertex_buffer.slice(..));
+                render_pass
+                    .set_index_buffer(resources.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
                 render_pass.draw_indexed(0..6, 0, 0..1);
             }
         }
@@ -432,147 +655,6 @@ impl GpuRenderer {
         self.queue.submit(std::iter::once(encoder.finish()));
 
         Ok(())
-    }
-
-    fn prepare_shape_buffers(
-        &self,
-        shape: &DrawShape,
-    ) -> Result<(wgpu::Buffer, wgpu::Buffer, wgpu::BindGroup), String> {
-        let rect = shape.rect;
-
-        // Create vertices for a quad
-        let (color, gradient_colors) = match &shape.brush {
-            Brush::Solid(c) => ([c.r(), c.g(), c.b(), c.a()], vec![]),
-            Brush::LinearGradient(colors) => {
-                let first = colors.first().unwrap_or(&Color(1.0, 1.0, 1.0, 1.0));
-                ([first.r(), first.g(), first.b(), first.a()], colors.clone())
-            }
-            Brush::RadialGradient { colors, .. } => {
-                let first = colors.first().unwrap_or(&Color(1.0, 1.0, 1.0, 1.0));
-                ([first.r(), first.g(), first.b(), first.a()], colors.clone())
-            }
-        };
-
-        let vertices = [
-            Vertex {
-                position: [rect.x, rect.y],
-                color,
-                uv: [0.0, 0.0],
-            },
-            Vertex {
-                position: [rect.x + rect.width, rect.y],
-                color,
-                uv: [1.0, 0.0],
-            },
-            Vertex {
-                position: [rect.x, rect.y + rect.height],
-                color,
-                uv: [0.0, 1.0],
-            },
-            Vertex {
-                position: [rect.x + rect.width, rect.y + rect.height],
-                color,
-                uv: [1.0, 1.0],
-            },
-        ];
-
-        let indices: [u16; 6] = [0, 1, 2, 2, 1, 3];
-
-        let vertex_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Vertex Buffer"),
-                contents: bytemuck::cast_slice(&vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-
-        let index_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Index Buffer"),
-                contents: bytemuck::cast_slice(&indices),
-                usage: wgpu::BufferUsages::INDEX,
-            });
-
-        // Create shape data
-        let radii = if let Some(rounded) = shape.shape {
-            let resolved = rounded.resolve(rect.width, rect.height);
-            [
-                resolved.top_left,
-                resolved.top_right,
-                resolved.bottom_left,
-                resolved.bottom_right,
-            ]
-        } else {
-            [0.0, 0.0, 0.0, 0.0]
-        };
-
-        let (brush_type, gradient_start, gradient_count) = match &shape.brush {
-            Brush::Solid(_) => (0, 0, 0),
-            Brush::LinearGradient(colors) => (1, 0, colors.len() as u32),
-            Brush::RadialGradient { colors, .. } => (2, 0, colors.len() as u32),
-        };
-
-        let shape_data = ShapeData {
-            rect: [rect.x, rect.y, rect.width, rect.height],
-            radii,
-            brush_type,
-            gradient_start,
-            gradient_count,
-            _padding: 0,
-        };
-
-        let shape_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Shape Buffer"),
-                contents: bytemuck::cast_slice(&[shape_data]),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-
-        // Create gradient buffer (even if empty)
-        let gradient_stops: Vec<GradientStop> = gradient_colors
-            .iter()
-            .map(|c| GradientStop {
-                color: [c.r(), c.g(), c.b(), c.a()],
-            })
-            .collect();
-
-        let gradient_buffer = if gradient_stops.is_empty() {
-            // Create a dummy buffer with at least one element
-            self.device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Gradient Buffer"),
-                    contents: bytemuck::cast_slice(&[GradientStop {
-                        color: [0.0, 0.0, 0.0, 0.0],
-                    }]),
-                    usage: wgpu::BufferUsages::STORAGE,
-                })
-        } else {
-            self.device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Gradient Buffer"),
-                    contents: bytemuck::cast_slice(&gradient_stops),
-                    usage: wgpu::BufferUsages::STORAGE,
-                })
-        };
-
-        let shape_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Shape Bind Group"),
-            layout: &self.shape_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: shape_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: gradient_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        Ok((vertex_buffer, index_buffer, shape_bind_group))
     }
 }
 
