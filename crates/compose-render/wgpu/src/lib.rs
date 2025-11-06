@@ -46,14 +46,7 @@ impl WgpuRenderer {
 
         // Load Roboto font into the system
         let font_data = include_bytes!("../../../../apps/desktop-demo/assets/Roboto-Light.ttf");
-        println!("Loading Roboto font ({} bytes)", font_data.len());
         font_system.db_mut().load_font_data(font_data.to_vec());
-
-        // Debug: List available font families
-        let families: Vec<_> = font_system.db().faces()
-            .filter_map(|face| face.families.first().map(|(name, _)| name.clone()))
-            .collect();
-        println!("Font loaded into system. Available families: {:?}", families);
 
         let font_system = Arc::new(Mutex::new(font_system));
         let text_measurer = WgpuTextMeasurer::new(font_system.clone());

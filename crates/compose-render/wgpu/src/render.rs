@@ -189,16 +189,6 @@ impl GpuRenderer {
         width: u32,
         height: u32,
     ) -> Result<(), String> {
-        // Debug output using println! to ensure visibility
-        println!("=== WGPU Render ===");
-        println!("Shapes: {}", shapes.len());
-        println!("Texts: {}", texts.len());
-        for (i, text) in texts.iter().enumerate() {
-            println!("  Text[{}]: '{}' at ({}, {}) size {}x{} z={} color=({}, {}, {}, {})",
-                i, text.text, text.rect.x, text.rect.y, text.rect.width, text.rect.height,
-                text.z_index, text.color.r(), text.color.g(), text.color.b(), text.color.a());
-        }
-
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -275,20 +265,14 @@ impl GpuRenderer {
         }
 
         // Prepare text rendering - create buffers and text areas
-        println!("Preparing {} text items", sorted_texts.len());
         let mut font_system = self.font_system.lock().unwrap();
         let mut text_data: Vec<(Buffer, &TextDraw)> = Vec::new();
 
         for text_draw in &sorted_texts {
             // Skip empty text or zero-sized rects
             if text_draw.text.is_empty() || text_draw.rect.width <= 0.0 || text_draw.rect.height <= 0.0 {
-                println!("WARN: Skipping text '{}' - empty or zero size rect", text_draw.text);
                 continue;
             }
-
-            println!("Creating buffer for text: '{}' at ({},{}) size {}x{}",
-                text_draw.text, text_draw.rect.x, text_draw.rect.y,
-                text_draw.rect.width, text_draw.rect.height);
 
             let mut buffer = Buffer::new(
                 &mut font_system,
@@ -296,7 +280,6 @@ impl GpuRenderer {
             );
             // Don't constrain buffer size - let it shape freely
             buffer.set_size(&mut font_system, f32::MAX, f32::MAX);
-            // Try using default family (first available) instead of specifying
             buffer.set_text(
                 &mut font_system,
                 &text_draw.text,
@@ -304,13 +287,6 @@ impl GpuRenderer {
                 Shaping::Advanced,
             );
             buffer.shape_until_scroll(&mut font_system);
-
-            // Debug: Check if glyphs were shaped
-            let mut glyph_count = 0;
-            for run in buffer.layout_runs() {
-                glyph_count += run.glyphs.len();
-            }
-            println!("  -> Shaped {} glyphs for '{}'", glyph_count, text_draw.text);
 
             text_data.push((buffer, text_draw));
         }
@@ -347,10 +323,7 @@ impl GpuRenderer {
         }
 
         // Prepare all text at once
-        println!("Calling text_renderer.prepare with {} text areas", text_areas.len());
-        println!("  Resolution: {}x{}", width, height);
-
-        let result = self.text_renderer
+        self.text_renderer
             .prepare(
                 &self.device,
                 &self.queue,
@@ -359,19 +332,11 @@ impl GpuRenderer {
                 Resolution { width, height },
                 text_areas.iter().cloned(),
                 &mut self.swash_cache,
-            );
-
-        match result {
-            Ok(_) => println!("Text prepare succeeded"),
-            Err(e) => {
-                println!("Text prepare FAILED: {:?}", e);
-                return Err(format!("Text prepare error: {:?}", e));
-            }
-        }
+            )
+            .map_err(|e| format!("Text prepare error: {:?}", e))?;
 
         // Trim the atlas after preparing
         self.text_atlas.trim();
-        println!("Text atlas trimmed");
 
         drop(font_system);
 
@@ -391,11 +356,9 @@ impl GpuRenderer {
                 occlusion_query_set: None,
             });
 
-            println!("Calling text_renderer.render");
             self.text_renderer
                 .render(&self.text_atlas, &mut text_pass)
                 .map_err(|e| format!("Text render error: {:?}", e))?;
-            println!("Text render succeeded");
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
