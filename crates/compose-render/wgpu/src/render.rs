@@ -189,12 +189,12 @@ impl GpuRenderer {
         width: u32,
         height: u32,
     ) -> Result<(), String> {
-        // Debug logging
-        log::info!("=== WGPU Render ===");
-        log::info!("Shapes: {}", shapes.len());
-        log::info!("Texts: {}", texts.len());
+        // Debug output using println! to ensure visibility
+        println!("=== WGPU Render ===");
+        println!("Shapes: {}", shapes.len());
+        println!("Texts: {}", texts.len());
         for (i, text) in texts.iter().enumerate() {
-            log::info!("  Text[{}]: '{}' at ({}, {}) size {}x{} z={} color=({}, {}, {}, {})",
+            println!("  Text[{}]: '{}' at ({}, {}) size {}x{} z={} color=({}, {}, {}, {})",
                 i, text.text, text.rect.x, text.rect.y, text.rect.width, text.rect.height,
                 text.z_index, text.color.r(), text.color.g(), text.color.b(), text.color.a());
         }
@@ -275,18 +275,18 @@ impl GpuRenderer {
         }
 
         // Prepare text rendering - create buffers and text areas
-        log::info!("Preparing {} text items", sorted_texts.len());
+        println!("Preparing {} text items", sorted_texts.len());
         let mut font_system = self.font_system.lock().unwrap();
         let mut text_data: Vec<(Buffer, &TextDraw)> = Vec::new();
 
         for text_draw in &sorted_texts {
             // Skip empty text or zero-sized rects
             if text_draw.text.is_empty() || text_draw.rect.width <= 0.0 || text_draw.rect.height <= 0.0 {
-                log::warn!("Skipping text '{}' - empty or zero size rect", text_draw.text);
+                println!("WARN: Skipping text '{}' - empty or zero size rect", text_draw.text);
                 continue;
             }
 
-            log::info!("Creating buffer for text: '{}' at ({},{}) size {}x{}",
+            println!("Creating buffer for text: '{}' at ({},{}) size {}x{}",
                 text_draw.text, text_draw.rect.x, text_draw.rect.y,
                 text_draw.rect.width, text_draw.rect.height);
 
@@ -338,7 +338,7 @@ impl GpuRenderer {
         }
 
         // Prepare all text at once
-        log::info!("Calling text_renderer.prepare with {} text areas", text_areas.len());
+        println!("Calling text_renderer.prepare with {} text areas", text_areas.len());
         self.text_renderer
             .prepare(
                 &self.device,
@@ -350,7 +350,7 @@ impl GpuRenderer {
                 &mut self.swash_cache,
             )
             .map_err(|e| format!("Text prepare error: {:?}", e))?;
-        log::info!("Text prepare succeeded");
+        println!("Text prepare succeeded");
 
         drop(font_system);
 
@@ -370,11 +370,11 @@ impl GpuRenderer {
                 occlusion_query_set: None,
             });
 
-            log::info!("Calling text_renderer.render");
+            println!("Calling text_renderer.render");
             self.text_renderer
                 .render(&self.text_atlas, &mut text_pass)
                 .map_err(|e| format!("Text render error: {:?}", e))?;
-            log::info!("Text render succeeded");
+            println!("Text render succeeded");
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
