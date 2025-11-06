@@ -511,3 +511,38 @@ impl SlotStorage for SplitSlotStorage {
         }
     }
 }
+
+impl SplitSlotStorage {
+    /// Debug method to dump all groups.
+    pub fn debug_dump_groups(&self) -> Vec<(usize, Key, Option<ScopeId>, usize)> {
+        self.layout
+            .iter()
+            .enumerate()
+            .filter_map(|(i, slot)| match slot {
+                LayoutSlot::Group { key, len, scope, .. } => Some((i, *key, *scope, *len)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Debug method to dump all slots.
+    pub fn debug_dump_all_slots(&self) -> Vec<(usize, String)> {
+        self.layout
+            .iter()
+            .enumerate()
+            .map(|(i, slot)| {
+                let desc = match slot {
+                    LayoutSlot::Group { key, scope, len, has_gap_children, .. } => {
+                        format!("Group(key={}, scope={:?}, len={}, gaps={})", key, scope, len, has_gap_children)
+                    }
+                    LayoutSlot::ValueRef { .. } => "ValueRef".to_string(),
+                    LayoutSlot::Node { id, .. } => format!("Node(id={})", id),
+                    LayoutSlot::Gap { group_key, group_scope, group_len, .. } => {
+                        format!("Gap(key={:?}, scope={:?}, len={})", group_key, group_scope, group_len)
+                    }
+                };
+                (i, desc)
+            })
+            .collect()
+    }
+}

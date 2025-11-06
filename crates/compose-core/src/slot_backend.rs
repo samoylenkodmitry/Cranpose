@@ -61,7 +61,7 @@ impl SlotBackend {
 
 impl Default for SlotBackend {
     fn default() -> Self {
-        Self::Baseline(SlotTable::new())
+        Self::new(SlotBackendKind::default())
     }
 }
 
@@ -247,16 +247,18 @@ impl SlotBackend {
     pub fn debug_dump_groups(&self) -> Vec<(usize, Key, Option<ScopeId>, usize)> {
         match self {
             Self::Baseline(s) => s.debug_dump_groups(),
-            // Other backends don't implement these debug methods yet
-            Self::Chunked(_) | Self::Hierarchical(_) | Self::Split(_) => Vec::new(),
+            Self::Hierarchical(s) => s.debug_dump_groups(),
+            Self::Chunked(s) => s.debug_dump_groups(),
+            Self::Split(s) => s.debug_dump_groups(),
         }
     }
 
     pub fn debug_dump_all_slots(&self) -> Vec<(usize, String)> {
         match self {
             Self::Baseline(s) => s.debug_dump_all_slots(),
-            // Other backends don't implement these debug methods yet
-            Self::Chunked(_) | Self::Hierarchical(_) | Self::Split(_) => Vec::new(),
+            Self::Hierarchical(s) => s.debug_dump_all_slots(),
+            Self::Chunked(s) => s.debug_dump_all_slots(),
+            Self::Split(s) => s.debug_dump_all_slots(),
         }
     }
 }

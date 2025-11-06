@@ -689,3 +689,36 @@ impl SlotStorage for ChunkedSlotStorage {
         self.rebuild_anchors();
     }
 }
+
+impl ChunkedSlotStorage {
+    /// Debug method to dump all groups.
+    pub fn debug_dump_groups(&self) -> Vec<(usize, Key, Option<ScopeId>, usize)> {
+        let mut result = Vec::new();
+        for global_idx in 0..self.total_slots() {
+            if let Some(ChunkedSlot::Group { key, len, scope, .. }) = self.get_slot(global_idx) {
+                result.push((global_idx, *key, *scope, *len));
+            }
+        }
+        result
+    }
+
+    /// Debug method to dump all slots.
+    pub fn debug_dump_all_slots(&self) -> Vec<(usize, String)> {
+        let mut result = Vec::new();
+        for global_idx in 0..self.total_slots() {
+            let desc = match self.get_slot(global_idx) {
+                Some(ChunkedSlot::Group { key, scope, len, has_gap_children, .. }) => {
+                    format!("Group(key={}, scope={:?}, len={}, gaps={})", key, scope, len, has_gap_children)
+                }
+                Some(ChunkedSlot::Value { .. }) => "Value".to_string(),
+                Some(ChunkedSlot::Node { id, .. }) => format!("Node(id={})", id),
+                Some(ChunkedSlot::Gap { group_key, group_scope, group_len, .. }) => {
+                    format!("Gap(key={:?}, scope={:?}, len={})", group_key, group_scope, group_len)
+                }
+                None => "Empty".to_string(),
+            };
+            result.push((global_idx, desc));
+        }
+        result
+    }
+}

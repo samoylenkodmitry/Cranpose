@@ -246,3 +246,19 @@ impl SlotStorage for HierarchicalSlotStorage {
         }
     }
 }
+
+impl HierarchicalSlotStorage {
+    /// Debug method to dump all groups from the current storage.
+    pub fn debug_dump_groups(&self) -> Vec<(usize, Key, Option<ScopeId>, usize)> {
+        // For now, just return groups from root storage
+        // TODO: Consider including child storage groups with offset indices
+        self.root.debug_dump_groups()
+    }
+
+    /// Debug method to dump all slots from the current storage.
+    pub fn debug_dump_all_slots(&self) -> Vec<(usize, String)> {
+        // For now, just return slots from root storage
+        // TODO: Consider including child storage slots with offset indices
+        self.root.debug_dump_all_slots()
+    }
+}
