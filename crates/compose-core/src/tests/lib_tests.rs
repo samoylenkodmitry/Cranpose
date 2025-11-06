@@ -107,7 +107,7 @@ fn compose_test_node<N: Node + 'static>(init: impl FnOnce() -> N) -> NodeId {
 }
 
 fn setup_composer(
-    slots: &mut SlotTable,
+    slots: &mut SlotBackend,
     applier: &mut MemoryApplier,
     handle: RuntimeHandle,
     root: Option<NodeId>,
@@ -133,14 +133,14 @@ fn setup_composer(
 }
 
 fn teardown_composer(
-    slots: &mut SlotTable,
+    slots: &mut SlotBackend,
     applier: &mut MemoryApplier,
     slots_host: Rc<SlotsHost>,
     applier_host: Rc<ConcreteApplierHost<MemoryApplier>>,
 ) {
     *slots = Rc::try_unwrap(slots_host)
         .unwrap_or_else(|_| panic!("slots host still has outstanding references"))
-        .into_inner();
+        .take();
     *applier = Rc::try_unwrap(applier_host)
         .unwrap_or_else(|_| panic!("applier host still has outstanding references"))
         .into_inner();
@@ -150,7 +150,7 @@ fn teardown_composer(
 #[should_panic(expected = "subcompose() may only be called during measure or layout")]
 fn subcompose_panics_outside_measure_or_layout() {
     let (handle, _runtime) = runtime_handle();
-    let mut slots = SlotTable::new();
+    let mut slots = SlotBackend::default();
     let mut applier = MemoryApplier::new();
     let (composer, slots_host, applier_host) =
         setup_composer(&mut slots, &mut applier, handle, None);
@@ -163,7 +163,7 @@ fn subcompose_panics_outside_measure_or_layout() {
 #[test]
 fn subcompose_reuses_nodes_across_calls() {
     let (handle, _runtime) = runtime_handle();
-    let mut slots = SlotTable::new();
+    let mut slots = SlotBackend::default();
     let mut applier = MemoryApplier::new();
     let mut state = SubcomposeState::default();
     let first_id;
@@ -1744,7 +1744,7 @@ impl Node for TrackingChild {
 }
 
 fn apply_child_diff(
-    slots: &mut SlotTable,
+    slots: &mut SlotBackend,
     applier: &mut MemoryApplier,
     runtime: &Runtime,
     parent_id: NodeId,
@@ -1781,7 +1781,7 @@ fn apply_child_diff(
 
 #[test]
 fn reorder_keyed_children_emits_moves() {
-    let mut slots = SlotTable::new();
+    let mut slots = SlotBackend::default();
     let mut applier = MemoryApplier::new();
     let runtime = Runtime::new(Arc::new(TestScheduler::default()));
     let parent_id = applier.create(Box::new(RecordingNode::default()));
@@ -1843,7 +1843,7 @@ fn reorder_keyed_children_emits_moves() {
 
 #[test]
 fn insert_and_remove_emit_expected_ops() {
-    let mut slots = SlotTable::new();
+    let mut slots = SlotBackend::default();
     let mut applier = MemoryApplier::new();
     let runtime = Runtime::new(Arc::new(TestScheduler::default()));
     let parent_id = applier.create(Box::new(RecordingNode::default()));
@@ -3910,4 +3910,84 @@ fn tab_switching_preserves_node_order() {
         vec!["A_0", "A_1", "A_2"],
         "Order should be preserved after tab switch"
     );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Backend Integration Tests
+// ════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn composition_works_with_baseline_backend() {
+    test_composition_with_backend(SlotBackendKind::Baseline);
+}
+
+#[test]
+fn composition_works_with_chunked_backend() {
+    test_composition_with_backend(SlotBackendKind::Chunked);
+}
+
+#[test]
+fn composition_works_with_split_backend() {
+    test_composition_with_backend(SlotBackendKind::Split);
+}
+
+#[test]
+fn composition_works_with_hierarchical_backend() {
+    test_composition_with_backend(SlotBackendKind::Hierarchical);
+}
+
+fn test_composition_with_backend(backend: SlotBackendKind) {
+    let key = 12345u64;
+    let applier = MemoryApplier::new();
+    let runtime = Runtime::new(Arc::new(TestScheduler::default()));
+    let mut composition = Composition::with_backend(applier, runtime.clone(), backend);
+
+    // Track recompositions
+    let recompose_count = Rc::new(Cell::new(0));
+    let recompose_count_clone = Rc::clone(&recompose_count);
+
+    // Test basic composition with groups and remembered values
+    composition
+        .render(key, || {
+            with_current_composer(|composer| {
+                composer.with_group(1, |composer| {
+                    recompose_count_clone.set(recompose_count_clone.get() + 1);
+
+                    // Test remember
+                    let value = composer.remember(|| 123);
+                    value.with(|v| assert_eq!(*v, 123));
+
+                    // Test nested group
+                    composer.with_group(2, |composer| {
+                        let nested = composer.remember(|| "hello".to_string());
+                        nested.with(|n| assert_eq!(n, "hello"));
+                    });
+                });
+            });
+        })
+        .expect("first render");
+
+    assert_eq!(recompose_count.get(), 1, "Should have composed once");
+
+    // Test recomposition preserves remembered values
+    composition
+        .render(key, || {
+            with_current_composer(|composer| {
+                composer.with_group(1, |composer| {
+                    recompose_count_clone.set(recompose_count_clone.get() + 1);
+
+                    // Remembered value should be preserved
+                    let value = composer.remember(|| 456); // Different init, but should return 123
+                    value.with(|v| assert_eq!(*v, 123, "Remembered value should be preserved"));
+
+                    composer.with_group(2, |composer| {
+                        let nested = composer.remember(|| "world".to_string());
+                        nested.with(|n| assert_eq!(n, "hello", "Nested remembered value should be preserved"));
+                    });
+                });
+            });
+        })
+        .expect("second render");
+
+    assert_eq!(recompose_count.get(), 2, "Should have composed twice");
 }

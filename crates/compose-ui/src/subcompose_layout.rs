@@ -2,7 +2,7 @@ use std::cell::{Ref, RefCell, RefMut};
 use std::rc::Rc;
 
 use compose_core::{
-    Composer, NodeError, NodeId, Phase, SlotId, SlotTable, SlotsHost, SubcomposeState,
+    Composer, NodeError, NodeId, Phase, SlotBackend, SlotId, SlotsHost, SubcomposeState,
 };
 use indexmap::IndexSet;
 
@@ -253,7 +253,7 @@ struct SubcomposeLayoutNodeInner {
     state: SubcomposeState,
     measure_policy: Rc<MeasurePolicy>,
     children: IndexSet<NodeId>,
-    slots: SlotTable,
+    slots: SlotBackend,
 }
 
 impl SubcomposeLayoutNodeInner {
@@ -265,7 +265,7 @@ impl SubcomposeLayoutNodeInner {
             state: SubcomposeState::default(),
             measure_policy,
             children: IndexSet::new(),
-            slots: SlotTable::new(),
+            slots: SlotBackend::default(),
         }
     }
 

@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use compose_core::{
-    self, Applier, ConcreteApplierHost, MutableState, SlotTable, SlotsHost, SnapshotStateObserver,
+    self, Applier, ConcreteApplierHost, MutableState, SlotBackend, SlotStorage, SlotsHost, SnapshotStateObserver,
 };
 
 #[derive(Default)]
@@ -21,7 +21,7 @@ fn runtime_handle() -> (
 }
 
 fn setup_composer(
-    slots: &mut SlotTable,
+    slots: &mut SlotBackend,
     applier: &mut compose_core::MemoryApplier,
     handle: compose_core::RuntimeHandle,
     root: Option<compose_core::NodeId>,
@@ -47,21 +47,21 @@ fn setup_composer(
 }
 
 fn teardown_composer(
-    slots: &mut SlotTable,
+    slots: &mut SlotBackend,
     applier: &mut compose_core::MemoryApplier,
     slots_host: Rc<SlotsHost>,
     applier_host: Rc<ConcreteApplierHost<compose_core::MemoryApplier>>,
 ) {
     *slots = Rc::try_unwrap(slots_host)
         .unwrap_or_else(|_| panic!("slots host still has outstanding references"))
-        .into_inner();
+        .take();
     *applier = Rc::try_unwrap(applier_host)
         .unwrap_or_else(|_| panic!("applier host still has outstanding references"))
         .into_inner();
 }
 
 fn measure_once(
-    slots: &mut SlotTable,
+    slots: &mut SlotBackend,
     applier: &mut compose_core::MemoryApplier,
     handle: &compose_core::RuntimeHandle,
     node_id: compose_core::NodeId,
@@ -90,7 +90,7 @@ fn measure_once(
 #[test]
 fn measure_subcomposes_content() {
     let (handle, _composition) = runtime_handle();
-    let mut slots = SlotTable::new();
+    let mut slots = SlotBackend::default();
     let mut applier = compose_core::MemoryApplier::new();
     let recorded = Rc::new(RefCell::new(Vec::new()));
     let recorded_capture = Rc::clone(&recorded);
@@ -132,7 +132,7 @@ fn measure_subcomposes_content() {
 #[test]
 fn subcompose_reuses_nodes_across_measures() {
     let (handle, _composition) = runtime_handle();
-    let mut slots = SlotTable::new();
+    let mut slots = SlotBackend::default();
     let mut applier = compose_core::MemoryApplier::new();
     let recorded = Rc::new(RefCell::new(Vec::new()));
     let recorded_capture = Rc::clone(&recorded);
@@ -183,7 +183,7 @@ fn subcompose_reuses_nodes_across_measures() {
 #[test]
 fn inactive_slots_move_to_reusable_pool() {
     let (handle, _composition) = runtime_handle();
-    let mut slots = SlotTable::new();
+    let mut slots = SlotBackend::default();
     let mut applier = compose_core::MemoryApplier::new();
     let toggle = MutableState::with_runtime(true, handle.clone());
     let toggle_capture = toggle.clone();

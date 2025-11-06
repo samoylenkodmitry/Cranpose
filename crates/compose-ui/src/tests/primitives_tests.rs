@@ -11,7 +11,7 @@ use crate::widgets::{
 use crate::{run_test_composition, LayoutEngine, SnapshotState, TestComposition};
 use compose_core::{
     self, location_key, Applier, Composer, Composition, ConcreteApplierHost, MemoryApplier,
-    MutableState, NodeId, Phase, SlotTable, SlotsHost, SnapshotStateObserver, State,
+    MutableState, NodeId, Phase, SlotBackend, SlotStorage, SlotsHost, SnapshotStateObserver, State,
 };
 use compose_ui_layout::{HorizontalAlignment, LinearArrangement, VerticalAlignment};
 use std::cell::{Cell, RefCell};
@@ -23,7 +23,7 @@ thread_local! {
 }
 
 fn prepare_measure_composer(
-    slots: &mut SlotTable,
+    slots: &mut SlotBackend,
     applier: &mut MemoryApplier,
     handle: &compose_core::RuntimeHandle,
     root: Option<NodeId>,
@@ -49,21 +49,21 @@ fn prepare_measure_composer(
 }
 
 fn restore_measure_composer(
-    slots: &mut SlotTable,
+    slots: &mut SlotBackend,
     applier: &mut MemoryApplier,
     slots_host: Rc<SlotsHost>,
     applier_host: Rc<ConcreteApplierHost<MemoryApplier>>,
 ) {
     *slots = Rc::try_unwrap(slots_host)
         .unwrap_or_else(|_| panic!("slots host still has outstanding references"))
-        .into_inner();
+        .take();
     *applier = Rc::try_unwrap(applier_host)
         .unwrap_or_else(|_| panic!("applier host still has outstanding references"))
         .into_inner();
 }
 
 fn run_subcompose_measure(
-    slots: &mut SlotTable,
+    slots: &mut SlotBackend,
     applier: &mut MemoryApplier,
     handle: &compose_core::RuntimeHandle,
     node_id: NodeId,
@@ -130,7 +130,7 @@ fn column_with_alignment_updates_node_fields() {
 
 fn measure_subcompose_node(
     composition: &mut Composition<MemoryApplier>,
-    slots: &mut SlotTable,
+    slots: &mut SlotBackend,
     handle: &compose_core::RuntimeHandle,
     root: NodeId,
     constraints: Constraints,
@@ -943,7 +943,7 @@ fn box_with_constraints_composes_different_content() {
 
     let root = composition.root().expect("root node");
     let handle = composition.runtime_handle();
-    let mut slots = SlotTable::new();
+    let mut slots = SlotBackend::default();
 
     measure_subcompose_node(
         &mut composition,
@@ -988,7 +988,7 @@ fn box_with_constraints_reacts_to_constraint_changes() {
 
     let root = composition.root().expect("root node");
     let handle = composition.runtime_handle();
-    let mut slots = SlotTable::new();
+    let mut slots = SlotBackend::default();
 
     for width in [120.0, 60.0] {
         let constraints = Constraints::tight(width, 40.0);

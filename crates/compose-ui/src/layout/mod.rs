@@ -12,7 +12,7 @@ use std::{
 
 use compose_core::{
     Applier, ApplierHost, Composer, ConcreteApplierHost,
-    MemoryApplier, Node, NodeError, NodeId, Phase, RuntimeHandle, SlotTable, SlotsHost,
+    MemoryApplier, Node, NodeError, NodeId, Phase, RuntimeHandle, SlotBackend, SlotsHost,
     SnapshotStateObserver,
 };
 
@@ -309,7 +309,7 @@ impl LayoutBuilder {
 struct LayoutBuilderState {
     applier: Rc<ConcreteApplierHost<MemoryApplier>>,
     runtime_handle: Option<RuntimeHandle>,
-    slots: SlotTable,
+    slots: SlotBackend,
     cache_epoch: u64,
     tmp_measurables: Vec<Box<dyn Measurable>>,
     tmp_records: Vec<(NodeId, ChildRecord)>,
@@ -321,7 +321,7 @@ impl LayoutBuilderState {
         Self {
             applier,
             runtime_handle,
-            slots: SlotTable::new(),
+            slots: SlotBackend::default(),
             cache_epoch: NEXT_CACHE_EPOCH.fetch_add(1, Ordering::Relaxed),
             tmp_measurables: Vec::new(),
             tmp_records: Vec::new(),
@@ -825,7 +825,7 @@ impl Drop for VecPools {
 
 struct SlotsGuard {
     state: Rc<RefCell<LayoutBuilderState>>,
-    slots: Option<SlotTable>,
+    slots: Option<SlotBackend>,
 }
 
 impl SlotsGuard {
@@ -841,11 +841,11 @@ impl SlotsGuard {
     }
 
     fn host(&mut self) -> Rc<SlotsHost> {
-        let slots = self.slots.take().unwrap_or_else(SlotTable::new);
+        let slots = self.slots.take().unwrap_or_else(SlotBackend::default);
         Rc::new(SlotsHost::new(slots))
     }
 
-    fn restore(&mut self, slots: SlotTable) {
+    fn restore(&mut self, slots: SlotBackend) {
         debug_assert!(self.slots.is_none());
         self.slots = Some(slots);
     }
