@@ -80,12 +80,16 @@ impl TextCacheKey {
             scale_key,
         }
     }
+
+    fn scale_key(&self) -> u32 {
+        self.scale_key
+    }
 }
 
 struct CachedTextBuffer {
     buffer: Buffer,
     metrics: Metrics,
-    width: f32,
+    scale_key: u32,
     height: f32,
     text: String,
 }
@@ -94,19 +98,19 @@ impl CachedTextBuffer {
     fn new(
         font_system: &mut FontSystem,
         metrics: Metrics,
-        width: f32,
+        scale_key: u32,
         height: f32,
         text: &str,
         attrs: Attrs,
     ) -> Self {
         let mut buffer = Buffer::new(font_system, metrics);
-        buffer.set_size(font_system, width, height);
+        buffer.set_size(font_system, f32::MAX, height);
         buffer.set_text(font_system, text, attrs, Shaping::Advanced);
         buffer.shape_until_scroll(font_system);
         Self {
             buffer,
             metrics,
-            width,
+            scale_key,
             height,
             text: text.to_string(),
         }
@@ -116,22 +120,24 @@ impl CachedTextBuffer {
         &mut self,
         font_system: &mut FontSystem,
         metrics: Metrics,
-        width: f32,
+        scale_key: u32,
         height: f32,
         text: &str,
         attrs: Attrs,
     ) -> bool {
+        const HEIGHT_EPSILON: f32 = 0.5;
+
         let mut reshaped = false;
 
-        if metrics != self.metrics {
+        if self.scale_key != scale_key || self.metrics != metrics {
             self.buffer.set_metrics(font_system, metrics);
             self.metrics = metrics;
+            self.scale_key = scale_key;
             reshaped = true;
         }
 
-        if width != self.width || height != self.height {
-            self.buffer.set_size(font_system, width, height);
-            self.width = width;
+        if (height - self.height).abs() > HEIGHT_EPSILON {
+            self.buffer.set_size(font_system, f32::MAX, height);
             self.height = height;
             reshaped = true;
         }
@@ -783,7 +789,7 @@ impl GpuRenderer {
                     reshaped = entry.ensure(
                         &mut font_system,
                         metrics,
-                        f32::MAX,
+                        key.scale_key(),
                         buffer_height,
                         &text_draw.text,
                         attrs,
@@ -805,7 +811,7 @@ impl GpuRenderer {
                     let cached = CachedTextBuffer::new(
                         &mut font_system,
                         metrics,
-                        f32::MAX,
+                        key.scale_key(),
                         buffer_height,
                         &text_draw.text,
                         attrs,
