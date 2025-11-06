@@ -16,6 +16,9 @@ use std::num::NonZeroUsize;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 
+const TEXT_CACHE_INITIAL_CAPACITY: usize = 128;
+const TEXT_CACHE_MAX_CAPACITY: usize = 4096;
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct Vertex {
@@ -324,6 +327,22 @@ pub struct GpuRenderer {
 }
 
 impl GpuRenderer {
+    fn grow_text_cache(&mut self) {
+        let current_cap = self.text_cache.cap().get();
+        if current_cap >= TEXT_CACHE_MAX_CAPACITY {
+            return;
+        }
+
+        let mut new_cap = (current_cap * 2).max(TEXT_CACHE_INITIAL_CAPACITY);
+        if new_cap > TEXT_CACHE_MAX_CAPACITY {
+            new_cap = TEXT_CACHE_MAX_CAPACITY;
+        }
+
+        if let Some(capacity) = NonZeroUsize::new(new_cap) {
+            self.text_cache.resize(capacity);
+        }
+    }
+
     pub fn new(
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
@@ -447,7 +466,7 @@ impl GpuRenderer {
 
         let shape_buffers = ShapeBatchBuffers::new(&device, &shape_bind_group_layout);
 
-        let text_cache = LruCache::new(NonZeroUsize::new(128).unwrap());
+        let text_cache = LruCache::new(NonZeroUsize::new(TEXT_CACHE_INITIAL_CAPACITY).unwrap());
 
         Self {
             device,
@@ -706,8 +725,6 @@ impl GpuRenderer {
             let mut skipped_invalid_size = 0usize;
             let mut prepared_areas = Vec::with_capacity(sorted_texts.len());
 
-            let preferred_font = self.preferred_font.as_ref();
-
             for text_draw in &sorted_texts {
                 let original_scale = text_draw.scale;
                 let text_scale = original_scale.max(0.0);
@@ -753,41 +770,57 @@ impl GpuRenderer {
                     DEFAULT_LINE_HEIGHT * text_scale,
                 );
                 let buffer_height = text_draw.rect.height.max(metrics.line_height);
-                let attrs = match preferred_font {
-                    Some(font) => Attrs::new()
-                        .family(Family::Name(&font.family))
-                        .weight(font.weight),
-                    None => Attrs::new().family(Family::SansSerif),
-                };
 
                 let key = TextCacheKey::new(&text_draw.text, text_scale);
-                if !self.text_cache.contains(&key) {
+                let mut reshaped = false;
+
+                let buffer_ptr = if let Some(entry) = self.text_cache.get_mut(&key) {
+                    let attrs = match self.preferred_font.as_ref() {
+                        Some(font) => Attrs::new()
+                            .family(Family::Name(&font.family))
+                            .weight(font.weight),
+                        None => Attrs::new().family(Family::SansSerif),
+                    };
+                    reshaped = entry.ensure(
+                        &mut font_system,
+                        metrics,
+                        f32::MAX,
+                        buffer_height,
+                        &text_draw.text,
+                        attrs,
+                    );
+                    let ptr = NonNull::from(&entry.buffer);
+                    log_text_glyphs(&font_system, &entry.buffer, text_draw, text_scale);
+                    ptr
+                } else {
+                    if self.text_cache.len() == self.text_cache.cap().get() {
+                        drop(font_system);
+                        self.grow_text_cache();
+                        font_system = self.font_system.lock().unwrap();
+                    }
+
+                    let attrs = match self.preferred_font.as_ref() {
+                        Some(font) => Attrs::new()
+                            .family(Family::Name(&font.family))
+                            .weight(font.weight),
+                        None => Attrs::new().family(Family::SansSerif),
+                    };
                     let cached = CachedTextBuffer::new(
                         &mut font_system,
                         metrics,
                         f32::MAX,
                         buffer_height,
                         &text_draw.text,
-                        attrs.clone(),
+                        attrs,
                     );
                     self.text_cache.put(key.clone(), Box::new(cached));
-                }
-
-                let (buffer_ptr, reshaped) = {
                     let entry = self
                         .text_cache
                         .get_mut(&key)
                         .expect("text cache entry missing after insertion");
-                    let reshaped = entry.ensure(
-                        &mut font_system,
-                        metrics,
-                        f32::MAX,
-                        buffer_height,
-                        &text_draw.text,
-                        attrs.clone(),
-                    );
+                    let ptr = NonNull::from(&entry.buffer);
                     log_text_glyphs(&font_system, &entry.buffer, text_draw, text_scale);
-                    (NonNull::from(&entry.buffer), reshaped)
+                    ptr
                 };
 
                 let to_u8 = |value: f32| -> u8 { (value.clamp(0.0, 1.0) * 255.0).round() as u8 };
@@ -871,7 +904,7 @@ impl GpuRenderer {
                         );
                         let mut buffer = Box::new(Buffer::new(&mut font_system, metrics));
                         buffer.set_size(&mut font_system, f32::MAX, area.buffer_height);
-                        let attrs = match preferred_font {
+                        let attrs = match self.preferred_font.as_ref() {
                             Some(font) => Attrs::new()
                                 .family(Family::Name(&font.family))
                                 .weight(font.weight),
