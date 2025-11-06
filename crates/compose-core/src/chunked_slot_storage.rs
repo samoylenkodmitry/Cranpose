@@ -464,6 +464,35 @@ impl ChunkedSlotStorage {
             }
         }
 
+        // Before searching forward, check if there's a Group at cursor with a DIFFERENT key
+        // If so, convert it to a Gap (like Baseline does) so it can be found later
+        if let Some(ChunkedSlot::Group {
+            key: existing_key,
+            anchor: existing_anchor,
+            len: existing_len,
+            scope: existing_scope,
+            ..
+        }) = self.get_slot(self.cursor)
+        {
+            if *existing_key != key {
+                // Convert this group to a Gap to preserve it for later
+                let gap_key = *existing_key;
+                let gap_anchor = *existing_anchor;
+                let gap_len = *existing_len;
+                let gap_scope = *existing_scope;
+
+                *self.get_slot_mut(self.cursor).unwrap() = ChunkedSlot::Gap {
+                    group_key: Some(gap_key),
+                    anchor: gap_anchor,
+                    group_scope: gap_scope,
+                    group_len: gap_len,
+                };
+
+                // Mark children as gaps too (TODO: implement this if needed)
+                // For now, just convert the group itself
+            }
+        }
+
         // Search forward for a matching gap that we can restore
         if !parent_force && self.cursor < self.total_slots().saturating_sub(1) {
             let parent_end = self
@@ -472,24 +501,59 @@ impl ChunkedSlotStorage {
                 .map(|frame| frame.end.min(self.total_slots()))
                 .unwrap_or(self.total_slots());
 
+            eprintln!("[SEARCH] Starting forward search from cursor {} to parent_end {}", self.cursor, parent_end);
+
             const SEARCH_BUDGET: usize = 16;
             let mut search_pos = self.cursor + 1; // Start from next slot
             let mut scanned = 0;
 
+            let mut skipped_adjacent = false; // Track if we skipped an adjacent group
+
             while search_pos < self.total_slots() && scanned < SEARCH_BUDGET {
                 scanned += 1;
 
-                // Check for matching Group slot - convert to Gap and continue searching
+                eprintln!("[SEARCH_STEP] Checking pos {}: {:?}", search_pos, match self.get_slot(search_pos) {
+                    Some(ChunkedSlot::Group { key: k, .. }) => format!("Group(key={})", k),
+                    Some(ChunkedSlot::Gap { group_key: Some(k), .. }) => format!("Gap(key={})", k),
+                    Some(ChunkedSlot::Gap { group_key: None, .. }) => "Gap(no key)".to_string(),
+                    Some(ChunkedSlot::Value { .. }) => "Value".to_string(),
+                    Some(ChunkedSlot::Node { .. }) => "Node".to_string(),
+                    None => "None".to_string(),
+                });
+
+                // Check for matching Group slot - convert to Gap and use it immediately
                 if let Some(ChunkedSlot::Group {
                     key: group_key,
                     anchor: group_anchor,
                     len: group_len,
                     scope: group_scope,
-                    has_gap_children,
+                    ..
                 }) = self.get_slot(search_pos)
                 {
                     if *group_key == key {
-                        // Convert the Group to a Gap so it can be restored at cursor
+                        // Heuristic: Skip the first matching group if it's immediately adjacent (cursor+1)
+                        // This helps distinguish between skipped groups and groups that need to move
+                        // when they have the same key
+                        if search_pos == self.cursor + 1 && parent_end > search_pos + *group_len && !skipped_adjacent {
+                            eprintln!("[GROUP_TO_GAP] Skipping adjacent Group at pos {} (too close, continuing search)", search_pos);
+                            // Convert to Gap but continue searching
+                            let gap_anchor = *group_anchor;
+                            let gap_scope = *group_scope;
+                            let gap_len = *group_len;
+
+                            *self.get_slot_mut(search_pos).unwrap() = ChunkedSlot::Gap {
+                                group_key: Some(key),
+                                anchor: gap_anchor,
+                                group_scope: gap_scope,
+                                group_len: gap_len,
+                            };
+                            skipped_adjacent = true;
+                            // Skip this position entirely - move to next position
+                            // (don't decrement, just continue so search_pos += 1 moves us forward)
+                            continue;
+                        } else {
+                        eprintln!("[GROUP_TO_GAP] Found matching Group at pos {} (key={}, len={}). Converting to Gap and moving it.", search_pos, key, group_len);
+                        // Convert to Gap
                         let gap_anchor = *group_anchor;
                         let gap_scope = *group_scope;
                         let gap_len = *group_len;
@@ -501,34 +565,21 @@ impl ChunkedSlotStorage {
                             group_len: gap_len,
                         };
 
-                        // Now fall through to the Gap restoration logic below
-                        // (it will find this Gap and restore it properly)
-                    }
-                }
-
-                // Check for matching Gap slot
-                if let Some(ChunkedSlot::Gap {
-                    group_key: Some(gap_key),
-                    anchor: gap_anchor,
-                    group_scope,
-                    group_len,
-                    ..
-                }) = self.get_slot(search_pos)
-                {
-                    if *gap_key == key {
-                        // Found matching gap! Move it to cursor position
+                        // Now move this Gap to cursor (same logic as Gap handling below)
                         let anchor = if gap_anchor.is_valid() {
-                            *gap_anchor
+                            gap_anchor
                         } else {
                             self.alloc_anchor()
                         };
-                        let scope = *group_scope;
-                        let len = *group_len;
+                        let scope = gap_scope;
+                        let len = gap_len;
 
-                        // Need to move the Gap AND its children (total of 1 + len slots)
-                        // From positions [search_pos, search_pos+len] to [cursor, cursor+len]
+                        // Extract the Gap itself and its children
+                        let gap_slot = std::mem::replace(
+                            self.get_slot_mut(search_pos).unwrap(),
+                            ChunkedSlot::default()
+                        );
 
-                        // Extract the children first
                         let mut children = Vec::new();
                         for i in 1..=len {
                             if search_pos + i < self.total_slots() {
@@ -539,7 +590,7 @@ impl ChunkedSlotStorage {
                             }
                         }
 
-                        // Shift slots to make room for group + children
+                        // Shift slots to make room
                         self.shift_across_chunks(self.cursor, search_pos);
 
                         // Place the restored Group at cursor
@@ -556,6 +607,123 @@ impl ChunkedSlotStorage {
                             if self.cursor + 1 + i < self.total_slots() {
                                 *self.get_slot_mut(self.cursor + 1 + i).unwrap() = child;
                             }
+                        }
+
+                        let start = self.cursor;
+                        self.cursor += 1;
+                        self.group_stack.push(GroupFrame {
+                            key,
+                            start,
+                            end: start + len,
+                            force_children_recompose: true,
+                        });
+                        self.update_group_bounds();
+                        self.last_start_was_gap = true;
+                        self.anchors_dirty = true;
+                        return (start, true);
+                        } // end of else (not adjacent)
+                    }
+                }
+
+                // Check for matching Gap slot
+                if let Some(ChunkedSlot::Gap {
+                    group_key: Some(gap_key),
+                    anchor: gap_anchor,
+                    group_scope,
+                    group_len,
+                    ..
+                }) = self.get_slot(search_pos)
+                {
+                    eprintln!("[GAP_CHECK] Found Gap at pos {} with gap_key={}, looking for key={}", search_pos, gap_key, key);
+                    if *gap_key == key {
+                        eprintln!("[GAP_CHECK] Keys match! Moving Gap from pos {} to cursor {}", search_pos, self.cursor);
+                        eprintln!("[FORWARD_SEARCH] Found Gap at pos={}, len={}, cursor={}", search_pos, group_len, self.cursor);
+                        eprintln!("[FORWARD_SEARCH] Before extraction, slots [{}..={}]:", self.cursor, search_pos + group_len);
+                        for i in self.cursor..=(search_pos + group_len).min(self.total_slots().saturating_sub(1)) {
+                            let desc = match self.get_slot(i) {
+                                Some(ChunkedSlot::Group { key: k, len: l, .. }) => format!("Group(key={}, len={})", k, l),
+                                Some(ChunkedSlot::Gap { group_key: Some(k), group_len: l, .. }) => format!("Gap(key={}, len={})", k, l),
+                                Some(ChunkedSlot::Gap { group_key: None, .. }) => "Gap(no key)".to_string(),
+                                Some(ChunkedSlot::Value { .. }) => "Value".to_string(),
+                                Some(ChunkedSlot::Node { .. }) => "Node".to_string(),
+                                None => "None".to_string(),
+                            };
+                            eprintln!("[FORWARD_SEARCH]   [{}] = {}", i, desc);
+                        }
+
+                        // Found matching gap! Move it to cursor position
+                        let anchor = if gap_anchor.is_valid() {
+                            *gap_anchor
+                        } else {
+                            self.alloc_anchor()
+                        };
+                        let scope = *group_scope;
+                        let len = *group_len;
+
+                        // Need to move the Gap AND its children (total of 1 + len slots)
+                        // From positions [search_pos, search_pos+len] to [cursor, cursor+len]
+
+                        // Extract the Gap itself and its children
+                        let gap_slot = std::mem::replace(
+                            self.get_slot_mut(search_pos).unwrap(),
+                            ChunkedSlot::default()
+                        );
+
+                        let mut children = Vec::new();
+                        for i in 1..=len {
+                            if search_pos + i < self.total_slots() {
+                                children.push(std::mem::replace(
+                                    self.get_slot_mut(search_pos + i).unwrap(),
+                                    ChunkedSlot::default()
+                                ));
+                            }
+                        }
+                        eprintln!("[FORWARD_SEARCH] Extracted {} children, gap_slot cleared at pos {}", children.len(), search_pos);
+
+                        // Shift slots to make room for group + children
+                        eprintln!("[FORWARD_SEARCH] Calling shift_across_chunks({}, {})", self.cursor, search_pos);
+                        self.shift_across_chunks(self.cursor, search_pos);
+
+                        eprintln!("[FORWARD_SEARCH] After shift, before placing:");
+                        for i in self.cursor..=(search_pos + len + 1).min(self.total_slots().saturating_sub(1)) {
+                            let desc = match self.get_slot(i) {
+                                Some(ChunkedSlot::Group { key: k, len: l, .. }) => format!("Group(key={}, len={})", k, l),
+                                Some(ChunkedSlot::Gap { group_key: Some(k), group_len: l, .. }) => format!("Gap(key={}, len={})", k, l),
+                                Some(ChunkedSlot::Gap { group_key: None, .. }) => "Gap(no key)".to_string(),
+                                Some(ChunkedSlot::Value { .. }) => "Value".to_string(),
+                                Some(ChunkedSlot::Node { .. }) => "Node".to_string(),
+                                None => "None".to_string(),
+                            };
+                            eprintln!("[FORWARD_SEARCH]   [{}] = {}", i, desc);
+                        }
+
+                        // Place the restored Group at cursor
+                        *self.get_slot_mut(self.cursor).unwrap() = ChunkedSlot::Group {
+                            key,
+                            anchor,
+                            len,
+                            scope,
+                            has_gap_children: true,
+                        };
+
+                        // Place the children right after the group
+                        for (i, child) in children.into_iter().enumerate() {
+                            if self.cursor + 1 + i < self.total_slots() {
+                                *self.get_slot_mut(self.cursor + 1 + i).unwrap() = child;
+                            }
+                        }
+
+                        eprintln!("[FORWARD_SEARCH] After placing group and children:");
+                        for i in self.cursor..=(self.cursor + len + 5).min(self.total_slots().saturating_sub(1)) {
+                            let desc = match self.get_slot(i) {
+                                Some(ChunkedSlot::Group { key: k, len: l, .. }) => format!("Group(key={}, len={})", k, l),
+                                Some(ChunkedSlot::Gap { group_key: Some(k), group_len: l, .. }) => format!("Gap(key={}, len={})", k, l),
+                                Some(ChunkedSlot::Gap { group_key: None, .. }) => "Gap(no key)".to_string(),
+                                Some(ChunkedSlot::Value { .. }) => "Value".to_string(),
+                                Some(ChunkedSlot::Node { .. }) => "Node".to_string(),
+                                None => "None".to_string(),
+                            };
+                            eprintln!("[FORWARD_SEARCH]   [{}] = {}", i, desc);
                         }
 
                         let start = self.cursor;
@@ -696,7 +864,9 @@ impl SlotStorage for ChunkedSlotStorage {
     type ValueSlot = ValueSlotId;
 
     fn begin_group(&mut self, key: Key) -> StartGroup<Self::Group> {
+        eprintln!("[BEGIN_GROUP] key={}, cursor={}", key, self.cursor);
         let (idx, restored) = self.start_group(key);
+        eprintln!("[BEGIN_GROUP] -> idx={}, restored={}, new_cursor={}", idx, restored, self.cursor);
         StartGroup {
             group: GroupId::new(idx),
             restored_from_gap: restored,
