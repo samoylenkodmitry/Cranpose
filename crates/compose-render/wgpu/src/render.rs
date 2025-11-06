@@ -16,29 +16,18 @@ use std::num::NonZeroUsize;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 
-fn align_to(value: u64, alignment: u64) -> u64 {
-    if alignment <= 1 {
-        return value;
-    }
-    let remainder = value % alignment;
-    if remainder == 0 {
-        value
-    } else {
-        value + (alignment - remainder)
-    }
-}
-
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct Vertex {
     position: [f32; 2],
     color: [f32; 4],
-    uv: [f32; 2],
+    shape_index: u32,
+    _padding: u32,
 }
 
 impl Vertex {
     const ATTRIBS: [wgpu::VertexAttribute; 3] =
-        wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4, 2 => Float32x2];
+        wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4, 2 => Uint32];
 
     fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
@@ -177,17 +166,10 @@ struct ShapeBatchBuffers {
     index_capacity: usize,
     shape_capacity: usize,
     gradient_capacity: usize,
-    uniform_stride: u64,
-    uniform_binding_size: std::num::NonZeroU64,
 }
 
 impl ShapeBatchBuffers {
-    fn new(
-        device: &wgpu::Device,
-        layout: &wgpu::BindGroupLayout,
-        uniform_stride: u64,
-        uniform_binding_size: std::num::NonZeroU64,
-    ) -> Self {
+    fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout) -> Self {
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Vertex Buffer"),
             size: (mem::size_of::<Vertex>() * 4) as u64,
@@ -204,8 +186,8 @@ impl ShapeBatchBuffers {
 
         let shape_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Shape Buffer"),
-            size: uniform_stride.max(mem::size_of::<ShapeData>() as u64),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            size: mem::size_of::<ShapeData>() as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
@@ -222,11 +204,7 @@ impl ShapeBatchBuffers {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &shape_buffer,
-                        offset: 0,
-                        size: Some(uniform_binding_size),
-                    }),
+                    resource: shape_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -245,8 +223,6 @@ impl ShapeBatchBuffers {
             index_capacity: 6,
             shape_capacity: 1,
             gradient_capacity: 1,
-            uniform_stride,
-            uniform_binding_size,
         }
     }
 
@@ -287,8 +263,8 @@ impl ShapeBatchBuffers {
             let new_capacity = shapes.max(1).next_power_of_two();
             self.shape_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Shape Buffer"),
-                size: self.uniform_stride * new_capacity as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                size: (mem::size_of::<ShapeData>() * new_capacity) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
             self.shape_capacity = new_capacity;
@@ -314,11 +290,7 @@ impl ShapeBatchBuffers {
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                            buffer: &self.shape_buffer,
-                            offset: 0,
-                            size: Some(self.uniform_binding_size),
-                        }),
+                        resource: self.shape_buffer.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
@@ -338,7 +310,6 @@ pub struct GpuRenderer {
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
     shape_buffers: ShapeBatchBuffers,
-    shape_uniform_stride: u64,
     font_system: Arc<Mutex<FontSystem>>,
     text_renderer: TextRenderer,
     text_atlas: TextAtlas,
@@ -385,8 +356,8 @@ impl GpuRenderer {
                         binding: 0,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: true,
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
                             min_binding_size: Some(
                                 std::num::NonZeroU64::new(mem::size_of::<ShapeData>() as u64)
                                     .unwrap(),
@@ -460,12 +431,6 @@ impl GpuRenderer {
             }],
         });
 
-        let limits = device.limits();
-        let uniform_alignment = u64::from(limits.min_uniform_buffer_offset_alignment.max(1));
-        let shape_uniform_size = mem::size_of::<ShapeData>() as u64;
-        let shape_uniform_stride = align_to(shape_uniform_size, uniform_alignment);
-        let uniform_binding_size = std::num::NonZeroU64::new(shape_uniform_size).unwrap();
-
         let swash_cache = SwashCache::new();
         let mut text_atlas = TextAtlas::new(&device, &queue, surface_format);
         let text_renderer = TextRenderer::new(
@@ -475,12 +440,7 @@ impl GpuRenderer {
             None,
         );
 
-        let shape_buffers = ShapeBatchBuffers::new(
-            &device,
-            &shape_bind_group_layout,
-            shape_uniform_stride,
-            uniform_binding_size,
-        );
+        let shape_buffers = ShapeBatchBuffers::new(&device, &shape_bind_group_layout);
 
         let text_cache = LruCache::new(NonZeroUsize::new(128).unwrap());
 
@@ -492,7 +452,6 @@ impl GpuRenderer {
             uniform_buffer,
             uniform_bind_group,
             shape_buffers,
-            shape_uniform_stride,
             font_system,
             text_renderer,
             text_atlas,
@@ -538,6 +497,7 @@ impl GpuRenderer {
 
         for (i, shape) in sorted_shapes.iter().enumerate() {
             let rect = shape.rect;
+            let shape_index = i as u32;
 
             let mut gradient_params = [0.0f32; 4];
             let (color, brush_type, gradient_start, gradient_count) = match &shape.brush {
@@ -596,22 +556,26 @@ impl GpuRenderer {
                 Vertex {
                     position: [rect.x, rect.y],
                     color,
-                    uv: [0.0, 0.0],
+                    shape_index,
+                    _padding: 0,
                 },
                 Vertex {
                     position: [rect.x + rect.width, rect.y],
                     color,
-                    uv: [1.0, 0.0],
+                    shape_index,
+                    _padding: 0,
                 },
                 Vertex {
                     position: [rect.x, rect.y + rect.height],
                     color,
-                    uv: [0.0, 1.0],
+                    shape_index,
+                    _padding: 0,
                 },
                 Vertex {
                     position: [rect.x + rect.width, rect.y + rect.height],
                     color,
-                    uv: [1.0, 1.0],
+                    shape_index,
+                    _padding: 0,
                 },
             ]);
 
@@ -674,15 +638,11 @@ impl GpuRenderer {
                 bytemuck::cast_slice(&index_data),
             );
 
-            let stride = self.shape_uniform_stride as usize;
-            let shape_size = mem::size_of::<ShapeData>();
-            let mut shape_bytes = vec![0u8; stride * total_shapes];
-            for (i, data) in shape_data_entries.iter().enumerate() {
-                let offset = i * stride;
-                shape_bytes[offset..offset + shape_size].copy_from_slice(bytemuck::bytes_of(data));
-            }
-            self.queue
-                .write_buffer(&self.shape_buffers.shape_buffer, 0, &shape_bytes);
+            self.queue.write_buffer(
+                &self.shape_buffers.shape_buffer,
+                0,
+                bytemuck::cast_slice(&shape_data_entries),
+            );
 
             if !gradient_data.is_empty() {
                 self.queue.write_buffer(
@@ -720,6 +680,7 @@ impl GpuRenderer {
 
             // Render each shape
             if shape_count > 0 {
+                render_pass.set_bind_group(1, &self.shape_buffers.bind_group, &[]);
                 render_pass.set_vertex_buffer(0, self.shape_buffers.vertex_buffer.slice(..));
                 render_pass.set_index_buffer(
                     self.shape_buffers.index_buffer.slice(..),
@@ -727,8 +688,6 @@ impl GpuRenderer {
                 );
 
                 for i in 0..shape_count {
-                    let offset = (i as u64 * self.shape_uniform_stride) as u32;
-                    render_pass.set_bind_group(1, &self.shape_buffers.bind_group, &[offset]);
                     let index_start = (i * 6) as u32;
                     let index_end = index_start + 6;
                     let base_vertex = (i * 4) as i32;
