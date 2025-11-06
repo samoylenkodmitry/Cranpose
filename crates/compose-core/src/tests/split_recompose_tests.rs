@@ -107,7 +107,7 @@ fn test_split_recompose_at_scope() {
     let child2_recompose = storage.begin_recompose_at_scope(20);
     assert!(child2_recompose.is_some(), "Should find scope 20");
 
-    // begin_recompose_at_scope already entered the group, so directly allocate slots
+    // begin_recompose_at_scope entered the group, directly allocate slots
     let val2_recompose = storage.alloc_value_slot(|| 123i32);
 
     // The value should be preserved from initial composition

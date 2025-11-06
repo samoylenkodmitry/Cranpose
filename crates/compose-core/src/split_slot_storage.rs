@@ -472,22 +472,19 @@ impl SlotStorage for SplitSlotStorage {
             {
                 if *s == scope {
                     eprintln!("[begin_recompose_at_scope] Found scope {} at idx={}, entering group", scope, idx);
-                    // Enter the group: move cursor past the group slot
+                    // Enter the group and skip RecomposeScope
                     self.cursor = idx + 1;
 
-                    // Check if first child is a RecomposeScope and skip it
-                    // Macro-generated composables have RecomposeScope as first child
-                    let mut did_skip_recompose_scope = false;
+                    // Skip RecomposeScope if present
                     if let Some(LayoutSlot::ValueRef { anchor }) = self.layout.get(self.cursor) {
                         if let Some(data) = self.payload.get(&anchor.0) {
                             if (**data).type_id() == std::any::TypeId::of::<crate::owned::Owned<crate::RecomposeScope>>() {
+                                eprintln!("[begin_recompose_at_scope] Skipping RecomposeScope at cursor={}", self.cursor);
                                 self.cursor += 1;
-                                did_skip_recompose_scope = true;
                             }
                         }
                     }
 
-                    eprintln!("[begin_recompose_at_scope] Cursor now at {}, skipped RecomposeScope: {}", self.cursor, did_skip_recompose_scope);
                     self.in_recompose_mode = true;
                     return Some(GroupId::new(idx));
                 }
