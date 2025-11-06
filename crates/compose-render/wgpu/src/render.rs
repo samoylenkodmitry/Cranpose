@@ -5,11 +5,25 @@ use crate::shaders;
 use bytemuck::{Pod, Zeroable};
 use compose_ui_graphics::{Brush, Color, Rect};
 use glyphon::{
-    Attrs, Buffer, Color as GlyphonColor, Family, FontSystem, Metrics, Resolution, Shaping,
+    fontdb, Attrs, Buffer, Color as GlyphonColor, Family, FontSystem, Metrics, Resolution, Shaping,
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer,
 };
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use wgpu::util::DeviceExt;
+
+#[derive(Clone, Copy)]
+struct StaticFontData(&'static [u8]);
+
+impl AsRef<[u8]> for StaticFontData {
+    fn as_ref(&self) -> &[u8] {
+        self.0
+    }
+}
+
+const ROBOTO_LIGHT_FONT: StaticFontData = StaticFontData(include_bytes!(
+    "../../../../apps/desktop-demo/assets/Roboto-Light.ttf"
+));
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
@@ -160,7 +174,8 @@ impl GpuRenderer {
             multiview: None,
         });
 
-        let font_system = Arc::new(Mutex::new(FontSystem::new()));
+        let font_sources = [fontdb::Source::Binary(Arc::new(ROBOTO_LIGHT_FONT))];
+        let font_system = Arc::new(Mutex::new(FontSystem::new_with_fonts(font_sources)));
         let swash_cache = SwashCache::new();
         let mut text_atlas = TextAtlas::new(&device, &queue, surface_format);
         let text_renderer = TextRenderer::new(
@@ -328,10 +343,12 @@ impl GpuRenderer {
                 buffer.set_text(
                     &mut font_system,
                     &text_draw.text,
-                    Attrs::new().family(Family::SansSerif),
+                    Attrs::new().family(Family::Name("Roboto")),
                     Shaping::Advanced,
                 );
                 buffer.shape_until_scroll(&mut font_system);
+
+                log_text_glyphs(&font_system, &buffer, text_draw, text_scale);
 
                 let to_u8 = |value: f32| -> u8 { (value.clamp(0.0, 1.0) * 255.0).round() as u8 };
 
@@ -601,16 +618,111 @@ fn text_bounds_from_clip(clip: Option<Rect>, width: u32, height: u32) -> Option<
     }
 }
 
-fn text_preview(text: &str) -> String {
-    const MAX_PREVIEW_CHARS: usize = 32;
-    if !log::log_enabled!(log::Level::Debug) {
-        return String::new();
+fn log_text_glyphs(
+    font_system: &FontSystem,
+    buffer: &Buffer,
+    text_draw: &TextDraw,
+    text_scale: f32,
+) {
+    let mut glyph_total = 0usize;
+    let mut run_count = 0usize;
+    let mut fonts: BTreeMap<fontdb::ID, usize> = BTreeMap::new();
+
+    for run in buffer.layout_runs() {
+        run_count += 1;
+        glyph_total += run.glyphs.len();
+        for glyph in run.glyphs.iter() {
+            *fonts.entry(glyph.font_id).or_insert(0) += 1;
+        }
     }
 
+    let font_db = font_system.db();
+    let font_details: Vec<String> = fonts
+        .into_iter()
+        .map(|(font_id, count)| {
+            if let Some(face) = font_db.face(font_id) {
+                let family = face
+                    .families
+                    .first()
+                    .map(|(name, _)| name.as_str())
+                    .unwrap_or_else(|| face.post_script_name.as_str());
+                format!(
+                    "{} ({}; id {}) - {} {}",
+                    family,
+                    face.post_script_name,
+                    font_id,
+                    count,
+                    glyph_label(count)
+                )
+            } else {
+                format!("id {} - {} {}", font_id, count, glyph_label(count))
+            }
+        })
+        .collect();
+
+    let fonts_label = if font_details.is_empty() {
+        String::from("none")
+    } else {
+        font_details.join(", ")
+    };
+
+    let text_snippet = info_text_preview(&text_draw.text);
+
+    if glyph_total == 0 {
+        log::warn!(
+            "GPU text glyphs: no glyphs formed for \"{}\" @ scale {:.2} (rect {:.1}×{:.1} at {:.1},{:.1}); fonts resolved: {} ({} run(s))",
+            text_snippet,
+            text_scale,
+            text_draw.rect.width,
+            text_draw.rect.height,
+            text_draw.rect.x,
+            text_draw.rect.y,
+            fonts_label,
+            run_count
+        );
+    } else {
+        log::info!(
+            "GPU text glyphs: formed {} {} across {} run(s) for \"{}\" @ scale {:.2} (rect {:.1}×{:.1} at {:.1},{:.1}); fonts resolved: {}",
+            glyph_total,
+            glyph_label(glyph_total),
+            run_count,
+            text_snippet,
+            text_scale,
+            text_draw.rect.width,
+            text_draw.rect.height,
+            text_draw.rect.x,
+            text_draw.rect.y,
+            fonts_label
+        );
+    }
+}
+
+fn glyph_label(count: usize) -> &'static str {
+    if count == 1 {
+        "glyph"
+    } else {
+        "glyphs"
+    }
+}
+
+const TEXT_PREVIEW_LIMIT: usize = 32;
+
+fn info_text_preview(text: &str) -> String {
+    truncated_text(text, TEXT_PREVIEW_LIMIT)
+}
+
+fn truncated_text(text: &str, max_chars: usize) -> String {
     let mut chars = text.chars();
-    let mut preview: String = chars.by_ref().take(MAX_PREVIEW_CHARS).collect();
+    let mut preview: String = chars.by_ref().take(max_chars).collect();
     if chars.next().is_some() {
         preview.push('…');
     }
     preview
+}
+
+fn text_preview(text: &str) -> String {
+    if !log::log_enabled!(log::Level::Debug) {
+        return String::new();
+    }
+    truncated_text(text, TEXT_PREVIEW_LIMIT)
 }
