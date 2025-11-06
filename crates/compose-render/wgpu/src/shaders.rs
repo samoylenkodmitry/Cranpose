@@ -13,6 +13,7 @@ struct VertexOutput {
     @location(0) color: vec4<f32>,
     @location(1) uv: vec2<f32>,
     @location(2) rect_pos: vec2<f32>,
+    @location(3) @interpolate(flat) shape_idx: u32,
 }
 
 struct Uniforms {
@@ -25,7 +26,7 @@ var<uniform> uniforms: Uniforms;
 
 // Vertex shader
 @vertex
-fn vs_main(input: VertexInput) -> VertexOutput {
+fn vs_main(input: VertexInput, @builtin(vertex_index) vertex_idx: u32) -> VertexOutput {
     var output: VertexOutput;
 
     // Convert from pixel coordinates to clip space
@@ -36,6 +37,8 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     output.color = input.color;
     output.uv = input.uv;
     output.rect_pos = input.position;
+    // Each shape has 4 vertices, so divide by 4 to get shape index
+    output.shape_idx = vertex_idx / 4u;
 
     return output;
 }
@@ -55,7 +58,7 @@ struct GradientStop {
 }
 
 @group(1) @binding(0)
-var<uniform> shape_data: ShapeData;
+var<storage, read> shape_data: array<ShapeData>;
 
 @group(1) @binding(1)
 var<storage, read> gradient_stops: array<GradientStop>;
@@ -78,13 +81,14 @@ fn sdf_rounded_rect(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    let shape = shape_data[input.shape_idx];
     let rect_pos = input.rect_pos;
-    let rect_center = shape_data.rect.xy + shape_data.rect.zw * 0.5;
-    let half_size = shape_data.rect.zw * 0.5;
+    let rect_center = shape.rect.xy + shape.rect.zw * 0.5;
+    let half_size = shape.rect.zw * 0.5;
     let local_pos = rect_pos - rect_center;
 
     // Compute SDF for rounded rectangle
-    let dist = sdf_rounded_rect(local_pos, half_size, shape_data.radii);
+    let dist = sdf_rounded_rect(local_pos, half_size, shape.radii);
 
     // Anti-aliasing
     let alpha = 1.0 - smoothstep(-0.5, 0.5, dist);
@@ -96,31 +100,31 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     var color = input.color;
 
     // Apply gradient if needed
-    if (shape_data.brush_type == 1u) {
+    if (shape.brush_type == 1u) {
         // Linear gradient (top to bottom)
-        let t = clamp((rect_pos.y - shape_data.rect.y) / shape_data.rect.w, 0.0, 1.0);
-        let count = shape_data.gradient_count;
+        let t = clamp((rect_pos.y - shape.rect.y) / shape.rect.w, 0.0, 1.0);
+        let count = shape.gradient_count;
         let idx = u32(t * f32(count - 1u));
         let next_idx = min(idx + 1u, count - 1u);
         let local_t = fract(t * f32(count - 1u));
 
-        let c1 = gradient_stops[shape_data.gradient_start + idx].color;
-        let c2 = gradient_stops[shape_data.gradient_start + next_idx].color;
+        let c1 = gradient_stops[shape.gradient_start + idx].color;
+        let c2 = gradient_stops[shape.gradient_start + next_idx].color;
         color = mix(c1, c2, local_t);
-    } else if (shape_data.brush_type == 2u) {
+    } else if (shape.brush_type == 2u) {
         // Radial gradient
-        let center = shape_data.rect.xy + shape_data.rect.zw * 0.5;
-        let max_dist = length(shape_data.rect.zw * 0.5);
+        let center = shape.rect.xy + shape.rect.zw * 0.5;
+        let max_dist = length(shape.rect.zw * 0.5);
         let dist_from_center = length(rect_pos - center);
         let t = clamp(dist_from_center / max_dist, 0.0, 1.0);
 
-        let count = shape_data.gradient_count;
+        let count = shape.gradient_count;
         let idx = u32(t * f32(count - 1u));
         let next_idx = min(idx + 1u, count - 1u);
         let local_t = fract(t * f32(count - 1u));
 
-        let c1 = gradient_stops[shape_data.gradient_start + idx].color;
-        let c2 = gradient_stops[shape_data.gradient_start + next_idx].color;
+        let c1 = gradient_stops[shape.gradient_start + idx].color;
+        let c2 = gradient_stops[shape.gradient_start + next_idx].color;
         color = mix(c1, c2, local_t);
     }
 
