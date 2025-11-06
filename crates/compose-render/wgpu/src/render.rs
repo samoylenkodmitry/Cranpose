@@ -348,15 +348,25 @@ impl GpuRenderer {
             .map(|shape| Self::create_shape_key(shape))
             .collect();
 
+        // Debug: track cache stats
+        let cache_size_before = self.shape_cache.len();
+
         // Remove cache entries for shapes no longer present (O(n) instead of O(n²))
         self.shape_cache.retain(|key, _| current_keys.contains(key));
 
+        let removed = cache_size_before - self.shape_cache.len();
+        if removed > 0 {
+            println!("Shape cache: removed {} stale entries", removed);
+        }
+
         // First pass: populate cache for missing shapes
+        let mut cache_misses = 0;
         for shape in &sorted_shapes {
             let key = Self::create_shape_key(shape);
 
             if !self.shape_cache.contains_key(&key) {
                 // Not in cache, create new buffers
+                cache_misses += 1;
                 let (vertex_buffer, index_buffer, shape_bind_group) =
                     self.prepare_shape_buffers(shape)?;
 
@@ -370,6 +380,9 @@ impl GpuRenderer {
                 );
             }
         }
+
+        println!("Shape cache: {} shapes, {} misses, {} hits",
+            sorted_shapes.len(), cache_misses, sorted_shapes.len() - cache_misses);
 
         // Second pass: collect references from cache
         let shape_data: Vec<_> = sorted_shapes
@@ -429,10 +442,19 @@ impl GpuRenderer {
             .map(|text| Self::create_text_key(text))
             .collect();
 
+        // Debug: track text cache stats
+        let text_cache_size_before = self.text_cache.len();
+
         // Remove cache entries for text no longer present (O(n) instead of O(n²))
         self.text_cache.retain(|key, _| current_text_keys.contains(key));
 
+        let text_removed = text_cache_size_before - self.text_cache.len();
+        if text_removed > 0 {
+            println!("Text cache: removed {} stale entries", text_removed);
+        }
+
         // Create or get cached text buffers
+        let mut text_cache_misses = 0;
         for text_draw in &sorted_texts {
             // Skip empty text or zero-sized rects
             if text_draw.text.is_empty() || text_draw.rect.width <= 0.0 || text_draw.rect.height <= 0.0 {
@@ -443,6 +465,7 @@ impl GpuRenderer {
 
             if !self.text_cache.contains_key(&key) {
                 // Not in cache, create new buffer
+                text_cache_misses += 1;
                 let mut buffer = Buffer::new(
                     &mut font_system,
                     Metrics::new(14.0 * text_draw.scale, 20.0 * text_draw.scale),
@@ -467,6 +490,12 @@ impl GpuRenderer {
                 );
             }
         }
+
+        let valid_texts = sorted_texts.iter()
+            .filter(|t| !t.text.is_empty() && t.rect.width > 0.0 && t.rect.height > 0.0)
+            .count();
+        println!("Text cache: {} texts, {} misses, {} hits",
+            valid_texts, text_cache_misses, valid_texts - text_cache_misses);
 
         // Collect text data from cache
         let text_data: Vec<(&TextDraw, TextKey)> = sorted_texts
