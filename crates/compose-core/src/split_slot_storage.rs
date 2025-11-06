@@ -273,10 +273,16 @@ impl SplitSlotStorage {
 
     fn do_end_group(&mut self) {
         if let Some(frame) = self.group_stack.pop() {
-            let len = self.cursor.saturating_sub(frame.start + 1);
-            if let Some(LayoutSlot::Group { len: slot_len, .. }) = self.layout.get_mut(frame.start)
+            let end = self.cursor;
+            let len = end.saturating_sub(frame.start + 1);
+            if let Some(LayoutSlot::Group { len: slot_len, has_gap_children, .. }) = self.layout.get_mut(frame.start)
             {
+                let old_len = *slot_len;
                 *slot_len = len;
+                // If the group shrunk, mark that it has gap children
+                if len < old_len {
+                    *has_gap_children = true;
+                }
             }
         }
     }
@@ -406,44 +412,66 @@ impl SlotStorage for SplitSlotStorage {
     fn alloc_value_slot<T: 'static>(&mut self, init: impl FnOnce() -> T) -> Self::ValueSlot {
         self.ensure_capacity();
 
-        // Check if we're inside a group that needs children recomposition (restored from gap)
-        let force_recreate = self.group_stack.last().map_or(false, |frame| frame.force_children_recompose);
+        // NOTE: force_children_recompose is ONLY for child GROUPS, not for value slots!
+        // Value slots should always be reused if the type matches, just like in Baseline.
 
         // Check if current slot is a value ref we can reuse
-        // But don't reuse if force_recreate is true (parent was restored from gap)
-        if !force_recreate {
-            if let Some(LayoutSlot::ValueRef { anchor }) = self.layout.get(self.cursor) {
-                let anchor_id = anchor.0;
-                // Check if payload exists and has correct type
-                if let Some(data) = self.payload.get(&anchor_id) {
-                    if data.is::<T>() {
-                        // Reuse existing slot with matching type
-                        let slot_id = ValueSlotId::new(self.cursor);
-                        self.cursor += 1;
-                        return slot_id;
-                    } else {
-                        // Type mismatch: overwrite payload with new value
-                        self.payload.insert(anchor_id, Box::new(init()));
-                        let slot_id = ValueSlotId::new(self.cursor);
-                        self.cursor += 1;
-                        return slot_id;
-                    }
+        if let Some(LayoutSlot::ValueRef { anchor }) = self.layout.get(self.cursor) {
+            let anchor_id = anchor.0;
+            // Check if payload exists and has correct type
+            if let Some(data) = self.payload.get(&anchor_id) {
+                if data.is::<T>() {
+                    // Reuse existing slot with matching type
+                    let slot_id = ValueSlotId::new(self.cursor);
+                    self.cursor += 1;
+                    return slot_id;
                 } else {
-                    // Layout points to missing payload: create new payload
+                    // Type mismatch: overwrite payload with new value
                     self.payload.insert(anchor_id, Box::new(init()));
                     let slot_id = ValueSlotId::new(self.cursor);
                     self.cursor += 1;
                     return slot_id;
                 }
+            } else {
+                // Layout points to missing payload: create new payload
+                self.payload.insert(anchor_id, Box::new(init()));
+                let slot_id = ValueSlotId::new(self.cursor);
+                self.cursor += 1;
+                return slot_id;
             }
         }
 
-        // Check if it's a gap we can reuse, OR if we need to overwrite an existing ValueRef
-        let should_overwrite = matches!(self.layout.get(self.cursor), Some(LayoutSlot::Gap { .. }))
-            || (force_recreate && matches!(self.layout.get(self.cursor), Some(LayoutSlot::ValueRef { .. })));
+        // Check if it's a gap we can reuse
+        if let Some(LayoutSlot::Gap { anchor, group_key, .. }) = self.layout.get(self.cursor) {
+            let gap_anchor = *anchor;
+            let is_group_gap = group_key.is_some();
 
-        if should_overwrite {
-            // Create new value slot in the gap or overwrite existing ValueRef
+            // If this gap was NOT a group (i.e., it was a value or node slot),
+            // try to restore it as a ValueRef and reuse the payload
+            if !is_group_gap && gap_anchor.is_valid() {
+                let anchor_id = gap_anchor.0;
+                // Check if payload exists and has correct type
+                if let Some(data) = self.payload.get(&anchor_id) {
+                    if data.is::<T>() {
+                        // Restore the ValueRef and reuse existing payload
+                        self.layout[self.cursor] = LayoutSlot::ValueRef { anchor: gap_anchor };
+                        let slot_id = ValueSlotId::new(self.cursor);
+                        self.cursor += 1;
+                        self.anchors_dirty = true;
+                        return slot_id;
+                    } else {
+                        // Type mismatch: overwrite payload with new value
+                        self.payload.insert(anchor_id, Box::new(init()));
+                        self.layout[self.cursor] = LayoutSlot::ValueRef { anchor: gap_anchor };
+                        let slot_id = ValueSlotId::new(self.cursor);
+                        self.cursor += 1;
+                        self.anchors_dirty = true;
+                        return slot_id;
+                    }
+                }
+            }
+
+            // Otherwise, create new value slot in the gap
             let anchor = self.alloc_anchor();
             let anchor_id = anchor.0;
 
