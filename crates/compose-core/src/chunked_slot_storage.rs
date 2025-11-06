@@ -741,6 +741,14 @@ impl ChunkedSlotStorage {
                     }
                 }
 
+                // When we didn't find a match at this position, skip over the entire structure
+                // (like Baseline does) to avoid searching inside unrelated groups/gaps
+                let advance = match self.get_slot(search_pos) {
+                    Some(ChunkedSlot::Group { len, .. }) => (*len).max(1),
+                    Some(ChunkedSlot::Gap { group_len, .. }) => (*group_len).max(1),
+                    _ => 1,
+                };
+
                 // Stop searching if we've gone beyond parent_end, unless we need extended search
                 if search_pos >= parent_end && parent_end < self.total_slots() {
                     // Do limited extended search
@@ -750,7 +758,7 @@ impl ChunkedSlotStorage {
                     }
                 }
 
-                search_pos += 1;
+                search_pos += advance;
             }
         }
 
