@@ -18,7 +18,7 @@ use pixels::{Pixels, SurfaceTexture};
 
 #[cfg(feature = "renderer-wgpu")]
 use compose_render_wgpu::WgpuRenderer;
-#[cfg(feature = "renderer-wgpu")]
+
 use std::sync::Arc;
 
 use winit::dpi::LogicalSize;
@@ -198,17 +198,17 @@ fn run_pixels_app(options: &ComposeAppOptions, content: impl FnMut() + 'static) 
     let initial_width = options.initial_size.0;
     let initial_height = options.initial_size.1;
 
-    let window = WindowBuilder::new()
+    let window = Arc::new(WindowBuilder::new()
         .with_title(options.title.clone())
         .with_inner_size(LogicalSize::new(
             initial_width as f64,
             initial_height as f64,
         ))
         .build(&event_loop)
-        .expect("failed to create window");
+        .expect("failed to create window"));
 
     let size = window.inner_size();
-    let surface_texture = SurfaceTexture::new(size.width, size.height, &window);
+    let surface_texture = SurfaceTexture::new(size.width, size.height, window.as_ref());
     let mut pixels = Pixels::new(initial_width, initial_height, surface_texture)
         .expect("failed to create pixel buffer");
 
@@ -231,10 +231,11 @@ fn run_pixels_app(options: &ComposeAppOptions, content: impl FnMut() + 'static) 
     app.set_buffer_size(initial_width, initial_height);
     app.set_viewport(size.width as f32, size.height as f32);
 
+    let window_for_event_loop = window.clone();
     let _ = event_loop.run(move |event, elwt| {
         elwt.set_control_flow(ControlFlow::Wait);
         match event {
-            Event::WindowEvent { window_id, event } if window_id == window.id() => match event {
+            Event::WindowEvent { window_id, event } if window_id == window_for_event_loop.id() => match event {
                 WindowEvent::CloseRequested => {
                     elwt.exit();
                 }
@@ -255,7 +256,7 @@ fn run_pixels_app(options: &ComposeAppOptions, content: impl FnMut() + 'static) 
                     ..
                 } => {
                     platform.set_scale_factor(scale_factor);
-                    let new_size = window.inner_size();
+                    let new_size = window_for_event_loop.inner_size();
                     if let Err(err) =
                         pixels.resize_surface(new_size.width, new_size.height)
                     {
@@ -276,7 +277,7 @@ fn run_pixels_app(options: &ComposeAppOptions, content: impl FnMut() + 'static) 
                     app.set_cursor(logical.x, logical.y);
                     if app.should_render() {
                         app.update();
-                        window.request_redraw();
+                        window_for_event_loop.request_redraw();
                     }
                 }
                 WindowEvent::MouseInput {
@@ -309,7 +310,7 @@ fn run_pixels_app(options: &ComposeAppOptions, content: impl FnMut() + 'static) 
             },
             Event::AboutToWait | Event::UserEvent(()) => {
                 if app.should_render() {
-                    window.request_redraw();
+                    window_for_event_loop.request_redraw();
                     elwt.set_control_flow(ControlFlow::Poll);
                 }
             }
@@ -474,10 +475,7 @@ fn run_wgpu_app(options: &ComposeAppOptions, content: impl FnMut() + 'static) ->
                         .texture
                         .create_view(&wgpu::TextureViewDescriptor::default());
 
-                    // SAFETY: We need mutable access to the renderer for rendering.
-                    // This is safe because we're the only code accessing it in this event.
-                    let renderer_ptr = app.renderer() as *const WgpuRenderer as *mut WgpuRenderer;
-                    if let Err(err) = unsafe { &mut *renderer_ptr }.render(&view, surface_config.width, surface_config.height) {
+                    if let Err(err) = app.renderer().render(&view, surface_config.width, surface_config.height) {
                         log::error!("render failed: {err:?}");
                         return;
                     }

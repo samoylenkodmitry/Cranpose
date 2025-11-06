@@ -14,7 +14,7 @@ compose-app-shell = { path = "../compose-app-shell" }
 compose-platform-desktop-winit = { path = "../compose-platform/desktop-winit", optional = true }
 compose-render-pixels = { path = "../compose-render/pixels", optional = true }
 compose-render-wgpu = { path = "../compose-render/wgpu", optional = true }
-pixels = { version = "0.13", optional = true }
+pixels = { version = "0.15", optional = true }
 wgpu = { version = "0.19", optional = true }
 pollster = { version = "0.3", optional = true }
 winit = { version = "0.29", optional = true }
