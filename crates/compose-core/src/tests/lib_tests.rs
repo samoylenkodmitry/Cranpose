@@ -1115,7 +1115,7 @@ fn stats_scope_survives_conditional_gap() {
 
 #[test]
 fn slot_table_remember_replaces_mismatched_type() {
-    let mut slots = SlotBackend::default();
+    let mut slots = SlotTable::new();
 
     {
         let value = slots.remember(|| 42i32);
@@ -1744,7 +1744,7 @@ impl Node for TrackingChild {
 }
 
 fn apply_child_diff(
-    slots: &mut SlotTable,
+    slots: &mut SlotBackend,
     applier: &mut MemoryApplier,
     runtime: &Runtime,
     parent_id: NodeId,
@@ -2531,7 +2531,7 @@ fn stats_watchers_survive_conditional_toggle() {
 
 #[test]
 fn slot_table_marks_values_as_gaps() {
-    let mut slots = SlotBackend::default();
+    let mut slots = SlotTable::new();
 
     // Create initial composition with 3 value slots
     let _idx1 = slots.use_value_slot(|| 1i32);
@@ -2548,7 +2548,7 @@ fn slot_table_marks_values_as_gaps() {
 
 #[test]
 fn slot_table_reuses_gap_slots_for_values() {
-    let mut slots = SlotBackend::default();
+    let mut slots = SlotTable::new();
 
     // Create initial value
     let idx1 = slots.use_value_slot(|| 1i32);
@@ -2569,7 +2569,7 @@ fn slot_table_reuses_gap_slots_for_values() {
 
 #[test]
 fn slot_table_replaces_mismatched_value_types() {
-    let mut slots = SlotBackend::default();
+    let mut slots = SlotTable::new();
 
     // Create initial value of type i32
     let idx = slots.use_value_slot(|| 1i32);
@@ -2586,7 +2586,7 @@ fn slot_table_replaces_mismatched_value_types() {
 
 #[test]
 fn slot_table_handles_nested_group_gaps() {
-    let mut slots = SlotBackend::default();
+    let mut slots = SlotTable::new();
 
     // Create a parent group
     let parent_idx = slots.start(100);
@@ -2611,7 +2611,7 @@ fn slot_table_handles_nested_group_gaps() {
 
 #[test]
 fn slot_table_preserves_sibling_groups_when_marking_gaps() {
-    let mut slots = SlotBackend::default();
+    let mut slots = SlotTable::new();
 
     // Create first group with a value
     let g1 = slots.start(1);
