@@ -30,7 +30,7 @@ pub enum SlotBackendKind {
 
 impl Default for SlotBackendKind {
     fn default() -> Self {
-        Self::Baseline
+        Self::Chunked
     }
 }
 

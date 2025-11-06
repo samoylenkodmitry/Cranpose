@@ -470,10 +470,9 @@ impl ChunkedSlotStorage {
 
     /// Skip over the current group (internal implementation).
     fn do_skip_current_group(&mut self) {
-        if let Some(slot) = self.get_slot(self.cursor) {
-            if let ChunkedSlot::Group { len, .. } = slot {
-                self.cursor += 1 + len;
-            }
+        if let Some(frame) = self.group_stack.last() {
+            let total = self.total_slots();
+            self.cursor = frame.end.min(total);
         }
     }
 
@@ -586,11 +585,28 @@ impl SlotStorage for ChunkedSlotStorage {
         // Linear scan to find group with this scope
         for global_idx in 0..self.total_slots() {
             if let Some(ChunkedSlot::Group {
-                scope: Some(s), ..
+                scope: Some(s),
+                len,
+                key,
+                ..
             }) = self.get_slot(global_idx)
             {
                 if *s == scope {
-                    self.cursor = global_idx;
+                    // Push group frame and position cursor inside the group
+                    let frame = GroupFrame {
+                        key: *key,
+                        start: global_idx,
+                        end: global_idx + len,
+                        force_children_recompose: false,
+                    };
+                    self.group_stack.push(frame);
+                    self.cursor = global_idx + 1;
+
+                    // Skip over first value slot if present (matches baseline behavior)
+                    if matches!(self.get_slot(self.cursor), Some(ChunkedSlot::Value { .. })) {
+                        self.cursor += 1;
+                    }
+
                     return Some(GroupId::new(global_idx));
                 }
             }
@@ -599,7 +615,9 @@ impl SlotStorage for ChunkedSlotStorage {
     }
 
     fn end_recompose(&mut self) {
-        // No-op for chunked storage
+        if let Some(frame) = self.group_stack.pop() {
+            self.cursor = frame.end;
+        }
     }
 
     fn alloc_value_slot<T: 'static>(&mut self, init: impl FnOnce() -> T) -> Self::ValueSlot {
@@ -610,11 +628,27 @@ impl SlotStorage for ChunkedSlotStorage {
             if data.is::<T>() {
                 let slot_id = ValueSlotId::new(self.cursor);
                 self.cursor += 1;
+                self.update_group_bounds();
                 return slot_id;
             }
         }
 
-        // Create new value slot
+        // Check if the slot is a Gap that we can replace
+        if matches!(self.get_slot(self.cursor), Some(ChunkedSlot::Gap { .. })) {
+            let anchor = self.alloc_anchor();
+            let slot = ChunkedSlot::Value {
+                anchor,
+                data: Box::new(init()),
+            };
+            *self.get_slot_mut(self.cursor).unwrap() = slot;
+            let slot_id = ValueSlotId::new(self.cursor);
+            self.cursor += 1;
+            self.update_group_bounds();
+            self.anchors_dirty = true;
+            return slot_id;
+        }
+
+        // Create new value slot (type mismatch or other slot type)
         let anchor = self.alloc_anchor();
         let slot = ChunkedSlot::Value {
             anchor,
@@ -713,7 +747,11 @@ impl ChunkedSlotStorage {
                 Some(ChunkedSlot::Value { .. }) => "Value".to_string(),
                 Some(ChunkedSlot::Node { id, .. }) => format!("Node(id={})", id),
                 Some(ChunkedSlot::Gap { group_key, group_scope, group_len, .. }) => {
-                    format!("Gap(key={:?}, scope={:?}, len={})", group_key, group_scope, group_len)
+                    if let Some(key) = group_key {
+                        format!("Gap(was_group_key={}, scope={:?})", key, group_scope)
+                    } else {
+                        "Gap".to_string()
+                    }
                 }
                 None => "Empty".to_string(),
             };
