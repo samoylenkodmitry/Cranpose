@@ -1,13 +1,15 @@
 //! GPU rendering implementation using WGPU
 
-use crate::font::{PreferredFont, DEFAULT_FONT_SIZE, DEFAULT_LINE_HEIGHT};
+use crate::font::{
+    fallback_text_attrs, primary_text_attrs, PreferredFont, DEFAULT_FONT_SIZE, DEFAULT_LINE_HEIGHT,
+};
 use crate::scene::{DrawShape, TextDraw};
 use crate::shaders;
 use crate::text_cache::{grow_text_cache, CachedTextBuffer, TextCacheKey};
 use bytemuck::{Pod, Zeroable};
 use compose_ui_graphics::{Brush, Rect};
 use glyphon::{
-    fontdb, Attrs, Buffer, Color as GlyphonColor, Family, FontSystem, Metrics, Resolution, Shaping,
+    fontdb, Attrs, Buffer, Color as GlyphonColor, FontSystem, Metrics, Resolution, Shaping,
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer,
 };
 use lru::LruCache;
@@ -70,6 +72,7 @@ struct PreparedTextArea {
     color: GlyphonColor,
     scale: f32,
     buffer_height: f32,
+    prefer_fallback: bool,
     fallback: Option<Box<Buffer>>,
 }
 
@@ -612,6 +615,8 @@ impl GpuRenderer {
         {
             let mut font_system = self.font_system.lock().unwrap();
             let mut text_cache = self.text_cache.lock().unwrap();
+            let primary_attrs = primary_text_attrs(self.preferred_font.as_ref());
+            let fallback_attrs = fallback_text_attrs(self.preferred_font.as_ref());
             let total_texts = sorted_texts.len();
             let mut skipped_zero_scale = 0usize;
             let mut skipped_invalid_clip = 0usize;
@@ -666,46 +671,39 @@ impl GpuRenderer {
 
                 let key = TextCacheKey::new(&text_draw.text, text_scale);
                 let mut reshaped = false;
+                let prefer_fallback;
 
                 if let Some(entry) = text_cache.get_mut(&key) {
-                    let attrs = match self.preferred_font.as_ref() {
-                        Some(font) => Attrs::new()
-                            .family(Family::Name(&font.family))
-                            .weight(font.weight),
-                        None => Attrs::new().family(Family::SansSerif),
-                    };
                     reshaped = entry.ensure(
                         &mut font_system,
                         metrics,
                         key.scale_key(),
                         buffer_height,
                         &text_draw.text,
-                        attrs,
+                        primary_attrs,
+                        fallback_attrs,
                     );
+                    prefer_fallback = entry.uses_fallback();
                     log_text_glyphs(&font_system, &entry.buffer, text_draw, text_scale);
                 } else {
                     if text_cache.len() == text_cache.cap().get() {
                         grow_text_cache(&mut text_cache);
                     }
 
-                    let attrs = match self.preferred_font.as_ref() {
-                        Some(font) => Attrs::new()
-                            .family(Family::Name(&font.family))
-                            .weight(font.weight),
-                        None => Attrs::new().family(Family::SansSerif),
-                    };
                     let cached = CachedTextBuffer::new(
                         &mut font_system,
                         metrics,
                         key.scale_key(),
                         buffer_height,
                         &text_draw.text,
-                        attrs,
+                        primary_attrs,
+                        fallback_attrs,
                     );
                     text_cache.put(key.clone(), Box::new(cached));
                     let entry = text_cache
                         .get_mut(&key)
                         .expect("text cache entry missing after insertion");
+                    prefer_fallback = entry.uses_fallback();
                     log_text_glyphs(&font_system, &entry.buffer, text_draw, text_scale);
                 }
 
@@ -726,6 +724,7 @@ impl GpuRenderer {
                     color,
                     scale: text_scale,
                     buffer_height,
+                    prefer_fallback,
                     fallback: None,
                 });
 
@@ -789,19 +788,36 @@ impl GpuRenderer {
                         );
                         let mut buffer = Buffer::new(&mut font_system, metrics);
                         buffer.set_size(&mut font_system, f32::MAX, area.buffer_height);
-                        let attrs = match self.preferred_font.as_ref() {
-                            Some(font) => Attrs::new()
-                                .family(Family::Name(&font.family))
-                                .weight(font.weight),
-                            None => Attrs::new().family(Family::SansSerif),
+
+                        let mut shape_buffer = |attrs: Attrs| -> usize {
+                            buffer.set_text(
+                                &mut font_system,
+                                area.key.text(),
+                                attrs,
+                                Shaping::Advanced,
+                            );
+                            buffer.shape_until_scroll(&mut font_system);
+                            buffer
+                                .layout_runs()
+                                .fold(0usize, |acc, run| acc + run.glyphs.len())
                         };
-                        buffer.set_text(
-                            &mut font_system,
-                            area.key.text(),
-                            attrs,
-                            Shaping::Advanced,
-                        );
-                        buffer.shape_until_scroll(&mut font_system);
+
+                        let mut _glyphs = {
+                            let first_attrs = if area.prefer_fallback {
+                                fallback_attrs.unwrap_or(primary_attrs)
+                            } else {
+                                primary_attrs
+                            };
+                            shape_buffer(first_attrs)
+                        };
+
+                        if _glyphs == 0 {
+                            if let Some(fallback) = fallback_attrs {
+                                if !area.prefer_fallback || fallback != primary_attrs {
+                                    _glyphs = shape_buffer(fallback);
+                                }
+                            }
+                        }
                         area.fallback = Some(Box::new(buffer));
                         let buffer_ref: &Buffer = area
                             .fallback

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use glyphon::{fontdb, FontSystem, Weight};
+use glyphon::{fontdb, Attrs, Family, FontSystem, Weight};
 
 #[derive(Clone, Copy)]
 struct StaticFontData(&'static [u8]);
@@ -58,4 +58,17 @@ pub(crate) fn detect_preferred_font(font_system: &FontSystem) -> Option<Preferre
     }
 
     fallback
+}
+
+pub(crate) fn primary_text_attrs(preferred: Option<&PreferredFont>) -> Attrs<'_> {
+    match preferred {
+        Some(font) => Attrs::new()
+            .family(Family::Name(&font.family))
+            .weight(font.weight),
+        None => Attrs::new().family(Family::SansSerif),
+    }
+}
+
+pub(crate) fn fallback_text_attrs(preferred: Option<&PreferredFont>) -> Option<Attrs<'_>> {
+    preferred.map(|_| Attrs::new().family(Family::SansSerif))
 }

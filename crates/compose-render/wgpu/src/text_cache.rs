@@ -42,6 +42,7 @@ pub struct CachedTextBuffer {
     height: f32,
     text: String,
     layout: LayoutMetrics,
+    uses_fallback: bool,
 }
 
 impl CachedTextBuffer {
@@ -52,12 +53,10 @@ impl CachedTextBuffer {
         height: f32,
         text: &str,
         attrs: Attrs,
+        fallback_attrs: Option<Attrs>,
     ) -> Self {
         let mut buffer = Buffer::new(font_system, metrics);
         buffer.set_size(font_system, f32::MAX, height);
-        buffer.set_text(font_system, text, attrs, Shaping::Advanced);
-        buffer.shape_until_scroll(font_system);
-
         let mut cached = Self {
             buffer,
             metrics,
@@ -65,8 +64,20 @@ impl CachedTextBuffer {
             height,
             text: text.to_string(),
             layout: LayoutMetrics::default(),
+            uses_fallback: false,
         };
-        cached.update_layout_metrics();
+        let mut glyphs = cached.reflow_text(font_system, text, attrs);
+        if glyphs == 0 {
+            if let Some(fallback) = fallback_attrs {
+                if fallback != attrs {
+                    glyphs = cached.reflow_text(font_system, text, fallback);
+                    cached.uses_fallback = glyphs > 0;
+                }
+            }
+        }
+        if glyphs == 0 {
+            cached.uses_fallback = false;
+        }
         cached
     }
 
@@ -77,36 +88,59 @@ impl CachedTextBuffer {
         scale_key: u32,
         height: f32,
         text: &str,
-        attrs: Attrs,
+        primary_attrs: Attrs,
+        fallback_attrs: Option<Attrs>,
     ) -> bool {
         const HEIGHT_EPSILON: f32 = 0.5;
 
         let mut reshaped = false;
+        let mut needs_reflow = false;
 
         if self.scale_key != scale_key || self.metrics != metrics {
             self.buffer.set_metrics(font_system, metrics);
             self.metrics = metrics;
             self.scale_key = scale_key;
-            reshaped = true;
+            needs_reflow = true;
         }
 
         if (height - self.height).abs() > HEIGHT_EPSILON {
             self.buffer.set_size(font_system, f32::MAX, height);
             self.height = height;
-            reshaped = true;
+            needs_reflow = true;
         }
 
         if self.text != text {
-            self.buffer
-                .set_text(font_system, text, attrs, Shaping::Advanced);
-            self.text.clear();
-            self.text.push_str(text);
-            reshaped = true;
+            needs_reflow = true;
         }
 
-        if reshaped {
-            self.buffer.shape_until_scroll(font_system);
-            self.update_layout_metrics();
+        if needs_reflow {
+            let mut glyphs = {
+                let first_attrs = if self.uses_fallback {
+                    fallback_attrs.unwrap_or(primary_attrs)
+                } else {
+                    primary_attrs
+                };
+                let glyphs = self.reflow_text(font_system, text, first_attrs);
+                self.uses_fallback = first_attrs != primary_attrs && glyphs > 0;
+                glyphs
+            };
+
+            if glyphs == 0 {
+                if let Some(fallback) = fallback_attrs {
+                    if fallback != primary_attrs {
+                        glyphs = self.reflow_text(font_system, text, fallback);
+                        self.uses_fallback = glyphs > 0;
+                    }
+                } else {
+                    self.uses_fallback = false;
+                }
+            }
+
+            if glyphs == 0 {
+                self.uses_fallback = false;
+            }
+
+            reshaped = true;
         }
 
         reshaped
@@ -114,6 +148,28 @@ impl CachedTextBuffer {
 
     pub fn layout_metrics(&self) -> LayoutMetrics {
         self.layout
+    }
+
+    pub fn uses_fallback(&self) -> bool {
+        self.uses_fallback
+    }
+
+    fn glyph_count(&self) -> usize {
+        let mut glyphs = 0usize;
+        for run in self.buffer.layout_runs() {
+            glyphs += run.glyphs.len();
+        }
+        glyphs
+    }
+
+    fn reflow_text(&mut self, font_system: &mut FontSystem, text: &str, attrs: Attrs) -> usize {
+        self.buffer
+            .set_text(font_system, text, attrs, Shaping::Advanced);
+        self.buffer.shape_until_scroll(font_system);
+        self.text.clear();
+        self.text.push_str(text);
+        self.update_layout_metrics();
+        self.glyph_count()
     }
 
     fn update_layout_metrics(&mut self) {

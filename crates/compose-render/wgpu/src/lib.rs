@@ -16,10 +16,10 @@ use compose_render_common::{RenderScene, Renderer};
 use compose_ui::{set_text_measurer, LayoutTree, TextMeasurer};
 use compose_ui_graphics::Size;
 use font::{
-    create_font_system, detect_preferred_font, PreferredFont, DEFAULT_FONT_SIZE,
-    DEFAULT_LINE_HEIGHT,
+    create_font_system, detect_preferred_font, fallback_text_attrs, primary_text_attrs,
+    PreferredFont, DEFAULT_FONT_SIZE, DEFAULT_LINE_HEIGHT,
 };
-use glyphon::{Attrs, Family, FontSystem, Metrics};
+use glyphon::{FontSystem, Metrics};
 use lru::LruCache;
 use render::GpuRenderer;
 use std::num::NonZeroUsize;
@@ -199,19 +199,16 @@ impl TextMeasurer for WgpuTextMeasurer {
 
         let mut font_system = self.font_system.lock().unwrap();
         let metrics = Metrics::new(font_size, DEFAULT_LINE_HEIGHT);
-        let attrs = match &self.preferred_font {
-            Some(font) => Attrs::new()
-                .family(Family::Name(&font.family))
-                .weight(font.weight),
-            None => Attrs::new().family(Family::SansSerif),
-        };
+        let primary_attrs = primary_text_attrs(self.preferred_font.as_ref());
+        let fallback_attrs = fallback_text_attrs(self.preferred_font.as_ref());
         let cached = CachedTextBuffer::new(
             &mut font_system,
             metrics,
             key.scale_key(),
             f32::MAX,
             text,
-            attrs,
+            primary_attrs,
+            fallback_attrs,
         );
         let metrics = text_metrics_from_buffer(&cached);
         drop(font_system);
