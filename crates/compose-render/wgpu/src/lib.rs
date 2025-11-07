@@ -122,10 +122,47 @@ impl Renderer for WgpuRenderer {
 }
 
 // Text measurer implementation for WGPU
+
+/// Cached measurement buffer to avoid redundant text shaping
+struct MeasurementBuffer {
+    buffer: Buffer,
+    text: String,
+    font_size: f32,
+}
+
+impl MeasurementBuffer {
+    fn ensure(
+        &mut self,
+        font_system: &mut FontSystem,
+        text: &str,
+        font_size: f32,
+        attrs: Attrs,
+    ) -> bool {
+        // Check if anything changed that requires reshaping
+        if self.text == text && self.font_size == font_size {
+            return false; // No reshaping needed!
+        }
+
+        // Something changed, need to reshape
+        let metrics = Metrics::new(font_size, font_size * 1.4);
+        self.buffer.set_metrics(font_system, metrics);
+        self.buffer.set_text(font_system, text, attrs, Shaping::Advanced);
+        self.buffer.shape_until_scroll(font_system);
+
+        // Update cached values
+        self.text.clear();
+        self.text.push_str(text);
+        self.font_size = font_size;
+
+        true
+    }
+}
+
 #[derive(Clone)]
 struct WgpuTextMeasurer {
     font_system: Arc<Mutex<FontSystem>>,
     cache: Arc<Mutex<LruCache<(String, i32), Size>>>,
+    buffer_cache: Arc<Mutex<LruCache<(String, i32), Box<MeasurementBuffer>>>>,
 }
 
 impl WgpuTextMeasurer {
@@ -133,6 +170,7 @@ impl WgpuTextMeasurer {
         Self {
             font_system,
             cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(64).unwrap()))),
+            buffer_cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(64).unwrap()))),
         }
     }
 }
@@ -142,6 +180,7 @@ impl TextMeasurer for WgpuTextMeasurer {
         let font_size = 14.0; // Default font size
         let key = (text.to_string(), (font_size * 100.0) as i32);
 
+        // Check size cache first (fastest path)
         {
             let mut cache = self.cache.lock().unwrap();
             if let Some(size) = cache.get(&key) {
@@ -152,18 +191,36 @@ impl TextMeasurer for WgpuTextMeasurer {
             }
         }
 
+        // Need to measure - check buffer cache
         let mut font_system = self.font_system.lock().unwrap();
-        let mut buffer = Buffer::new(&mut font_system, Metrics::new(font_size, font_size * 1.4));
-        buffer.set_size(&mut font_system, f32::MAX, f32::MAX);
-        // Use default family instead of specifying
-        buffer.set_text(
-            &mut font_system,
-            text,
-            Attrs::new(),
-            Shaping::Advanced,
-        );
-        buffer.shape_until_scroll(&mut font_system);
+        let mut buffer_cache = self.buffer_cache.lock().unwrap();
 
+        let buffer = if let Some(cached) = buffer_cache.get_mut(&key) {
+            // Buffer cache hit - use ensure() to only reshape if needed
+            cached.ensure(&mut font_system, text, font_size, Attrs::new());
+            &cached.buffer
+        } else {
+            // Buffer cache miss - create new buffer
+            let mut new_buffer = Buffer::new(&mut font_system, Metrics::new(font_size, font_size * 1.4));
+            new_buffer.set_size(&mut font_system, f32::MAX, f32::MAX);
+            new_buffer.set_text(
+                &mut font_system,
+                text,
+                Attrs::new(),
+                Shaping::Advanced,
+            );
+            new_buffer.shape_until_scroll(&mut font_system);
+
+            let cached = Box::new(MeasurementBuffer {
+                buffer: new_buffer,
+                text: text.to_string(),
+                font_size,
+            });
+            buffer_cache.put(key.clone(), cached);
+            &buffer_cache.get(&key).unwrap().buffer
+        };
+
+        // Measure the shaped buffer
         let mut max_width = 0.0f32;
         let mut total_height = 0.0f32;
 
@@ -181,6 +238,7 @@ impl TextMeasurer for WgpuTextMeasurer {
             height: total_height,
         };
 
+        // Cache the size result
         let mut cache = self.cache.lock().unwrap();
         cache.put(key, size);
 
