@@ -14,6 +14,7 @@ use glyphon::{
 };
 use lru::LruCache;
 use std::collections::BTreeMap;
+use std::convert::TryFrom;
 use std::mem;
 use std::sync::{Arc, Mutex};
 
@@ -36,6 +37,18 @@ impl Vertex {
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &Self::ATTRIBS,
         }
+    }
+}
+
+#[derive(Default)]
+struct ShapePushMetrics {
+    requested_stops: usize,
+    used_stops: usize,
+}
+
+impl ShapePushMetrics {
+    fn truncated(&self) -> bool {
+        self.used_stops < self.requested_stops
     }
 }
 
@@ -83,6 +96,8 @@ const MAX_SHAPE_BUFFER_BYTES: usize = MAX_SHAPES_PER_DRAW * std::mem::size_of::<
 const MAX_GRADIENT_STOPS_PER_SHAPE: usize = 64;
 const MAX_GRADIENT_BUFFER_BYTES: usize =
     MAX_SHAPES_PER_DRAW * MAX_GRADIENT_STOPS_PER_SHAPE * std::mem::size_of::<GradientStop>();
+const MAX_GRADIENT_STOPS_PER_DRAW: usize =
+    MAX_GRADIENT_BUFFER_BYTES / std::mem::size_of::<GradientStop>();
 
 struct ShapeBatchBuffers {
     vertex_buffer: wgpu::Buffer,
@@ -276,6 +291,164 @@ pub struct GpuRenderer {
 }
 
 impl GpuRenderer {
+    fn estimate_gradient_stops(shape: &DrawShape) -> usize {
+        match &shape.brush {
+            Brush::Solid(_) => 0,
+            Brush::LinearGradient(colors) => colors.len(),
+            Brush::RadialGradient { colors, .. } => colors.len(),
+        }
+    }
+
+    fn push_shape_into_batch(
+        shape: &DrawShape,
+        local_index: usize,
+        available_gradient_slots: usize,
+        vertex_data: &mut Vec<Vertex>,
+        index_data: &mut Vec<u32>,
+        shape_data_entries: &mut Vec<ShapeData>,
+        gradient_data: &mut Vec<GradientStop>,
+    ) -> ShapePushMetrics {
+        let rect = shape.rect;
+        let shape_index = u32::try_from(local_index).expect("shape index overflow");
+
+        let mut color = [1.0, 1.0, 1.0, 1.0];
+        let mut gradient_params = [0.0; 4];
+        let mut brush_type = 0u32;
+        let mut gradient_start = 0u32;
+        let mut gradient_count = 0u32;
+
+        let mut requested_stops = 0usize;
+        let mut used_stops = 0usize;
+
+        match &shape.brush {
+            Brush::Solid(c) => {
+                color = [c.r(), c.g(), c.b(), c.a()];
+            }
+            Brush::LinearGradient(colors) => {
+                requested_stops = colors.len();
+                if let Some(first) = colors.first() {
+                    color = [first.r(), first.g(), first.b(), first.a()];
+                }
+
+                if available_gradient_slots > 0 && !colors.is_empty() {
+                    let max_for_shape = available_gradient_slots.min(MAX_GRADIENT_STOPS_PER_SHAPE);
+                    used_stops = colors.len().min(max_for_shape);
+
+                    if used_stops > 0 {
+                        let start = gradient_data.len();
+                        gradient_start = u32::try_from(start).expect("gradient start overflow");
+                        for stop in colors.iter().take(used_stops) {
+                            gradient_data.push(GradientStop {
+                                color: [stop.r(), stop.g(), stop.b(), stop.a()],
+                            });
+                        }
+                        gradient_count =
+                            u32::try_from(used_stops).expect("gradient count overflow");
+                        brush_type = 1;
+                    }
+                }
+            }
+            Brush::RadialGradient {
+                colors,
+                center,
+                radius,
+            } => {
+                requested_stops = colors.len();
+                if let Some(first) = colors.first() {
+                    color = [first.r(), first.g(), first.b(), first.a()];
+                }
+
+                if available_gradient_slots > 0 && !colors.is_empty() {
+                    let max_for_shape = available_gradient_slots.min(MAX_GRADIENT_STOPS_PER_SHAPE);
+                    used_stops = colors.len().min(max_for_shape);
+
+                    if used_stops > 0 {
+                        let start = gradient_data.len();
+                        gradient_start = u32::try_from(start).expect("gradient start overflow");
+                        for stop in colors.iter().take(used_stops) {
+                            gradient_data.push(GradientStop {
+                                color: [stop.r(), stop.g(), stop.b(), stop.a()],
+                            });
+                        }
+                        gradient_count =
+                            u32::try_from(used_stops).expect("gradient count overflow");
+                        brush_type = 2;
+                        gradient_params = [
+                            rect.x + center.x,
+                            rect.y + center.y,
+                            radius.max(f32::EPSILON),
+                            0.0,
+                        ];
+                    }
+                }
+            }
+        }
+
+        vertex_data.extend_from_slice(&[
+            Vertex {
+                position: [rect.x, rect.y],
+                color,
+                shape_index,
+                _padding: 0,
+            },
+            Vertex {
+                position: [rect.x + rect.width, rect.y],
+                color,
+                shape_index,
+                _padding: 0,
+            },
+            Vertex {
+                position: [rect.x, rect.y + rect.height],
+                color,
+                shape_index,
+                _padding: 0,
+            },
+            Vertex {
+                position: [rect.x + rect.width, rect.y + rect.height],
+                color,
+                shape_index,
+                _padding: 0,
+            },
+        ]);
+
+        let base_index = u32::try_from(local_index * 4).expect("index overflow");
+        index_data.extend_from_slice(&[
+            base_index,
+            base_index + 1,
+            base_index + 2,
+            base_index + 2,
+            base_index + 1,
+            base_index + 3,
+        ]);
+
+        let radii = if let Some(rounded) = shape.shape {
+            let resolved = rounded.resolve(rect.width, rect.height);
+            [
+                resolved.top_left,
+                resolved.top_right,
+                resolved.bottom_left,
+                resolved.bottom_right,
+            ]
+        } else {
+            [0.0, 0.0, 0.0, 0.0]
+        };
+
+        shape_data_entries.push(ShapeData {
+            rect: [rect.x, rect.y, rect.width, rect.height],
+            radii,
+            gradient_params,
+            brush_type,
+            gradient_start,
+            gradient_count,
+            _padding: 0,
+        });
+
+        ShapePushMetrics {
+            requested_stops,
+            used_stops,
+        }
+    }
+
     pub fn new(
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
@@ -451,136 +624,89 @@ impl GpuRenderer {
         let mut gradient_data: Vec<GradientStop> = Vec::new();
         let mut drew_shapes = false;
 
-        for chunk in sorted_shapes.chunks(MAX_SHAPES_PER_DRAW) {
-            let chunk_len = chunk.len();
-            if chunk_len == 0 {
-                continue;
-            }
+        vertex_data.reserve(MAX_SHAPES_PER_DRAW * 4);
+        index_data.reserve(MAX_SHAPES_PER_DRAW * 6);
+        shape_data_entries.reserve(MAX_SHAPES_PER_DRAW);
 
+        let mut shape_cursor = 0usize;
+
+        while shape_cursor < sorted_shapes.len() {
             vertex_data.clear();
             index_data.clear();
             shape_data_entries.clear();
             gradient_data.clear();
 
-            vertex_data.reserve(chunk_len * 4);
-            index_data.reserve(chunk_len * 6);
-            shape_data_entries.reserve(chunk_len);
+            let mut shapes_in_chunk = 0usize;
 
-            for (local_index, shape) in chunk.iter().enumerate() {
-                let rect = shape.rect;
-                let shape_index = local_index as u32;
+            while shape_cursor < sorted_shapes.len() && shapes_in_chunk < MAX_SHAPES_PER_DRAW {
+                let available_slots =
+                    MAX_GRADIENT_STOPS_PER_DRAW.saturating_sub(gradient_data.len());
 
-                let mut gradient_params = [0.0f32; 4];
-                let (color, brush_type, gradient_start, gradient_count) = match &shape.brush {
-                    Brush::Solid(c) => ([c.r(), c.g(), c.b(), c.a()], 0u32, 0u32, 0u32),
-                    Brush::LinearGradient(colors) => {
-                        let start = gradient_data.len() as u32;
-                        if colors.is_empty() {
-                            ([1.0, 1.0, 1.0, 1.0], 0u32, 0u32, 0u32)
-                        } else {
-                            for color in colors {
-                                gradient_data.push(GradientStop {
-                                    color: [color.r(), color.g(), color.b(), color.a()],
-                                });
-                            }
-                            let first = colors.first().unwrap();
-                            (
-                                [first.r(), first.g(), first.b(), first.a()],
-                                1u32,
-                                start,
-                                colors.len() as u32,
-                            )
-                        }
-                    }
-                    Brush::RadialGradient {
-                        colors,
-                        center,
-                        radius,
-                    } => {
-                        if colors.is_empty() {
-                            ([1.0, 1.0, 1.0, 1.0], 0u32, 0u32, 0u32)
-                        } else {
-                            let start = gradient_data.len() as u32;
-                            for color in colors {
-                                gradient_data.push(GradientStop {
-                                    color: [color.r(), color.g(), color.b(), color.a()],
-                                });
-                            }
-                            let first = colors.first().unwrap();
-                            gradient_params = [
-                                rect.x + center.x,
-                                rect.y + center.y,
-                                radius.max(f32::EPSILON),
-                                0.0,
-                            ];
-                            (
-                                [first.r(), first.g(), first.b(), first.a()],
-                                2u32,
-                                start,
-                                colors.len() as u32,
-                            )
-                        }
-                    }
-                };
+                if available_slots == 0 && shapes_in_chunk > 0 {
+                    break;
+                }
 
-                vertex_data.extend_from_slice(&[
-                    Vertex {
-                        position: [rect.x, rect.y],
-                        color,
-                        shape_index,
-                        _padding: 0,
-                    },
-                    Vertex {
-                        position: [rect.x + rect.width, rect.y],
-                        color,
-                        shape_index,
-                        _padding: 0,
-                    },
-                    Vertex {
-                        position: [rect.x, rect.y + rect.height],
-                        color,
-                        shape_index,
-                        _padding: 0,
-                    },
-                    Vertex {
-                        position: [rect.x + rect.width, rect.y + rect.height],
-                        color,
-                        shape_index,
-                        _padding: 0,
-                    },
-                ]);
+                let shape = &sorted_shapes[shape_cursor];
+                let requested_stops = Self::estimate_gradient_stops(shape);
 
-                let base_index = (local_index * 4) as u32;
-                index_data.extend_from_slice(&[
-                    base_index,
-                    base_index + 1,
-                    base_index + 2,
-                    base_index + 2,
-                    base_index + 1,
-                    base_index + 3,
-                ]);
+                if shapes_in_chunk > 0 && requested_stops > available_slots {
+                    break;
+                }
 
-                let radii = if let Some(rounded) = shape.shape {
-                    let resolved = rounded.resolve(rect.width, rect.height);
-                    [
-                        resolved.top_left,
-                        resolved.top_right,
-                        resolved.bottom_left,
-                        resolved.bottom_right,
-                    ]
-                } else {
-                    [0.0, 0.0, 0.0, 0.0]
-                };
+                let metrics = Self::push_shape_into_batch(
+                    shape,
+                    shapes_in_chunk,
+                    available_slots,
+                    &mut vertex_data,
+                    &mut index_data,
+                    &mut shape_data_entries,
+                    &mut gradient_data,
+                );
 
-                shape_data_entries.push(ShapeData {
-                    rect: [rect.x, rect.y, rect.width, rect.height],
-                    radii,
-                    gradient_params,
-                    brush_type,
-                    gradient_start,
-                    gradient_count,
-                    _padding: 0,
-                });
+                if metrics.truncated() && log::log_enabled!(log::Level::Debug) {
+                    log::debug!(
+                        "Truncated gradient stops from {} to {} for shape at z-index {}",
+                        metrics.requested_stops,
+                        metrics.used_stops,
+                        shape.z_index
+                    );
+                }
+
+                shapes_in_chunk += 1;
+                shape_cursor += 1;
+
+                if gradient_data.len() >= MAX_GRADIENT_STOPS_PER_DRAW {
+                    break;
+                }
+            }
+
+            if shapes_in_chunk == 0 && shape_cursor < sorted_shapes.len() {
+                let shape = &sorted_shapes[shape_cursor];
+                let metrics = Self::push_shape_into_batch(
+                    shape,
+                    0,
+                    MAX_GRADIENT_STOPS_PER_DRAW,
+                    &mut vertex_data,
+                    &mut index_data,
+                    &mut shape_data_entries,
+                    &mut gradient_data,
+                );
+
+                if metrics.truncated() && log::log_enabled!(log::Level::Warn) {
+                    log::warn!(
+                        "Gradient for shape at z-index {} required {} stops but only {} were used due to batch limits",
+                        shape.z_index,
+                        metrics.requested_stops,
+                        metrics.used_stops
+                    );
+                }
+
+                shapes_in_chunk = 1;
+                shape_cursor += 1;
+            }
+
+            if shapes_in_chunk == 0 {
+                break;
             }
 
             let vertex_count = vertex_data.len();
