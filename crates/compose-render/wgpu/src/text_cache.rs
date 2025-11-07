@@ -66,17 +66,12 @@ impl CachedTextBuffer {
             layout: LayoutMetrics::default(),
             uses_fallback: false,
         };
-        let mut glyphs = cached.reflow_text(font_system, text, attrs);
-        if glyphs == 0 {
-            if let Some(fallback) = fallback_attrs {
-                if fallback != attrs {
-                    glyphs = cached.reflow_text(font_system, text, fallback);
-                    cached.uses_fallback = glyphs > 0;
-                }
-            }
-        }
-        if glyphs == 0 {
+        if !cached.shape_with_recovery(font_system, text, attrs, fallback_attrs) {
+            // As a last resort, fall back to default attributes after recreating the buffer.
+            cached.buffer = Buffer::new(font_system, metrics);
+            cached.buffer.set_size(font_system, f32::MAX, height);
             cached.uses_fallback = false;
+            cached.shape_with_recovery(font_system, text, attrs, fallback_attrs);
         }
         cached
     }
@@ -114,33 +109,21 @@ impl CachedTextBuffer {
         }
 
         if needs_reflow {
-            let mut glyphs = {
-                let first_attrs = if self.uses_fallback {
-                    fallback_attrs.unwrap_or(primary_attrs)
-                } else {
-                    primary_attrs
-                };
-                let glyphs = self.reflow_text(font_system, text, first_attrs);
-                self.uses_fallback = first_attrs != primary_attrs && glyphs > 0;
-                glyphs
-            };
+            let mut shaped =
+                self.shape_with_recovery(font_system, text, primary_attrs, fallback_attrs);
 
-            if glyphs == 0 {
-                if let Some(fallback) = fallback_attrs {
-                    if fallback != primary_attrs {
-                        glyphs = self.reflow_text(font_system, text, fallback);
-                        self.uses_fallback = glyphs > 0;
-                    }
-                } else {
-                    self.uses_fallback = false;
-                }
+            if !shaped {
+                // The internal buffer can occasionally get into a state where shaping
+                // produces no glyphs. Recreate it and retry with a clean slate.
+                self.buffer = Buffer::new(font_system, metrics);
+                self.buffer.set_size(font_system, f32::MAX, height);
+                self.metrics = metrics;
+                self.scale_key = scale_key;
+                self.height = height;
+                shaped = self.shape_with_recovery(font_system, text, primary_attrs, fallback_attrs);
             }
 
-            if glyphs == 0 {
-                self.uses_fallback = false;
-            }
-
-            reshaped = true;
+            reshaped = shaped;
         }
 
         reshaped
@@ -170,6 +153,66 @@ impl CachedTextBuffer {
         self.text.push_str(text);
         self.update_layout_metrics();
         self.glyph_count()
+    }
+
+    fn shape_with_recovery(
+        &mut self,
+        font_system: &mut FontSystem,
+        text: &str,
+        primary_attrs: Attrs,
+        fallback_attrs: Option<Attrs>,
+    ) -> bool {
+        let mut attempts: Vec<(Attrs, bool)> = Vec::with_capacity(4);
+
+        if self.uses_fallback {
+            if let Some(fallback) = fallback_attrs {
+                if !attempts.iter().any(|(existing, _)| *existing == fallback) {
+                    attempts.push((fallback, true));
+                }
+            }
+            if !attempts
+                .iter()
+                .any(|(existing, _)| *existing == primary_attrs)
+            {
+                attempts.push((primary_attrs, false));
+            }
+        } else {
+            if !attempts
+                .iter()
+                .any(|(existing, _)| *existing == primary_attrs)
+            {
+                attempts.push((primary_attrs, false));
+            }
+            if let Some(fallback) = fallback_attrs {
+                if !attempts.iter().any(|(existing, _)| *existing == fallback) {
+                    attempts.push((fallback, true));
+                }
+            }
+        }
+
+        let default_attrs = Attrs::new();
+        if !attempts
+            .iter()
+            .any(|(existing, _)| *existing == default_attrs)
+        {
+            attempts.push((default_attrs, true));
+        }
+
+        let mut shaped = false;
+        for (attrs, mark_fallback) in attempts.into_iter() {
+            let glyphs = self.reflow_text(font_system, text, attrs);
+            if glyphs > 0 {
+                self.uses_fallback = mark_fallback && attrs != primary_attrs;
+                shaped = true;
+                break;
+            }
+        }
+
+        if !shaped {
+            self.uses_fallback = false;
+        }
+
+        shaped
     }
 
     fn update_layout_metrics(&mut self) {
