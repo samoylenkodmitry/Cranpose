@@ -601,20 +601,8 @@ impl GpuRenderer {
             .map(|text| Self::create_text_key(text))
             .collect();
 
-        // Debug: track cache stats
-        let cache_size_before = self.text_cache.len();
-        let total_texts = current_text_keys.len();
-
-        // Remove cache entries for text no longer present (O(n) instead of O(n²))
+        // Remove cache entries for text no longer present (O(1) lookups via HashSet)
         self.text_cache.retain(|key, _| current_text_keys.contains(key));
-
-        let cache_size_after_cleanup = self.text_cache.len();
-        let evicted = cache_size_before.saturating_sub(cache_size_after_cleanup);
-
-        // Track cache behavior
-        let mut cache_hits = 0;
-        let mut cache_misses = 0;
-        let mut reshapes = 0;
 
         // Create or update cached text buffers (only reshape when needed)
         for text_draw in &sorted_texts {
@@ -627,19 +615,9 @@ impl GpuRenderer {
 
             if let Some(cached) = self.text_cache.get_mut(&key) {
                 // Already in cache - use ensure() to only reshape if needed
-                cache_hits += 1;
-                let reshaped = cached.ensure(&mut font_system, &text_draw.text, text_draw.scale, Attrs::new());
-                if reshaped {
-                    reshapes += 1;
-                    eprintln!("[TEXT RENDER] Reshaped in cache: \"{}\" (scale: {})",
-                              &text_draw.text[..text_draw.text.len().min(30)], text_draw.scale);
-                }
+                cached.ensure(&mut font_system, &text_draw.text, text_draw.scale, Attrs::new());
             } else {
                 // Not in cache, create new buffer
-                cache_misses += 1;
-                eprintln!("[TEXT RENDER] Cache MISS: \"{}\" (scale: {})",
-                          &text_draw.text[..text_draw.text.len().min(30)], text_draw.scale);
-
                 let mut buffer = Buffer::new(
                     &mut font_system,
                     Metrics::new(14.0 * text_draw.scale, 20.0 * text_draw.scale),
@@ -662,12 +640,6 @@ impl GpuRenderer {
                     },
                 );
             }
-        }
-
-        // Print summary
-        if cache_misses > 0 || reshapes > 0 || evicted > 0 {
-            eprintln!("[TEXT RENDER] Frame stats: {} texts, {} hits, {} misses, {} reshapes, {} evicted, cache size: {}",
-                      total_texts, cache_hits, cache_misses, reshapes, evicted, self.text_cache.len());
         }
 
         // Collect text data from cache
