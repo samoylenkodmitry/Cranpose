@@ -36,7 +36,7 @@ where
     compose_core::pop_parent();
 
     // Bubble dirty flags up after layout node updates
-    super::nodes::bubble_dirty_flags(id);
+    compose_core::bubble_layout_dirty_in_composer::<LayoutNode>(id);
 
     id
 }

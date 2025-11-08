@@ -248,48 +248,16 @@ impl LayoutNode {
     }
 }
 
-/// Bubble dirty flags up the parent chain from a LayoutNode.
-/// This should be called after marking a node dirty during recomposition.
-/// Uses the current composer context to access nodes via with_node_mut.
+/// DEPRECATED: Use `compose_core::bubble_layout_dirty_in_composer::<LayoutNode>(node_id)` instead.
 ///
-/// If the starting node isn't dirty, this is a no-op (returns immediately).
-/// This allows calling it unconditionally after composition without overhead.
+/// This function now simply delegates to the unified bubbling API in compose_core.
+/// All new code should use `compose_core::bubble_layout_dirty_in_composer` directly.
+#[deprecated(
+    since = "0.1.0",
+    note = "Use compose_core::bubble_layout_dirty_in_composer::<LayoutNode>(node_id) instead"
+)]
 pub fn bubble_dirty_flags(node_id: compose_core::NodeId) {
-    // Early exit if starting node isn't dirty - nothing to bubble
-    let is_dirty = compose_core::with_node_mut(node_id, |node: &mut LayoutNode| {
-        node.needs_layout()
-    }).unwrap_or(false);
-
-    if !is_dirty {
-        return; // Node is clean, no need to bubble
-    }
-
-    let mut current_id = node_id;
-    loop {
-        // Get parent of current node
-        let parent_id = match compose_core::with_node_mut(current_id, |node: &mut LayoutNode| {
-            node.parent()
-        }) {
-            Ok(Some(pid)) => pid,
-            _ => break, // No parent or error - stop bubbling
-        };
-
-        // Mark parent as needing layout
-        let should_continue = compose_core::with_node_mut(parent_id, |node: &mut LayoutNode| {
-            if !node.needs_layout() {
-                node.mark_needs_layout();
-                true // Continue bubbling
-            } else {
-                false // Already dirty, stop
-            }
-        }).unwrap_or(false);
-
-        if should_continue {
-            current_id = parent_id;
-        } else {
-            break;
-        }
-    }
+    compose_core::bubble_layout_dirty_in_composer::<LayoutNode>(node_id);
 }
 
 impl Clone for LayoutNode {
@@ -324,7 +292,9 @@ impl Node for LayoutNode {
         self.children.shift_remove(&child);
         self.cache.clear();
         self.mark_needs_measure();
-        // TODO: Clear parent via applier.with_node(child, |n| n.clear_parent())
+        // Note: Parent clearing is handled by the caller (composer reconciliation)
+        // via on_removed_from_parent() in a separate command. This node-level
+        // method doesn't have applier access and shouldn't need it.
     }
 
     fn move_child(&mut self, from: usize, to: usize) {
@@ -351,7 +321,9 @@ impl Node for LayoutNode {
         }
         self.cache.clear();
         self.mark_needs_measure();
-        // TODO: Update parent links via applier for all new children
+        // Note: Parent link updates are handled by the caller (composer reconciliation)
+        // via on_attached_to_parent() in separate commands. This node-level method
+        // doesn't have applier access and shouldn't need it.
     }
 
     fn children(&self) -> Vec<NodeId> {

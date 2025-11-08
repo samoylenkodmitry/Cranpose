@@ -787,10 +787,56 @@ pub trait Node: Any {
     }
 }
 
-/// Helper to bubble dirty flags from a node to the root.
-/// Call this after mutations (insert/remove/update) that dirty a node.
-/// This is used by the composer to ensure dirty flags propagate to root.
-pub fn bubble_layout_dirty_from_composer(applier: &mut dyn Applier, mut node_id: NodeId) {
+/// Unified API for bubbling layout dirty flags from a node to the root (Applier context).
+///
+/// This is the canonical function for dirty bubbling during the apply phase (structural changes).
+/// Call this after mutations like insert/remove/move that happen during apply.
+///
+/// # Behavior
+/// 1. Marks the starting node as needing layout
+/// 2. Walks up the parent chain, marking each ancestor
+/// 3. Stops when it reaches a node that's already dirty (O(1) optimization)
+/// 4. Stops at the root (node with no parent)
+///
+/// # Performance
+/// This function is O(height) in the worst case, but typically O(1) due to early exit
+/// when encountering an already-dirty ancestor.
+///
+/// # Usage
+/// - Call from composer mutations (insert/remove/move) during apply phase
+/// - Call from applier-level operations that modify the tree structure
+pub fn bubble_layout_dirty(applier: &mut dyn Applier, node_id: NodeId) {
+    bubble_layout_dirty_applier(applier, node_id);
+}
+
+/// Unified API for bubbling layout dirty flags from a node to the root (Composer context).
+///
+/// This is the canonical function for dirty bubbling during composition (property changes).
+/// Call this after property changes that happen during composition via with_node_mut.
+///
+/// # Behavior
+/// 1. Marks the starting node as needing layout
+/// 2. Walks up the parent chain, marking each ancestor
+/// 3. Stops when it reaches a node that's already dirty (O(1) optimization)
+/// 4. Stops at the root (node with no parent)
+///
+/// # Performance
+/// This function is O(height) in the worst case, but typically O(1) due to early exit
+/// when encountering an already-dirty ancestor.
+///
+/// # Type Requirements
+/// The node type N must implement Node (which includes mark_needs_layout, parent, etc.).
+/// Typically this will be LayoutNode or similar layout-aware node types.
+///
+/// # Usage
+/// - Call from property setters during composition (e.g., set_modifier, set_measure_policy)
+/// - Call from widget composition when layout-affecting state changes
+pub fn bubble_layout_dirty_in_composer<N: Node + 'static>(node_id: NodeId) {
+    bubble_layout_dirty_composer::<N>(node_id);
+}
+
+/// Internal implementation for applier-based bubbling.
+fn bubble_layout_dirty_applier(applier: &mut dyn Applier, mut node_id: NodeId) {
     // First, mark the starting node dirty (critical!)
     // This ensures root gets marked even if it has no parent
     if let Ok(node) = applier.get_mut(node_id) {
@@ -820,6 +866,43 @@ pub fn bubble_layout_dirty_from_composer(applier: &mut dyn Applier, mut node_id:
                 }
             }
             None => break, // No parent, stop
+        }
+    }
+}
+
+/// Internal implementation for composer-based bubbling.
+/// This uses with_node_mut and works during composition with a concrete node type.
+/// The node type N must implement Node (which includes mark_needs_layout, parent, etc.).
+fn bubble_layout_dirty_composer<N: Node + 'static>(mut node_id: NodeId) {
+    // Mark the starting node dirty
+    let _ = with_node_mut(node_id, |node: &mut N| {
+        node.mark_needs_layout();
+    });
+
+    // Then bubble up to ancestors
+    loop {
+        // Get parent of current node
+        let parent_id = match with_node_mut(node_id, |node: &mut N| {
+            node.parent()
+        }) {
+            Ok(Some(pid)) => pid,
+            _ => break, // No parent or error - stop bubbling
+        };
+
+        // Mark parent as needing layout
+        let should_continue = with_node_mut(parent_id, |node: &mut N| {
+            if !node.needs_layout() {
+                node.mark_needs_layout();
+                true // Continue bubbling
+            } else {
+                false // Already dirty, stop (O(1) optimization)
+            }
+        }).unwrap_or(false);
+
+        if should_continue {
+            node_id = parent_id;
+        } else {
+            break;
         }
     }
 }
@@ -1791,7 +1874,7 @@ impl Composer {
                         self.commands_mut()
                             .push(Box::new(move |applier: &mut dyn Applier| {
                                 // Bubble dirty flags to root after removal
-                                bubble_layout_dirty_from_composer(applier, id);
+                                bubble_layout_dirty(applier, id);
                                 Ok(())
                             }));
                         self.commands_mut()
@@ -1844,7 +1927,7 @@ impl Composer {
                         self.commands_mut()
                             .push(Box::new(move |applier: &mut dyn Applier| {
                                 // Bubble dirty flags to root after insertion
-                                bubble_layout_dirty_from_composer(applier, id);
+                                bubble_layout_dirty(applier, id);
                                 Ok(())
                             }));
                         if insert_index != appended_index {

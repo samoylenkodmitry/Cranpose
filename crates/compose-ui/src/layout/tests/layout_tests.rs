@@ -685,10 +685,9 @@ fn bubbling_stops_at_already_dirty_ancestor() -> Result<(), NodeError> {
         node.needs_layout()
     })?;
 
-    // Note: Current implementation continues bubbling even if parent is dirty
-    // This is actually fine and matches Jetpack Compose behavior
-    // Commenting out this assertion as the optimization is not critical
-    // assert!(!root_needs_layout, "Bubbling should stop at already dirty ancestor");
+    // The unified bubbling API now implements the O(1) optimization:
+    // bubbling stops when it encounters an already-dirty ancestor
+    assert!(!root_needs_layout, "Bubbling should stop at already dirty ancestor (O(1) optimization)");
 
     Ok(())
 }

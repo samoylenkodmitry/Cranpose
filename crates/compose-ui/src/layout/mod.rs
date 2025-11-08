@@ -247,35 +247,17 @@ pub fn tree_needs_layout(applier: &mut MemoryApplier, root: NodeId) -> bool {
     }).unwrap_or(true) // If not a LayoutNode or doesn't exist, assume dirty
 }
 
-/// Bubble layout dirty flag up the parent chain (Jetpack Compose style).
-/// When a node becomes dirty, all ancestors need to know they have dirty descendants.
+/// Bubble layout dirty flag up the parent chain.
 ///
-/// This is the applier-based version for tests and direct applier usage.
-/// Production widget code should use `widgets::bubble_dirty_flags()` which works in composer context.
-pub(crate) fn bubble_layout_dirty(applier: &mut MemoryApplier, mut node_id: NodeId) {
-    loop {
-        // Get parent of current node
-        let parent_id = match applier.with_node::<LayoutNode, _>(node_id, |node| node.parent()) {
-            Ok(Some(pid)) => pid,
-            _ => break, // No parent or error - stop bubbling
-        };
-
-        // Mark parent as needing layout (not necessarily measure)
-        // The parent needs to re-layout its children, but its own size may not change
-        if applier.with_node::<LayoutNode, _>(parent_id, |node| {
-            // Only mark if not already marked (avoid infinite loops)
-            if !node.needs_layout() {
-                node.mark_needs_layout();
-                true
-            } else {
-                false // Already marked, no need to continue bubbling
-            }
-        }).unwrap_or(false) {
-            node_id = parent_id; // Continue bubbling up
-        } else {
-            break; // Parent already dirty or error - stop
-        }
-    }
+/// This is a thin wrapper around `compose_core::bubble_layout_dirty` for tests
+/// that use `MemoryApplier`. It casts to the trait object for compatibility.
+///
+/// # Note
+/// New code should prefer calling `compose_core::bubble_layout_dirty` directly.
+/// This wrapper exists for backward compatibility with existing tests.
+#[cfg(test)]
+pub(crate) fn bubble_layout_dirty(applier: &mut MemoryApplier, node_id: NodeId) {
+    compose_core::bubble_layout_dirty(applier as &mut dyn Applier, node_id);
 }
 
 
