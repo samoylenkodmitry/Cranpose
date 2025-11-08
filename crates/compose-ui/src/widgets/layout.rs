@@ -26,7 +26,6 @@ where
         composer.emit_node(|| LayoutNode::new(modifier.clone(), Rc::clone(&policy)))
     });
     if let Err(err) = compose_core::with_node_mut(id, |node: &mut LayoutNode| {
-        node.set_node_id(id);
         node.set_modifier(modifier.clone());
         node.set_measure_policy(Rc::clone(&policy));
     }) {
@@ -36,20 +35,8 @@ where
     content();
     compose_core::pop_parent();
 
-    // Wire up parent-child relationships after composition
-    if let Ok(children) = compose_core::with_node_mut(id, |node: &mut LayoutNode| {
-        node.children.iter().copied().collect::<Vec<_>>()
-    }) {
-        for child_id in children {
-            let _ = compose_core::with_node_mut(child_id, |child: &mut LayoutNode| {
-                child.set_parent(id);
-            });
-        }
-    }
-
     // Bubble dirty flags up after layout node updates
-    // Note: This call is deferred and requires applier access at the composition level
-    crate::layout::bubble_dirty_from_widget(id);
+    super::nodes::bubble_dirty_flags(id);
 
     id
 }

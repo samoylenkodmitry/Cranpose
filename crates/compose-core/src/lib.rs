@@ -764,6 +764,12 @@ pub trait Node: Any {
     fn children(&self) -> Vec<NodeId> {
         Vec::new()
     }
+    /// Called after the node is created to record its own ID.
+    /// Useful for nodes that need to store their ID for later operations.
+    fn set_node_id(&mut self, _id: NodeId) {}
+    /// Called when this node is attached to a parent.
+    /// Nodes with parent tracking should set their parent reference here.
+    fn on_attached_to_parent(&mut self, _parent: NodeId) {}
     /// Called when this node is removed from its parent.
     /// Nodes with parent tracking should clear their parent reference here.
     fn on_removed_from_parent(&mut self) {}
@@ -1643,6 +1649,7 @@ impl Composer {
                     Err(NodeError::Missing { .. }) => return Ok(()),
                     Err(err) => return Err(err),
                 };
+                node.set_node_id(id);
                 node.mount();
                 Ok(())
             }));
@@ -1768,6 +1775,14 @@ impl Composer {
                             .push(Box::new(move |applier: &mut dyn Applier| {
                                 if let Ok(parent_node) = applier.get_mut(id) {
                                     parent_node.insert_child(child);
+                                }
+                                Ok(())
+                            }));
+                        self.commands_mut()
+                            .push(Box::new(move |applier: &mut dyn Applier| {
+                                // Set parent link on the child node
+                                if let Ok(child_node) = applier.get_mut(child) {
+                                    child_node.on_attached_to_parent(id);
                                 }
                                 Ok(())
                             }));

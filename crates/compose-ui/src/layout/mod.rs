@@ -309,40 +309,6 @@ pub fn bubble_layout_dirty(applier: &mut MemoryApplier, mut node_id: NodeId) {
     }
 }
 
-/// Helper to bubble dirty flags from the widget layer.
-/// Call this after updating a node's modifier or measure policy.
-/// Uses the current composer's with_node_mut to bubble dirty flags up the parent chain.
-pub fn bubble_dirty_from_widget(node_id: NodeId) {
-    use crate::widgets::nodes::LayoutNode;
-
-    let mut current_id = node_id;
-    loop {
-        // Get parent of current node
-        let parent_id = match compose_core::with_node_mut(current_id, |node: &mut LayoutNode| {
-            node.parent()
-        }) {
-            Ok(Some(pid)) => pid,
-            _ => break, // No parent or error - stop bubbling
-        };
-
-        // Mark parent as needing layout (not necessarily measure)
-        let should_continue = compose_core::with_node_mut(parent_id, |node: &mut LayoutNode| {
-            // Only mark if not already marked (avoid infinite loops)
-            if !node.needs_layout() {
-                node.mark_needs_layout();
-                true
-            } else {
-                false // Already marked, no need to continue bubbling
-            }
-        }).unwrap_or(false);
-
-        if should_continue {
-            current_id = parent_id; // Continue bubbling up
-        } else {
-            break; // Parent already dirty or error - stop
-        }
-    }
-}
 
 /// Runs the measure phase for the subtree rooted at `root`.
 pub fn measure_layout(

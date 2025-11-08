@@ -242,6 +242,38 @@ impl LayoutNode {
     }
 }
 
+/// Bubble dirty flags up the parent chain from a LayoutNode.
+/// This should be called after marking a node dirty during recomposition.
+/// Uses the current composer context to access nodes via with_node_mut.
+pub fn bubble_dirty_flags(node_id: compose_core::NodeId) {
+    let mut current_id = node_id;
+    loop {
+        // Get parent of current node
+        let parent_id = match compose_core::with_node_mut(current_id, |node: &mut LayoutNode| {
+            node.parent()
+        }) {
+            Ok(Some(pid)) => pid,
+            _ => break, // No parent or error - stop bubbling
+        };
+
+        // Mark parent as needing layout
+        let should_continue = compose_core::with_node_mut(parent_id, |node: &mut LayoutNode| {
+            if !node.needs_layout() {
+                node.mark_needs_layout();
+                true // Continue bubbling
+            } else {
+                false // Already dirty, stop
+            }
+        }).unwrap_or(false);
+
+        if should_continue {
+            current_id = parent_id;
+        } else {
+            break;
+        }
+    }
+}
+
 impl Clone for LayoutNode {
     fn clone(&self) -> Self {
         Self {
@@ -260,12 +292,14 @@ impl Clone for LayoutNode {
 }
 
 impl Node for LayoutNode {
+    fn set_node_id(&mut self, id: NodeId) {
+        self.id.set(Some(id));
+    }
+
     fn insert_child(&mut self, child: NodeId) {
         self.children.insert(child);
         self.cache.clear();
         self.mark_needs_measure();
-        // TODO: Parent tracking is set up at widget layer via set_parent()
-        // This is done where we have access to the applier
     }
 
     fn remove_child(&mut self, child: NodeId) {
@@ -304,6 +338,10 @@ impl Node for LayoutNode {
 
     fn children(&self) -> Vec<NodeId> {
         self.children.iter().copied().collect()
+    }
+
+    fn on_attached_to_parent(&mut self, parent: NodeId) {
+        self.set_parent(parent);
     }
 
     fn on_removed_from_parent(&mut self) {
