@@ -439,12 +439,6 @@ impl GpuRenderer {
         width: u32,
         height: u32,
     ) -> Result<(), String> {
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
-            });
-
         // Sort by z-index
         let mut sorted_shapes = shapes.to_vec();
         sorted_shapes.sort_by_key(|s| s.z_index);
@@ -547,7 +541,8 @@ impl GpuRenderer {
             self.queue.write_buffer(&self.shape_buffers.gradient_buffer, 0, bytemuck::cast_slice(&all_gradients));
         }
 
-        // Second pass: render shapes in chunks - one render pass per chunk for proper synchronization
+        // Second pass: render shapes in chunks with proper synchronization
+        // Each chunk gets its own encoder+submit to ensure buffer writes complete before next chunk
         for (chunk_idx, chunk) in sorted_shapes.chunks(MAX_SHAPES_PER_DRAW).enumerate() {
             let chunk_len = chunk.len();
             let chunk_start = chunk_idx * MAX_SHAPES_PER_DRAW;
@@ -591,48 +586,59 @@ impl GpuRenderer {
             // Get shape data slice for this chunk
             let chunk_shape_data = &all_shape_data[chunk_start..chunk_start + chunk_len];
 
-            // Write chunk data to buffers (outside render pass for proper synchronization)
+            // Write chunk data and render in one encoder (submit after to ensure synchronization)
             if !vertices.is_empty() {
+                // Write this chunk's data to buffers
                 self.queue.write_buffer(&self.shape_buffers.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
                 self.queue.write_buffer(&self.shape_buffers.index_buffer, 0, bytemuck::cast_slice(&indices));
                 self.queue.write_buffer(&self.shape_buffers.shape_buffer, 0, bytemuck::cast_slice(chunk_shape_data));
 
-                // Create render pass for this chunk (Clear on first chunk, Load on subsequent)
-                let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Shape Render Pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: if chunk_idx == 0 {
-                                wgpu::LoadOp::Clear(wgpu::Color {
-                                    r: 18.0 / 255.0,
-                                    g: 18.0 / 255.0,
-                                    b: 24.0 / 255.0,
-                                    a: 1.0,
-                                })
-                            } else {
-                                wgpu::LoadOp::Load // Preserve previous chunks
-                            },
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
+                // Create encoder for this chunk
+                let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Shape Chunk Encoder"),
                 });
 
-                render_pass.set_pipeline(&self.pipeline);
-                render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                render_pass.set_bind_group(1, &self.shape_buffers.bind_group, &[]);
+                // Create render pass for this chunk (Clear on first chunk, Load on subsequent)
+                {
+                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Shape Render Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: if chunk_idx == 0 {
+                                    wgpu::LoadOp::Clear(wgpu::Color {
+                                        r: 18.0 / 255.0,
+                                        g: 18.0 / 255.0,
+                                        b: 24.0 / 255.0,
+                                        a: 1.0,
+                                    })
+                                } else {
+                                    wgpu::LoadOp::Load // Preserve previous chunks
+                                },
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
 
-                // Draw this chunk
-                render_pass.set_vertex_buffer(0, self.shape_buffers.vertex_buffer.slice(..));
-                render_pass.set_index_buffer(
-                    self.shape_buffers.index_buffer.slice(..),
-                    wgpu::IndexFormat::Uint32,
-                );
-                render_pass.draw_indexed(0..(chunk_len as u32 * 6), 0, 0..1);
+                    render_pass.set_pipeline(&self.pipeline);
+                    render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    render_pass.set_bind_group(1, &self.shape_buffers.bind_group, &[]);
+
+                    // Draw this chunk
+                    render_pass.set_vertex_buffer(0, self.shape_buffers.vertex_buffer.slice(..));
+                    render_pass.set_index_buffer(
+                        self.shape_buffers.index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint32,
+                    );
+                    render_pass.draw_indexed(0..(chunk_len as u32 * 6), 0, 0..1);
+                }
+
+                // Submit this chunk immediately to ensure synchronization before next chunk
+                self.queue.submit(std::iter::once(encoder.finish()));
             }
         }
 
@@ -744,8 +750,13 @@ impl GpuRenderer {
 
         drop(font_system);
 
+        // Create encoder for text rendering
+        let mut text_encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Text Encoder"),
+        });
+
         {
-            let mut text_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut text_pass = text_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Text Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view,
@@ -765,7 +776,7 @@ impl GpuRenderer {
                 .map_err(|e| format!("Text render error: {:?}", e))?;
         }
 
-        self.queue.submit(std::iter::once(encoder.finish()));
+        self.queue.submit(std::iter::once(text_encoder.finish()));
 
         Ok(())
     }
