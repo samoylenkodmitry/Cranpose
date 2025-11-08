@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["renderer-pixels", "desktop"]
+default = ["renderer-wgpu", "desktop"]
 renderer-pixels = ["compose-app/renderer-pixels"]
 renderer-wgpu = ["compose-app/renderer-wgpu"]
 desktop = ["compose-app/desktop"]
