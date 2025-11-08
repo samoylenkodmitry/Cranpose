@@ -426,6 +426,7 @@ fn selective_measure_with_tree_hierarchy() -> Result<(), NodeError> {
 
 #[test]
 fn dirty_child_triggers_parent_remeasure() -> Result<(), NodeError> {
+    use super::bubble_layout_dirty;
     let mut applier = MemoryApplier::new();
 
     // Create tree with child that can change
@@ -438,17 +439,27 @@ fn dirty_child_triggers_parent_remeasure() -> Result<(), NodeError> {
     root.children.insert(child);
     let root_id = applier.create(Box::new(root));
 
+    // Set up parent links
+    applier.with_node::<LayoutNode, _>(root_id, |node| node.set_node_id(root_id))?;
+    applier.with_node::<LayoutNode, _>(child, |node| {
+        node.set_node_id(child);
+        node.set_parent(root_id);
+    })?;
+
     // First measure
     measure_layout(&mut applier, root_id, Size { width: 100.0, height: 100.0 })?;
 
-    // Mark child as dirty
+    // Mark child as dirty and bubble to root
     applier.with_node::<LayoutNode, _>(child, |node| {
         node.mark_needs_measure();
     })?;
+    bubble_layout_dirty(&mut applier, child);
 
-    // Check that needs_measure_recursive detects the dirty child
-    let needs_measure = needs_measure_recursive(&mut applier, root_id);
-    assert!(needs_measure, "Parent should need measure when child is dirty");
+    // Check that root is now dirty (O(1) check)
+    let root_needs_measure = applier.with_node::<LayoutNode, _>(root_id, |node| {
+        node.needs_layout()
+    })?;
+    assert!(root_needs_measure, "Root should be dirty when child is dirty (due to bubbling)");
 
     Ok(())
 }

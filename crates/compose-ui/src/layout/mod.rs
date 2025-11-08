@@ -247,41 +247,6 @@ pub fn tree_needs_layout(applier: &mut MemoryApplier, root: NodeId) -> bool {
     }).unwrap_or(true) // If not a LayoutNode or doesn't exist, assume dirty
 }
 
-/// Internal recursive check for dirty nodes.
-/// Handles heterogeneous node trees - tries LayoutNode first, falls back to generic Node trait.
-fn needs_measure_recursive(applier: &mut MemoryApplier, node_id: NodeId) -> bool {
-    // Try to access as LayoutNode first (most common case)
-    // Grab everything in one closure to minimize applier calls
-    if let Ok((needs, children)) = applier.with_node::<LayoutNode, _>(node_id, |node| {
-        (node.needs_measure(), node.children.iter().copied().collect::<Vec<_>>())
-    }) {
-        if needs {
-            return true;
-        }
-        // Check children
-        for child_id in children {
-            if needs_measure_recursive(applier, child_id) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    // Not a LayoutNode - could be SubcomposeLayoutNode, ButtonNode, etc.
-    // These nodes don't have dirty flags, but they may have children that need layout.
-    // Use the generic Node trait to get children and recurse.
-    if let Ok(node) = applier.get_mut(node_id) {
-        let children = node.children();
-        for child_id in children {
-            if needs_measure_recursive(applier, child_id) {
-                return true;
-            }
-        }
-    }
-
-    false
-}
-
 /// Bubble layout dirty flag up the parent chain (Jetpack Compose style).
 /// When a node becomes dirty, all ancestors need to know they have dirty descendants.
 ///
