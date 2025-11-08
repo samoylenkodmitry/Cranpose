@@ -1855,7 +1855,8 @@ impl Composer {
                 eprintln!("  previous children: {:?}", previous);
                 eprintln!("  new children: {:?}", new_children);
             }
-            if previous != new_children {
+            let children_changed = previous != new_children;
+            if children_changed {
                 let mut current = previous.clone();
                 let target = new_children.clone();
                 let desired: HashSet<NodeId> = target.iter().copied().collect();
@@ -1866,20 +1867,13 @@ impl Composer {
                         current.remove(index);
                         self.commands_mut()
                             .push(Box::new(move |applier: &mut dyn Applier| {
+                                // Remove child from parent and clear parent link atomically
                                 if let Ok(parent_node) = applier.get_mut(id) {
                                     parent_node.remove_child(child);
                                 }
-                                Ok(())
-                            }));
-                        self.commands_mut()
-                            .push(Box::new(move |applier: &mut dyn Applier| {
-                                // Bubble dirty flags to root after removal
+                                // Bubble BEFORE clearing parent link so bubbling can verify consistency
                                 bubble_layout_dirty(applier, id);
-                                Ok(())
-                            }));
-                        self.commands_mut()
-                            .push(Box::new(move |applier: &mut dyn Applier| {
-                                // Clear parent link and unmount
+                                // Now clear parent link and unmount
                                 if let Ok(node) = applier.get_mut(child) {
                                     node.on_removed_from_parent();
                                     node.unmount();
@@ -1904,6 +1898,13 @@ impl Composer {
                                     }
                                     Ok(())
                                 }));
+                            self.commands_mut()
+                                .push(Box::new(move |applier: &mut dyn Applier| {
+                                    // Bubble dirty flags to root after reordering
+                                    // Even though parent doesn't change, layout needs recomputation
+                                    bubble_layout_dirty(applier, id);
+                                    Ok(())
+                                }));
                         }
                     } else {
                         let insert_index = target_index.min(current.len());
@@ -1911,21 +1912,14 @@ impl Composer {
                         current.insert(insert_index, child);
                         self.commands_mut()
                             .push(Box::new(move |applier: &mut dyn Applier| {
+                                // Insert child and set parent link atomically
                                 if let Ok(parent_node) = applier.get_mut(id) {
                                     parent_node.insert_child(child);
                                 }
-                                Ok(())
-                            }));
-                        self.commands_mut()
-                            .push(Box::new(move |applier: &mut dyn Applier| {
-                                // Set parent link on the child node
+                                // Set parent link immediately after insertion
                                 if let Ok(child_node) = applier.get_mut(child) {
                                     child_node.on_attached_to_parent(id);
                                 }
-                                Ok(())
-                            }));
-                        self.commands_mut()
-                            .push(Box::new(move |applier: &mut dyn Applier| {
                                 // Bubble dirty flags to root after insertion
                                 bubble_layout_dirty(applier, id);
                                 Ok(())
@@ -1942,6 +1936,26 @@ impl Composer {
                     }
                 }
             }
+
+            // Even if children didn't change, property changes (like set_modifier, set_measure_policy)
+            // may have marked this node dirty during composition. We need to bubble those changes too.
+            // This makes composable-level bubbling unnecessary.
+            if !children_changed {
+                self.commands_mut()
+                    .push(Box::new(move |applier: &mut dyn Applier| {
+                        // Check if node is dirty and bubble if so
+                        let is_dirty = if let Ok(node) = applier.get_mut(id) {
+                            node.needs_layout()
+                        } else {
+                            false
+                        };
+                        if is_dirty {
+                            bubble_layout_dirty(applier, id);
+                        }
+                        Ok(())
+                    }));
+            }
+
             remembered.update(|entry| entry.children = new_children);
         }
     }

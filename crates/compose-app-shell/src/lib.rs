@@ -182,7 +182,15 @@ where
             applier.set_runtime_handle(handle);
 
             // Check if the tree actually needs layout (selective measure optimization)
-            if !compose_ui::tree_needs_layout(&mut *applier, root) {
+            let needs_layout = compose_ui::tree_needs_layout(&mut *applier, root)
+                .unwrap_or_else(|err| {
+                    // If we can't check dirty status (missing node, wrong type), assume dirty
+                    // This is the only place where it's acceptable to have a safety net
+                    log::warn!("Failed to check tree_needs_layout for root #{}: {}. Assuming dirty.", root, err);
+                    true
+                });
+
+            if !needs_layout {
                 // Tree is clean - skip layout computation and keep cached layout
                 log::trace!("Skipping layout: tree is clean");
                 self.layout_dirty = false;

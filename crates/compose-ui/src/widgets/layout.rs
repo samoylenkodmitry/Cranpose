@@ -35,8 +35,10 @@ where
     content();
     compose_core::pop_parent();
 
-    // Bubble dirty flags up after layout node updates
-    compose_core::bubble_layout_dirty_in_composer::<LayoutNode>(id);
+    // Note: No manual bubbling needed! pop_parent() now handles bubbling for both:
+    // 1. Structural changes (insert/remove/move children) via reconciliation
+    // 2. Property changes (set_modifier/set_measure_policy) by checking dirty flag
+    // This ensures dirty propagation works purely through the mutation/apply layer.
 
     id
 }

@@ -597,7 +597,7 @@ fn tree_needs_layout_api() -> Result<(), NodeError> {
 
     // Initially dirty (new nodes)
     assert!(
-        tree_needs_layout(&mut applier, root_id),
+        tree_needs_layout(&mut applier as &mut dyn Applier, root_id)?,
         "New tree should need layout"
     );
 
@@ -613,7 +613,7 @@ fn tree_needs_layout_api() -> Result<(), NodeError> {
 
     // Now clean
     assert!(
-        !tree_needs_layout(&mut applier, root_id),
+        !tree_needs_layout(&mut applier as &mut dyn Applier, root_id)?,
         "Clean tree should not need layout"
     );
 
@@ -625,7 +625,7 @@ fn tree_needs_layout_api() -> Result<(), NodeError> {
 
     // Should need layout again (root should be dirty now due to bubbling)
     assert!(
-        tree_needs_layout(&mut applier, root_id),
+        tree_needs_layout(&mut applier as &mut dyn Applier, root_id)?,
         "Tree with dirty child should need layout"
     );
 
