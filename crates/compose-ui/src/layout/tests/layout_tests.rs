@@ -99,6 +99,56 @@ impl MeasurePolicy for MaxSizePolicy {
     }
 }
 
+#[derive(Clone)]
+struct CountingPolicy {
+    counter: Rc<std::cell::Cell<usize>>,
+}
+
+impl CountingPolicy {
+    fn new(counter: Rc<std::cell::Cell<usize>>) -> Self {
+        Self { counter }
+    }
+}
+
+impl MeasurePolicy for CountingPolicy {
+    fn measure(
+        &self,
+        measurables: &[Box<dyn Measurable>],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        self.counter.set(self.counter.get().saturating_add(1));
+        let mut y: f32 = 0.0;
+        let mut width: f32 = 0.0;
+        let mut placements = Vec::new();
+        for measurable in measurables {
+            let placeable = measurable.measure(constraints);
+            width = width.max(placeable.width());
+            let height = placeable.height();
+            placements.push(Placement::new(placeable.node_id(), 0.0, y, 0));
+            y += height;
+        }
+        let width = width.clamp(constraints.min_width, constraints.max_width);
+        let height = y.clamp(constraints.min_height, constraints.max_height);
+        MeasureResult::new(Size { width, height }, placements)
+    }
+
+    fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+        0.0
+    }
+
+    fn max_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+        0.0
+    }
+
+    fn min_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+        0.0
+    }
+
+    fn max_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+        0.0
+    }
+}
+
 #[test]
 fn clamp_dimension_respects_infinite_max() {
     let clamped = clamp_dimension(50.0, 10.0, f32::INFINITY);
@@ -172,5 +222,75 @@ fn layout_node_uses_measure_policy() -> Result<(), NodeError> {
     assert_eq!(measured.children.len(), 2);
     assert_eq!(measured.children[0].offset, Point { x: 0.0, y: 0.0 });
     assert_eq!(measured.children[1].offset, Point { x: 0.0, y: 20.0 });
+    Ok(())
+}
+
+#[test]
+fn selective_measure_reuses_clean_subtrees() -> Result<(), NodeError> {
+    let mut applier = MemoryApplier::new();
+
+    let spacer_a = applier.create(Box::new(SpacerNode {
+        size: Size {
+            width: 10.0,
+            height: 20.0,
+        },
+    }));
+    let spacer_b = applier.create(Box::new(SpacerNode {
+        size: Size {
+            width: 5.0,
+            height: 30.0,
+        },
+    }));
+
+    let counter_a = Rc::new(std::cell::Cell::new(0));
+    let counter_b = Rc::new(std::cell::Cell::new(0));
+    let counter_root = Rc::new(std::cell::Cell::new(0));
+
+    let child_a_policy = Rc::new(CountingPolicy::new(Rc::clone(&counter_a)));
+    let child_b_policy = Rc::new(CountingPolicy::new(Rc::clone(&counter_b)));
+
+    let mut child_a = LayoutNode::new(Modifier::empty(), child_a_policy);
+    child_a.children.insert(spacer_a);
+    let child_a_id = applier.create(Box::new(child_a));
+
+    let mut child_b = LayoutNode::new(Modifier::empty(), child_b_policy);
+    child_b.children.insert(spacer_b);
+    let child_b_id = applier.create(Box::new(child_b));
+
+    let mut root_node = LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(CountingPolicy::new(Rc::clone(&counter_root))),
+    );
+    root_node.children.insert(child_a_id);
+    root_node.children.insert(child_b_id);
+    let root_id = applier.create(Box::new(root_node));
+
+    applier.with_node(root_id, |node: &mut LayoutNode| node.set_node_id(root_id))?;
+    applier.with_node(child_a_id, |node: &mut LayoutNode| {
+        node.set_node_id(child_a_id)
+    })?;
+    applier.with_node(child_b_id, |node: &mut LayoutNode| {
+        node.set_node_id(child_b_id)
+    })?;
+
+    let size = Size {
+        width: 200.0,
+        height: 200.0,
+    };
+
+    measure_layout(&mut applier, root_id, size)?;
+
+    assert_eq!(counter_root.get(), 1);
+    assert_eq!(counter_a.get(), 1);
+    assert_eq!(counter_b.get(), 1);
+
+    mark_measure_dirty(child_a_id);
+
+    measure_layout(&mut applier, root_id, size)?;
+
+    assert_eq!(counter_root.get(), 2);
+    assert_eq!(counter_a.get(), 2);
+    assert_eq!(counter_b.get(), 1);
+
     Ok(())
 }

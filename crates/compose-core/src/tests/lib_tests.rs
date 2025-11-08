@@ -3982,7 +3982,9 @@ fn test_composition_with_backend(backend: SlotBackendKind) {
 
                     composer.with_group(2, |composer| {
                         let nested = composer.remember(|| "world".to_string());
-                        nested.with(|n| assert_eq!(n, "hello", "Nested remembered value should be preserved"));
+                        nested.with(|n| {
+                            assert_eq!(n, "hello", "Nested remembered value should be preserved")
+                        });
                     });
                 });
             });

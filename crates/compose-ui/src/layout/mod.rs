@@ -1,6 +1,8 @@
 pub mod core;
 pub mod policies;
 
+mod dirty;
+
 use compose_core::collections::map::Entry;
 use compose_core::collections::map::HashMap;
 use std::{
@@ -11,9 +13,8 @@ use std::{
 };
 
 use compose_core::{
-    Applier, ApplierHost, Composer, ConcreteApplierHost,
-    MemoryApplier, Node, NodeError, NodeId, Phase, RuntimeHandle, SlotBackend, SlotsHost,
-    SnapshotStateObserver,
+    Applier, ApplierHost, Composer, ConcreteApplierHost, MemoryApplier, Node, NodeError, NodeId,
+    Phase, RuntimeHandle, SlotBackend, SlotsHost, SnapshotStateObserver,
 };
 
 #[cfg(test)]
@@ -27,6 +28,28 @@ use crate::widgets::nodes::{
     ButtonNode, IntrinsicKind, LayoutNode, LayoutNodeCacheHandles, SpacerNode, TextNode,
 };
 use compose_ui_layout::{Constraints, MeasurePolicy};
+
+use self::dirty::{has_dirty, is_dirty, mark_clean, mark_dirty, rebuild_parent_links, DirtyPhase};
+
+pub(crate) fn mark_measure_dirty(node_id: NodeId) {
+    mark_dirty(node_id, DirtyPhase::MEASURE);
+}
+
+pub(crate) fn mark_measure_clean(node_id: NodeId) {
+    mark_clean(node_id, DirtyPhase::MEASURE);
+}
+
+pub fn has_measure_dirty_nodes() -> bool {
+    has_dirty(DirtyPhase::MEASURE)
+}
+
+fn rebuild_dirty_parent_links(root: &MeasuredNode) {
+    rebuild_parent_links(root);
+}
+
+fn is_measure_dirty(node_id: NodeId) -> bool {
+    is_dirty(node_id, DirtyPhase::MEASURE)
+}
 
 static NEXT_CACHE_EPOCH: AtomicU64 = AtomicU64::new(1);
 
@@ -251,6 +274,7 @@ pub fn measure_layout(
     let applier_host = Rc::new(ConcreteApplierHost::new(original_applier));
     let mut builder = LayoutBuilder::new(Rc::clone(&applier_host));
     let measured = builder.measure_node(root, normalize_constraints(constraints))?;
+    rebuild_dirty_parent_links(&measured);
     let metadata = {
         let mut applier_ref = applier_host.borrow_typed();
         collect_runtime_metadata(&mut *applier_ref, &measured)?
@@ -285,24 +309,12 @@ impl LayoutBuilder {
         LayoutBuilderState::measure_node(Rc::clone(&self.state), node_id, constraints)
     }
 
-    fn measure_node_reuse(
-        &mut self,
-        node_id: NodeId,
-        constraints: Constraints,
-    ) -> Result<Rc<MeasuredNode>, NodeError> {
-        LayoutBuilderState::measure_node(Rc::clone(&self.state), node_id, constraints)
-    }
-
     fn set_runtime_handle(&mut self, handle: Option<RuntimeHandle>) {
         self.state.borrow_mut().runtime_handle = handle;
     }
 
     fn set_cache_epoch(&mut self, epoch: u64) {
         self.state.borrow_mut().cache_epoch = epoch;
-    }
-
-    fn cache_epoch(&self) -> u64 {
-        self.state.borrow().cache_epoch
     }
 }
 
@@ -322,7 +334,7 @@ impl LayoutBuilderState {
             applier,
             runtime_handle,
             slots: SlotBackend::default(),
-            cache_epoch: NEXT_CACHE_EPOCH.fetch_add(1, Ordering::Relaxed),
+            cache_epoch: NEXT_CACHE_EPOCH.load(Ordering::Relaxed),
             tmp_measurables: Vec::new(),
             tmp_records: Vec::new(),
         }
@@ -531,8 +543,11 @@ impl LayoutBuilderState {
             cache,
         } = snapshot;
         cache.activate(cache_epoch);
-        if let Some(cached) = cache.get_measurement(constraints) {
-            return Ok(cached);
+        let dirty = is_measure_dirty(node_id);
+        if !dirty {
+            if let Some(cached) = cache.get_measurement(constraints) {
+                return Ok(cached);
+            }
         }
 
         let props = modifier.layout_properties();
@@ -729,6 +744,7 @@ impl LayoutBuilderState {
         ));
 
         cache.store_measurement(constraints, Rc::clone(&measured));
+        mark_measure_clean(node_id);
 
         Ok(measured)
     }
@@ -970,8 +986,11 @@ impl LayoutChildMeasurable {
 
     fn intrinsic_measure(&self, constraints: Constraints) -> Option<Rc<MeasuredNode>> {
         self.cache.activate(self.cache_epoch);
-        if let Some(cached) = self.cache.get_measurement(constraints) {
-            return Some(cached);
+        let dirty = is_measure_dirty(self.node_id);
+        if !dirty {
+            if let Some(cached) = self.cache.get_measurement(constraints) {
+                return Some(cached);
+            }
         }
 
         match self.perform_measure(constraints) {
@@ -991,19 +1010,27 @@ impl LayoutChildMeasurable {
 impl Measurable for LayoutChildMeasurable {
     fn measure(&self, constraints: Constraints) -> Box<dyn Placeable> {
         self.cache.activate(self.cache_epoch);
-        if let Some(cached) = self.cache.get_measurement(constraints) {
-            *self.measured.borrow_mut() = Some(Rc::clone(&cached));
-        } else {
-            match self.perform_measure(constraints) {
-                Ok(measured) => {
-                    self.cache
-                        .store_measurement(constraints, Rc::clone(&measured));
-                    *self.measured.borrow_mut() = Some(measured);
-                }
-                Err(err) => {
-                    self.record_error(err);
-                    self.measured.borrow_mut().take();
-                }
+        let dirty = is_measure_dirty(self.node_id);
+        if !dirty {
+            if let Some(cached) = self.cache.get_measurement(constraints) {
+                *self.measured.borrow_mut() = Some(Rc::clone(&cached));
+                return Box::new(LayoutChildPlaceable::new(
+                    self.node_id,
+                    Rc::clone(&self.measured),
+                    Rc::clone(&self.last_position),
+                ));
+            }
+        }
+
+        match self.perform_measure(constraints) {
+            Ok(measured) => {
+                self.cache
+                    .store_measurement(constraints, Rc::clone(&measured));
+                *self.measured.borrow_mut() = Some(measured);
+            }
+            Err(err) => {
+                self.record_error(err);
+                self.measured.borrow_mut().take();
             }
         }
         Box::new(LayoutChildPlaceable::new(
@@ -1217,12 +1244,14 @@ fn measure_leaf(
         constraints.max_height,
     );
 
-    Rc::new(MeasuredNode::new(
+    let measured = Rc::new(MeasuredNode::new(
         node_id,
         Size { width, height },
         offset,
         Vec::new(),
-    ))
+    ));
+    mark_measure_clean(node_id);
+    measured
 }
 
 #[derive(Clone)]

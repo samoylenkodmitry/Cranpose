@@ -10,7 +10,7 @@ mod shaders;
 
 pub use scene::{ClickAction, DrawShape, HitRegion, Scene, TextDraw};
 
-use compose_render_common::{Renderer, RenderScene};
+use compose_render_common::{RenderScene, Renderer};
 use compose_ui::{set_text_measurer, LayoutTree, TextMeasurer};
 use compose_ui_graphics::Size;
 use glyphon::{Attrs, Buffer, FontSystem, Metrics, Shaping};
@@ -86,7 +86,8 @@ impl SharedTextBuffer {
         // Something changed, need to reshape
         let metrics = Metrics::new(font_size, font_size * 1.4);
         self.buffer.set_metrics(font_system, metrics);
-        self.buffer.set_text(font_system, text, attrs, Shaping::Advanced);
+        self.buffer
+            .set_text(font_system, text, attrs, Shaping::Advanced);
         self.buffer.shape_until_scroll(font_system);
 
         // Update cached values
@@ -183,7 +184,12 @@ impl WgpuRenderer {
     }
 
     /// Render the scene to a texture view.
-    pub fn render(&mut self, view: &wgpu::TextureView, width: u32, height: u32) -> Result<(), WgpuRendererError> {
+    pub fn render(
+        &mut self,
+        view: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+    ) -> Result<(), WgpuRendererError> {
         if let Some(gpu_renderer) = &mut self.gpu_renderer {
             gpu_renderer
                 .render(view, &self.scene.shapes, &self.scene.texts, width, height)
@@ -222,7 +228,11 @@ impl Renderer for WgpuRenderer {
         &mut self.scene
     }
 
-    fn rebuild_scene(&mut self, layout_tree: &LayoutTree, _viewport: Size) -> Result<(), Self::Error> {
+    fn rebuild_scene(
+        &mut self,
+        layout_tree: &LayoutTree,
+        _viewport: Size,
+    ) -> Result<(), Self::Error> {
         self.scene.clear();
         pipeline::render_layout_tree(layout_tree.root(), &mut self.scene);
         Ok(())
@@ -279,14 +289,10 @@ impl TextMeasurer for WgpuTextMeasurer {
             cached.size(font_size)
         } else {
             // Cache miss - create new buffer and add to shared cache
-            let mut new_buffer = Buffer::new(&mut font_system, Metrics::new(font_size, font_size * 1.4));
+            let mut new_buffer =
+                Buffer::new(&mut font_system, Metrics::new(font_size, font_size * 1.4));
             new_buffer.set_size(&mut font_system, f32::MAX, f32::MAX);
-            new_buffer.set_text(
-                &mut font_system,
-                text,
-                Attrs::new(),
-                Shaping::Advanced,
-            );
+            new_buffer.set_text(&mut font_system, text, Attrs::new(), Shaping::Advanced);
             new_buffer.shape_until_scroll(&mut font_system);
 
             let mut shared_buffer = SharedTextBuffer {

@@ -25,17 +25,31 @@ fn test_backend_smoke(kind: SlotBackendKind) {
 
     // Begin a root group
     let result1 = storage.begin_group(100);
-    assert!(!result1.restored_from_gap, "{:?}: First group should not be from gap", kind);
+    assert!(
+        !result1.restored_from_gap,
+        "{:?}: First group should not be from gap",
+        kind
+    );
 
     // Allocate a value slot
     let slot = storage.alloc_value_slot(|| 42);
 
     // Read it back
-    assert_eq!(*storage.read_value::<i32>(slot), 42, "{:?}: Value should match", kind);
+    assert_eq!(
+        *storage.read_value::<i32>(slot),
+        42,
+        "{:?}: Value should match",
+        kind
+    );
 
     // Write a new value
     storage.write_value(slot, 100);
-    assert_eq!(*storage.read_value::<i32>(slot), 100, "{:?}: Updated value should match", kind);
+    assert_eq!(
+        *storage.read_value::<i32>(slot),
+        100,
+        "{:?}: Updated value should match",
+        kind
+    );
 
     // End the group
     storage.end_group();
@@ -222,7 +236,11 @@ fn test_backend_gap_restore(kind: SlotBackendKind) {
     // First composition: create a group with content
     storage.reset();
     let result1 = storage.begin_group(500);
-    assert!(!result1.restored_from_gap, "{:?}: First group should not be from gap", kind);
+    assert!(
+        !result1.restored_from_gap,
+        "{:?}: First group should not be from gap",
+        kind
+    );
 
     let _slot = storage.alloc_value_slot(|| 42);
     storage.end_group();
@@ -242,7 +260,11 @@ fn test_backend_gap_restore(kind: SlotBackendKind) {
     let result3 = storage.begin_group(500);
 
     // All backends now support gap restoration
-    assert!(result3.restored_from_gap, "{:?}: Group should be restored from gap", kind);
+    assert!(
+        result3.restored_from_gap,
+        "{:?}: Group should be restored from gap",
+        kind
+    );
 
     storage.end_group();
     storage.flush();
@@ -433,7 +455,7 @@ fn test_backends_nested_groups_partial_finalize() {
         let _inner = storage.begin_group(101);
         let _slot = storage.alloc_value_slot(|| 1usize);
         storage.end_group(); // inner
-        // finalize outer while cursor is inside its range
+                             // finalize outer while cursor is inside its range
         storage.finalize_current_group();
         storage.end_group(); // outer
         storage.flush();
@@ -581,7 +603,11 @@ fn test_backends_gap_restore_rejects_key_mismatch() {
         storage.reset();
         let res = storage.begin_group(901);
         // must NOT be restored_from_gap because key differs
-        assert!(!res.restored_from_gap, "{:?}: should not restore if key changed", kind);
+        assert!(
+            !res.restored_from_gap,
+            "{:?}: should not restore if key changed",
+            kind
+        );
         storage.end_group();
         storage.flush();
     }
@@ -658,7 +684,11 @@ fn test_backends_multiple_sibling_groups_gap_isolated() {
         storage.end_group();
 
         let g2c = storage.begin_group(1001);
-        assert!(g2c.restored_from_gap, "{:?}: second sibling should restore from gap", kind);
+        assert!(
+            g2c.restored_from_gap,
+            "{:?}: second sibling should restore from gap",
+            kind
+        );
         storage.end_group();
         storage.flush();
     }
@@ -695,7 +725,12 @@ fn test_backends_insert_before_following_group() {
         let v2b = storage.alloc_value_slot(|| 22u32);
         // Explicitly write value to ensure it's set (alloc may reuse old slot)
         storage.write_value(v2b, 22u32);
-        assert_eq!(*storage.read_value::<u32>(v2b), 22, "{:?}: shifted second group must still work", kind);
+        assert_eq!(
+            *storage.read_value::<u32>(v2b),
+            22,
+            "{:?}: shifted second group must still work",
+            kind
+        );
         storage.end_group();
         storage.flush();
     }
@@ -718,7 +753,11 @@ fn test_backends_scope_recomposition_not_found_is_safe() {
         // try to recompose at non-existent scope
         storage.reset();
         let found = storage.begin_recompose_at_scope(999_999);
-        assert!(found.is_none(), "{:?}: nonexistent scope should return None", kind);
+        assert!(
+            found.is_none(),
+            "{:?}: nonexistent scope should return None",
+            kind
+        );
         // after a failed recompose we should still be able to do a normal pass
         let _g2 = storage.begin_group(1200);
         let _v2 = storage.alloc_value_slot(|| 2i32);
@@ -856,7 +895,11 @@ fn test_chunked_value_slot_is_position_based() {
     let _g = storage.begin_group(9000);
     let slot = storage.alloc_value_slot(|| 123i32);
     // we expect the id to be 1 here because group is at 0, value at 1
-    assert_eq!(slot.index(), 1, "chunked backend must use position-based ValueSlotId like other backends");
+    assert_eq!(
+        slot.index(),
+        1,
+        "chunked backend must use position-based ValueSlotId like other backends"
+    );
     storage.end_group();
     storage.flush();
 }
@@ -911,7 +954,7 @@ fn test_backends_gap_restore_shorter_children_respects_parent_frame() {
         let _v2 = storage.alloc_value_slot(|| 200u32);
         let _v3 = storage.alloc_value_slot(|| 300u32);
         storage.end_group(); // child
-        // Finalize parent early to establish its bounds
+                             // Finalize parent early to establish its bounds
         storage.finalize_current_group();
         storage.end_group(); // parent
         storage.flush();
@@ -924,13 +967,22 @@ fn test_backends_gap_restore_shorter_children_respects_parent_frame() {
         // pass 3: restore parent and child, but allocate only 1 child value
         storage.reset();
         let res_parent = storage.begin_group(2000);
-        assert!(res_parent.restored_from_gap, "{:?}: parent should restore from gap", kind);
+        assert!(
+            res_parent.restored_from_gap,
+            "{:?}: parent should restore from gap",
+            kind
+        );
 
         let res_child = storage.begin_group(2001);
         // Child might be restored from gap or freshly created depending on backend
         let v1_new = storage.alloc_value_slot(|| 111u32);
         storage.write_value(v1_new, 111u32);
-        assert_eq!(*storage.read_value::<u32>(v1_new), 111, "{:?}: should read new value", kind);
+        assert_eq!(
+            *storage.read_value::<u32>(v1_new),
+            111,
+            "{:?}: should read new value",
+            kind
+        );
 
         // Finalize child to mark remaining slots as gaps
         storage.finalize_current_group();
@@ -978,7 +1030,12 @@ fn test_backends_insert_in_first_group_preserves_nested_second_group() {
         let v2b = storage.alloc_value_slot(|| 22i32);
         storage.write_value(v2b, 22i32);
         // This must not panic, and must read correctly
-        assert_eq!(*storage.read_value::<i32>(v2b), 22, "{:?}: nested group after shift must be readable", kind);
+        assert_eq!(
+            *storage.read_value::<i32>(v2b),
+            22,
+            "{:?}: nested group after shift must be readable",
+            kind
+        );
         storage.end_group(); // inner
         storage.end_group(); // group2
 
@@ -1013,7 +1070,12 @@ fn test_backends_root_finalize_then_gap_restore_anchors_consistent() {
         assert!(res.restored_from_gap, "{:?}: should restore from gap", kind);
         let slot2 = storage.alloc_value_slot(|| 42i32);
         // This must not panic and must have the correct value
-        assert_eq!(*storage.read_value::<i32>(slot2), 42, "{:?}: value must be readable after gap restore", kind);
+        assert_eq!(
+            *storage.read_value::<i32>(slot2),
+            42,
+            "{:?}: value must be readable after gap restore",
+            kind
+        );
         storage.end_group();
         storage.flush();
     }
@@ -1050,7 +1112,11 @@ fn test_backends_gap_restore_preserves_scope() {
         // pass 4: verify scope is still findable
         storage.reset();
         let found = storage.begin_recompose_at_scope(123);
-        assert!(found.is_some(), "{:?}: scope 123 must be findable after gap restore", kind);
+        assert!(
+            found.is_some(),
+            "{:?}: scope 123 must be findable after gap restore",
+            kind
+        );
         if found.is_some() {
             storage.end_group();
             storage.end_recompose();
@@ -1149,7 +1215,11 @@ fn test_chunked_gap_scan_upper_bound_fallback() {
     // This allocation hits the gap scan limit and falls back
     let s3 = storage.alloc_value_slot(|| 999u32);
     storage.write_value(s3, 999u32);
-    assert_eq!(*storage.read_value::<u32>(s3), 999, "fallback overwrite must work");
+    assert_eq!(
+        *storage.read_value::<u32>(s3),
+        999,
+        "fallback overwrite must work"
+    );
     storage.end_group();
     storage.flush();
 }

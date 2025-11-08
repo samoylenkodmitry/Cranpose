@@ -365,7 +365,12 @@ impl SlotTable {
     /// Mark a range of slots as gaps instead of truncating.
     /// This preserves sibling components while allowing structure changes.
     /// When encountering a Group, recursively marks the entire group structure as gaps.
-    pub fn mark_range_as_gaps(&mut self, start: usize, end: usize, owner_index: Option<usize>) -> bool {
+    pub fn mark_range_as_gaps(
+        &mut self,
+        start: usize,
+        end: usize,
+        owner_index: Option<usize>,
+    ) -> bool {
         let mut i = start;
         let end = end.min(self.slots.len());
         let mut marked_any = false;

@@ -253,7 +253,9 @@ impl SplitSlotStorage {
                     let slot = &mut self.layout[self.cursor];
                     let anchor = slot.anchor_id();
                     let (group_key, group_scope, group_len) = match slot {
-                        LayoutSlot::Group { key, scope, len, .. } => (Some(*key), *scope, *len),
+                        LayoutSlot::Group {
+                            key, scope, len, ..
+                        } => (Some(*key), *scope, *len),
                         _ => (None, None, 0),
                     };
                     *slot = LayoutSlot::Gap {
@@ -276,7 +278,9 @@ impl SplitSlotStorage {
             let slot = &mut self.layout[self.cursor];
             let anchor = slot.anchor_id();
             let (group_key, group_scope, group_len) = match slot {
-                LayoutSlot::Group { key, scope, len, .. } => (Some(*key), *scope, *len),
+                LayoutSlot::Group {
+                    key, scope, len, ..
+                } => (Some(*key), *scope, *len),
                 _ => (None, None, 0),
             };
 
@@ -345,10 +349,7 @@ impl SlotStorage for SplitSlotStorage {
 
     fn begin_recompose_at_scope(&mut self, scope: ScopeId) -> Option<Self::Group> {
         for (idx, slot) in self.layout.iter().enumerate() {
-            if let LayoutSlot::Group {
-                scope: Some(s), ..
-            } = slot
-            {
+            if let LayoutSlot::Group { scope: Some(s), .. } = slot {
                 if *s == scope {
                     self.cursor = idx;
                     return Some(GroupId::new(idx));
@@ -432,21 +433,30 @@ impl SlotStorage for SplitSlotStorage {
     }
 
     fn read_value<T: 'static>(&self, slot: Self::ValueSlot) -> &T {
-        let layout_slot = self.layout.get(slot.index()).expect("layout slot not found");
+        let layout_slot = self
+            .layout
+            .get(slot.index())
+            .expect("layout slot not found");
         let anchor = layout_slot.anchor_id();
         let data = self.payload.get(&anchor.0).expect("payload not found");
         data.downcast_ref::<T>().expect("type mismatch")
     }
 
     fn read_value_mut<T: 'static>(&mut self, slot: Self::ValueSlot) -> &mut T {
-        let layout_slot = self.layout.get(slot.index()).expect("layout slot not found");
+        let layout_slot = self
+            .layout
+            .get(slot.index())
+            .expect("layout slot not found");
         let anchor = layout_slot.anchor_id();
         let data = self.payload.get_mut(&anchor.0).expect("payload not found");
         data.downcast_mut::<T>().expect("type mismatch")
     }
 
     fn write_value<T: 'static>(&mut self, slot: Self::ValueSlot, value: T) {
-        let layout_slot = self.layout.get(slot.index()).expect("layout slot not found");
+        let layout_slot = self
+            .layout
+            .get(slot.index())
+            .expect("layout slot not found");
         let anchor = layout_slot.anchor_id();
         self.payload.insert(anchor.0, Box::new(value));
     }
@@ -519,7 +529,9 @@ impl SplitSlotStorage {
             .iter()
             .enumerate()
             .filter_map(|(i, slot)| match slot {
-                LayoutSlot::Group { key, len, scope, .. } => Some((i, *key, *scope, *len)),
+                LayoutSlot::Group {
+                    key, len, scope, ..
+                } => Some((i, *key, *scope, *len)),
                 _ => None,
             })
             .collect()
@@ -532,13 +544,30 @@ impl SplitSlotStorage {
             .enumerate()
             .map(|(i, slot)| {
                 let desc = match slot {
-                    LayoutSlot::Group { key, scope, len, has_gap_children, .. } => {
-                        format!("Group(key={}, scope={:?}, len={}, gaps={})", key, scope, len, has_gap_children)
+                    LayoutSlot::Group {
+                        key,
+                        scope,
+                        len,
+                        has_gap_children,
+                        ..
+                    } => {
+                        format!(
+                            "Group(key={}, scope={:?}, len={}, gaps={})",
+                            key, scope, len, has_gap_children
+                        )
                     }
                     LayoutSlot::ValueRef { .. } => "ValueRef".to_string(),
                     LayoutSlot::Node { id, .. } => format!("Node(id={})", id),
-                    LayoutSlot::Gap { group_key, group_scope, group_len, .. } => {
-                        format!("Gap(key={:?}, scope={:?}, len={})", group_key, group_scope, group_len)
+                    LayoutSlot::Gap {
+                        group_key,
+                        group_scope,
+                        group_len,
+                        ..
+                    } => {
+                        format!(
+                            "Gap(key={:?}, scope={:?}, len={})",
+                            group_key, group_scope, group_len
+                        )
                     }
                 };
                 (i, desc)

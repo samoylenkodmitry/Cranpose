@@ -6,6 +6,7 @@ use compose_core::{
 };
 use indexmap::IndexSet;
 
+use crate::layout::mark_measure_dirty;
 use crate::modifier::{Modifier, Point, Size};
 use compose_foundation::{BasicModifierNodeContext, ModifierNodeChain};
 
@@ -103,6 +104,10 @@ impl SubcomposeLayoutNode {
         }
     }
 
+    pub fn set_node_id(&mut self, id: NodeId) {
+        self.inner.borrow_mut().set_node_id(id);
+    }
+
     pub fn handle(&self) -> SubcomposeLayoutNodeHandle {
         SubcomposeLayoutNodeHandle {
             inner: Rc::clone(&self.inner),
@@ -136,11 +141,19 @@ impl SubcomposeLayoutNode {
 
 impl compose_core::Node for SubcomposeLayoutNode {
     fn insert_child(&mut self, child: NodeId) {
-        self.inner.borrow_mut().children.insert(child);
+        let mut inner = self.inner.borrow_mut();
+        inner.children.insert(child);
+        if let Some(id) = inner.id {
+            mark_measure_dirty(id);
+        }
     }
 
     fn remove_child(&mut self, child: NodeId) {
-        self.inner.borrow_mut().children.shift_remove(&child);
+        let mut inner = self.inner.borrow_mut();
+        inner.children.shift_remove(&child);
+        if let Some(id) = inner.id {
+            mark_measure_dirty(id);
+        }
     }
 
     fn move_child(&mut self, from: usize, to: usize) {
@@ -156,6 +169,9 @@ impl compose_core::Node for SubcomposeLayoutNode {
         for id in ordered {
             inner.children.insert(id);
         }
+        if let Some(id) = inner.id {
+            mark_measure_dirty(id);
+        }
     }
 
     fn update_children(&mut self, children: &[NodeId]) {
@@ -163,6 +179,9 @@ impl compose_core::Node for SubcomposeLayoutNode {
         inner.children.clear();
         for &child in children {
             inner.children.insert(child);
+        }
+        if let Some(id) = inner.id {
+            mark_measure_dirty(id);
         }
     }
 
@@ -254,6 +273,7 @@ struct SubcomposeLayoutNodeInner {
     measure_policy: Rc<MeasurePolicy>,
     children: IndexSet<NodeId>,
     slots: SlotBackend,
+    id: Option<NodeId>,
 }
 
 impl SubcomposeLayoutNodeInner {
@@ -266,17 +286,34 @@ impl SubcomposeLayoutNodeInner {
             measure_policy,
             children: IndexSet::new(),
             slots: SlotBackend::default(),
+            id: None,
         }
     }
 
+    fn set_node_id(&mut self, id: NodeId) {
+        self.id = Some(id);
+    }
+
     fn set_measure_policy(&mut self, policy: Rc<MeasurePolicy>) {
+        if Rc::ptr_eq(&self.measure_policy, &policy) {
+            return;
+        }
         self.measure_policy = policy;
+        if let Some(id) = self.id {
+            mark_measure_dirty(id);
+        }
     }
 
     fn set_modifier(&mut self, modifier: Modifier) {
+        if self.modifier == modifier {
+            return;
+        }
         self.modifier = modifier;
         self.mods
             .update_from_slice(self.modifier.elements(), &mut self.modifier_context);
+        if let Some(id) = self.id {
+            mark_measure_dirty(id);
+        }
     }
 }
 

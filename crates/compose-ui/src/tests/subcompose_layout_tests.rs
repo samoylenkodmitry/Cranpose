@@ -3,7 +3,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use compose_core::{
-    self, Applier, ConcreteApplierHost, MutableState, SlotBackend, SlotStorage, SlotsHost, SnapshotStateObserver,
+    self, Applier, ConcreteApplierHost, MutableState, SlotBackend, SlotStorage, SlotsHost,
+    SnapshotStateObserver,
 };
 
 #[derive(Default)]

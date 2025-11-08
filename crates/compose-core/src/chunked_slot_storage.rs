@@ -101,18 +101,18 @@ impl ChunkedSlot {
 
     fn as_value<T: 'static>(&self) -> &T {
         match self {
-            ChunkedSlot::Value { data, .. } => data
-                .downcast_ref::<T>()
-                .expect("slot value type mismatch"),
+            ChunkedSlot::Value { data, .. } => {
+                data.downcast_ref::<T>().expect("slot value type mismatch")
+            }
             _ => panic!("slot is not a value"),
         }
     }
 
     fn as_value_mut<T: 'static>(&mut self) -> &mut T {
         match self {
-            ChunkedSlot::Value { data, .. } => data
-                .downcast_mut::<T>()
-                .expect("slot value type mismatch"),
+            ChunkedSlot::Value { data, .. } => {
+                data.downcast_mut::<T>().expect("slot value type mismatch")
+            }
             _ => panic!("slot is not a value"),
         }
     }
@@ -278,7 +278,7 @@ impl ChunkedSlotStorage {
             // Use mem::replace to move without cloning
             let temp = std::mem::replace(
                 &mut self.chunks[src_chunk][src_offset],
-                ChunkedSlot::default()
+                ChunkedSlot::default(),
             );
             // Capacity is guaranteed by the loop above
             self.chunks[dst_chunk][dst_offset] = temp;
@@ -492,7 +492,9 @@ impl ChunkedSlotStorage {
                     if let Some(slot) = self.get_slot_mut(self.cursor) {
                         let anchor = slot.anchor_id();
                         let (group_key, group_scope, group_len) = match slot {
-                            ChunkedSlot::Group { key, scope, len, .. } => (Some(*key), *scope, *len),
+                            ChunkedSlot::Group {
+                                key, scope, len, ..
+                            } => (Some(*key), *scope, *len),
                             _ => (None, None, 0),
                         };
                         *slot = ChunkedSlot::Gap {
@@ -517,7 +519,9 @@ impl ChunkedSlotStorage {
                 // Convert to gap
                 let anchor = slot.anchor_id();
                 let (group_key, group_scope, group_len) = match slot {
-                    ChunkedSlot::Group { key, scope, len, .. } => (Some(*key), *scope, *len),
+                    ChunkedSlot::Group {
+                        key, scope, len, ..
+                    } => (Some(*key), *scope, *len),
                     _ => (None, None, 0),
                 };
                 *slot = ChunkedSlot::Gap {
@@ -585,10 +589,7 @@ impl SlotStorage for ChunkedSlotStorage {
     fn begin_recompose_at_scope(&mut self, scope: ScopeId) -> Option<Self::Group> {
         // Linear scan to find group with this scope
         for global_idx in 0..self.total_slots() {
-            if let Some(ChunkedSlot::Group {
-                scope: Some(s), ..
-            }) = self.get_slot(global_idx)
-            {
+            if let Some(ChunkedSlot::Group { scope: Some(s), .. }) = self.get_slot(global_idx) {
                 if *s == scope {
                     self.cursor = global_idx;
                     return Some(GroupId::new(global_idx));
@@ -695,7 +696,10 @@ impl ChunkedSlotStorage {
     pub fn debug_dump_groups(&self) -> Vec<(usize, Key, Option<ScopeId>, usize)> {
         let mut result = Vec::new();
         for global_idx in 0..self.total_slots() {
-            if let Some(ChunkedSlot::Group { key, len, scope, .. }) = self.get_slot(global_idx) {
+            if let Some(ChunkedSlot::Group {
+                key, len, scope, ..
+            }) = self.get_slot(global_idx)
+            {
                 result.push((global_idx, *key, *scope, *len));
             }
         }
@@ -707,13 +711,30 @@ impl ChunkedSlotStorage {
         let mut result = Vec::new();
         for global_idx in 0..self.total_slots() {
             let desc = match self.get_slot(global_idx) {
-                Some(ChunkedSlot::Group { key, scope, len, has_gap_children, .. }) => {
-                    format!("Group(key={}, scope={:?}, len={}, gaps={})", key, scope, len, has_gap_children)
+                Some(ChunkedSlot::Group {
+                    key,
+                    scope,
+                    len,
+                    has_gap_children,
+                    ..
+                }) => {
+                    format!(
+                        "Group(key={}, scope={:?}, len={}, gaps={})",
+                        key, scope, len, has_gap_children
+                    )
                 }
                 Some(ChunkedSlot::Value { .. }) => "Value".to_string(),
                 Some(ChunkedSlot::Node { id, .. }) => format!("Node(id={})", id),
-                Some(ChunkedSlot::Gap { group_key, group_scope, group_len, .. }) => {
-                    format!("Gap(key={:?}, scope={:?}, len={})", group_key, group_scope, group_len)
+                Some(ChunkedSlot::Gap {
+                    group_key,
+                    group_scope,
+                    group_len,
+                    ..
+                }) => {
+                    format!(
+                        "Gap(key={:?}, scope={:?}, len={})",
+                        group_key, group_scope, group_len
+                    )
                 }
                 None => "Empty".to_string(),
             };

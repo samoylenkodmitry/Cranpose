@@ -192,20 +192,24 @@ fn run_app(options: ComposeAppOptions, content: impl FnMut() + 'static) -> ! {
 
 #[cfg(feature = "renderer-pixels")]
 fn run_pixels_app(options: &ComposeAppOptions, content: impl FnMut() + 'static) -> ! {
-    let event_loop = EventLoopBuilder::new().build().expect("failed to create event loop");
+    let event_loop = EventLoopBuilder::new()
+        .build()
+        .expect("failed to create event loop");
     let frame_proxy = event_loop.create_proxy();
 
     let initial_width = options.initial_size.0;
     let initial_height = options.initial_size.1;
 
-    let window = Arc::new(WindowBuilder::new()
-        .with_title(options.title.clone())
-        .with_inner_size(LogicalSize::new(
-            initial_width as f64,
-            initial_height as f64,
-        ))
-        .build(&event_loop)
-        .expect("failed to create window"));
+    let window = Arc::new(
+        WindowBuilder::new()
+            .with_title(options.title.clone())
+            .with_inner_size(LogicalSize::new(
+                initial_width as f64,
+                initial_height as f64,
+            ))
+            .build(&event_loop)
+            .expect("failed to create window"),
+    );
 
     let size = window.inner_size();
     let surface_texture = SurfaceTexture::new(size.width, size.height, window.as_ref());
@@ -235,79 +239,74 @@ fn run_pixels_app(options: &ComposeAppOptions, content: impl FnMut() + 'static) 
     let _ = event_loop.run(move |event, elwt| {
         elwt.set_control_flow(ControlFlow::Wait);
         match event {
-            Event::WindowEvent { window_id, event } if window_id == window_for_event_loop.id() => match event {
-                WindowEvent::CloseRequested => {
-                    elwt.exit();
-                }
-                WindowEvent::Resized(new_size) => {
-                    if let Err(err) = pixels.resize_surface(new_size.width, new_size.height) {
-                        log::error!("failed to resize surface: {err}");
-                        return;
+            Event::WindowEvent { window_id, event } if window_id == window_for_event_loop.id() => {
+                match event {
+                    WindowEvent::CloseRequested => {
+                        elwt.exit();
                     }
-                    if let Err(err) = pixels.resize_buffer(new_size.width, new_size.height) {
-                        log::error!("failed to resize buffer: {err}");
-                        return;
+                    WindowEvent::Resized(new_size) => {
+                        if let Err(err) = pixels.resize_surface(new_size.width, new_size.height) {
+                            log::error!("failed to resize surface: {err}");
+                            return;
+                        }
+                        if let Err(err) = pixels.resize_buffer(new_size.width, new_size.height) {
+                            log::error!("failed to resize buffer: {err}");
+                            return;
+                        }
+                        app.set_buffer_size(new_size.width, new_size.height);
+                        app.set_viewport(new_size.width as f32, new_size.height as f32);
                     }
-                    app.set_buffer_size(new_size.width, new_size.height);
-                    app.set_viewport(new_size.width as f32, new_size.height as f32);
-                }
-                WindowEvent::ScaleFactorChanged {
-                    scale_factor,
-                    ..
-                } => {
-                    platform.set_scale_factor(scale_factor);
-                    let new_size = window_for_event_loop.inner_size();
-                    if let Err(err) =
-                        pixels.resize_surface(new_size.width, new_size.height)
-                    {
-                        log::error!("failed to resize surface: {err}");
-                        return;
+                    WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                        platform.set_scale_factor(scale_factor);
+                        let new_size = window_for_event_loop.inner_size();
+                        if let Err(err) = pixels.resize_surface(new_size.width, new_size.height) {
+                            log::error!("failed to resize surface: {err}");
+                            return;
+                        }
+                        if let Err(err) = pixels.resize_buffer(new_size.width, new_size.height) {
+                            log::error!("failed to resize buffer: {err}");
+                            return;
+                        }
+                        app.set_buffer_size(new_size.width, new_size.height);
+                        app.set_viewport(new_size.width as f32, new_size.height as f32);
                     }
-                    if let Err(err) =
-                        pixels.resize_buffer(new_size.width, new_size.height)
-                    {
-                        log::error!("failed to resize buffer: {err}");
-                        return;
-                    }
-                    app.set_buffer_size(new_size.width, new_size.height);
-                    app.set_viewport(new_size.width as f32, new_size.height as f32);
-                }
-                WindowEvent::CursorMoved { position, .. } => {
-                    let logical = platform.pointer_position(position);
-                    app.set_cursor(logical.x, logical.y);
-                    if app.should_render() {
-                        app.update();
-                        window_for_event_loop.request_redraw();
-                    }
-                }
-                WindowEvent::MouseInput {
-                    state,
-                    button: MouseButton::Left,
-                    ..
-                } => match state {
-                    ElementState::Pressed => app.pointer_pressed(),
-                    ElementState::Released => app.pointer_released(),
-                },
-                WindowEvent::KeyboardInput { event, .. } => {
-                    use winit::keyboard::{KeyCode, PhysicalKey};
-                    if event.state == ElementState::Pressed {
-                        if let PhysicalKey::Code(KeyCode::KeyD) = event.physical_key {
-                            app.log_debug_info();
+                    WindowEvent::CursorMoved { position, .. } => {
+                        let logical = platform.pointer_position(position);
+                        app.set_cursor(logical.x, logical.y);
+                        if app.should_render() {
+                            app.update();
+                            window_for_event_loop.request_redraw();
                         }
                     }
-                }
-                WindowEvent::RedrawRequested => {
-                    app.update();
-
-                    let frame = pixels.frame_mut();
-                    let (buffer_width, buffer_height) = app.buffer_size();
-                    draw_scene(frame, buffer_width, buffer_height, app.scene());
-                    if let Err(err) = pixels.render() {
-                        log::error!("pixels render failed: {err}");
+                    WindowEvent::MouseInput {
+                        state,
+                        button: MouseButton::Left,
+                        ..
+                    } => match state {
+                        ElementState::Pressed => app.pointer_pressed(),
+                        ElementState::Released => app.pointer_released(),
+                    },
+                    WindowEvent::KeyboardInput { event, .. } => {
+                        use winit::keyboard::{KeyCode, PhysicalKey};
+                        if event.state == ElementState::Pressed {
+                            if let PhysicalKey::Code(KeyCode::KeyD) = event.physical_key {
+                                app.log_debug_info();
+                            }
+                        }
                     }
+                    WindowEvent::RedrawRequested => {
+                        app.update();
+
+                        let frame = pixels.frame_mut();
+                        let (buffer_width, buffer_height) = app.buffer_size();
+                        draw_scene(frame, buffer_width, buffer_height, app.scene());
+                        if let Err(err) = pixels.render() {
+                            log::error!("pixels render failed: {err}");
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
-            },
+            }
             Event::AboutToWait | Event::UserEvent(()) => {
                 if app.should_render() {
                     window_for_event_loop.request_redraw();
@@ -323,20 +322,24 @@ fn run_pixels_app(options: &ComposeAppOptions, content: impl FnMut() + 'static) 
 
 #[cfg(feature = "renderer-wgpu")]
 fn run_wgpu_app(options: &ComposeAppOptions, content: impl FnMut() + 'static) -> ! {
-    let event_loop = EventLoopBuilder::new().build().expect("failed to create event loop");
+    let event_loop = EventLoopBuilder::new()
+        .build()
+        .expect("failed to create event loop");
     let frame_proxy = event_loop.create_proxy();
 
     let initial_width = options.initial_size.0;
     let initial_height = options.initial_size.1;
 
-    let window = Arc::new(WindowBuilder::new()
-        .with_title(options.title.clone())
-        .with_inner_size(LogicalSize::new(
-            initial_width as f64,
-            initial_height as f64,
-        ))
-        .build(&event_loop)
-        .expect("failed to create window"));
+    let window = Arc::new(
+        WindowBuilder::new()
+            .with_title(options.title.clone())
+            .with_inner_size(LogicalSize::new(
+                initial_width as f64,
+                initial_height as f64,
+            ))
+            .build(&event_loop)
+            .expect("failed to create window"),
+    );
 
     // Initialize WGPU
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -421,10 +424,7 @@ fn run_wgpu_app(options: &ComposeAppOptions, content: impl FnMut() + 'static) ->
                         app.set_viewport(new_size.width as f32, new_size.height as f32);
                     }
                 }
-                WindowEvent::ScaleFactorChanged {
-                    scale_factor,
-                    ..
-                } => {
+                WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                     platform.set_scale_factor(scale_factor);
                     let new_size = window.inner_size();
                     if new_size.width > 0 && new_size.height > 0 {
@@ -475,7 +475,10 @@ fn run_wgpu_app(options: &ComposeAppOptions, content: impl FnMut() + 'static) ->
                         .texture
                         .create_view(&wgpu::TextureViewDescriptor::default());
 
-                    if let Err(err) = app.renderer().render(&view, surface_config.width, surface_config.height) {
+                    if let Err(err) =
+                        app.renderer()
+                            .render(&view, surface_config.width, surface_config.height)
+                    {
                         log::error!("render failed: {err:?}");
                         return;
                     }

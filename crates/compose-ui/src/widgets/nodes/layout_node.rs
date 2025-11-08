@@ -1,4 +1,7 @@
-use crate::{layout::MeasuredNode, modifier::Modifier};
+use crate::{
+    layout::{mark_measure_dirty, MeasuredNode},
+    modifier::Modifier,
+};
 use compose_core::{Node, NodeId};
 use compose_foundation::{BasicModifierNodeContext, ModifierNodeChain};
 use compose_ui_layout::{Constraints, MeasurePolicy};
@@ -139,6 +142,7 @@ pub struct LayoutNode {
     pub measure_policy: Rc<dyn MeasurePolicy>,
     pub children: IndexSet<NodeId>,
     cache: LayoutNodeCacheHandles,
+    id: Option<NodeId>,
 }
 
 impl LayoutNode {
@@ -150,21 +154,38 @@ impl LayoutNode {
             measure_policy,
             children: IndexSet::new(),
             cache: LayoutNodeCacheHandles::default(),
+            id: None,
         };
         node.set_modifier(modifier);
         node
     }
 
+    pub fn set_node_id(&mut self, id: NodeId) {
+        self.id = Some(id);
+    }
+
     pub fn set_modifier(&mut self, modifier: Modifier) {
+        if self.modifier == modifier {
+            return;
+        }
         self.modifier = modifier;
         self.mods
             .update_from_slice(self.modifier.elements(), &mut self.modifier_context);
         self.cache.clear();
+        if let Some(id) = self.id {
+            mark_measure_dirty(id);
+        }
     }
 
     pub fn set_measure_policy(&mut self, policy: Rc<dyn MeasurePolicy>) {
+        if Rc::ptr_eq(&self.measure_policy, &policy) {
+            return;
+        }
         self.measure_policy = policy;
         self.cache.clear();
+        if let Some(id) = self.id {
+            mark_measure_dirty(id);
+        }
     }
 
     pub(crate) fn cache_handles(&self) -> LayoutNodeCacheHandles {
@@ -181,6 +202,7 @@ impl Clone for LayoutNode {
             measure_policy: self.measure_policy.clone(),
             children: self.children.clone(),
             cache: self.cache.clone(),
+            id: self.id,
         }
     }
 }
@@ -189,11 +211,17 @@ impl Node for LayoutNode {
     fn insert_child(&mut self, child: NodeId) {
         self.children.insert(child);
         self.cache.clear();
+        if let Some(id) = self.id {
+            mark_measure_dirty(id);
+        }
     }
 
     fn remove_child(&mut self, child: NodeId) {
         self.children.shift_remove(&child);
         self.cache.clear();
+        if let Some(id) = self.id {
+            mark_measure_dirty(id);
+        }
     }
 
     fn move_child(&mut self, from: usize, to: usize) {
@@ -209,6 +237,9 @@ impl Node for LayoutNode {
             self.children.insert(id);
         }
         self.cache.clear();
+        if let Some(id) = self.id {
+            mark_measure_dirty(id);
+        }
     }
 
     fn update_children(&mut self, children: &[NodeId]) {
@@ -217,6 +248,9 @@ impl Node for LayoutNode {
             self.children.insert(child);
         }
         self.cache.clear();
+        if let Some(id) = self.id {
+            mark_measure_dirty(id);
+        }
     }
 
     fn children(&self) -> Vec<NodeId> {

@@ -6,8 +6,8 @@ use compose_foundation::PointerEventKind;
 use compose_render_common::{HitTestTarget, RenderScene, Renderer};
 use compose_runtime_std::StdRuntime;
 use compose_ui::{
-    log_layout_tree, log_render_scene, log_screen_summary, HeadlessRenderer, LayoutEngine,
-    LayoutTree,
+    has_measure_dirty_nodes, log_layout_tree, log_render_scene, log_screen_summary,
+    HeadlessRenderer, LayoutEngine, LayoutTree,
 };
 use compose_ui_graphics::Size;
 
@@ -87,7 +87,7 @@ where
     }
 
     pub fn should_render(&self) -> bool {
-        if self.layout_dirty || self.scene_dirty {
+        if self.layout_dirty || self.scene_dirty || has_measure_dirty_nodes() {
             return true;
         }
         self.runtime.take_frame_request() || self.composition.should_render()
@@ -167,7 +167,7 @@ where
     }
 
     fn run_layout_phase(&mut self) {
-        if !self.layout_dirty {
+        if !self.layout_dirty && !has_measure_dirty_nodes() {
             return;
         }
         self.layout_dirty = false;

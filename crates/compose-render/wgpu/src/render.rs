@@ -6,8 +6,8 @@ use crate::{SharedTextBuffer, SharedTextCache, TextCacheKey};
 use bytemuck::{Pod, Zeroable};
 use compose_ui_graphics::{Brush, Color};
 use glyphon::{
-    Attrs, Color as GlyphonColor, FontSystem, Metrics, Resolution, Shaping,
-    SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer,
+    Attrs, Color as GlyphonColor, FontSystem, Metrics, Resolution, Shaping, SwashCache, TextArea,
+    TextAtlas, TextBounds, TextRenderer,
 };
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -80,8 +80,8 @@ struct ShapeBatchBuffers {
 
 impl ShapeBatchBuffers {
     fn new(device: &wgpu::Device, bind_group_layout: &wgpu::BindGroupLayout) -> Self {
-        let initial_vertex_cap = 64;  // 16 shapes * 4 vertices
-        let initial_index_cap = 96;   // 16 shapes * 6 indices
+        let initial_vertex_cap = 64; // 16 shapes * 4 vertices
+        let initial_index_cap = 96; // 16 shapes * 6 indices
         let initial_shape_cap = 16;
         let initial_gradient_cap = 16;
 
@@ -404,20 +404,19 @@ impl GpuRenderer {
             viewport: [width as f32, height as f32],
             _padding: [0.0, 0.0],
         };
-        self.queue.write_buffer(
-            &self.uniform_buffer,
-            0,
-            bytemuck::bytes_of(&uniforms),
-        );
+        self.queue
+            .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
         // Chunked rendering for robustness with large scenes
         let total_shape_count = sorted_shapes.len();
 
         if total_shape_count > MAX_SHAPES_PER_DRAW {
-            eprintln!("INFO: Rendering {} shapes in {} chunks (max {} per draw)",
-                     total_shape_count,
-                     (total_shape_count + MAX_SHAPES_PER_DRAW - 1) / MAX_SHAPES_PER_DRAW,
-                     MAX_SHAPES_PER_DRAW);
+            eprintln!(
+                "INFO: Rendering {} shapes in {} chunks (max {} per draw)",
+                total_shape_count,
+                (total_shape_count + MAX_SHAPES_PER_DRAW - 1) / MAX_SHAPES_PER_DRAW,
+                MAX_SHAPES_PER_DRAW
+            );
         }
 
         // First pass: collect all shape data and gradients across entire scene
@@ -430,9 +429,7 @@ impl GpuRenderer {
             // Determine gradient parameters and collect stops
             let mut gradient_params = [0.0f32; 4];
             let (brush_type, gradient_start, gradient_count) = match &shape.brush {
-                Brush::Solid(_) => {
-                    (0u32, 0u32, 0u32)
-                }
+                Brush::Solid(_) => (0u32, 0u32, 0u32),
                 Brush::LinearGradient(colors) => {
                     let start = all_gradients.len() as u32;
                     for c in colors {
@@ -442,7 +439,11 @@ impl GpuRenderer {
                     }
                     (1u32, start, colors.len() as u32)
                 }
-                Brush::RadialGradient { colors, center, radius } => {
+                Brush::RadialGradient {
+                    colors,
+                    center,
+                    radius,
+                } => {
                     let start = all_gradients.len() as u32;
                     for c in colors {
                         all_gradients.push(GradientStop {
@@ -463,7 +464,12 @@ impl GpuRenderer {
             // Shape data
             let radii = if let Some(rounded) = shape.shape {
                 let resolved = rounded.resolve(rect.width, rect.height);
-                [resolved.top_left, resolved.top_right, resolved.bottom_left, resolved.bottom_right]
+                [
+                    resolved.top_left,
+                    resolved.top_right,
+                    resolved.bottom_left,
+                    resolved.bottom_right,
+                ]
             } else {
                 [0.0, 0.0, 0.0, 0.0]
             };
@@ -483,15 +489,19 @@ impl GpuRenderer {
         self.shape_buffers.ensure_capacity(
             &self.device,
             &self.shape_bind_group_layout,
-            MAX_SHAPES_PER_DRAW * 4,  // vertices
-            MAX_SHAPES_PER_DRAW * 6,  // indices
-            MAX_SHAPES_PER_DRAW,       // shapes
+            MAX_SHAPES_PER_DRAW * 4,    // vertices
+            MAX_SHAPES_PER_DRAW * 6,    // indices
+            MAX_SHAPES_PER_DRAW,        // shapes
             all_gradients.len().max(1), // all gradients (written once)
         );
 
         // Write gradients once for all chunks
         if !all_gradients.is_empty() {
-            self.queue.write_buffer(&self.shape_buffers.gradient_buffer, 0, bytemuck::cast_slice(&all_gradients));
+            self.queue.write_buffer(
+                &self.shape_buffers.gradient_buffer,
+                0,
+                bytemuck::cast_slice(&all_gradients),
+            );
         }
 
         // Second pass: render shapes in chunks with proper synchronization
@@ -523,16 +533,36 @@ impl GpuRenderer {
 
                 // Vertices for quad
                 vertices.extend_from_slice(&[
-                    Vertex { position: [rect.x, rect.y], color, uv: [0.0, 0.0] },
-                    Vertex { position: [rect.x + rect.width, rect.y], color, uv: [1.0, 0.0] },
-                    Vertex { position: [rect.x, rect.y + rect.height], color, uv: [0.0, 1.0] },
-                    Vertex { position: [rect.x + rect.width, rect.y + rect.height], color, uv: [1.0, 1.0] },
+                    Vertex {
+                        position: [rect.x, rect.y],
+                        color,
+                        uv: [0.0, 0.0],
+                    },
+                    Vertex {
+                        position: [rect.x + rect.width, rect.y],
+                        color,
+                        uv: [1.0, 0.0],
+                    },
+                    Vertex {
+                        position: [rect.x, rect.y + rect.height],
+                        color,
+                        uv: [0.0, 1.0],
+                    },
+                    Vertex {
+                        position: [rect.x + rect.width, rect.y + rect.height],
+                        color,
+                        uv: [1.0, 1.0],
+                    },
                 ]);
 
                 // Indices for two triangles
                 indices.extend_from_slice(&[
-                    base_vertex, base_vertex + 1, base_vertex + 2,
-                    base_vertex + 2, base_vertex + 1, base_vertex + 3,
+                    base_vertex,
+                    base_vertex + 1,
+                    base_vertex + 2,
+                    base_vertex + 2,
+                    base_vertex + 1,
+                    base_vertex + 3,
                 ]);
             }
 
@@ -542,14 +572,28 @@ impl GpuRenderer {
             // Write chunk data and render in one encoder (submit after to ensure synchronization)
             if !vertices.is_empty() {
                 // Write this chunk's data to buffers
-                self.queue.write_buffer(&self.shape_buffers.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
-                self.queue.write_buffer(&self.shape_buffers.index_buffer, 0, bytemuck::cast_slice(&indices));
-                self.queue.write_buffer(&self.shape_buffers.shape_buffer, 0, bytemuck::cast_slice(chunk_shape_data));
+                self.queue.write_buffer(
+                    &self.shape_buffers.vertex_buffer,
+                    0,
+                    bytemuck::cast_slice(&vertices),
+                );
+                self.queue.write_buffer(
+                    &self.shape_buffers.index_buffer,
+                    0,
+                    bytemuck::cast_slice(&indices),
+                );
+                self.queue.write_buffer(
+                    &self.shape_buffers.shape_buffer,
+                    0,
+                    bytemuck::cast_slice(chunk_shape_data),
+                );
 
                 // Create encoder for this chunk
-                let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Shape Chunk Encoder"),
-                });
+                let mut encoder =
+                    self.device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Shape Chunk Encoder"),
+                        });
 
                 // Create render pass for this chunk (Clear on first chunk, Load on subsequent)
                 {
@@ -606,12 +650,18 @@ impl GpuRenderer {
             .collect();
 
         // Remove cache entries for text no longer present (O(1) lookups via HashSet)
-        self.text_cache.lock().unwrap().retain(|key, _| current_text_keys.contains(key));
+        self.text_cache
+            .lock()
+            .unwrap()
+            .retain(|key, _| current_text_keys.contains(key));
 
         // Create or update cached text buffers (only reshape when needed)
         for text_draw in &sorted_texts {
             // Skip empty text or zero-sized rects
-            if text_draw.text.is_empty() || text_draw.rect.width <= 0.0 || text_draw.rect.height <= 0.0 {
+            if text_draw.text.is_empty()
+                || text_draw.rect.width <= 0.0
+                || text_draw.rect.height <= 0.0
+            {
                 continue;
             }
 
@@ -708,9 +758,11 @@ impl GpuRenderer {
         drop(font_system);
 
         // Create encoder for text rendering
-        let mut text_encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Text Encoder"),
-        });
+        let mut text_encoder =
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Text Encoder"),
+                });
 
         {
             let mut text_pass = text_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

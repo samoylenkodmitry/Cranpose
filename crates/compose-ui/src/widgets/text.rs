@@ -4,6 +4,7 @@
 
 use super::nodes::TextNode;
 use crate::composable;
+use crate::layout::mark_measure_dirty;
 use crate::modifier::Modifier;
 use compose_core::{MutableState, NodeId, State};
 use std::rc::Rc;
@@ -113,8 +114,12 @@ where
     if let Err(err) = compose_core::with_node_mut(id, |node: &mut TextNode| {
         if node.text != current {
             node.text = current.clone();
+            mark_measure_dirty(id);
         }
-        node.modifier = modifier.clone();
+        if node.modifier != modifier {
+            node.modifier = modifier.clone();
+            mark_measure_dirty(id);
+        }
     }) {
         debug_assert!(false, "failed to update Text node: {err}");
     }
