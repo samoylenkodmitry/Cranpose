@@ -182,6 +182,25 @@ fn subcompose_reuses_nodes_across_measures() {
 }
 
 #[test]
+fn handle_reports_modifier_capabilities() {
+    let policy: Rc<MeasurePolicy> =
+        Rc::new(|scope, _constraints| scope.layout(0.0, 0.0, Vec::new()));
+    let mut node = SubcomposeLayoutNode::new(
+        crate::modifier::Modifier::background(crate::modifier::Color(0.1, 0.2, 0.3, 1.0)),
+        Rc::clone(&policy),
+    );
+
+    let handle = node.handle();
+    assert!(handle.has_draw_modifier_nodes());
+    assert!(!handle.has_layout_modifier_nodes());
+
+    node.set_modifier(crate::modifier::Modifier::padding(4.0));
+    let handle = node.handle();
+    assert!(handle.has_layout_modifier_nodes());
+    assert!(!handle.has_draw_modifier_nodes());
+}
+
+#[test]
 fn inactive_slots_move_to_reusable_pool() {
     let (handle, _composition) = runtime_handle();
     let mut slots = SlotBackend::default();

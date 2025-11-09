@@ -542,12 +542,7 @@ impl ModifierNodeElement for TestLayoutElement {
     fn update(&self, _node: &mut Self::Node) {}
 
     fn capabilities(&self) -> NodeCapabilities {
-        NodeCapabilities {
-            has_layout: true,
-            has_draw: false,
-            has_pointer_input: false,
-            has_semantics: false,
-        }
+        NodeCapabilities::LAYOUT
     }
 }
 
@@ -577,12 +572,7 @@ impl ModifierNodeElement for TestDrawElement {
     fn update(&self, _node: &mut Self::Node) {}
 
     fn capabilities(&self) -> NodeCapabilities {
-        NodeCapabilities {
-            has_layout: false,
-            has_draw: true,
-            has_pointer_input: false,
-            has_semantics: false,
-        }
+        NodeCapabilities::DRAW
     }
 }
 
@@ -602,6 +592,10 @@ fn chain_tracks_node_capabilities() {
     assert!(chain.has_nodes_for_invalidation(InvalidationKind::Draw));
     assert!(!chain.has_nodes_for_invalidation(InvalidationKind::PointerInput));
     assert!(!chain.has_nodes_for_invalidation(InvalidationKind::Semantics));
+    assert_eq!(
+        chain.capabilities(),
+        NodeCapabilities::LAYOUT | NodeCapabilities::DRAW
+    );
 
     // Verify we can iterate over layout and draw nodes separately
     assert_eq!(chain.layout_nodes().count(), 1);

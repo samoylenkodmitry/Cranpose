@@ -1,5 +1,5 @@
 use compose_foundation::{
-    BasicModifierNodeContext, InvalidationKind, ModifierNode, ModifierNodeChain,
+    BasicModifierNodeContext, InvalidationKind, ModifierNode, ModifierNodeChain, NodeCapabilities,
 };
 
 use super::{Color, Modifier, ResolvedModifiers, RoundedCornerShape};
@@ -16,6 +16,7 @@ pub struct ModifierChainHandle {
     chain: ModifierNodeChain,
     context: BasicModifierNodeContext,
     resolved: ResolvedModifiers,
+    capabilities: NodeCapabilities,
 }
 
 #[allow(dead_code)]
@@ -28,12 +29,34 @@ impl ModifierChainHandle {
     pub fn update(&mut self, modifier: &Modifier) {
         self.chain
             .update_from_slice(modifier.elements(), &mut self.context);
+        self.capabilities = self.chain.capabilities();
         self.resolved = self.compute_resolved(modifier);
     }
 
     /// Returns the modifier node chain for read-only traversal.
     pub fn chain(&self) -> &ModifierNodeChain {
         &self.chain
+    }
+
+    /// Returns the aggregated capability mask for the reconciled chain.
+    pub fn capabilities(&self) -> NodeCapabilities {
+        self.capabilities
+    }
+
+    pub fn has_layout_nodes(&self) -> bool {
+        self.capabilities.contains(NodeCapabilities::LAYOUT)
+    }
+
+    pub fn has_draw_nodes(&self) -> bool {
+        self.capabilities.contains(NodeCapabilities::DRAW)
+    }
+
+    pub fn has_pointer_input_nodes(&self) -> bool {
+        self.capabilities.contains(NodeCapabilities::POINTER_INPUT)
+    }
+
+    pub fn has_semantics_nodes(&self) -> bool {
+        self.capabilities.contains(NodeCapabilities::SEMANTICS)
     }
 
     /// Drains invalidations requested during the last update cycle.
@@ -60,17 +83,22 @@ impl ModifierChainHandle {
         }
         resolved.set_corner_shape(modifier.corner_shape());
 
-        for node in self.chain.layout_nodes() {
-            if let Some(padding) = node.as_any().downcast_ref::<PaddingNode>() {
-                resolved.add_padding(padding.padding());
+        if self.has_layout_nodes() {
+            for node in self.chain.layout_nodes() {
+                if let Some(padding) = node.as_any().downcast_ref::<PaddingNode>() {
+                    resolved.add_padding(padding.padding());
+                }
             }
         }
-        for node in self.chain.draw_nodes() {
-            let any = node.as_any();
-            if let Some(background) = any.downcast_ref::<BackgroundNode>() {
-                resolved.set_background_color(background.color());
-            } else if let Some(shape) = any.downcast_ref::<CornerShapeNode>() {
-                resolved.set_corner_shape(Some(shape.shape()));
+
+        if self.has_draw_nodes() {
+            for node in self.chain.draw_nodes() {
+                let any = node.as_any();
+                if let Some(background) = any.downcast_ref::<BackgroundNode>() {
+                    resolved.set_background_color(background.color());
+                } else if let Some(shape) = any.downcast_ref::<CornerShapeNode>() {
+                    resolved.set_corner_shape(Some(shape.shape()));
+                }
             }
         }
 
@@ -80,7 +108,7 @@ impl ModifierChainHandle {
 
 #[cfg(test)]
 mod tests {
-    use compose_foundation::ModifierNode;
+    use compose_foundation::{ModifierNode, NodeCapabilities};
 
     use super::*;
     use crate::modifier_nodes::PaddingNode;
@@ -148,6 +176,22 @@ mod tests {
         let resolved = handle.resolved_modifiers();
         assert!(resolved.background().is_none());
         assert!(resolved.corner_shape().is_none());
+    }
+
+    #[test]
+    fn capability_mask_updates_with_chain() {
+        let mut handle = ModifierChainHandle::new();
+        handle.update(&Modifier::padding(4.0));
+        assert_eq!(handle.capabilities(), NodeCapabilities::LAYOUT);
+        assert!(handle.has_layout_nodes());
+        assert!(!handle.has_draw_nodes());
+        handle.take_invalidations();
+
+        let color = Color(0.5, 0.6, 0.7, 1.0);
+        handle.update(&Modifier::background(color));
+        assert_eq!(handle.capabilities(), NodeCapabilities::DRAW);
+        assert!(handle.has_draw_nodes());
+        assert!(!handle.has_layout_nodes());
     }
 
     fn node_ptr<N: ModifierNode + 'static>(handle: &ModifierChainHandle) -> *const N {

@@ -193,12 +193,7 @@ impl ModifierNodeElement for PaddingElement {
     }
 
     fn capabilities(&self) -> NodeCapabilities {
-        NodeCapabilities {
-            has_layout: true,
-            has_draw: false,
-            has_pointer_input: false,
-            has_semantics: false,
-        }
+        NodeCapabilities::LAYOUT
     }
 }
 
@@ -277,12 +272,7 @@ impl ModifierNodeElement for BackgroundElement {
     }
 
     fn capabilities(&self) -> NodeCapabilities {
-        NodeCapabilities {
-            has_layout: false,
-            has_draw: true,
-            has_pointer_input: false,
-            has_semantics: false,
-        }
+        NodeCapabilities::DRAW
     }
 }
 
@@ -353,12 +343,7 @@ impl ModifierNodeElement for CornerShapeElement {
     }
 
     fn capabilities(&self) -> NodeCapabilities {
-        NodeCapabilities {
-            has_layout: false,
-            has_draw: true,
-            has_pointer_input: false,
-            has_semantics: false,
-        }
+        NodeCapabilities::DRAW
     }
 }
 
@@ -471,12 +456,7 @@ impl ModifierNodeElement for SizeElement {
     }
 
     fn capabilities(&self) -> NodeCapabilities {
-        NodeCapabilities {
-            has_layout: true,
-            has_draw: false,
-            has_pointer_input: false,
-            has_semantics: false,
-        }
+        NodeCapabilities::LAYOUT
     }
 }
 
@@ -589,12 +569,7 @@ impl ModifierNodeElement for ClickableElement {
     }
 
     fn capabilities(&self) -> NodeCapabilities {
-        NodeCapabilities {
-            has_layout: false,
-            has_draw: false,
-            has_pointer_input: true,
-            has_semantics: false,
-        }
+        NodeCapabilities::POINTER_INPUT
     }
 }
 
@@ -670,12 +645,7 @@ impl ModifierNodeElement for AlphaElement {
     }
 
     fn capabilities(&self) -> NodeCapabilities {
-        NodeCapabilities {
-            has_layout: false,
-            has_draw: true,
-            has_pointer_input: false,
-            has_semantics: false,
-        }
+        NodeCapabilities::DRAW
     }
 }
 

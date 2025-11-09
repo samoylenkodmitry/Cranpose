@@ -7,7 +7,7 @@ Goal: match Jetpack Compose's `Modifier` API surface and `Modifier.Node` runtime
 ## Current Gaps (Compose-RS)
 - `Modifier` is an Rc-backed builder that caches layout/draw state; primitives read baked values instead of delegating to `Modifier.Node`s (`ModifierState`), so ordering, invalidation, and lifetimes differ from Jetpack Compose.
 - Although `compose_foundation::ModifierNodeChain` exists, composables never reconcile one from their `Modifier`s, so nodes never attach to layout/draw/pointer pipelines.
-- Traits like `ModifierElement`/`ModifierNode` still lack Kotlin parity features such as capability bitmasks, coroutine scopes, semantics/pointer slices, etc. (fold helpers + inspector metadata now exist, so the remaining work is lifecycle + capability plumbing).
+- Traits like `ModifierElement`/`ModifierNode` still lack Kotlin parity features such as coroutine scopes, modifier-local plumbs, and semantics/pointer slices (capability bitmasks + targeted invalidations now exist, so the remaining work is lifecycle + subsystem-specific plumbing).
 
 ## Jetpack Compose Reference Anchors
 - `Modifier` is an immutable interface implemented by `EmptyModifier` and `CombinedModifier`, exposing `foldIn`, `foldOut`, `any`, `all`, and `then`.
@@ -22,7 +22,7 @@ Goal: match Jetpack Compose's `Modifier` API surface and `Modifier.Node` runtime
    - Introduce real node elements with `create`/`update`/`key`/`hashCode` contracts so nodes can be diffed and reused.
    - Extend `Modifier.Node` with lifecycle hooks (`onAttach`, `onDetach`, coroutine scope cancellation) that match Kotlin semantics.
 3. **Port `NodeChain` diff + capability plumbing (Kotlin: `NodeChain.kt`, `NodeKind.kt`)**
-   - Implement sentinel head/tail nodes, structural diffing, and capability bitmasks so we can target layout/draw/pointer/semantics passes precisely.
+   - Implement sentinel head/tail nodes and structural diffing so we can target layout/draw/pointer/semantics passes precisely (capability bitmasks + aggregation already landed; the missing pieces are structural sentinels + parent/child wiring).
    - Emit aggregated capability masks per chain and expose iterators for each subsystem (layout, draw, pointer, semantics, modifier locals).
 4. **Wire runtime subsystems through chains**
    - Layout/subcompose: measurement, intrinsics, and parent-data resolution must read from reconciled nodes instead of `ModifierState`.
@@ -37,13 +37,12 @@ Goal: match Jetpack Compose's `Modifier` API surface and `Modifier.Node` runtime
 - Should `ModifierState` remain behind a feature flag for compatibility, or be removed outright once node-backed equivalents exist?
 
 ## Near-Term Next Steps
-1. **Capability bitmasks + targeted invalidations**  
-   - Mirror `NodeKind.kt` by giving every `ModifierNode` a capability mask (layout/draw/pointer/semantics/etc.) and aggregate those bits inside `ModifierChainHandle`, `LayoutNode`, and `SubcomposeLayoutNode`. Touch `compose_foundation::modifier.rs`, `crates/compose-ui/src/widgets/nodes/layout_node.rs`, and `crates/compose-ui/src/modifier/chain.rs`.  
-   - Route `InvalidationKind` automatically via the aggregated masks so `LayoutNode::mark_needs_*` only flips phases that actually have interested nodes. Kotlin references: `NodeChain.aggregateChildKindSet`, `DelegatableNode.highlightedKindSet`, and `NodeCoordinator.requestUpdate`.  
-   - Add focused tests under `crates/compose-ui/src/modifier/tests/` that create mock nodes per capability and assert the correct dirty flags fire when their state mutates.
-2. **Pointer/draw pipeline parity**  
-   - Teach renderers and pointer dispatchers to traverse capability-filtered node slices (`layout_nodes()`, `draw_nodes()`, `pointer_input_nodes()`) instead of reading `ModifierState`, matching Kotlin’s `DelegatableNode` walking helpers in `ModifierNodeChain.kt`.  
-   - Port the pointer-input lifecycle (`PointerInputModifierNode`, `AwaitPointerEventScope`, cancellation semantics) from `/media/huge/composerepo/compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/input/pointer` into `crates/compose-ui/src/modifier/pointer_input.rs` so interactive modifiers (clickable, scrollable) behave identically.
+1. **Pointer/draw pipeline parity**  
+   - Teach renderers and pointer dispatchers to walk the reconciled `ModifierNodeChain` slices (`layout_nodes()`, `draw_nodes()`, `pointer_input_nodes()`) and short-circuit based on the new capability masks instead of reading cached `ModifierState`, mirroring Kotlin’s `DelegatableNode` helpers in `ModifierNodeChain.kt`.  
+   - Port the pointer-input lifecycle (`PointerInputModifierNode`, `AwaitPointerEventScope`, cancellation semantics, restartable coroutines) from `/media/huge/composerepo/compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/input/pointer` into `crates/compose-ui/src/modifier/pointer_input.rs`, and update clickable/scrollable factories to drive those nodes.
+2. **NodeChain lifecycle + coordinator plumbing**  
+   - Extend `ModifierNodeChain` with sentinel head/tail nodes, parent/child links, and per-node capability masks so we can mirror Kotlin’s `DelegatableNode` hierarchy, bubble invalidations, and splice nodes without reallocating entire vectors.  
+   - Introduce a lightweight `NodeCoordinator` analogue that wires node `onAttach`/`onDetach` order, tracks coroutine scopes, and exposes traversal APIs for layout/draw/pointer/semantics slices, keeping parity with `Modifier.Node` lifecycle rules in Kotlin.
 3. **Diagnostics + tooling**  
    - Add `COMPOSE_DEBUG_MODIFIERS` tracing hooks that log node churn, capability masks, and invalidation kinds during `ModifierChainHandle::update`, and expose a debugging helper/tests (e.g., `crates/compose-ui/src/tests/debug_tests.rs`) that dump the reconciled chain + masks for a layout node, mirroring Kotlin’s inspector utilities.
 
@@ -51,6 +50,7 @@ Goal: match Jetpack Compose's `Modifier` API surface and `Modifier.Node` runtime
 
 ## Progress Snapshot
 - `ModifierChainHandle` now lives inside `LayoutNode`/`SubcomposeLayoutNode`; every layout node reconciles its chain each frame and drains invalidations.
+- Capability bitmasks now mirror Kotlin’s `NodeKind`: every `ModifierNodeElement` advertises a mask, `ModifierNodeChain` aggregates per-chain capabilities, and `LayoutNode`/`SubcomposeLayoutNode` gate layout/draw invalidations off those masks with dedicated unit tests.
 - New `ResolvedModifiers` struct captures runtime-only data (padding, background, offset, graphics layers, and layout props) so measurement/render stacks no longer read `ModifierState`.
 - Layout/subcompose measurement now pull padding, offsets, graphics layers, and layout weights from `ResolvedModifiers`, so Column/Row/Box respect node-backed state instead of consulting the legacy `ModifierState`; regression tests (`crates/compose-ui/src/layout/tests/layout_tests.rs`) lock padding + weight behavior.
 - Padding modifiers exclusively emit `PaddingElement`s; layout/subcompose measurement subtract/adds padding from the resolved node data, matching Kotlin ordering.
@@ -64,14 +64,14 @@ Goal: match Jetpack Compose's `Modifier` API surface and `Modifier.Node` runtime
 - `modifier_tests` assert metadata emission for layout + interaction modifiers, verify ordering, and cover the new debugging helper, giving us Kotlin-style inspector coverage for future migrations.
 
 ### Follow-up tasks for the next agent
-1. **Integrate with real layout primitives**  
-   - Column/Row/Box still read `LayoutProperties` (weight/align/padding) directly from `ModifierState`. Start pulling padding/offset/weight from `ResolvedModifiers` + chain traversal so layout policies use node-backed data and ordering matches Kotlin.
-2. **Migrate draw modifiers**  
-   - Repeat the padding flow for `Modifier::background` (and friends). Add a `BackgroundNode`-driven resolved property (color + shape) and update renderers/tests so draw no longer consult `ModifierState`.
-3. **Capability-driven invalidations + diagnostics**  
-   - `ModifierChainHandle::sync` still discards draw/pointer/semantics invalidations. Plumb them through `LayoutNode`, log via `COMPOSE_DEBUG_MODIFIERS`, and add node-chain dumps in `debug_tests` to catch regressions early.
-4. **Documentation/tests**  
-   - Extend `modifier_nodes_tests` with node-backed background assertions and add an integration test that recomputes layout after chain-driven padding/background changes without touching `ModifierState`.
+1. **Pointer/draw traversal + renderer integration**  
+   - Replace the remaining renderer and pointer dispatcher reads of `ModifierState` with traversals over `ModifierNodeChain::draw_nodes()` / `pointer_input_nodes()`, mirroring Kotlin’s `DelegatableNode` slices so draw order and hit testing match Jetpack Compose.
+2. **Pointer input coroutine lifecycle**  
+   - Port `PointerInputModifierNode`, `AwaitPointerEventScope`, and the restart/cancellation plumbing from Kotlin into `crates/compose-ui/src/modifier/pointer_input.rs`, then reimplement clickable/scrollable factories on top of the new node-backed scope.
+3. **NodeChain sentinel + coordinator work**  
+   - Add sentinel head/tail nodes, parent/child links, and a lightweight `NodeCoordinator` analogue so modifier nodes can bubble invalidations, query their neighbors, and participate in semantics/modifier-local slices exactly like `DelegatableNode`.
+4. **Diagnostics + semantics plumbing**  
+   - Wire `InvalidationKind::Semantics` through the new capability masks, add chain-dump tooling behind `COMPOSE_DEBUG_MODIFIERS`, and extend `modifier_nodes_tests` with snapshots that compare Compose-RS chain traversal against Kotlin references.
 
 Keep referencing the Kotlin sources under `/media/huge/composerepo/compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui` for behavioral parity, especially `Modifier.kt`, `ModifierNodeElement.kt`, and `NodeChain.kt`.
 

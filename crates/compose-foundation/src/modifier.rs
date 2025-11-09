@@ -11,6 +11,7 @@ use std::any::{type_name, Any, TypeId};
 use std::collections::hash_map::DefaultHasher;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::ops::{BitOr, BitOrAssign};
 use std::rc::Rc;
 
 pub use compose_ui_graphics::DrawScope;
@@ -273,12 +274,89 @@ pub trait ModifierElement: ModifierNodeElement {}
 impl<T> ModifierElement for T where T: ModifierNodeElement {}
 
 /// Capability flags indicating which specialized traits a modifier node implements.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct NodeCapabilities {
-    pub has_layout: bool,
-    pub has_draw: bool,
-    pub has_pointer_input: bool,
-    pub has_semantics: bool,
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NodeCapabilities(u32);
+
+impl NodeCapabilities {
+    /// No capabilities.
+    pub const NONE: Self = Self(0);
+    /// Modifier participates in measure/layout.
+    pub const LAYOUT: Self = Self(1 << 0);
+    /// Modifier participates in draw.
+    pub const DRAW: Self = Self(1 << 1);
+    /// Modifier participates in pointer input.
+    pub const POINTER_INPUT: Self = Self(1 << 2);
+    /// Modifier participates in semantics tree construction.
+    pub const SEMANTICS: Self = Self(1 << 3);
+    /// Modifier participates in modifier locals.
+    pub const MODIFIER_LOCALS: Self = Self(1 << 4);
+
+    /// Returns an empty capability set.
+    pub const fn empty() -> Self {
+        Self::NONE
+    }
+
+    /// Returns whether all bits in `other` are present in `self`.
+    pub const fn contains(self, other: Self) -> bool {
+        (self.0 & other.0) == other.0
+    }
+
+    /// Returns whether any bit in `other` is present in `self`.
+    pub const fn intersects(self, other: Self) -> bool {
+        (self.0 & other.0) != 0
+    }
+
+    /// Inserts the requested capability bits.
+    pub fn insert(&mut self, other: Self) {
+        self.0 |= other.0;
+    }
+
+    /// Returns the raw bit representation.
+    pub const fn bits(self) -> u32 {
+        self.0
+    }
+
+    /// Returns the capability bit mask required for the given invalidation.
+    pub const fn for_invalidation(kind: InvalidationKind) -> Self {
+        match kind {
+            InvalidationKind::Layout => Self::LAYOUT,
+            InvalidationKind::Draw => Self::DRAW,
+            InvalidationKind::PointerInput => Self::POINTER_INPUT,
+            InvalidationKind::Semantics => Self::SEMANTICS,
+        }
+    }
+}
+
+impl Default for NodeCapabilities {
+    fn default() -> Self {
+        Self::NONE
+    }
+}
+
+impl fmt::Debug for NodeCapabilities {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NodeCapabilities")
+            .field("layout", &self.contains(Self::LAYOUT))
+            .field("draw", &self.contains(Self::DRAW))
+            .field("pointer_input", &self.contains(Self::POINTER_INPUT))
+            .field("semantics", &self.contains(Self::SEMANTICS))
+            .field("modifier_locals", &self.contains(Self::MODIFIER_LOCALS))
+            .finish()
+    }
+}
+
+impl BitOr for NodeCapabilities {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl BitOrAssign for NodeCapabilities {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0;
+    }
 }
 
 /// Type-erased modifier element used by the runtime to reconcile chains.
@@ -404,10 +482,7 @@ struct ModifierNodeEntry {
     element: DynModifierElement,
     node: Box<dyn ModifierNode>,
     attached: bool,
-    has_layout: bool,
-    has_draw: bool,
-    has_pointer_input: bool,
-    has_semantics: bool,
+    capabilities: NodeCapabilities,
 }
 
 impl ModifierNodeEntry {
@@ -426,20 +501,13 @@ impl ModifierNodeEntry {
             element,
             node,
             attached: false,
-            has_layout: capabilities.has_layout,
-            has_draw: capabilities.has_draw,
-            has_pointer_input: capabilities.has_pointer_input,
-            has_semantics: capabilities.has_semantics,
+            capabilities,
         }
     }
 
     fn matches_invalidation(&self, kind: InvalidationKind) -> bool {
-        match kind {
-            InvalidationKind::Layout => self.has_layout,
-            InvalidationKind::Draw => self.has_draw,
-            InvalidationKind::PointerInput => self.has_pointer_input,
-            InvalidationKind::Semantics => self.has_semantics,
-        }
+        self.capabilities
+            .contains(NodeCapabilities::for_invalidation(kind))
     }
 }
 
@@ -452,12 +520,14 @@ impl ModifierNodeEntry {
 #[derive(Default)]
 pub struct ModifierNodeChain {
     entries: Vec<ModifierNodeEntry>,
+    aggregated_capabilities: NodeCapabilities,
 }
 
 impl ModifierNodeChain {
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
+            aggregated_capabilities: NodeCapabilities::empty(),
         }
     }
 
@@ -470,6 +540,7 @@ impl ModifierNodeChain {
     ) {
         let mut old_entries = std::mem::take(&mut self.entries);
         let mut new_entries = Vec::with_capacity(elements.len());
+        let mut aggregated = NodeCapabilities::empty();
 
         for element in elements {
             let element_type = element.element_type();
@@ -518,10 +589,8 @@ impl ModifierNodeChain {
                 entry.element = element.clone();
                 entry.element_type = element_type;
                 entry.hash_code = hash_code;
-                entry.has_layout = capabilities.has_layout;
-                entry.has_draw = capabilities.has_draw;
-                entry.has_pointer_input = capabilities.has_pointer_input;
-                entry.has_semantics = capabilities.has_semantics;
+                entry.capabilities = capabilities;
+                aggregated |= entry.capabilities;
                 new_entries.push(entry);
             } else {
                 let mut node = element.create_node();
@@ -536,6 +605,7 @@ impl ModifierNodeChain {
                     capabilities,
                 );
                 entry.attached = true;
+                aggregated |= entry.capabilities;
                 new_entries.push(entry);
             }
         }
@@ -548,6 +618,7 @@ impl ModifierNodeChain {
         }
 
         self.entries = new_entries;
+        self.aggregated_capabilities = aggregated;
     }
 
     /// Convenience wrapper that accepts any iterator of type-erased
@@ -576,6 +647,7 @@ impl ModifierNodeChain {
                 entry.node.on_detach();
             }
         }
+        self.aggregated_capabilities = NodeCapabilities::empty();
     }
 
     pub fn len(&self) -> usize {
@@ -584,6 +656,16 @@ impl ModifierNodeChain {
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Returns the aggregated capability mask for the entire chain.
+    pub fn capabilities(&self) -> NodeCapabilities {
+        self.aggregated_capabilities
+    }
+
+    /// Returns true if the chain contains at least one node with the requested capability.
+    pub fn has_capability(&self, capability: NodeCapabilities) -> bool {
+        self.aggregated_capabilities.contains(capability)
     }
 
     /// Downcasts the node at `index` to the requested type.
@@ -602,16 +684,15 @@ impl ModifierNodeChain {
 
     /// Returns true if the chain contains any nodes matching the given invalidation kind.
     pub fn has_nodes_for_invalidation(&self, kind: InvalidationKind) -> bool {
-        self.entries
-            .iter()
-            .any(|entry| entry.matches_invalidation(kind))
+        self.aggregated_capabilities
+            .contains(NodeCapabilities::for_invalidation(kind))
     }
 
     /// Iterates over all layout nodes in the chain.
     pub fn layout_nodes(&self) -> impl Iterator<Item = &dyn ModifierNode> {
         self.entries
             .iter()
-            .filter(|entry| entry.has_layout)
+            .filter(|entry| entry.capabilities.contains(NodeCapabilities::LAYOUT))
             .map(|entry| entry.node.as_ref())
     }
 
@@ -619,7 +700,7 @@ impl ModifierNodeChain {
     pub fn draw_nodes(&self) -> impl Iterator<Item = &dyn ModifierNode> {
         self.entries
             .iter()
-            .filter(|entry| entry.has_draw)
+            .filter(|entry| entry.capabilities.contains(NodeCapabilities::DRAW))
             .map(|entry| entry.node.as_ref())
     }
 
@@ -627,7 +708,7 @@ impl ModifierNodeChain {
     pub fn pointer_input_nodes(&self) -> impl Iterator<Item = &dyn ModifierNode> {
         self.entries
             .iter()
-            .filter(|entry| entry.has_pointer_input)
+            .filter(|entry| entry.capabilities.contains(NodeCapabilities::POINTER_INPUT))
             .map(|entry| entry.node.as_ref())
     }
 
@@ -635,7 +716,7 @@ impl ModifierNodeChain {
     pub fn semantics_nodes(&self) -> impl Iterator<Item = &dyn ModifierNode> {
         self.entries
             .iter()
-            .filter(|entry| entry.has_semantics)
+            .filter(|entry| entry.capabilities.contains(NodeCapabilities::SEMANTICS))
             .map(|entry| entry.node.as_ref())
     }
 }

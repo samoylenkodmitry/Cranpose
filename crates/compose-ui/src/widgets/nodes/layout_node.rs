@@ -3,7 +3,7 @@ use crate::{
     modifier::{Modifier, ModifierChainHandle, ResolvedModifiers},
 };
 use compose_core::{Node, NodeId};
-use compose_foundation::InvalidationKind;
+use compose_foundation::{InvalidationKind, NodeCapabilities};
 use compose_ui_layout::{Constraints, MeasurePolicy};
 use indexmap::IndexSet;
 use std::cell::Cell;
@@ -144,6 +144,7 @@ pub struct LayoutNode {
     pub modifier: Modifier,
     modifier_chain: ModifierChainHandle,
     resolved_modifiers: ResolvedModifiers,
+    modifier_capabilities: NodeCapabilities,
     pub measure_policy: Rc<dyn MeasurePolicy>,
     pub children: IndexSet<NodeId>,
     cache: LayoutNodeCacheHandles,
@@ -162,6 +163,7 @@ impl LayoutNode {
             modifier: Modifier::empty(),
             modifier_chain: ModifierChainHandle::new(),
             resolved_modifiers: ResolvedModifiers::default(),
+            modifier_capabilities: NodeCapabilities::default(),
             measure_policy,
             children: IndexSet::new(),
             cache: LayoutNodeCacheHandles::default(),
@@ -187,10 +189,24 @@ impl LayoutNode {
     fn sync_modifier_chain(&mut self) {
         self.modifier_chain.update(&self.modifier);
         self.resolved_modifiers = self.modifier_chain.resolved_modifiers();
-        for invalidation in self.modifier_chain.take_invalidations() {
+        self.modifier_capabilities = self.modifier_chain.capabilities();
+        let invalidations = self.modifier_chain.take_invalidations();
+        self.dispatch_modifier_invalidations(&invalidations);
+    }
+
+    fn dispatch_modifier_invalidations(&self, invalidations: &[InvalidationKind]) {
+        for invalidation in invalidations {
             match invalidation {
-                InvalidationKind::Layout => self.mark_needs_measure(),
-                InvalidationKind::Draw => self.mark_needs_layout(),
+                InvalidationKind::Layout => {
+                    if self.has_layout_modifier_nodes() {
+                        self.mark_needs_measure();
+                    }
+                }
+                InvalidationKind::Draw => {
+                    if self.has_draw_modifier_nodes() {
+                        self.mark_needs_layout();
+                    }
+                }
                 InvalidationKind::PointerInput | InvalidationKind::Semantics => {}
             }
         }
@@ -268,6 +284,29 @@ impl LayoutNode {
     pub(crate) fn resolved_modifiers(&self) -> ResolvedModifiers {
         self.resolved_modifiers
     }
+
+    pub fn modifier_capabilities(&self) -> NodeCapabilities {
+        self.modifier_capabilities
+    }
+
+    pub fn has_layout_modifier_nodes(&self) -> bool {
+        self.modifier_capabilities
+            .contains(NodeCapabilities::LAYOUT)
+    }
+
+    pub fn has_draw_modifier_nodes(&self) -> bool {
+        self.modifier_capabilities.contains(NodeCapabilities::DRAW)
+    }
+
+    pub fn has_pointer_input_modifier_nodes(&self) -> bool {
+        self.modifier_capabilities
+            .contains(NodeCapabilities::POINTER_INPUT)
+    }
+
+    pub fn has_semantics_modifier_nodes(&self) -> bool {
+        self.modifier_capabilities
+            .contains(NodeCapabilities::SEMANTICS)
+    }
 }
 
 /// Legacy bubbling function kept for test compatibility only.
@@ -285,6 +324,7 @@ impl Clone for LayoutNode {
             modifier: self.modifier.clone(),
             modifier_chain: ModifierChainHandle::new(),
             resolved_modifiers: ResolvedModifiers::default(),
+            modifier_capabilities: self.modifier_capabilities,
             measure_policy: self.measure_policy.clone(),
             children: self.children.clone(),
             cache: self.cache.clone(),
@@ -363,5 +403,102 @@ impl Node for LayoutNode {
 
     fn needs_layout(&self) -> bool {
         self.needs_layout.get()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use compose_ui_graphics::Size as GeometrySize;
+    use compose_ui_layout::{Measurable, MeasureResult};
+    use std::rc::Rc;
+
+    #[derive(Default)]
+    struct TestMeasurePolicy;
+
+    impl MeasurePolicy for TestMeasurePolicy {
+        fn measure(
+            &self,
+            _measurables: &[Box<dyn Measurable>],
+            _constraints: Constraints,
+        ) -> MeasureResult {
+            MeasureResult::new(
+                GeometrySize {
+                    width: 0.0,
+                    height: 0.0,
+                },
+                Vec::new(),
+            )
+        }
+
+        fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+            0.0
+        }
+
+        fn max_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+            0.0
+        }
+
+        fn min_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+            0.0
+        }
+
+        fn max_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+            0.0
+        }
+    }
+
+    fn fresh_node() -> LayoutNode {
+        LayoutNode::new(Modifier::empty(), Rc::new(TestMeasurePolicy))
+    }
+
+    #[test]
+    fn layout_invalidation_requires_layout_capability() {
+        let mut node = fresh_node();
+        node.clear_needs_measure();
+        node.clear_needs_layout();
+        node.modifier_capabilities = NodeCapabilities::DRAW;
+
+        node.dispatch_modifier_invalidations(&[InvalidationKind::Layout]);
+
+        assert!(!node.needs_measure());
+        assert!(!node.needs_layout());
+    }
+
+    #[test]
+    fn layout_invalidation_marks_flags_when_capability_present() {
+        let mut node = fresh_node();
+        node.clear_needs_measure();
+        node.clear_needs_layout();
+        node.modifier_capabilities = NodeCapabilities::LAYOUT;
+
+        node.dispatch_modifier_invalidations(&[InvalidationKind::Layout]);
+
+        assert!(node.needs_measure());
+        assert!(node.needs_layout());
+    }
+
+    #[test]
+    fn draw_invalidation_requires_draw_capability() {
+        let mut node = fresh_node();
+        node.clear_needs_measure();
+        node.clear_needs_layout();
+        node.modifier_capabilities = NodeCapabilities::LAYOUT;
+
+        node.dispatch_modifier_invalidations(&[InvalidationKind::Draw]);
+
+        assert!(!node.needs_layout());
+    }
+
+    #[test]
+    fn draw_invalidation_marks_layout_flag_when_capable() {
+        let mut node = fresh_node();
+        node.clear_needs_measure();
+        node.clear_needs_layout();
+        node.modifier_capabilities = NodeCapabilities::DRAW;
+
+        node.dispatch_modifier_invalidations(&[InvalidationKind::Draw]);
+
+        assert!(node.needs_layout());
     }
 }

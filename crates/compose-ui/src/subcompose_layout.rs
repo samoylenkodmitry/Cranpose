@@ -7,6 +7,7 @@ use compose_core::{
 use indexmap::IndexSet;
 
 use crate::modifier::{Modifier, ModifierChainHandle, Point, ResolvedModifiers, Size};
+use compose_foundation::NodeCapabilities;
 
 pub use compose_ui_layout::{Constraints, MeasureResult, Placement};
 
@@ -196,6 +197,30 @@ impl SubcomposeLayoutNodeHandle {
         self.resolved_modifiers().offset()
     }
 
+    pub fn modifier_capabilities(&self) -> NodeCapabilities {
+        self.inner.borrow().modifier_capabilities
+    }
+
+    pub fn has_layout_modifier_nodes(&self) -> bool {
+        self.modifier_capabilities()
+            .contains(NodeCapabilities::LAYOUT)
+    }
+
+    pub fn has_draw_modifier_nodes(&self) -> bool {
+        self.modifier_capabilities()
+            .contains(NodeCapabilities::DRAW)
+    }
+
+    pub fn has_pointer_input_modifier_nodes(&self) -> bool {
+        self.modifier_capabilities()
+            .contains(NodeCapabilities::POINTER_INPUT)
+    }
+
+    pub fn has_semantics_modifier_nodes(&self) -> bool {
+        self.modifier_capabilities()
+            .contains(NodeCapabilities::SEMANTICS)
+    }
+
     pub fn measure(
         &self,
         composer: &Composer,
@@ -257,6 +282,7 @@ struct SubcomposeLayoutNodeInner {
     modifier: Modifier,
     modifier_chain: ModifierChainHandle,
     resolved_modifiers: ResolvedModifiers,
+    modifier_capabilities: NodeCapabilities,
     state: SubcomposeState,
     measure_policy: Rc<MeasurePolicy>,
     children: IndexSet<NodeId>,
@@ -269,6 +295,7 @@ impl SubcomposeLayoutNodeInner {
             modifier: Modifier::empty(),
             modifier_chain: ModifierChainHandle::new(),
             resolved_modifiers: ResolvedModifiers::default(),
+            modifier_capabilities: NodeCapabilities::default(),
             state: SubcomposeState::default(),
             measure_policy,
             children: IndexSet::new(),
@@ -284,6 +311,9 @@ impl SubcomposeLayoutNodeInner {
         self.modifier = modifier;
         self.modifier_chain.update(&self.modifier);
         self.resolved_modifiers = self.modifier_chain.resolved_modifiers();
+        self.modifier_capabilities = self.modifier_chain.capabilities();
+        // Drain invalidations for now; subcompose nodes will route them when subsystems are ready.
+        let _ = self.modifier_chain.take_invalidations();
     }
 }
 

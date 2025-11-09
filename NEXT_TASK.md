@@ -1,30 +1,30 @@
-# Next Task: Capability Bitmasks & Targeted Modifier Invalidations
+# Next Task: Pointer & Draw Pipeline Parity
 
 ## Context
-Layout/subcompose nodes now reconcile a `ModifierChainHandle` and read padding/weight/offset/graphics-layer data from `ResolvedModifiers`, but the chain still treats every modifier as if it were layout-affecting. Jetpack Compose relies on capability bitmasks (`NodeKind.kt`, `ModifierNodeChain.kt`) to know which phases (layout, draw, pointer input, semantics, modifier locals) need to run and to route `InvalidationKind` precisely. Without those masks, Compose-RS continues to invalidate full layout/draw passes even when only pointer nodes change, and we can’t yet expose filtered iterators for renderers or pointer dispatch. The immediate parity gap is wiring capability metadata through `ModifierNodeElement`, aggregating it per layout node, and ensuring invalidations/short-circuiting match Kotlin semantics.
+Capability masks now mirror Jetpack Compose’s `NodeKind` flags and `LayoutNode` / `SubcomposeLayoutNode` only dirty the phases that have interested nodes, but the runtime still treats draw and pointer behavior as value-based `ModifierState`. Renderers continue to read cached background/graphics-layer state and the pointer dispatcher calls the legacy closures on `ModifierState` instead of traversing `ModifierNodeChain` slices. To reach Kotlin parity we need to drive draw + pointer passes directly from reconciled nodes, reuse Kotlin’s coroutine-backed pointer input lifecycle, and prove the new traversal order matches `androidx.compose.ui` (`ModifierNodeChain.kt`, `DelegatableNode.kt`, `PointerInputModifierNode.kt`).
 
 ## Goals
-1. Teach every modifier node/element to expose a capability bitmask mirroring Kotlin’s `NodeKind` flags (layout, draw, pointer, semantics, modifier locals).
-2. Aggregate masks inside `ModifierChainHandle`, `LayoutNode`, and `SubcomposeLayoutNode`, and store them so runtime subsystems can query `has_draw_nodes`, `has_pointer_input_nodes`, etc.
-3. Route `InvalidationKind` through the aggregated masks so `LayoutNode::mark_needs_measure`, `mark_needs_layout`, and future draw/pointer invalidations trigger only when a relevant capability is present.
-4. Add tests covering capability aggregation and invalidation routing, preventing regressions as more node-backed modifiers arrive.
+1. Teach every renderer (`compose-render/*`) to walk `ModifierNodeChain::draw_nodes()` / `pointer_input_nodes()` (via `LayoutNode` helpers) so draw order, clipping, and hit testing mirror Kotlin.
+2. Port the pointer-input coroutine machinery (`PointerInputModifierNode`, `AwaitPointerEventScope`, cancellation semantics) from `/media/huge/composerepo/compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/input/pointer`, and rebase `ClickableElement`/gesture modifiers on the new API.
+3. Expose capability-gated iterators (`layout_nodes()`, `draw_nodes()`, `pointer_input_nodes()`) through `LayoutNode` / `SubcomposeLayoutNode` handles so subsystems can short-circuit when a slice is empty.
+4. Add tests that validate draw/pointer traversal order, pointer cancellation, and capability gating (unit tests under `crates/compose-ui/src/tests/` plus renderer smoke tests).
 
 ## Suggested Steps
-1. **Define bitmasks**  
-   - Mirror `androidx.compose.ui.node.NodeKind` by adding a `NodeCapability` bitflag type (likely in `compose_foundation`) and extending `ModifierNodeElement::capabilities()` / `NodeCapabilities` to return the mask.  
-   - Update existing elements (`PaddingElement`, `BackgroundElement`, `ClickableElement`, future pointer nodes) to declare the correct bits.
-2. **Aggregate per chain**  
-   - In `crates/compose-ui/src/modifier/chain.rs`, accumulate the capability mask while reconciling the chain and expose getters like `layout_kind_set`, `draw_kind_set`, `pointer_kind_set`.  
-   - Thread these aggregates into `LayoutNode`/`SubcomposeLayoutNode` (e.g., new `capabilities` field) so measurement/render pipelines can branch early when a slice is empty.
-3. **Wire invalidations**  
-   - Extend `LayoutNode::sync_modifier_chain` (and the subcompose variant) to inspect the aggregated mask when draining `InvalidationKind`s: only call `mark_needs_measure` if layout bits are present, add placeholders for draw/pointer/semantics invalidations, and ensure repeated requests short-circuit.  
-   - Follow Kotlin’s `ModifierNode.onAttach`/`onDetach` + `NodeCoordinator.requestUpdate` flow to keep lifecycle consistent.
-4. **Tests & parity checks**  
-   - Add unit tests in `crates/compose-ui/src/modifier/tests/` and/or `modifier_nodes_tests.rs` that register fake nodes with different capability combinations, mutate them, and assert only the expected flags toggle.  
-   - Add integration coverage in `crates/compose-ui/src/layout/tests/layout_tests.rs` to verify layout nodes skip `mark_needs_measure` when only pointer-capable nodes invalidate.
+1. **Surface node slices to subsystems**  
+   - Add helpers such as `LayoutNode::draw_nodes()` / `pointer_input_nodes()` (wrapping the existing `ModifierChainHandle` iterators) and mirror them on `SubcomposeLayoutNodeHandle`.  
+   - Update `ResolvedModifiers` consumers to call these helpers instead of touching `ModifierState`.
+2. **Update rendering / pointer dispatch**  
+   - Walk `draw_nodes()` inside each renderer and run `DrawModifierNode::draw` hooks before/after child content, mirroring Kotlin’s `NodeCoordinator`.  
+   - Replace the pointer dispatcher’s direct click handler invocation with traversal over `pointer_input_nodes()`, using capability checks to skip nodes quickly.
+3. **Port pointer-input coroutine flow**  
+   - Translate `AwaitPointerEventScope`, `PointerInputModifierNode`, and cancellation rules from the Kotlin sources into `crates/compose-ui/src/modifier/pointer_input.rs`.  
+   - Reimplement `ClickableElement` (and any existing gesture modifiers) so they create proper pointer-input nodes instead of storing closures in `ModifierState`.
+4. **Tests & parity validation**  
+   - Extend `modifier_nodes_tests.rs` with fixtures that enqueue multiple draw + pointer nodes and assert traversal order / invalidations.  
+   - Add integration tests (and, if feasible, renderer snapshots) that simulate pointer sequences to ensure cancellation + restart behavior matches Kotlin.
 
 ## Definition of Done
-- `ModifierNodeElement` / `ModifierNode` expose capability masks aligned with Jetpack Compose’s `NodeKind`.
-- `ModifierChainHandle` and layout/subcompose nodes cache aggregated capability bits and expose helpers for future pointer/draw/semantics traversals.
-- `LayoutNode::sync_modifier_chain` (and the subcompose equivalent) routes invalidations through the masks so only relevant phases mark dirty.
-- Tests cover capability aggregation and invalidation routing, and `cargo test -p compose-ui` passes.
+- Renderers and pointer dispatchers consume draw/pointer modifier nodes via capability-filtered iterators; no remaining draw/pointer logic relies on `ModifierState`.
+- Pointer-input coroutine scaffolding (`PointerInputModifierNode`, `AwaitPointerEventScope`, cancellation) exists in `compose-ui`, and `ClickableElement` (plus any existing gesture modifiers) uses it.
+- `LayoutNode` / `SubcomposeLayoutNode` expose ergonomic helpers (`has_pointer_input_modifier_nodes`, iterators) that short-circuit subsystem work when slices are empty.
+- New tests cover traversal order, pointer cancellation semantics, and capability gating; `cargo test -p compose-ui` passes.
