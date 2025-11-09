@@ -1,4 +1,4 @@
-use super::{Modifier, Point};
+use super::{inspector_metadata, Modifier, Point};
 use crate::modifier_nodes::ClickableElement;
 use std::rc::Rc;
 
@@ -11,5 +11,8 @@ impl Modifier {
                 state.click_handler = Some(handler.clone());
             },
         )
+        .with_inspector_metadata(inspector_metadata("clickable", |info| {
+            info.add_property("onClick", "provided");
+        }))
     }
 }

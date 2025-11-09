@@ -1,6 +1,9 @@
-use crate::{layout::MeasuredNode, modifier::Modifier};
+use crate::{
+    layout::MeasuredNode,
+    modifier::{Modifier, ModifierChainHandle, ResolvedModifiers},
+};
 use compose_core::{Node, NodeId};
-use compose_foundation::{BasicModifierNodeContext, ModifierNodeChain};
+use compose_foundation::InvalidationKind;
 use compose_ui_layout::{Constraints, MeasurePolicy};
 use indexmap::IndexSet;
 use std::cell::Cell;
@@ -135,8 +138,8 @@ impl LayoutNodeCacheHandles {
 
 pub struct LayoutNode {
     pub modifier: Modifier,
-    pub mods: ModifierNodeChain,
-    modifier_context: BasicModifierNodeContext,
+    modifier_chain: ModifierChainHandle,
+    resolved_modifiers: ResolvedModifiers,
     pub measure_policy: Rc<dyn MeasurePolicy>,
     pub children: IndexSet<NodeId>,
     cache: LayoutNodeCacheHandles,
@@ -153,8 +156,8 @@ impl LayoutNode {
     pub fn new(modifier: Modifier, measure_policy: Rc<dyn MeasurePolicy>) -> Self {
         let mut node = Self {
             modifier: Modifier::empty(),
-            mods: ModifierNodeChain::new(),
-            modifier_context: BasicModifierNodeContext::new(),
+            modifier_chain: ModifierChainHandle::new(),
+            resolved_modifiers: ResolvedModifiers::default(),
             measure_policy,
             children: IndexSet::new(),
             cache: LayoutNodeCacheHandles::default(),
@@ -171,10 +174,21 @@ impl LayoutNode {
         // Only mark dirty if modifier actually changed
         if self.modifier != modifier {
             self.modifier = modifier;
-            self.mods
-                .update_from_slice(self.modifier.elements(), &mut self.modifier_context);
+            self.sync_modifier_chain();
             self.cache.clear();
             self.mark_needs_measure();
+        }
+    }
+
+    fn sync_modifier_chain(&mut self) {
+        self.modifier_chain.update(&self.modifier);
+        self.resolved_modifiers = self.modifier_chain.resolved_modifiers();
+        for invalidation in self.modifier_chain.take_invalidations() {
+            match invalidation {
+                InvalidationKind::Layout => self.mark_needs_measure(),
+                InvalidationKind::Draw => self.mark_needs_layout(),
+                InvalidationKind::PointerInput | InvalidationKind::Semantics => {}
+            }
         }
     }
 
@@ -246,6 +260,10 @@ impl LayoutNode {
     pub(crate) fn cache_handles(&self) -> LayoutNodeCacheHandles {
         self.cache.clone()
     }
+
+    pub(crate) fn resolved_modifiers(&self) -> ResolvedModifiers {
+        self.resolved_modifiers
+    }
 }
 
 /// Legacy bubbling function kept for test compatibility only.
@@ -259,10 +277,10 @@ pub(crate) fn bubble_dirty_flags(node_id: compose_core::NodeId) {
 
 impl Clone for LayoutNode {
     fn clone(&self) -> Self {
-        Self {
+        let mut node = Self {
             modifier: self.modifier.clone(),
-            mods: ModifierNodeChain::new(),
-            modifier_context: BasicModifierNodeContext::new(),
+            modifier_chain: ModifierChainHandle::new(),
+            resolved_modifiers: ResolvedModifiers::default(),
             measure_policy: self.measure_policy.clone(),
             children: self.children.clone(),
             cache: self.cache.clone(),
@@ -270,7 +288,9 @@ impl Clone for LayoutNode {
             needs_layout: Cell::new(self.needs_layout.get()),
             parent: Cell::new(self.parent.get()),
             id: Cell::new(self.id.get()),
-        }
+        };
+        node.sync_modifier_chain();
+        node
     }
 }
 

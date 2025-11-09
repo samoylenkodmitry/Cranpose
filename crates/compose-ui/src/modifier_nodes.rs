@@ -70,6 +70,10 @@ impl PaddingNode {
     pub fn new(padding: EdgeInsets) -> Self {
         Self { padding }
     }
+
+    pub fn padding(&self) -> EdgeInsets {
+        self.padding
+    }
 }
 
 impl ModifierNode for PaddingNode {

@@ -28,7 +28,7 @@ pub use layout::{
 };
 pub use modifier::{
     Brush, Color, CornerRadii, EdgeInsets, GraphicsLayer, Modifier, Point, PointerEvent,
-    PointerEventKind, Rect, RoundedCornerShape, Size,
+    PointerEventKind, Rect, ResolvedModifiers, RoundedCornerShape, Size,
 };
 pub use modifier_nodes::{
     AlphaElement, AlphaNode, BackgroundElement, BackgroundNode, ClickableElement, ClickableNode,

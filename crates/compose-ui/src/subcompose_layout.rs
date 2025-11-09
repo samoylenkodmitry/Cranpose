@@ -6,8 +6,7 @@ use compose_core::{
 };
 use indexmap::IndexSet;
 
-use crate::modifier::{Modifier, Point, Size};
-use compose_foundation::{BasicModifierNodeContext, ModifierNodeChain};
+use crate::modifier::{Modifier, ModifierChainHandle, Point, ResolvedModifiers, Size};
 
 pub use compose_ui_layout::{Constraints, MeasureResult, Placement};
 
@@ -121,6 +120,10 @@ impl SubcomposeLayoutNode {
         self.handle().modifier()
     }
 
+    pub fn resolved_modifiers(&self) -> ResolvedModifiers {
+        self.inner.borrow().resolved_modifiers
+    }
+
     pub fn state(&self) -> Ref<'_, SubcomposeState> {
         Ref::map(self.inner.borrow(), |inner| &inner.state)
     }
@@ -183,6 +186,10 @@ impl SubcomposeLayoutNodeHandle {
 
     pub fn layout_properties(&self) -> crate::modifier::LayoutProperties {
         self.inner.borrow().modifier.layout_properties()
+    }
+
+    pub fn resolved_modifiers(&self) -> ResolvedModifiers {
+        self.inner.borrow().resolved_modifiers
     }
 
     pub fn total_offset(&self) -> Point {
@@ -248,8 +255,8 @@ impl SubcomposeLayoutNodeHandle {
 
 struct SubcomposeLayoutNodeInner {
     modifier: Modifier,
-    mods: ModifierNodeChain,
-    modifier_context: BasicModifierNodeContext,
+    modifier_chain: ModifierChainHandle,
+    resolved_modifiers: ResolvedModifiers,
     state: SubcomposeState,
     measure_policy: Rc<MeasurePolicy>,
     children: IndexSet<NodeId>,
@@ -260,8 +267,8 @@ impl SubcomposeLayoutNodeInner {
     fn new(measure_policy: Rc<MeasurePolicy>) -> Self {
         Self {
             modifier: Modifier::empty(),
-            mods: ModifierNodeChain::new(),
-            modifier_context: BasicModifierNodeContext::new(),
+            modifier_chain: ModifierChainHandle::new(),
+            resolved_modifiers: ResolvedModifiers::default(),
             state: SubcomposeState::default(),
             measure_policy,
             children: IndexSet::new(),
@@ -275,8 +282,8 @@ impl SubcomposeLayoutNodeInner {
 
     fn set_modifier(&mut self, modifier: Modifier) {
         self.modifier = modifier;
-        self.mods
-            .update_from_slice(self.modifier.elements(), &mut self.modifier_context);
+        self.modifier_chain.update(&self.modifier);
+        self.resolved_modifiers = self.modifier_chain.resolved_modifiers();
     }
 }
 

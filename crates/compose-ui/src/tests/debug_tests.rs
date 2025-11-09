@@ -1,6 +1,6 @@
 use super::*;
 use crate::layout::{LayoutBox, LayoutNodeData, LayoutNodeKind};
-use crate::modifier::{Modifier, Rect};
+use crate::modifier::{Modifier, Rect, ResolvedModifiers};
 
 #[test]
 fn test_count_nodes() {
@@ -11,7 +11,13 @@ fn test_count_nodes() {
         height: 0.0,
     };
 
-    let node_data = || LayoutNodeData::new(Modifier::empty(), LayoutNodeKind::Unknown);
+    let node_data = || {
+        LayoutNodeData::new(
+            Modifier::empty(),
+            ResolvedModifiers::default(),
+            LayoutNodeKind::Unknown,
+        )
+    };
     let root = LayoutBox {
         node_id: 0,
         rect: empty_rect,

@@ -224,7 +224,7 @@ impl fmt::Debug for dyn ModifierNode {
 }
 
 impl dyn ModifierNode {
-    fn as_any(&self) -> &dyn Any {
+    pub fn as_any(&self) -> &dyn Any {
         self
     }
 

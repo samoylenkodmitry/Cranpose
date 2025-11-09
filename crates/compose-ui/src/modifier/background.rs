@@ -1,4 +1,4 @@
-use super::{Color, Modifier, RoundedCornerShape};
+use super::{inspector_metadata, Color, Modifier, RoundedCornerShape};
 use crate::modifier_nodes::BackgroundElement;
 
 impl Modifier {
@@ -6,6 +6,7 @@ impl Modifier {
         Self::with_element(BackgroundElement::new(color), move |state| {
             state.background = Some(color);
         })
+        .with_inspector_metadata(background_metadata(color))
     }
 
     pub fn rounded_corners(radius: f32) -> Self {
@@ -19,4 +20,10 @@ impl Modifier {
             state.corner_shape = Some(shape);
         })
     }
+}
+
+fn background_metadata(color: Color) -> super::InspectorMetadata {
+    inspector_metadata("background", |info| {
+        info.add_property("backgroundColor", format!("{color:?}"));
+    })
 }

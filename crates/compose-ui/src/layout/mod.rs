@@ -19,7 +19,7 @@ use compose_core::{
 use self::core::VerticalAlignment;
 use self::core::{HorizontalAlignment, LinearArrangement, Measurable, Placeable};
 use crate::modifier::{
-    DimensionConstraint, EdgeInsets, Modifier, Point, Rect as GeometryRect, Size,
+    DimensionConstraint, EdgeInsets, Modifier, Point, Rect as GeometryRect, ResolvedModifiers, Size,
 };
 use crate::subcompose_layout::SubcomposeLayoutNode;
 use crate::widgets::nodes::{
@@ -152,12 +152,25 @@ impl LayoutBox {
 #[derive(Debug, Clone)]
 pub struct LayoutNodeData {
     pub modifier: Modifier,
+    pub resolved_modifiers: ResolvedModifiers,
     pub kind: LayoutNodeKind,
 }
 
 impl LayoutNodeData {
-    pub fn new(modifier: Modifier, kind: LayoutNodeKind) -> Self {
-        Self { modifier, kind }
+    pub fn new(
+        modifier: Modifier,
+        resolved_modifiers: ResolvedModifiers,
+        kind: LayoutNodeKind,
+    ) -> Self {
+        Self {
+            modifier,
+            resolved_modifiers,
+            kind,
+        }
+    }
+
+    pub fn resolved_modifiers(&self) -> ResolvedModifiers {
+        self.resolved_modifiers
     }
 }
 
@@ -439,7 +452,7 @@ impl LayoutBuilderState {
             Rc::clone(&state.applier)
         };
 
-        let (node_handle, props, offset) = {
+        let (node_handle, props, resolved_modifiers, offset) = {
             let mut applier = applier_host.borrow_typed();
             let node = match applier.get_mut(node_id) {
                 Ok(node) => node,
@@ -450,8 +463,9 @@ impl LayoutBuilderState {
             if let Some(subcompose) = any.downcast_mut::<SubcomposeLayoutNode>() {
                 let handle = subcompose.handle();
                 let props = handle.layout_properties();
+                let resolved_modifiers = handle.resolved_modifiers();
                 let offset = handle.total_offset();
-                (handle, props, offset)
+                (handle, props, resolved_modifiers, offset)
             } else {
                 return Ok(None);
             }
@@ -471,7 +485,8 @@ impl LayoutBuilderState {
                 })?
         };
 
-        let padding = props.padding();
+        let mut padding = props.padding();
+        padding += resolved_modifiers.padding();
         let mut inner_constraints = normalize_constraints(subtract_padding(constraints, padding));
 
         if let DimensionConstraint::Points(width) = props.width() {
@@ -564,6 +579,7 @@ impl LayoutBuilderState {
         };
         let LayoutNodeSnapshot {
             modifier,
+            resolved_modifiers,
             measure_policy,
             children,
             cache,
@@ -592,7 +608,8 @@ impl LayoutBuilderState {
         }
 
         let props = modifier.layout_properties();
-        let padding = props.padding();
+        let mut padding = props.padding();
+        padding += resolved_modifiers.padding();
         let offset = modifier.total_offset();
         let mut inner_constraints = normalize_constraints(subtract_padding(constraints, padding));
 
@@ -826,6 +843,7 @@ impl LayoutBuilderState {
 /// dirty (some nodes changed), clean nodes can skip measure and use cached results.
 struct LayoutNodeSnapshot {
     modifier: Modifier,
+    resolved_modifiers: ResolvedModifiers,
     measure_policy: Rc<dyn MeasurePolicy>,
     children: Vec<NodeId>,
     cache: LayoutNodeCacheHandles,
@@ -837,6 +855,7 @@ impl LayoutNodeSnapshot {
     fn from_layout_node(node: &LayoutNode) -> Self {
         Self {
             modifier: node.modifier.clone(),
+            resolved_modifiers: node.resolved_modifiers(),
             measure_policy: Rc::clone(&node.measure_policy),
             children: node.children.iter().copied().collect(),
             cache: node.cache_handles(),
@@ -1267,7 +1286,8 @@ fn measure_leaf(
     constraints: Constraints,
 ) -> Rc<MeasuredNode> {
     let props = modifier.layout_properties();
-    let padding = props.padding();
+    let mut padding = props.padding();
+    padding += modifier.resolved_modifiers().padding();
     let offset = modifier.total_offset();
 
     let mut width = base_size.width + padding.horizontal_sum();
@@ -1301,6 +1321,7 @@ fn measure_leaf(
 #[derive(Clone)]
 struct RuntimeNodeMetadata {
     modifier: Modifier,
+    resolved_modifiers: ResolvedModifiers,
     role: SemanticsRole,
     actions: Vec<SemanticsAction>,
     button_handler: Option<Rc<RefCell<dyn FnMut()>>>,
@@ -1310,6 +1331,7 @@ impl Default for RuntimeNodeMetadata {
     fn default() -> Self {
         Self {
             modifier: Modifier::empty(),
+            resolved_modifiers: ResolvedModifiers::default(),
             role: SemanticsRole::Unknown,
             actions: Vec::new(),
             button_handler: None,
@@ -1348,6 +1370,7 @@ fn runtime_metadata_for(
     if let Some(layout) = try_clone::<LayoutNode>(applier, node_id)? {
         return Ok(RuntimeNodeMetadata {
             modifier: layout.modifier.clone(),
+            resolved_modifiers: layout.resolved_modifiers(),
             role: SemanticsRole::Layout,
             actions: Vec::new(),
             button_handler: None,
@@ -1356,6 +1379,7 @@ fn runtime_metadata_for(
     if let Some(button) = try_clone::<ButtonNode>(applier, node_id)? {
         return Ok(RuntimeNodeMetadata {
             modifier: button.modifier.clone(),
+            resolved_modifiers: button.modifier.resolved_modifiers(),
             role: SemanticsRole::Button,
             actions: vec![SemanticsAction::Click {
                 handler: SemanticsCallback::new(node_id),
@@ -1366,6 +1390,7 @@ fn runtime_metadata_for(
     if let Some(text) = try_clone::<TextNode>(applier, node_id)? {
         return Ok(RuntimeNodeMetadata {
             modifier: text.modifier.clone(),
+            resolved_modifiers: text.modifier.resolved_modifiers(),
             role: SemanticsRole::Text {
                 value: text.text.clone(),
             },
@@ -1376,16 +1401,20 @@ fn runtime_metadata_for(
     if try_clone::<SpacerNode>(applier, node_id)?.is_some() {
         return Ok(RuntimeNodeMetadata {
             modifier: Modifier::empty(),
+            resolved_modifiers: ResolvedModifiers::default(),
             role: SemanticsRole::Spacer,
             actions: Vec::new(),
             button_handler: None,
         });
     }
-    if let Ok(modifier) =
-        applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| node.modifier())
+    if let Ok((modifier, resolved_modifiers)) = applier
+        .with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
+            (node.modifier(), node.resolved_modifiers())
+        })
     {
         return Ok(RuntimeNodeMetadata {
             modifier,
+            resolved_modifiers,
             role: SemanticsRole::Subcompose,
             actions: Vec::new(),
             button_handler: None,
@@ -1428,7 +1457,7 @@ fn build_layout_tree_from_metadata(
         };
         let info = metadata.get(&node.node_id).cloned().unwrap_or_default();
         let kind = layout_kind_from_metadata(node.node_id, &info);
-        let data = LayoutNodeData::new(info.modifier.clone(), kind);
+        let data = LayoutNodeData::new(info.modifier.clone(), info.resolved_modifiers, kind);
         let children = node
             .children
             .iter()

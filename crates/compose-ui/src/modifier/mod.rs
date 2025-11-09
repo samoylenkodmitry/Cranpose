@@ -10,6 +10,7 @@ use std::fmt;
 use std::rc::Rc;
 
 mod background;
+mod chain;
 mod clickable;
 mod draw_cache;
 mod graphics_layer;
@@ -17,10 +18,12 @@ mod padding;
 mod pointer_input;
 
 pub use crate::draw::{DrawCacheBuilder, DrawCommand};
-use compose_foundation::ModifierElement;
+#[allow(unused_imports)]
+pub use chain::ModifierChainHandle;
 pub use compose_foundation::{
-    modifier_element, DynModifierElement, PointerEvent, PointerEventKind,
+    modifier_element, AnyModifierElement, DynModifierElement, PointerEvent, PointerEventKind,
 };
+use compose_foundation::ModifierElement;
 pub use compose_ui_graphics::{
     Brush, Color, CornerRadii, EdgeInsets, GraphicsLayer, Point, Rect, RoundedCornerShape, Size,
 };
@@ -28,10 +31,169 @@ use compose_ui_layout::{Alignment, HorizontalAlignment, IntrinsicSize, VerticalA
 
 use crate::modifier_nodes::SizeElement;
 
+/// Trait mirroring Jetpack Compose's `Modifier` interface.
+///
+/// Implementors expose helper operations that fold over modifier elements or
+/// evaluate predicates against the chain without materializing intermediate
+/// allocations. This matches Kotlin's `foldIn`, `foldOut`, `any`, and `all`
+/// helpers and allows downstream code to treat modifiers abstractly instead of
+/// poking at cached `ModifierState`.
+pub trait ComposeModifier {
+    /// Accumulates a value by visiting modifier elements in insertion order.
+    fn fold_in<R, F>(&self, initial: R, operation: F) -> R
+    where
+        F: FnMut(R, &dyn AnyModifierElement) -> R;
+
+    /// Accumulates a value by visiting modifier elements in reverse order.
+    fn fold_out<R, F>(&self, initial: R, operation: F) -> R
+    where
+        F: FnMut(R, &dyn AnyModifierElement) -> R;
+
+    /// Returns true when any element satisfies the predicate.
+    fn any<F>(&self, predicate: F) -> bool
+    where
+        F: FnMut(&dyn AnyModifierElement) -> bool;
+
+    /// Returns true only if all elements satisfy the predicate.
+    fn all<F>(&self, predicate: F) -> bool
+    where
+        F: FnMut(&dyn AnyModifierElement) -> bool;
+}
+
+/// Minimal inspector metadata storage.
+#[derive(Clone, Debug, Default)]
+pub struct InspectorInfo {
+    properties: Vec<InspectorProperty>,
+}
+
+impl InspectorInfo {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn add_property<V: Into<String>>(&mut self, name: &'static str, value: V) {
+        self.properties.push(InspectorProperty {
+            name,
+            value: value.into(),
+        });
+    }
+
+    pub fn properties(&self) -> &[InspectorProperty] {
+        &self.properties
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.properties.is_empty()
+    }
+
+    pub fn add_dimension(&mut self, name: &'static str, constraint: DimensionConstraint) {
+        self.add_property(name, describe_dimension(constraint));
+    }
+
+    pub fn add_offset_components(
+        &mut self,
+        x_name: &'static str,
+        y_name: &'static str,
+        offset: Point,
+    ) {
+        self.add_property(x_name, offset.x.to_string());
+        self.add_property(y_name, offset.y.to_string());
+    }
+
+    pub fn add_alignment<A>(&mut self, name: &'static str, alignment: A)
+    where
+        A: fmt::Debug,
+    {
+        self.add_property(name, format!("{alignment:?}"));
+    }
+
+    pub fn debug_properties(&self) -> Vec<(&'static str, String)> {
+        self.properties
+            .iter()
+            .map(|property| (property.name, property.value.clone()))
+            .collect()
+    }
+
+    pub fn describe(&self) -> String {
+        self.properties
+            .iter()
+            .map(|property| format!("{}={}", property.name, property.value))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+/// Single inspector entry recording a property exposed by a modifier.
+#[derive(Clone, Debug)]
+pub struct InspectorProperty {
+    pub name: &'static str,
+    pub value: String,
+}
+
+/// Helper describing the metadata contributed by a modifier factory.
+#[derive(Clone, Debug)]
+pub(crate) struct InspectorMetadata {
+    name: &'static str,
+    info: InspectorInfo,
+}
+
+impl InspectorMetadata {
+    pub(crate) fn new<F>(name: &'static str, recorder: F) -> Self
+    where
+        F: FnOnce(&mut InspectorInfo),
+    {
+        let mut info = InspectorInfo::new();
+        recorder(&mut info);
+        Self { name, info }
+    }
+
+    fn append_to(&self, target: &mut InspectorInfo) {
+        if self.info.is_empty() {
+            target.add_property(self.name, "applied");
+        } else {
+            for property in self.info.properties() {
+                target.add_property(property.name, property.value.clone());
+            }
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.info.is_empty()
+    }
+}
+
+fn describe_dimension(constraint: DimensionConstraint) -> String {
+    match constraint {
+        DimensionConstraint::Unspecified => "unspecified".to_string(),
+        DimensionConstraint::Points(value) => value.to_string(),
+        DimensionConstraint::Fraction(value) => format!("fraction({value})"),
+        DimensionConstraint::Intrinsic(size) => format!("intrinsic({size:?})"),
+    }
+}
+
+pub(crate) fn inspector_metadata<F>(name: &'static str, recorder: F) -> InspectorMetadata
+where
+    F: FnOnce(&mut InspectorInfo),
+{
+    InspectorMetadata::new(name, recorder)
+}
+
+/// Trait implemented by modifiers that can describe themselves for tooling.
+pub trait InspectableModifier {
+    /// Human-readable name exposed to inspector tooling.
+    fn inspector_name(&self) -> &'static str {
+        "Modifier"
+    }
+
+    /// Records inspector metadata for the modifier chain.
+    fn inspect(&self, _info: &mut InspectorInfo) {}
+}
+
 #[derive(Clone, Default)]
 pub struct Modifier {
     elements: Rc<Vec<DynModifierElement>>,
     state: Rc<ModifierState>,
+    inspector: Rc<Vec<InspectorMetadata>>,
 }
 
 impl Modifier {
@@ -40,13 +202,16 @@ impl Modifier {
     }
 
     pub fn size(size: Size) -> Self {
-        Self::with_element(
-            SizeElement::new(Some(size.width), Some(size.height)),
-            move |state| {
-                state.layout.width = DimensionConstraint::Points(size.width);
-                state.layout.height = DimensionConstraint::Points(size.height);
-            },
-        )
+        let width = size.width;
+        let height = size.height;
+        Self::with_element(SizeElement::new(Some(width), Some(height)), move |state| {
+            state.layout.width = DimensionConstraint::Points(width);
+            state.layout.height = DimensionConstraint::Points(height);
+        })
+        .with_inspector_metadata(inspector_metadata("size", move |info| {
+            info.add_dimension("width", DimensionConstraint::Points(width));
+            info.add_dimension("height", DimensionConstraint::Points(height));
+        }))
     }
 
     pub fn size_points(width: f32, height: f32) -> Self {
@@ -57,24 +222,36 @@ impl Modifier {
         Self::with_element(SizeElement::new(Some(width), None), move |state| {
             state.layout.width = DimensionConstraint::Points(width);
         })
+        .with_inspector_metadata(inspector_metadata("width", move |info| {
+            info.add_dimension("width", DimensionConstraint::Points(width));
+        }))
     }
 
     pub fn height(height: f32) -> Self {
         Self::with_element(SizeElement::new(None, Some(height)), move |state| {
             state.layout.height = DimensionConstraint::Points(height);
         })
+        .with_inspector_metadata(inspector_metadata("height", move |info| {
+            info.add_dimension("height", DimensionConstraint::Points(height));
+        }))
     }
 
     pub fn width_intrinsic(intrinsic: IntrinsicSize) -> Self {
         Self::with_state(move |state| {
             state.layout.width = DimensionConstraint::Intrinsic(intrinsic);
         })
+        .with_inspector_metadata(inspector_metadata("widthIntrinsic", move |info| {
+            info.add_dimension("width", DimensionConstraint::Intrinsic(intrinsic));
+        }))
     }
 
     pub fn height_intrinsic(intrinsic: IntrinsicSize) -> Self {
         Self::with_state(move |state| {
             state.layout.height = DimensionConstraint::Intrinsic(intrinsic);
         })
+        .with_inspector_metadata(inspector_metadata("heightIntrinsic", move |info| {
+            info.add_dimension("height", DimensionConstraint::Intrinsic(intrinsic));
+        }))
     }
 
     pub fn fill_max_size() -> Self {
@@ -87,6 +264,10 @@ impl Modifier {
             state.layout.width = DimensionConstraint::Fraction(clamped);
             state.layout.height = DimensionConstraint::Fraction(clamped);
         })
+        .with_inspector_metadata(inspector_metadata("fillMaxSize", move |info| {
+            info.add_dimension("width", DimensionConstraint::Fraction(clamped));
+            info.add_dimension("height", DimensionConstraint::Fraction(clamped));
+        }))
     }
 
     pub fn fill_max_width() -> Self {
@@ -98,6 +279,9 @@ impl Modifier {
         Self::with_state(move |state| {
             state.layout.width = DimensionConstraint::Fraction(clamped);
         })
+        .with_inspector_metadata(inspector_metadata("fillMaxWidth", move |info| {
+            info.add_dimension("width", DimensionConstraint::Fraction(clamped));
+        }))
     }
 
     pub fn fill_max_height() -> Self {
@@ -109,17 +293,34 @@ impl Modifier {
         Self::with_state(move |state| {
             state.layout.height = DimensionConstraint::Fraction(clamped);
         })
+        .with_inspector_metadata(inspector_metadata("fillMaxHeight", move |info| {
+            info.add_dimension("height", DimensionConstraint::Fraction(clamped));
+        }))
     }
 
     pub fn offset(x: f32, y: f32) -> Self {
+        Self::offset_modifier(x, y).with_inspector_metadata(inspector_metadata(
+            "offset",
+            move |info| {
+                info.add_offset_components("offsetX", "offsetY", Point { x, y });
+            },
+        ))
+    }
+
+    pub fn absolute_offset(x: f32, y: f32) -> Self {
+        Self::offset_modifier(x, y).with_inspector_metadata(inspector_metadata(
+            "absoluteOffset",
+            move |info| {
+                info.add_offset_components("absoluteOffsetX", "absoluteOffsetY", Point { x, y });
+            },
+        ))
+    }
+
+    fn offset_modifier(x: f32, y: f32) -> Self {
         Self::with_state(move |state| {
             state.offset.x += x;
             state.offset.y += y;
         })
-    }
-
-    pub fn absolute_offset(x: f32, y: f32) -> Self {
-        Self::offset(x, y)
     }
 
     pub fn required_size(size: Size) -> Self {
@@ -147,6 +348,9 @@ impl Modifier {
         Self::with_state(move |state| {
             state.layout.box_alignment = Some(alignment);
         })
+        .with_inspector_metadata(inspector_metadata("align", move |info| {
+            info.add_alignment("boxAlignment", alignment);
+        }))
     }
 
     pub fn alignInBox(self, alignment: Alignment) -> Self {
@@ -154,15 +358,23 @@ impl Modifier {
     }
 
     pub fn alignInColumn(self, alignment: HorizontalAlignment) -> Self {
-        self.then(Self::with_state(move |state| {
+        let modifier = Self::with_state(move |state| {
             state.layout.column_alignment = Some(alignment);
-        }))
+        })
+        .with_inspector_metadata(inspector_metadata("alignInColumn", move |info| {
+            info.add_alignment("columnAlignment", alignment);
+        }));
+        self.then(modifier)
     }
 
     pub fn alignInRow(self, alignment: VerticalAlignment) -> Self {
-        self.then(Self::with_state(move |state| {
+        let modifier = Self::with_state(move |state| {
             state.layout.row_alignment = Some(alignment);
-        }))
+        })
+        .with_inspector_metadata(inspector_metadata("alignInRow", move |info| {
+            info.add_alignment("rowAlignment", alignment);
+        }));
+        self.then(modifier)
     }
 
     pub fn columnWeight(self, weight: f32, fill: bool) -> Self {
@@ -177,13 +389,16 @@ impl Modifier {
         Self::with_state(|state| {
             state.clip_to_bounds = true;
         })
+        .with_inspector_metadata(inspector_metadata("clipToBounds", |info| {
+            info.add_property("clipToBounds", "true");
+        }))
     }
 
     pub fn then(&self, next: Modifier) -> Modifier {
-        if self.elements.is_empty() && self.state.is_default() {
+        if self.is_trivially_empty() {
             return next;
         }
-        if next.elements.is_empty() && next.state.is_default() {
+        if next.is_trivially_empty() {
             return self.clone();
         }
         let mut elements = Vec::with_capacity(self.elements.len() + next.elements.len());
@@ -191,7 +406,14 @@ impl Modifier {
         elements.extend(next.elements.iter().cloned());
         let mut state = (*self.state).clone();
         state.merge(&next.state);
-        Modifier::from_parts(elements, state)
+        let mut inspector = Vec::with_capacity(self.inspector.len() + next.inspector.len());
+        inspector.extend(self.inspector.iter().cloned());
+        inspector.extend(next.inspector.iter().cloned());
+        Modifier {
+            elements: Rc::new(elements),
+            state: Rc::new(state),
+            inspector: Rc::new(inspector),
+        }
     }
 
     pub(crate) fn elements(&self) -> &[DynModifierElement] {
@@ -269,6 +491,12 @@ impl Modifier {
         self.state.clip_to_bounds
     }
 
+    pub fn resolved_modifiers(&self) -> ResolvedModifiers {
+        let mut handle = ModifierChainHandle::new();
+        handle.update(self);
+        handle.resolved_modifiers()
+    }
+
     fn with_element<E, F>(element: E, update: F) -> Self
     where
         E: ModifierElement,
@@ -289,13 +517,84 @@ impl Modifier {
         Self {
             elements: Rc::new(elements),
             state: Rc::new(state),
+            inspector: Rc::new(Vec::new()),
+        }
+    }
+
+    fn is_trivially_empty(&self) -> bool {
+        self.elements.is_empty() && self.state.is_default() && self.inspector.is_empty()
+    }
+
+    pub(crate) fn with_inspector_metadata(mut self, metadata: InspectorMetadata) -> Self {
+        if metadata.is_empty() {
+            return self;
+        }
+        Rc::make_mut(&mut self.inspector).push(metadata);
+        self
+    }
+}
+
+impl ComposeModifier for Modifier {
+    fn fold_in<R, F>(&self, mut initial: R, mut operation: F) -> R
+    where
+        F: FnMut(R, &dyn AnyModifierElement) -> R,
+    {
+        for element in self.elements.iter() {
+            let erased: &dyn AnyModifierElement = element.as_ref();
+            initial = operation(initial, erased);
+        }
+        initial
+    }
+
+    fn fold_out<R, F>(&self, mut initial: R, mut operation: F) -> R
+    where
+        F: FnMut(R, &dyn AnyModifierElement) -> R,
+    {
+        for element in self.elements.iter().rev() {
+            let erased: &dyn AnyModifierElement = element.as_ref();
+            initial = operation(initial, erased);
+        }
+        initial
+    }
+
+    fn any<F>(&self, mut predicate: F) -> bool
+    where
+        F: FnMut(&dyn AnyModifierElement) -> bool,
+    {
+        for element in self.elements.iter() {
+            if predicate(element.as_ref()) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn all<F>(&self, mut predicate: F) -> bool
+    where
+        F: FnMut(&dyn AnyModifierElement) -> bool,
+    {
+        for element in self.elements.iter() {
+            if !predicate(element.as_ref()) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+impl InspectableModifier for Modifier {
+    fn inspect(&self, info: &mut InspectorInfo) {
+        for metadata in self.inspector.iter() {
+            metadata.append_to(info);
         }
     }
 }
 
 impl PartialEq for Modifier {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.elements, &other.elements) && Rc::ptr_eq(&self.state, &other.state)
+        Rc::ptr_eq(&self.elements, &other.elements)
+            && Rc::ptr_eq(&self.state, &other.state)
+            && Rc::ptr_eq(&self.inspector, &other.inspector)
     }
 }
 
@@ -305,6 +604,7 @@ impl fmt::Debug for Modifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Modifier")
             .field("elements", &self.elements.len())
+            .field("inspector_entries", &self.inspector.len())
             .finish()
     }
 }
@@ -387,6 +687,21 @@ impl Default for ModifierState {
             graphics_layer: None,
             clip_to_bounds: false,
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ResolvedModifiers {
+    padding: EdgeInsets,
+}
+
+impl ResolvedModifiers {
+    pub fn padding(&self) -> EdgeInsets {
+        self.padding
+    }
+
+    pub(crate) fn add_padding(&mut self, padding: EdgeInsets) {
+        self.padding += padding;
     }
 }
 

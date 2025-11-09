@@ -79,7 +79,8 @@ fn render_container(
     mut extra_clicks: Vec<ClickAction>,
 ) {
     let modifier = &layout.node_data.modifier;
-    let style = NodeStyle::from_modifier(modifier);
+    let resolved = layout.node_data.resolved_modifiers;
+    let style = NodeStyle::from_modifier(modifier, resolved);
     let node_layer = combine_layers(parent_layer, style.graphics_layer);
     let rect = layout.rect;
     let size = Size {
@@ -171,7 +172,8 @@ fn render_text(
     scene: &mut Scene,
 ) {
     let modifier = &layout.node_data.modifier;
-    let style = NodeStyle::from_modifier(modifier);
+    let resolved = layout.node_data.resolved_modifiers;
+    let style = NodeStyle::from_modifier(modifier, resolved);
     let node_layer = combine_layers(parent_layer, style.graphics_layer);
     let rect = layout.rect;
     let size = Size {

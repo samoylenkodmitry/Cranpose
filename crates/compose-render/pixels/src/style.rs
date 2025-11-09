@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use compose_foundation::PointerEvent;
-use compose_ui::{Brush, DrawCommand, Modifier};
+use compose_ui::{Brush, DrawCommand, Modifier, ResolvedModifiers};
 use compose_ui_graphics::{
     Color, CornerRadii, DrawPrimitive, GraphicsLayer, Point, Rect, RoundedCornerShape, Size,
 };
@@ -20,9 +20,9 @@ pub(crate) struct NodeStyle {
 }
 
 impl NodeStyle {
-    pub fn from_modifier(modifier: &Modifier) -> Self {
+    pub fn from_modifier(modifier: &Modifier, resolved: ResolvedModifiers) -> Self {
         Self {
-            padding: modifier.padding_values(),
+            padding: resolved.padding(),
             background: modifier.background_color(),
             clickable: modifier.click_handler(),
             shape: modifier.corner_shape(),
