@@ -21,11 +21,12 @@ pub(crate) struct NodeStyle {
 
 impl NodeStyle {
     pub fn from_modifier(modifier: &Modifier, resolved: ResolvedModifiers) -> Self {
+        let resolved_background = resolved.background();
         Self {
             padding: resolved.padding(),
-            background: modifier.background_color(),
+            background: resolved_background.map(|background| background.color()),
             clickable: modifier.click_handler(),
-            shape: modifier.corner_shape(),
+            shape: resolved.corner_shape(),
             pointer_inputs: modifier.pointer_inputs(),
             draw_commands: modifier.draw_commands(),
             graphics_layer: modifier.graphics_layer_values(),

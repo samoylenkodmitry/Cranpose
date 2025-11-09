@@ -2,8 +2,8 @@ use compose_foundation::{
     BasicModifierNodeContext, InvalidationKind, ModifierNode, ModifierNodeChain,
 };
 
-use super::{Modifier, ResolvedModifiers};
-use crate::modifier_nodes::PaddingNode;
+use super::{Color, Modifier, ResolvedModifiers, RoundedCornerShape};
+use crate::modifier_nodes::{BackgroundNode, CornerShapeNode, PaddingNode};
 
 /// Runtime helper that keeps a [`ModifierNodeChain`] in sync with a [`Modifier`].
 ///
@@ -46,6 +46,15 @@ impl ModifierChainHandle {
                 resolved.add_padding(padding.padding());
             }
         }
+        for node in self.chain.draw_nodes() {
+            let any = node.as_any();
+            if let Some(background) = any.downcast_ref::<BackgroundNode>() {
+                resolved.set_background_color(background.color());
+            } else if let Some(shape) = any.downcast_ref::<CornerShapeNode>() {
+                resolved.set_corner_shape(Some(shape.shape()));
+            }
+        }
+
         resolved
     }
 }
@@ -85,6 +94,41 @@ mod tests {
             handle.take_invalidations().is_empty(),
             "no additional invalidations should be issued for a pure update"
         );
+    }
+
+    #[test]
+    fn resolved_modifiers_capture_background_and_shape() {
+        let mut handle = ModifierChainHandle::new();
+        handle.update(
+            &Modifier::background(Color(0.2, 0.3, 0.4, 1.0)).then(Modifier::rounded_corners(8.0)),
+        );
+        let resolved = handle.resolved_modifiers();
+        let background = resolved
+            .background()
+            .expect("expected resolved background entry");
+        assert_eq!(background.color(), Color(0.2, 0.3, 0.4, 1.0));
+        assert_eq!(
+            resolved.corner_shape(),
+            Some(RoundedCornerShape::uniform(8.0))
+        );
+
+        handle.update(
+            &Modifier::rounded_corners(4.0).then(Modifier::background(Color(0.9, 0.1, 0.1, 1.0))),
+        );
+        let resolved = handle.resolved_modifiers();
+        let background = resolved
+            .background()
+            .expect("background should be tracked after update");
+        assert_eq!(background.color(), Color(0.9, 0.1, 0.1, 1.0));
+        assert_eq!(
+            resolved.corner_shape(),
+            Some(RoundedCornerShape::uniform(4.0))
+        );
+
+        handle.update(&Modifier::empty());
+        let resolved = handle.resolved_modifiers();
+        assert!(resolved.background().is_none());
+        assert!(resolved.corner_shape().is_none());
     }
 
     fn node_ptr<N: ModifierNode + 'static>(handle: &ModifierChainHandle) -> *const N {

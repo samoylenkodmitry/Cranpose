@@ -88,6 +88,10 @@ impl LayoutNodeCacheHandles {
         }
     }
 
+    pub(crate) fn epoch(&self) -> u64 {
+        self.state.borrow().epoch
+    }
+
     pub(crate) fn get_measurement(&self, constraints: Constraints) -> Option<Rc<MeasuredNode>> {
         let state = self.state.borrow();
         state

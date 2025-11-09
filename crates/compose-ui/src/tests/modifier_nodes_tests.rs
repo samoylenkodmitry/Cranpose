@@ -124,6 +124,20 @@ fn background_node_is_draw_only() {
 }
 
 #[test]
+fn corner_shape_node_is_draw_only() {
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+
+    let elements = vec![modifier_element(CornerShapeElement::new(
+        RoundedCornerShape::uniform(6.0),
+    ))];
+    chain.update_from_slice(&elements, &mut context);
+
+    assert!(chain.has_nodes_for_invalidation(compose_foundation::InvalidationKind::Draw));
+    assert!(!chain.has_nodes_for_invalidation(compose_foundation::InvalidationKind::Layout));
+}
+
+#[test]
 fn modifier_chain_reuses_padding_nodes() {
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();

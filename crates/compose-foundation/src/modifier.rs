@@ -8,7 +8,9 @@
 //! begin migrating without expanding the public API surface.
 
 use std::any::{type_name, Any, TypeId};
+use std::collections::hash_map::DefaultHasher;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 pub use compose_ui_graphics::DrawScope;
@@ -233,17 +235,29 @@ impl dyn ModifierNode {
     }
 }
 
-/// Strongly typed modifier elements that can create and update nodes.
-pub trait ModifierElement: 'static {
+/// Strongly typed modifier elements that can create and update nodes while
+/// exposing equality/hash/inspector contracts that mirror Jetpack Compose.
+pub trait ModifierNodeElement: fmt::Debug + Hash + PartialEq + 'static {
     type Node: ModifierNode;
 
+    /// Creates a new modifier node instance for this element.
     fn create(&self) -> Self::Node;
 
+    /// Brings an existing modifier node up to date with the element's data.
     fn update(&self, node: &mut Self::Node);
 
+    /// Optional key used to disambiguate multiple instances of the same element type.
     fn key(&self) -> Option<u64> {
         None
     }
+
+    /// Human readable name surfaced to inspector tooling.
+    fn inspector_name(&self) -> &'static str {
+        type_name::<Self>()
+    }
+
+    /// Records inspector properties for tooling.
+    fn inspector_properties(&self, _inspector: &mut dyn FnMut(&'static str, String)) {}
 
     /// Returns the capabilities of nodes created by this element.
     /// Override this to indicate which specialized traits the node implements.
@@ -251,6 +265,12 @@ pub trait ModifierElement: 'static {
         NodeCapabilities::default()
     }
 }
+
+/// Transitional alias so existing call sites that refer to `ModifierElement`
+/// keep compiling while the ecosystem migrates to `ModifierNodeElement`.
+pub trait ModifierElement: ModifierNodeElement {}
+
+impl<T> ModifierElement for T where T: ModifierNodeElement {}
 
 /// Capability flags indicating which specialized traits a modifier node implements.
 #[derive(Clone, Copy, Debug, Default)]
@@ -265,6 +285,8 @@ pub struct NodeCapabilities {
 pub trait AnyModifierElement: fmt::Debug {
     fn node_type(&self) -> TypeId;
 
+    fn element_type(&self) -> TypeId;
+
     fn create_node(&self) -> Box<dyn ModifierNode>;
 
     fn update_node(&self, node: &mut dyn ModifierNode);
@@ -274,13 +296,23 @@ pub trait AnyModifierElement: fmt::Debug {
     fn capabilities(&self) -> NodeCapabilities {
         NodeCapabilities::default()
     }
+
+    fn hash_code(&self) -> u64;
+
+    fn equals_element(&self, other: &dyn AnyModifierElement) -> bool;
+
+    fn inspector_name(&self) -> &'static str;
+
+    fn record_inspector_properties(&self, visitor: &mut dyn FnMut(&'static str, String));
+
+    fn as_any(&self) -> &dyn Any;
 }
 
-struct TypedModifierElement<E: ModifierElement> {
+struct TypedModifierElement<E: ModifierNodeElement> {
     element: E,
 }
 
-impl<E: ModifierElement> TypedModifierElement<E> {
+impl<E: ModifierNodeElement> TypedModifierElement<E> {
     fn new(element: E) -> Self {
         Self { element }
     }
@@ -288,7 +320,7 @@ impl<E: ModifierElement> TypedModifierElement<E> {
 
 impl<E> fmt::Debug for TypedModifierElement<E>
 where
-    E: ModifierElement,
+    E: ModifierNodeElement,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TypedModifierElement")
@@ -299,10 +331,14 @@ where
 
 impl<E> AnyModifierElement for TypedModifierElement<E>
 where
-    E: ModifierElement,
+    E: ModifierNodeElement,
 {
     fn node_type(&self) -> TypeId {
         TypeId::of::<E::Node>()
+    }
+
+    fn element_type(&self) -> TypeId {
+        TypeId::of::<E>()
     }
 
     fn create_node(&self) -> Box<dyn ModifierNode> {
@@ -324,11 +360,37 @@ where
     fn capabilities(&self) -> NodeCapabilities {
         self.element.capabilities()
     }
+
+    fn hash_code(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.element.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn equals_element(&self, other: &dyn AnyModifierElement) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .map(|typed| typed.element == self.element)
+            .unwrap_or(false)
+    }
+
+    fn inspector_name(&self) -> &'static str {
+        self.element.inspector_name()
+    }
+
+    fn record_inspector_properties(&self, visitor: &mut dyn FnMut(&'static str, String)) {
+        self.element.inspector_properties(visitor);
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 /// Convenience helper for callers to construct a type-erased modifier
 /// element without having to mention the internal wrapper type.
-pub fn modifier_element<E: ModifierElement>(element: E) -> DynModifierElement {
+pub fn modifier_element<E: ModifierNodeElement>(element: E) -> DynModifierElement {
     Rc::new(TypedModifierElement::new(element))
 }
 
@@ -336,8 +398,9 @@ pub fn modifier_element<E: ModifierElement>(element: E) -> DynModifierElement {
 pub type DynModifierElement = Rc<dyn AnyModifierElement>;
 
 struct ModifierNodeEntry {
-    type_id: TypeId,
+    element_type: TypeId,
     key: Option<u64>,
+    element: DynModifierElement,
     node: Box<dyn ModifierNode>,
     attached: bool,
     has_layout: bool,
@@ -348,14 +411,16 @@ struct ModifierNodeEntry {
 
 impl ModifierNodeEntry {
     fn new(
-        type_id: TypeId,
+        element_type: TypeId,
         key: Option<u64>,
+        element: DynModifierElement,
         node: Box<dyn ModifierNode>,
         capabilities: NodeCapabilities,
     ) -> Self {
         Self {
-            type_id,
+            element_type,
             key,
+            element,
             node,
             attached: false,
             has_layout: capabilities.has_layout,
@@ -404,39 +469,45 @@ impl ModifierNodeChain {
         let mut new_entries = Vec::with_capacity(elements.len());
 
         for element in elements {
-            let type_id = element.node_type();
+            let element_type = element.element_type();
             let key = element.key();
-            let reused = old_entries
-                .iter()
-                .position(|entry| {
-                    entry.type_id == type_id
-                        && match (key, entry.key) {
-                            (Some(lhs), Some(rhs)) => lhs == rhs,
-                            (None, None) => true,
-                            _ => false,
-                        }
-                })
-                .map(|index| old_entries.remove(index));
 
-            let entry = if let Some(mut entry) = reused {
+            let reused_index = old_entries.iter().position(|entry| {
+                entry.element_type == element_type
+                    && match (key, entry.key) {
+                        (Some(lhs), Some(rhs)) => lhs == rhs,
+                        (None, None) => true,
+                        _ => false,
+                    }
+            });
+
+            if let Some(index) = reused_index {
+                let mut entry = old_entries.remove(index);
+                let same_element = entry.element.as_ref().equals_element(element.as_ref());
+
                 if !entry.attached {
                     entry.node.on_attach(context);
                     entry.attached = true;
                 }
-                element.update_node(entry.node.as_mut());
+
+                if !same_element {
+                    element.update_node(entry.node.as_mut());
+                }
+
                 entry.key = key;
-                entry
+                entry.element = element.clone();
+                entry.element_type = element_type;
+                new_entries.push(entry);
             } else {
                 let capabilities = element.capabilities();
                 let mut node = element.create_node();
                 node.on_attach(context);
                 element.update_node(node.as_mut());
-                let mut entry = ModifierNodeEntry::new(type_id, key, node, capabilities);
+                let mut entry =
+                    ModifierNodeEntry::new(element_type, key, element.clone(), node, capabilities);
                 entry.attached = true;
-                entry
-            };
-
-            new_entries.push(entry);
+                new_entries.push(entry);
+            }
         }
 
         for mut entry in old_entries {

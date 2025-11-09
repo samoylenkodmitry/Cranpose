@@ -1,9 +1,8 @@
 use super::*;
-use compose_core::Applier;
-use std::rc::Rc;
-
 use crate::modifier::{Modifier, Size};
+use compose_core::Applier;
 use compose_ui_layout::{MeasurePolicy, MeasureResult, Placement};
+use std::rc::Rc;
 
 use super::core::Measurable;
 
@@ -424,7 +423,8 @@ fn cache_epoch_not_incremented_when_no_dirty_nodes() -> Result<(), NodeError> {
         node.clear_needs_layout();
     })?;
 
-    let epoch_before = NEXT_CACHE_EPOCH.load(Ordering::Relaxed);
+    let epoch_before =
+        applier.with_node::<LayoutNode, _>(node_id, |node| node.cache_handles().epoch())?;
 
     // Second measure with no dirty nodes - epoch should not increment
     measure_layout(
@@ -436,7 +436,8 @@ fn cache_epoch_not_incremented_when_no_dirty_nodes() -> Result<(), NodeError> {
         },
     )?;
 
-    let epoch_after = NEXT_CACHE_EPOCH.load(Ordering::Relaxed);
+    let epoch_after =
+        applier.with_node::<LayoutNode, _>(node_id, |node| node.cache_handles().epoch())?;
 
     assert_eq!(
         epoch_before, epoch_after,
@@ -461,7 +462,8 @@ fn cache_epoch_increments_when_nodes_dirty() -> Result<(), NodeError> {
         },
     )?;
 
-    let epoch_before = NEXT_CACHE_EPOCH.load(Ordering::Relaxed);
+    let epoch_before =
+        applier.with_node::<LayoutNode, _>(node_id, |node| node.cache_handles().epoch())?;
 
     // Mark node as dirty
     applier.with_node::<LayoutNode, _>(node_id, |node| {
@@ -478,7 +480,8 @@ fn cache_epoch_increments_when_nodes_dirty() -> Result<(), NodeError> {
         },
     )?;
 
-    let epoch_after = NEXT_CACHE_EPOCH.load(Ordering::Relaxed);
+    let epoch_after =
+        applier.with_node::<LayoutNode, _>(node_id, |node| node.cache_handles().epoch())?;
 
     assert!(
         epoch_after > epoch_before,
@@ -527,7 +530,8 @@ fn selective_measure_with_tree_hierarchy() -> Result<(), NodeError> {
         node.clear_needs_layout();
     })?;
 
-    let epoch_before = NEXT_CACHE_EPOCH.load(Ordering::Relaxed);
+    let epoch_before =
+        applier.with_node::<LayoutNode, _>(root_id, |node| node.cache_handles().epoch())?;
 
     // Second measure - should use cache
     measure_layout(
@@ -539,7 +543,8 @@ fn selective_measure_with_tree_hierarchy() -> Result<(), NodeError> {
         },
     )?;
 
-    let epoch_after = NEXT_CACHE_EPOCH.load(Ordering::Relaxed);
+    let epoch_after =
+        applier.with_node::<LayoutNode, _>(root_id, |node| node.cache_handles().epoch())?;
 
     assert_eq!(
         epoch_before, epoch_after,

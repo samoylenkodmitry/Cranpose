@@ -28,11 +28,11 @@ pub use layout::{
 };
 pub use modifier::{
     Brush, Color, CornerRadii, EdgeInsets, GraphicsLayer, Modifier, Point, PointerEvent,
-    PointerEventKind, Rect, ResolvedModifiers, RoundedCornerShape, Size,
+    PointerEventKind, Rect, ResolvedBackground, ResolvedModifiers, RoundedCornerShape, Size,
 };
 pub use modifier_nodes::{
     AlphaElement, AlphaNode, BackgroundElement, BackgroundNode, ClickableElement, ClickableNode,
-    PaddingElement, PaddingNode, SizeElement, SizeNode,
+    CornerShapeElement, CornerShapeNode, PaddingElement, PaddingNode, SizeElement, SizeNode,
 };
 pub use primitives::{
     Box, BoxScope, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope,

@@ -20,10 +20,10 @@ mod pointer_input;
 pub use crate::draw::{DrawCacheBuilder, DrawCommand};
 #[allow(unused_imports)]
 pub use chain::ModifierChainHandle;
+use compose_foundation::ModifierNodeElement;
 pub use compose_foundation::{
     modifier_element, AnyModifierElement, DynModifierElement, PointerEvent, PointerEventKind,
 };
-use compose_foundation::ModifierElement;
 pub use compose_ui_graphics::{
     Brush, Color, CornerRadii, EdgeInsets, GraphicsLayer, Point, Rect, RoundedCornerShape, Size,
 };
@@ -499,7 +499,7 @@ impl Modifier {
 
     fn with_element<E, F>(element: E, update: F) -> Self
     where
-        E: ModifierElement,
+        E: ModifierNodeElement,
         F: FnOnce(&mut ModifierState),
     {
         let dyn_element = modifier_element(element);
@@ -690,9 +690,35 @@ impl Default for ModifierState {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ResolvedBackground {
+    color: Color,
+    shape: Option<RoundedCornerShape>,
+}
+
+impl ResolvedBackground {
+    pub fn new(color: Color, shape: Option<RoundedCornerShape>) -> Self {
+        Self { color, shape }
+    }
+
+    pub fn color(&self) -> Color {
+        self.color
+    }
+
+    pub fn shape(&self) -> Option<RoundedCornerShape> {
+        self.shape
+    }
+
+    pub fn set_shape(&mut self, shape: Option<RoundedCornerShape>) {
+        self.shape = shape;
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ResolvedModifiers {
     padding: EdgeInsets,
+    background: Option<ResolvedBackground>,
+    corner_shape: Option<RoundedCornerShape>,
 }
 
 impl ResolvedModifiers {
@@ -700,8 +726,31 @@ impl ResolvedModifiers {
         self.padding
     }
 
+    pub fn background(&self) -> Option<ResolvedBackground> {
+        self.background
+    }
+
+    pub fn corner_shape(&self) -> Option<RoundedCornerShape> {
+        self.corner_shape
+    }
+
     pub(crate) fn add_padding(&mut self, padding: EdgeInsets) {
         self.padding += padding;
+    }
+
+    pub(crate) fn set_background_color(&mut self, color: Color) {
+        self.background = Some(ResolvedBackground::new(color, self.corner_shape));
+    }
+
+    pub(crate) fn clear_background(&mut self) {
+        self.background = None;
+    }
+
+    pub(crate) fn set_corner_shape(&mut self, shape: Option<RoundedCornerShape>) {
+        self.corner_shape = shape;
+        if let Some(background) = &mut self.background {
+            background.set_shape(shape);
+        }
     }
 }
 

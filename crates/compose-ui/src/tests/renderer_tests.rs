@@ -59,6 +59,37 @@ fn renderer_emits_background_and_text() {
 }
 
 #[test]
+fn renderer_honors_resolved_background_shape() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let key = location_key(file!(), line!(), column!());
+    composition
+        .render(key, || {
+            Text(
+                "Rounded".to_string(),
+                Modifier::background(Color(0.5, 0.2, 0.2, 1.0))
+                    .then(Modifier::rounded_corners(12.0)),
+            );
+        })
+        .expect("initial render");
+
+    let root = composition.root().expect("text root");
+    let layout = compute_layout(&mut composition, root);
+    let renderer = HeadlessRenderer::new();
+    let scene = renderer.render(&layout);
+
+    assert!(
+        matches!(
+            &scene.operations()[0],
+            RenderOp::Primitive {
+                primitive: DrawPrimitive::RoundRect { .. },
+                ..
+            }
+        ),
+        "expected rounded rect background primitive"
+    );
+}
+
+#[test]
 fn renderer_translates_draw_commands() {
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());

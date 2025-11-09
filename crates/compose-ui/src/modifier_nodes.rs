@@ -48,13 +48,28 @@
 //! the migration is complete.
 
 use compose_foundation::{
-    Constraints, DrawModifierNode, DrawScope, LayoutModifierNode, Measurable, ModifierElement,
-    ModifierNode, ModifierNodeContext, NodeCapabilities, PointerEvent, PointerEventKind,
+    Constraints, DrawModifierNode, DrawScope, LayoutModifierNode, Measurable, ModifierNode,
+    ModifierNodeContext, ModifierNodeElement, NodeCapabilities, PointerEvent, PointerEventKind,
     PointerInputNode, Size,
 };
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
-use crate::modifier::{Color, EdgeInsets, Point};
+use crate::modifier::{Color, EdgeInsets, Point, RoundedCornerShape};
+
+fn hash_f32_value<H: Hasher>(state: &mut H, value: f32) {
+    state.write_u32(value.to_bits());
+}
+
+fn hash_option_f32<H: Hasher>(state: &mut H, value: Option<f32>) {
+    match value {
+        Some(v) => {
+            state.write_u8(1);
+            hash_f32_value(state, v);
+        }
+        None => state.write_u8(0),
+    }
+}
 
 // ============================================================================
 // Padding Modifier Node
@@ -143,7 +158,7 @@ impl LayoutModifierNode for PaddingNode {
 }
 
 /// Element that creates and updates padding nodes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PaddingElement {
     padding: EdgeInsets,
 }
@@ -154,7 +169,16 @@ impl PaddingElement {
     }
 }
 
-impl ModifierElement for PaddingElement {
+impl Hash for PaddingElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_f32_value(state, self.padding.left);
+        hash_f32_value(state, self.padding.top);
+        hash_f32_value(state, self.padding.right);
+        hash_f32_value(state, self.padding.bottom);
+    }
+}
+
+impl ModifierNodeElement for PaddingElement {
     type Node = PaddingNode;
 
     fn create(&self) -> Self::Node {
@@ -186,11 +210,20 @@ impl ModifierElement for PaddingElement {
 #[derive(Debug)]
 pub struct BackgroundNode {
     color: Color,
+    shape: Option<RoundedCornerShape>,
 }
 
 impl BackgroundNode {
     pub fn new(color: Color) -> Self {
-        Self { color }
+        Self { color, shape: None }
+    }
+
+    pub fn color(&self) -> Color {
+        self.color
+    }
+
+    pub fn shape(&self) -> Option<RoundedCornerShape> {
+        self.shape
     }
 }
 
@@ -209,7 +242,7 @@ impl DrawModifierNode for BackgroundNode {
 }
 
 /// Element that creates and updates background nodes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BackgroundElement {
     color: Color,
 }
@@ -220,7 +253,16 @@ impl BackgroundElement {
     }
 }
 
-impl ModifierElement for BackgroundElement {
+impl Hash for BackgroundElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_f32_value(state, self.color.0);
+        hash_f32_value(state, self.color.1);
+        hash_f32_value(state, self.color.2);
+        hash_f32_value(state, self.color.3);
+    }
+}
+
+impl ModifierNodeElement for BackgroundElement {
     type Node = BackgroundNode;
 
     fn create(&self) -> Self::Node {
@@ -231,6 +273,82 @@ impl ModifierElement for BackgroundElement {
         if node.color != self.color {
             node.color = self.color;
             // Note: In a full implementation, we would invalidate draw here
+        }
+    }
+
+    fn capabilities(&self) -> NodeCapabilities {
+        NodeCapabilities {
+            has_layout: false,
+            has_draw: true,
+            has_pointer_input: false,
+            has_semantics: false,
+        }
+    }
+}
+
+// ============================================================================
+// Size Modifier Node
+// ============================================================================
+
+/// Node that tracks the latest rounded corner shape.
+#[derive(Debug)]
+pub struct CornerShapeNode {
+    shape: RoundedCornerShape,
+}
+
+impl CornerShapeNode {
+    pub fn new(shape: RoundedCornerShape) -> Self {
+        Self { shape }
+    }
+
+    pub fn shape(&self) -> RoundedCornerShape {
+        self.shape
+    }
+}
+
+impl ModifierNode for CornerShapeNode {
+    fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
+        context.invalidate(compose_foundation::InvalidationKind::Draw);
+    }
+}
+
+impl DrawModifierNode for CornerShapeNode {
+    fn draw(&mut self, _context: &mut dyn ModifierNodeContext, _draw_scope: &mut dyn DrawScope) {}
+}
+
+/// Element that creates and updates corner shape nodes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CornerShapeElement {
+    shape: RoundedCornerShape,
+}
+
+impl CornerShapeElement {
+    pub fn new(shape: RoundedCornerShape) -> Self {
+        Self { shape }
+    }
+}
+
+impl Hash for CornerShapeElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let radii = self.shape.radii();
+        hash_f32_value(state, radii.top_left);
+        hash_f32_value(state, radii.top_right);
+        hash_f32_value(state, radii.bottom_right);
+        hash_f32_value(state, radii.bottom_left);
+    }
+}
+
+impl ModifierNodeElement for CornerShapeElement {
+    type Node = CornerShapeNode;
+
+    fn create(&self) -> Self::Node {
+        CornerShapeNode::new(self.shape)
+    }
+
+    fn update(&self, node: &mut Self::Node) {
+        if node.shape != self.shape {
+            node.shape = self.shape;
+            // Invalidations are handled lazily for now.
         }
     }
 
@@ -319,7 +437,7 @@ impl LayoutModifierNode for SizeNode {
 }
 
 /// Element that creates and updates size nodes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SizeElement {
     width: Option<f32>,
     height: Option<f32>,
@@ -331,7 +449,14 @@ impl SizeElement {
     }
 }
 
-impl ModifierElement for SizeElement {
+impl Hash for SizeElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_option_f32(state, self.width);
+        hash_option_f32(state, self.height);
+    }
+}
+
+impl ModifierNodeElement for SizeElement {
     type Node = SizeNode;
 
     fn create(&self) -> Self::Node {
@@ -436,7 +561,22 @@ impl std::fmt::Debug for ClickableElement {
     }
 }
 
-impl ModifierElement for ClickableElement {
+impl PartialEq for ClickableElement {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.on_click, &other.on_click)
+    }
+}
+
+impl Eq for ClickableElement {}
+
+impl Hash for ClickableElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let ptr = Rc::as_ptr(&self.on_click) as *const ();
+        (ptr as usize).hash(state);
+    }
+}
+
+impl ModifierNodeElement for ClickableElement {
     type Node = ClickableNode;
 
     fn create(&self) -> Self::Node {
@@ -495,7 +635,7 @@ impl DrawModifierNode for AlphaNode {
 }
 
 /// Element that creates and updates alpha nodes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AlphaElement {
     alpha: f32,
 }
@@ -508,7 +648,13 @@ impl AlphaElement {
     }
 }
 
-impl ModifierElement for AlphaElement {
+impl Hash for AlphaElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_f32_value(state, self.alpha);
+    }
+}
+
+impl ModifierNodeElement for AlphaElement {
     type Node = AlphaNode;
 
     fn create(&self) -> Self::Node {

@@ -117,9 +117,9 @@ fn evaluate_modifier(
     let mut behind = Vec::new();
     let mut overlay = Vec::new();
 
-    if let Some(color) = modifier.background_color() {
-        let brush = Brush::solid(color);
-        let primitive = if let Some(shape) = modifier.corner_shape() {
+    if let Some(background) = resolved.background() {
+        let brush = Brush::solid(background.color());
+        let primitive = if let Some(shape) = background.shape() {
             let radii = resolve_radii(shape, rect);
             DrawPrimitive::RoundRect { rect, brush, radii }
         } else {

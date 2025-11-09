@@ -47,7 +47,22 @@ struct LoggingElement {
     log: Rc<RefCell<Vec<String>>>,
 }
 
-impl ModifierElement for LoggingElement {
+impl PartialEq for LoggingElement {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.value == other.value
+    }
+}
+
+impl Eq for LoggingElement {}
+
+impl Hash for LoggingElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+        self.value.hash(state);
+    }
+}
+
+impl ModifierNodeElement for LoggingElement {
     type Node = LoggingNode;
 
     fn create(&self) -> Self::Node {
@@ -179,15 +194,211 @@ fn chain_reuses_nodes_when_reordered() {
     assert_eq!(&*log.borrow(), &["detach:b", "detach:a"]);
 }
 
+#[derive(Debug, Default, PartialEq)]
+struct EqualityNode {
+    value: i32,
+}
+
+impl ModifierNode for EqualityNode {}
+
+#[derive(Debug, Clone)]
+struct EqualityElement {
+    value: i32,
+    updates: Rc<Cell<usize>>,
+}
+
+impl PartialEq for EqualityElement {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
+}
+
+impl Eq for EqualityElement {}
+
+impl Hash for EqualityElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.value.hash(state);
+    }
+}
+
+impl ModifierNodeElement for EqualityElement {
+    type Node = EqualityNode;
+
+    fn create(&self) -> Self::Node {
+        EqualityNode { value: self.value }
+    }
+
+    fn update(&self, node: &mut Self::Node) {
+        node.value = self.value;
+        self.updates.set(self.updates.get() + 1);
+    }
+}
+
+#[test]
+fn element_equality_controls_node_reuse() {
+    let mut chain = ModifierNodeChain::new();
+    let mut context = TestContext::default();
+
+    let updates = Rc::new(Cell::new(0));
+    let initial = vec![modifier_element(EqualityElement {
+        value: 1,
+        updates: updates.clone(),
+    })];
+    chain.update_from_slice(&initial, &mut context);
+    let first_ptr = chain.node::<EqualityNode>(0).unwrap() as *const EqualityNode;
+    updates.set(0);
+
+    let same = vec![modifier_element(EqualityElement {
+        value: 1,
+        updates: updates.clone(),
+    })];
+    chain.update_from_slice(&same, &mut context);
+    let reused_ptr = chain.node::<EqualityNode>(0).unwrap() as *const EqualityNode;
+    assert_eq!(
+        first_ptr, reused_ptr,
+        "nodes should be reused when elements are equal"
+    );
+    assert_eq!(updates.get(), 0, "equal elements skip update invocations");
+
+    let different = vec![modifier_element(EqualityElement {
+        value: 2,
+        updates: updates.clone(),
+    })];
+    chain.update_from_slice(&different, &mut context);
+    let updated_ptr = chain.node::<EqualityNode>(0).unwrap() as *const EqualityNode;
+    assert_eq!(
+        first_ptr, updated_ptr,
+        "nodes should be reused even when element data changes"
+    );
+    assert_eq!(
+        updates.get(),
+        1,
+        "value changes trigger a single update call"
+    );
+    assert_eq!(chain.node::<EqualityNode>(0).unwrap().value, 2);
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct KeyedElement {
+    key: u64,
+    value: i32,
+}
+
+impl ModifierNodeElement for KeyedElement {
+    type Node = EqualityNode;
+
+    fn create(&self) -> Self::Node {
+        EqualityNode { value: self.value }
+    }
+
+    fn update(&self, node: &mut Self::Node) {
+        node.value = self.value;
+    }
+
+    fn key(&self) -> Option<u64> {
+        Some(self.key)
+    }
+}
+
+#[test]
+fn element_keys_gate_node_reuse() {
+    let mut chain = ModifierNodeChain::new();
+    let mut context = TestContext::default();
+
+    let initial = vec![modifier_element(KeyedElement { key: 7, value: 1 })];
+    chain.update_from_slice(&initial, &mut context);
+    let first_ptr = chain.node::<EqualityNode>(0).unwrap() as *const EqualityNode;
+
+    let same_key = vec![modifier_element(KeyedElement { key: 7, value: 1 })];
+    chain.update_from_slice(&same_key, &mut context);
+    let reused_ptr = chain.node::<EqualityNode>(0).unwrap() as *const EqualityNode;
+    assert_eq!(first_ptr, reused_ptr, "matching keys should reuse nodes");
+
+    let different_key = vec![modifier_element(KeyedElement { key: 8, value: 1 })];
+    chain.update_from_slice(&different_key, &mut context);
+    let replaced_ptr = chain.node::<EqualityNode>(0).unwrap() as *const EqualityNode;
+    assert_ne!(
+        first_ptr, replaced_ptr,
+        "changing keys should force recreation"
+    );
+}
+
+#[test]
+fn different_element_types_replace_nodes() {
+    let mut chain = ModifierNodeChain::new();
+    let mut context = TestContext::default();
+
+    let layout = vec![modifier_element(TestLayoutElement)];
+    chain.update_from_slice(&layout, &mut context);
+    assert!(chain.node::<TestLayoutNode>(0).is_some());
+
+    let draw = vec![modifier_element(TestDrawElement)];
+    chain.update_from_slice(&draw, &mut context);
+    assert!(chain.node::<TestLayoutNode>(0).is_none());
+    assert!(chain.node::<TestDrawNode>(0).is_some());
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct InspectorElement {
+    label: &'static str,
+    value: i32,
+}
+
+impl ModifierNodeElement for InspectorElement {
+    type Node = EqualityNode;
+
+    fn create(&self) -> Self::Node {
+        EqualityNode { value: self.value }
+    }
+
+    fn update(&self, node: &mut Self::Node) {
+        node.value = self.value;
+    }
+
+    fn inspector_name(&self) -> &'static str {
+        self.label
+    }
+
+    fn inspector_properties(&self, inspector: &mut dyn FnMut(&'static str, String)) {
+        inspector("value", self.value.to_string());
+    }
+}
+
+#[test]
+fn modifier_elements_expose_inspector_metadata() {
+    let element = modifier_element(InspectorElement {
+        label: "TestInspector",
+        value: 42,
+    });
+
+    assert_eq!(element.inspector_name(), "TestInspector");
+
+    let mut props = Vec::new();
+    element.record_inspector_properties(&mut |name, value| props.push((name, value)));
+    assert_eq!(props, vec![("value", "42".to_string())]);
+}
+
 #[derive(Debug, Clone)]
 struct InvalidationElement {
     attach_count: Rc<Cell<usize>>,
 }
 
+impl PartialEq for InvalidationElement {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.attach_count, &other.attach_count)
+    }
+}
+
+impl Hash for InvalidationElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (self.attach_count.as_ptr() as usize).hash(state);
+    }
+}
+
 #[derive(Debug, Default)]
 struct InvalidationNode;
 
-impl ModifierElement for InvalidationElement {
+impl ModifierNodeElement for InvalidationElement {
     type Node = InvalidationNode;
 
     fn create(&self) -> Self::Node {
@@ -278,10 +489,10 @@ impl LayoutModifierNode for TestLayoutNode {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct TestLayoutElement;
 
-impl ModifierElement for TestLayoutElement {
+impl ModifierNodeElement for TestLayoutElement {
     type Node = TestLayoutNode;
 
     fn create(&self) -> Self::Node {
@@ -313,10 +524,10 @@ impl DrawModifierNode for TestDrawNode {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct TestDrawElement;
 
-impl ModifierElement for TestDrawElement {
+impl ModifierNodeElement for TestDrawElement {
     type Node = TestDrawNode;
 
     fn create(&self) -> Self::Node {
