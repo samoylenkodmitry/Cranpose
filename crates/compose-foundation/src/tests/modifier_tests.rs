@@ -706,3 +706,173 @@ fn sentinel_links_exist_for_empty_chain() {
         NodeCapabilities::empty()
     );
 }
+
+#[test]
+fn chain_iterators_follow_expected_order() {
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+    let elements = vec![
+        modifier_element(TestLayoutElement),
+        modifier_element(TestDrawElement),
+    ];
+    chain.update_from_slice(&elements, &mut context);
+
+    let forward: Vec<&'static str> = chain
+        .head_to_tail()
+        .map(|node_ref| {
+            if node_ref
+                .node()
+                .unwrap()
+                .as_any()
+                .downcast_ref::<TestLayoutNode>()
+                .is_some()
+            {
+                "layout"
+            } else if node_ref
+                .node()
+                .unwrap()
+                .as_any()
+                .downcast_ref::<TestDrawNode>()
+                .is_some()
+            {
+                "draw"
+            } else {
+                "unknown"
+            }
+        })
+        .collect();
+    assert_eq!(forward, vec!["layout", "draw"]);
+
+    let backward: Vec<&'static str> = chain
+        .tail_to_head()
+        .map(|node_ref| {
+            if node_ref
+                .node()
+                .unwrap()
+                .as_any()
+                .downcast_ref::<TestLayoutNode>()
+                .is_some()
+            {
+                "layout"
+            } else if node_ref
+                .node()
+                .unwrap()
+                .as_any()
+                .downcast_ref::<TestDrawNode>()
+                .is_some()
+            {
+                "draw"
+            } else {
+                "unknown"
+            }
+        })
+        .collect();
+    assert_eq!(backward, vec!["draw", "layout"]);
+}
+
+#[test]
+fn chain_can_find_node_refs() {
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+    let elements = vec![
+        modifier_element(TestLayoutElement),
+        modifier_element(TestDrawElement),
+    ];
+    chain.update_from_slice(&elements, &mut context);
+
+    let layout_node: &dyn ModifierNode =
+        chain.node::<TestLayoutNode>(0).expect("layout node exists");
+    let draw_node: &dyn ModifierNode = chain.node::<TestDrawNode>(1).expect("draw node exists");
+
+    let layout_ref = chain
+        .find_node_ref(layout_node)
+        .expect("should resolve layout node ref");
+    assert!(layout_ref
+        .node()
+        .unwrap()
+        .as_any()
+        .downcast_ref::<TestLayoutNode>()
+        .is_some());
+
+    let draw_ref = chain
+        .find_node_ref(draw_node)
+        .expect("should resolve draw node ref");
+    assert!(draw_ref
+        .node()
+        .unwrap()
+        .as_any()
+        .downcast_ref::<TestDrawNode>()
+        .is_some());
+}
+
+#[test]
+fn visit_descendants_matching_short_circuits() {
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+    let elements = vec![
+        modifier_element(TestLayoutElement),
+        modifier_element(TestDrawElement),
+    ];
+    chain.update_from_slice(&elements, &mut context);
+
+    let first = chain.head().child().expect("layout node present");
+
+    let mut visited = Vec::new();
+    first.visit_descendants_matching(false, NodeCapabilities::DRAW, |node| {
+        if node
+            .node()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<TestDrawNode>()
+            .is_some()
+        {
+            visited.push("draw");
+        }
+    });
+    assert_eq!(visited, vec!["draw"]);
+
+    let mut skipped = false;
+    first.visit_descendants_matching(false, NodeCapabilities::SEMANTICS, |_| {
+        skipped = true;
+    });
+    assert!(!skipped, "semantics mask should skip traversal");
+}
+
+#[test]
+fn visit_ancestors_matching_includes_self() {
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+    let elements = vec![
+        modifier_element(TestLayoutElement),
+        modifier_element(TestDrawElement),
+    ];
+    chain.update_from_slice(&elements, &mut context);
+
+    let draw_ref = chain
+        .head()
+        .child()
+        .unwrap()
+        .child()
+        .expect("draw node present");
+    let mut order = Vec::new();
+    draw_ref.visit_ancestors(true, |node| {
+        if node
+            .node()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<TestDrawNode>()
+            .is_some()
+        {
+            order.push("draw");
+        } else if node
+            .node()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<TestLayoutNode>()
+            .is_some()
+        {
+            order.push("layout");
+        }
+    });
+    assert_eq!(order, vec!["draw", "layout"]);
+}

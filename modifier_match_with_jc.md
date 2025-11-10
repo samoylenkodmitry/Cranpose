@@ -35,20 +35,20 @@ Goal: match Jetpack Compose’s `Modifier` API surface and `Modifier.Node` runti
    Finish porting the remaining factories off `ModifierState`, add Kotlin-style inspector dumps/trace hooks, and grow the parity test matrix to compare traversal order/capabilities against the Android reference.
 
 ## Near-Term Next Steps
-1. **Delegate + ancestor traversal parity**  
-   - Port Kotlin’s delegate APIs (`DelegatableNode`, `DelegatingNode`, `node.parent/child` contract) so every `ModifierNode` exposes the same traversal surface as Android.  
-   - Propagate `aggregateChildKindSet` (capability bitmasks) from nodes into `LayoutNode` so ancestor/descendant queries short-circuit exactly like `NodeChain.kt`.  
-   - Mirror Kotlin’s `NodeChain` head/tail iteration helpers (`headToTail`, `tailToHead`, `trimChain/padChain`) for diffing, ensuring keyed reuse + capability recompute follow the reference semantics.
+1. **Delegate + ancestor traversal parity (in flight)**  
+   - ✅ `ModifierNodeChain` now exposes sentinel-safe `head_to_tail`, `tail_to_head`, and filtered visitors plus cached `aggregate_child_capabilities` on both the chain and owning `LayoutNode`.  
+   - Next: port Kotlin’s delegate APIs (`DelegatableNode`, `DelegatingNode`, `node.parent/child` contract) so every `ModifierNode` exposes the same traversal surface, and make delegate chains update capability masks the same way Kotlin’s `NodeChain` does.  
+   - Finish mirroring Kotlin’s diff helpers (`trimChain`, `padChain`, delegate reuse rules) so keyed reuse + capability recompute follow the reference semantics.
 2. **Modifier locals parity**  
-   - Flesh out a `ModifierLocalManager` that registers providers/consumers, invalidates descendants on insert/remove, and mirrors Kotlin’s `ModifierLocalConsumer` contract.  
-   - Implement ancestor lookups that walk parent layout nodes (not just the current chain) and add parity tests based on `ModifierLocalTest.kt`.  
-   - Connect modifier-local invalidations into `LayoutNode` dirty flags so layout/draw updates fire exactly as on Android.
+   - Use the new traversal helpers to flesh out `ModifierLocalManager`: register providers/consumers, track inserts/removals, and mirror Kotlin’s `ModifierLocalModifierNode` contracts.  
+   - Implement ancestor lookups that walk parent layout nodes (using the cached `modifier_child_capabilities`) and add parity tests based on `ModifierLocalTest.kt`.  
+   - Connect modifier-local invalidations into `LayoutNode` dirty flags so layout/draw/semantics updates fire exactly as on Android.
 3. **Semantics stack parity**  
    - Replace `RuntimeNodeMetadata` semantics fields with direct traversal of modifier nodes, build a `SemanticsOwner`/`SemanticsTree` identical to Kotlin’s implementation, and add parity tests (clickable semantics, content descriptions, custom actions).  
    - Wire semantics invalidations through modifier nodes + layout nodes, and feed the resulting semantics tree into accessibility/focus layers once available.
 4. **Diagnostics + focus-ready infrastructure**  
-   - Extend debugging helpers (`Modifier.toString()`, chain dumps) to include delegate depth, modifier locals provided, semantics flags, and capability masks.  
-   - Port Kotlin’s snapshot tests/logging (`trace`, `NodeChain#trace`, `Modifier.toString()`) to prevent regressions once focus/focusRequester stacks land.
+   - Extend debugging helpers (`Modifier.to_string()`, chain dumps) to include delegate depth, modifier locals provided, semantics flags, and capability masks.  
+   - Port Kotlin’s tracing (`NodeChain#trace`, inspector strings) so modifier/focus debugging has feature parity and can be toggled per-layout-node (not just via `COMPOSE_DEBUG_MODIFIERS`).
 5. **Modifier factory + `ModifierState` removal**  
    - Audit every `Modifier` factory to ensure it’s fully node-backed; delete `ModifierState` caches after verifying layout/draw/inspection behavior via tests.  
    - Update docs/examples to emphasize node-backed factories and remove stale ModOp/`ModifierState` guidance.
@@ -229,31 +229,26 @@ Always cross-check behavior against the Kotlin sources under `/media/huge/compos
 
 **Targets:** wifn 5, supports gaps 5–6
 
-1. **Add chain-level helpers that mirror Kotlin (`headToTail`, `tailToHead`, filtered)**
+1. **Adopt the shared traversal helpers everywhere**
 
-   * **Goal:** get rid of hand-rolled parent/child Option-walking at call sites.
+   * **Goal:** now that `ModifierNodeChain` exposes `head_to_tail`, `tail_to_head`, and filtered visitors, every subsystem should stop hand-rolling pointer/`Option` walks.
    * **Actions:**
 
-     * On `ModifierNodeChain`, add:
-
-       * `fn for_each_forward<F>(&self, f: F)`
-       * `fn for_each_forward_with_mask<F>(&self, mask: NodeCapabilities, f: F)`
-       * optionally `fn for_each_backward...`
-     * Implement them using the `ChainPosition` you already set up.
+     * Update modifier locals, semantics extraction, pointer input, and focus scaffolding to call the helpers instead of reimplementing traversal.
+     * Remove bespoke iterators (`draw_nodes`, `pointer_input_nodes`) once the new visitors cover all call sites.
    * **Acceptance:**
 
-     * Semantics, modifier locals, and (later) focus can all call the same traversal helpers.
+     * There is one canonical traversal API and it matches Kotlin’s `headToTail`/`visitAncestors` semantics.
 
-2. **Document the traversal contract**
+2. **Document and enforce the traversal contract**
 
-   * **Goal:** this is where your “parity with Jetpack Compose” actually lives.
+   * **Goal:** codify the guarantees (sentinel head/tail, stable parent/child links, aggregate child sets, capability-filtered visitors) and highlight what’s still missing (delegate stacks).
    * **Actions:**
 
-     * In the md, add “we guarantee sentinel head/tail, stable parent/child, aggregate child set, and filtered traversal helpers.”
-     * Note what you *don’t* yet guarantee (no delegate stacks yet).
+     * Keep this section updated as new helpers land; link directly to Kotlin references (`NodeChain.kt`, `DelegatableNode.kt`) for parity.
+     * Add tests that assert the helpers short-circuit correctly when capability masks are absent.
    * **Acceptance:**
 
-     * Anyone adding a new node kind knows which traversal to call.
+     * Anyone adding a new node kind or runtime feature knows which traversal to call and what it guarantees.
 
 ---
-

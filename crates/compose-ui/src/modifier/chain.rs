@@ -17,6 +17,7 @@ pub struct ModifierChainHandle {
     context: BasicModifierNodeContext,
     resolved: ResolvedModifiers,
     capabilities: NodeCapabilities,
+    aggregate_child_capabilities: NodeCapabilities,
     modifier_locals: ModifierLocalManager,
 }
 
@@ -31,6 +32,7 @@ impl ModifierChainHandle {
         self.chain
             .update_from_slice(modifier.elements(), &mut self.context);
         self.capabilities = self.chain.capabilities();
+        self.aggregate_child_capabilities = self.chain.head().aggregate_child_capabilities();
         self.modifier_locals.sync(&mut self.chain);
         if std::env::var_os("COMPOSE_DEBUG_MODIFIERS").is_some() {
             crate::debug::log_modifier_chain(self.chain());
@@ -46,6 +48,11 @@ impl ModifierChainHandle {
     /// Returns the aggregated capability mask for the reconciled chain.
     pub fn capabilities(&self) -> NodeCapabilities {
         self.capabilities
+    }
+
+    /// Returns the aggregate child capability mask rooted at the sentinel head.
+    pub fn aggregate_child_capabilities(&self) -> NodeCapabilities {
+        self.aggregate_child_capabilities
     }
 
     pub fn has_layout_nodes(&self) -> bool {

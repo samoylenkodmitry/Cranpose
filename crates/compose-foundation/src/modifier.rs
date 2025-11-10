@@ -362,6 +362,11 @@ impl NodeCapabilities {
         self.0
     }
 
+    /// Returns true when no capabilities are set.
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
     /// Returns the capability bit mask required for the given invalidation.
     pub const fn for_invalidation(kind: InvalidationKind) -> Self {
         match kind {
@@ -527,6 +532,46 @@ enum ChainPosition {
     Tail,
     Entry(usize),
 }
+
+#[derive(Clone, Copy)]
+enum TraversalDirection {
+    Forward,
+    Backward,
+}
+
+/// Iterator walking a modifier chain either from head-to-tail or tail-to-head.
+pub struct ModifierChainIter<'a> {
+    next: Option<ModifierChainNodeRef<'a>>,
+    direction: TraversalDirection,
+}
+
+impl<'a> ModifierChainIter<'a> {
+    fn new(start: Option<ModifierChainNodeRef<'a>>, direction: TraversalDirection) -> Self {
+        Self {
+            next: start,
+            direction,
+        }
+    }
+}
+
+impl<'a> Iterator for ModifierChainIter<'a> {
+    type Item = ModifierChainNodeRef<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let current = self.next?;
+        if current.is_sentinel() {
+            self.next = None;
+            return None;
+        }
+        self.next = match self.direction {
+            TraversalDirection::Forward => current.child(),
+            TraversalDirection::Backward => current.parent(),
+        };
+        Some(current)
+    }
+}
+
+impl<'a> std::iter::FusedIterator for ModifierChainIter<'a> {}
 
 #[derive(Clone, Copy, Debug)]
 struct NodeLinks {
@@ -785,6 +830,104 @@ impl ModifierNodeChain {
     /// Returns the sentinel tail reference for traversal.
     pub fn tail(&self) -> ModifierChainNodeRef<'_> {
         self.make_node_ref(ChainPosition::Tail)
+    }
+
+    /// Iterates over the chain from head to tail, skipping sentinels.
+    pub fn head_to_tail(&self) -> ModifierChainIter<'_> {
+        ModifierChainIter::new(self.head().child(), TraversalDirection::Forward)
+    }
+
+    /// Iterates over the chain from tail to head, skipping sentinels.
+    pub fn tail_to_head(&self) -> ModifierChainIter<'_> {
+        ModifierChainIter::new(self.tail().parent(), TraversalDirection::Backward)
+    }
+
+    /// Calls `f` for every node in insertion order.
+    pub fn for_each_forward<F>(&self, mut f: F)
+    where
+        F: FnMut(ModifierChainNodeRef<'_>),
+    {
+        for node in self.head_to_tail() {
+            f(node);
+        }
+    }
+
+    /// Calls `f` for every node containing any capability from `mask`.
+    pub fn for_each_forward_matching<F>(&self, mask: NodeCapabilities, mut f: F)
+    where
+        F: FnMut(ModifierChainNodeRef<'_>),
+    {
+        if mask.is_empty() {
+            self.for_each_forward(f);
+            return;
+        }
+
+        if !self.head().aggregate_child_capabilities().intersects(mask) {
+            return;
+        }
+
+        for node in self.head_to_tail() {
+            if node.kind_set().intersects(mask) {
+                f(node);
+            }
+        }
+    }
+
+    /// Calls `f` for every node in reverse insertion order.
+    pub fn for_each_backward<F>(&self, mut f: F)
+    where
+        F: FnMut(ModifierChainNodeRef<'_>),
+    {
+        for node in self.tail_to_head() {
+            f(node);
+        }
+    }
+
+    /// Calls `f` for every node in reverse order that matches `mask`.
+    pub fn for_each_backward_matching<F>(&self, mask: NodeCapabilities, mut f: F)
+    where
+        F: FnMut(ModifierChainNodeRef<'_>),
+    {
+        if mask.is_empty() {
+            self.for_each_backward(f);
+            return;
+        }
+
+        if !self.head().aggregate_child_capabilities().intersects(mask) {
+            return;
+        }
+
+        for node in self.tail_to_head() {
+            if node.kind_set().intersects(mask) {
+                f(node);
+            }
+        }
+    }
+
+    /// Returns a node reference for the entry at `index`.
+    pub fn node_ref_at(&self, index: usize) -> Option<ModifierChainNodeRef<'_>> {
+        if index >= self.entries.len() {
+            None
+        } else {
+            Some(self.make_node_ref(ChainPosition::Entry(index)))
+        }
+    }
+
+    /// Returns the node reference that owns `node`.
+    pub fn find_node_ref(&self, node: &dyn ModifierNode) -> Option<ModifierChainNodeRef<'_>> {
+        #[inline]
+        fn data_ptr(node: &dyn ModifierNode) -> *const () {
+            node as *const dyn ModifierNode as *const ()
+        }
+
+        let target = data_ptr(node);
+        self.entries.iter().enumerate().find_map(|(index, entry)| {
+            if data_ptr(entry.node.as_ref()) == target {
+                Some(self.make_node_ref(ChainPosition::Entry(index)))
+            } else {
+                None
+            }
+        })
     }
 
     /// Downcasts the node at `index` to the requested type.
@@ -1077,6 +1220,87 @@ impl<'a> ModifierChainNodeRef<'a> {
     /// Returns true if this reference targets either sentinel.
     pub fn is_sentinel(self) -> bool {
         self.is_head() || self.is_tail()
+    }
+
+    /// Returns true if this node has any capability bits present in `mask`.
+    pub fn has_capability(self, mask: NodeCapabilities) -> bool {
+        !mask.is_empty() && self.kind_set().intersects(mask)
+    }
+
+    /// Visits descendant nodes, optionally including `self`, in insertion order.
+    pub fn visit_descendants<F>(self, include_self: bool, mut f: F)
+    where
+        F: FnMut(ModifierChainNodeRef<'a>),
+    {
+        let mut current = if include_self {
+            Some(self)
+        } else {
+            self.child()
+        };
+        while let Some(node) = current {
+            if node.is_tail() {
+                break;
+            }
+            f(node);
+            current = node.child();
+        }
+    }
+
+    /// Visits descendant nodes that match `mask`, short-circuiting when possible.
+    pub fn visit_descendants_matching<F>(self, include_self: bool, mask: NodeCapabilities, mut f: F)
+    where
+        F: FnMut(ModifierChainNodeRef<'a>),
+    {
+        if mask.is_empty() {
+            self.visit_descendants(include_self, f);
+            return;
+        }
+
+        if !self.aggregate_child_capabilities().intersects(mask) {
+            return;
+        }
+
+        self.visit_descendants(include_self, |node| {
+            if node.kind_set().intersects(mask) {
+                f(node);
+            }
+        });
+    }
+
+    /// Visits ancestor nodes up to (but excluding) the sentinel head.
+    pub fn visit_ancestors<F>(self, include_self: bool, mut f: F)
+    where
+        F: FnMut(ModifierChainNodeRef<'a>),
+    {
+        let mut current = if include_self {
+            Some(self)
+        } else {
+            self.parent()
+        };
+        while let Some(node) = current {
+            if node.is_head() {
+                break;
+            }
+            f(node);
+            current = node.parent();
+        }
+    }
+
+    /// Visits ancestor nodes that match `mask`.
+    pub fn visit_ancestors_matching<F>(self, include_self: bool, mask: NodeCapabilities, mut f: F)
+    where
+        F: FnMut(ModifierChainNodeRef<'a>),
+    {
+        if mask.is_empty() {
+            self.visit_ancestors(include_self, f);
+            return;
+        }
+
+        self.visit_ancestors(include_self, |node| {
+            if node.kind_set().intersects(mask) {
+                f(node);
+            }
+        });
     }
 }
 

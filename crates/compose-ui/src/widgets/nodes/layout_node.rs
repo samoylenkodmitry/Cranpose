@@ -150,6 +150,7 @@ pub struct LayoutNode {
     modifier_chain: ModifierChainHandle,
     resolved_modifiers: ResolvedModifiers,
     modifier_capabilities: NodeCapabilities,
+    modifier_child_capabilities: NodeCapabilities,
     pub measure_policy: Rc<dyn MeasurePolicy>,
     pub children: IndexSet<NodeId>,
     cache: LayoutNodeCacheHandles,
@@ -169,6 +170,7 @@ impl LayoutNode {
             modifier_chain: ModifierChainHandle::new(),
             resolved_modifiers: ResolvedModifiers::default(),
             modifier_capabilities: NodeCapabilities::default(),
+            modifier_child_capabilities: NodeCapabilities::default(),
             measure_policy,
             children: IndexSet::new(),
             cache: LayoutNodeCacheHandles::default(),
@@ -195,6 +197,7 @@ impl LayoutNode {
         self.modifier_chain.update(&self.modifier);
         self.resolved_modifiers = self.modifier_chain.resolved_modifiers();
         self.modifier_capabilities = self.modifier_chain.capabilities();
+        self.modifier_child_capabilities = self.modifier_chain.aggregate_child_capabilities();
         let invalidations = self.modifier_chain.take_invalidations();
         self.dispatch_modifier_invalidations(&invalidations);
     }
@@ -294,6 +297,10 @@ impl LayoutNode {
         self.modifier_capabilities
     }
 
+    pub fn modifier_child_capabilities(&self) -> NodeCapabilities {
+        self.modifier_child_capabilities
+    }
+
     pub fn has_layout_modifier_nodes(&self) -> bool {
         self.modifier_capabilities
             .contains(NodeCapabilities::LAYOUT)
@@ -361,6 +368,7 @@ impl Clone for LayoutNode {
             modifier_chain: ModifierChainHandle::new(),
             resolved_modifiers: ResolvedModifiers::default(),
             modifier_capabilities: self.modifier_capabilities,
+            modifier_child_capabilities: self.modifier_child_capabilities,
             measure_policy: self.measure_policy.clone(),
             children: self.children.clone(),
             cache: self.cache.clone(),
@@ -494,6 +502,7 @@ mod tests {
         node.clear_needs_measure();
         node.clear_needs_layout();
         node.modifier_capabilities = NodeCapabilities::DRAW;
+        node.modifier_child_capabilities = node.modifier_capabilities;
 
         node.dispatch_modifier_invalidations(&[InvalidationKind::Layout]);
 
@@ -522,6 +531,7 @@ mod tests {
         node.clear_needs_measure();
         node.clear_needs_layout();
         node.modifier_capabilities = NodeCapabilities::LAYOUT;
+        node.modifier_child_capabilities = node.modifier_capabilities;
 
         node.dispatch_modifier_invalidations(&[InvalidationKind::Layout]);
 
@@ -535,6 +545,7 @@ mod tests {
         node.clear_needs_measure();
         node.clear_needs_layout();
         node.modifier_capabilities = NodeCapabilities::LAYOUT;
+        node.modifier_child_capabilities = node.modifier_capabilities;
 
         node.dispatch_modifier_invalidations(&[InvalidationKind::Draw]);
 
@@ -547,9 +558,21 @@ mod tests {
         node.clear_needs_measure();
         node.clear_needs_layout();
         node.modifier_capabilities = NodeCapabilities::DRAW;
+        node.modifier_child_capabilities = node.modifier_capabilities;
 
         node.dispatch_modifier_invalidations(&[InvalidationKind::Draw]);
 
         assert!(node.needs_layout());
+    }
+
+    #[test]
+    fn modifier_child_capabilities_reflect_chain_head() {
+        let mut node = fresh_node();
+        node.set_modifier(Modifier::padding(4.0));
+        assert!(
+            node.modifier_child_capabilities()
+                .contains(NodeCapabilities::LAYOUT),
+            "padding should introduce layout capability"
+        );
     }
 }

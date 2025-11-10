@@ -1,44 +1,35 @@
-# Next Task: Finish Modifier/NodeChain Parity With Jetpack Compose
+# Next Task: Modifier Local Manager Parity & Ancestor Resolution
 
 ## Context
-`ModifierNodeChain` now owns safe head/tail sentinels, exposes parent/child links, and emits debug dumps via `COMPOSE_DEBUG_MODIFIERS`. Modifier locals and semantics have initial ports (`ModifierLocalKey`, provider/consumer nodes, `Modifier::semantics`, `LayoutNode::semantics_configuration`), and renderers/pointer input consume reconciled node slices. The outstanding parity work is to finish Kotlin’s delegate traversal contract, make modifier locals + semantics behave exactly like Android (including invalidations and ancestor lookups), and delete the remaining `ModifierState` responsibilities.
+`ModifierNodeChain` now mirrors Kotlin’s traversal surface: sentinel head/tail nodes, `head_to_tail` / `tail_to_head` iterators, filtered visitors, and cached `aggregate_child_capabilities` are wired through `ModifierChainHandle` into each `LayoutNode` (`layout_node.modifier_child_capabilities()`). This unlocks ancestor-aware queries, but our modifier-local plumbing still behaves like a single-chain demo:
 
-Our reference remains `/media/huge/composerepo/compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui`, especially:
+- `ModifierLocalManager` only walks the current chain once, immediately invoking consumers without tracking invalidations.
+- Providers/consumers have no notion of parent layout nodes, so locals cannot flow across the tree the way Kotlin’s `ModifierLocalManager` + `DelegatableNode.visitAncestors` allow.
+- `LayoutNode` has no way to mark itself dirty when a provider appears/disappears or when a provider’s value changes, so modifier locals never trigger measure/draw/semantics updates.
 
-- `node/NodeChain.kt`, `node/DelegatableNode.kt`, `node/NodeKind.kt`
-- `modifier/ModifierLocal*`, `semantics/*`, `semantics/SemanticsNode.kt`
-- `Modifier.kt` for inspector/debug dumps and chain tracing
+To move toward Jetpack Compose parity we need to port the Kotlin behavior from `/media/huge/composerepo/compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/modifier/ModifierLocal*` plus the management hooks in `NodeChain.kt` / `DelegatableNode.kt`.
 
 ## Goals
-1. Complete delegate traversal parity: implement Kotlin’s `DelegatableNode` contract, delegate chains, and `aggregateChildKindSet` propagation so ancestor/descendant queries and invalidations match Android 1:1.
-2. Finish modifier-local infrastructure: mirror `ModifierLocalManager`, ancestor lookups (walking parent layout nodes), and provider/consumer invalidations so modifier locals behave exactly like Kotlin’s `modifierLocalProvider/Consumer`.
-3. Rebuild semantics on top of modifier nodes: port `SemanticsModifierNode`, `SemanticsOwner`, and tree extraction so `SemanticsTree` no longer relies on `RuntimeNodeMetadata`.
-4. Expand diagnostics: add Kotlin-style `Modifier.toString()`, chain tracing (`NodeChain#trace` equivalent), and debug hooks that print delegate depth, capability masks, and modifier-local/semantics state.
-5. Remove the remaining `ModifierState` caches after all public factories are node-backed and the runtime relies solely on reconciled node chains.
+1. Implement a real `ModifierLocalManager` that tracks provider registration, consumer dependencies, and invalidation scopes just like Kotlin’s `ModifierLocalManager`.
+2. Allow modifier-local consumers to resolve values by walking ancestor layout nodes, using the cached `modifier_child_capabilities` mask to short-circuit when no providers exist.
+3. Bubble provider/consumer insert/remove/update events back to `LayoutNode` so relevant dirty flags (layout, draw, semantics) flip when modifier locals change.
 
 ## Suggested Steps
-1. **Delegate + traversal parity**  
-   - Mirror `androidx.compose.ui.node.DelegatableNode`/`DelegatingNode`, including delegate chains, `node.parent/child`, and `aggregateChildKindSet` updates while diffing.  
-   - Port Kotlin’s traversal helpers (`headToTail`, `tailToHead`, `visitAncestors`, `visitChildren`) and add exhaustive tests in `crates/compose-foundation/src/tests/modifier_tests.rs`.  
-   - Ensure `LayoutNode` caches aggregate capability bits so ancestor lookups (semantics, modifier locals, focus) can short-circuit identical to Android.
-2. **Modifier locals**  
-   - Implement a `ModifierLocalManager` that tracks provider insert/remove/update events, mirroring `ModifierLocalManager.kt`. Hook it into `LayoutNode` so consumers invalidate when upstream values change.  
-   - Update provider/consumer nodes to walk parent layout nodes when resolving values (use Kotlin’s `visitAncestors` semantics).  
-   - Add parity tests based on `ModifierLocalTest.kt`, covering sibling/ancestor lookups, inter-layout propagation, and invalidation behavior.
-3. **Semantics stack**  
-   - Port `SemanticsModifierNode`, `SemanticsOwner`, and tree construction from Kotlin’s `semantics/*`. Replace `RuntimeNodeMetadata` semantics fields with direct traversal of modifier nodes.  
-   - Wire semantics invalidations through modifier nodes and layout nodes so accessibility/focus layers can listen for changes.  
-   - Mirror Android tests (e.g., clickable semantics, custom properties, merged configurations) under `crates/compose-ui/src/tests`.
-4. **Diagnostics + tooling**  
-   - Implement Kotlin-style `Modifier.toString()` / inspector strings (including delegate depth and modifier-local values), add `compose_ui::debug::trace_modifier_chain`, and surface capability masks per node.  
-   - Ensure tracing respects `COMPOSE_DEBUG_MODIFIERS` and can be toggled per layout node for future focus/focusRequester debugging.
-5. **ModifierState removal**  
-   - Audit every modifier factory; migrate any remaining value-based helpers to node-backed implementations.  
-   - Delete `ModifierState` caches once parity tests confirm layout/draw/inspector behavior, and update docs/examples to drop references to the legacy ModOp system.
+1. **Manager data model**
+   - Port the concepts from `ModifierLocalManager.kt`: maintain maps of providers by `ModifierLocalId`, keep weak handles (or `NodeId` references) to consumers, and produce an `InvalidationKind`/dirty flag list when a provider changes.
+   - Update `ModifierChainHandle::update` to receive the invalidation list from the manager (e.g. `manager.sync(&mut chain)` → `ModifierLocalSyncResult { consumers_to_invalidate, requery }`).
+2. **Consumer resolution + ancestor walk**
+   - Add a method like `ModifierLocalManager::resolve(key, chain, parent_lookup)` that first checks providers in the current chain (using the new traversal helpers) and otherwise calls a closure supplied by `LayoutNode` to walk parent chains.
+   - When notifying consumers, pass a scope that defers reads until the consumer re-runs, mirroring Kotlin’s `ModifierLocalReadScope`.
+3. **LayoutNode integration**
+   - Store the per-node manager or, at minimum, receive invalidation results from `ModifierChainHandle` and flip `needs_measure`/`needs_layout`/semantics-dirty flags accordingly.
+   - Expose a callback on `LayoutNode` (or via `ModifierChainHandle`) that knows how to walk parent nodes using `modifier_child_capabilities` to prune branches (parity with `DelegatableNode.visitAncestors`).
+4. **Testing**
+   - Add Rust tests mirroring scenarios from `ModifierLocalTest.kt`: intra-chain overrides, ancestor lookup across layout boundaries, provider removal invalidating children, etc.
+   - Ensure tests cover capability short-circuiting (no ancestor walk when `modifier_child_capabilities` lacks `MODIFIER_LOCALS`).
 
 ## Definition of Done
-- `ModifierNodeChain` exposes delegate traversal helpers and `aggregateChildKindSet` parity with Kotlin; ancestor/descendant queries and keyed diffing behave identically to `NodeChain.kt`.
-- Modifier locals: providers/consumers, manager, invalidations, and ancestor lookups match Kotlin behavior, with tests covering intra-/inter-layout scenarios.
-- Semantics: modifier nodes build the semantics tree (no `RuntimeNodeMetadata` fallback), expose parity actions/configurations, and pass new tests mirroring Android’s suite.
-- Diagnostics: `Modifier::to_string()`/`Debug` output matches Kotlin’s formatting, `log_modifier_chain` (and new tracing helpers) print delegate/capability/modifier-local info, and can be toggled via env flags.
-- `ModifierState` is removed from the runtime path; all public factories are node-backed, and renderers/layout rely solely on reconciled node chains. Workspace `cargo test` (plus targeted suites such as `cargo test -p compose-ui`) remains green.
+- `ModifierLocalManager` persists provider state, tracks consumers, and surfaces invalidation info instead of immediately invoking callbacks.
+- Consumers can observe providers defined on ancestor layout nodes; lookups short-circuit when `modifier_child_capabilities()` shows no modifier-local capability above.
+- Changing a provider’s value (or removing/adding one) marks the owning `LayoutNode` dirty in the same way Kotlin does (layout vs draw vs semantics as appropriate).
+- New tests under `crates/compose-ui` (and/or `compose-foundation`) cover sibling overrides, ancestor propagation, and invalidations; they pass alongside `cargo test`.
