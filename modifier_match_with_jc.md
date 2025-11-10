@@ -63,3 +63,197 @@ Goal: match Jetpack Compose’s `Modifier` API surface and `Modifier.Node` runti
 | Semantics | `semantics/*`, `SemanticsNode.kt` | `crates/compose-ui/src/semantics` (to be ported) |
 
 Always cross-check behavior against the Kotlin sources under `/media/huge/composerepo/compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui` to ensure parity.
+
+## Roadmap: Closing Runtime/Parity Gaps
+
+### Phase 1 — Stabilize “where does resolved data come from?”
+
+**Targets:** gap 3, shortcuts 1, wifn 1–3
+
+1. **Centralize resolved-modifier computation**
+
+   * **Goal:** resolved data is computed exactly once per layout-owning thing (`LayoutNode`, `SubcomposeLayoutNode`), never ad-hoc.
+   * **Actions:**
+
+     * Keep `LayoutNode`’s current `modifier_chain.update(...)` + `resolved_modifiers` as the **source of truth**.
+     * Make `SubcomposeLayoutNodeInner` do the same (it already does, just confirm it mirrors the layout node path).
+     * Mark `Modifier::resolved_modifiers()` as “helper/debug-only” and hunt down any call sites in layout/measure/text that still use it.
+   * **Acceptance:**
+
+     * No hot path calls `Modifier::resolved_modifiers()` directly.
+     * Renderer and layout both consume the snapshot coming from `LayoutNodeData`.
+
+2. **Make all layout-tree builders provide the 3-part node data**
+
+   * **Goal:** every constructed `LayoutNodeData` has
+
+     ```rust
+     LayoutNodeData::new(
+       modifier,
+       resolved_modifiers,
+       modifier_slices,
+       kind,
+     )
+     ```
+   * **Actions:**
+
+     * Audit places that build layout trees (debug tests, runtime metadata trees, any virtual/layout wrappers) and update them to call the new constructor.
+     * Add a tiny test that builds a minimal layout tree and asserts `modifier_slices` is non-None / default.
+   * **Acceptance:**
+
+     * `cargo check` over ui + both renderers succeeds after the constructor change.
+     * No `LayoutNodeData { modifier, kind }` left.
+
+3. **Make resolved modifiers fully node-first**
+
+   * **Goal:** stop “build from legacy ModifierState and then patch from nodes.”
+   * **Actions:**
+
+     * Move the logic from `ModifierChainHandle::compute_resolved(...)` so it **starts** from the chain (layout nodes, draw nodes, shape nodes) and only *optionally* consults legacy fields.
+     * Keep the current order for now (padding → background → shape → graphics layer) but document “this is 100% node-backed once all factories are node-backed.”
+   * **Acceptance:**
+
+     * The resolved struct can be explained using only “what nodes were in the chain.”
+
+---
+
+### Phase 2 — Modifier locals that actually do something
+
+**Targets:** gap 5, shortcut 3, wifn 4
+
+1. **Wire `ModifierLocalManager` to layout nodes**
+
+   * **Goal:** provider changes cause consumer invalidations, including across layout boundaries.
+   * **Actions:**
+
+     * When `ModifierChainHandle` calls `modifier_locals.sync(...)`, have that return “here are the consumers that must be invalidated.”
+     * Bubble that list to the owning `LayoutNode` so it can mark itself dirty (layout or semantics depending on what the local influences).
+   * **Acceptance:**
+
+     * A provider on parent → change value → child consumer runs its closure again in the next frame.
+
+2. **Add ancestor walking for locals**
+
+   * **Goal:** match Kotlin’s “walk parent layout nodes” behaviour.
+   * **Actions:**
+
+     * Expose a helper on the chain like `resolve_local(key)` that first checks the current chain, then a callback to walk parent layout nodes.
+     * On the layout side, provide that parent-walk callback.
+   * **Acceptance:**
+
+     * A consumer in a grandchild can see a provider in an ancestor layout node.
+
+3. **Make debug toggling less global**
+
+   * **Goal:** avoid “env var = everything logs.”
+   * **Actions:**
+
+     * Keep `COMPOSE_DEBUG_MODIFIERS` for now, but add a per-node switch the layout node can set (`layout_node.set_debug_modifiers(true)`).
+     * Route chain logging through that.
+   * **Acceptance:**
+
+     * You can turn on modifier-debug for one node without spamming the whole tree.
+
+---
+
+### Phase 3 — Semantics on top of modifier nodes
+
+**Targets:** gap 6, shortcuts 4, 5, wifn 5
+
+1. **Unify semantics extraction**
+
+   * **Goal:** stop mixing “runtime node metadata” semantics with “modifier-node” semantics.
+   * **Actions:**
+
+     * In `LayoutNode::semantics_configuration()`, you already gather from modifier nodes — make the tree builder prefer this over the old metadata fields.
+     * Keep the metadata path only for widgets that don’t have modifier nodes yet (like your current Button shim).
+   * **Acceptance:**
+
+     * A node with `.semantics { is_clickable = true }` ends up clickable in the built semantics tree without needing `RuntimeNodeMetadata` to say so.
+
+2. **Respect capability-based traversal**
+
+   * **Goal:** don’t walk the whole chain if `aggregate_child_capabilities` says “nothing semantic down here.”
+   * **Actions:**
+
+     * Add tiny traversal helpers on `ModifierNodeChain`:
+
+       * `visit_from_head(kind_mask, f)`
+       * `visit_ancestors(from, kind_mask, f)`
+     * Use those in semantics extraction so you only look where SEMANTICS is present.
+   * **Acceptance:**
+
+     * Semantics building only touches entries that have the semantics bit (or have it in children).
+
+3. **Separate draw vs layout invalidations from semantics**
+
+   * **Goal:** current invalidation routing in `LayoutNode` is coarse.
+   * **Actions:**
+
+     * When the chain reports an invalidation of kind `Semantics`, do **not** call `mark_needs_layout()`.
+     * Instead, mark a “semantics dirty” flag, or route to whatever layer builds the semantics tree.
+   * **Acceptance:**
+
+     * Changing only semantics does not trigger a layout pass.
+
+---
+
+### Phase 4 — Clean up the “shortcut” APIs on nodes
+
+**Targets:** shortcuts 4, 5
+
+1. **Replace per-node `as_*_node` with mask-driven dispatch**
+
+   * **Goal:** not every user node has to implement 4 optional methods.
+   * **Actions:**
+
+     * Where you iterate now with `draw_nodes()`, `pointer_input_nodes()`, switch to: use the chain entries’ capability bits as the primary filter, and only downcast the node once.
+     * Keep the `as_*` methods for now for built-ins, but don’t require third parties to override them.
+   * **Acceptance:**
+
+     * A node with the DRAW capability but no `as_draw_node` still gets visited.
+
+2. **Make invalidation routing match the mask**
+
+   * **Goal:** stop doing “draw → mark_needs_layout.”
+   * **Actions:**
+
+     * Add a `mark_needs_redraw()` or equivalent on the node/renderer path and call that for DRAW invalidations.
+   * **Acceptance:**
+
+     * DRAW-only updates don’t force layout.
+
+---
+
+### Phase 5 — Finish traversal utilities (the Kotlin-like part)
+
+**Targets:** wifn 5, supports gaps 5–6
+
+1. **Add chain-level helpers that mirror Kotlin (`headToTail`, `tailToHead`, filtered)**
+
+   * **Goal:** get rid of hand-rolled parent/child Option-walking at call sites.
+   * **Actions:**
+
+     * On `ModifierNodeChain`, add:
+
+       * `fn for_each_forward<F>(&self, f: F)`
+       * `fn for_each_forward_with_mask<F>(&self, mask: NodeCapabilities, f: F)`
+       * optionally `fn for_each_backward...`
+     * Implement them using the `ChainPosition` you already set up.
+   * **Acceptance:**
+
+     * Semantics, modifier locals, and (later) focus can all call the same traversal helpers.
+
+2. **Document the traversal contract**
+
+   * **Goal:** this is where your “parity with Jetpack Compose” actually lives.
+   * **Actions:**
+
+     * In the md, add “we guarantee sentinel head/tail, stable parent/child, aggregate child set, and filtered traversal helpers.”
+     * Note what you *don’t* yet guarantee (no delegate stacks yet).
+   * **Acceptance:**
+
+     * Anyone adding a new node kind knows which traversal to call.
+
+---
+
