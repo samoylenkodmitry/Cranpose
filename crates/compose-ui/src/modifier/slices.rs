@@ -1,7 +1,7 @@
 use std::fmt;
 use std::rc::Rc;
 
-use compose_foundation::{ModifierNode, ModifierNodeChain, PointerEvent};
+use compose_foundation::{ModifierNode, ModifierNodeChain, NodeCapabilities, PointerEvent};
 
 use crate::draw::DrawCommand;
 use crate::modifier::Modifier;
@@ -83,27 +83,40 @@ impl fmt::Debug for ModifierNodeSlices {
 pub fn collect_modifier_slices(chain: &ModifierNodeChain) -> ModifierNodeSlices {
     let mut slices = ModifierNodeSlices::default();
 
-    for node in chain.pointer_input_nodes() {
-        if let Some(handler) = node.pointer_input_handler() {
-            slices.pointer_inputs.push(handler);
-        }
+    if chain.has_capability(NodeCapabilities::POINTER_INPUT) {
+        chain.for_each_forward_matching(NodeCapabilities::POINTER_INPUT, |node_ref| {
+            let Some(node) = node_ref.node() else {
+                return;
+            };
 
-        let modifier_node = node as &dyn ModifierNode;
-        if let Some(clickable) = modifier_node.as_any().downcast_ref::<ClickableNode>() {
-            slices.click_handlers.push(clickable.handler());
-        }
+            if let Some(handler) = node
+                .as_pointer_input_node()
+                .and_then(|n| n.pointer_input_handler())
+            {
+                slices.pointer_inputs.push(handler);
+            }
+
+            if let Some(clickable) = node.as_any().downcast_ref::<ClickableNode>() {
+                slices.click_handlers.push(clickable.handler());
+            }
+        });
     }
 
-    for node in chain.draw_nodes() {
-        let modifier_node = node as &dyn ModifierNode;
-        if let Some(commands) = modifier_node.as_any().downcast_ref::<DrawCommandNode>() {
-            slices
-                .draw_commands
-                .extend(commands.commands().iter().cloned());
-        }
-        if modifier_node.as_any().is::<ClipToBoundsNode>() {
-            slices.clip_to_bounds = true;
-        }
+    if chain.has_capability(NodeCapabilities::DRAW) {
+        chain.for_each_forward_matching(NodeCapabilities::DRAW, |node_ref| {
+            let Some(node) = node_ref.node() else {
+                return;
+            };
+            let any = node.as_any();
+            if let Some(commands) = any.downcast_ref::<DrawCommandNode>() {
+                slices
+                    .draw_commands
+                    .extend(commands.commands().iter().cloned());
+            }
+            if any.is::<ClipToBoundsNode>() {
+                slices.clip_to_bounds = true;
+            }
+        });
     }
 
     slices

@@ -501,7 +501,7 @@ impl ModifierLocalManager {
 
     pub fn sync(
         &mut self,
-        chain: &mut ModifierNodeChain,
+        chain: &ModifierNodeChain,
         ancestor_lookup: &mut ModifierLocalAncestorResolver<'_>,
     ) -> Vec<InvalidationKind> {
         if !chain.has_capability(NodeCapabilities::MODIFIER_LOCALS) {
@@ -514,19 +514,20 @@ impl ModifierLocalManager {
         let mut seen_consumers = HashSet::new();
         let mut invalidations = Vec::new();
 
-        chain.visit_nodes_mut(|node, capabilities| {
-            if !capabilities.contains(NodeCapabilities::MODIFIER_LOCALS) {
+        chain.for_each_forward_matching(NodeCapabilities::MODIFIER_LOCALS, |node_ref| {
+            let Some(node) = node_ref.node() else {
                 return;
-            }
+            };
+
             if let Some(provider) = node.as_any().downcast_ref::<ModifierLocalProviderNode>() {
                 providers.insert(
                     provider.token().id(),
                     ProviderRecord::new(provider.value(), provider.version()),
                 );
-            } else if let Some(consumer) = node
-                .as_any_mut()
-                .downcast_mut::<ModifierLocalConsumerNode>()
-            {
+                return;
+            }
+
+            if let Some(consumer) = node.as_any().downcast_ref::<ModifierLocalConsumerNode>() {
                 let id = consumer.id();
                 seen_consumers.insert(id);
                 let needs_update = self
@@ -534,20 +535,19 @@ impl ModifierLocalManager {
                     .get(&id)
                     .map(|state| state.needs_update(&providers, ancestor_lookup))
                     .unwrap_or(true);
-                if needs_update {
-                    let mut dependencies = Vec::new();
-                    {
-                        let mut scope = ModifierLocalReadScope::new(
-                            &providers,
-                            ancestor_lookup,
-                            &mut dependencies,
-                        );
-                        consumer.notify(&mut scope);
-                    }
-                    self.consumers.insert(id, ConsumerState::new(dependencies));
-                    if !invalidations.contains(&InvalidationKind::Layout) {
-                        invalidations.push(InvalidationKind::Layout);
-                    }
+                if !needs_update {
+                    return;
+                }
+
+                let mut dependencies = Vec::new();
+                {
+                    let mut scope =
+                        ModifierLocalReadScope::new(&providers, ancestor_lookup, &mut dependencies);
+                    consumer.notify(&mut scope);
+                }
+                self.consumers.insert(id, ConsumerState::new(dependencies));
+                if !invalidations.contains(&InvalidationKind::Layout) {
+                    invalidations.push(InvalidationKind::Layout);
                 }
             }
         });
@@ -566,5 +566,234 @@ impl ModifierLocalManager {
                 ModifierLocalSource::Chain,
             )
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use compose_foundation::{modifier_element, BasicModifierNodeContext, ModifierNodeChain};
+    use std::cell::RefCell;
+
+    #[derive(Clone)]
+    struct DelegatingProviderElement {
+        token: ModifierLocalToken,
+        factory: Rc<dyn Fn() -> Box<dyn Any>>,
+    }
+
+    impl DelegatingProviderElement {
+        fn new<T: 'static + Clone>(key: ModifierLocalKey<T>, value: T) -> Self {
+            let stored = Rc::new(value);
+            let factory = Rc::new({
+                let stored = stored.clone();
+                move || -> Box<dyn Any> { Box::new((stored.as_ref()).clone()) }
+            });
+            Self {
+                token: key.token(),
+                factory,
+            }
+        }
+    }
+
+    impl fmt::Debug for DelegatingProviderElement {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("DelegatingProviderElement")
+        }
+    }
+
+    impl PartialEq for DelegatingProviderElement {
+        fn eq(&self, other: &Self) -> bool {
+            self.token == other.token && Rc::ptr_eq(&self.factory, &other.factory)
+        }
+    }
+
+    impl Eq for DelegatingProviderElement {}
+
+    impl Hash for DelegatingProviderElement {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.token.hash(state);
+            Rc::as_ptr(&self.factory).hash(state);
+        }
+    }
+
+    struct DelegatingProviderNode {
+        state: NodeState,
+        delegate: ModifierLocalProviderNode,
+    }
+
+    impl DelegatingProviderNode {
+        fn new(token: ModifierLocalToken, factory: Rc<dyn Fn() -> Box<dyn Any>>) -> Self {
+            let mut node = Self {
+                state: NodeState::new(),
+                delegate: ModifierLocalProviderNode::new(token, factory),
+            };
+            node.state
+                .set_capabilities(NodeCapabilities::MODIFIER_LOCALS);
+            node.delegate
+                .node_state()
+                .set_capabilities(NodeCapabilities::MODIFIER_LOCALS);
+            node
+        }
+    }
+
+    impl DelegatableNode for DelegatingProviderNode {
+        fn node_state(&self) -> &NodeState {
+            &self.state
+        }
+    }
+
+    impl ModifierNode for DelegatingProviderNode {
+        fn for_each_delegate<'a>(&'a self, visitor: &mut dyn FnMut(&'a dyn ModifierNode)) {
+            visitor(&self.delegate);
+        }
+
+        fn for_each_delegate_mut<'a>(
+            &'a mut self,
+            visitor: &mut dyn FnMut(&'a mut dyn ModifierNode),
+        ) {
+            visitor(&mut self.delegate);
+        }
+    }
+
+    #[derive(Clone)]
+    struct DelegatingConsumerElement {
+        callback: Rc<dyn for<'a> Fn(&mut ModifierLocalReadScope<'a>)>,
+    }
+
+    impl DelegatingConsumerElement {
+        fn new(callback: Rc<dyn for<'a> Fn(&mut ModifierLocalReadScope<'a>)>) -> Self {
+            Self { callback }
+        }
+    }
+
+    impl fmt::Debug for DelegatingConsumerElement {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("DelegatingConsumerElement")
+        }
+    }
+
+    impl PartialEq for DelegatingConsumerElement {
+        fn eq(&self, other: &Self) -> bool {
+            Rc::ptr_eq(&self.callback, &other.callback)
+        }
+    }
+
+    impl Eq for DelegatingConsumerElement {}
+
+    impl Hash for DelegatingConsumerElement {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            Rc::as_ptr(&self.callback).hash(state);
+        }
+    }
+
+    struct DelegatingConsumerNode {
+        state: NodeState,
+        delegate: ModifierLocalConsumerNode,
+    }
+
+    impl DelegatingConsumerNode {
+        fn new(callback: Rc<dyn for<'a> Fn(&mut ModifierLocalReadScope<'a>)>) -> Self {
+            let mut node = Self {
+                state: NodeState::new(),
+                delegate: ModifierLocalConsumerNode::new(callback),
+            };
+            node.state
+                .set_capabilities(NodeCapabilities::MODIFIER_LOCALS);
+            node.delegate
+                .node_state()
+                .set_capabilities(NodeCapabilities::MODIFIER_LOCALS);
+            node
+        }
+    }
+
+    impl DelegatableNode for DelegatingConsumerNode {
+        fn node_state(&self) -> &NodeState {
+            &self.state
+        }
+    }
+
+    impl ModifierNode for DelegatingConsumerNode {
+        fn for_each_delegate<'a>(&'a self, visitor: &mut dyn FnMut(&'a dyn ModifierNode)) {
+            visitor(&self.delegate);
+        }
+
+        fn for_each_delegate_mut<'a>(
+            &'a mut self,
+            visitor: &mut dyn FnMut(&'a mut dyn ModifierNode),
+        ) {
+            visitor(&mut self.delegate);
+        }
+    }
+
+    impl ModifierNodeElement for DelegatingProviderElement {
+        type Node = DelegatingProviderNode;
+
+        fn create(&self) -> Self::Node {
+            DelegatingProviderNode::new(self.token, self.factory.clone())
+        }
+
+        fn update(&self, node: &mut Self::Node) {
+            node.delegate.set_factory(self.factory.clone());
+        }
+
+        fn capabilities(&self) -> NodeCapabilities {
+            NodeCapabilities::MODIFIER_LOCALS
+        }
+    }
+
+    impl ModifierNodeElement for DelegatingConsumerElement {
+        type Node = DelegatingConsumerNode;
+
+        fn create(&self) -> Self::Node {
+            DelegatingConsumerNode::new(self.callback.clone())
+        }
+
+        fn update(&self, node: &mut Self::Node) {
+            node.delegate.callback = self.callback.clone();
+        }
+
+        fn capabilities(&self) -> NodeCapabilities {
+            NodeCapabilities::MODIFIER_LOCALS
+        }
+    }
+
+    #[test]
+    fn modifier_local_manager_visits_delegated_nodes() {
+        let key = modifier_local_of(|| 0i32);
+        let observed = Rc::new(RefCell::new(Vec::new()));
+        let key_for_consumer = key.clone();
+        let consumer_callback: Rc<dyn for<'a> Fn(&mut ModifierLocalReadScope<'a>)> = {
+            let observed = observed.clone();
+            Rc::new(move |scope| {
+                observed.borrow_mut().push(*scope.get(&key_for_consumer));
+            })
+        };
+
+        let elements = vec![
+            modifier_element(DelegatingProviderElement::new(key.clone(), 42)),
+            modifier_element(DelegatingConsumerElement::new(consumer_callback)),
+        ];
+
+        let mut chain = ModifierNodeChain::new();
+        let mut context = BasicModifierNodeContext::new();
+        chain.update_from_slice(&elements, &mut context);
+
+        let mut manager = ModifierLocalManager::new();
+        let mut ancestor_lookup = |_token: ModifierLocalToken| None;
+        let invalidations = manager.sync(&chain, &mut ancestor_lookup);
+        assert_eq!(invalidations, vec![InvalidationKind::Layout]);
+        assert_eq!(observed.borrow().as_slice(), &[42]);
+
+        let resolved = manager
+            .resolve(key.token())
+            .expect("provider should be registered");
+        assert_eq!(
+            *resolved
+                .value()
+                .downcast_ref::<i32>()
+                .expect("modifier local type mismatch"),
+            42
+        );
+        assert_eq!(resolved.source(), ModifierLocalSource::Chain);
     }
 }

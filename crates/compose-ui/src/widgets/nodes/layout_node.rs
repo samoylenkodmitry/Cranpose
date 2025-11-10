@@ -7,9 +7,7 @@ use crate::{
     },
 };
 use compose_core::{Node, NodeId};
-use compose_foundation::{
-    DrawModifierNode, InvalidationKind, NodeCapabilities, PointerInputNode, SemanticsConfiguration,
-};
+use compose_foundation::{InvalidationKind, NodeCapabilities, SemanticsConfiguration};
 use compose_ui_layout::{Constraints, MeasurePolicy};
 use indexmap::IndexSet;
 use std::cell::{Cell, RefCell};
@@ -362,14 +360,6 @@ impl LayoutNode {
         }
     }
 
-    pub fn draw_nodes(&self) -> impl Iterator<Item = &dyn DrawModifierNode> {
-        self.modifier_chain.chain().draw_nodes()
-    }
-
-    pub fn pointer_input_nodes(&self) -> impl Iterator<Item = &dyn PointerInputNode> {
-        self.modifier_chain.chain().pointer_input_nodes()
-    }
-
     pub fn modifier_slices_snapshot(&self) -> ModifierNodeSlices {
         collect_modifier_slices(self.modifier_chain.chain())
     }
@@ -380,12 +370,17 @@ impl LayoutNode {
         }
         let mut config = SemanticsConfiguration::default();
         let mut has_semantics = false;
-        for node in self.modifier_chain.chain().semantics_nodes() {
-            if let Some(sem_node) = node.as_semantics_node() {
-                has_semantics = true;
-                sem_node.merge_semantics(&mut config);
-            }
-        }
+        self.modifier_chain.chain().for_each_forward_matching(
+            NodeCapabilities::SEMANTICS,
+            |node_ref| {
+                if let Some(node) = node_ref.node() {
+                    if let Some(sem_node) = node.as_semantics_node() {
+                        has_semantics = true;
+                        sem_node.merge_semantics(&mut config);
+                    }
+                }
+            },
+        );
         if has_semantics {
             Some(config)
         } else {

@@ -3,6 +3,16 @@ use std::cell::{Cell, RefCell};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
+fn count_nodes_with_capability(chain: &ModifierNodeChain, capability: NodeCapabilities) -> usize {
+    let mut count = 0;
+    chain.for_each_forward_matching(capability, |node_ref| {
+        if node_ref.node().is_some() {
+            count += 1;
+        }
+    });
+    count
+}
+
 #[derive(Clone, Default)]
 struct TestContext {
     invalidations: Rc<RefCell<Vec<InvalidationKind>>>,
@@ -752,6 +762,183 @@ impl ModifierNodeElement for DelegatingElement {
     }
 }
 
+#[derive(Debug)]
+struct DelegatedSemanticsNode {
+    label: &'static str,
+    state: NodeState,
+}
+
+impl DelegatedSemanticsNode {
+    fn new(label: &'static str) -> Self {
+        let mut node = Self {
+            label,
+            state: NodeState::new(),
+        };
+        node.state.set_capabilities(NodeCapabilities::SEMANTICS);
+        node
+    }
+}
+
+impl DelegatableNode for DelegatedSemanticsNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
+impl ModifierNode for DelegatedSemanticsNode {
+    fn as_semantics_node(&self) -> Option<&dyn SemanticsNode> {
+        Some(self)
+    }
+}
+
+impl SemanticsNode for DelegatedSemanticsNode {
+    fn merge_semantics(&self, config: &mut SemanticsConfiguration) {
+        config.content_description = Some(self.label.to_string());
+        config.is_clickable = true;
+    }
+}
+
+#[derive(Debug)]
+struct SemanticsDelegatingHostNode {
+    state: NodeState,
+    delegate: DelegatedSemanticsNode,
+}
+
+impl SemanticsDelegatingHostNode {
+    fn new(_host_id: &'static str, label: &'static str) -> Self {
+        let mut node = Self {
+            state: NodeState::new(),
+            delegate: DelegatedSemanticsNode::new(label),
+        };
+        node.state
+            .set_capabilities(NodeCapabilities::LAYOUT | NodeCapabilities::MODIFIER_LOCALS);
+        node.state.set_parent_link(None);
+        node.state.set_child_link(None);
+        node
+    }
+}
+
+impl DelegatableNode for SemanticsDelegatingHostNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
+impl ModifierNode for SemanticsDelegatingHostNode {
+    fn for_each_delegate<'a>(&'a self, visitor: &mut dyn FnMut(&'a dyn ModifierNode)) {
+        visitor(&self.delegate);
+    }
+
+    fn for_each_delegate_mut<'a>(&'a mut self, visitor: &mut dyn FnMut(&'a mut dyn ModifierNode)) {
+        visitor(&mut self.delegate);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SemanticsDelegatingElement {
+    host_id: &'static str,
+    label: &'static str,
+}
+
+impl ModifierNodeElement for SemanticsDelegatingElement {
+    type Node = SemanticsDelegatingHostNode;
+
+    fn create(&self) -> Self::Node {
+        SemanticsDelegatingHostNode::new(self.host_id, self.label)
+    }
+
+    fn update(&self, _node: &mut Self::Node) {}
+
+    fn capabilities(&self) -> NodeCapabilities {
+        NodeCapabilities::LAYOUT
+    }
+}
+
+#[derive(Debug)]
+struct DelegatedPointerNode {
+    label: &'static str,
+    state: NodeState,
+}
+
+impl DelegatedPointerNode {
+    fn new(label: &'static str) -> Self {
+        let mut node = Self {
+            label,
+            state: NodeState::new(),
+        };
+        node.state.set_capabilities(NodeCapabilities::POINTER_INPUT);
+        node
+    }
+}
+
+impl DelegatableNode for DelegatedPointerNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
+impl ModifierNode for DelegatedPointerNode {
+    fn as_pointer_input_node(&self) -> Option<&dyn PointerInputNode> {
+        Some(self)
+    }
+}
+
+impl PointerInputNode for DelegatedPointerNode {}
+
+#[derive(Debug)]
+struct PointerDelegatingHostNode {
+    state: NodeState,
+    delegate: DelegatedPointerNode,
+}
+
+impl PointerDelegatingHostNode {
+    fn new(_host_id: &'static str, label: &'static str) -> Self {
+        let mut node = Self {
+            state: NodeState::new(),
+            delegate: DelegatedPointerNode::new(label),
+        };
+        node.state
+            .set_capabilities(NodeCapabilities::LAYOUT | NodeCapabilities::MODIFIER_LOCALS);
+        node
+    }
+}
+
+impl DelegatableNode for PointerDelegatingHostNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
+impl ModifierNode for PointerDelegatingHostNode {
+    fn for_each_delegate<'a>(&'a self, visitor: &mut dyn FnMut(&'a dyn ModifierNode)) {
+        visitor(&self.delegate);
+    }
+
+    fn for_each_delegate_mut<'a>(&'a mut self, visitor: &mut dyn FnMut(&'a mut dyn ModifierNode)) {
+        visitor(&mut self.delegate);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct PointerDelegatingElement {
+    host_id: &'static str,
+    label: &'static str,
+}
+
+impl ModifierNodeElement for PointerDelegatingElement {
+    type Node = PointerDelegatingHostNode;
+
+    fn create(&self) -> Self::Node {
+        PointerDelegatingHostNode::new(self.host_id, self.label)
+    }
+
+    fn update(&self, _node: &mut Self::Node) {}
+
+    fn capabilities(&self) -> NodeCapabilities {
+        NodeCapabilities::LAYOUT
+    }
+}
+
 #[test]
 fn chain_tracks_node_capabilities() {
     let mut chain = ModifierNodeChain::new();
@@ -774,10 +961,22 @@ fn chain_tracks_node_capabilities() {
     );
 
     // Verify we can iterate over layout and draw nodes separately
-    assert_eq!(chain.layout_nodes().count(), 1);
-    assert_eq!(chain.draw_nodes().count(), 1);
-    assert_eq!(chain.pointer_input_nodes().count(), 0);
-    assert_eq!(chain.semantics_nodes().count(), 0);
+    assert_eq!(
+        count_nodes_with_capability(&chain, NodeCapabilities::LAYOUT),
+        1
+    );
+    assert_eq!(
+        count_nodes_with_capability(&chain, NodeCapabilities::DRAW),
+        1
+    );
+    assert_eq!(
+        count_nodes_with_capability(&chain, NodeCapabilities::POINTER_INPUT),
+        0
+    );
+    assert_eq!(
+        count_nodes_with_capability(&chain, NodeCapabilities::SEMANTICS),
+        0
+    );
 }
 
 #[test]
@@ -921,6 +1120,88 @@ fn delegate_capabilities_propagate() {
         }
     });
     assert_eq!(draw_nodes, 1, "expected delegated draw node to be visited");
+}
+
+#[test]
+fn semantics_delegates_are_visited_by_forward_matching() {
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+    let elements = vec![modifier_element(SemanticsDelegatingElement {
+        host_id: "host",
+        label: "delegate",
+    })];
+    chain.update_from_slice(&elements, &mut context);
+
+    assert!(
+        chain.capabilities().contains(NodeCapabilities::SEMANTICS),
+        "semantics capability should propagate from delegate"
+    );
+
+    let mut visits = 0;
+    chain.for_each_forward_matching(NodeCapabilities::SEMANTICS, |node_ref| {
+        if node_ref
+            .node()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<DelegatedSemanticsNode>()
+            .is_some()
+        {
+            visits += 1;
+        }
+    });
+    assert_eq!(visits, 1, "delegated semantics node should be visited");
+
+    let mut config = SemanticsConfiguration {
+        content_description: None,
+        is_button: false,
+        is_clickable: false,
+    };
+    chain.for_each_forward_matching(NodeCapabilities::SEMANTICS, |node_ref| {
+        node_ref
+            .node()
+            .unwrap()
+            .as_semantics_node()
+            .unwrap()
+            .merge_semantics(&mut config);
+    });
+    assert_eq!(
+        config.content_description.as_deref(),
+        Some("delegate"),
+        "delegate semantics should merge into config"
+    );
+    assert!(config.is_clickable, "semantics merge should set flag");
+}
+
+#[test]
+fn pointer_delegates_are_visited_by_forward_matching() {
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+    let elements = vec![modifier_element(PointerDelegatingElement {
+        host_id: "host",
+        label: "delegate",
+    })];
+    chain.update_from_slice(&elements, &mut context);
+
+    assert!(
+        chain
+            .capabilities()
+            .contains(NodeCapabilities::POINTER_INPUT),
+        "pointer capability should include delegated nodes"
+    );
+
+    let mut visits = 0;
+    chain.for_each_forward_matching(NodeCapabilities::POINTER_INPUT, |node_ref| {
+        if node_ref
+            .node()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<DelegatedPointerNode>()
+            .is_some()
+        {
+            visits += 1;
+        }
+    });
+    assert_eq!(visits, 1, "delegated pointer node should be visited");
 }
 
 #[test]

@@ -64,7 +64,7 @@ impl ModifierChainHandle {
         let modifier_local_invalidations = self
             .modifier_locals
             .borrow_mut()
-            .sync(&mut self.chain, resolver);
+            .sync(&self.chain, resolver);
         if std::env::var_os("COMPOSE_DEBUG_MODIFIERS").is_some() {
             crate::debug::log_modifier_chain(self.chain());
         }
@@ -139,23 +139,28 @@ impl ModifierChainHandle {
         resolved.set_corner_shape(modifier.corner_shape());
 
         if self.has_layout_nodes() {
-            for node in self.chain.layout_nodes() {
-                if let Some(padding) = node.as_any().downcast_ref::<PaddingNode>() {
-                    resolved.add_padding(padding.padding());
-                }
-            }
+            self.chain
+                .for_each_forward_matching(NodeCapabilities::LAYOUT, |node_ref| {
+                    if let Some(node) = node_ref.node() {
+                        if let Some(padding) = node.as_any().downcast_ref::<PaddingNode>() {
+                            resolved.add_padding(padding.padding());
+                        }
+                    }
+                });
         }
 
         if self.has_draw_nodes() {
-            for node in self.chain.draw_nodes() {
-                let modifier_node = node as &dyn ModifierNode;
-                let any = modifier_node.as_any();
-                if let Some(background) = any.downcast_ref::<BackgroundNode>() {
-                    resolved.set_background_color(background.color());
-                } else if let Some(shape) = any.downcast_ref::<CornerShapeNode>() {
-                    resolved.set_corner_shape(Some(shape.shape()));
-                }
-            }
+            self.chain
+                .for_each_forward_matching(NodeCapabilities::DRAW, |node_ref| {
+                    if let Some(node) = node_ref.node() {
+                        let any = node.as_any();
+                        if let Some(background) = any.downcast_ref::<BackgroundNode>() {
+                            resolved.set_background_color(background.color());
+                        } else if let Some(shape) = any.downcast_ref::<CornerShapeNode>() {
+                            resolved.set_corner_shape(Some(shape.shape()));
+                        }
+                    }
+                });
         }
 
         resolved

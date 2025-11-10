@@ -1143,48 +1143,6 @@ impl ModifierNodeChain {
             .contains(NodeCapabilities::for_invalidation(kind))
     }
 
-    /// Iterates over all layout nodes in the chain.
-    pub fn layout_nodes(&self) -> impl Iterator<Item = &dyn ModifierNode> {
-        self.ordered_nodes.iter().filter_map(|link| {
-            let node = self.resolve_node(link);
-            if node
-                .node_state()
-                .capabilities()
-                .contains(NodeCapabilities::LAYOUT)
-            {
-                Some(node)
-            } else {
-                None
-            }
-        })
-    }
-
-    /// Iterates over all draw nodes in the chain.
-    pub fn draw_nodes(&self) -> DrawNodes<'_> {
-        DrawNodes::new(self)
-    }
-
-    /// Iterates over all pointer input nodes in the chain.
-    pub fn pointer_input_nodes(&self) -> PointerInputNodes<'_> {
-        PointerInputNodes::new(self)
-    }
-
-    /// Iterates over all semantics nodes in the chain.
-    pub fn semantics_nodes(&self) -> impl Iterator<Item = &dyn ModifierNode> {
-        self.ordered_nodes.iter().filter_map(|link| {
-            let node = self.resolve_node(link);
-            if node
-                .node_state()
-                .capabilities()
-                .contains(NodeCapabilities::SEMANTICS)
-            {
-                Some(node)
-            } else {
-                None
-            }
-        })
-    }
-
     /// Visits every node in insertion order together with its capability mask.
     pub fn visit_nodes<F>(&self, mut f: F)
     where
@@ -1339,62 +1297,6 @@ impl ModifierNodeChain {
             node = nth_delegate_mut(node, delegate_index).expect("invalid delegate path");
         }
         node
-    }
-}
-
-/// Iterator over draw modifier nodes stored in a [`ModifierNodeChain`].
-pub struct DrawNodes<'a> {
-    chain: &'a ModifierNodeChain,
-    index: usize,
-}
-
-impl<'a> DrawNodes<'a> {
-    fn new(chain: &'a ModifierNodeChain) -> Self {
-        Self { chain, index: 0 }
-    }
-}
-
-impl<'a> Iterator for DrawNodes<'a> {
-    type Item = &'a dyn DrawModifierNode;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while self.index < self.chain.ordered_nodes.len() {
-            let link = &self.chain.ordered_nodes[self.index];
-            self.index += 1;
-            let node = self.chain.resolve_node(link);
-            if let Some(draw) = node.as_draw_node() {
-                return Some(draw);
-            }
-        }
-        None
-    }
-}
-
-/// Iterator over pointer-input modifier nodes.
-pub struct PointerInputNodes<'a> {
-    chain: &'a ModifierNodeChain,
-    index: usize,
-}
-
-impl<'a> PointerInputNodes<'a> {
-    fn new(chain: &'a ModifierNodeChain) -> Self {
-        Self { chain, index: 0 }
-    }
-}
-
-impl<'a> Iterator for PointerInputNodes<'a> {
-    type Item = &'a dyn PointerInputNode;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while self.index < self.chain.ordered_nodes.len() {
-            let link = &self.chain.ordered_nodes[self.index];
-            self.index += 1;
-            let node = self.chain.resolve_node(link);
-            if let Some(pointer) = node.as_pointer_input_node() {
-                return Some(pointer);
-            }
-        }
-        None
     }
 }
 

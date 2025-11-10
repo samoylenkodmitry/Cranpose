@@ -2,12 +2,13 @@ use super::*;
 use crate::modifier::{collect_slices_from_modifier, Modifier, PointerInputScope};
 use compose_core::NodeId;
 use compose_foundation::{
-    modifier_element, BasicModifierNodeContext, ModifierNodeChain, PointerButton, PointerButtons,
-    PointerEvent, PointerEventKind, PointerPhase,
+    modifier_element, BasicModifierNodeContext, ModifierNodeChain, NodeCapabilities, PointerButton,
+    PointerButtons, PointerEvent, PointerEventKind, PointerPhase,
 };
 use compose_ui_layout::Placeable;
 use std::cell::{Cell, RefCell};
 use std::future::pending;
+use std::rc::Rc;
 
 struct TestPlaceable {
     width: f32,
@@ -280,9 +281,23 @@ fn mixed_modifier_chain_tracks_all_capabilities() {
     assert!(chain.has_nodes_for_invalidation(compose_foundation::InvalidationKind::PointerInput));
 
     // Verify correct node counts by type
-    assert_eq!(chain.layout_nodes().count(), 1); // padding
-    assert_eq!(chain.draw_nodes().count(), 2); // alpha + background
-    assert_eq!(chain.pointer_input_nodes().count(), 1); // clickable
+    let mut layout_nodes = 0;
+    chain.for_each_forward_matching(NodeCapabilities::LAYOUT, |_| {
+        layout_nodes += 1;
+    });
+    assert_eq!(layout_nodes, 1, "expected a single layout node");
+
+    let mut draw_nodes = 0;
+    chain.for_each_forward_matching(NodeCapabilities::DRAW, |_| {
+        draw_nodes += 1;
+    });
+    assert_eq!(draw_nodes, 2, "expected alpha + background draw nodes");
+
+    let mut pointer_nodes = 0;
+    chain.for_each_forward_matching(NodeCapabilities::POINTER_INPUT, |_| {
+        pointer_nodes += 1;
+    });
+    assert_eq!(pointer_nodes, 1, "expected exactly one pointer node");
 }
 
 #[test]
