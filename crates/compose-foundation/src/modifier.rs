@@ -384,7 +384,7 @@ pub trait SemanticsNode: ModifierNode {
 }
 
 /// Semantics configuration for accessibility.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct SemanticsConfiguration {
     pub content_description: Option<String>,
     pub is_button: bool,

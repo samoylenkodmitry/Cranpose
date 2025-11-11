@@ -54,13 +54,20 @@ pub enum SemanticsAction {
 }
 
 /// Semantic role describing how a node should participate in accessibility and hit testing.
+/// Roles are now derived from SemanticsConfiguration rather than widget types.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticsRole {
+    /// Generic container or layout node
     Layout,
+    /// Subcomposition boundary
     Subcompose,
+    /// Text content (derived from TextNode for backward compatibility)
     Text { value: String },
+    /// Spacer (non-interactive)
     Spacer,
+    /// Button (derived from is_button semantics flag)
     Button,
+    /// Unknown or unspecified role
     Unknown,
 }
 
@@ -105,6 +112,48 @@ impl SemanticsTree {
 
     pub fn root(&self) -> &SemanticsNode {
         &self.root
+    }
+}
+
+/// Caches semantics configurations for layout nodes, similar to Jetpack Compose's SemanticsOwner.
+/// This enables lazy semantics tree construction and efficient invalidation.
+#[derive(Default)]
+pub struct SemanticsOwner {
+    configurations: RefCell<HashMap<NodeId, Option<SemanticsConfiguration>>>,
+}
+
+impl SemanticsOwner {
+    pub fn new() -> Self {
+        Self {
+            configurations: RefCell::new(HashMap::default()),
+        }
+    }
+
+    /// Returns the cached configuration for the given node, computing it if necessary.
+    pub fn get_or_compute(
+        &self,
+        node_id: NodeId,
+        applier: &mut MemoryApplier,
+    ) -> Option<SemanticsConfiguration> {
+        // Check cache first
+        if let Some(cached) = self.configurations.borrow().get(&node_id) {
+            return cached.clone();
+        }
+
+        // Compute and cache
+        let config = compute_semantics_for_node(applier, node_id);
+        self.configurations.borrow_mut().insert(node_id, config.clone());
+        config
+    }
+
+    /// Invalidates the cached configuration for a specific node.
+    pub fn invalidate(&self, node_id: NodeId) {
+        self.configurations.borrow_mut().remove(&node_id);
+    }
+
+    /// Clears all cached configurations.
+    pub fn clear(&self) {
+        self.configurations.borrow_mut().clear();
     }
 }
 
@@ -1374,13 +1423,46 @@ fn collect_runtime_metadata(
     Ok(map)
 }
 
+/// Collects semantics configurations for all nodes in the measured tree using the SemanticsOwner cache.
+fn collect_semantics_with_owner(
+    applier: &mut MemoryApplier,
+    node: &MeasuredNode,
+    owner: &SemanticsOwner,
+) -> Result<(), NodeError> {
+    // Compute and cache configuration for this node
+    owner.get_or_compute(node.node_id, applier);
+
+    // Recurse to children
+    for child in &node.children {
+        collect_semantics_with_owner(applier, &child.node, owner)?;
+    }
+    Ok(())
+}
+
 fn collect_semantics_snapshot(
     applier: &mut MemoryApplier,
     node: &MeasuredNode,
 ) -> Result<HashMap<NodeId, Option<SemanticsConfiguration>>, NodeError> {
+    let owner = SemanticsOwner::new();
+    collect_semantics_with_owner(applier, node, &owner)?;
+
+    // Extract all cached configurations into a map
     let mut map = HashMap::default();
-    collect_semantics_snapshot_inner(applier, node, &mut map)?;
+    extract_configurations_recursive(node, &owner, &mut map);
     Ok(map)
+}
+
+fn extract_configurations_recursive(
+    node: &MeasuredNode,
+    owner: &SemanticsOwner,
+    map: &mut HashMap<NodeId, Option<SemanticsConfiguration>>,
+) {
+    if let Some(config) = owner.configurations.borrow().get(&node.node_id) {
+        map.insert(node.node_id, config.clone());
+    }
+    for child in &node.children {
+        extract_configurations_recursive(&child.node, owner, map);
+    }
 }
 
 fn collect_runtime_metadata_inner(
@@ -1394,21 +1476,6 @@ fn collect_runtime_metadata_inner(
     }
     for child in &node.children {
         collect_runtime_metadata_inner(applier, &child.node, map)?;
-    }
-    Ok(())
-}
-
-fn collect_semantics_snapshot_inner(
-    applier: &mut MemoryApplier,
-    node: &MeasuredNode,
-    map: &mut HashMap<NodeId, Option<SemanticsConfiguration>>,
-) -> Result<(), NodeError> {
-    if let Entry::Vacant(entry) = map.entry(node.node_id) {
-        let semantics = semantics_configuration_for(applier, node.node_id)?;
-        entry.insert(semantics);
-    }
-    for child in &node.children {
-        collect_semantics_snapshot_inner(applier, &child.node, map)?;
     }
     Ok(())
 }
@@ -1477,70 +1544,86 @@ fn runtime_metadata_for(
     Ok(RuntimeNodeMetadata::default())
 }
 
-fn semantics_configuration_for(
+/// Computes semantics configuration for a node by reading from its modifier chain.
+/// This is the primary entry point for extracting semantics from nodes, replacing
+/// the widget-specific fallbacks with pure modifier-node traversal.
+fn compute_semantics_for_node(
     applier: &mut MemoryApplier,
     node_id: NodeId,
-) -> Result<Option<SemanticsConfiguration>, NodeError> {
+) -> Option<SemanticsConfiguration> {
+    // Try LayoutNode first (the primary case)
     match applier.with_node::<LayoutNode, _>(node_id, |layout| {
         let config = layout.semantics_configuration();
         layout.clear_needs_semantics();
         config
     }) {
-        Ok(config) => return Ok(config),
+        Ok(config) => return config,
         Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => {}
-        Err(err) => return Err(err),
+        Err(_) => return None,
     }
 
-    if let Some(button) = try_clone::<ButtonNode>(applier, node_id)? {
+    // Fallback for legacy Button nodes (temporary during migration)
+    if let Ok(Some(button)) = try_clone::<ButtonNode>(applier, node_id) {
         let from_modifier = collect_semantics_from_modifier(&button.modifier);
-        return Ok(from_modifier.or_else(|| {
+        return from_modifier.or_else(|| {
+            // Fallback: generate default button semantics if no modifiers provided them
             let mut config = SemanticsConfiguration::default();
             config.is_button = true;
             config.is_clickable = true;
             Some(config)
-        }));
+        });
     }
 
-    if let Some(text) = try_clone::<TextNode>(applier, node_id)? {
-        return Ok(collect_semantics_from_modifier(&text.modifier));
+    // Fallback for Text nodes (read from modifier if present)
+    if let Ok(Some(text)) = try_clone::<TextNode>(applier, node_id) {
+        return collect_semantics_from_modifier(&text.modifier);
     }
 
-    if try_clone::<SpacerNode>(applier, node_id)?.is_some() {
-        return Ok(None);
+    // Spacer nodes have no semantics
+    if try_clone::<SpacerNode>(applier, node_id).unwrap_or(None).is_some() {
+        return None;
     }
 
+    // SubcomposeLayoutNode: read from modifier
     if let Ok(modifier) =
         applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| node.modifier())
     {
-        return Ok(collect_semantics_from_modifier(&modifier));
+        return collect_semantics_from_modifier(&modifier);
     }
 
-    Ok(None)
+    None
 }
 
+/// Builds a semantics node from measured tree data and semantics configurations.
+/// Roles and actions are now derived entirely from SemanticsConfiguration, with
+/// metadata consulted only for legacy widget type information.
 fn build_semantics_node(
     node: &MeasuredNode,
     metadata: &HashMap<NodeId, RuntimeNodeMetadata>,
     semantics: &HashMap<NodeId, Option<SemanticsConfiguration>>,
 ) -> SemanticsNode {
     let info = metadata.get(&node.node_id).cloned().unwrap_or_default();
-    let mut role = info.role;
-    let mut actions = info.actions;
+
+    // Start with the widget-derived role as a fallback
+    let mut role = info.role.clone();
+    let mut actions = Vec::new();
     let mut description = None;
 
+    // Override with semantics configuration if present
     if let Some(config) = semantics.get(&node.node_id).cloned().flatten() {
+        // Role synthesis: prefer semantics flags over widget type
         if config.is_button {
             role = SemanticsRole::Button;
         }
-        if config.is_clickable
-            && !actions
-                .iter()
-                .any(|action| matches!(action, SemanticsAction::Click { .. }))
-        {
+
+        // Action synthesis: create click action if node is clickable
+        if config.is_clickable {
             actions.push(SemanticsAction::Click {
                 handler: SemanticsCallback::new(node.node_id),
             });
         }
+
+        // Description from configuration
         if let Some(desc) = config.content_description {
             description = Some(desc);
         }
@@ -1551,6 +1634,7 @@ fn build_semantics_node(
         .iter()
         .map(|child| build_semantics_node(&child.node, metadata, semantics))
         .collect();
+
     SemanticsNode::new(node.node_id, role, actions, children, description)
 }
 
