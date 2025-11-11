@@ -3,10 +3,14 @@ use compose_foundation::{
 };
 
 use super::{
-    local::ModifierLocalManager, Modifier, ModifierLocalAncestorResolver, ModifierLocalToken,
-    ResolvedModifierLocal, ResolvedModifiers,
+    local::ModifierLocalManager, Color, DimensionConstraint, EdgeInsets, GraphicsLayer,
+    LayoutProperties, LayoutWeight, Modifier, ModifierLocalAncestorResolver, ModifierLocalToken,
+    Point, ResolvedModifierLocal, ResolvedModifiers, RoundedCornerShape,
 };
-use crate::modifier_nodes::{BackgroundNode, CornerShapeNode, PaddingNode};
+use crate::modifier_nodes::{
+    AlignmentNode, BackgroundNode, CornerShapeNode, FillDirection, FillNode, GraphicsLayerNode,
+    IntrinsicAxis, IntrinsicSizeNode, OffsetNode, PaddingNode, SizeNode, WeightNode,
+};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -68,7 +72,7 @@ impl ModifierChainHandle {
         if std::env::var_os("COMPOSE_DEBUG_MODIFIERS").is_some() {
             crate::debug::log_modifier_chain(self.chain());
         }
-        self.resolved = self.compute_resolved(modifier);
+        self.resolved = self.compute_resolved();
         modifier_local_invalidations
     }
 
@@ -123,47 +127,115 @@ impl ModifierChainHandle {
         Rc::clone(&self.modifier_locals)
     }
 
-    fn compute_resolved(&self, modifier: &Modifier) -> ResolvedModifiers {
+    fn compute_resolved(&self) -> ResolvedModifiers {
         let mut resolved = ResolvedModifiers::default();
-        let layout = modifier.layout_properties();
-        resolved.set_layout_properties(layout);
-        resolved.set_padding(layout.padding());
-        resolved.set_offset(modifier.total_offset());
-        resolved.set_graphics_layer(modifier.graphics_layer_values());
+        let mut layout = LayoutProperties::default();
+        let mut padding = EdgeInsets::default();
+        let mut offset = Point::default();
+        let mut background: Option<Color> = None;
+        let mut corner_shape: Option<RoundedCornerShape> = None;
+        let mut graphics_layer: Option<GraphicsLayer> = None;
 
-        if let Some(color) = modifier.background_color() {
+        self.chain.for_each_forward(|node_ref| {
+            let Some(node) = node_ref.node() else {
+                return;
+            };
+            let any = node.as_any();
+            if let Some(padding_node) = any.downcast_ref::<PaddingNode>() {
+                padding += padding_node.padding();
+            } else if let Some(size_node) = any.downcast_ref::<SizeNode>() {
+                apply_size_node(&mut layout, size_node);
+            } else if let Some(fill_node) = any.downcast_ref::<FillNode>() {
+                apply_fill_node(&mut layout, fill_node);
+            } else if let Some(intrinsic_node) = any.downcast_ref::<IntrinsicSizeNode>() {
+                apply_intrinsic_size_node(&mut layout, intrinsic_node);
+            } else if let Some(weight_node) = any.downcast_ref::<WeightNode>() {
+                layout.weight = Some(weight_node.layout_weight());
+            } else if let Some(alignment_node) = any.downcast_ref::<AlignmentNode>() {
+                if let Some(alignment) = alignment_node.box_alignment() {
+                    layout.box_alignment = Some(alignment);
+                }
+                if let Some(alignment) = alignment_node.column_alignment() {
+                    layout.column_alignment = Some(alignment);
+                }
+                if let Some(alignment) = alignment_node.row_alignment() {
+                    layout.row_alignment = Some(alignment);
+                }
+            } else if let Some(offset_node) = any.downcast_ref::<OffsetNode>() {
+                let delta = offset_node.offset();
+                offset.x += delta.x;
+                offset.y += delta.y;
+            } else if let Some(background_node) = any.downcast_ref::<BackgroundNode>() {
+                background = Some(background_node.color());
+            } else if let Some(shape_node) = any.downcast_ref::<CornerShapeNode>() {
+                corner_shape = Some(shape_node.shape());
+            } else if let Some(layer_node) = any.downcast_ref::<GraphicsLayerNode>() {
+                graphics_layer = Some(layer_node.layer());
+            }
+        });
+
+        resolved.set_padding(padding);
+        resolved.set_layout_properties(layout);
+        resolved.set_offset(offset);
+        resolved.set_graphics_layer(graphics_layer);
+        resolved.set_corner_shape(corner_shape);
+        if let Some(color) = background {
             resolved.set_background_color(color);
         } else {
             resolved.clear_background();
         }
-        resolved.set_corner_shape(modifier.corner_shape());
-
-        if self.has_layout_nodes() {
-            self.chain
-                .for_each_forward_matching(NodeCapabilities::LAYOUT, |node_ref| {
-                    if let Some(node) = node_ref.node() {
-                        if let Some(padding) = node.as_any().downcast_ref::<PaddingNode>() {
-                            resolved.add_padding(padding.padding());
-                        }
-                    }
-                });
-        }
-
-        if self.has_draw_nodes() {
-            self.chain
-                .for_each_forward_matching(NodeCapabilities::DRAW, |node_ref| {
-                    if let Some(node) = node_ref.node() {
-                        let any = node.as_any();
-                        if let Some(background) = any.downcast_ref::<BackgroundNode>() {
-                            resolved.set_background_color(background.color());
-                        } else if let Some(shape) = any.downcast_ref::<CornerShapeNode>() {
-                            resolved.set_corner_shape(Some(shape.shape()));
-                        }
-                    }
-                });
-        }
-
         resolved
+    }
+}
+
+fn apply_size_node(layout: &mut LayoutProperties, node: &SizeNode) {
+    if let Some(width) = node.max_width().or(node.min_width()) {
+        layout.width = DimensionConstraint::Points(width);
+    }
+    if let Some(height) = node.max_height().or(node.min_height()) {
+        layout.height = DimensionConstraint::Points(height);
+    }
+    if !node.enforce_incoming() {
+        if let Some(min_width) = node.min_width() {
+            layout.min_width = Some(min_width);
+        }
+        if let Some(max_width) = node.max_width() {
+            layout.max_width = Some(max_width);
+        }
+        if let Some(min_height) = node.min_height() {
+            layout.min_height = Some(min_height);
+        }
+        if let Some(max_height) = node.max_height() {
+            layout.max_height = Some(max_height);
+        }
+    }
+}
+
+fn apply_fill_node(layout: &mut LayoutProperties, node: &FillNode) {
+    let fraction = node.fraction();
+    match node.direction() {
+        FillDirection::Horizontal => {
+            layout.width = DimensionConstraint::Fraction(fraction);
+        }
+        FillDirection::Vertical => {
+            layout.height = DimensionConstraint::Fraction(fraction);
+        }
+        FillDirection::Both => {
+            layout.width = DimensionConstraint::Fraction(fraction);
+            layout.height = DimensionConstraint::Fraction(fraction);
+        }
+    }
+}
+
+fn apply_intrinsic_size_node(layout: &mut LayoutProperties, node: &IntrinsicSizeNode) {
+    let constraint = DimensionConstraint::Intrinsic(node.intrinsic_size());
+    match node.axis() {
+        IntrinsicAxis::Width => {
+            layout.width = constraint;
+        }
+        IntrinsicAxis::Height => {
+            layout.height = constraint;
+        }
     }
 }
 

@@ -52,11 +52,12 @@ use compose_foundation::{
     ModifierNode, ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState,
     PointerEvent, PointerEventKind, PointerInputNode, Size,
 };
+use compose_ui_layout::{Alignment, HorizontalAlignment, IntrinsicSize, VerticalAlignment};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use crate::draw::DrawCommand;
-use crate::modifier::{Color, EdgeInsets, Point, RoundedCornerShape};
+use crate::modifier::{Color, EdgeInsets, GraphicsLayer, LayoutWeight, Point, RoundedCornerShape};
 
 fn hash_f32_value<H: Hasher>(state: &mut H, value: f32) {
     state.write_u32(value.to_bits());
@@ -70,6 +71,36 @@ fn hash_option_f32<H: Hasher>(state: &mut H, value: Option<f32>) {
         }
         None => state.write_u8(0),
     }
+}
+
+fn hash_graphics_layer<H: Hasher>(state: &mut H, layer: GraphicsLayer) {
+    hash_f32_value(state, layer.alpha);
+    hash_f32_value(state, layer.scale);
+    hash_f32_value(state, layer.translation_x);
+    hash_f32_value(state, layer.translation_y);
+}
+
+fn hash_horizontal_alignment<H: Hasher>(state: &mut H, alignment: HorizontalAlignment) {
+    let tag = match alignment {
+        HorizontalAlignment::Start => 0,
+        HorizontalAlignment::CenterHorizontally => 1,
+        HorizontalAlignment::End => 2,
+    };
+    state.write_u8(tag);
+}
+
+fn hash_vertical_alignment<H: Hasher>(state: &mut H, alignment: VerticalAlignment) {
+    let tag = match alignment {
+        VerticalAlignment::Top => 0,
+        VerticalAlignment::CenterVertically => 1,
+        VerticalAlignment::Bottom => 2,
+    };
+    state.write_u8(tag);
+}
+
+fn hash_alignment<H: Hasher>(state: &mut H, alignment: Alignment) {
+    hash_horizontal_alignment(state, alignment.horizontal);
+    hash_vertical_alignment(state, alignment.vertical);
 }
 
 // ============================================================================
@@ -396,6 +427,78 @@ impl ModifierNodeElement for CornerShapeElement {
 }
 
 // ============================================================================
+// GraphicsLayer Modifier Node
+// ============================================================================
+
+/// Node that stores graphics layer state for resolved modifiers.
+#[derive(Debug)]
+pub struct GraphicsLayerNode {
+    layer: GraphicsLayer,
+    state: NodeState,
+}
+
+impl GraphicsLayerNode {
+    pub fn new(layer: GraphicsLayer) -> Self {
+        Self {
+            layer,
+            state: NodeState::new(),
+        }
+    }
+
+    pub fn layer(&self) -> GraphicsLayer {
+        self.layer
+    }
+}
+
+impl DelegatableNode for GraphicsLayerNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
+impl ModifierNode for GraphicsLayerNode {
+    fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
+        context.invalidate(compose_foundation::InvalidationKind::Draw);
+    }
+}
+
+/// Element that creates and updates graphics layer nodes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphicsLayerElement {
+    layer: GraphicsLayer,
+}
+
+impl GraphicsLayerElement {
+    pub fn new(layer: GraphicsLayer) -> Self {
+        Self { layer }
+    }
+}
+
+impl Hash for GraphicsLayerElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_graphics_layer(state, self.layer);
+    }
+}
+
+impl ModifierNodeElement for GraphicsLayerElement {
+    type Node = GraphicsLayerNode;
+
+    fn create(&self) -> Self::Node {
+        GraphicsLayerNode::new(self.layer)
+    }
+
+    fn update(&self, node: &mut Self::Node) {
+        if node.layer != self.layer {
+            node.layer = self.layer;
+        }
+    }
+
+    fn capabilities(&self) -> NodeCapabilities {
+        NodeCapabilities::DRAW
+    }
+}
+
+// ============================================================================
 // Size Modifier Node
 // ============================================================================
 
@@ -466,6 +569,26 @@ impl SizeNode {
             max_height,
         }
     }
+
+    pub fn min_width(&self) -> Option<f32> {
+        self.min_width
+    }
+
+    pub fn max_width(&self) -> Option<f32> {
+        self.max_width
+    }
+
+    pub fn min_height(&self) -> Option<f32> {
+        self.min_height
+    }
+
+    pub fn max_height(&self) -> Option<f32> {
+        self.max_height
+    }
+
+    pub fn enforce_incoming(&self) -> bool {
+        self.enforce_incoming
+    }
 }
 
 impl DelegatableNode for SizeNode {
@@ -492,7 +615,10 @@ impl LayoutModifierNode for SizeNode {
         let wrapped_constraints = if self.enforce_incoming {
             // Constrain target constraints by incoming constraints
             Constraints {
-                min_width: target.min_width.max(constraints.min_width).min(constraints.max_width),
+                min_width: target
+                    .min_width
+                    .max(constraints.min_width)
+                    .min(constraints.max_width),
                 max_width: target
                     .max_width
                     .min(constraints.max_width)
@@ -1284,7 +1410,10 @@ impl OffsetNode {
     }
 
     pub fn offset(&self) -> Point {
-        Point { x: self.x, y: self.y }
+        Point {
+            x: self.x,
+            y: self.y,
+        }
     }
 
     pub fn rtl_aware(&self) -> bool {
@@ -1542,6 +1671,328 @@ impl ModifierNodeElement for FillElement {
         if node.direction != self.direction || node.fraction != self.fraction {
             node.direction = self.direction;
             node.fraction = self.fraction;
+        }
+    }
+
+    fn capabilities(&self) -> NodeCapabilities {
+        NodeCapabilities::LAYOUT
+    }
+}
+
+// ============================================================================
+// Weight Modifier Node
+// ============================================================================
+
+/// Node that records flex weight data for Row/Column parents.
+#[derive(Debug)]
+pub struct WeightNode {
+    weight: f32,
+    fill: bool,
+    state: NodeState,
+}
+
+impl WeightNode {
+    pub fn new(weight: f32, fill: bool) -> Self {
+        Self {
+            weight,
+            fill,
+            state: NodeState::new(),
+        }
+    }
+
+    pub fn layout_weight(&self) -> LayoutWeight {
+        LayoutWeight {
+            weight: self.weight,
+            fill: self.fill,
+        }
+    }
+}
+
+impl DelegatableNode for WeightNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
+impl ModifierNode for WeightNode {
+    fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
+        context.invalidate(compose_foundation::InvalidationKind::Layout);
+    }
+}
+
+/// Element that creates and updates weight nodes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WeightElement {
+    weight: f32,
+    fill: bool,
+}
+
+impl WeightElement {
+    pub fn new(weight: f32, fill: bool) -> Self {
+        Self { weight, fill }
+    }
+}
+
+impl Hash for WeightElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_f32_value(state, self.weight);
+        self.fill.hash(state);
+    }
+}
+
+impl ModifierNodeElement for WeightElement {
+    type Node = WeightNode;
+
+    fn create(&self) -> Self::Node {
+        WeightNode::new(self.weight, self.fill)
+    }
+
+    fn update(&self, node: &mut Self::Node) {
+        if node.weight != self.weight || node.fill != self.fill {
+            node.weight = self.weight;
+            node.fill = self.fill;
+        }
+    }
+
+    fn capabilities(&self) -> NodeCapabilities {
+        NodeCapabilities::LAYOUT
+    }
+}
+
+// ============================================================================
+// Alignment Modifier Node
+// ============================================================================
+
+/// Node that records alignment preferences for Box/Row/Column scopes.
+#[derive(Debug)]
+pub struct AlignmentNode {
+    box_alignment: Option<Alignment>,
+    column_alignment: Option<HorizontalAlignment>,
+    row_alignment: Option<VerticalAlignment>,
+    state: NodeState,
+}
+
+impl AlignmentNode {
+    pub fn new(
+        box_alignment: Option<Alignment>,
+        column_alignment: Option<HorizontalAlignment>,
+        row_alignment: Option<VerticalAlignment>,
+    ) -> Self {
+        Self {
+            box_alignment,
+            column_alignment,
+            row_alignment,
+            state: NodeState::new(),
+        }
+    }
+
+    pub fn box_alignment(&self) -> Option<Alignment> {
+        self.box_alignment
+    }
+
+    pub fn column_alignment(&self) -> Option<HorizontalAlignment> {
+        self.column_alignment
+    }
+
+    pub fn row_alignment(&self) -> Option<VerticalAlignment> {
+        self.row_alignment
+    }
+}
+
+impl DelegatableNode for AlignmentNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
+impl ModifierNode for AlignmentNode {
+    fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
+        context.invalidate(compose_foundation::InvalidationKind::Layout);
+    }
+}
+
+/// Element that creates and updates alignment nodes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AlignmentElement {
+    box_alignment: Option<Alignment>,
+    column_alignment: Option<HorizontalAlignment>,
+    row_alignment: Option<VerticalAlignment>,
+}
+
+impl AlignmentElement {
+    pub fn box_alignment(alignment: Alignment) -> Self {
+        Self {
+            box_alignment: Some(alignment),
+            column_alignment: None,
+            row_alignment: None,
+        }
+    }
+
+    pub fn column_alignment(alignment: HorizontalAlignment) -> Self {
+        Self {
+            box_alignment: None,
+            column_alignment: Some(alignment),
+            row_alignment: None,
+        }
+    }
+
+    pub fn row_alignment(alignment: VerticalAlignment) -> Self {
+        Self {
+            box_alignment: None,
+            column_alignment: None,
+            row_alignment: Some(alignment),
+        }
+    }
+}
+
+impl Hash for AlignmentElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        if let Some(alignment) = self.box_alignment {
+            state.write_u8(1);
+            hash_alignment(state, alignment);
+        } else {
+            state.write_u8(0);
+        }
+        if let Some(alignment) = self.column_alignment {
+            state.write_u8(1);
+            hash_horizontal_alignment(state, alignment);
+        } else {
+            state.write_u8(0);
+        }
+        if let Some(alignment) = self.row_alignment {
+            state.write_u8(1);
+            hash_vertical_alignment(state, alignment);
+        } else {
+            state.write_u8(0);
+        }
+    }
+}
+
+impl ModifierNodeElement for AlignmentElement {
+    type Node = AlignmentNode;
+
+    fn create(&self) -> Self::Node {
+        AlignmentNode::new(
+            self.box_alignment,
+            self.column_alignment,
+            self.row_alignment,
+        )
+    }
+
+    fn update(&self, node: &mut Self::Node) {
+        if node.box_alignment != self.box_alignment {
+            node.box_alignment = self.box_alignment;
+        }
+        if node.column_alignment != self.column_alignment {
+            node.column_alignment = self.column_alignment;
+        }
+        if node.row_alignment != self.row_alignment {
+            node.row_alignment = self.row_alignment;
+        }
+    }
+
+    fn capabilities(&self) -> NodeCapabilities {
+        NodeCapabilities::LAYOUT
+    }
+}
+
+// ============================================================================
+// Intrinsic Size Modifier Node
+// ============================================================================
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum IntrinsicAxis {
+    Width,
+    Height,
+}
+
+/// Node that records intrinsic sizing requests.
+#[derive(Debug)]
+pub struct IntrinsicSizeNode {
+    axis: IntrinsicAxis,
+    size: IntrinsicSize,
+    state: NodeState,
+}
+
+impl IntrinsicSizeNode {
+    pub fn new(axis: IntrinsicAxis, size: IntrinsicSize) -> Self {
+        Self {
+            axis,
+            size,
+            state: NodeState::new(),
+        }
+    }
+
+    pub fn axis(&self) -> IntrinsicAxis {
+        self.axis
+    }
+
+    pub fn intrinsic_size(&self) -> IntrinsicSize {
+        self.size
+    }
+}
+
+impl DelegatableNode for IntrinsicSizeNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
+impl ModifierNode for IntrinsicSizeNode {
+    fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
+        context.invalidate(compose_foundation::InvalidationKind::Layout);
+    }
+}
+
+/// Element that creates and updates intrinsic size nodes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IntrinsicSizeElement {
+    axis: IntrinsicAxis,
+    size: IntrinsicSize,
+}
+
+impl IntrinsicSizeElement {
+    pub fn width(size: IntrinsicSize) -> Self {
+        Self {
+            axis: IntrinsicAxis::Width,
+            size,
+        }
+    }
+
+    pub fn height(size: IntrinsicSize) -> Self {
+        Self {
+            axis: IntrinsicAxis::Height,
+            size,
+        }
+    }
+}
+
+impl Hash for IntrinsicSizeElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u8(match self.axis {
+            IntrinsicAxis::Width => 0,
+            IntrinsicAxis::Height => 1,
+        });
+        state.write_u8(match self.size {
+            IntrinsicSize::Min => 0,
+            IntrinsicSize::Max => 1,
+        });
+    }
+}
+
+impl ModifierNodeElement for IntrinsicSizeElement {
+    type Node = IntrinsicSizeNode;
+
+    fn create(&self) -> Self::Node {
+        IntrinsicSizeNode::new(self.axis, self.size)
+    }
+
+    fn update(&self, node: &mut Self::Node) {
+        if node.axis != self.axis {
+            node.axis = self.axis;
+        }
+        if node.size != self.size {
+            node.size = self.size;
         }
     }
 

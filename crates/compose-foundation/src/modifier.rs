@@ -1528,15 +1528,12 @@ impl<'a> ModifierChainNodeRef<'a> {
     /// component in the tree.
     pub fn find_parent_focus_target(&self) -> Option<ModifierChainNodeRef<'a>> {
         let mut result = None;
-        self.clone().visit_ancestors_matching(
-            false,
-            NodeCapabilities::FOCUS,
-            |node| {
+        self.clone()
+            .visit_ancestors_matching(false, NodeCapabilities::FOCUS, |node| {
                 if result.is_none() {
                     result = Some(node);
                 }
-            },
-        );
+            });
         result
     }
 
@@ -1546,28 +1543,22 @@ impl<'a> ModifierChainNodeRef<'a> {
     /// child component in the tree.
     pub fn find_first_focus_target(&self) -> Option<ModifierChainNodeRef<'a>> {
         let mut result = None;
-        self.clone().visit_descendants_matching(
-            false,
-            NodeCapabilities::FOCUS,
-            |node| {
+        self.clone()
+            .visit_descendants_matching(false, NodeCapabilities::FOCUS, |node| {
                 if result.is_none() {
                     result = Some(node);
                 }
-            },
-        );
+            });
         result
     }
 
     /// Returns true if this node or any ancestor has focus capability.
     pub fn has_focus_capability_in_ancestors(&self) -> bool {
         let mut found = false;
-        self.clone().visit_ancestors_matching(
-            true,
-            NodeCapabilities::FOCUS,
-            |_| {
+        self.clone()
+            .visit_ancestors_matching(true, NodeCapabilities::FOCUS, |_| {
                 found = true;
-            },
-        );
+            });
         found
     }
 }

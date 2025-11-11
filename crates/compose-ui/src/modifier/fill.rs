@@ -17,12 +17,12 @@ impl Modifier {
 
     pub fn fill_max_width_fraction(fraction: f32) -> Self {
         let clamped = fraction.clamp(0.0, 1.0);
-        Self::with_element(FillElement::width(clamped), move |state| {
-            state.layout.width = DimensionConstraint::Fraction(clamped);
-        })
-        .with_inspector_metadata(inspector_metadata("fillMaxWidth", move |info| {
-            info.add_dimension("width", DimensionConstraint::Fraction(clamped));
-        }))
+        Self::with_element(FillElement::width(clamped)).with_inspector_metadata(inspector_metadata(
+            "fillMaxWidth",
+            move |info| {
+                info.add_dimension("width", DimensionConstraint::Fraction(clamped));
+            },
+        ))
     }
 
     /// Have the content fill the maximum available height.
@@ -36,12 +36,11 @@ impl Modifier {
 
     pub fn fill_max_height_fraction(fraction: f32) -> Self {
         let clamped = fraction.clamp(0.0, 1.0);
-        Self::with_element(FillElement::height(clamped), move |state| {
-            state.layout.height = DimensionConstraint::Fraction(clamped);
-        })
-        .with_inspector_metadata(inspector_metadata("fillMaxHeight", move |info| {
-            info.add_dimension("height", DimensionConstraint::Fraction(clamped));
-        }))
+        Self::with_element(FillElement::height(clamped)).with_inspector_metadata(
+            inspector_metadata("fillMaxHeight", move |info| {
+                info.add_dimension("height", DimensionConstraint::Fraction(clamped));
+            }),
+        )
     }
 
     /// Have the content fill the maximum available size (both width and height).
@@ -55,13 +54,12 @@ impl Modifier {
 
     pub fn fill_max_size_fraction(fraction: f32) -> Self {
         let clamped = fraction.clamp(0.0, 1.0);
-        Self::with_element(FillElement::size(clamped), move |state| {
-            state.layout.width = DimensionConstraint::Fraction(clamped);
-            state.layout.height = DimensionConstraint::Fraction(clamped);
-        })
-        .with_inspector_metadata(inspector_metadata("fillMaxSize", move |info| {
-            info.add_dimension("width", DimensionConstraint::Fraction(clamped));
-            info.add_dimension("height", DimensionConstraint::Fraction(clamped));
-        }))
+        Self::with_element(FillElement::size(clamped)).with_inspector_metadata(inspector_metadata(
+            "fillMaxSize",
+            move |info| {
+                info.add_dimension("width", DimensionConstraint::Fraction(clamped));
+                info.add_dimension("height", DimensionConstraint::Fraction(clamped));
+            },
+        ))
     }
 }

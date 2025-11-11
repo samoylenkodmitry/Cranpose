@@ -13,13 +13,11 @@ impl Modifier {
     ///
     /// Matches Kotlin: `Modifier.offset(x: Dp, y: Dp)`
     pub fn offset(x: f32, y: f32) -> Self {
-        Self::with_element(OffsetElement::new(x, y, true), move |state| {
-            state.offset.x += x;
-            state.offset.y += y;
-        })
-        .with_inspector_metadata(inspector_metadata("offset", move |info| {
-            info.add_offset_components("offsetX", "offsetY", Point { x, y });
-        }))
+        Self::with_element(OffsetElement::new(x, y, true)).with_inspector_metadata(
+            inspector_metadata("offset", move |info| {
+                info.add_offset_components("offsetX", "offsetY", Point { x, y });
+            }),
+        )
     }
 
     /// Offset the content by (x, y) without considering layout direction.
@@ -28,12 +26,10 @@ impl Modifier {
     ///
     /// Matches Kotlin: `Modifier.absoluteOffset(x: Dp, y: Dp)`
     pub fn absolute_offset(x: f32, y: f32) -> Self {
-        Self::with_element(OffsetElement::new(x, y, false), move |state| {
-            state.offset.x += x;
-            state.offset.y += y;
-        })
-        .with_inspector_metadata(inspector_metadata("absoluteOffset", move |info| {
-            info.add_offset_components("absoluteOffsetX", "absoluteOffsetY", Point { x, y });
-        }))
+        Self::with_element(OffsetElement::new(x, y, false)).with_inspector_metadata(
+            inspector_metadata("absoluteOffset", move |info| {
+                info.add_offset_components("absoluteOffsetX", "absoluteOffsetY", Point { x, y });
+            }),
+        )
     }
 }

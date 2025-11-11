@@ -2,13 +2,15 @@
 //!
 //! This module now acts as a thin builder around modifier elements. Each
 //! [`Modifier`] stores the element chain required by the modifier node system
-//! together with cached layout/draw state used by higher level components.
+//! together with inspector metadata while resolved state is computed directly
+//! from the modifier nodes.
 
 #![allow(non_snake_case)]
 
 use std::fmt;
 use std::rc::Rc;
 
+mod alignment;
 mod background;
 mod chain;
 mod clickable;
@@ -23,6 +25,7 @@ mod pointer_input;
 mod semantics;
 mod size;
 mod slices;
+mod weight;
 
 pub use crate::draw::{DrawCacheBuilder, DrawCommand};
 #[allow(unused_imports)]
@@ -47,7 +50,7 @@ pub use pointer_input::{AwaitPointerEventScope, PointerInputScope};
 pub use semantics::{collect_semantics_from_chain, collect_semantics_from_modifier};
 pub use slices::{collect_modifier_slices, collect_slices_from_modifier, ModifierNodeSlices};
 
-use crate::modifier_nodes::{ClipToBoundsElement, SizeElement};
+use crate::modifier_nodes::ClipToBoundsElement;
 use focus::{FocusRequesterElement, FocusTargetElement};
 use local::{ModifierLocalConsumerElement, ModifierLocalProviderElement};
 use semantics::SemanticsElement;
@@ -58,7 +61,7 @@ use semantics::SemanticsElement;
 /// evaluate predicates against the chain without materializing intermediate
 /// allocations. This matches Kotlin's `foldIn`, `foldOut`, `any`, and `all`
 /// helpers and allows downstream code to treat modifiers abstractly instead of
-/// poking at cached `ModifierState`.
+/// poking at cached resolved state.
 pub trait ComposeModifier {
     /// Accumulates a value by visiting modifier elements in insertion order.
     fn fold_in<R, F>(&self, initial: R, operation: F) -> R
@@ -213,7 +216,6 @@ pub trait InspectableModifier {
 #[derive(Clone, Default)]
 pub struct Modifier {
     elements: Rc<Vec<DynModifierElement>>,
-    state: Rc<ModifierState>,
     inspector: Rc<Vec<InspectorMetadata>>,
 }
 
@@ -222,64 +224,13 @@ impl Modifier {
         Self::default()
     }
 
-
-    pub fn weight(weight: f32) -> Self {
-        Self::weight_with_fill(weight, true)
-    }
-
-    pub fn weight_with_fill(weight: f32, fill: bool) -> Self {
-        Self::with_state(move |state| {
-            state.layout.weight = Some(LayoutWeight { weight, fill });
-        })
-    }
-
-    pub fn align(alignment: Alignment) -> Self {
-        Self::with_state(move |state| {
-            state.layout.box_alignment = Some(alignment);
-        })
-        .with_inspector_metadata(inspector_metadata("align", move |info| {
-            info.add_alignment("boxAlignment", alignment);
-        }))
-    }
-
-    pub fn alignInBox(self, alignment: Alignment) -> Self {
-        self.then(Self::align(alignment))
-    }
-
-    pub fn alignInColumn(self, alignment: HorizontalAlignment) -> Self {
-        let modifier = Self::with_state(move |state| {
-            state.layout.column_alignment = Some(alignment);
-        })
-        .with_inspector_metadata(inspector_metadata("alignInColumn", move |info| {
-            info.add_alignment("columnAlignment", alignment);
-        }));
-        self.then(modifier)
-    }
-
-    pub fn alignInRow(self, alignment: VerticalAlignment) -> Self {
-        let modifier = Self::with_state(move |state| {
-            state.layout.row_alignment = Some(alignment);
-        })
-        .with_inspector_metadata(inspector_metadata("alignInRow", move |info| {
-            info.add_alignment("rowAlignment", alignment);
-        }));
-        self.then(modifier)
-    }
-
-    pub fn columnWeight(self, weight: f32, fill: bool) -> Self {
-        self.then(Self::weight_with_fill(weight, fill))
-    }
-
-    pub fn rowWeight(self, weight: f32, fill: bool) -> Self {
-        self.then(Self::weight_with_fill(weight, fill))
-    }
-
     pub fn clip_to_bounds() -> Self {
-        Self::with_element(ClipToBoundsElement::new(), |_| {}).with_inspector_metadata(
-            inspector_metadata("clipToBounds", |info| {
+        Self::with_element(ClipToBoundsElement::new()).with_inspector_metadata(inspector_metadata(
+            "clipToBounds",
+            |info| {
                 info.add_property("clipToBounds", "true");
-            }),
-        )
+            },
+        ))
     }
 
     pub fn modifier_local_provider<T, F>(self, key: ModifierLocalKey<T>, value: F) -> Self
@@ -288,8 +239,7 @@ impl Modifier {
         F: Fn() -> T + 'static,
     {
         let element = ModifierLocalProviderElement::new(key, value);
-        let modifier =
-            Modifier::from_parts(vec![modifier_element(element)], ModifierState::default());
+        let modifier = Modifier::from_parts(vec![modifier_element(element)]);
         self.then(modifier)
     }
 
@@ -298,8 +248,7 @@ impl Modifier {
         F: for<'scope> Fn(&mut ModifierLocalReadScope<'scope>) + 'static,
     {
         let element = ModifierLocalConsumerElement::new(consumer);
-        let modifier =
-            Modifier::from_parts(vec![modifier_element(element)], ModifierState::default());
+        let modifier = Modifier::from_parts(vec![modifier_element(element)]);
         self.then(modifier)
     }
 
@@ -308,8 +257,7 @@ impl Modifier {
         F: Fn(&mut SemanticsConfiguration) + 'static,
     {
         let element = SemanticsElement::new(recorder);
-        let modifier =
-            Modifier::from_parts(vec![modifier_element(element)], ModifierState::default());
+        let modifier = Modifier::from_parts(vec![modifier_element(element)]);
         self.then(modifier)
     }
 
@@ -320,8 +268,7 @@ impl Modifier {
     /// can be focused programmatically.
     pub fn focus_target(self) -> Self {
         let element = FocusTargetElement::new();
-        let modifier =
-            Modifier::from_parts(vec![modifier_element(element)], ModifierState::default());
+        let modifier = Modifier::from_parts(vec![modifier_element(element)]);
         self.then(modifier)
     }
 
@@ -334,8 +281,7 @@ impl Modifier {
         F: Fn(FocusState) + 'static,
     {
         let element = FocusTargetElement::with_callback(callback);
-        let modifier =
-            Modifier::from_parts(vec![modifier_element(element)], ModifierState::default());
+        let modifier = Modifier::from_parts(vec![modifier_element(element)]);
         self.then(modifier)
     }
 
@@ -345,8 +291,7 @@ impl Modifier {
     /// this component from application code.
     pub fn focus_requester(self, requester: &FocusRequester) -> Self {
         let element = FocusRequesterElement::new(requester.id());
-        let modifier =
-            Modifier::from_parts(vec![modifier_element(element)], ModifierState::default());
+        let modifier = Modifier::from_parts(vec![modifier_element(element)]);
         self.then(modifier)
     }
 
@@ -360,14 +305,11 @@ impl Modifier {
         let mut elements = Vec::with_capacity(self.elements.len() + next.elements.len());
         elements.extend(self.elements.iter().cloned());
         elements.extend(next.elements.iter().cloned());
-        let mut state = (*self.state).clone();
-        state.merge(&next.state);
         let mut inspector = Vec::with_capacity(self.inspector.len() + next.inspector.len());
         inspector.extend(self.inspector.iter().cloned());
         inspector.extend(next.inspector.iter().cloned());
         Modifier {
             elements: Rc::new(elements),
-            state: Rc::new(state),
             inspector: Rc::new(inspector),
         }
     }
@@ -396,35 +338,37 @@ impl Modifier {
     }
 
     pub fn padding_values(&self) -> EdgeInsets {
-        self.state.layout.padding
+        self.resolved_modifiers().padding()
     }
 
     pub(crate) fn total_offset(&self) -> Point {
-        self.state.offset
+        self.resolved_modifiers().offset()
     }
 
     pub(crate) fn layout_properties(&self) -> LayoutProperties {
-        self.state.layout
+        self.resolved_modifiers().layout_properties()
     }
 
     pub fn box_alignment(&self) -> Option<Alignment> {
-        self.state.layout.box_alignment
+        self.layout_properties().box_alignment()
     }
 
     pub fn column_alignment(&self) -> Option<HorizontalAlignment> {
-        self.state.layout.column_alignment
+        self.layout_properties().column_alignment()
     }
 
     pub fn row_alignment(&self) -> Option<VerticalAlignment> {
-        self.state.layout.row_alignment
+        self.layout_properties().row_alignment()
     }
 
     pub fn background_color(&self) -> Option<Color> {
-        self.state.background
+        self.resolved_modifiers()
+            .background()
+            .map(|background| background.color())
     }
 
     pub fn corner_shape(&self) -> Option<RoundedCornerShape> {
-        self.state.corner_shape
+        self.resolved_modifiers().corner_shape()
     }
 
     pub fn draw_commands(&self) -> Vec<DrawCommand> {
@@ -432,7 +376,7 @@ impl Modifier {
     }
 
     pub fn graphics_layer_values(&self) -> Option<GraphicsLayer> {
-        self.state.graphics_layer
+        self.resolved_modifiers().graphics_layer()
     }
 
     pub fn clips_to_bounds(&self) -> bool {
@@ -445,32 +389,23 @@ impl Modifier {
         handle.resolved_modifiers()
     }
 
-    fn with_element<E, F>(element: E, update: F) -> Self
+    fn with_element<E>(element: E) -> Self
     where
         E: ModifierNodeElement,
-        F: FnOnce(&mut ModifierState),
     {
         let dyn_element = modifier_element(element);
-        Self::from_parts(vec![dyn_element], ModifierState::from_update(update))
+        Self::from_parts(vec![dyn_element])
     }
 
-    fn with_state<F>(update: F) -> Self
-    where
-        F: FnOnce(&mut ModifierState),
-    {
-        Self::from_parts(Vec::new(), ModifierState::from_update(update))
-    }
-
-    fn from_parts(elements: Vec<DynModifierElement>, state: ModifierState) -> Self {
+    fn from_parts(elements: Vec<DynModifierElement>) -> Self {
         Self {
             elements: Rc::new(elements),
-            state: Rc::new(state),
             inspector: Rc::new(Vec::new()),
         }
     }
 
     fn is_trivially_empty(&self) -> bool {
-        self.elements.is_empty() && self.state.is_default() && self.inspector.is_empty()
+        self.elements.is_empty() && self.inspector.is_empty()
     }
 
     pub(crate) fn with_inspector_metadata(mut self, metadata: InspectorMetadata) -> Self {
@@ -540,9 +475,7 @@ impl InspectableModifier for Modifier {
 
 impl PartialEq for Modifier {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.elements, &other.elements)
-            && Rc::ptr_eq(&self.state, &other.state)
-            && Rc::ptr_eq(&self.inspector, &other.inspector)
+        Rc::ptr_eq(&self.elements, &other.elements) && Rc::ptr_eq(&self.inspector, &other.inspector)
     }
 }
 
@@ -576,76 +509,6 @@ impl fmt::Display for Modifier {
 impl fmt::Debug for Modifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self, f)
-    }
-}
-
-#[derive(Clone)]
-struct ModifierState {
-    layout: LayoutProperties,
-    offset: Point,
-    background: Option<Color>,
-    corner_shape: Option<RoundedCornerShape>,
-    draw_commands: Vec<DrawCommand>,
-    graphics_layer: Option<GraphicsLayer>,
-    clip_to_bounds: bool,
-}
-
-impl ModifierState {
-    fn new() -> Self {
-        Self::default()
-    }
-
-    fn from_update<F>(update: F) -> Self
-    where
-        F: FnOnce(&mut ModifierState),
-    {
-        let mut state = Self::new();
-        update(&mut state);
-        state
-    }
-
-    fn merge(&mut self, other: &ModifierState) {
-        self.layout = self.layout.merged(other.layout);
-        self.offset.x += other.offset.x;
-        self.offset.y += other.offset.y;
-        if let Some(color) = other.background {
-            self.background = Some(color);
-        }
-        if let Some(shape) = other.corner_shape {
-            self.corner_shape = Some(shape);
-        }
-        if let Some(layer) = other.graphics_layer {
-            self.graphics_layer = Some(layer);
-        }
-        if other.clip_to_bounds {
-            self.clip_to_bounds = true;
-        }
-        self.draw_commands
-            .extend(other.draw_commands.iter().cloned());
-    }
-
-    fn is_default(&self) -> bool {
-        self.layout == LayoutProperties::default()
-            && self.offset == Point { x: 0.0, y: 0.0 }
-            && self.background.is_none()
-            && self.corner_shape.is_none()
-            && self.graphics_layer.is_none()
-            && !self.clip_to_bounds
-            && self.draw_commands.is_empty()
-    }
-}
-
-impl Default for ModifierState {
-    fn default() -> Self {
-        Self {
-            layout: LayoutProperties::default(),
-            offset: Point { x: 0.0, y: 0.0 },
-            background: None,
-            corner_shape: None,
-            draw_commands: Vec::new(),
-            graphics_layer: None,
-            clip_to_bounds: false,
-        }
     }
 }
 

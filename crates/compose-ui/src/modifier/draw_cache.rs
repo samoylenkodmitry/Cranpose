@@ -10,10 +10,7 @@ impl Modifier {
             f(&mut scope);
             scope.into_primitives()
         });
-        Self::with_element(
-            DrawCommandElement::new(DrawCommand::Overlay(func.clone())),
-            |_| {},
-        )
+        Self::with_element(DrawCommandElement::new(DrawCommand::Overlay(func.clone())))
     }
 
     pub fn draw_behind(f: impl Fn(&mut dyn DrawScope) + 'static) -> Self {
@@ -22,16 +19,13 @@ impl Modifier {
             f(&mut scope);
             scope.into_primitives()
         });
-        Self::with_element(
-            DrawCommandElement::new(DrawCommand::Behind(func.clone())),
-            |_| {},
-        )
+        Self::with_element(DrawCommandElement::new(DrawCommand::Behind(func.clone())))
     }
 
     pub fn draw_with_cache(build: impl FnOnce(&mut DrawCacheBuilder)) -> Self {
         let mut builder = DrawCacheBuilder::default();
         build(&mut builder);
         let commands = builder.finish();
-        Self::with_element(DrawCommandElement::from_commands(commands), |_| {})
+        Self::with_element(DrawCommandElement::from_commands(commands))
     }
 }

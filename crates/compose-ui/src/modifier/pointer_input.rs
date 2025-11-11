@@ -27,7 +27,7 @@ impl Modifier {
     {
         let element =
             PointerInputElement::new(vec![KeyToken::new(&key)], pointer_input_handler(handler));
-        Self::with_element(element, |_| {})
+        Self::with_element(element)
     }
 }
 

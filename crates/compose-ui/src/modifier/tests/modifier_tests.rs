@@ -1,7 +1,7 @@
 use super::{
-    modifier_local_of, Color, ComposeModifier, DimensionConstraint, EdgeInsets,
-    InspectableModifier, InspectorInfo, Modifier, ModifierChainHandle, ModifierLocalSource,
-    ModifierLocalToken, Point,
+    modifier_local_of, Alignment, Color, ComposeModifier, DimensionConstraint, EdgeInsets,
+    GraphicsLayer, HorizontalAlignment, InspectableModifier, InspectorInfo, Modifier,
+    ModifierChainHandle, ModifierLocalSource, ModifierLocalToken, Point, Size, VerticalAlignment,
 };
 use crate::modifier_nodes::{AlphaNode, BackgroundNode, ClickableNode, PaddingNode};
 use std::any::TypeId;
@@ -30,7 +30,7 @@ fn padding_nodes_resolve_padding_values() {
 #[test]
 fn fill_max_size_sets_fraction_constraints() {
     let modifier = Modifier::fill_max_size_fraction(0.75);
-    let props = modifier.layout_properties();
+    let props = modifier.resolved_modifiers().layout_properties();
     assert_eq!(props.width(), DimensionConstraint::Fraction(0.75));
     assert_eq!(props.height(), DimensionConstraint::Fraction(0.75));
 }
@@ -38,7 +38,7 @@ fn fill_max_size_sets_fraction_constraints() {
 #[test]
 fn weight_tracks_fill_flag() {
     let modifier = Modifier::weight_with_fill(2.0, false);
-    let props = modifier.layout_properties();
+    let props = modifier.resolved_modifiers().layout_properties();
     let weight = props.weight().expect("weight to be recorded");
     assert_eq!(weight.weight, 2.0);
     assert!(!weight.fill);
@@ -49,7 +49,7 @@ fn offset_accumulates_across_chain() {
     let modifier = Modifier::offset(4.0, 6.0)
         .then(Modifier::absolute_offset(-1.5, 2.5))
         .then(Modifier::offset(0.5, -3.0));
-    let total = modifier.total_offset();
+    let total = modifier.resolved_modifiers().offset();
     assert_eq!(total, Point { x: 3.0, y: 5.5 });
 }
 
@@ -183,6 +183,45 @@ fn inspector_metadata_records_size_and_clickable() {
     assert!(props
         .iter()
         .any(|prop| prop.name == "onClick" && prop.value == "provided"));
+}
+
+#[test]
+fn required_size_sets_explicit_constraints() {
+    let modifier = Modifier::required_size(Size {
+        width: 32.0,
+        height: 18.0,
+    });
+    let props = modifier.resolved_modifiers().layout_properties();
+    assert_eq!(props.width(), DimensionConstraint::Points(32.0));
+    assert_eq!(props.height(), DimensionConstraint::Points(18.0));
+    assert_eq!(props.min_width(), Some(32.0));
+    assert_eq!(props.max_width(), Some(32.0));
+    assert_eq!(props.min_height(), Some(18.0));
+    assert_eq!(props.max_height(), Some(18.0));
+}
+
+#[test]
+fn alignment_modifiers_record_values() {
+    let modifier = Modifier::align(Alignment::BOTTOM_END)
+        .alignInColumn(HorizontalAlignment::CenterHorizontally)
+        .alignInRow(VerticalAlignment::Top);
+    let props = modifier.resolved_modifiers().layout_properties();
+    assert_eq!(props.box_alignment(), Some(Alignment::BOTTOM_END));
+    assert_eq!(
+        props.column_alignment(),
+        Some(HorizontalAlignment::CenterHorizontally)
+    );
+    assert_eq!(props.row_alignment(), Some(VerticalAlignment::Top));
+}
+
+#[test]
+fn graphics_layer_modifier_updates_resolved_layer() {
+    let layer = GraphicsLayer {
+        alpha: 0.5,
+        ..Default::default()
+    };
+    let modifier = Modifier::graphics_layer(layer);
+    assert_eq!(modifier.graphics_layer_values(), Some(layer));
 }
 
 #[test]

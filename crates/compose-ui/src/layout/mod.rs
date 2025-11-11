@@ -142,7 +142,9 @@ impl SemanticsOwner {
 
         // Compute and cache
         let config = compute_semantics_for_node(applier, node_id);
-        self.configurations.borrow_mut().insert(node_id, config.clone());
+        self.configurations
+            .borrow_mut()
+            .insert(node_id, config.clone());
         config
     }
 
@@ -1580,7 +1582,10 @@ fn compute_semantics_for_node(
     }
 
     // Spacer nodes have no semantics
-    if try_clone::<SpacerNode>(applier, node_id).unwrap_or(None).is_some() {
+    if try_clone::<SpacerNode>(applier, node_id)
+        .unwrap_or(None)
+        .is_some()
+    {
         return None;
     }
 
