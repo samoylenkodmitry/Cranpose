@@ -1,0 +1,1239 @@
+   Compiling proc-macro2 v1.0.101
+   Compiling unicode-ident v1.0.19
+   Compiling cfg-if v1.0.3
+   Compiling libc v0.2.176
+   Compiling once_cell v1.21.3
+   Compiling version_check v0.9.5
+   Compiling zerocopy v0.8.27
+   Compiling allocator-api2 v0.2.21
+   Compiling getrandom v0.3.3
+   Compiling equivalent v1.0.2
+   Compiling foldhash v0.2.0
+   Compiling bitflags v2.9.4
+   Compiling smallvec v1.15.1
+   Compiling log v0.4.28
+   Compiling smallvec v2.0.0-alpha.11
+   Compiling quote v1.0.41
+   Compiling rustc-hash v2.1.1
+   Compiling futures-task v0.3.31
+   Compiling libloading v0.8.9
+   Compiling pkg-config v0.3.32
+   Compiling rustix v1.1.2
+   Compiling compose-ui-graphics v0.1.0 (/home/user/rs-compose/crates/compose-ui-graphics)
+   Compiling cfg_aliases v0.1.1
+   Compiling linux-raw-sys v0.11.0
+   Compiling thiserror v1.0.69
+   Compiling ahash v0.8.12
+   Compiling hashbrown v0.16.0
+   Compiling shlex v1.3.0
+   Compiling find-msvc-tools v0.1.3
+   Compiling autocfg v1.5.0
+   Compiling dlib v0.5.2
+   Compiling scoped-tls v1.0.1
+   Compiling cc v1.2.40
+   Compiling memchr v2.7.6
+   Compiling downcast-rs v1.2.1
+   Compiling arrayvec v0.7.6
+   Compiling wayland-sys v0.31.7
+   Compiling wayland-client v0.31.11
+   Compiling parking_lot_core v0.9.12
+   Compiling termcolor v1.4.1
+   Compiling indexmap v2.11.4
+   Compiling num-traits v0.2.19
+   Compiling raw-window-handle v0.6.2
+   Compiling scopeguard v1.2.0
+   Compiling rustc-hash v1.1.0
+   Compiling khronos-egl v6.0.0
+   Compiling syn v2.0.106
+   Compiling quick-xml v0.37.5
+   Compiling bit-vec v0.6.3
+   Compiling rustix v0.38.44
+   Compiling ash v0.37.3+1.3.251
+   Compiling unicode-width v0.1.14
+   Compiling lock_api v0.4.14
+   Compiling wgpu-hal v0.19.5
+   Compiling gpu-alloc-types v0.3.0
+   Compiling bit-set v0.5.3
+   Compiling codespan-reporting v0.11.1
+   Compiling spirv v0.3.0+sdk-1.3.268.0
+   Compiling gpu-descriptor-types v0.1.2
+   Compiling libloading v0.7.4
+   Compiling linux-raw-sys v0.4.15
+   Compiling ab_glyph_rasterizer v0.1.10
+   Compiling unicode-xid v0.2.6
+   Compiling wayland-backend v0.3.11
+   Compiling hexf-parse v0.2.1
+   Compiling wayland-scanner v0.31.7
+   Compiling parking_lot v0.12.5
+   Compiling gpu-alloc v0.6.0
+   Compiling wgpu-core v0.19.4
+   Compiling slotmap v1.0.7
+   Compiling wgpu-types v0.19.2
+   Compiling renderdoc-sys v1.1.0
+   Compiling glow v0.13.1
+   Compiling libm v0.2.15
+   Compiling profiling v1.0.17
+   Compiling foldhash v0.1.5
+   Compiling slab v0.4.11
+   Compiling wgpu v0.19.4
+   Compiling xcursor v0.3.10
+   Compiling arrayref v0.3.9
+   Compiling hashbrown v0.15.5
+   Compiling xkeysym v0.2.1
+   Compiling tinyvec_macros v0.1.1
+   Compiling smithay-client-toolkit v0.18.1
+   Compiling roxmltree v0.20.0
+   Compiling ttf-parser v0.25.1
+   Compiling cursor-icon v1.2.0
+   Compiling strict-num v0.1.1
+   Compiling tinyvec v1.10.0
+   Compiling lru v0.12.5
+   Compiling memmap2 v0.8.0
+   Compiling fontconfig-parser v0.5.8
+   Compiling memmap2 v0.9.9
+   Compiling x11-dl v2.21.0
+   Compiling unicode-properties v0.1.4
+   Compiling yazi v0.1.6
+   Compiling static_assertions v1.1.0
+   Compiling ttf-parser v0.19.2
+   Compiling ttf-parser v0.20.0
+   Compiling unicode-script v0.5.7
+   Compiling crossbeam-utils v0.8.21
+   Compiling unicode-bidi-mirroring v0.1.0
+   Compiling zeno v0.2.3
+   Compiling serde_core v1.0.228
+   Compiling bitflags v1.3.2
+   Compiling unicode-ccc v0.1.2
+   Compiling euclid v0.22.11
+   Compiling winit v0.29.15
+   Compiling unicode-segmentation v1.12.0
+   Compiling ttf-parser v0.15.2
+   Compiling unicode-linebreak v0.1.5
+   Compiling zerocopy-derive v0.8.27
+   Compiling bytemuck_derive v1.10.2
+   Compiling thiserror-impl v1.0.69
+   Compiling as-raw-xcb-connection v1.0.1
+   Compiling rangemap v1.6.0
+   Compiling self_cell v1.2.1
+   Compiling owned_ttf_parser v0.25.1
+   Compiling polling v3.11.0
+   Compiling gethostname v1.1.0
+   Compiling unicode-bidi v0.3.18
+   Compiling ab_glyph v0.2.32
+   Compiling x11rb-protocol v0.13.2
+   Compiling sys-locale v0.3.2
+   Compiling fontdb v0.15.0
+   Compiling svg_fmt v0.4.5
+   Compiling etagere v0.2.15
+   Compiling owned_ttf_parser v0.15.2
+   Compiling wayland-csd-frame v0.3.0
+   Compiling bytemuck v1.24.0
+   Compiling xkbcommon-dl v0.4.2
+   Compiling aho-corasick v1.1.3
+   Compiling smol_str v0.2.2
+   Compiling naga v0.19.2
+   Compiling calloop v0.12.4
+   Compiling font-types v0.7.3
+   Compiling tiny-skia-path v0.11.4
+   Compiling rustybuzz v0.11.0
+   Compiling safe_arch v0.7.4
+   Compiling serde v1.0.228
+   Compiling percent-encoding v2.3.2
+   Compiling read-fonts v0.22.7
+   Compiling regex-syntax v0.8.6
+   Compiling tiny-skia v0.11.4
+   Compiling wide v0.7.33
+   Compiling wayland-protocols v0.31.2
+   Compiling wayland-cursor v0.31.11
+   Compiling calloop-wayland-source v0.2.0
+   Compiling crossbeam-epoch v0.9.18
+   Compiling rusttype v0.9.3
+   Compiling serde_derive v1.0.228
+   Compiling rayon-core v1.13.0
+   Compiling compose-core v0.1.0 (/home/user/rs-compose/crates/compose-core)
+   Compiling hashbrown v0.14.5
+   Compiling regex-automata v0.4.11
+warning: unused doc comment
+  --> crates/compose-core/src/snapshot_pinning.rs:91:1
+   |
+91 | /// Global pinning table protected by a mutex.
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ rustdoc does not generate documentation for macro invocations
+   |
+   = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+   = note: `#[warn(unused_doc_comments)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused doc comment
+   --> crates/compose-core/src/snapshot_v2/mod.rs:323:1
+    |
+323 | /// Thread-local storage for the current snapshot.
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+   --> crates/compose-core/src/snapshot_v2/mod.rs:405:1
+    |
+405 | /// Global map of apply observers indexed by unique ID.
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+   --> crates/compose-core/src/snapshot_v2/mod.rs:410:1
+    |
+410 | / /// Thread-local last-writer registry used for conflict detection in v2.
+411 | | ///
+412 | | /// Maps a state object id to the snapshot id of the most recent successful apply
+413 | | /// that modified the object. This is a simplified conflict tracking mechanism
+414 | | /// for Phase 2.1 before full record-chain merging is implemented.
+415 | | ///
+416 | | /// Thread-local ensures test isolation - each test thread has its own registry.
+    | |_-------------------------------------------------------------------------------^
+    |   |
+    |   rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+   --> crates/compose-core/src/snapshot_v2/mod.rs:421:1
+    |
+421 | / /// Thread-local weak set of state objects with multiple records for periodic garbage collection.
+422 | | /// Mirrors Kotlin's `extraStateObjects` WeakSet.
+    | |_------------------------------------------------^
+    |   |
+    |   rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unexpected `cfg` condition value: `std-hash`
+ --> crates/compose-core/src/collections.rs:1:7
+  |
+1 | #[cfg(feature = "std-hash")]
+  |       ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: expected values for `feature` are: `default`
+  = help: consider adding `std-hash` as a feature in `Cargo.toml`
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+  = note: `#[warn(unexpected_cfgs)]` on by default
+
+warning: unexpected `cfg` condition value: `std-hash`
+ --> crates/compose-core/src/collections.rs:7:11
+  |
+7 | #[cfg(not(feature = "std-hash"))]
+  |           ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: expected values for `feature` are: `default`
+  = help: consider adding `std-hash` as a feature in `Cargo.toml`
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `std-hash`
+ --> crates/compose-core/src/hash.rs:4:7
+  |
+4 | #[cfg(feature = "std-hash")]
+  |       ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: expected values for `feature` are: `default`
+  = help: consider adding `std-hash` as a feature in `Cargo.toml`
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `std-hash`
+  --> crates/compose-core/src/hash.rs:14:11
+   |
+14 | #[cfg(not(feature = "std-hash"))]
+   |           ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: expected values for `feature` are: `default`
+   = help: consider adding `std-hash` as a feature in `Cargo.toml`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unused import: `core::hash::Hash`
+ --> crates/compose-core/src/hash.rs:1:5
+  |
+1 | use core::hash::Hash;
+  |     ^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::hash::Hasher`
+ --> crates/compose-core/src/hash.rs:2:5
+  |
+2 | use std::hash::Hasher;
+  |     ^^^^^^^^^^^^^^^^^
+
+   Compiling serde_json v1.0.145
+   Compiling either v1.15.0
+   Compiling gpu-descriptor v0.2.4
+   Compiling ultraviolet v0.9.2
+   Compiling crossbeam-deque v0.8.6
+   Compiling half v2.7.0
+   Compiling is-terminal v0.4.16
+warning: variable does not need to be mutable
+   --> crates/compose-core/src/state.rs:499:17
+    |
+499 |             let mut head_guard = self.head.write().unwrap();
+    |                 ----^^^^^^^^^^
+    |                 |
+    |                 help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling itoa v1.0.15
+   Compiling clap_lex v0.7.5
+   Compiling ryu v1.0.20
+   Compiling anstyle v1.0.13
+   Compiling ciborium-io v0.2.2
+   Compiling plotters-backend v0.3.7
+warning: type `ObjectId` is more private than the item `state::StateObject::object_id`
+   --> crates/compose-core/src/state.rs:382:5
+    |
+382 |     fn object_id(&self) -> ObjectId;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `state::StateObject::object_id` is reachable at visibility `pub`
+    |
+note: but type `ObjectId` is only usable at visibility `pub(crate)`
+   --> crates/compose-core/src/state.rs:20:1
+    |
+ 20 | pub(crate) struct ObjectId(pub(crate) usize);
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: `#[warn(private_interfaces)]` on by default
+
+warning: type `StateRecord` is more private than the item `state::StateObject::first_record`
+   --> crates/compose-core/src/state.rs:383:5
+    |
+383 |     fn first_record(&self) -> Arc<StateRecord>;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `state::StateObject::first_record` is reachable at visibility `pub`
+    |
+note: but type `StateRecord` is only usable at visibility `pub(crate)`
+   --> crates/compose-core/src/state.rs:33:1
+    |
+ 33 | pub(crate) struct StateRecord {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `StateRecord` is more private than the item `state::StateObject::readable_record`
+   --> crates/compose-core/src/state.rs:384:5
+    |
+384 | /     fn readable_record(&self, snapshot_id: SnapshotId, invalid: &SnapshotIdSet)
+385 | |         -> Arc<StateRecord>;
+    | |____________________________^ method `state::StateObject::readable_record` is reachable at visibility `pub`
+    |
+note: but type `StateRecord` is only usable at visibility `pub(crate)`
+   --> crates/compose-core/src/state.rs:33:1
+    |
+ 33 | pub(crate) struct StateRecord {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `StateRecord` is more private than the item `state::StateObject::prepend_state_record`
+   --> crates/compose-core/src/state.rs:390:5
+    |
+390 |     fn prepend_state_record(&self, record: Arc<StateRecord>);
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `state::StateObject::prepend_state_record` is reachable at visibility `pub`
+    |
+note: but type `StateRecord` is only usable at visibility `pub(crate)`
+   --> crates/compose-core/src/state.rs:33:1
+    |
+ 33 | pub(crate) struct StateRecord {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `StateRecord` is more private than the item `state::StateObject::merge_records`
+   --> crates/compose-core/src/state.rs:392:5
+    |
+392 | /     fn merge_records(
+393 | |         &self,
+394 | |         _previous: Arc<StateRecord>,
+395 | |         _current: Arc<StateRecord>,
+396 | |         _applied: Arc<StateRecord>,
+397 | |     ) -> Option<Arc<StateRecord>> {
+    | |_________________________________^ method `state::StateObject::merge_records` is reachable at visibility `pub`
+    |
+note: but type `StateRecord` is only usable at visibility `pub(crate)`
+   --> crates/compose-core/src/state.rs:33:1
+    |
+ 33 | pub(crate) struct StateRecord {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `StateRecord` is more private than the item `state::StateObject::commit_merged_record`
+   --> crates/compose-core/src/state.rs:401:5
+    |
+401 |     fn commit_merged_record(&self, _merged: Arc<StateRecord>) -> Result<SnapshotId, &'static str> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `state::StateObject::commit_merged_record` is reachable at visibility `pub`
+    |
+note: but type `StateRecord` is only usable at visibility `pub(crate)`
+   --> crates/compose-core/src/state.rs:33:1
+    |
+ 33 | pub(crate) struct StateRecord {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+   Compiling pollster v0.3.0
+warning: struct `GroupFrame` is never constructed
+   --> crates/compose-core/src/lib.rs:725:8
+    |
+725 | struct GroupFrame {
+    |        ^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `INVALID_ANCHOR_POS` is never used
+   --> crates/compose-core/src/lib.rs:732:7
+    |
+732 | const INVALID_ANCHOR_POS: usize = usize::MAX;
+    |       ^^^^^^^^^^^^^^^^^^
+
+warning: function `get_last_write` is never used
+   --> crates/compose-core/src/snapshot_v2/mod.rs:477:15
+    |
+477 | pub(crate) fn get_last_write(id: StateObjectId) -> Option<SnapshotId> {
+    |               ^^^^^^^^^^^^^^
+
+warning: function `process_for_unused_records_locked` is never used
+   --> crates/compose-core/src/snapshot_v2/mod.rs:517:15
+    |
+517 | pub(crate) fn process_for_unused_records_locked(state: &Arc<dyn crate::state::StateObject>) {
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `global_snapshot_id` is never used
+   --> crates/compose-core/src/snapshot_v2/global.rs:194:8
+    |
+194 | pub fn global_snapshot_id() -> SnapshotId {
+    |        ^^^^^^^^^^^^^^^^^^
+
+warning: methods `add` and `add_trait_object` are never used
+  --> crates/compose-core/src/snapshot_weak_set.rs:40:19
+   |
+28 | impl SnapshotWeakSet {
+   | -------------------- methods in this implementation
+...
+40 |     pub(crate) fn add<T: StateObject + 'static>(&mut self, state: &Arc<T>) {
+   |                   ^^^
+...
+59 |     pub(crate) fn add_trait_object(&mut self, state: &Arc<dyn StateObject>) {
+   |                   ^^^^^^^^^^^^^^^^
+
+warning: method `clear_for_reuse` is never used
+   --> crates/compose-core/src/state.rs:106:19
+    |
+ 40 | impl StateRecord {
+    | ---------------- method in this implementation
+...
+106 |     pub(crate) fn clear_for_reuse(&self) {
+    |                   ^^^^^^^^^^^^^^^
+
+warning: fields `key` and `force_children_recompose` are never read
+  --> crates/compose-core/src/chunked_slot_storage.rs:62:5
+   |
+61 | struct GroupFrame {
+   |        ---------- fields in this struct
+62 |     key: Key,
+   |     ^^^
+...
+65 |     force_children_recompose: bool,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `lookup_anchor_position` is never used
+   --> crates/compose-core/src/chunked_slot_storage.rs:320:8
+    |
+132 | impl ChunkedSlotStorage {
+    | ----------------------- method in this implementation
+...
+320 |     fn lookup_anchor_position(&self, anchor_id: usize) -> Option<usize> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `group_id` is never read
+  --> crates/compose-core/src/hierarchical_slot_storage.rs:61:5
+   |
+57 | struct StorageFrame {
+   |        ------------ field in this struct
+...
+61 |     group_id: usize,
+   |     ^^^^^^^^
+
+warning: fields `key` and `force_children_recompose` are never read
+  --> crates/compose-core/src/split_slot_storage.rs:64:5
+   |
+63 | struct GroupFrame {
+   |        ---------- fields in this struct
+64 |     key: Key,
+   |     ^^^
+...
+67 |     force_children_recompose: bool,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: associated items `GAP_BLOCK`, `ensure_gap_at`, and `update_anchor_for_slot` are never used
+    --> crates/compose-core/src/slot_table.rs:128:11
+     |
+ 126 | impl SlotTable {
+     | -------------- associated items in this implementation
+ 127 |     const INITIAL_CAP: usize = 32;
+ 128 |     const GAP_BLOCK: usize = 32; // tune 16/32/64
+     |           ^^^^^^^^^
+...
+ 155 |     fn ensure_gap_at(&mut self, cursor: usize) {
+     |        ^^^^^^^^^^^^^
+...
+1157 |     fn update_anchor_for_slot(&mut self, slot_index: usize) {
+     |        ^^^^^^^^^^^^^^^^^^^^^^
+
+   Compiling ciborium-ll v0.2.2
+   Compiling clap_builder v4.5.48
+   Compiling plotters-svg v0.3.7
+   Compiling itertools v0.10.5
+   Compiling cast v0.3.0
+   Compiling same-file v1.0.6
+   Compiling plotters v0.3.7
+   Compiling compose-ui-layout v0.1.0 (/home/user/rs-compose/crates/compose-ui-layout)
+   Compiling compose-runtime-std v0.1.0 (/home/user/rs-compose/crates/compose-runtime-std)
+   Compiling compose-foundation v0.1.0 (/home/user/rs-compose/crates/compose-foundation)
+   Compiling wayland-protocols-wlr v0.2.0
+   Compiling wayland-protocols-plasma v0.2.0
+   Compiling regex v1.11.3
+   Compiling compose-testing v0.1.0 (/home/user/rs-compose/crates/compose-testing)
+   Compiling criterion-plot v0.5.0
+   Compiling walkdir v2.5.0
+   Compiling clap v4.5.48
+   Compiling rayon v1.11.0
+   Compiling anes v0.1.6
+   Compiling oorandom v11.1.5
+   Compiling humantime v2.3.0
+   Compiling compose-animation v0.1.0 (/home/user/rs-compose/crates/compose-animation)
+   Compiling tinytemplate v1.2.1
+   Compiling ciborium v0.2.2
+   Compiling env_logger v0.10.2
+   Compiling skrifa v0.22.3
+   Compiling compose-assets v0.1.0 (/home/user/rs-compose/crates/compose-assets)
+   Compiling sctk-adwaita v0.8.3
+warning: `compose-core` (lib) generated 30 warnings (11 duplicates) (run `cargo fix --lib -p compose-core` to apply 1 suggestion)
+   Compiling compose-macros v0.1.0 (/home/user/rs-compose/crates/compose-macros)
+warning: `compose-core` (lib) generated 30 warnings (19 duplicates) (run `cargo fix --lib -p compose-core` to apply 2 suggestions)
+   Compiling criterion v0.5.1
+   Compiling x11rb v0.13.2
+   Compiling swash v0.1.19
+   Compiling compose-ui v0.1.0 (/home/user/rs-compose/crates/compose-ui)
+warning: associated function `new` is never used
+   --> crates/compose-ui/src/layout/mod.rs:317:8
+    |
+313 | impl LayoutBuilder {
+    | ------------------ associated function in this implementation
+...
+317 |     fn new(applier: Rc<ConcreteApplierHost<MemoryApplier>>) -> Self {
+    |        ^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling compose-render-common v0.1.0 (/home/user/rs-compose/crates/compose-render/common)
+   Compiling compose-app-shell v0.1.0 (/home/user/rs-compose/crates/compose-app-shell)
+   Compiling compose-render-pixels v0.1.0 (/home/user/rs-compose/crates/compose-render/pixels)
+warning: struct `RusttypeTextMeasurer` is never constructed
+  --> crates/compose-render/pixels/src/draw.rs:24:19
+   |
+24 | pub(crate) struct RusttypeTextMeasurer;
+   |                   ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `compose-ui` (lib) generated 1 warning
+warning: `compose-render-pixels` (lib) generated 1 warning
+   Compiling cosmic-text v0.10.0
+warning: unused import: `SnapshotApplyResult`
+   --> crates/compose-core/src/snapshot_state_observer.rs:472:53
+    |
+472 |     use crate::snapshot_v2::{take_mutable_snapshot, SnapshotApplyResult};
+    |                                                     ^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `ColumnSpec`, `Column`, `Modifier`, `RowSpec`, `Row`, and `Text`
+ --> crates/compose-core/src/tests/lib_tests.rs:7:18
+  |
+7 | use compose_ui::{Column, ColumnSpec, Modifier, Row, RowSpec, Text};
+  |                  ^^^^^^  ^^^^^^^^^^  ^^^^^^^^  ^^^  ^^^^^^^  ^^^^
+
+warning: unused import: `core::hash::Hash`
+ --> crates/compose-core/src/hash.rs:1:5
+  |
+1 | use core::hash::Hash;
+  |     ^^^^^^^^^^^^^^^^
+
+warning: `compose-render-pixels` (lib test) generated 1 warning (1 duplicate)
+warning: unused variable: `constraints`
+   --> crates/compose-ui/src/layout/tests/layout_tests.rs:327:9
+    |
+327 |     let constraints = Constraints {
+    |         ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_constraints`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `size1`
+   --> crates/compose-ui/src/layout/tests/layout_tests.rs:381:9
+    |
+381 |     let size1 = result1.root_size();
+    |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_size1`
+
+warning: unused variable: `result2`
+   --> crates/compose-ui/src/layout/tests/layout_tests.rs:389:9
+    |
+389 |     let result2 = measure_layout(
+    |         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_result2`
+
+   Compiling compose-platform-desktop-winit v0.1.0 (/home/user/rs-compose/crates/compose-platform/desktop-winit)
+warning: struct `DummyNode` is never constructed
+  --> crates/compose-ui/src/tests/async_runtime_full_layout_test.rs:52:8
+   |
+52 | struct DummyNode;
+   |        ^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `slot`
+   --> crates/compose-core/src/tests/slot_backend_tests.rs:917:9
+    |
+917 |     let slot = storage.alloc_value_slot(|| 10i32);
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_slot`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `res_child`
+   --> crates/compose-core/src/tests/slot_backend_tests.rs:976:13
+    |
+976 |         let res_child = storage.begin_group(2001);
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_res_child`
+
+warning: type `state::ObjectId` is more private than the item `state::StateObject::object_id`
+   --> crates/compose-core/src/state.rs:382:5
+    |
+382 |     fn object_id(&self) -> ObjectId;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `state::StateObject::object_id` is reachable at visibility `pub`
+    |
+note: but type `state::ObjectId` is only usable at visibility `pub(crate)`
+   --> crates/compose-core/src/state.rs:20:1
+    |
+ 20 | pub(crate) struct ObjectId(pub(crate) usize);
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: `#[warn(private_interfaces)]` on by default
+
+warning: type `state::StateRecord` is more private than the item `state::StateObject::first_record`
+   --> crates/compose-core/src/state.rs:383:5
+    |
+383 |     fn first_record(&self) -> Arc<StateRecord>;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `state::StateObject::first_record` is reachable at visibility `pub`
+    |
+note: but type `state::StateRecord` is only usable at visibility `pub(crate)`
+   --> crates/compose-core/src/state.rs:33:1
+    |
+ 33 | pub(crate) struct StateRecord {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `state::StateRecord` is more private than the item `state::StateObject::readable_record`
+   --> crates/compose-core/src/state.rs:384:5
+    |
+384 | /     fn readable_record(&self, snapshot_id: SnapshotId, invalid: &SnapshotIdSet)
+385 | |         -> Arc<StateRecord>;
+    | |____________________________^ method `state::StateObject::readable_record` is reachable at visibility `pub`
+    |
+note: but type `state::StateRecord` is only usable at visibility `pub(crate)`
+   --> crates/compose-core/src/state.rs:33:1
+    |
+ 33 | pub(crate) struct StateRecord {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `state::StateRecord` is more private than the item `state::StateObject::prepend_state_record`
+   --> crates/compose-core/src/state.rs:390:5
+    |
+390 |     fn prepend_state_record(&self, record: Arc<StateRecord>);
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `state::StateObject::prepend_state_record` is reachable at visibility `pub`
+    |
+note: but type `state::StateRecord` is only usable at visibility `pub(crate)`
+   --> crates/compose-core/src/state.rs:33:1
+    |
+ 33 | pub(crate) struct StateRecord {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `state::StateRecord` is more private than the item `state::StateObject::merge_records`
+   --> crates/compose-core/src/state.rs:392:5
+    |
+392 | /     fn merge_records(
+393 | |         &self,
+394 | |         _previous: Arc<StateRecord>,
+395 | |         _current: Arc<StateRecord>,
+396 | |         _applied: Arc<StateRecord>,
+397 | |     ) -> Option<Arc<StateRecord>> {
+    | |_________________________________^ method `state::StateObject::merge_records` is reachable at visibility `pub`
+    |
+note: but type `state::StateRecord` is only usable at visibility `pub(crate)`
+   --> crates/compose-core/src/state.rs:33:1
+    |
+ 33 | pub(crate) struct StateRecord {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `state::StateRecord` is more private than the item `state::StateObject::commit_merged_record`
+   --> crates/compose-core/src/state.rs:401:5
+    |
+401 |     fn commit_merged_record(&self, _merged: Arc<StateRecord>) -> Result<SnapshotId, &'static str> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `state::StateObject::commit_merged_record` is reachable at visibility `pub`
+    |
+note: but type `state::StateRecord` is only usable at visibility `pub(crate)`
+   --> crates/compose-core/src/state.rs:33:1
+    |
+ 33 | pub(crate) struct StateRecord {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `value` is never read
+   --> crates/compose-core/src/snapshot_v2/mutable.rs:555:9
+    |
+554 |     struct MockStateObject {
+    |            --------------- field in this struct
+555 |         value: Cell<i32>,
+    |         ^^^^^
+
+warning: field `value` is never read
+   --> crates/compose-core/src/snapshot_v2/readonly.rs:100:9
+    |
+ 99 |     struct MockStateObject {
+    |            --------------- field in this struct
+100 |         value: Cell<i32>,
+    |         ^^^^^
+
+warning: field `value` is never read
+   --> crates/compose-core/src/snapshot_v2/transparent.rs:330:13
+    |
+329 |         struct MockState {
+    |                --------- field in this struct
+330 |             value: Cell<i32>,
+    |             ^^^^^
+
+warning: field `value` is never read
+    --> crates/compose-core/src/snapshot_v2/mod.rs:1165:13
+     |
+1164 |         struct TestState {
+     |                --------- field in this struct
+1165 |             value: Cell<i32>,
+     |             ^^^^^
+
+warning: field `value` is never read
+    --> crates/compose-core/src/snapshot_v2/mod.rs:1225:13
+     |
+1224 |         struct TestState {
+     |                --------- field in this struct
+1225 |             value: Cell<i32>,
+     |             ^^^^^
+
+warning: method `add_trait_object` is never used
+  --> crates/compose-core/src/snapshot_weak_set.rs:59:19
+   |
+28 | impl SnapshotWeakSet {
+   | -------------------- method in this implementation
+...
+59 |     pub(crate) fn add_trait_object(&mut self, state: &Arc<dyn StateObject>) {
+   |                   ^^^^^^^^^^^^^^^^
+
+warning: `compose-ui` (lib test) generated 4 warnings
+warning: `compose-core` (lib test) generated 37 warnings (20 duplicates) (run `cargo fix --lib -p compose-core --tests` to apply 3 suggestions)
+   Compiling glyphon v0.5.0
+   Compiling pixels v0.15.0
+   Compiling compose-render-wgpu v0.1.0 (/home/user/rs-compose/crates/compose-render/wgpu)
+warning: function `point_in_rounded_rect` is never used
+   --> crates/compose-render/wgpu/src/pipeline/style.rs:161:15
+    |
+161 | pub(crate) fn point_in_rounded_rect(x: f32, y: f32, rect: Rect, shape: RoundedCornerShape) -> bool {
+    |               ^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `point_in_resolved_rounded_rect` is never used
+   --> crates/compose-render/wgpu/src/pipeline/style.rs:166:15
+    |
+166 | pub(crate) fn point_in_resolved_rounded_rect(
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+   Compiling compose-app v0.1.0 (/home/user/rs-compose/crates/compose-app)
+warning: `compose-render-wgpu` (lib) generated 2 warnings
+warning: function `run_pixels_app` is never used
+   --> crates/compose-app/src/lib.rs:194:4
+    |
+194 | fn run_pixels_app(options: &ComposeAppOptions, content: impl FnMut() + 'static) -> ! {
+    |    ^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `compose-app` (lib) generated 1 warning
+   Compiling desktop-app v0.1.0 (/home/user/rs-compose/apps/desktop-demo)
+warning: `compose-render-wgpu` (lib test) generated 2 warnings (2 duplicates)
+warning: `compose-app` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 38.73s
+     Running unittests src/lib.rs (target/debug/deps/compose_animation-e4fcb2146774fddd)
+
+running 7 tests
+test animation::tests::animation_spec_default_has_reasonable_values ... ok
+test animation::tests::easing_bounds_are_correct ... ok
+test animation::tests::animate_float_as_state_interpolates_over_time ... ok
+test animation::tests::spring_spec_bouncy_has_low_damping ... ok
+test animation::tests::easing_linear_is_identity ... ok
+test animation::tests::spring_spec_default_is_critically_damped ... ok
+test animation::tests::spring_spec_stiff_has_high_stiffness ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/compose_app-8a1f9f211238095a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/compose_app_shell-4d3bbbac1486c594)
+
+running 1 test
+test tests::layout_recovers_after_tab_switching_updates ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running unittests src/lib.rs (target/debug/deps/compose_assets-743261ddfc16fbf6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/compose_core-d531ab4f948fe453)
+
+running 284 tests
+test slot_backend_tests::test_backends_allocate_fewer_slots ... ok
+test slot_backend_tests::test_all_backends_smoke ... ok
+test slot_backend_tests::test_backends_allocate_more_slots_after_gap_restore ... ok
+test recursive_decrease_increase_test::recursive_decrease_increase_preserves_structure ... ok
+test slot_backend_tests::test_backends_gap_restore ... ok
+test slot_backend_tests::test_backends_gap_restore_frame_end ... ok
+test recursive_decrease_increase_test::recursive_decrease_increase_multiple_cycles ... ok
+test slot_backend_tests::test_backends_gap_restore_preserves_scope ... ok
+test slot_backend_tests::test_backends_gap_restore_rejects_key_mismatch ... ok
+test slot_backend_tests::test_backends_gap_restore_shorter_children_respects_parent_frame ... ok
+test slot_backend_tests::test_backends_gap_scan_forward ... ok
+test slot_backend_tests::test_backends_gaps ... ok
+test slot_backend_tests::test_backends_insert_before_following_group ... ok
+test slot_backend_tests::test_backends_insert_in_first_group_preserves_nested_second_group ... ok
+test slot_backend_tests::test_backends_insert_middle_after_finalize ... ok
+test slot_backend_tests::test_backends_multiple_sibling_groups_gap_isolated ... ok
+test slot_backend_tests::test_backends_nested_groups_partial_finalize ... ok
+test slot_backend_tests::test_backends_recomposition ... ok
+test slot_backend_tests::test_backends_root_finalize_safe ... ok
+test slot_backend_tests::test_backends_root_finalize_then_gap_restore_anchors_consistent ... ok
+test slot_backend_tests::test_backends_scope_recomposition ... ok
+test slot_backend_tests::test_backends_scope_recomposition_not_found_is_safe ... ok
+test slot_backend_tests::test_backends_value_node_value_sequence ... ok
+test slot_backend_tests::test_backends_value_slot_type_mismatch_overwrite ... ok
+test slot_backend_tests::test_chunked_anchor_rebuild_after_shift ... ok
+test slot_backend_tests::test_chunked_gap_scan_upper_bound_fallback ... ok
+test slot_backend_tests::test_chunked_read_after_root_finalize ... ok
+test slot_backend_tests::test_chunked_value_slot_is_position_based ... ok
+test slot_backend_tests::test_hierarchical_scope_search ... ok
+test slot_backend_tests::test_split_payload_gap_then_type_change ... ok
+test slot_backend_tests::test_split_payload_persists_across_gap ... ok
+test slot_backend_tests::test_split_type_mismatch_overwrites_payload_string_to_u64 ... ok
+test slot_backend_tests::test_split_type_mismatch_overwrites_payload_string_to_u64_via_gap ... ok
+test snapshot_double_index_heap::tests::test_add_multiple_maintains_min ... ok
+test snapshot_double_index_heap::tests::test_add_single_element ... ok
+test snapshot_double_index_heap::tests::test_capacity_growth ... ok
+test snapshot_double_index_heap::tests::test_empty_heap ... ok
+test snapshot_double_index_heap::tests::test_handle_reuse ... ok
+test snapshot_double_index_heap::tests::test_heap_invariant_after_operations ... ok
+test snapshot_double_index_heap::tests::test_remove_maintains_heap_invariant ... ok
+test snapshot_double_index_heap::tests::test_stress_random_operations ... ok
+test snapshot_id_set::tests::test_and_not_fast_path ... ok
+test snapshot_id_set::tests::test_and_not_slow_path ... ok
+test snapshot_id_set::tests::test_below_bound_insertion ... ok
+test snapshot_id_set::tests::test_below_bound_removal ... ok
+test snapshot_id_set::tests::test_boundary_transitions ... ok
+test snapshot_id_set::tests::test_clear ... ok
+test snapshot_id_set::tests::test_clear_idempotent ... ok
+test snapshot_id_set::tests::test_debug_format ... ok
+test snapshot_id_set::tests::test_empty_set ... ok
+test snapshot_id_set::tests::test_iterator ... ok
+test snapshot_id_set::tests::test_iterator_all_ranges ... ok
+test snapshot_id_set::tests::test_iterator_empty ... ok
+test snapshot_id_set::tests::test_large_snapshot_ids ... ok
+test snapshot_id_set::tests::test_lowest_in_below_bound ... ok
+test snapshot_id_set::tests::test_lowest_in_lower_set ... ok
+test snapshot_id_set::tests::test_lowest_in_upper_set ... ok
+test snapshot_id_set::tests::test_lowest_returns_upper_if_none_found ... ok
+test snapshot_id_set::tests::test_or_fast_path ... ok
+test snapshot_id_set::tests::test_or_slow_path ... ok
+test snapshot_id_set::tests::test_set_and_get_lower_range ... ok
+test snapshot_id_set::tests::test_set_and_get_upper_range ... ok
+test snapshot_id_set::tests::test_set_idempotent ... ok
+test snapshot_id_set::tests::test_shift_and_set ... ok
+test snapshot_id_set::tests::test_to_list ... ok
+test snapshot_pinning::tests::test_concurrent_snapshots ... ok
+test snapshot_pinning::tests::test_duplicate_pins ... ok
+test snapshot_pinning::tests::test_empty_invalid_set ... ok
+test snapshot_pinning::tests::test_heap_handle_based_removal ... ok
+test snapshot_pinning::tests::test_invalid_handle ... ok
+test snapshot_pinning::tests::test_lowest_from_invalid_set ... ok
+test snapshot_pinning::tests::test_multiple_pins ... ok
+test snapshot_pinning::tests::test_pin_ordering ... ok
+test snapshot_pinning::tests::test_release_invalid_handle ... ok
+test snapshot_pinning::tests::test_track_and_release ... ok
+test snapshot_pinning::tests::test_valid_handle ... ok
+test snapshot_state_observer::tests::clear_removes_scope_observation ... ok
+test snapshot_state_observer::tests::notifies_scope_when_state_changes ... ok
+test snapshot_state_observer::tests::with_no_observations_skips_reads ... ok
+test snapshot_v2::global::tests::test_advance_global_snapshot_function ... ok
+test snapshot_v2::global::tests::test_global_snapshot_advance ... ok
+test snapshot_v2::global::tests::test_global_snapshot_apply_always_succeeds ... ok
+test snapshot_v2::global::tests::test_global_snapshot_creation ... ok
+test snapshot_v2::global::tests::test_global_snapshot_enter ... ok
+test snapshot_v2::global::tests::test_global_snapshot_get_or_create ... ok
+test snapshot_v2::global::tests::test_global_snapshot_has_no_pending_changes_initially ... ok
+test snapshot_v2::global::tests::test_global_snapshot_nested ... ok
+test snapshot_v2::global::tests::test_global_snapshot_nested_mutable ... ok
+test snapshot_v2::global::tests::test_global_snapshot_nested_mutable_dispose_clears_invalid ... ok
+test snapshot_v2::global::tests::test_global_snapshot_never_disposed ... ok
+test snapshot_v2::integration_tests::tests::test_concurrent_snapshots_with_different_objects ... ok
+test snapshot_v2::integration_tests::tests::test_concurrent_snapshots_with_same_object_conflict ... ok
+test snapshot_v2::integration_tests::tests::test_conflict_detection_after_record_reuse ... ok
+test snapshot_v2::integration_tests::tests::test_dispose_prevents_further_operations ... ok
+test snapshot_v2::integration_tests::tests::test_empty_snapshot_applies_successfully ... ok
+test snapshot_v2::integration_tests::tests::test_end_to_end_simple_snapshot_workflow ... ok
+test snapshot_v2::integration_tests::tests::test_multiple_levels_of_nesting ... ok
+test snapshot_v2::integration_tests::tests::test_nested_snapshot_applies_to_parent ... ok
+test snapshot_v2::integration_tests::tests::test_nested_snapshot_conflict_with_parent ... ok
+test snapshot_v2::integration_tests::tests::test_observer_notifications_on_apply ... ok
+test snapshot_v2::integration_tests::tests::test_optimistic_merges_failure_returns_none ... ok
+test snapshot_v2::integration_tests::tests::test_optimistic_merges_runs_outside_runtime_lock ... ok
+test snapshot_v2::integration_tests::tests::test_optimistic_merges_success ... ok
+test snapshot_v2::integration_tests::tests::test_snapshot_isolation ... ok
+test snapshot_v2::integration_tests::tests::test_three_way_merge_equivalent_prefers_parent ... ok
+test snapshot_v2::integration_tests::tests::test_three_way_merge_succeeds_with_policy ... ok
+test snapshot_v2::mutable::tests::test_mutable_conflict_detection_same_object ... ok
+test snapshot_v2::mutable::tests::test_mutable_no_conflict_different_objects ... ok
+test snapshot_v2::mutable::tests::test_mutable_snapshot_apply_empty ... ok
+test snapshot_v2::mutable::tests::test_mutable_snapshot_apply_observer ... ok
+test snapshot_v2::mutable::tests::test_mutable_snapshot_apply_twice_fails ... ok
+test snapshot_v2::mutable::tests::test_mutable_snapshot_creation ... ok
+test snapshot_v2::mutable::tests::test_mutable_snapshot_dispose ... ok
+test snapshot_v2::mutable::tests::test_mutable_snapshot_enter ... ok
+test snapshot_v2::mutable::tests::test_mutable_snapshot_nested_dispose ... ok
+test snapshot_v2::mutable::tests::test_mutable_snapshot_nested_mutable ... ok
+test snapshot_v2::mutable::tests::test_mutable_snapshot_nested_mutable_dispose_clears_invalid ... ok
+test snapshot_v2::mutable::tests::test_mutable_snapshot_nested_readonly ... ok
+test snapshot_v2::mutable::tests::test_mutable_snapshot_no_pending_changes_initially ... ok
+test snapshot_v2::mutable::tests::test_mutable_snapshot_read_observer ... ok
+test snapshot_v2::readonly::tests::test_readonly_snapshot_creation ... ok
+test snapshot_v2::readonly::tests::test_readonly_snapshot_dispose ... ok
+test snapshot_v2::readonly::tests::test_readonly_snapshot_enter_restores_previous ... ok
+test snapshot_v2::readonly::tests::test_readonly_snapshot_enter ... ok
+test snapshot_v2::readonly::tests::test_readonly_snapshot_is_valid ... ok
+test snapshot_v2::readonly::tests::test_readonly_snapshot_nested ... ok
+test snapshot_v2::readonly::tests::test_readonly_snapshot_nested_with_observer ... ok
+test snapshot_v2::readonly::tests::test_readonly_snapshot_no_pending_changes ... ok
+test snapshot_v2::readonly::tests::test_readonly_snapshot_read_observer ... ok
+test snapshot_v2::mutable::tests::test_mutable_snapshot_write_after_apply_panics - should panic ... ok
+test snapshot_v2::readonly::tests::test_readonly_snapshot_write_panics - should panic ... ok
+test snapshot_v2::mutable::tests::test_mutable_snapshot_write_after_dispose_panics - should panic ... ok
+test snapshot_v2::mutable::tests::test_mutable_snapshot_write_observer ... ok
+test snapshot_v2::nested::tests::test_nested_conflict_with_parent_same_object ... ok
+test snapshot_v2::nested::tests::test_nested_merge_sets_parent_pending_changes ... ok
+test snapshot_v2::nested::tests::test_nested_mutable_apply ... ok
+test snapshot_v2::nested::tests::test_nested_mutable_apply_twice_fails ... ok
+test snapshot_v2::nested::tests::test_nested_mutable_dispose ... ok
+test snapshot_v2::nested::tests::test_nested_mutable_snapshot ... ok
+test snapshot_v2::nested::tests::test_nested_readonly_dispose ... ok
+test snapshot_v2::nested::tests::test_nested_readonly_snapshot ... ok
+test snapshot_v2::nested::tests::test_nested_readonly_snapshot_root ... ok
+test snapshot_v2::runtime::tests::test_advance_global_snapshot_updates_open_set ... ok
+test snapshot_v2::runtime::tests::test_allocate_snapshot_marks_it_open ... ok
+test snapshot_v2::runtime::tests::test_close_snapshot_clears_open_flag ... ok
+test snapshot_v2::runtime::tests::test_initial_state_marks_global_snapshot_open ... ok
+test snapshot_v2::tests::test_apply_observer_not_called_for_empty_modifications ... ok
+test snapshot_v2::tests::test_apply_observer_receives_correct_modified_objects ... ok
+test snapshot_v2::tests::test_apply_observer_receives_correct_snapshot_id ... ok
+test snapshot_v2::tests::test_apply_result_check_success ... ok
+test snapshot_v2::tests::test_apply_result_is_failure ... ok
+test snapshot_v2::tests::test_apply_result_is_success ... ok
+test snapshot_v2::tests::test_apply_result_check_failure - should panic ... ok
+test snapshot_v2::tests::test_current_snapshot_none_initially ... ok
+test snapshot_v2::tests::test_merge_read_observers_both_none ... ok
+test snapshot_v2::tests::test_merge_read_observers_one_some ... ok
+test snapshot_v2::tests::test_merge_write_observers_both_none ... ok
+test snapshot_v2::tests::test_merge_write_observers_one_some ... ok
+test snapshot_v2::tests::test_multiple_apply_observers_all_called ... ok
+test snapshot_v2::tests::test_multiple_writes_to_same_state_object ... ok
+test snapshot_v2::tests::test_observer_handle_drop_in_different_orders ... ok
+test snapshot_v2::tests::test_observer_handle_drop_removes_correct_observer ... ok
+test snapshot_v2::tests::test_observer_ids_are_unique ... ok
+test snapshot_v2::tests::test_remaining_observers_still_work_after_drop ... ok
+test snapshot_v2::tests::test_state_object_storage_in_modified_set ... ok
+test snapshot_v2::transparent::tests::test_transparent_observer_mutable_apply ... ok
+test snapshot_v2::transparent::tests::test_transparent_observer_mutable_nested ... ok
+test snapshot_v2::transparent::tests::test_transparent_observer_mutable_snapshot ... ok
+test snapshot_v2::transparent::tests::test_transparent_observer_snapshot ... ok
+test snapshot_v2::transparent::tests::test_transparent_observer_snapshot_nested ... ok
+test snapshot_weak_set::tests::test_weak_set_add_multiple ... ok
+test snapshot_v2::transparent::tests::test_transparent_observer_snapshot_write_panics - should panic ... ok
+test snapshot_weak_set::tests::test_weak_set_add_single ... ok
+test snapshot_weak_set::tests::test_weak_set_capacity_growth ... ok
+test snapshot_weak_set::tests::test_weak_set_maintains_sort_order ... ok
+test snapshot_weak_set::tests::test_weak_set_mixed_alive_and_dead ... ok
+test snapshot_weak_set::tests::test_weak_set_new ... ok
+test snapshot_weak_set::tests::test_weak_set_remove_all ... ok
+test snapshot_weak_set::tests::test_weak_set_remove_if_keeps_matching ... ok
+test snapshot_weak_set::tests::test_weak_set_remove_if_predicate ... ok
+test snapshot_weak_set::tests::test_weak_set_removes_dead_references ... ok
+test state::tests::test_assign_value_copies_int ... ok
+test state::tests::test_assign_value_copies_string ... ok
+test state::tests::test_assign_value_overwrites_existing_value ... ok
+test state::tests::test_assign_value_self_assignment ... ok
+test state::tests::test_assign_value_with_custom_type ... ok
+test state::tests::test_assign_value_with_vec ... ok
+test state::tests::test_new_overwritable_record_locked_creates_new ... ok
+test state::tests::test_new_overwritable_record_locked_reuses_invalid ... ok
+test state::tests::test_overwrite_unused_records_basic_cleanup ... ok
+test state::tests::test_overwrite_unused_records_clears_values ... ok
+test state::tests::test_overwrite_unused_records_mixed_old_and_new ... ok
+test state::tests::test_overwrite_unused_records_no_old_records ... ok
+test state::tests::test_overwrite_unused_records_single_record_only ... ok
+test state::tests::test_readable_record_for_picks_highest_valid ... ok
+test state::tests::test_readable_record_for_preexisting ... ok
+test state::tests::test_readable_record_for_skips_invalid_set ... ok
+test state::tests::test_state_record_clear_for_reuse ... ok
+test state::tests::test_used_locked_finds_invalid_snapshot ... ok
+test state::tests::test_used_locked_finds_obscured_record ... ok
+test state::tests::test_used_locked_no_reusable_record ... ok
+test state::tests::test_used_locked_single_old_record ... ok
+test state::tests::test_writable_record_creates_new_when_reuse_disallowed ... ok
+test state::tests::test_writable_record_reuses_invalid_record ... ok
+test subcompose::tests::dispose_from_middle_moves_trailing_slots ... ok
+test subcompose::tests::dispose_or_reuse_respects_policy ... ok
+test subcompose::tests::draining_inactive_precomposed_returns_nodes ... ok
+test subcompose::tests::exact_reuse_wins ... ok
+test subcompose::tests::incompatible_reuse_is_rejected ... ok
+test subcompose::tests::policy_based_compatibility ... ok
+test subcompose::tests::removing_slots_deactivates_scopes ... ok
+test subcompose::tests::reordering_keyed_children_preserves_nodes ... ok
+test tests::cancelling_frame_callback_prevents_execution ... ok
+test tests::anchor_survives_conditional_removal ... ok
+test tests::composable_skips_when_inputs_unchanged ... ok
+test tests::compose_with_reuse_forces_recomposition_when_requested ... ok
+test tests::compose_with_reuse_skips_then_recomposes ... ok
+test tests::composition_local_default_value_used_outside_provider ... ok
+test tests::composition_local_provider_scopes_values ... ok
+test tests::composition_local_simple_subscription_test ... ok
+test tests::composition_local_tracks_reads_and_recomposes_selectively ... ok
+test tests::composition_works_with_baseline_backend ... ok
+test tests::composition_works_with_chunked_backend ... ok
+test tests::composition_works_with_hierarchical_backend ... ok
+test tests::composition_works_with_split_backend ... ok
+test tests::debug_nested_component_slot_table_state ... ok
+test tests::disposable_effect_reacts_to_key_changes ... ok
+test tests::draining_callbacks_clears_needs_frame ... ok
+test tests::disposing_scope_cancels_pending_frame_callback ... ok
+test tests::frame_callbacks_fire_in_registration_order ... ok
+test tests::inactive_scopes_delay_invalidation_until_reactivated ... ok
+test tests::insert_and_remove_emit_expected_ops ... ok
+test tests::launched_effect_async_restarts_on_key_change ... ok
+test tests::launched_effect_async_survives_conditional_cycle ... ok
+test tests::launched_effect_async_keeps_frames_after_backward_forward_flip ... ok
+test tests::launched_effect_relaunches_on_branch_change ... ok
+test tests::launched_effect_runs_and_cancels ... ok
+test tests::launched_effect_runs_side_effect_body ... ok
+test tests::mutable_state_exposes_pending_value_while_borrowed ... ok
+test tests::mutable_state_reads_during_update_return_previous_value ... ok
+test tests::mutable_state_snapshot_handles_reentrant_drop_reads ... ok
+test tests::next_frame_future_resolves_after_callback ... ok
+test tests::recompose_handles_removed_scopes_gracefully ... ok
+test tests::recompose_does_not_use_stale_indices_when_prior_scope_changes_length ... ok
+test tests::remember_state_roundtrip ... ok
+test tests::reorder_keyed_children_emits_moves ... ok
+test tests::side_effect_runs_after_composition ... ok
+test tests::slot_table_conditional_rendering_preserves_sibling_scopes ... ok
+test tests::slot_table_handles_nested_group_gaps ... ok
+test tests::slot_table_marks_values_as_gaps ... ok
+test tests::slot_table_gaps_work_with_nested_conditionals ... ok
+test tests::slot_table_preserves_sibling_groups_when_marking_gaps ... ok
+test tests::slot_table_remember_replaces_mismatched_type ... ok
+test tests::slot_table_multiple_rapid_tab_switches ... ok
+test tests::slot_table_replaces_mismatched_value_types ... ok
+test tests::slot_table_reuses_gap_slots_for_values ... ok
+test tests::snapshot_state_child_apply_after_parent_history ... ok
+test tests::slot_table_tab_switching_preserves_scopes ... ok
+test tests::snapshot_state_child_isolation_and_apply ... ok
+test tests::snapshot_state_concurrent_children_merge ... ok
+test tests::snapshot_state_global_write_then_read ... ok
+test tests::snapshot_state_list_basic_operations ... ok
+test state::tests::test_assign_value_copies_from_cleared_source_panics - should panic ... ok
+test tests::snapshot_state_list_commits_snapshot_mutations ... ok
+test tests::snapshot_state_map_basic_operations ... ok
+test tests::snapshot_state_map_commits_snapshot_mutations ... ok
+test tests::state_invalidation_skips_parent_scope ... ok
+test tests::state_update_schedules_render ... ok
+test tests::static_composition_local_default_value_used_outside_provider ... ok
+test tests::static_composition_local_provides_values ... ok
+test tests::stats_scope_survives_conditional_gap ... ok
+test tests::launched_effect_background_updates_ui ... ok
+test tests::subcompose_reuses_nodes_across_calls ... ok
+test tests::stats_watchers_survive_conditional_toggle ... ok
+test tests::tab_switching_preserves_node_order ... ok
+test tests::tab_switching_with_different_node_types ... ok
+test tests::tab_switching_with_dynamic_lists ... ok
+test tests::tab_switching_with_empty_tab ... ok
+test tests::tab_switching_with_keyed_children ... ok
+test tests::tab_switching_with_nested_components ... ok
+test tests::tab_switching_with_state_during_switch ... ok
+test tests::tab_switching_memory_slot_reuse ... ok
+test tests::launched_effect_background_ignores_late_result_after_cancel ... ok
+test tests::subcompose_panics_outside_measure_or_layout - should panic ... ok
+
+test result: ok. 284 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.69s
+
+     Running unittests src/lib.rs (target/debug/deps/compose_foundation-d0c4c1af8052a17a)
+
+running 4 tests
+test modifier::tests::basic_context_records_invalidations_and_updates ... ok
+test modifier::tests::chain_attaches_updates_and_detaches_nodes ... ok
+test modifier::tests::chain_reuses_nodes_when_reordered ... ok
+test modifier::tests::chain_tracks_node_capabilities ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/compose_macros-2fae592c14be07f4)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/compose_platform_desktop_winit-4e7da0fb3b53eef8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/compose_render_common-cc8db5c27e42ede0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/compose_render_pixels-7f166a94976786ed)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/compose_render_wgpu-4c394f3a92f877d1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/compose_runtime_std-53e420f95ab73146)
+
+running 1 test
+test tests::std_runtime_requests_frame_and_recomposes_on_state_change ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/compose_testing-65de152fab367857)
+
+running 4 tests
+test testing::recomposition_tests::test_skipped_composable_preserves_children ... ok
+test testing::recomposition_tests::test_child_recomposition_preserves_parent ... ok
+test testing::tests::compose_test_rule_reports_content_and_root ... ok
+test testing::recomposition_tests::test_conditional_composable_preserves_siblings ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/compose_ui-2907b47dde1ecc96)
+
+running 74 tests
+test debug::tests::test_count_nodes ... ok
+test layout::policies::tests::box_measure_policy_takes_max_size ... ok
+test layout::policies::tests::column_measure_policy_sums_heights ... ok
+test layout::policies::tests::row_measure_policy_sums_widths ... ok
+test layout::tests::align_helpers_respect_available_space ... ok
+test anchor_async_tests::stats_state_invalidates_after_direction_flip ... ok
+test layout::tests::bubbling_stops_at_already_dirty_ancestor ... ok
+test layout::tests::cache_epoch_increments_when_nodes_dirty ... ok
+test layout::tests::cache_epoch_not_incremented_when_no_dirty_nodes ... ok
+test layout::tests::clamp_dimension_respects_infinite_max ... ok
+test layout::tests::dirty_bubbling_to_root ... ok
+test layout::tests::dirty_child_triggers_parent_remeasure ... ok
+test layout::tests::insert_child_marks_dirty ... ok
+test layout::tests::layout_node_uses_measure_policy ... ok
+test layout::tests::mark_needs_layout_only_sets_layout_flag ... ok
+test layout::tests::mark_needs_measure_sets_both_flags ... ok
+test layout::tests::new_layout_node_starts_dirty ... ok
+test layout::tests::parent_tracking_basic ... ok
+test layout::tests::property_change_bubbles_without_manual_call ... ok
+test layout::tests::remove_child_marks_dirty ... ok
+test layout::tests::resolve_dimension_applies_explicit_points ... ok
+test layout::tests::selective_measure_remeasures_when_dirty ... ok
+test layout::tests::selective_measure_uses_cache_when_not_dirty ... ok
+test layout::tests::selective_measure_with_tree_hierarchy ... ok
+test layout::tests::set_measure_policy_marks_dirty ... ok
+test layout::tests::set_modifier_marks_dirty ... ok
+test layout::tests::tree_needs_layout_api ... ok
+test modifier::tests::fill_max_size_sets_fraction_constraints ... ok
+test modifier::tests::offset_accumulates_across_chain ... ok
+test modifier::tests::padding_values_accumulate_per_edge ... ok
+test modifier::tests::weight_tracks_fill_flag ... ok
+test modifier_nodes::tests::alpha_node_clamps_values ... ok
+test modifier_nodes::tests::alpha_node_is_draw_only ... ok
+test modifier_nodes::tests::background_node_is_draw_only ... ok
+test modifier_nodes::tests::clickable_node_handles_pointer_events ... ok
+test modifier_nodes::tests::mixed_modifier_chain_tracks_all_capabilities ... ok
+test modifier_nodes::tests::modifier_chain_reuses_padding_nodes ... ok
+test modifier_nodes::tests::padding_node_adds_space_to_content ... ok
+test modifier_nodes::tests::padding_node_respects_intrinsics ... ok
+test modifier_nodes::tests::reordering_modifiers_with_stable_reuse ... ok
+test modifier_nodes::tests::size_node_enforces_dimensions ... ok
+test modifier_nodes::tests::toggling_background_color_reuses_node ... ok
+test primitives::tests::box_with_constraints_composes_different_content ... ok
+test primitives::tests::box_with_constraints_reacts_to_constraint_changes ... ok
+test primitives::tests::button_triggers_state_update ... ok
+test primitives::tests::column_with_alignment_updates_node_fields ... ok
+test primitives::tests::counter_state_skips_when_label_static ... ok
+test primitives::tests::fill_child_respects_explicit_parent_width ... ok
+test primitives::tests::fill_max_height_child_clamps_to_parent ... ok
+test primitives::tests::desktop_counter_layout_respects_container_bounds ... ok
+test primitives::tests::foreach_reorders_without_losing_children ... ok
+test primitives::tests::layout_column_produces_expected_measurements ... ok
+test primitives::tests::row_with_alignment_updates_node_fields ... ok
+test primitives::tests::modifier_offset_translates_layout ... ok
+test primitives::tests::test_fill_max_width_respects_parent_bounds ... ok
+test primitives::tests::test_fill_max_width_should_not_propagate_to_wrapping_parent ... ok
+test primitives::tests::test_fill_max_width_with_background_and_double_padding ... ok
+test primitives::tests::text_updates_with_state_after_write ... ok
+test renderer::tests::renderer_emits_background_and_text ... ok
+test primitives::tests::wrap_column_with_fill_child_uses_content_width ... ok
+test renderer::tests::renderer_renders_subcompose_background ... ok
+test renderer::tests::renderer_translates_draw_commands ... ok
+test subcompose_layout::tests::inactive_slots_move_to_reusable_pool ... ok
+test subcompose_layout::tests::measure_subcomposes_content ... ok
+test subcompose_layout::tests::subcompose_reuses_nodes_across_measures ... ok
+test tab_switching_tests::tab_switching_layout_pass_handles_conditional_nodes ... ok
+test tab_switching_tests::tab_switching_restores_conditional_layout_nodes ... ok
+test tab_switching_tests::recursive_layout_depth_decrease_then_increase_restores_branches ... ok
+test tab_switching_tests::tab_switching_multiple_toggle_cycles_stays_responsive ... ok
+test tab_switching_tests::recursive_layout_updates_keep_all_branches ... ok
+test tab_switching_tests::recursive_layout_nodes_preserve_extent ... ok
+test tab_switching_tests::tab_switching_recursive_layout_preserves_branches ... ok
+test anchor_async_tests::async_runtime_freezes_without_conditional_key ... ok
+test async_runtime_full_layout_test::async_runtime_full_layout_freezes_after_forward_flip ... ok
+
+test result: ok. 74 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.10s
+
+     Running unittests src/lib.rs (target/debug/deps/compose_ui_graphics-e11f99f5af8ae32b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/compose_ui_layout-c6322988f0ae03a9)
+
+running 2 tests
+test arrangement::tests::spaced_by_uses_fixed_spacing ... ok
+test arrangement::tests::space_evenly_distributes_gaps ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/desktop_app-6c39dbce709abe4c)
+
+running 1 test
+test app::tests::async_runtime_freezes_without_conditional_key ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s
+

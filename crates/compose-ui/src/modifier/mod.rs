@@ -9,12 +9,18 @@
 use std::fmt;
 use std::rc::Rc;
 
+mod alpha;
+mod aspect_ratio;
 mod background;
+mod border;
 mod clickable;
+mod clip;
 mod draw_cache;
 mod graphics_layer;
 mod padding;
 mod pointer_input;
+mod rotate;
+mod scale;
 
 pub use crate::draw::{DrawCacheBuilder, DrawCommand};
 use compose_foundation::ModifierElement;
