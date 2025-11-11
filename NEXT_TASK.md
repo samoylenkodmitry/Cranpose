@@ -1,30 +1,29 @@
-# Next Task: Rebuild Semantics Extraction on Modifier Nodes
+# Next Task: Build a Modifier-Driven Semantics Tree
 
 ## Context
-Traversal parity is in place: every runtime consumer now relies on the delegate-aware helpers that mirror Jetpack Compose’s `NodeChain`. Semantics is still the major outlier: `LayoutNode::semantics_configuration()` mixes modifier-node data with `RuntimeNodeMetadata`, semantics invalidations always bubble through layout, and the tree builder cannot short-circuit on `NodeCapabilities::SEMANTICS`. Kotlin’s `SemanticsNode`, `SemanticsOwner`, and `SemanticsModifierNode` (see `/media/huge/composerepo/compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/semantics`) build their tree exclusively from modifier nodes and respect capability masks when visiting descendants and ancestors. We need to mirror that flow so semantics-only updates stay cheap and the upcoming semantics rewrite has a solid foundation.
+Semantics data now comes straight from modifier nodes: `LayoutNode::semantics_configuration` pulls from the reconciled `ModifierNodeChain`, capability filters keep traversal tight, and semantics invalidations raise a dedicated dirty flag that bubbles through the composer without touching layout. The remaining gap lives in the tree builder: `layout/mod.rs` still assembles semantics using `RuntimeNodeMetadata` shims, synthesizing roles/actions per widget instead of mirroring Kotlin’s `SemanticsNode`/`SemanticsOwner` pipeline. We need to replace that scaffolding with modifier-node traversal so delegated semantics, ancestor merges, and capability masks behave like Jetpack Compose.
 
 ## Goals
-1. Build the semantics tree exclusively from modifier nodes (delegates included), eliminating the dependency on `RuntimeNodeMetadata`.
-2. Short-circuit semantics extraction using `aggregate_child_capabilities` so chains without semantics are skipped entirely.
-3. Route semantics invalidations through a dedicated dirty flag/pipeline instead of `mark_needs_layout`, matching Kotlin’s `SemanticsOwner` behavior.
-4. Expand diagnostics/tests to cover delegate semantics nodes, semantics-only invalidations, and capability-gated traversal.
+1. Rebuild the semantics tree exclusively from modifier nodes (including delegates), removing `RuntimeNodeMetadata` from the extraction path.
+2. Introduce a SemanticsOwner-style cache keyed by `NodeId` that stores the most recent `SemanticsConfiguration` per layout node and is refreshed only when `needs_semantics()` is true.
+3. Ensure role/action synthesis (e.g., click handlers, button roles, content descriptions) flows from the modifier-provided configuration, not widget-specific fallbacks.
+4. Expand tests to cover delegated semantics children, semantics-only updates, and capability-filtered traversal parity with Jetpack Compose expectations.
 
 ## Suggested Steps
-1. **Modifier-chain semantics snapshot**
-   - Teach `LayoutNode::semantics_configuration` and the tree builder in `crates/compose-ui/src/layout/mod.rs` to iterate with `for_each_forward_matching(NodeCapabilities::SEMANTICS, …)`. Remove the fallback to `RuntimeNodeMetadata` for nodes whose semantics come purely from modifiers.
-   - Add helper(s) that materialize a `SemanticsConfiguration` slice per node/delegate, similar to Kotlin’s `SemanticsNode.collectSemantics`.
-2. **Semantics dirty plumbing**
-   - Introduce a semantics dirty flag on `LayoutNode` (and/or the semantics owner) that is toggled when the chain reports `InvalidationKind::Semantics`. Ensure this flag does **not** trigger layout/measure work; instead, queue a semantics recompute pass similar to Kotlin’s `SemanticsOwner` invalidations.
-   - Hook the new flag into the existing layout pipeline so semantics are recomputed before rendering/inspection when dirty.
-3. **Tree builder parity**
-   - Update `build_semantics_node` to stop reading legacy metadata, use the modifier-node configurations, and respect capability masks when recursing.
-   - Ensure delegate stacks contribute semantic children in order, matching Jetpack Compose’s `SemanticsNode`.
+1. **Refactor the semantics snapshot**
+   - Mirror Kotlin’s `SemanticsNode#collectSemantics`: walk each `LayoutNode`’s modifier chain with `for_each_forward_matching(NodeCapabilities::SEMANTICS, …)` to gather configurations and cache them alongside the node id.
+   - Replace the `RuntimeNodeMetadata` structs with a lightweight owner map (e.g., `HashMap<NodeId, SemanticsEntry>`) that records the cached configuration, child ordering hints, and any synthesized actions derived from the config.
+2. **Build a SemanticsOwner**
+   - Create a dedicated struct (or reuse an existing container) that holds the node map, exposes `invalidate(node_id)` when `mark_needs_semantics` fires, and rebuilds the tree lazily before reads.
+   - Clear each `LayoutNode`’s semantics dirty flag after the owner refreshes the configuration, mirroring Kotlin’s contract.
+3. **Rework tree assembly**
+   - Update `build_semantics_node` and related helpers to read from the new owner cache, compose delegated children in modifier order, and derive roles/actions solely from the configuration (falling back to widget shims only when no semantics nodes exist).
+   - Ensure capability masks gate traversal: skip subtrees whose layout nodes advertise no semantics capabilities.
 4. **Testing & diagnostics**
-   - Extend `crates/compose-foundation/src/tests/modifier_tests.rs` and `crates/compose-ui/src/widgets/nodes/layout_node.rs` tests to assert that delegated semantics nodes are discovered, semantics-only updates skip layout, and capability masks short-circuit traversal.
-   - Add targeted snapshot tests under `crates/compose-ui/src/layout/tests` (or similar) that build nested semantics delegates and verify the resulting tree/dirty flags.
+   - Extend `crates/compose-ui/src/layout/tests/layout_tests.rs` (and related modules) with cases that cover modifier delegates adding semantics, semantics-only updates avoiding layout, and ancestor merges.
+   - Add debug assertions or logs (guarded behind existing flags) that dump the rebuilt semantics tree so parity comparisons with Kotlin samples are straightforward.
 
 ## Definition of Done
-- Semantics extraction/trees no longer depend on `RuntimeNodeMetadata`; they are built entirely from modifier nodes via capability-filtered traversal (delegates included).
-- Semantics invalidations toggle a dedicated dirty flag or queue, not `mark_needs_layout`, and semantics-only changes avoid measure/layout work.
-- Capability masks short-circuit semantics traversal in both chain iteration and tree building.
-- New/updated tests cover delegated semantics nodes, semantics-only invalidations, and the semantics tree builder; the full workspace `cargo test` remains green.
+- The semantics tree no longer relies on `RuntimeNodeMetadata`; all roles/actions/descriptions originate from modifier-node traversal and cached configurations.
+- The new semantics owner invalidation flow respects `LayoutNode::needs_semantics()` and clears the flag after refresh, leaving layout/measure dirty flags untouched on semantics-only updates.
+- Tests exercise delegated semantics, capability short-circuiting, and semantics-only invalidations; the full workspace `cargo test` suite remains green.

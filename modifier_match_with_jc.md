@@ -7,7 +7,7 @@ Goal: match Jetpack Compose’s `Modifier` API surface and `Modifier.Node` runti
 ## Current Gaps (Compose-RS)
 - `Modifier` is still an Rc-backed builder with cached layout/draw state for legacy APIs. Renderers now read reconciled node slices, but `ModifierState` continues to provide padding/layout caches and must be removed once every factory is node-backed.
 - Focus is the last holdout that still treats the modifier chain as a flat list; its ancestor search, invalidations, and capability gating must move onto the delegate-aware traversal helpers.
-- Semantics extraction still mixes modifier-node data with `RuntimeNodeMetadata`, so we never build the Kotlin-style `SemanticsOwner` tree or honor capability-scoped traversal/invalidations (semantics-only changes continue to trigger layout).
+- Semantics tree building still leans on `RuntimeNodeMetadata` shims instead of walking modifier nodes end-to-end, so we lack a Kotlin-style `SemanticsOwner`, capability-scoped traversal, and full delegate coverage when deriving roles/actions.
 - Diagnostics exist (`Modifier::fmt`, `debug::log_modifier_chain`, `COMPOSE_DEBUG_MODIFIERS`), but we still lack parity tooling such as Kotlin’s inspector strings, capability dumps with delegate depth, and targeted tracing hooks used by focus/pointer stacks.
 
 ## Jetpack Compose Reference Anchors
@@ -24,6 +24,7 @@ Goal: match Jetpack Compose’s `Modifier` API surface and `Modifier.Node` runti
 - Core modifier factories (`padding`, `background`, `draw*`, `clipToBounds`, `pointerInput`, `clickable`) are node-backed, and pointer input runs on coroutine-driven scaffolding mirroring Kotlin. Renderers and pointer dispatch now operate exclusively on reconciled node slices.
 - `ModifierNodeChain` now mirrors Kotlin’s delegate semantics: every node exposes parent/child links, delegate stacks feed the traversal helpers, aggregate capability masks propagate through delegates, and tests cover ordering, sentinel wiring, and capability short-circuiting without any `unsafe`.
 - Runtime consumers (modifier locals, pointer input, semantics helpers, diagnostics, and resolver pipelines) now use the delegate-aware traversal helpers exclusively; the legacy iterator APIs were removed and tests cover delegated capability discovery.
+- Semantics modifiers now feed a capability-filtered snapshot straight from `ModifierNodeChain`, and layout nodes own a dedicated semantics dirty flag that queues bubbling through composer commands so semantics-only updates avoid layout.
 
 ## Migration Plan
 1. **Mirror the `Modifier` data model (Kotlin: `Modifier.kt`)**  
@@ -41,10 +42,10 @@ Goal: match Jetpack Compose’s `Modifier` API surface and `Modifier.Node` runti
 1. **Focus chain parity**  
    - Wire the focus manager/requester utilities through `ModifierNodeChain`’s delegate traversal helpers so focus targets, focus order, and ancestor resolution short-circuit via capability masks.  
    - Port the relevant pieces from `androidx.compose.ui.focus.*` (especially `FocusTransactions.kt`, `FocusTraversalPolicy.kt`) to ensure Kotlin’s `visitAncestors/visitChildren` semantics hold, and add tests that cover delegated focus nodes.
-2. **Semantics stack parity**  
-   - Re-read `androidx/compose/ui/node/Semantics*` and port the Kotlin contract: build semantics trees by walking modifier nodes via capability masks, keep per-node `SemanticsConfiguration` caches, and expose a `SemanticsOwner`-equivalent that downstream renderers/tests can query.  
-   - Split semantics invalidations from layout/draw flags in `LayoutNode`, and only traverse the chain sections whose `aggregate_child_capabilities` contain `SEMANTICS`.  
-   - Expand the parity test matrix (e.g., mirror `SemanticsModifierTest.kt`) to cover ancestor-provided semantics, custom actions, and semantics-only updates.
+2. **Semantics stack parity**
+   - Re-read `androidx/compose/ui/node/Semantics*` and port the Kotlin contract: build the accessibility tree directly from modifier nodes/delegates, cache `SemanticsConfiguration`s per node, and expose a `SemanticsOwner`-equivalent that downstream renderers/tests can query.
+   - Replace the `RuntimeNodeMetadata` shims in `layout/mod.rs` with node-chain derived data so role/action synthesis mirrors Kotlin and respects capability-scoped traversal.
+   - Expand the parity test matrix (e.g., mirror `SemanticsModifierTest.kt`) to cover ancestor-provided semantics, custom actions, delegated semantics children, and semantics-only updates.
 3. **Diagnostics + focus-ready infrastructure**  
    - Extend debugging helpers (`Modifier.to_string()`, chain dumps) to include delegate depth, modifier locals provided, semantics flags, and capability masks.  
    - Port Kotlin’s tracing (`NodeChain#trace`, inspector strings) so modifier/focus debugging has feature parity and can be toggled per-layout-node (not just via `COMPOSE_DEBUG_MODIFIERS`).
@@ -145,7 +146,7 @@ Always cross-check behavior against the Kotlin sources under `/media/huge/compos
 
 **Targets:** gap 6, shortcuts 4, 5, wifn 5
 
-1. **Unify semantics extraction**
+1. **(✅) Unify semantics extraction**
 
    * **Goal:** stop mixing “runtime node metadata” semantics with “modifier-node” semantics.
    * **Actions:**
@@ -156,7 +157,7 @@ Always cross-check behavior against the Kotlin sources under `/media/huge/compos
 
      * A node with `.semantics { is_clickable = true }` ends up clickable in the built semantics tree without needing `RuntimeNodeMetadata` to say so.
 
-2. **Respect capability-based traversal**
+2. **(✅) Respect capability-based traversal**
 
    * **Goal:** don’t walk the whole chain if `aggregate_child_capabilities` says “nothing semantic down here.”
    * **Actions:**
@@ -170,7 +171,7 @@ Always cross-check behavior against the Kotlin sources under `/media/huge/compos
 
      * Semantics building only touches entries that have the semantics bit (or have it in children).
 
-3. **Separate draw vs layout invalidations from semantics**
+3. **(✅) Separate draw vs layout invalidations from semantics**
 
    * **Goal:** current invalidation routing in `LayoutNode` is coarse.
    * **Actions:**
