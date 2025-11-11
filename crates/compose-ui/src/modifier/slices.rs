@@ -83,41 +83,30 @@ impl fmt::Debug for ModifierNodeSlices {
 pub fn collect_modifier_slices(chain: &ModifierNodeChain) -> ModifierNodeSlices {
     let mut slices = ModifierNodeSlices::default();
 
-    if chain.has_capability(NodeCapabilities::POINTER_INPUT) {
-        chain.for_each_forward_matching(NodeCapabilities::POINTER_INPUT, |node_ref| {
-            let Some(node) = node_ref.node() else {
-                return;
-            };
+    chain.for_each_node_with_capability(NodeCapabilities::POINTER_INPUT, |_ref, node| {
+        if let Some(handler) = node
+            .as_pointer_input_node()
+            .and_then(|n| n.pointer_input_handler())
+        {
+            slices.pointer_inputs.push(handler);
+        }
 
-            if let Some(handler) = node
-                .as_pointer_input_node()
-                .and_then(|n| n.pointer_input_handler())
-            {
-                slices.pointer_inputs.push(handler);
-            }
+        if let Some(clickable) = node.as_any().downcast_ref::<ClickableNode>() {
+            slices.click_handlers.push(clickable.handler());
+        }
+    });
 
-            if let Some(clickable) = node.as_any().downcast_ref::<ClickableNode>() {
-                slices.click_handlers.push(clickable.handler());
-            }
-        });
-    }
-
-    if chain.has_capability(NodeCapabilities::DRAW) {
-        chain.for_each_forward_matching(NodeCapabilities::DRAW, |node_ref| {
-            let Some(node) = node_ref.node() else {
-                return;
-            };
-            let any = node.as_any();
-            if let Some(commands) = any.downcast_ref::<DrawCommandNode>() {
-                slices
-                    .draw_commands
-                    .extend(commands.commands().iter().cloned());
-            }
-            if any.is::<ClipToBoundsNode>() {
-                slices.clip_to_bounds = true;
-            }
-        });
-    }
+    chain.for_each_node_with_capability(NodeCapabilities::DRAW, |_ref, node| {
+        let any = node.as_any();
+        if let Some(commands) = any.downcast_ref::<DrawCommandNode>() {
+            slices
+                .draw_commands
+                .extend(commands.commands().iter().cloned());
+        }
+        if any.is::<ClipToBoundsNode>() {
+            slices.clip_to_bounds = true;
+        }
+    });
 
     slices
 }

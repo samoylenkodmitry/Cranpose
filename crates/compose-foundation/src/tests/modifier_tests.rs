@@ -693,6 +693,44 @@ impl ModifierNodeElement for TestDrawElement {
 }
 
 #[derive(Debug)]
+struct MaskOnlyNode {
+    state: NodeState,
+}
+
+impl DelegatableNode for MaskOnlyNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
+impl ModifierNode for MaskOnlyNode {}
+
+impl Default for MaskOnlyNode {
+    fn default() -> Self {
+        Self {
+            state: NodeState::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct MaskOnlyElement;
+
+impl ModifierNodeElement for MaskOnlyElement {
+    type Node = MaskOnlyNode;
+
+    fn create(&self) -> Self::Node {
+        MaskOnlyNode::default()
+    }
+
+    fn update(&self, _node: &mut Self::Node) {}
+
+    fn capabilities(&self) -> NodeCapabilities {
+        NodeCapabilities::DRAW
+    }
+}
+
+#[derive(Debug)]
 struct DelegatedDrawNode {
     id: &'static str,
     state: NodeState,
@@ -1003,6 +1041,21 @@ fn chain_tracks_node_capabilities() {
         count_nodes_with_capability(&chain, NodeCapabilities::SEMANTICS),
         0
     );
+}
+
+#[test]
+fn for_each_node_with_capability_visits_mask_only_nodes() {
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+    chain.update_from_slice(
+        &[modifier_element(MaskOnlyElement)],
+        &mut context as &mut dyn ModifierNodeContext,
+    );
+    let mut visited = 0;
+    chain.for_each_node_with_capability(NodeCapabilities::DRAW, |_node_ref, _node| {
+        visited += 1;
+    });
+    assert_eq!(visited, 1, "mask-only nodes should still be visited");
 }
 
 #[test]

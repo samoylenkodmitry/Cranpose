@@ -514,11 +514,7 @@ impl ModifierLocalManager {
         let mut seen_consumers = HashSet::new();
         let mut invalidations = Vec::new();
 
-        chain.for_each_forward_matching(NodeCapabilities::MODIFIER_LOCALS, |node_ref| {
-            let Some(node) = node_ref.node() else {
-                return;
-            };
-
+        chain.for_each_node_with_capability(NodeCapabilities::MODIFIER_LOCALS, |_ref, node| {
             if let Some(provider) = node.as_any().downcast_ref::<ModifierLocalProviderNode>() {
                 providers.insert(
                     provider.token().id(),

@@ -6,8 +6,10 @@ use compose_foundation::PointerEventKind;
 use compose_render_common::{HitTestTarget, RenderScene, Renderer};
 use compose_runtime_std::StdRuntime;
 use compose_ui::{
-    log_layout_tree, log_render_scene, log_screen_summary, peek_render_invalidation,
-    take_render_invalidation, HeadlessRenderer, LayoutEngine, LayoutTree,
+    log_layout_tree, log_render_scene, log_screen_summary, peek_focus_invalidation,
+    peek_pointer_invalidation, peek_render_invalidation, take_focus_invalidation,
+    take_pointer_invalidation, take_render_invalidation, HeadlessRenderer, LayoutEngine,
+    LayoutTree,
 };
 use compose_ui_graphics::Size;
 
@@ -87,7 +89,12 @@ where
     }
 
     pub fn should_render(&self) -> bool {
-        if self.layout_dirty || self.scene_dirty || peek_render_invalidation() {
+        if self.layout_dirty
+            || self.scene_dirty
+            || peek_render_invalidation()
+            || peek_pointer_invalidation()
+            || peek_focus_invalidation()
+        {
             return true;
         }
         self.runtime.take_frame_request() || self.composition.should_render()
@@ -222,7 +229,10 @@ where
     }
 
     fn run_render_phase(&mut self) {
-        if take_render_invalidation() {
+        let render_dirty = take_render_invalidation();
+        let pointer_dirty = take_pointer_invalidation();
+        let focus_dirty = take_focus_invalidation();
+        if render_dirty || pointer_dirty || focus_dirty {
             self.scene_dirty = true;
         }
         if !self.scene_dirty {

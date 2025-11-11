@@ -1201,6 +1201,18 @@ impl ModifierNodeChain {
         }
     }
 
+    /// Calls `f` for every node containing any capability from `mask`, providing the node ref.
+    pub fn for_each_node_with_capability<F>(&self, mask: NodeCapabilities, mut f: F)
+    where
+        F: FnMut(ModifierChainNodeRef<'_>, &dyn ModifierNode),
+    {
+        self.for_each_forward_matching(mask, |node_ref| {
+            if let Some(node) = node_ref.node() {
+                f(node_ref, node);
+            }
+        });
+    }
+
     /// Calls `f` for every node in reverse insertion order.
     pub fn for_each_backward<F>(&self, mut f: F)
     where

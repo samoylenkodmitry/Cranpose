@@ -5,8 +5,8 @@ Goal: match Jetpack Compose’s `Modifier` API surface and `Modifier.Node` runti
 ---
 
 ## Current Gaps (Compose-RS)
-- Runtime dispatch still leans on the optional `as_*` downcasts; Kotlin’s mask-driven visitors (`NodeChain#forEachKind` in `androidx/compose/ui/node/NodeChain.kt`) remain the model so third-party nodes can rely solely on capability masks.
-- Pointer/focus invalidations still piggyback on layout dirtiness; we need the Kotlin-style targeted bubbling so input + focus can refresh independently.
+- Pointer/focus invalidations now produce dedicated flags (`needs_pointer_pass`, `needs_focus_sync`) but nothing drains them outside of tests. Kotlin’s `NodeChain.invalidateKind(NodeKind.Pointer/Focus)` flows into the pointer dispatcher and `FocusManager`. We still need the owner/layout engine to service these queues so pointer repasses and focus recomposition happen without hijacking layout/draw.
+- The public contract still references the `as_draw_node`/`as_pointer_input_node` helpers. Even though capability-driven visitors exist, third-party nodes must keep overriding the `as_*` hooks to participate in draw/pointer/focus. We need either blanket implementations or documentation/macro support so “set the capability bit + implement the trait” is enough, mirroring `Modifier.Node` in Kotlin.
 
 ## Jetpack Compose Reference Anchors
 - `Modifier.kt`: immutable interface (`EmptyModifier`, `CombinedModifier`) plus `foldIn`, `foldOut`, `any`, `all`, `then`.
@@ -22,6 +22,7 @@ Goal: match Jetpack Compose’s `Modifier` API surface and `Modifier.Node` runti
 - Core modifier factories (`padding`, `background`, `draw*`, `clipToBounds`, `pointerInput`, `clickable`) are node-backed, and pointer input runs on coroutine-driven scaffolding mirroring Kotlin. Renderers and pointer dispatch now operate exclusively on reconciled node slices.
 - `ModifierNodeChain` now mirrors Kotlin's delegate semantics: every node exposes parent/child links, delegate stacks feed the traversal helpers, aggregate capability masks propagate through delegates, and tests cover ordering, sentinel wiring, and capability short-circuiting without any `unsafe`.
 - Runtime consumers (modifier locals, pointer input, semantics helpers, diagnostics, and resolver pipelines) now use the delegate-aware traversal helpers exclusively; the legacy iterator APIs were removed and tests cover delegated capability discovery.
+- **Mask-driven visitors + targeted input flags:** `ModifierNodeChain::for_each_node_with_capability` mirrors Kotlin’s `NodeChain.forEachKind`, draw/pointer/semantics/modifier-local collectors now rely on capability masks, and mask-only regression tests cover delegated nodes. `LayoutNode` exposes `mark_needs_pointer_pass`/`mark_needs_focus_sync`, and the app shell watches pointer/focus invalidation flags so input/focus dirties no longer force measure/layout.
 - **Semantics tree is now fully modifier-driven:** `SemanticsOwner` caches configurations by `NodeId`, `build_semantics_node` derives roles/actions exclusively from `SemanticsConfiguration` flags, semantics dirty flag is independent of layout, and capability-filtered traversal respects delegate depth. `RuntimeNodeMetadata` removed from the semantics extraction path.
 - **Focus chain parity achieved:** `FocusTargetNode` and `FocusRequesterNode` implement full `ModifierNode` lifecycle, focus traversal uses `NodeCapabilities::FOCUS` with delegate-aware visitors (`find_parent_focus_target`, `find_first_focus_target`), `FocusManager` tracks state without unsafe code, focus invalidations are independent of layout/draw, and all 6 tests pass covering lifecycle, callbacks, chain integration, and state predicates.
 - **✅ Layout modifier migration complete:** `OffsetElement`/`OffsetNode` (offset.rs), `FillElement`/`FillNode` (fill.rs), and enhanced `SizeElement`/`SizeNode` now provide full 1:1 parity with Kotlin's foundation-layout modifiers. All three implement `LayoutModifierNode` with proper `measure()`, intrinsic measurement support, and `enforce_incoming` constraint handling. Code is organized into separate files (offset.rs, fill.rs, size.rs). All 118 tests pass ✅.
@@ -143,24 +144,25 @@ Always cross-check behavior against the Kotlin sources under `/media/huge/compos
 
 **Targets:** shortcuts 4, 5
 
-1. **Replace per-node `as_*_node` with mask-driven dispatch** *(in progress)*
+1. **Replace per-node `as_*_node` with mask-driven dispatch** *(mostly done, needs API polish)*
 
    * **Goal:** not every user node has to implement 4 optional methods.
    * **Actions:**
 
-     * Where you iterate now with `draw_nodes()`, `pointer_input_nodes()`, switch to: use the chain entries’ capability bits as the primary filter, and only downcast the node once.
-     * Keep the `as_*` methods for now for built-ins, but don’t require third parties to override them.
+     * ✅ `ModifierNodeChain::for_each_node_with_capability` mirrors Kotlin’s `forEachKind` and all internal collectors (draw slices, pointer input, semantics, modifier locals) now ride capability masks before downcasting.
+     * 🚧 We still expose and document the `as_*` helpers; third-party nodes must override them to hand out trait objects. Need a Kotlin-style capability contract (blanket impl/derive + updated docs/tests) so setting the mask + implementing the trait is sufficient.
    * **Acceptance:**
 
      * A node with the DRAW capability but no `as_draw_node` still gets visited.
 
-2. **Make invalidation routing match the mask** *(partially done)*
+2. **Make invalidation routing match the mask** *(plumbing landed, hook up the managers)*
 
    * **Goal:** stop doing “draw → mark_needs_layout.”
    * **Actions:**
 
      * ✅ Added `ModifierInvalidation` tracking + `LayoutNode::mark_needs_redraw()` so DRAW-only updates no longer force measure/layout and renderers receive precise dirties.
-     * 🚧 Extend the targeted path to pointer/focus so they raise their own managers without toggling layout flags.
+     * ✅ Pointer/focus invalidations now set `needs_pointer_pass`/`needs_focus_sync` and trigger dedicated atomics so hosts can react without touching layout flags.
+     * 🚧 Nothing drains those flags yet—`compose-app-shell` only flips `scene_dirty`. We still need Kotlin-style pointer/focus manager hooks that consume the queues and drive pointer repasses/focus recomposition.
    * **Acceptance:**
 
      * DRAW-only updates don’t force layout. *(met)*

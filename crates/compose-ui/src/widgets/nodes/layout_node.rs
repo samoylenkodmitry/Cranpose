@@ -161,6 +161,8 @@ pub struct LayoutNode {
     needs_layout: Cell<bool>,
     needs_semantics: Cell<bool>,
     needs_redraw: Cell<bool>,
+    needs_pointer_pass: Cell<bool>,
+    needs_focus_sync: Cell<bool>,
     // Parent tracking for dirty flag bubbling (Jetpack Compose style)
     parent: Cell<Option<NodeId>>,
     // Node's own ID (set by applier after creation)
@@ -183,8 +185,10 @@ impl LayoutNode {
             needs_layout: Cell::new(true),  // New nodes need initial layout
             needs_semantics: Cell::new(true), // Semantics snapshot needs initial build
             needs_redraw: Cell::new(true),  // First render should draw the node
-            parent: Cell::new(None),        // No parent initially
-            id: Cell::new(None),            // ID set by applier after creation
+            needs_pointer_pass: Cell::new(false),
+            needs_focus_sync: Cell::new(false),
+            parent: Cell::new(None), // No parent initially
+            id: Cell::new(None),     // ID set by applier after creation
             debug_modifiers: Cell::new(false),
         };
         node.set_modifier(modifier);
@@ -234,13 +238,20 @@ impl LayoutNode {
                         self.mark_needs_redraw();
                     }
                 }
-                InvalidationKind::PointerInput => {}
+                InvalidationKind::PointerInput => {
+                    if self.has_pointer_input_modifier_nodes() {
+                        self.mark_needs_pointer_pass();
+                        crate::request_pointer_invalidation();
+                    }
+                }
                 InvalidationKind::Semantics => {
                     self.request_semantics_update();
                 }
                 InvalidationKind::Focus => {
-                    // Focus invalidations are handled separately by the focus manager
-                    // and don't require layout or draw updates
+                    if self.has_focus_modifier_nodes() {
+                        self.mark_needs_focus_sync();
+                        crate::request_focus_invalidation();
+                    }
                 }
             }
         }
@@ -330,6 +341,36 @@ impl LayoutNode {
         self.needs_redraw.set(false);
     }
 
+    /// Marks this node as needing a fresh pointer-input pass.
+    pub fn mark_needs_pointer_pass(&self) {
+        self.needs_pointer_pass.set(true);
+    }
+
+    /// Returns true when pointer-input state needs to be recomputed.
+    pub fn needs_pointer_pass(&self) -> bool {
+        self.needs_pointer_pass.get()
+    }
+
+    /// Clears the pointer-input dirty flag after hosts service it.
+    pub(crate) fn clear_needs_pointer_pass(&self) {
+        self.needs_pointer_pass.set(false);
+    }
+
+    /// Marks this node as needing a focus synchronization.
+    pub fn mark_needs_focus_sync(&self) {
+        self.needs_focus_sync.set(true);
+    }
+
+    /// Returns true when focus state needs to be synchronized.
+    pub fn needs_focus_sync(&self) -> bool {
+        self.needs_focus_sync.get()
+    }
+
+    /// Clears the focus dirty flag after the focus manager processes it.
+    pub(crate) fn clear_needs_focus_sync(&self) {
+        self.needs_focus_sync.set(false);
+    }
+
     /// Set this node's ID (called by applier after creation).
     pub fn set_node_id(&self, id: NodeId) {
         if let Some(existing) = self.id.replace(Some(id)) {
@@ -416,6 +457,10 @@ impl LayoutNode {
             .contains(NodeCapabilities::SEMANTICS)
     }
 
+    pub fn has_focus_modifier_nodes(&self) -> bool {
+        self.modifier_capabilities.contains(NodeCapabilities::FOCUS)
+    }
+
     fn refresh_registry_state(&self) {
         if let Some(id) = self.id.get() {
             let parent = self.parent();
@@ -464,6 +509,8 @@ impl Clone for LayoutNode {
             needs_layout: Cell::new(self.needs_layout.get()),
             needs_semantics: Cell::new(self.needs_semantics.get()),
             needs_redraw: Cell::new(self.needs_redraw.get()),
+            needs_pointer_pass: Cell::new(self.needs_pointer_pass.get()),
+            needs_focus_sync: Cell::new(self.needs_focus_sync.get()),
             parent: Cell::new(self.parent.get()),
             id: Cell::new(None),
             debug_modifiers: Cell::new(self.debug_modifiers.get()),
@@ -758,6 +805,62 @@ mod tests {
         assert!(node.needs_semantics());
         assert!(!node.needs_measure());
         assert!(!node.needs_layout());
+    }
+
+    #[test]
+    fn pointer_invalidation_requires_pointer_capability() {
+        let mut node = fresh_node();
+        node.clear_needs_pointer_pass();
+        node.modifier_capabilities = NodeCapabilities::DRAW;
+        node.modifier_child_capabilities = node.modifier_capabilities;
+        crate::take_pointer_invalidation();
+
+        node.dispatch_modifier_invalidations(&[invalidation(InvalidationKind::PointerInput)]);
+
+        assert!(!node.needs_pointer_pass());
+        assert!(!crate::take_pointer_invalidation());
+    }
+
+    #[test]
+    fn pointer_invalidation_marks_flag_and_requests_queue() {
+        let mut node = fresh_node();
+        node.clear_needs_pointer_pass();
+        node.modifier_capabilities = NodeCapabilities::POINTER_INPUT;
+        node.modifier_child_capabilities = node.modifier_capabilities;
+        crate::take_pointer_invalidation();
+
+        node.dispatch_modifier_invalidations(&[invalidation(InvalidationKind::PointerInput)]);
+
+        assert!(node.needs_pointer_pass());
+        assert!(crate::take_pointer_invalidation());
+    }
+
+    #[test]
+    fn focus_invalidation_requires_focus_capability() {
+        let mut node = fresh_node();
+        node.clear_needs_focus_sync();
+        node.modifier_capabilities = NodeCapabilities::DRAW;
+        node.modifier_child_capabilities = node.modifier_capabilities;
+        crate::take_focus_invalidation();
+
+        node.dispatch_modifier_invalidations(&[invalidation(InvalidationKind::Focus)]);
+
+        assert!(!node.needs_focus_sync());
+        assert!(!crate::take_focus_invalidation());
+    }
+
+    #[test]
+    fn focus_invalidation_marks_flag_and_requests_queue() {
+        let mut node = fresh_node();
+        node.clear_needs_focus_sync();
+        node.modifier_capabilities = NodeCapabilities::FOCUS;
+        node.modifier_child_capabilities = node.modifier_capabilities;
+        crate::take_focus_invalidation();
+
+        node.dispatch_modifier_invalidations(&[invalidation(InvalidationKind::Focus)]);
+
+        assert!(node.needs_focus_sync());
+        assert!(crate::take_focus_invalidation());
     }
 
     #[test]

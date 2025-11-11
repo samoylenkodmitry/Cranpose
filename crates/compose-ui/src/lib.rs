@@ -44,7 +44,9 @@ pub use primitives::{
     LayoutNode, Row, RowSpec, Spacer, SpacerNode, SubcomposeLayout, Text, TextNode,
 };
 pub use render_state::{
-    peek_render_invalidation, request_render_invalidation, take_render_invalidation,
+    peek_focus_invalidation, peek_pointer_invalidation, peek_render_invalidation,
+    request_focus_invalidation, request_pointer_invalidation, request_render_invalidation,
+    take_focus_invalidation, take_pointer_invalidation, take_render_invalidation,
 };
 pub use renderer::{HeadlessRenderer, PaintLayer, RecordedRenderScene, RenderOp};
 pub use subcompose_layout::{

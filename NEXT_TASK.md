@@ -1,42 +1,43 @@
-# Next Task: Mask-Driven Visitors & Pointer/Focus Invalidations
+# Next Task: Pointer/Focus Manager Wiring & Capability Contract Polish
 
 ## Context
-`BasicModifierNodeContext` now records `ModifierInvalidation`s with capability masks and `LayoutNode::mark_needs_redraw()` mirrors `AndroidComposeView#invalidateLayers`, so DRAW-only nodes stop forcing layout. The remaining Kotlin parity gap lives in dispatch: `NodeChain` APIs in `/media/huge/composerepo/compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/NodeChain.kt` walk capability masks directly, while Compose-RS still relies on legacy `as_*` shortcuts and treats pointer/focus dirties as implicit layout work. We need to finish the mask-driven traversal story (per `Modifier.kt` + `ModifierNodeElement.kt`) and route pointer/focus invalidations through their dedicated managers.
+Capability-driven traversal is in place (`ModifierNodeChain::for_each_node_with_capability` mirrors Kotlin’s `NodeChain.forEachKind`), and `LayoutNode` now raises pointer/focus invalidations via `needs_pointer_pass` and `needs_focus_sync`. However, those queues are never drained outside of tests—the app shell simply marks the scene dirty, so pointer/focus updates still rely on layout/draw side effects. At the same time, the public guidelines still tell authors to override `as_draw_node`/`as_pointer_input_node`, even though Kotlin’s `Modifier.Node` contract relies solely on capability masks. We need to finish the Kotlin parity story by wiring the new flags into the runtime (pointer dispatcher + focus manager) and by polishing the API/docs so third-party nodes can depend on masks instead of bespoke `as_*` hooks.
 
 ## Current State
-- `ModifierNodeChain::for_each_*_matching` and delegate-aware visitors exist, but higher-level systems (draw collection, pointer input stack, semantics, focus, modifier locals) still downcast via `as_draw_node`/`as_pointer_input_node`.
-- `BasicModifierNodeContext` emits rich `ModifierInvalidation`s and `compose-app-shell` watches `request_render_invalidation()`, yet pointer/focus events remain tied to layout dirties instead of their Kotlin-style queues (`PointerInputDelegatingNode` in `androidx/compose/ui/input/pointer` uses `NodeKind.Pointer` checks).
-- Docs/tests still tell downstream authors to override `as_*` helpers even though capability masks are the contract.
+- `LayoutNode::dispatch_modifier_invalidations` sets `needs_pointer_pass`/`needs_focus_sync` and flips the new `request_pointer_invalidation`/`request_focus_invalidation` atomics, but `compose-app-shell` ignores those flags beyond re-rendering. Pointer input still only reprocesses events during layout/draw, and `FocusManager` never sees the new invalidations.
+- `ModifierNode` still exposes the `as_*` helpers, every built-in node overrides them manually, and our docs/tests keep referencing that pattern. Kotlin’s `ModifierNodeElement.kt` only requires the node to set the capability mask + implement the specialized trait.
+- We added a regression test for “mask-only” nodes, yet the runtime still depends on `as_*` to obtain `DrawModifierNode`/`PointerInputNode` trait objects. Without a helper or derive macro, downstream authors still have to write the overrides by hand.
 
 ## Goals
-1. **Mask-driven traversal everywhere** — All modifier consumers (draw, pointer, focus, semantics, modifier locals) use capability masks + delegate-aware visitors, enabling nodes that only set `NodeCapabilities` to participate without overriding helpers.
-2. **Pointer & focus invalidation routing** — Pointer/focus nodes trigger dedicated queues (pointer repass, focus recomposition) without calling `mark_needs_measure/layout`, matching `NodeChain.invalidateKind(NodeKind.Pointer/Input/Foc)` semantics from Kotlin.
-3. **API surface cleanup** — Deprecate mentions of `as_draw_node`/friends, ensure built-ins report accurate masks, and document the new contract for third parties.
+1. **Service pointer invalidations without layout/draw** — Drain `needs_pointer_pass` in the same places Kotlin’s `Owner.onInvalidatePointerInput` fires so pointer repasses happen immediately and only when necessary.
+2. **Surface focus invalidations to `FocusManager`** — Bubble `needs_focus_sync` through a dedicated queue so focus targets/requesters update state without piggybacking on layout.
+3. **Polish the capability contract** — Provide helpers/docs/tests so setting capability bits + implementing the specialized trait is enough; the runtime should stop telling authors to override `as_*`.
 
 ## Jetpack Compose Reference
-- `androidx/compose/ui/node/NodeChain.kt` & `DelegatableNode.kt` for capability-mask traversal.
-- `androidx/compose/ui/Modifier.kt` / `ModifierNodeElement.kt` for the “capabilities define behavior” contract.
-- Pointer/focus routing under `/media/huge/composerepo/compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/input/pointer` and `androidx/compose/ui/focus/FocusTargetNode.kt`.
+- `androidx/compose/ui/node/NodeChain.kt` (`invalidateKind(NodeKind.Pointer/Focus)`) and `Owner.onInvalidatePointerInput/onInvalidateFocus` for how pointer/focus queues get serviced.
+- `androidx/compose/ui/input/pointer/PointerInputDelegatingNode.kt` for pointer repass scheduling.
+- `androidx/compose/ui/focus/FocusOwner.kt` + `FocusTargetNode.kt` for focus invalidation flows.
+- `androidx/compose/ui/Modifier.kt` / `ModifierNodeElement.kt` for the capability-driven contract that avoids `as_*` helpers.
 
 ## Implementation Plan
 
-### Phase 1 — Finish Mask-Driven Visitors
-1. Introduce shims (e.g., `for_each_node_with(mask, visitor)`) to wrap `ModifierChainNodeRef` iteration à la Kotlin’s `forEachKind`.
-2. Update draw slice collection, pointer input dispatch, semantics collection, focus search, and modifier-local manager to consume these shims instead of calling the `as_*` helpers.
-3. Leave the `as_*` hooks as temporary compat no-ops, but add tests proving nodes that only set capability bits still run.
+### Phase 1 — Pointer invalidation servicing
+1. Teach `LayoutEngine`/`AppShell` to poll `LayoutNode::needs_pointer_pass()` after composition/layout and enqueue a “pointer repass” task instead of only toggling `scene_dirty`.
+2. Extend the pointer input stack (`crates/compose-ui/src/modifier/pointer_input.rs` + renderers) with a `request_repass()` API that mirrors Kotlin’s `PointerInputDelegatingNode.requestPointerInput`.
+3. When a repass is scheduled, drain the pointer chain using the existing capability visitors and clear `needs_pointer_pass`/`request_pointer_invalidation()`. Add regression tests that mutate pointer modifiers without touching layout and assert that handlers rerun.
 
-### Phase 2 — Pointer/Focus Invalidation Routing
-1. Extend `ModifierInvalidation` plumbing so pointer/focus requests bubble out of `BasicModifierNodeContext` and reach `LayoutNode::dispatch_modifier_invalidations`.
-2. Add `LayoutNode::mark_needs_pointer_pass()`/focus equivalent, and teach `compose-app-shell` (and other hosts) to act on those flags without toggling layout dirties.
-3. Mirror Kotlin’s targeted behavior: pointer stacks request a new pass, focus manager queues recomposition, layout flags remain untouched.
+### Phase 2 — Focus invalidation servicing
+1. Add a focus invalidation queue (similar to Kotlin’s `FocusInvalidationManager`) that tracks `LayoutNode`s with `needs_focus_sync`.
+2. Integrate the queue with `FocusManager` so `FocusTargetNode`/`FocusRequesterNode` refresh their state immediately, clearing `needs_focus_sync` without forcing layout.
+3. Cover scenarios like `FocusRequester.requestFocus()` + modifier updates with tests to ensure focus invalidations no longer depend on layout dirtiness.
 
-### Phase 3 — Public Surface Polish
-1. Update docs + examples to describe capability-driven nodes (drop `as_draw_node` references).
-2. Audit built-in `ModifierNodeElement::capabilities()` to guarantee every node advertises pointers/focus/etc. correctly.
-3. Add migration/regression tests for third-party nodes that rely solely on masks.
+### Phase 3 — Capability contract polish
+1. Introduce a helper (derive macro or blanket impl) that automatically wires `as_draw_node`/`as_pointer_input_node`/etc. when a node implements the corresponding specialized trait, eliminating boilerplate for third parties.
+2. Update docs (`modifier_match_with_jc.md`, inline Rustdoc) and samples to emphasize “set `NodeCapabilities`, implement the trait” instead of overriding `as_*`.
+3. Audit every `ModifierNodeElement::capabilities()` for accuracy and add regression tests proving a node that only sets the capability bit (no manual override) still participates in draw/pointer/focus traversals.
 
 ## Acceptance Criteria
-- Draw, pointer, focus, semantics, and modifier-local traversals rely exclusively on capability masks & delegate-aware visitors.
-- Pointer/focus invalidations no longer call `mark_needs_measure/layout`; they drive their dedicated managers like in Kotlin.
-- Built-in docs/tests describe the capability contract, and third-party nodes that only set `NodeCapabilities` pass new regression suites.
-- Workspace `cargo test` passes.
+- Pointer/focus invalidations are fully drained via runtime queues; they no longer rely on layout/draw flags, and end-to-end tests confirm repasses/focus updates trigger without a measure/layout pass.
+- The pointer dispatcher and `FocusManager` expose new APIs/hooks that mirror Jetpack Compose’s targeted routing.
+- Library docs/samples/tests no longer instruct users to override `as_*`; capability bits + specialized traits suffice, with regression tests covering mask-only nodes.
+- `cargo fmt`, `cargo clippy --all-targets --all-features`, and `cargo test` continue to pass.

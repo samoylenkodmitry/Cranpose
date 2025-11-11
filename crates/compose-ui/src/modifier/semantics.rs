@@ -122,11 +122,9 @@ pub fn collect_semantics_from_chain(chain: &ModifierNodeChain) -> Option<Semanti
 
     let mut config = SemanticsConfiguration::default();
     let mut merged = false;
-    chain.for_each_forward_matching(NodeCapabilities::SEMANTICS, |node_ref| {
-        if let Some(node) = node_ref.node() {
-            if merge_semantics_from_node(node, &mut config) {
-                merged = true;
-            }
+    chain.for_each_node_with_capability(NodeCapabilities::SEMANTICS, |_ref, node| {
+        if merge_semantics_from_node(node, &mut config) {
+            merged = true;
         }
     });
 
