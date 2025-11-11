@@ -6,9 +6,11 @@ pub use compose_macros::composable;
 
 mod debug;
 mod draw;
+mod focus_dispatch;
 mod layout;
 mod modifier;
 mod modifier_nodes;
+mod pointer_dispatch;
 mod primitives;
 mod render_state;
 mod renderer;
@@ -19,6 +21,12 @@ pub mod widgets;
 pub use compose_ui_graphics::Dp;
 pub use compose_ui_layout::IntrinsicSize;
 pub use draw::{execute_draw_commands, DrawCacheBuilder, DrawCommand};
+pub use focus_dispatch::{
+    active_focus_target, clear_focus_invalidations, has_pending_focus_invalidations,
+    process_focus_invalidations, schedule_focus_invalidation, set_active_focus_target,
+};
+// Re-export FocusManager from compose-foundation to avoid duplication
+pub use compose_foundation::nodes::input::focus::FocusManager;
 pub use layout::{
     core::{
         Alignment, Arrangement, HorizontalAlignment, LinearArrangement, Measurable, Placeable,
@@ -27,6 +35,10 @@ pub use layout::{
     measure_layout, tree_needs_layout, LayoutBox, LayoutEngine, LayoutMeasurements, LayoutNodeData,
     LayoutNodeKind, LayoutTree, SemanticsAction, SemanticsCallback, SemanticsNode, SemanticsRole,
     SemanticsTree,
+};
+pub use pointer_dispatch::{
+    clear_pointer_repasses, has_pending_pointer_repasses, process_pointer_repasses,
+    schedule_pointer_repass,
 };
 pub use modifier::{
     collect_modifier_slices, collect_slices_from_modifier, Brush, Color, CornerRadii, EdgeInsets,

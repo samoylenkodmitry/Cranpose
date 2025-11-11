@@ -242,6 +242,10 @@ impl LayoutNode {
                     if self.has_pointer_input_modifier_nodes() {
                         self.mark_needs_pointer_pass();
                         crate::request_pointer_invalidation();
+                        // Schedule pointer repass for this node
+                        if let Some(id) = self.id.get() {
+                            crate::schedule_pointer_repass(id);
+                        }
                     }
                 }
                 InvalidationKind::Semantics => {
@@ -251,6 +255,10 @@ impl LayoutNode {
                     if self.has_focus_modifier_nodes() {
                         self.mark_needs_focus_sync();
                         crate::request_focus_invalidation();
+                        // Schedule focus invalidation for this node
+                        if let Some(id) = self.id.get() {
+                            crate::schedule_focus_invalidation(id);
+                        }
                     }
                 }
             }

@@ -9,8 +9,8 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use compose_foundation::{
-    DelegatableNode, FocusNode, FocusState, ModifierNode, ModifierNodeContext, ModifierNodeElement,
-    NodeCapabilities, NodeState,
+    impl_focus_node, DelegatableNode, FocusNode, FocusState, ModifierNode, ModifierNodeContext,
+    ModifierNodeElement, NodeCapabilities, NodeState,
 };
 
 /// Focus direction for navigation.
@@ -109,13 +109,8 @@ impl ModifierNode for FocusTargetNode {
         self.clear_focus();
     }
 
-    fn as_focus_node(&self) -> Option<&dyn FocusNode> {
-        Some(self)
-    }
-
-    fn as_focus_node_mut(&mut self) -> Option<&mut dyn FocusNode> {
-        Some(self)
-    }
+    // Capability-driven implementation using helper macro
+    impl_focus_node!();
 }
 
 impl FocusNode for FocusTargetNode {

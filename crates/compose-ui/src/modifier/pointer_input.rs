@@ -1,7 +1,7 @@
 use super::{inspector_metadata, Modifier, PointerEvent};
 use compose_foundation::{
-    DelegatableNode, ModifierNode, ModifierNodeContext, ModifierNodeElement, NodeCapabilities,
-    NodeState, PointerInputNode,
+    impl_pointer_input_node, DelegatableNode, ModifierNode, ModifierNodeContext,
+    ModifierNodeElement, NodeCapabilities, NodeState, PointerInputNode,
 };
 use compose_ui_graphics::Size;
 use futures_task::{waker, ArcWake};
@@ -426,13 +426,8 @@ impl ModifierNode for SuspendingPointerInputNode {
         self.restart();
     }
 
-    fn as_pointer_input_node(&self) -> Option<&dyn PointerInputNode> {
-        Some(self)
-    }
-
-    fn as_pointer_input_node_mut(&mut self) -> Option<&mut dyn PointerInputNode> {
-        Some(self)
-    }
+    // Capability-driven implementation using helper macro
+    impl_pointer_input_node!();
 }
 
 impl DelegatableNode for SuspendingPointerInputNode {

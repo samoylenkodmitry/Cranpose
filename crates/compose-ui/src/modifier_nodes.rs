@@ -1,15 +1,16 @@
 //! Concrete implementations of modifier nodes for common modifiers.
 //!
-//! This module provides actual implementations of layout and draw modifier nodes
-//! that can be used instead of the value-based ModOp system. These nodes follow
-//! the Modifier.Node architecture from the roadmap.
+//! This module provides node-backed implementations of layout and draw modifiers
+//! following Jetpack Compose's Modifier.Node architecture. All modifiers are now
+//! node-based, achieving complete parity with Kotlin's modifier system.
 //!
 //! # Overview
 //!
-//! The Modifier.Node system provides better performance than value-based modifiers by:
-//! - Reusing node instances across recompositions (zero allocations when stable)
-//! - Targeted invalidation (only affected phases like layout/draw are invalidated)
-//! - Lifecycle hooks (on_attach, on_detach, update) for efficient state management
+//! The Modifier.Node system provides excellent performance through:
+//! - **Node reuse** — Node instances are reused across recompositions (zero allocations when stable)
+//! - **Targeted invalidation** — Only affected phases (layout/draw/pointer/focus) are invalidated
+//! - **Lifecycle hooks** — `on_attach`, `on_detach`, `update` for efficient state management
+//! - **Capability-driven dispatch** — Nodes declare capabilities via `NodeCapabilities` bits
 //!
 //! # Example Usage
 //!
@@ -34,18 +35,30 @@
 //!
 //! # Available Nodes
 //!
-//! - [`PaddingNode`] / [`PaddingElement`]: Adds padding around content (layout)
-//! - [`BackgroundNode`] / [`BackgroundElement`]: Draws a background color (draw)
-//! - [`SizeNode`] / [`SizeElement`]: Enforces specific dimensions (layout)
+//! ## Layout Modifiers
+//! - [`PaddingNode`] / [`PaddingElement`]: Adds padding around content
+//! - [`SizeNode`] / [`SizeElement`]: Enforces specific dimensions
+//! - [`FillNode`] / [`FillElement`]: Fills available space with optional fractions
+//! - [`OffsetNode`] / [`OffsetElement`]: Translates content by offset
+//! - [`WeightNode`] / [`WeightElement`]: Proportional sizing in flex containers
+//! - [`AlignmentNode`] / [`AlignmentElement`]: Alignment within parent
+//! - [`IntrinsicSizeNode`] / [`IntrinsicSizeElement`]: Intrinsic measurement
+//!
+//! ## Draw Modifiers
+//! - [`BackgroundNode`] / [`BackgroundElement`]: Draws a background color
+//! - [`AlphaNode`] / [`AlphaElement`]: Applies alpha transparency
+//! - [`CornerShapeNode`] / [`CornerShapeElement`]: Rounded corner clipping
+//! - [`GraphicsLayerNode`] / [`GraphicsLayerElement`]: Advanced transformations
+//!
+//! ## Input Modifiers
 //! - [`ClickableNode`] / [`ClickableElement`]: Handles click/tap interactions (pointer input)
-//! - [`AlphaNode`] / [`AlphaElement`]: Applies alpha transparency (draw)
 //!
-//! # Integration with Value-Based Modifiers
+//! # Architecture Notes
 //!
-//! Currently, both systems coexist. The value-based `Modifier` API (ModOp enum)
-//! is still the primary public API. The node-based system provides an alternative
-//! implementation path that will eventually replace value-based modifiers once
-//! the migration is complete.
+//! This is the **only** modifier implementation — there is no legacy "value-based" system.
+//! All modifier factories in `Modifier` return `ModifierNodeElement` instances that create
+//! these nodes. The system achieves complete 1:1 parity with Jetpack Compose's modifier
+//! architecture.
 
 use compose_foundation::{
     Constraints, DelegatableNode, DrawModifierNode, DrawScope, LayoutModifierNode, Measurable,

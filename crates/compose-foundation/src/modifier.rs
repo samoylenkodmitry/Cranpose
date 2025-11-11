@@ -269,6 +269,58 @@ pub trait DelegatableNode {
 
 /// Core trait implemented by modifier nodes.
 ///
+/// # Capability-Driven Architecture
+///
+/// This trait follows Jetpack Compose's `Modifier.Node` pattern where nodes declare
+/// their capabilities via [`NodeCapabilities`] and implement specialized traits
+/// ([`DrawModifierNode`], [`PointerInputNode`], [`SemanticsNode`], [`FocusNode`], etc.)
+/// to participate in specific pipeline stages.
+///
+/// ## How to Implement a Modifier Node
+///
+/// 1. **Declare capabilities** in your [`ModifierNodeElement::capabilities()`] implementation
+/// 2. **Implement specialized traits** for the capabilities you declared
+/// 3. **Use helper macros** to reduce boilerplate (recommended)
+///
+/// ### Example: Draw Node
+///
+/// ```ignore
+/// use compose_foundation::*;
+///
+/// struct MyDrawNode {
+///     state: NodeState,
+///     color: Color,
+/// }
+///
+/// impl DelegatableNode for MyDrawNode {
+///     fn node_state(&self) -> &NodeState {
+///         &self.state
+///     }
+/// }
+///
+/// impl ModifierNode for MyDrawNode {
+///     // Use the helper macro instead of manual as_* implementations
+///     impl_modifier_node!(draw);
+/// }
+///
+/// impl DrawModifierNode for MyDrawNode {
+///     fn draw(&mut self, _context: &mut dyn ModifierNodeContext, draw_scope: &mut dyn DrawScope) {
+///         // Drawing logic here
+///     }
+/// }
+/// ```
+///
+/// ### Example: Multi-Capability Node
+///
+/// ```ignore
+/// impl ModifierNode for MyComplexNode {
+///     // This node participates in draw, pointer input, and semantics
+///     impl_modifier_node!(draw, pointer_input, semantics);
+/// }
+/// ```
+///
+/// ## Lifecycle Callbacks
+///
 /// Nodes receive lifecycle callbacks when they attach to or detach from a
 /// composition and may optionally react to resets triggered by the runtime
 /// (for example, when reusing nodes across modifier list changes).
