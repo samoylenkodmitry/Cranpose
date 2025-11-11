@@ -39,6 +39,7 @@ pub(crate) use local::{
 };
 #[allow(unused_imports)]
 pub use pointer_input::{AwaitPointerEventScope, PointerInputScope};
+pub use semantics::{collect_semantics_from_chain, collect_semantics_from_modifier};
 pub use slices::{collect_modifier_slices, collect_slices_from_modifier, ModifierNodeSlices};
 
 use crate::modifier_nodes::{ClipToBoundsElement, SizeElement};

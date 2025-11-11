@@ -259,8 +259,9 @@ fn set_modifier_marks_dirty() {
     let mut node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
     node.clear_needs_measure();
     node.clear_needs_layout();
+    node.clear_needs_semantics();
 
-    node.set_modifier(Modifier::empty());
+    node.set_modifier(Modifier::padding(4.0));
     assert!(
         node.needs_measure(),
         "set_modifier should mark node as needing measure"
@@ -268,6 +269,10 @@ fn set_modifier_marks_dirty() {
     assert!(
         node.needs_layout(),
         "set_modifier should mark node as needing layout"
+    );
+    assert!(
+        node.needs_semantics(),
+        "set_modifier should mark node as needing semantics"
     );
 }
 

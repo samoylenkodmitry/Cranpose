@@ -157,6 +157,7 @@ pub struct LayoutNode {
     // Dirty flags for selective measure/layout/render
     needs_measure: Cell<bool>,
     needs_layout: Cell<bool>,
+    needs_semantics: Cell<bool>,
     // Parent tracking for dirty flag bubbling (Jetpack Compose style)
     parent: Cell<Option<NodeId>>,
     // Node's own ID (set by applier after creation)
@@ -176,6 +177,7 @@ impl LayoutNode {
             cache: LayoutNodeCacheHandles::default(),
             needs_measure: Cell::new(true), // New nodes need initial measure
             needs_layout: Cell::new(true),  // New nodes need initial layout
+            needs_semantics: Cell::new(true), // Semantics snapshot needs initial build
             parent: Cell::new(None),        // No parent initially
             id: Cell::new(None),            // ID set by applier after creation
         };
@@ -190,6 +192,7 @@ impl LayoutNode {
             self.sync_modifier_chain();
             self.cache.clear();
             self.mark_needs_measure();
+            self.request_semantics_update();
         }
     }
 
@@ -223,7 +226,10 @@ impl LayoutNode {
                         self.mark_needs_layout();
                     }
                 }
-                InvalidationKind::PointerInput | InvalidationKind::Semantics => {}
+                InvalidationKind::PointerInput => {}
+                InvalidationKind::Semantics => {
+                    self.request_semantics_update();
+                }
             }
         }
     }
@@ -256,6 +262,32 @@ impl LayoutNode {
     /// Check if this node needs layout.
     pub fn needs_layout(&self) -> bool {
         self.needs_layout.get()
+    }
+
+    /// Mark this node as needing semantics recomputation.
+    pub fn mark_needs_semantics(&self) {
+        self.needs_semantics.set(true);
+    }
+
+    /// Clear the semantics dirty flag after rebuilding semantics.
+    pub(crate) fn clear_needs_semantics(&self) {
+        self.needs_semantics.set(false);
+    }
+
+    /// Returns true when semantics need to be recomputed.
+    pub fn needs_semantics(&self) -> bool {
+        self.needs_semantics.get()
+    }
+
+    fn request_semantics_update(&self) {
+        let already_dirty = self.needs_semantics.replace(true);
+        if already_dirty {
+            return;
+        }
+
+        if let Some(id) = self.id.get() {
+            compose_core::queue_semantics_invalidation(id);
+        }
     }
 
     /// Clear the measure dirty flag after measuring.
@@ -365,27 +397,7 @@ impl LayoutNode {
     }
 
     pub fn semantics_configuration(&self) -> Option<SemanticsConfiguration> {
-        if !self.has_semantics_modifier_nodes() {
-            return None;
-        }
-        let mut config = SemanticsConfiguration::default();
-        let mut has_semantics = false;
-        self.modifier_chain.chain().for_each_forward_matching(
-            NodeCapabilities::SEMANTICS,
-            |node_ref| {
-                if let Some(node) = node_ref.node() {
-                    if let Some(sem_node) = node.as_semantics_node() {
-                        has_semantics = true;
-                        sem_node.merge_semantics(&mut config);
-                    }
-                }
-            },
-        );
-        if has_semantics {
-            Some(config)
-        } else {
-            None
-        }
+        crate::modifier::collect_semantics_from_chain(self.modifier_chain.chain())
     }
 }
 
@@ -411,6 +423,7 @@ impl Clone for LayoutNode {
             cache: self.cache.clone(),
             needs_measure: Cell::new(self.needs_measure.get()),
             needs_layout: Cell::new(self.needs_layout.get()),
+            needs_semantics: Cell::new(self.needs_semantics.get()),
             parent: Cell::new(self.parent.get()),
             id: Cell::new(None),
         };
@@ -484,6 +497,14 @@ impl Node for LayoutNode {
 
     fn needs_layout(&self) -> bool {
         self.needs_layout.get()
+    }
+
+    fn mark_needs_semantics(&self) {
+        self.needs_semantics.set(true);
+    }
+
+    fn needs_semantics(&self) -> bool {
+        self.needs_semantics.get()
     }
 }
 
@@ -672,6 +693,33 @@ mod tests {
         node.dispatch_modifier_invalidations(&[InvalidationKind::Draw]);
 
         assert!(node.needs_layout());
+    }
+
+    #[test]
+    fn semantics_invalidation_sets_semantics_flag_only() {
+        let mut node = fresh_node();
+        node.clear_needs_measure();
+        node.clear_needs_layout();
+        node.clear_needs_semantics();
+        node.modifier_capabilities = NodeCapabilities::SEMANTICS;
+        node.modifier_child_capabilities = node.modifier_capabilities;
+
+        node.dispatch_modifier_invalidations(&[InvalidationKind::Semantics]);
+
+        assert!(node.needs_semantics());
+        assert!(!node.needs_measure());
+        assert!(!node.needs_layout());
+    }
+
+    #[test]
+    fn set_modifier_marks_semantics_dirty() {
+        let mut node = fresh_node();
+        node.clear_needs_semantics();
+        node.set_modifier(Modifier::empty().semantics(|config| {
+            config.is_clickable = true;
+        }));
+
+        assert!(node.needs_semantics());
     }
 
     #[test]

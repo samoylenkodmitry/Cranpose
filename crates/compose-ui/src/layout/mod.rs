@@ -19,8 +19,8 @@ use compose_core::{
 use self::core::VerticalAlignment;
 use self::core::{HorizontalAlignment, LinearArrangement, Measurable, Placeable};
 use crate::modifier::{
-    collect_slices_from_modifier, DimensionConstraint, EdgeInsets, Modifier, ModifierNodeSlices,
-    Point, Rect as GeometryRect, ResolvedModifiers, Size,
+    collect_semantics_from_modifier, collect_slices_from_modifier, DimensionConstraint, EdgeInsets,
+    Modifier, ModifierNodeSlices, Point, Rect as GeometryRect, ResolvedModifiers, Size,
 };
 use crate::subcompose_layout::SubcomposeLayoutNode;
 use crate::widgets::nodes::{
@@ -300,19 +300,24 @@ pub fn measure_layout(
 
     // Selective measure: only increment epoch if something needs measuring
     // O(1) check - just look at root's dirty flag (bubbling ensures correctness)
-    let (needs_measure, cached_epoch) = match applier.with_node::<LayoutNode, _>(root, |node| {
-        (node.needs_layout(), node.cache_handles().epoch())
-    }) {
-        Ok(pair) => pair,
-        Err(NodeError::TypeMismatch { .. }) => {
-            let needs = {
-                let node = applier.get_mut(root)?;
-                node.needs_layout()
-            };
-            (needs, 0)
-        }
-        Err(err) => return Err(err),
-    };
+    let (needs_measure, _needs_semantics, cached_epoch) =
+        match applier.with_node::<LayoutNode, _>(root, |node| {
+            (
+                node.needs_layout(),
+                node.needs_semantics(),
+                node.cache_handles().epoch(),
+            )
+        }) {
+            Ok(tuple) => tuple,
+            Err(NodeError::TypeMismatch { .. }) => {
+                let (layout_dirty, semantics_dirty) = {
+                    let node = applier.get_mut(root)?;
+                    (node.needs_layout(), node.needs_semantics())
+                };
+                (layout_dirty, semantics_dirty, 0)
+            }
+            Err(err) => return Err(err),
+        };
 
     let epoch = if needs_measure {
         NEXT_CACHE_EPOCH.fetch_add(1, Ordering::Relaxed)
@@ -331,12 +336,16 @@ pub fn measure_layout(
         let mut applier_ref = applier_host.borrow_typed();
         collect_runtime_metadata(&mut *applier_ref, &measured)?
     };
+    let semantics_snapshot = {
+        let mut applier_ref = applier_host.borrow_typed();
+        collect_semantics_snapshot(&mut *applier_ref, &measured)?
+    };
     drop(builder);
     let applier_inner = Rc::try_unwrap(applier_host)
         .unwrap_or_else(|_| panic!("layout builder should be sole owner of applier host"))
         .into_inner();
     *applier = applier_inner;
-    let semantics_root = build_semantics_node(&measured, &metadata);
+    let semantics_root = build_semantics_node(&measured, &metadata, &semantics_snapshot);
     let semantics = SemanticsTree::new(semantics_root);
     let layout_tree = build_layout_tree_from_metadata(&measured, &metadata);
     Ok(LayoutMeasurements::new(measured, semantics, layout_tree))
@@ -1340,7 +1349,6 @@ struct RuntimeNodeMetadata {
     modifier_slices: ModifierNodeSlices,
     role: SemanticsRole,
     actions: Vec<SemanticsAction>,
-    semantics: Option<SemanticsConfiguration>,
     button_handler: Option<Rc<RefCell<dyn FnMut()>>>,
 }
 
@@ -1352,7 +1360,6 @@ impl Default for RuntimeNodeMetadata {
             modifier_slices: ModifierNodeSlices::default(),
             role: SemanticsRole::Unknown,
             actions: Vec::new(),
-            semantics: None,
             button_handler: None,
         }
     }
@@ -1364,6 +1371,15 @@ fn collect_runtime_metadata(
 ) -> Result<HashMap<NodeId, RuntimeNodeMetadata>, NodeError> {
     let mut map = HashMap::default();
     collect_runtime_metadata_inner(applier, node, &mut map)?;
+    Ok(map)
+}
+
+fn collect_semantics_snapshot(
+    applier: &mut MemoryApplier,
+    node: &MeasuredNode,
+) -> Result<HashMap<NodeId, Option<SemanticsConfiguration>>, NodeError> {
+    let mut map = HashMap::default();
+    collect_semantics_snapshot_inner(applier, node, &mut map)?;
     Ok(map)
 }
 
@@ -1382,6 +1398,21 @@ fn collect_runtime_metadata_inner(
     Ok(())
 }
 
+fn collect_semantics_snapshot_inner(
+    applier: &mut MemoryApplier,
+    node: &MeasuredNode,
+    map: &mut HashMap<NodeId, Option<SemanticsConfiguration>>,
+) -> Result<(), NodeError> {
+    if let Entry::Vacant(entry) = map.entry(node.node_id) {
+        let semantics = semantics_configuration_for(applier, node.node_id)?;
+        entry.insert(semantics);
+    }
+    for child in &node.children {
+        collect_semantics_snapshot_inner(applier, &child.node, map)?;
+    }
+    Ok(())
+}
+
 fn runtime_metadata_for(
     applier: &mut MemoryApplier,
     node_id: NodeId,
@@ -1393,7 +1424,6 @@ fn runtime_metadata_for(
             modifier_slices: layout.modifier_slices_snapshot(),
             role: SemanticsRole::Layout,
             actions: Vec::new(),
-            semantics: layout.semantics_configuration(),
             button_handler: None,
         });
     }
@@ -1404,12 +1434,6 @@ fn runtime_metadata_for(
             modifier_slices: collect_slices_from_modifier(&button.modifier),
             role: SemanticsRole::Unknown,
             actions: Vec::new(),
-            semantics: {
-                let mut config = SemanticsConfiguration::default();
-                config.is_button = true;
-                config.is_clickable = true;
-                Some(config)
-            },
             button_handler: Some(button.on_click.clone()),
         });
     }
@@ -1422,7 +1446,6 @@ fn runtime_metadata_for(
                 value: text.text.clone(),
             },
             actions: Vec::new(),
-            semantics: None,
             button_handler: None,
         });
     }
@@ -1433,7 +1456,6 @@ fn runtime_metadata_for(
             modifier_slices: ModifierNodeSlices::default(),
             role: SemanticsRole::Spacer,
             actions: Vec::new(),
-            semantics: None,
             button_handler: None,
         });
     }
@@ -1449,23 +1471,64 @@ fn runtime_metadata_for(
             modifier_slices,
             role: SemanticsRole::Subcompose,
             actions: Vec::new(),
-            semantics: None,
             button_handler: None,
         });
     }
     Ok(RuntimeNodeMetadata::default())
 }
 
+fn semantics_configuration_for(
+    applier: &mut MemoryApplier,
+    node_id: NodeId,
+) -> Result<Option<SemanticsConfiguration>, NodeError> {
+    match applier.with_node::<LayoutNode, _>(node_id, |layout| {
+        let config = layout.semantics_configuration();
+        layout.clear_needs_semantics();
+        config
+    }) {
+        Ok(config) => return Ok(config),
+        Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => {}
+        Err(err) => return Err(err),
+    }
+
+    if let Some(button) = try_clone::<ButtonNode>(applier, node_id)? {
+        let from_modifier = collect_semantics_from_modifier(&button.modifier);
+        return Ok(from_modifier.or_else(|| {
+            let mut config = SemanticsConfiguration::default();
+            config.is_button = true;
+            config.is_clickable = true;
+            Some(config)
+        }));
+    }
+
+    if let Some(text) = try_clone::<TextNode>(applier, node_id)? {
+        return Ok(collect_semantics_from_modifier(&text.modifier));
+    }
+
+    if try_clone::<SpacerNode>(applier, node_id)?.is_some() {
+        return Ok(None);
+    }
+
+    if let Ok(modifier) =
+        applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| node.modifier())
+    {
+        return Ok(collect_semantics_from_modifier(&modifier));
+    }
+
+    Ok(None)
+}
+
 fn build_semantics_node(
     node: &MeasuredNode,
     metadata: &HashMap<NodeId, RuntimeNodeMetadata>,
+    semantics: &HashMap<NodeId, Option<SemanticsConfiguration>>,
 ) -> SemanticsNode {
     let info = metadata.get(&node.node_id).cloned().unwrap_or_default();
     let mut role = info.role;
     let mut actions = info.actions;
     let mut description = None;
 
-    if let Some(config) = info.semantics {
+    if let Some(config) = semantics.get(&node.node_id).cloned().flatten() {
         if config.is_button {
             role = SemanticsRole::Button;
         }
@@ -1486,7 +1549,7 @@ fn build_semantics_node(
     let children = node
         .children
         .iter()
-        .map(|child| build_semantics_node(&child.node, metadata))
+        .map(|child| build_semantics_node(&child.node, metadata, semantics))
         .collect();
     SemanticsNode::new(node.node_id, role, actions, children, description)
 }

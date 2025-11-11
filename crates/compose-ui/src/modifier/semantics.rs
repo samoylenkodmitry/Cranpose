@@ -3,9 +3,11 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use compose_foundation::{
-    DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState,
-    SemanticsConfiguration, SemanticsNode as SemanticsNodeTrait,
+    DelegatableNode, ModifierNode, ModifierNodeChain, ModifierNodeElement, NodeCapabilities,
+    NodeState, SemanticsConfiguration, SemanticsNode as SemanticsNodeTrait,
 };
+
+use super::{Modifier, ModifierChainHandle};
 
 pub struct SemanticsModifierNode {
     recorder: Rc<dyn Fn(&mut SemanticsConfiguration)>,
@@ -93,4 +95,51 @@ impl ModifierNodeElement for SemanticsElement {
     fn capabilities(&self) -> NodeCapabilities {
         NodeCapabilities::SEMANTICS
     }
+}
+
+fn merge_semantics_from_node(node: &dyn ModifierNode, config: &mut SemanticsConfiguration) -> bool {
+    let mut merged = false;
+
+    if let Some(semantics) = node.as_semantics_node() {
+        semantics.merge_semantics(config);
+        merged = true;
+    }
+
+    node.for_each_delegate(&mut |delegate| {
+        if merge_semantics_from_node(delegate, config) {
+            merged = true;
+        }
+    });
+
+    merged
+}
+
+/// Collects semantics contributed by a reconciled modifier chain.
+pub fn collect_semantics_from_chain(chain: &ModifierNodeChain) -> Option<SemanticsConfiguration> {
+    if !chain.has_capability(NodeCapabilities::SEMANTICS) {
+        return None;
+    }
+
+    let mut config = SemanticsConfiguration::default();
+    let mut merged = false;
+    chain.for_each_forward_matching(NodeCapabilities::SEMANTICS, |node_ref| {
+        if let Some(node) = node_ref.node() {
+            if merge_semantics_from_node(node, &mut config) {
+                merged = true;
+            }
+        }
+    });
+
+    if merged {
+        Some(config)
+    } else {
+        None
+    }
+}
+
+/// Collects semantics by instantiating a temporary modifier chain from a [`Modifier`].
+pub fn collect_semantics_from_modifier(modifier: &Modifier) -> Option<SemanticsConfiguration> {
+    let mut handle = ModifierChainHandle::new();
+    handle.update(modifier);
+    collect_semantics_from_chain(handle.chain())
 }
