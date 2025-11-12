@@ -92,7 +92,10 @@ impl fmt::Debug for PointerInputElement {
 
 impl PartialEq for PointerInputElement {
     fn eq(&self, other: &Self) -> bool {
-        self.keys == other.keys && self.handler_id == other.handler_id
+        // Only compare keys, not handler_id. In Compose, elements are equal if their
+        // keys match, even if the handler closure is recreated on recomposition.
+        // This ensures nodes are reused instead of being dropped and recreated.
+        self.keys == other.keys
     }
 }
 
@@ -100,8 +103,9 @@ impl Eq for PointerInputElement {}
 
 impl Hash for PointerInputElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
+        // Only hash keys, not handler_id. This ensures stable hashing across
+        // recompositions when the closure is recreated but keys remain the same.
         self.keys.hash(state);
-        state.write_u64(self.handler_id);
     }
 }
 
@@ -332,7 +336,8 @@ impl PointerInputTaskInner {
             let mut cx = Context::from_waker(&waker);
             let mut future_slot = self.future.borrow_mut();
             if let Some(future) = future_slot.as_mut() {
-                if future.as_mut().poll(&mut cx).is_ready() {
+                let poll_result = future.as_mut().poll(&mut cx);
+                if poll_result.is_ready() {
                     future_slot.take();
                 }
             }
@@ -363,6 +368,7 @@ impl ArcWake for PointerInputTaskWaker {
 }
 
 pub struct SuspendingPointerInputNode {
+    node_id: u64,
     keys: Vec<KeyToken>,
     handler: PointerInputHandler,
     dispatcher: PointerEventDispatcher,
@@ -372,7 +378,10 @@ pub struct SuspendingPointerInputNode {
 
 impl SuspendingPointerInputNode {
     fn new(keys: Vec<KeyToken>, handler: PointerInputHandler) -> Self {
+        static NEXT_NODE_ID: AtomicU64 = AtomicU64::new(1);
+        let node_id = NEXT_NODE_ID.fetch_add(1, Ordering::Relaxed);
         Self {
+            node_id,
             keys,
             handler,
             dispatcher: PointerEventDispatcher::new(),
@@ -382,9 +391,13 @@ impl SuspendingPointerInputNode {
     }
 
     fn update(&mut self, keys: Vec<KeyToken>, handler: PointerInputHandler) {
-        let should_restart = self.keys != keys || !Rc::ptr_eq(&self.handler, &handler);
+        // Only restart if keys changed - not if handler Rc pointer changed.
+        // In Compose, closures are recreated every composition but the task should
+        // continue running as long as the keys are the same. This matches Jetpack
+        // Compose behavior where rememberUpdatedState keeps the task alive.
+        let should_restart = self.keys != keys;
         self.keys = keys;
-        self.handler = handler;
+        self.handler = handler;  // Update handler even if not restarting
         if should_restart {
             self.restart();
         }
@@ -413,6 +426,12 @@ impl SuspendingPointerInputNode {
     }
 }
 
+impl Drop for SuspendingPointerInputNode {
+    fn drop(&mut self) {
+        // Cleanup happens automatically when task field is dropped
+    }
+}
+
 impl ModifierNode for SuspendingPointerInputNode {
     fn on_attach(&mut self, _context: &mut dyn ModifierNodeContext) {
         self.start();
@@ -423,7 +442,9 @@ impl ModifierNode for SuspendingPointerInputNode {
     }
 
     fn on_reset(&mut self) {
-        self.restart();
+        // Don't restart on reset - only restart when keys/handler actually change
+        // (which is handled by update() method). Restarting here would kill the
+        // active task and lose its registered waker, preventing events from being delivered.
     }
 
     // Capability-driven implementation using helper macro
