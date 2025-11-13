@@ -3,7 +3,7 @@ use compose_core::{
     self, compositionLocalOf, CompositionLocal, CompositionLocalProvider, DisposableEffect,
     DisposableEffectResult, LaunchedEffect, LaunchedEffectAsync, MutableState,
 };
-use compose_foundation::{PointerEvent, PointerEventKind};
+use compose_foundation::PointerEventKind;
 use compose_ui::{
     composable, Brush, Button, Color, Column, ColumnSpec, CornerRadii, GraphicsLayer,
     IntrinsicSize, LinearArrangement, Modifier, Point, PointerInputScope, RoundedCornerShape, Row,
@@ -771,38 +771,25 @@ fn counter_app() {
     }
     LaunchedEffect!(counter.get(), |_| println!("effect call"));
 
-    let is_even = counter.get() % 2 == 0;
-    compose_core::with_key(&is_even, || {
-        if is_even {
-            Text(
-                "if counter % 2 == 0",
-                Modifier::padding(12.0)
-                    .then(Modifier::rounded_corner_shape(RoundedCornerShape::new(
-                        16.0, 24.0, 16.0, 24.0,
-                    )))
-                    .then(Modifier::draw_with_content(|scope| {
-                        scope.draw_round_rect(
-                            Brush::solid(Color(1.0, 1.0, 1.0, 0.1)),
-                            CornerRadii::uniform(20.0),
-                        );
-                    })),
-            );
-        } else {
-            Text(
-                "if counter % 2 != 0",
-                Modifier::padding(12.0)
-                    .then(Modifier::rounded_corner_shape(RoundedCornerShape::new(
-                        16.0, 24.0, 16.0, 24.0,
-                    )))
-                    .then(Modifier::draw_with_content(|scope| {
-                        scope.draw_round_rect(
-                            Brush::solid(Color(1.0, 1.0, 1.0, 0.5)),
-                            CornerRadii::uniform(20.0),
-                        );
-                    })),
-            );
-        }
-    });
+    let (parity_label, parity_alpha) = if counter.get() % 2 == 0 {
+        ("if counter % 2 == 0", 0.1)
+    } else {
+        ("if counter % 2 != 0", 0.5)
+    };
+
+    Text(
+        parity_label,
+        Modifier::padding(12.0)
+            .then(Modifier::rounded_corner_shape(RoundedCornerShape::new(
+                16.0, 24.0, 16.0, 24.0,
+            )))
+            .then(Modifier::draw_with_content(move |scope| {
+                scope.draw_round_rect(
+                    Brush::solid(Color(1.0, 1.0, 1.0, parity_alpha)),
+                    CornerRadii::uniform(20.0),
+                );
+            })),
+    );
 
     Column(
         Modifier::padding(32.0)
