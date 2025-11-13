@@ -1,6 +1,8 @@
 use super::*;
 use compose_core::{location_key, Composition, MemoryApplier, MutableState, NodeError};
 
+mod conditional_text_test;
+
 #[composable]
 fn async_runtime_test_content(
     animation: MutableState<AnimationState>,
