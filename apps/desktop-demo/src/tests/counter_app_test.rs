@@ -100,11 +100,11 @@ fn counter_app_conditional_text_updates_on_increment() {
     // Should now contain "if counter % 2 != 0" when counter is 1
     assert!(
         texts_after_increment.iter().any(|t| t.contains("if counter % 2 != 0")),
-        "Expected to find 'if counter % 2 != 0' text when counter is 1 (THIS IS THE BUG IF IT FAILS)"
+        "Expected to find 'if counter % 2 != 0' text when counter is 1"
     );
     assert!(
         !texts_after_increment.iter().any(|t| t.contains("if counter % 2 == 0")),
-        "Should NOT find 'if counter % 2 == 0' text when counter is 1"
+        "Should NOT find 'if counter % 2 == 0' text when counter is 1 (old node should be removed)"
     );
 
     // Click increment again: counter becomes 2 (even)

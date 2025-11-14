@@ -168,7 +168,7 @@ impl RuntimeInner {
     }
 
     fn has_updates(&self) -> bool {
-        !self.node_updates.borrow().is_empty()
+        !self.node_updates.borrow().is_empty() || self.has_invalid_scopes()
     }
 
     fn register_invalid_scope(&self, id: ScopeId, scope: Weak<RecomposeScopeInner>) {
