@@ -374,7 +374,7 @@ fn pointer_input_coroutine_receives_events() {
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
     let recorded = Rc::new(RefCell::new(Vec::new()));
-    let modifier = Modifier::pointer_input((), {
+    let modifier = Modifier::empty().pointer_input((), {
         let recorded = recorded.clone();
         move |scope: PointerInputScope| {
             let recorded = recorded.clone();
@@ -417,7 +417,7 @@ fn pointer_input_restarts_on_key_change() {
     let mut context = BasicModifierNodeContext::new();
     let starts = Rc::new(Cell::new(0));
 
-    let modifier = Modifier::pointer_input(0u32, {
+    let modifier = Modifier::empty().pointer_input(0u32, {
         let starts = starts.clone();
         move |_scope: PointerInputScope| {
             let starts = starts.clone();
@@ -431,7 +431,7 @@ fn pointer_input_restarts_on_key_change() {
     chain.update_from_slice(modifier.elements(), &mut context);
     assert_eq!(starts.get(), 1);
 
-    let modifier_updated = Modifier::pointer_input(1u32, {
+    let modifier_updated = Modifier::empty().pointer_input(1u32, {
         let starts = starts.clone();
         move |_scope: PointerInputScope| {
             let starts = starts.clone();
@@ -466,7 +466,7 @@ fn pointer_input_handlers_survive_temporary_chain_drop() {
     let received_events = Rc::new(RefCell::new(Vec::new()));
 
     // Create a modifier with pointer input
-    let modifier = Modifier::pointer_input(42u32, {
+    let modifier = Modifier::empty().pointer_input(42u32, {
         let events = received_events.clone();
         move |scope: PointerInputScope| {
             let events = events.clone();
@@ -532,7 +532,7 @@ fn multiple_temporary_chains_dont_interfere() {
     let events2 = Rc::new(RefCell::new(Vec::new()));
 
     // Create first modifier
-    let modifier1 = Modifier::pointer_input(1u32, {
+    let modifier1 = Modifier::empty().pointer_input(1u32, {
         let events = events1.clone();
         move |scope: PointerInputScope| {
             let events = events.clone();
@@ -548,7 +548,7 @@ fn multiple_temporary_chains_dont_interfere() {
     });
 
     // Create second modifier
-    let modifier2 = Modifier::pointer_input(2u32, {
+    let modifier2 = Modifier::empty().pointer_input(2u32, {
         let events = events2.clone();
         move |scope: PointerInputScope| {
             let events = events.clone();

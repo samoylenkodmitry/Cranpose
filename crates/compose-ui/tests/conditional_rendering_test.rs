@@ -28,18 +28,18 @@ fn conditional_outside_closure_app(counter: MutableState<i32>) {
     // BUG REPRODUCTION: This conditional is outside any content closure
     // When counter changes, recomposition happens but the visual may not update
     if counter.get() % 2 == 0 {
-        Text("Even", Modifier::padding(8.0));
+        Text("Even", Modifier::empty().padding(8.0));
     } else {
-        Text("Odd", Modifier::padding(8.0));
+        Text("Odd", Modifier::empty().padding(8.0));
     }
 
     // This should work because state is read inside the closure
-    Column(Modifier::padding(16.0), ColumnSpec::default(), {
+    Column(Modifier::empty().padding(16.0), ColumnSpec::default(), {
         let counter = counter.clone();
         move || {
             Text(
                 format!("Counter: {}", counter.get()),
-                Modifier::padding(8.0),
+                Modifier::empty().padding(8.0),
             );
         }
     });
@@ -136,19 +136,19 @@ fn test_conditional_text_actually_updates() {
 #[composable]
 fn conditional_inside_closure_app(counter: MutableState<i32>) {
     // CORRECT PATTERN: Conditional is inside the content closure
-    Column(Modifier::padding(16.0), ColumnSpec::default(), {
+    Column(Modifier::empty().padding(16.0), ColumnSpec::default(), {
         let counter = counter.clone();
         move || {
             // State is read here, inside the closure
             if counter.get() % 2 == 0 {
-                Text("Even", Modifier::padding(8.0));
+                Text("Even", Modifier::empty().padding(8.0));
             } else {
-                Text("Odd", Modifier::padding(8.0));
+                Text("Odd", Modifier::empty().padding(8.0));
             }
 
             Text(
                 format!("Counter: {}", counter.get()),
-                Modifier::padding(8.0),
+                Modifier::empty().padding(8.0),
             );
         }
     });

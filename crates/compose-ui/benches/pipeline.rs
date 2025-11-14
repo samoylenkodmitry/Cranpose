@@ -19,18 +19,18 @@ const ROOT_SIZE: Size = Size {
 #[composable]
 fn pipeline_content(sections: usize, rows_per_section: usize) {
     Column(
-        Modifier::fill_max_size(),
+        Modifier::empty().fill_max_size(),
         ColumnSpec::default(),
         move || {
             for section in 0..sections {
                 Column(
-                    Modifier::fill_max_width(),
+                    Modifier::empty().fill_max_width(),
                     ColumnSpec::default(),
                     move || {
                         Text(format!("Section {section}"), Modifier::empty());
                         for row in 0..rows_per_section {
-                            Row(Modifier::fill_max_width(), RowSpec::default(), move || {
-                                Text(format!("Item {section}-{row} title"), Modifier::weight(1.0));
+                            Row(Modifier::empty().fill_max_width(), RowSpec::default(), move || {
+                                Text(format!("Item {section}-{row} title"), Modifier::empty().weight(1.0));
                                 Text(format!("Detail {section}-{row}"), Modifier::empty());
                             });
                         }
@@ -44,7 +44,7 @@ fn pipeline_content(sections: usize, rows_per_section: usize) {
 #[composable]
 fn recursive_pipeline_content(depth: usize, rows_per_level: usize) {
     Column(
-        Modifier::fill_max_size(),
+        Modifier::empty().fill_max_size(),
         ColumnSpec::default(),
         move || {
             recursive_section(depth, rows_per_level, 0);
@@ -58,13 +58,13 @@ fn recursive_section(depth: usize, rows_per_level: usize, level: usize) {
         return;
     }
     Column(
-        Modifier::fill_max_width(),
+        Modifier::empty().fill_max_width(),
         ColumnSpec::default(),
         move || {
             Text(format!("Level {level}"), Modifier::empty());
             for row in 0..rows_per_level {
-                Row(Modifier::fill_max_width(), RowSpec::default(), move || {
-                    Text(format!("Node {level}-{row} title"), Modifier::weight(1.0));
+                Row(Modifier::empty().fill_max_width(), RowSpec::default(), move || {
+                    Text(format!("Node {level}-{row} title"), Modifier::empty().weight(1.0));
                     Text(format!("Detail {level}-{row}"), Modifier::empty());
                 });
             }

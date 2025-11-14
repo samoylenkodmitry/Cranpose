@@ -885,7 +885,7 @@ mod tests {
     #[test]
     fn modifier_child_capabilities_reflect_chain_head() {
         let mut node = fresh_node();
-        node.set_modifier(Modifier::padding(4.0));
+        node.set_modifier(Modifier::empty().padding(4.0));
         assert!(
             node.modifier_child_capabilities()
                 .contains(NodeCapabilities::LAYOUT),

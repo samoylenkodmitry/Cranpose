@@ -9,18 +9,18 @@ use compose_ui::*;
 #[test]
 fn intrinsic_size_modifiers_accept_values() {
     // Test that the API accepts intrinsic size values
-    let _width_min = Modifier::width_intrinsic(IntrinsicSize::Min);
-    let _width_max = Modifier::width_intrinsic(IntrinsicSize::Max);
-    let _height_min = Modifier::height_intrinsic(IntrinsicSize::Min);
-    let _height_max = Modifier::height_intrinsic(IntrinsicSize::Max);
+    let _width_min = Modifier::empty().width_intrinsic(IntrinsicSize::Min);
+    let _width_max = Modifier::empty().width_intrinsic(IntrinsicSize::Max);
+    let _height_min = Modifier::empty().height_intrinsic(IntrinsicSize::Min);
+    let _height_max = Modifier::empty().height_intrinsic(IntrinsicSize::Max);
 }
 
 #[test]
 fn intrinsic_size_can_be_combined_with_other_modifiers() {
     // Test that intrinsic size modifiers can be combined
-    let _combined = Modifier::width_intrinsic(IntrinsicSize::Max)
-        .then(Modifier::padding(8.0))
-        .then(Modifier::background(Color(1.0, 0.0, 0.0, 1.0)));
+    let _combined = Modifier::empty().width_intrinsic(IntrinsicSize::Max)
+        .then(Modifier::empty().padding(8.0))
+        .then(Modifier::empty().background(Color(1.0, 0.0, 0.0, 1.0)));
 }
 
 #[test]
@@ -32,21 +32,21 @@ fn equal_width_buttons_api_demonstration() {
         // This would make all buttons as wide as the widest button
         Row(Modifier::empty(), RowSpec::default(), || {
             Button(
-                Modifier::width_intrinsic(IntrinsicSize::Max),
+                Modifier::empty().width_intrinsic(IntrinsicSize::Max),
                 || {},
                 || {
                     Text("OK", Modifier::empty());
                 },
             );
             Button(
-                Modifier::width_intrinsic(IntrinsicSize::Max),
+                Modifier::empty().width_intrinsic(IntrinsicSize::Max),
                 || {},
                 || {
                     Text("Cancel", Modifier::empty());
                 },
             );
             Button(
-                Modifier::width_intrinsic(IntrinsicSize::Max),
+                Modifier::empty().width_intrinsic(IntrinsicSize::Max),
                 || {},
                 || {
                     Text("Apply", Modifier::empty());
@@ -64,8 +64,8 @@ fn column_with_intrinsic_width() {
     // Test Column with intrinsic width - should size to fit widest child
     let mut composition = run_test_composition(|| {
         Column(
-            Modifier::width_intrinsic(IntrinsicSize::Max)
-                .then(Modifier::background(Color(0.8, 0.8, 0.8, 1.0))),
+            Modifier::empty().width_intrinsic(IntrinsicSize::Max)
+                .then(Modifier::empty().background(Color(0.8, 0.8, 0.8, 1.0))),
             ColumnSpec::default(),
             || {
                 Text("Short", Modifier::empty());
@@ -83,12 +83,12 @@ fn row_with_intrinsic_height() {
     // Test Row with intrinsic height - should size to fit tallest child
     let mut composition = run_test_composition(|| {
         Row(
-            Modifier::height_intrinsic(IntrinsicSize::Max)
-                .then(Modifier::background(Color(0.8, 0.8, 0.8, 1.0))),
+            Modifier::empty().height_intrinsic(IntrinsicSize::Max)
+                .then(Modifier::empty().background(Color(0.8, 0.8, 0.8, 1.0))),
             RowSpec::default(),
             || {
                 Box(
-                    Modifier::size(Size {
+                    Modifier::empty().size(Size {
                         width: 50.0,
                         height: 30.0,
                     }),
@@ -96,7 +96,7 @@ fn row_with_intrinsic_height() {
                     || {},
                 );
                 Box(
-                    Modifier::size(Size {
+                    Modifier::empty().size(Size {
                         width: 50.0,
                         height: 80.0,
                     }),
@@ -104,7 +104,7 @@ fn row_with_intrinsic_height() {
                     || {},
                 );
                 Box(
-                    Modifier::size(Size {
+                    Modifier::empty().size(Size {
                         width: 50.0,
                         height: 50.0,
                     }),
@@ -123,7 +123,7 @@ fn min_intrinsic_vs_max_intrinsic() {
     // Demonstrate the difference between Min and Max intrinsic sizes
     let comp_min = run_test_composition(|| {
         Column(
-            Modifier::width_intrinsic(IntrinsicSize::Min),
+            Modifier::empty().width_intrinsic(IntrinsicSize::Min),
             ColumnSpec::default(),
             || {
                 Text("Content", Modifier::empty());
@@ -133,7 +133,7 @@ fn min_intrinsic_vs_max_intrinsic() {
 
     let comp_max = run_test_composition(|| {
         Column(
-            Modifier::width_intrinsic(IntrinsicSize::Max),
+            Modifier::empty().width_intrinsic(IntrinsicSize::Max),
             ColumnSpec::default(),
             || {
                 Text("Content", Modifier::empty());
@@ -150,9 +150,9 @@ fn intrinsic_size_with_padding() {
     // Test that padding is correctly applied when using intrinsic sizing
     let mut composition = run_test_composition(|| {
         Column(
-            Modifier::width_intrinsic(IntrinsicSize::Max)
-                .then(Modifier::padding(16.0))
-                .then(Modifier::background(Color(0.9, 0.9, 0.9, 1.0))),
+            Modifier::empty().width_intrinsic(IntrinsicSize::Max)
+                .then(Modifier::empty().padding(16.0))
+                .then(Modifier::empty().background(Color(0.9, 0.9, 0.9, 1.0))),
             ColumnSpec::default(),
             || {
                 Text("Button 1", Modifier::empty());
@@ -170,7 +170,7 @@ fn nested_intrinsic_sizing() {
     let composition = run_test_composition(|| {
         Column(Modifier::empty(), ColumnSpec::default(), || {
             Row(
-                Modifier::width_intrinsic(IntrinsicSize::Max),
+                Modifier::empty().width_intrinsic(IntrinsicSize::Max),
                 RowSpec::default(),
                 || {
                     Text("Left", Modifier::empty());
@@ -178,7 +178,7 @@ fn nested_intrinsic_sizing() {
                 },
             );
             Row(
-                Modifier::width_intrinsic(IntrinsicSize::Max),
+                Modifier::empty().width_intrinsic(IntrinsicSize::Max),
                 RowSpec::default(),
                 || {
                     Text("A", Modifier::empty());

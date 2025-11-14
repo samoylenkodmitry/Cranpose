@@ -130,9 +130,9 @@ fn async_runtime_full_layout(
     }
 
     // Full layout structure matching the demo
-    Column(Modifier::padding(32.0), ColumnSpec::default(), move || {
+    Column(Modifier::empty().padding(32.0), ColumnSpec::default(), move || {
         // Title Text
-        Text("Async Runtime Demo", Modifier::padding(12.0));
+        Text("Async Runtime Demo", Modifier::empty().padding(12.0));
 
         Spacer(Size {
             width: 0.0,
@@ -146,10 +146,10 @@ fn async_runtime_full_layout(
         let fill_width = 320.0 * progress_value;
 
         // Progress Column with conditional Row
-        Column(Modifier::padding(8.0), ColumnSpec::default(), move || {
+        Column(Modifier::empty().padding(8.0), ColumnSpec::default(), move || {
             Text(
                 format!("Progress: {:>3}%", (progress_value * 100.0) as i32),
-                Modifier::padding(6.0),
+                Modifier::empty().padding(6.0),
             );
 
             Spacer(Size {
@@ -159,7 +159,7 @@ fn async_runtime_full_layout(
 
             // Outer container Row
             Row(
-                Modifier::height(26.0).then(Modifier::rounded_corners(13.0)),
+                Modifier::empty().height(26.0).then(Modifier::empty().rounded_corners(13.0)),
                 RowSpec::default(),
                 {
                     let progress_width = fill_width;
@@ -168,10 +168,10 @@ fn async_runtime_full_layout(
                         // When progress goes from >0 to 0 and back, this changes composition structure
                         if progress_width > 0.0 {
                             Row(
-                                Modifier::width(progress_width.min(360.0))
-                                    .then(Modifier::height(26.0))
-                                    .then(Modifier::rounded_corners(13.0))
-                                    .then(Modifier::draw_behind(|scope| {
+                                Modifier::empty().width(progress_width.min(360.0))
+                                    .then(Modifier::empty().height(26.0))
+                                    .then(Modifier::empty().rounded_corners(13.0))
+                                    .then(Modifier::empty().draw_behind(|scope| {
                                         scope.draw_round_rect(
                                             Brush::linear_gradient(vec![
                                                 Color(0.25, 0.55, 0.95, 1.0),
@@ -205,7 +205,7 @@ fn async_runtime_full_layout(
                     "reverse"
                 }
             ),
-            Modifier::padding(8.0),
+            Modifier::empty().padding(8.0),
         );
 
         Spacer(Size {
@@ -216,7 +216,7 @@ fn async_runtime_full_layout(
         // Button Row
         {
             let is_running_for_button = is_running.clone();
-            Row(Modifier::padding(4.0), RowSpec::default(), move || {
+            Row(Modifier::empty().padding(4.0), RowSpec::default(), move || {
                 let running = is_running_for_button.get();
 
                 // Pause/Resume Button - APPEARANCE SHOULD CHANGE BUT FREEZES
@@ -226,13 +226,13 @@ fn async_runtime_full_layout(
                     "Resume animation"
                 };
                 Button(
-                    Modifier::padding(12.0),
+                    Modifier::empty().padding(12.0),
                     {
                         let toggle_state = is_running_for_button.clone();
                         move || toggle_state.set(!toggle_state.get())
                     },
                     move || {
-                        Text(button_label, Modifier::padding(6.0));
+                        Text(button_label, Modifier::empty().padding(6.0));
                     },
                 );
             });

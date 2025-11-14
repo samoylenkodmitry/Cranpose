@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
 impl Modifier {
-    pub fn pointer_input<K, F, Fut>(key: K, handler: F) -> Self
+    pub fn pointer_input<K, F, Fut>(self, key: K, handler: F) -> Self
     where
         K: Hash + 'static,
         F: Fn(PointerInputScope) -> Fut + 'static,
@@ -28,13 +28,13 @@ impl Modifier {
             PointerInputElement::new(vec![KeyToken::new(&key)], pointer_input_handler(handler));
         let key_count = element.key_count();
         let handler_id = element.handler_id();
-        Self::with_element(element).with_inspector_metadata(inspector_metadata(
+        self.then(Self::with_element(element).with_inspector_metadata(inspector_metadata(
             "pointerInput",
             move |info| {
                 info.add_property("keyCount", key_count.to_string());
                 info.add_property("handlerId", handler_id.to_string());
             },
-        ))
+        )))
     }
 }
 

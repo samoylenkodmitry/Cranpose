@@ -378,7 +378,7 @@ fn layout_column_produces_expected_measurements() {
     composition
         .render(key, move || {
             let text_id_capture = Rc::clone(&text_id_capture);
-            Column(Modifier::padding(10.0), ColumnSpec::default(), move || {
+            Column(Modifier::empty().padding(10.0), ColumnSpec::default(), move || {
                 let id = Text("Hello", Modifier::empty());
                 *text_id_capture.borrow_mut() = Some(id);
                 Spacer(Size {
@@ -428,8 +428,8 @@ fn modifier_offset_translates_layout() {
     composition
         .render(key, move || {
             let text_id_capture = Rc::clone(&text_id_capture);
-            Column(Modifier::padding(10.0), ColumnSpec::default(), move || {
-                *text_id_capture.borrow_mut() = Some(Text("Hello", Modifier::offset(5.0, 7.5)));
+            Column(Modifier::empty().padding(10.0), ColumnSpec::default(), move || {
+                *text_id_capture.borrow_mut() = Some(Text("Hello", Modifier::empty().offset(5.0, 7.5)));
             });
         })
         .expect("initial render");
@@ -558,7 +558,7 @@ fn desktop_counter_layout_respects_container_bounds() {
             let footer_status_capture = Rc::clone(&footer_status_render);
             let footer_extra_capture = Rc::clone(&footer_extra_render);
 
-            Column(Modifier::padding(16.0), ColumnSpec::default(), move || {
+            Column(Modifier::empty().padding(16.0), ColumnSpec::default(), move || {
                 *header_box_capture.borrow_mut() = Some(Spacer(Size {
                     width: 280.0,
                     height: 40.0,
@@ -573,7 +573,7 @@ fn desktop_counter_layout_respects_container_bounds() {
                 let row_chip_secondary_inner = Rc::clone(&row_chip_secondary_capture);
                 let row_chip_tertiary_inner = Rc::clone(&row_chip_tertiary_capture);
                 *info_row_capture.borrow_mut() = Some(Row(
-                    Modifier::padding(8.0),
+                    Modifier::empty().padding(8.0),
                     RowSpec::new()
                         .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
                         .vertical_alignment(VerticalAlignment::CenterVertically),
@@ -607,7 +607,7 @@ fn desktop_counter_layout_respects_container_bounds() {
                 let footer_extra_inner = Rc::clone(&footer_extra_capture);
 
                 *panel_column_capture.borrow_mut() = Some(Column(
-                    Modifier::padding(12.0).then(Modifier::size(Size {
+                    Modifier::empty().padding(12.0).then(Modifier::empty().size(Size {
                         width: 360.0,
                         height: 180.0,
                     })),
@@ -626,7 +626,7 @@ fn desktop_counter_layout_respects_container_bounds() {
                         let action_primary_leaf = Rc::clone(&action_primary_inner);
                         let action_secondary_leaf = Rc::clone(&action_secondary_inner);
                         *action_row_inner.borrow_mut() = Some(Row(
-                            Modifier::padding(8.0),
+                            Modifier::empty().padding(8.0),
                             RowSpec::new()
                                 .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
                                 .vertical_alignment(VerticalAlignment::CenterVertically),
@@ -650,7 +650,7 @@ fn desktop_counter_layout_respects_container_bounds() {
                         let footer_status_leaf = Rc::clone(&footer_status_inner);
                         let footer_extra_leaf = Rc::clone(&footer_extra_inner);
                         *footer_row_inner.borrow_mut() = Some(Row(
-                            Modifier::padding(8.0),
+                            Modifier::empty().padding(8.0),
                             RowSpec::new()
                                 .horizontal_arrangement(LinearArrangement::SpacedBy(16.0))
                                 .vertical_alignment(VerticalAlignment::CenterVertically),
@@ -1017,17 +1017,17 @@ fn test_fill_max_width_respects_parent_bounds() {
 
             // Outer Column with padding(20.0) and fill_max_width to ensure it has a defined width
             *column_capture.borrow_mut() = Some(Column(
-                Modifier::fill_max_width().then(Modifier::padding(20.0)),
+                Modifier::empty().fill_max_width().then(Modifier::empty().padding(20.0)),
                 ColumnSpec::default(),
                 move || {
                     let row_inner = Rc::clone(&row_capture);
                     // Row with fill_max_width() and padding(8.0)
                     *row_inner.borrow_mut() = Some(Row(
-                        Modifier::fill_max_width().then(Modifier::padding(8.0)),
+                        Modifier::empty().fill_max_width().then(Modifier::empty().padding(8.0)),
                         RowSpec::default(),
                         move || {
-                            Text("Button 1", Modifier::padding(4.0));
-                            Text("Button 2", Modifier::padding(4.0));
+                            Text("Button 1", Modifier::empty().padding(4.0));
+                            Text("Button 2", Modifier::empty().padding(4.0));
                         },
                     ));
                 },
@@ -1150,27 +1150,27 @@ fn test_fill_max_width_with_background_and_double_padding() {
             // Simulating counter_app structure:
             // Outer Column with padding(32.0)
             *outer_capture.borrow_mut() = Some(Column(
-                Modifier::padding(32.0),
+                Modifier::empty().padding(32.0),
                 ColumnSpec::default(),
                 move || {
                     let inner_cap2 = Rc::clone(&inner_capture);
                     let row_cap2 = Rc::clone(&row_capture);
                     // Inner Column with width(360.0)
                     *inner_cap2.borrow_mut() = Some(Column(
-                        Modifier::width(360.0),
+                        Modifier::empty().width(360.0),
                         ColumnSpec::default(),
                         move || {
                             let row_cap3 = Rc::clone(&row_cap2);
                             // Row with fill_max_width() + padding + background + padding
                             *row_cap3.borrow_mut() = Some(Row(
-                                Modifier::fill_max_width()
-                                    .then(Modifier::padding(8.0))
-                                    .then(Modifier::background(crate::Color(0.1, 0.1, 0.15, 0.6)))
-                                    .then(Modifier::padding(8.0)),
+                                Modifier::empty().fill_max_width()
+                                    .then(Modifier::empty().padding(8.0))
+                                    .then(Modifier::empty().background(crate::Color(0.1, 0.1, 0.15, 0.6)))
+                                    .then(Modifier::empty().padding(8.0)),
                                 RowSpec::default(),
                                 move || {
-                                    Text("OK", Modifier::padding(4.0));
-                                    Text("Cancel", Modifier::padding(4.0));
+                                    Text("OK", Modifier::empty().padding(4.0));
+                                    Text("Cancel", Modifier::empty().padding(4.0));
                                 },
                             ));
                         },
@@ -1307,7 +1307,7 @@ fn test_fill_max_width_should_not_propagate_to_wrapping_parent() {
 
                             // Row with fill_max_width() containing fixed-width content
                             *row_cap3.borrow_mut() = Some(Row(
-                                Modifier::fill_max_width(),
+                                Modifier::empty().fill_max_width(),
                                 RowSpec::default(),
                                 move || {
                                     // Fixed width content: 100px + 100px = 200px
@@ -1422,7 +1422,7 @@ fn wrap_column_with_fill_child_uses_content_width() {
             let first_chip_capture = Rc::clone(&first_chip_capture);
             let second_chip_capture = Rc::clone(&second_chip_capture);
             *column_capture.borrow_mut() = Some(Column(
-                Modifier::padding(10.0),
+                Modifier::empty().padding(10.0),
                 ColumnSpec::default(),
                 move || {
                     let row_inner = Rc::clone(&row_capture);
@@ -1430,7 +1430,7 @@ fn wrap_column_with_fill_child_uses_content_width() {
                     let second_inner = Rc::clone(&second_chip_capture);
 
                     *row_inner.borrow_mut() = Some(Row(
-                        Modifier::fill_max_width(),
+                        Modifier::empty().fill_max_width(),
                         RowSpec::default(),
                         move || {
                             *first_inner.borrow_mut() = Some(Spacer(Size {
@@ -1547,12 +1547,12 @@ fn fill_child_respects_explicit_parent_width() {
         .render(key, move || {
             let row_capture = Rc::clone(&row_capture);
             *column_capture.borrow_mut() = Some(Column(
-                Modifier::width(200.0),
+                Modifier::empty().width(200.0),
                 ColumnSpec::default(),
                 move || {
                     let row_inner = Rc::clone(&row_capture);
                     *row_inner.borrow_mut() = Some(Row(
-                        Modifier::fill_max_width(),
+                        Modifier::empty().fill_max_width(),
                         RowSpec::default(),
                         move || {
                             Spacer(Size {
@@ -1644,13 +1644,13 @@ fn fill_max_height_child_clamps_to_parent() {
             let fill_column_capture = Rc::clone(&fill_column_capture);
             let leaf_capture = Rc::clone(&leaf_capture);
             *row_capture.borrow_mut() = Some(Row(
-                Modifier::height(180.0),
+                Modifier::empty().height(180.0),
                 RowSpec::default(),
                 move || {
                     let fill_column_inner = Rc::clone(&fill_column_capture);
                     let leaf_inner = Rc::clone(&leaf_capture);
                     *fill_column_inner.borrow_mut() = Some(Column(
-                        Modifier::fill_max_height(),
+                        Modifier::empty().fill_max_height(),
                         ColumnSpec::default(),
                         move || {
                             *leaf_inner.borrow_mut() = Some(Spacer(Size {

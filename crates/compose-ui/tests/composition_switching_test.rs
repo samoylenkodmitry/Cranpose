@@ -14,14 +14,14 @@ fn counter_view(counter: MutableState<i32>, render_count: MutableState<i32>) {
     // Track render count
     render_count.set(render_count.get() + 1);
 
-    Column(Modifier::padding(20.0), ColumnSpec::default(), move || {
+    Column(Modifier::empty().padding(20.0), ColumnSpec::default(), move || {
         Text(
             format!("Counter: {}", counter.get()),
-            Modifier::padding(8.0),
+            Modifier::empty().padding(8.0),
         );
 
         Button(
-            Modifier::padding(10.0),
+            Modifier::empty().padding(10.0),
             {
                 let counter = counter.clone();
                 move || {
@@ -29,7 +29,7 @@ fn counter_view(counter: MutableState<i32>, render_count: MutableState<i32>) {
                 }
             },
             || {
-                Text("Increment", Modifier::padding(4.0));
+                Text("Increment", Modifier::empty().padding(4.0));
             },
         );
     });
@@ -41,14 +41,14 @@ fn alternative_view(counter: MutableState<i32>, render_count: MutableState<i32>)
     // Track render count
     render_count.set(render_count.get() + 1);
 
-    Column(Modifier::padding(20.0), ColumnSpec::default(), move || {
+    Column(Modifier::empty().padding(20.0), ColumnSpec::default(), move || {
         Text(
             format!("Alternative: {}", counter.get()),
-            Modifier::padding(8.0),
+            Modifier::empty().padding(8.0),
         );
 
         Button(
-            Modifier::padding(10.0),
+            Modifier::empty().padding(10.0),
             {
                 let counter = counter.clone();
                 move || {
@@ -56,7 +56,7 @@ fn alternative_view(counter: MutableState<i32>, render_count: MutableState<i32>)
                 }
             },
             || {
-                Text("Add", Modifier::padding(4.0));
+                Text("Add", Modifier::empty().padding(4.0));
             },
         );
     });
@@ -71,7 +71,7 @@ fn combined_switching_app(
     render_count1: MutableState<i32>,
     render_count2: MutableState<i32>,
 ) {
-    Column(Modifier::padding(20.0), ColumnSpec::default(), move || {
+    Column(Modifier::empty().padding(20.0), ColumnSpec::default(), move || {
         let show_counter_inner = show_counter.clone();
         let show_counter_for_button1 = show_counter.clone();
         let show_counter_for_button2 = show_counter.clone();
@@ -81,9 +81,9 @@ fn combined_switching_app(
         let render_count2_inner = render_count2.clone();
 
         // Switch buttons
-        Row(Modifier::padding(8.0), RowSpec::default(), move || {
+        Row(Modifier::empty().padding(8.0), RowSpec::default(), move || {
             Button(
-                Modifier::padding(10.0),
+                Modifier::empty().padding(10.0),
                 {
                     let show_counter = show_counter_for_button1.clone();
                     move || {
@@ -91,7 +91,7 @@ fn combined_switching_app(
                     }
                 },
                 || {
-                    Text("Counter View", Modifier::padding(4.0));
+                    Text("Counter View", Modifier::empty().padding(4.0));
                 },
             );
 
@@ -101,7 +101,7 @@ fn combined_switching_app(
             });
 
             Button(
-                Modifier::padding(10.0),
+                Modifier::empty().padding(10.0),
                 {
                     let show_counter = show_counter_for_button2.clone();
                     move || {
@@ -109,7 +109,7 @@ fn combined_switching_app(
                     }
                 },
                 || {
-                    Text("Alternative View", Modifier::padding(4.0));
+                    Text("Alternative View", Modifier::empty().padding(4.0));
                 },
             );
         });
@@ -290,7 +290,7 @@ fn test_node_cleanup_on_view_switch() {
         let show_first = show_first.clone();
         move || {
             let show_first_inner = show_first.clone();
-            Column(Modifier::padding(20.0), ColumnSpec::default(), move || {
+            Column(Modifier::empty().padding(20.0), ColumnSpec::default(), move || {
                 if show_first_inner.get() {
                     // First view with 3 text nodes
                     Text("First A", Modifier::empty());
@@ -840,13 +840,13 @@ fn test_composition_local_content_inner(local_holder: compose_core::CompositionL
     let value = local_holder.current();
     Text(
         format!("READING local: count={}", value),
-        Modifier::padding(8.0),
+        Modifier::empty().padding(8.0),
     );
 }
 
 #[composable]
 fn test_composition_local_content(local_holder: compose_core::CompositionLocal<i32>) {
-    Text("Outside provider (NOT reading)", Modifier::padding(8.0));
+    Text("Outside provider (NOT reading)", Modifier::empty().padding(8.0));
 
     Spacer(Size {
         width: 0.0,
@@ -860,7 +860,7 @@ fn test_composition_local_content(local_holder: compose_core::CompositionLocal<i
         height: 8.0,
     });
 
-    Text("NOT reading local", Modifier::padding(8.0));
+    Text("NOT reading local", Modifier::empty().padding(8.0));
 }
 
 #[composable]
@@ -868,8 +868,8 @@ fn test_composition_local_demo(
     counter: MutableState<i32>,
     local_holder: compose_core::CompositionLocal<i32>,
 ) {
-    Column(Modifier::padding(20.0), ColumnSpec::default(), move || {
-        Text("CompositionLocal Subscription Test", Modifier::padding(8.0));
+    Column(Modifier::empty().padding(20.0), ColumnSpec::default(), move || {
+        Text("CompositionLocal Subscription Test", Modifier::empty().padding(8.0));
 
         Spacer(Size {
             width: 0.0,
@@ -878,7 +878,7 @@ fn test_composition_local_demo(
 
         Text(
             format!("Counter: {}", counter.get()),
-            Modifier::padding(8.0),
+            Modifier::empty().padding(8.0),
         );
 
         Spacer(Size {
@@ -887,7 +887,7 @@ fn test_composition_local_demo(
         });
 
         Button(
-            Modifier::padding(10.0),
+            Modifier::empty().padding(10.0),
             {
                 let counter = counter.clone();
                 move || {
@@ -895,7 +895,7 @@ fn test_composition_local_demo(
                 }
             },
             || {
-                Text("Increment", Modifier::padding(4.0));
+                Text("Increment", Modifier::empty().padding(4.0));
             },
         );
 
@@ -948,7 +948,7 @@ fn composition_local_increment_keeps_node_count_stable() {
 
 #[composable]
 fn composable_view_a() {
-    Column(Modifier::padding(20.0), ColumnSpec::default(), || {
+    Column(Modifier::empty().padding(20.0), ColumnSpec::default(), || {
         Text("View A - Line 1", Modifier::empty());
         Text("View A - Line 2", Modifier::empty());
         Button(
@@ -963,7 +963,7 @@ fn composable_view_a() {
 
 #[composable]
 fn composable_view_b() {
-    Column(Modifier::padding(20.0), ColumnSpec::default(), || {
+    Column(Modifier::empty().padding(20.0), ColumnSpec::default(), || {
         Text("View B - Line 1", Modifier::empty());
         Text("View B - Line 2", Modifier::empty());
         Text("View B - Line 3", Modifier::empty());

@@ -325,7 +325,7 @@ mod tests {
     fn attaches_padding_node_and_invalidates_layout() {
         let mut handle = ModifierChainHandle::new();
 
-        let _ = handle.update(&Modifier::padding(8.0));
+        let _ = handle.update(&Modifier::empty().padding(8.0));
 
         assert_eq!(handle.chain().len(), 1);
 
@@ -343,11 +343,11 @@ mod tests {
     fn reuses_nodes_between_updates() {
         let mut handle = ModifierChainHandle::new();
 
-        let _ = handle.update(&Modifier::padding(12.0));
+        let _ = handle.update(&Modifier::empty().padding(12.0));
         let first_ptr = node_ptr::<PaddingNode>(&handle);
         handle.take_invalidations();
 
-        let _ = handle.update(&Modifier::padding(12.0));
+        let _ = handle.update(&Modifier::empty().padding(12.0));
         let second_ptr = node_ptr::<PaddingNode>(&handle);
 
         assert_eq!(first_ptr, second_ptr, "expected the node to be reused");
@@ -361,7 +361,7 @@ mod tests {
     fn resolved_modifiers_capture_background_and_shape() {
         let mut handle = ModifierChainHandle::new();
         let _ = handle.update(
-            &Modifier::background(Color(0.2, 0.3, 0.4, 1.0)).then(Modifier::rounded_corners(8.0)),
+            &Modifier::empty().background(Color(0.2, 0.3, 0.4, 1.0)).then(Modifier::empty().rounded_corners(8.0)),
         );
         let resolved = handle.resolved_modifiers();
         let background = resolved
@@ -374,7 +374,7 @@ mod tests {
         );
 
         let _ = handle.update(
-            &Modifier::rounded_corners(4.0).then(Modifier::background(Color(0.9, 0.1, 0.1, 1.0))),
+            &Modifier::empty().rounded_corners(4.0).then(Modifier::empty().background(Color(0.9, 0.1, 0.1, 1.0))),
         );
         let resolved = handle.resolved_modifiers();
         let background = resolved
@@ -395,14 +395,14 @@ mod tests {
     #[test]
     fn capability_mask_updates_with_chain() {
         let mut handle = ModifierChainHandle::new();
-        let _ = handle.update(&Modifier::padding(4.0));
+        let _ = handle.update(&Modifier::empty().padding(4.0));
         assert_eq!(handle.capabilities(), NodeCapabilities::LAYOUT);
         assert!(handle.has_layout_nodes());
         assert!(!handle.has_draw_nodes());
         handle.take_invalidations();
 
         let color = Color(0.5, 0.6, 0.7, 1.0);
-        let _ = handle.update(&Modifier::background(color));
+        let _ = handle.update(&Modifier::empty().background(color));
         assert_eq!(handle.capabilities(), NodeCapabilities::DRAW);
         assert!(handle.has_draw_nodes());
         assert!(!handle.has_layout_nodes());

@@ -185,7 +185,7 @@ fn layout_node_uses_measure_policy() -> Result<(), NodeError> {
 #[test]
 fn layout_padding_comes_from_modifier_chain() -> Result<(), NodeError> {
     let mut applier = MemoryApplier::new();
-    let layout_node = LayoutNode::new(Modifier::padding(8.0), Rc::new(VerticalStackPolicy));
+    let layout_node = LayoutNode::new(Modifier::empty().padding(8.0), Rc::new(VerticalStackPolicy));
     let layout_id = applier.create(Box::new(layout_node));
 
     let applier_host = Rc::new(ConcreteApplierHost::new(applier));
@@ -261,7 +261,7 @@ fn set_modifier_marks_dirty() {
     node.clear_needs_layout();
     node.clear_needs_semantics();
 
-    node.set_modifier(Modifier::padding(4.0));
+    node.set_modifier(Modifier::empty().padding(4.0));
     assert!(
         node.needs_measure(),
         "set_modifier should mark node as needing measure"
@@ -921,7 +921,7 @@ fn property_change_bubbles_without_manual_call() -> Result<(), NodeError> {
     // Change property on leaf (like set_modifier would do in Layout() composable)
     // This marks the node dirty but doesn't bubble yet
     applier.with_node::<LayoutNode, _>(leaf_id, |node| {
-        node.set_modifier(Modifier::width(100.0));
+        node.set_modifier(Modifier::empty().width(100.0));
     })?;
 
     // Leaf should be dirty now

@@ -18,9 +18,9 @@ where
     let on_click_rc: Rc<RefCell<dyn FnMut()>> = Rc::new(RefCell::new(on_click));
     let on_click_for_modifier = on_click_rc.clone();
 
-    let clickable_modifier = modifier.then(Modifier::clickable(move |_point| {
+    let clickable_modifier = modifier.clickable(move |_point| {
         (on_click_for_modifier.borrow_mut())();
-    }));
+    });
 
     let id = compose_core::with_current_composer(|composer| {
         composer.emit_node(|| {

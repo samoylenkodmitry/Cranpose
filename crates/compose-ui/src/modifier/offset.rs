@@ -12,12 +12,15 @@ impl Modifier {
     /// and left in RTL layouts.
     ///
     /// Matches Kotlin: `Modifier.offset(x: Dp, y: Dp)`
-    pub fn offset(x: f32, y: f32) -> Self {
-        Self::with_element(OffsetElement::new(x, y, true)).with_inspector_metadata(
+    ///
+    /// Example: `Modifier::empty().offset(10.0, 20.0)`
+    pub fn offset(self, x: f32, y: f32) -> Self {
+        let modifier = Self::with_element(OffsetElement::new(x, y, true)).with_inspector_metadata(
             inspector_metadata("offset", move |info| {
                 info.add_offset_components("offsetX", "offsetY", Point { x, y });
             }),
-        )
+        );
+        self.then(modifier)
     }
 
     /// Offset the content by (x, y) without considering layout direction.
@@ -25,11 +28,15 @@ impl Modifier {
     /// Positive x always moves content to the right regardless of RTL.
     ///
     /// Matches Kotlin: `Modifier.absoluteOffset(x: Dp, y: Dp)`
-    pub fn absolute_offset(x: f32, y: f32) -> Self {
-        Self::with_element(OffsetElement::new(x, y, false)).with_inspector_metadata(
-            inspector_metadata("absoluteOffset", move |info| {
-                info.add_offset_components("absoluteOffsetX", "absoluteOffsetY", Point { x, y });
-            }),
-        )
+    ///
+    /// Example: `Modifier::empty().absolute_offset(10.0, 20.0)`
+    pub fn absolute_offset(self, x: f32, y: f32) -> Self {
+        let modifier =
+            Self::with_element(OffsetElement::new(x, y, false)).with_inspector_metadata(
+                inspector_metadata("absoluteOffset", move |info| {
+                    info.add_offset_components("absoluteOffsetX", "absoluteOffsetY", Point { x, y });
+                }),
+            );
+        self.then(modifier)
     }
 }

@@ -186,7 +186,7 @@ fn handle_reports_modifier_capabilities() {
     let policy: Rc<MeasurePolicy> =
         Rc::new(|scope, _constraints| scope.layout(0.0, 0.0, Vec::new()));
     let mut node = SubcomposeLayoutNode::new(
-        crate::modifier::Modifier::background(crate::modifier::Color(0.1, 0.2, 0.3, 1.0)),
+        crate::modifier::Modifier::empty().background(crate::modifier::Color(0.1, 0.2, 0.3, 1.0)),
         Rc::clone(&policy),
     );
 
@@ -194,7 +194,7 @@ fn handle_reports_modifier_capabilities() {
     assert!(handle.has_draw_modifier_nodes());
     assert!(!handle.has_layout_modifier_nodes());
 
-    node.set_modifier(crate::modifier::Modifier::padding(4.0));
+    node.set_modifier(crate::modifier::Modifier::empty().padding(4.0));
     let handle = node.handle();
     assert!(handle.has_layout_modifier_nodes());
     assert!(!handle.has_draw_modifier_nodes());

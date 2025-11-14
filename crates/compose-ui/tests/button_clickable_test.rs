@@ -10,14 +10,14 @@ use compose_ui::*;
 
 #[composable]
 fn simple_button_app(clicked_count: MutableState<i32>) {
-    Column(Modifier::padding(20.0), ColumnSpec::default(), move || {
+    Column(Modifier::empty().padding(20.0), ColumnSpec::default(), move || {
         Text(
             format!("Clicks: {}", clicked_count.get()),
-            Modifier::padding(8.0),
+            Modifier::empty().padding(8.0),
         );
 
         Button(
-            Modifier::padding(10.0),
+            Modifier::empty().padding(10.0),
             {
                 let count = clicked_count.clone();
                 move || {
@@ -25,7 +25,7 @@ fn simple_button_app(clicked_count: MutableState<i32>) {
                 }
             },
             || {
-                Text("Click me", Modifier::padding(4.0));
+                Text("Click me", Modifier::empty().padding(4.0));
             },
         );
     });
@@ -81,14 +81,14 @@ fn test_button_creates_valid_composition() {
 
 #[composable]
 fn multi_button_app(button1_clicks: MutableState<i32>, button2_clicks: MutableState<i32>) {
-    Column(Modifier::padding(20.0), ColumnSpec::default(), move || {
+    Column(Modifier::empty().padding(20.0), ColumnSpec::default(), move || {
         Text(
             format!("Button 1 clicks: {}", button1_clicks.get()),
-            Modifier::padding(8.0),
+            Modifier::empty().padding(8.0),
         );
 
         Button(
-            Modifier::padding(10.0),
+            Modifier::empty().padding(10.0),
             {
                 let clicks = button1_clicks.clone();
                 move || {
@@ -96,17 +96,17 @@ fn multi_button_app(button1_clicks: MutableState<i32>, button2_clicks: MutableSt
                 }
             },
             || {
-                Text("Button 1", Modifier::padding(4.0));
+                Text("Button 1", Modifier::empty().padding(4.0));
             },
         );
 
         Text(
             format!("Button 2 clicks: {}", button2_clicks.get()),
-            Modifier::padding(8.0),
+            Modifier::empty().padding(8.0),
         );
 
         Button(
-            Modifier::padding(10.0),
+            Modifier::empty().padding(10.0),
             {
                 let clicks = button2_clicks.clone();
                 move || {
@@ -114,7 +114,7 @@ fn multi_button_app(button1_clicks: MutableState<i32>, button2_clicks: MutableSt
                 }
             },
             || {
-                Text("Button 2", Modifier::padding(4.0));
+                Text("Button 2", Modifier::empty().padding(4.0));
             },
         );
     });

@@ -14,9 +14,9 @@ use std::rc::Rc;
 
 #[test]
 fn padding_nodes_resolve_padding_values() {
-    let modifier = Modifier::padding(4.0)
-        .then(Modifier::padding_horizontal(2.0))
-        .then(Modifier::padding_each(1.0, 3.0, 5.0, 7.0));
+    let modifier = Modifier::empty().padding(4.0)
+        .then(Modifier::empty().padding_horizontal(2.0))
+        .then(Modifier::empty().padding_each(1.0, 3.0, 5.0, 7.0));
     let mut handle = ModifierChainHandle::new();
     let _ = handle.update(&modifier);
     let padding = handle.resolved_modifiers().padding();
@@ -33,7 +33,7 @@ fn padding_nodes_resolve_padding_values() {
 
 #[test]
 fn fill_max_size_sets_fraction_constraints() {
-    let modifier = Modifier::fill_max_size_fraction(0.75);
+    let modifier = Modifier::empty().fill_max_size_fraction(0.75);
     let props = modifier.resolved_modifiers().layout_properties();
     assert_eq!(props.width(), DimensionConstraint::Fraction(0.75));
     assert_eq!(props.height(), DimensionConstraint::Fraction(0.75));
@@ -41,7 +41,7 @@ fn fill_max_size_sets_fraction_constraints() {
 
 #[test]
 fn weight_tracks_fill_flag() {
-    let modifier = Modifier::weight_with_fill(2.0, false);
+    let modifier = Modifier::empty().weight_with_fill(2.0, false);
     let props = modifier.resolved_modifiers().layout_properties();
     let weight = props.weight().expect("weight to be recorded");
     assert_eq!(weight.weight, 2.0);
@@ -50,18 +50,18 @@ fn weight_tracks_fill_flag() {
 
 #[test]
 fn offset_accumulates_across_chain() {
-    let modifier = Modifier::offset(4.0, 6.0)
-        .then(Modifier::absolute_offset(-1.5, 2.5))
-        .then(Modifier::offset(0.5, -3.0));
+    let modifier = Modifier::empty().offset(4.0, 6.0)
+        .then(Modifier::empty().absolute_offset(-1.5, 2.5))
+        .then(Modifier::empty().offset(0.5, -3.0));
     let total = modifier.resolved_modifiers().offset();
     assert_eq!(total, Point { x: 3.0, y: 5.5 });
 }
 
 #[test]
 fn fold_in_iterates_in_insertion_order() {
-    let modifier = Modifier::padding(2.0)
-        .then(Modifier::background(Color(0.1, 0.2, 0.3, 1.0)))
-        .then(Modifier::clickable(|_| {}));
+    let modifier = Modifier::empty().padding(2.0)
+        .then(Modifier::empty().background(Color(0.1, 0.2, 0.3, 1.0)))
+        .then(Modifier::empty().clickable(|_| {}));
 
     let node_types = modifier.fold_in(Vec::new(), |mut acc, element| {
         acc.push(element.node_type());
@@ -82,9 +82,9 @@ fn fold_in_iterates_in_insertion_order() {
 
 #[test]
 fn fold_out_iterates_in_reverse_order() {
-    let modifier = Modifier::padding(2.0)
-        .then(Modifier::background(Color(0.1, 0.2, 0.3, 1.0)))
-        .then(Modifier::clickable(|_| {}));
+    let modifier = Modifier::empty().padding(2.0)
+        .then(Modifier::empty().background(Color(0.1, 0.2, 0.3, 1.0)))
+        .then(Modifier::empty().clickable(|_| {}));
 
     let node_types = modifier.fold_out(Vec::new(), |mut acc, element| {
         acc.push(element.node_type());
@@ -106,9 +106,9 @@ fn fold_out_iterates_in_reverse_order() {
 
 #[test]
 fn any_and_all_respect_predicates() {
-    let modifier = Modifier::padding(2.0)
-        .then(Modifier::background(Color(0.1, 0.2, 0.3, 1.0)))
-        .then(Modifier::clickable(|_| {}));
+    let modifier = Modifier::empty().padding(2.0)
+        .then(Modifier::empty().background(Color(0.1, 0.2, 0.3, 1.0)))
+        .then(Modifier::empty().clickable(|_| {}));
 
     assert!(modifier.any(|element| element.node_type() == TypeId::of::<BackgroundNode>()));
     assert!(!modifier.any(|element| element.node_type() == TypeId::of::<AlphaNode>()));
@@ -119,19 +119,19 @@ fn any_and_all_respect_predicates() {
 
 #[test]
 fn then_short_circuits_empty_modifiers() {
-    let padding = Modifier::padding(4.0);
+    let padding = Modifier::empty().padding(4.0);
     assert_eq!(Modifier::empty().then(padding.clone()), padding);
 
-    let background = Modifier::background(Color::rgba(0.2, 0.4, 0.6, 1.0));
+    let background = Modifier::empty().background(Color::rgba(0.2, 0.4, 0.6, 1.0));
     assert_eq!(background.then(Modifier::empty()), background);
 }
 
 #[test]
 fn then_preserves_element_order_when_chaining() {
     let modifier = Modifier::empty()
-        .then(Modifier::padding(2.0))
-        .then(Modifier::background(Color(0.1, 0.2, 0.3, 1.0)))
-        .then(Modifier::clickable(|_| {}));
+        .then(Modifier::empty().padding(2.0))
+        .then(Modifier::empty().background(Color(0.1, 0.2, 0.3, 1.0)))
+        .then(Modifier::empty().clickable(|_| {}));
 
     let node_types = modifier.fold_in(Vec::new(), |mut acc, element| {
         acc.push(element.node_type());
@@ -152,8 +152,8 @@ fn then_preserves_element_order_when_chaining() {
 
 #[test]
 fn inspector_metadata_records_padding_and_background() {
-    let modifier = Modifier::padding_each(4.0, 2.0, 1.0, 3.0)
-        .then(Modifier::background(Color::rgba(0.8, 0.1, 0.2, 1.0)));
+    let modifier = Modifier::empty().padding_each(4.0, 2.0, 1.0, 3.0)
+        .then(Modifier::empty().background(Color::rgba(0.8, 0.1, 0.2, 1.0)));
 
     let mut info = InspectorInfo::new();
     modifier.inspect(&mut info);
@@ -172,7 +172,7 @@ fn inspector_metadata_records_padding_and_background() {
 
 #[test]
 fn inspector_metadata_records_size_and_clickable() {
-    let modifier = Modifier::size_points(24.0, 48.0).then(Modifier::clickable(|_| {}));
+    let modifier = Modifier::empty().size_points(24.0, 48.0).then(Modifier::empty().clickable(|_| {}));
 
     let mut info = InspectorInfo::new();
     modifier.inspect(&mut info);
@@ -191,7 +191,7 @@ fn inspector_metadata_records_size_and_clickable() {
 
 #[test]
 fn required_size_sets_explicit_constraints() {
-    let modifier = Modifier::required_size(Size {
+    let modifier = Modifier::empty().required_size(Size {
         width: 32.0,
         height: 18.0,
     });
@@ -206,7 +206,7 @@ fn required_size_sets_explicit_constraints() {
 
 #[test]
 fn alignment_modifiers_record_values() {
-    let modifier = Modifier::align(Alignment::BOTTOM_END)
+    let modifier = Modifier::empty().align(Alignment::BOTTOM_END)
         .alignInColumn(HorizontalAlignment::CenterHorizontally)
         .alignInRow(VerticalAlignment::Top);
     let props = modifier.resolved_modifiers().layout_properties();
@@ -224,15 +224,15 @@ fn graphics_layer_modifier_updates_resolved_layer() {
         alpha: 0.5,
         ..Default::default()
     };
-    let modifier = Modifier::graphics_layer(layer);
+    let modifier = Modifier::empty().graphics_layer(layer);
     assert_eq!(modifier.graphics_layer_values(), Some(layer));
 }
 
 #[test]
 fn inspector_metadata_preserves_modifier_order() {
-    let modifier = Modifier::width(16.0)
-        .then(Modifier::fill_max_height_fraction(0.5))
-        .then(Modifier::clip_to_bounds());
+    let modifier = Modifier::empty().width(16.0)
+        .then(Modifier::empty().fill_max_height_fraction(0.5))
+        .then(Modifier::empty().clip_to_bounds());
 
     let mut info = InspectorInfo::new();
     modifier.inspect(&mut info);
@@ -242,7 +242,7 @@ fn inspector_metadata_preserves_modifier_order() {
 
 #[test]
 fn inspector_debug_helpers_surface_properties() {
-    let modifier = Modifier::offset(2.0, -1.0).then(Modifier::clip_to_bounds());
+    let modifier = Modifier::empty().offset(2.0, -1.0).then(Modifier::empty().clip_to_bounds());
 
     let mut info = InspectorInfo::new();
     modifier.inspect(&mut info);
@@ -265,9 +265,9 @@ fn inspector_debug_helpers_surface_properties() {
 
 #[test]
 fn collect_inspector_records_include_weight_and_pointer_input_metadata() {
-    let modifier = Modifier::padding(2.0)
-        .then(Modifier::weight_with_fill(3.5, false))
-        .then(Modifier::pointer_input(7u64, |_| async move {}));
+    let modifier = Modifier::empty().padding(2.0)
+        .then(Modifier::empty().weight_with_fill(3.5, false))
+        .then(Modifier::empty().pointer_input(7u64, |_| async move {}));
 
     let records = modifier.collect_inspector_records();
 
@@ -322,7 +322,7 @@ fn semantics_modifier_populates_inspector_metadata() {
 
 #[test]
 fn inspector_snapshot_includes_delegate_depth_and_capabilities() {
-    let modifier = Modifier::padding(4.0).then(
+    let modifier = Modifier::empty().padding(4.0).then(
         Modifier::with_element(TestDelegatingElement)
             .with_inspector_metadata(inspector_metadata("delegating", |info| {
                 info.add_property("tag", "root")
@@ -349,7 +349,7 @@ fn inspector_snapshot_includes_delegate_depth_and_capabilities() {
 
 #[test]
 fn modifier_chain_trace_runs_only_when_debug_flag_set() {
-    let modifier = Modifier::padding(1.0);
+    let modifier = Modifier::empty().padding(1.0);
     let mut handle = ModifierChainHandle::new();
     let invocations = std::sync::Arc::new(std::sync::Mutex::new(0usize));
     {

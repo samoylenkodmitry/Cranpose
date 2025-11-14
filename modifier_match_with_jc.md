@@ -95,10 +95,10 @@ Always cross-check behavior against the Kotlin sources under `/media/huge/compos
 
      * Keep `LayoutNode`’s current `modifier_chain.update(...)` + `resolved_modifiers` as the **source of truth**.
      * Make `SubcomposeLayoutNodeInner` do the same (it already does, just confirm it mirrors the layout node path).
-     * Mark `Modifier::resolved_modifiers()` as “helper/debug-only” and hunt down any call sites in layout/measure/text that still use it.
+     * Mark `Modifier::empty().resolved_modifiers()` as “helper/debug-only” and hunt down any call sites in layout/measure/text that still use it.
    * **Acceptance:**
 
-     * No hot path calls `Modifier::resolved_modifiers()` directly.
+     * No hot path calls `Modifier::empty().resolved_modifiers()` directly.
      * Renderer and layout both consume the snapshot coming from `LayoutNodeData`.
 
 2. **Make all layout-tree builders provide the 3-part node data**
@@ -286,7 +286,7 @@ fn main() {
 
     // Example 1: Basic Modifiers
     println!("1. Creating modifiers:");
-    let modifier = Modifier::new()
+    let modifier = Modifier::empty().new()
         .padding(16.0)
         .background(Color::rgb(0.2, 0.4, 0.8))
         .size(200.0, 100.0)
@@ -301,15 +301,15 @@ fn main() {
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
-    chain.update(Modifier::padding(16.0), &mut context);
+    chain.update(Modifier::empty().padding(16.0), &mut context);
     println!("   Chain length: {}", chain.len());
 
-    chain.update(Modifier::padding(24.0), &mut context);
+    chain.update(Modifier::empty().padding(24.0), &mut context);
     println!("   ✓ Node reused successfully!");
 
     // Example 3: Capability-driven dispatch
     println!("\n3. Capability-driven dispatch:");
-    let complex = Modifier::new()
+    let complex = Modifier::empty().new()
         .padding(8.0)           // LAYOUT capability
         .background(Color::Red)  // DRAW capability
         .clickable(|| {})        // POINTER_INPUT capability

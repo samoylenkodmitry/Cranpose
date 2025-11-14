@@ -13,12 +13,12 @@ use compose_ui::*;
 #[composable]
 fn test_hover_app(position: MutableState<Point>, event_count: MutableState<i32>) {
     Column(
-        Modifier::padding(20.0)
-            .then(Modifier::size(Size {
+        Modifier::empty().padding(20.0)
+            .then(Modifier::empty().size(Size {
                 width: 200.0,
                 height: 200.0,
             }))
-            .then(Modifier::pointer_input((), {
+            .then(Modifier::empty().pointer_input((), {
                 let pos = position.clone();
                 let count = event_count.clone();
                 move |scope: PointerInputScope| {
@@ -56,7 +56,7 @@ fn test_hover_app(position: MutableState<Point>, event_count: MutableState<i32>)
             })),
         ColumnSpec::default(),
         || {
-            Text("Hover area", Modifier::padding(8.0));
+            Text("Hover area", Modifier::empty().padding(8.0));
         },
     );
 }
@@ -112,19 +112,19 @@ fn pause_button_app(is_running: MutableState<bool>, click_count: MutableState<i3
         Color(0.2, 0.45, 0.9, 1.0)
     };
 
-    Column(Modifier::padding(20.0), ColumnSpec::default(), move || {
+    Column(Modifier::empty().padding(20.0), ColumnSpec::default(), move || {
         Text(
             format!(
                 "Running: {}, Clicks: {}",
                 is_running.get(),
                 click_count.get()
             ),
-            Modifier::padding(8.0),
+            Modifier::empty().padding(8.0),
         );
 
         // Recreate the pause button structure from the demo
         Button(
-            Modifier::rounded_corners(16.0).then(Modifier::draw_behind({
+            Modifier::empty().rounded_corners(16.0).then(Modifier::empty().draw_behind({
                 let color = button_color;
                 move |scope| {
                     scope.draw_round_rect(Brush::solid(color), CornerRadii::uniform(16.0));
@@ -141,7 +141,7 @@ fn pause_button_app(is_running: MutableState<bool>, click_count: MutableState<i3
             {
                 let label = if running { "Pause" } else { "Resume" };
                 move || {
-                    Text(label, Modifier::padding(6.0));
+                    Text(label, Modifier::empty().padding(6.0));
                 }
             },
         );

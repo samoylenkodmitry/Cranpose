@@ -18,11 +18,11 @@ fn gradient_follows_state_app(pointer_position: MutableState<Point>) {
     // where state is read and captured in the draw closure
 
     Column(
-        Modifier::size(Size {
+        Modifier::empty().size(Size {
             width: 200.0,
             height: 200.0,
         })
-        .then(Modifier::draw_with_content({
+        .then(Modifier::empty().draw_with_content({
             // This reads state at composition time and captures the value
             let position = pointer_position.get();
             eprintln!("Creating draw closure with position: {:?}", position);
@@ -36,7 +36,7 @@ fn gradient_follows_state_app(pointer_position: MutableState<Point>) {
                 ));
             }
         }))
-        .then(Modifier::pointer_input((), {
+        .then(Modifier::empty().pointer_input((), {
             let pointer_position = pointer_position.clone();
             move |scope: PointerInputScope| {
                 let pointer_position = pointer_position.clone();
@@ -63,7 +63,7 @@ fn gradient_follows_state_app(pointer_position: MutableState<Point>) {
         })),
         ColumnSpec::default(),
         || {
-            Text("Hover area", Modifier::padding(8.0));
+            Text("Hover area", Modifier::empty().padding(8.0));
         },
     );
 }
@@ -109,11 +109,11 @@ fn working_gradient_app(pointer_position: MutableState<Point>) {
     // This doesn't rely on recomposition, so it's more robust
 
     Column(
-        Modifier::size(Size {
+        Modifier::empty().size(Size {
             width: 200.0,
             height: 200.0,
         })
-        .then(Modifier::draw_with_content({
+        .then(Modifier::empty().draw_with_content({
             // Clone the state handle, not the value
             let pointer_position = pointer_position.clone();
             move |scope| {
@@ -127,7 +127,7 @@ fn working_gradient_app(pointer_position: MutableState<Point>) {
                 ));
             }
         }))
-        .then(Modifier::pointer_input((), {
+        .then(Modifier::empty().pointer_input((), {
             let pointer_position = pointer_position.clone();
             move |scope: PointerInputScope| {
                 let pointer_position = pointer_position.clone();
@@ -151,7 +151,7 @@ fn working_gradient_app(pointer_position: MutableState<Point>) {
         })),
         ColumnSpec::default(),
         || {
-            Text("Hover area", Modifier::padding(8.0));
+            Text("Hover area", Modifier::empty().padding(8.0));
         },
     );
 }

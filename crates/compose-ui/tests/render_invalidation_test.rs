@@ -12,9 +12,9 @@ use compose_ui::*;
 #[composable]
 fn conditional_text_app(counter: MutableState<i32>) {
     if counter.get() % 2 == 0 {
-        Text("Even", Modifier::padding(8.0));
+        Text("Even", Modifier::empty().padding(8.0));
     } else {
-        Text("Odd", Modifier::padding(8.0));
+        Text("Odd", Modifier::empty().padding(8.0));
     }
 }
 

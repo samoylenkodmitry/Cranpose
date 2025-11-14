@@ -2,16 +2,16 @@ use super::{inspector_metadata, Alignment, HorizontalAlignment, Modifier, Vertic
 use crate::modifier_nodes::AlignmentElement;
 
 impl Modifier {
-    pub fn align(alignment: Alignment) -> Self {
-        Self::with_element(AlignmentElement::box_alignment(alignment)).with_inspector_metadata(
+    pub fn align(self, alignment: Alignment) -> Self {
+        self.then(Self::with_element(AlignmentElement::box_alignment(alignment)).with_inspector_metadata(
             inspector_metadata("align", move |info| {
                 info.add_alignment("boxAlignment", alignment);
             }),
-        )
+        ))
     }
 
     pub fn alignInBox(self, alignment: Alignment) -> Self {
-        self.then(Self::align(alignment))
+        self.align(alignment)
     }
 
     pub fn alignInColumn(self, alignment: HorizontalAlignment) -> Self {
