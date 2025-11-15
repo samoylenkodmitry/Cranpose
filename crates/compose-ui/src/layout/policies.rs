@@ -578,6 +578,111 @@ impl MeasurePolicy for FlexMeasurePolicy {
     }
 }
 
+/// MeasurePolicy for Text - measures text content and respects constraints.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextMeasurePolicy {
+    pub text: String,
+}
+
+impl TextMeasurePolicy {
+    pub fn new(text: String) -> Self {
+        Self { text }
+    }
+}
+
+impl MeasurePolicy for TextMeasurePolicy {
+    fn measure(
+        &self,
+        _measurables: &[Box<dyn Measurable>],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        // Measure the text content
+        let text_size = measure_text_content(&self.text);
+
+        // Constrain the size to the provided constraints
+        let (width, height) = constraints.constrain(text_size.width, text_size.height);
+
+        MeasureResult::new(
+            crate::modifier::Size { width, height },
+            vec![], // Text has no children
+        )
+    }
+
+    fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+        measure_text_content(&self.text).width
+    }
+
+    fn max_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+        measure_text_content(&self.text).width
+    }
+
+    fn min_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+        measure_text_content(&self.text).height
+    }
+
+    fn max_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+        measure_text_content(&self.text).height
+    }
+
+    fn text_content(&self) -> Option<String> {
+        Some(self.text.clone())
+    }
+}
+
+/// Helper function to measure text content size.
+fn measure_text_content(text: &str) -> crate::modifier::Size {
+    let metrics = crate::text::measure_text(text);
+    crate::modifier::Size {
+        width: metrics.width,
+        height: metrics.height,
+    }
+}
+
+/// MeasurePolicy for leaf nodes with fixed intrinsic size (like Spacer).
+/// This policy respects the provided constraints but has a preferred intrinsic size.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LeafMeasurePolicy {
+    pub intrinsic_size: crate::modifier::Size,
+}
+
+impl LeafMeasurePolicy {
+    pub fn new(intrinsic_size: crate::modifier::Size) -> Self {
+        Self { intrinsic_size }
+    }
+}
+
+impl MeasurePolicy for LeafMeasurePolicy {
+    fn measure(
+        &self,
+        _measurables: &[Box<dyn Measurable>],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        // Use intrinsic size but constrain to provided constraints
+        let (width, height) = constraints.constrain(self.intrinsic_size.width, self.intrinsic_size.height);
+
+        MeasureResult::new(
+            crate::modifier::Size { width, height },
+            vec![], // Leaf nodes have no children
+        )
+    }
+
+    fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+        self.intrinsic_size.width
+    }
+
+    fn max_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+        self.intrinsic_size.width
+    }
+
+    fn min_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+        self.intrinsic_size.height
+    }
+
+    fn max_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+        self.intrinsic_size.height
+    }
+}
+
 #[cfg(test)]
 #[path = "tests/policies_tests.rs"]
 mod tests;

@@ -1,4 +1,5 @@
 use super::*;
+use crate::layout::policies::LeafMeasurePolicy;
 use crate::modifier::{Modifier, Size};
 use compose_core::{Applier, ConcreteApplierHost, MemoryApplier};
 use compose_ui_layout::{MeasurePolicy, MeasureResult, Placement};
@@ -136,18 +137,20 @@ fn align_helpers_respect_available_space() {
 #[test]
 fn layout_node_uses_measure_policy() -> Result<(), NodeError> {
     let mut applier = MemoryApplier::new();
-    let child_a = applier.create(Box::new(SpacerNode {
-        size: Size {
+    let child_a = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(LeafMeasurePolicy::new(Size {
             width: 10.0,
             height: 20.0,
-        },
-    }));
-    let child_b = applier.create(Box::new(SpacerNode {
-        size: Size {
+        })),
+    )));
+    let child_b = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(LeafMeasurePolicy::new(Size {
             width: 5.0,
             height: 30.0,
-        },
-    }));
+        })),
+    )));
 
     let mut layout_node = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
     layout_node.children.insert(child_a);
@@ -296,12 +299,13 @@ fn set_measure_policy_marks_dirty() {
 #[test]
 fn insert_child_marks_dirty() -> Result<(), NodeError> {
     let mut applier = MemoryApplier::new();
-    let child = applier.create(Box::new(SpacerNode {
-        size: Size {
+    let child = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(LeafMeasurePolicy::new(Size {
             width: 10.0,
             height: 10.0,
-        },
-    }));
+        })),
+    )));
 
     let mut node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
     node.clear_needs_measure();
@@ -322,12 +326,13 @@ fn insert_child_marks_dirty() -> Result<(), NodeError> {
 #[test]
 fn remove_child_marks_dirty() -> Result<(), NodeError> {
     let mut applier = MemoryApplier::new();
-    let child = applier.create(Box::new(SpacerNode {
-        size: Size {
+    let child = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(LeafMeasurePolicy::new(Size {
             width: 10.0,
             height: 10.0,
-        },
-    }));
+        })),
+    )));
 
     let mut node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
     node.insert_child(child);
@@ -524,18 +529,20 @@ fn selective_measure_with_tree_hierarchy() -> Result<(), NodeError> {
     let mut applier = MemoryApplier::new();
 
     // Create a tree: root -> child_a, child_b
-    let child_a = applier.create(Box::new(SpacerNode {
-        size: Size {
+    let child_a = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(LeafMeasurePolicy::new(Size {
             width: 10.0,
             height: 20.0,
-        },
-    }));
-    let child_b = applier.create(Box::new(SpacerNode {
-        size: Size {
+        })),
+    )));
+    let child_b = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(LeafMeasurePolicy::new(Size {
             width: 10.0,
             height: 30.0,
-        },
-    }));
+        })),
+    )));
 
     let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
     root.children.insert(child_a);

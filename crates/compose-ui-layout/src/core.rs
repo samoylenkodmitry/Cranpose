@@ -98,6 +98,12 @@ pub trait MeasurePolicy {
 
     /// Computes the maximum intrinsic height of this policy.
     fn max_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32;
+
+    /// Returns the text content if this is a text measure policy.
+    /// Used for extracting text content for rendering and semantics.
+    fn text_content(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Result of a measurement operation.

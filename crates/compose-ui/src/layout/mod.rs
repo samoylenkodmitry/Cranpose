@@ -16,16 +16,15 @@ use compose_core::{
 };
 
 #[cfg(test)]
-use self::core::VerticalAlignment;
-use self::core::{HorizontalAlignment, LinearArrangement, Measurable, Placeable};
+use self::core::{HorizontalAlignment, VerticalAlignment};
+use self::core::Measurable;
+use self::core::Placeable;
 use crate::modifier::{
     collect_semantics_from_modifier, collect_slices_from_modifier, DimensionConstraint, EdgeInsets,
     Modifier, ModifierNodeSlices, Point, Rect as GeometryRect, ResolvedModifiers, Size,
 };
 use crate::subcompose_layout::SubcomposeLayoutNode;
-use crate::widgets::nodes::{
-    ButtonNode, IntrinsicKind, LayoutNode, LayoutNodeCacheHandles, SpacerNode, TextNode,
-};
+use crate::widgets::nodes::{IntrinsicKind, LayoutNode, LayoutNodeCacheHandles};
 use compose_foundation::SemanticsConfiguration;
 use compose_ui_layout::{Constraints, MeasurePolicy};
 
@@ -481,12 +480,14 @@ impl LayoutBuilderState {
     ) -> Result<Rc<MeasuredNode>, NodeError> {
         let constraints = normalize_constraints(constraints);
 
+        // Try SubcomposeLayoutNode first
         if let Some(subcompose) =
             Self::try_measure_subcompose(Rc::clone(&state_rc), node_id, constraints)?
         {
             return Ok(subcompose);
         }
 
+        // Try LayoutNode (the primary modern path)
         if let Some(snapshot) = Self::with_applier_result(&state_rc, |applier| {
             match applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
                 LayoutNodeSnapshot::from_layout_node(layout_node)
@@ -499,24 +500,8 @@ impl LayoutBuilderState {
             return Self::measure_layout_node(Rc::clone(&state_rc), node_id, snapshot, constraints);
         }
 
-        if let Some(text) =
-            Self::with_applier_result(&state_rc, |applier| try_clone::<TextNode>(applier, node_id))?
-        {
-            return Ok(measure_text(node_id, &text, constraints));
-        }
-
-        if let Some(spacer) = Self::with_applier_result(&state_rc, |applier| {
-            try_clone::<SpacerNode>(applier, node_id)
-        })? {
-            return Ok(measure_spacer(node_id, &spacer, constraints));
-        }
-
-        if let Some(button) = Self::with_applier_result(&state_rc, |applier| {
-            try_clone::<ButtonNode>(applier, node_id)
-        })? {
-            return Self::measure_button(Rc::clone(&state_rc), node_id, button, constraints);
-        }
-
+        // No legacy fallbacks - all widgets now use LayoutNode or SubcomposeLayoutNode
+        // If we reach here, it's an unknown node type (shouldn't happen in normal use)
         Ok(Rc::new(MeasuredNode::new(
             node_id,
             Size::default(),
@@ -889,24 +874,6 @@ impl LayoutBuilderState {
         Ok(measured)
     }
 
-    fn measure_button(
-        state_rc: Rc<RefCell<Self>>,
-        node_id: NodeId,
-        node: ButtonNode,
-        constraints: Constraints,
-    ) -> Result<Rc<MeasuredNode>, NodeError> {
-        use crate::layout::policies::FlexMeasurePolicy;
-        let mut layout = LayoutNode::new(
-            node.modifier.clone(),
-            Rc::new(FlexMeasurePolicy::column(
-                LinearArrangement::Start,
-                HorizontalAlignment::Start,
-            )),
-        );
-        layout.children = node.children.clone();
-        let snapshot = LayoutNodeSnapshot::from_layout_node(&layout);
-        Self::measure_layout_node(state_rc, node_id, snapshot, constraints)
-    }
 }
 
 /// Snapshot of a LayoutNode's data for measuring.
@@ -1340,21 +1307,6 @@ fn measure_node_with_host(
     builder.measure_node(node_id, constraints)
 }
 
-fn measure_text(node_id: NodeId, node: &TextNode, constraints: Constraints) -> Rc<MeasuredNode> {
-    let base = measure_text_content(&node.text);
-    let resolved = node.modifier.resolved_modifiers();
-    measure_leaf(node_id, resolved, base, constraints)
-}
-
-fn measure_spacer(
-    node_id: NodeId,
-    node: &SpacerNode,
-    constraints: Constraints,
-) -> Rc<MeasuredNode> {
-    let resolved = Modifier::empty().resolved_modifiers();
-    measure_leaf(node_id, resolved, node.size, constraints)
-}
-
 fn measure_leaf(
     node_id: NodeId,
     resolved_modifiers: ResolvedModifiers,
@@ -1486,49 +1438,26 @@ fn runtime_metadata_for(
     applier: &mut MemoryApplier,
     node_id: NodeId,
 ) -> Result<RuntimeNodeMetadata, NodeError> {
+    // Try LayoutNode (the primary modern path)
     if let Some(layout) = try_clone::<LayoutNode>(applier, node_id)? {
+        // Check if this is a Text widget by checking if the measure policy has text content
+        let role = if let Some(text) = layout.measure_policy.text_content() {
+            SemanticsRole::Text { value: text }
+        } else {
+            SemanticsRole::Layout
+        };
+
         return Ok(RuntimeNodeMetadata {
             modifier: layout.modifier.clone(),
             resolved_modifiers: layout.resolved_modifiers(),
             modifier_slices: layout.modifier_slices_snapshot(),
-            role: SemanticsRole::Layout,
+            role,
             actions: Vec::new(),
             button_handler: None,
         });
     }
-    if let Some(button) = try_clone::<ButtonNode>(applier, node_id)? {
-        return Ok(RuntimeNodeMetadata {
-            modifier: button.modifier.clone(),
-            resolved_modifiers: button.modifier.resolved_modifiers(),
-            modifier_slices: collect_slices_from_modifier(&button.modifier),
-            role: SemanticsRole::Unknown,
-            actions: Vec::new(),
-            // TODO: The legacy ButtonNode.on_click field should not be used.
-            button_handler: None,
-        });
-    }
-    if let Some(text) = try_clone::<TextNode>(applier, node_id)? {
-        return Ok(RuntimeNodeMetadata {
-            modifier: text.modifier.clone(),
-            resolved_modifiers: text.modifier.resolved_modifiers(),
-            modifier_slices: collect_slices_from_modifier(&text.modifier),
-            role: SemanticsRole::Text {
-                value: text.text.clone(),
-            },
-            actions: Vec::new(),
-            button_handler: None,
-        });
-    }
-    if try_clone::<SpacerNode>(applier, node_id)?.is_some() {
-        return Ok(RuntimeNodeMetadata {
-            modifier: Modifier::empty(),
-            resolved_modifiers: ResolvedModifiers::default(),
-            modifier_slices: ModifierNodeSlices::default(),
-            role: SemanticsRole::Spacer,
-            actions: Vec::new(),
-            button_handler: None,
-        });
-    }
+
+    // Try SubcomposeLayoutNode
     if let Ok((modifier, resolved_modifiers)) = applier
         .with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
             (node.modifier(), node.resolved_modifiers())
@@ -1554,7 +1483,7 @@ fn compute_semantics_for_node(
     applier: &mut MemoryApplier,
     node_id: NodeId,
 ) -> Option<SemanticsConfiguration> {
-    // Try LayoutNode first (the primary case)
+    // Try LayoutNode (the primary modern path)
     match applier.with_node::<LayoutNode, _>(node_id, |layout| {
         let config = layout.semantics_configuration();
         layout.clear_needs_semantics();
@@ -1565,32 +1494,7 @@ fn compute_semantics_for_node(
         Err(_) => return None,
     }
 
-    // Fallback for legacy Button nodes (temporary during migration)
-    if let Ok(Some(button)) = try_clone::<ButtonNode>(applier, node_id) {
-        let from_modifier = collect_semantics_from_modifier(&button.modifier);
-        return from_modifier.or_else(|| {
-            // Fallback: generate default button semantics if no modifiers provided them
-            let mut config = SemanticsConfiguration::default();
-            config.is_button = true;
-            config.is_clickable = true;
-            Some(config)
-        });
-    }
-
-    // Fallback for Text nodes (read from modifier if present)
-    if let Ok(Some(text)) = try_clone::<TextNode>(applier, node_id) {
-        return collect_semantics_from_modifier(&text.modifier);
-    }
-
-    // Spacer nodes have no semantics
-    if try_clone::<SpacerNode>(applier, node_id)
-        .unwrap_or(None)
-        .is_some()
-    {
-        return None;
-    }
-
-    // SubcomposeLayoutNode: read from modifier
+    // Try SubcomposeLayoutNode
     if let Ok(modifier) =
         applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| node.modifier())
     {
@@ -1705,14 +1609,6 @@ fn layout_kind_from_metadata(_node_id: NodeId, info: &RuntimeNodeMetadata) -> La
             LayoutNodeKind::Button { on_click: handler }
         }
         SemanticsRole::Unknown => LayoutNodeKind::Unknown,
-    }
-}
-
-fn measure_text_content(text: &str) -> Size {
-    let metrics = crate::text::measure_text(text);
-    Size {
-        width: metrics.width,
-        height: metrics.height,
     }
 }
 
