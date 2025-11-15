@@ -2,9 +2,8 @@
 
 The modifier API surface is moving in the right direction (builder helpers now chain via
 `self.then`, `ModifierNodeChain` has capability tracking, and the node-backed factories live in
-`crates/compose-ui/src/modifier_nodes.rs`). However, the branch does **not** currently deliver the
-parity described in the README/NEXT_TASK files. This document records the gaps so we can close them
-before declaring the migration "done".
+`crates/compose-ui/src/modifier_nodes.rs`). This document records the current status and remaining
+gaps before we can claim full parity with Jetpack Compose.
 
 ---
 
@@ -15,45 +14,81 @@ before declaring the migration "done".
   `crates/compose-ui/src/modifier_nodes.rs`.
 - ✅ Public modifier builders (padding/background/fill/etc.) now consume `self` and use `then(...)`
   so callers can fluently chain them without reaching for ad-hoc constructors.
-- ⚠️ Runtime consumers still rely on legacy fallbacks:
-  - `LayoutNodeData` snapshots are only produced for `LayoutNode` / `SubcomposeLayoutNode`. Code
-    paths such as `runtime_metadata_for` in `crates/compose-ui/src/layout/mod.rs` still clone
-    modifiers from `ButtonNode`, `TextNode`, and `SpacerNode` instead of using reconciled node data.
-  - `measure_spacer` builds resolved modifiers via `Modifier::empty().resolved_modifiers()` each
-    time rather than pulling from the owning node.
 - ✅ Pointer/focus invalidation managers (`crates/compose-ui/src/pointer_dispatch.rs` and
   `crates/compose-ui/src/focus_dispatch.rs`) are now invoked by the app shell runtime during frame
   processing. The `process_pointer_repasses` / `process_focus_invalidations` functions are called
   in `AppShell::run_dispatch_queues()`, and the `needs_pointer_pass` / `needs_focus_sync` flags on
   `LayoutNode` are properly cleared after processing, matching Jetpack Compose's invalidation pattern.
-- ⚠️ `ButtonNode`, `TextNode`, and `SpacerNode` still implement the `Node` trait directly and
-  bypass the modifier chain completely, so "legacy" behaviour is still present in the tree.
+- ✅ **Legacy widget-specific nodes removed.** `ButtonNode`, `TextNode`, and `SpacerNode` have been
+  deleted. All widgets now use `LayoutNode` with appropriate measure policies.
+- ✅ **Centralized modifier resolution.** The legacy `measure_spacer`, `measure_text`, and
+  `measure_button` functions that rebuilt modifiers via `Modifier::empty().resolved_modifiers()` have
+  been removed. All measurement goes through the unified `measure_layout_node` path.
+- ✅ **Metadata fallbacks removed.** `runtime_metadata_for` and `compute_semantics_for_node` only
+  handle `LayoutNode` and `SubcomposeLayoutNode`, ensuring consistent modifier chain traversal.
+- ⚠️ **Text implementation shortcut.** Text content is currently stored in `TextMeasurePolicy` with
+  a `text_content()` method added to the `MeasurePolicy` trait. This violates separation of concerns
+  and doesn't match Jetpack Compose's architecture (see "Known Shortcuts" section below).
 - ⚠️ Tests under `crates/compose-ui/src/tests/pointer_input_integration_test.rs` simply assert node
   counts; no integration test actually drives pointer events through `HitTestTarget`.
 
 ---
 
-## Work Remaining Before Parity Claims
+## Known Shortcuts
+
+### Text Implementation Architecture Mismatch
+
+**Current (Shortcut) Implementation:**
+- Text content stored in `TextMeasurePolicy`
+- Added `text_content()` method to `MeasurePolicy` trait for extracting text
+- `Text()` widget: `Layout(modifier, TextMeasurePolicy::new(text), || {})`
+
+**Problem:**
+- Violates separation of concerns - `MeasurePolicy` shouldn't store rendering/semantic content
+- Pollutes `MeasurePolicy` trait with domain-specific methods
+- Doesn't match Jetpack Compose architecture
+
+**Jetpack Compose Architecture:**
+```kotlin
+// In BasicText.kt
+Layout(finalModifier, EmptyMeasurePolicy)
+
+// Where finalModifier includes:
+TextStringSimpleElement(text, style, ...) // Creates TextStringSimpleNode
+```
+
+**TextStringSimpleNode** implements:
+- `LayoutModifierNode` - for measurement
+- `DrawModifierNode` - for drawing
+- `SemanticsModifierNode` - for semantics
+
+Text content lives in the **modifier node**, not in MeasurePolicy!
+
+**Proper Fix Required:**
+1. Create `TextModifierNode: LayoutModifierNode + DrawModifierNode + SemanticsModifierNode`
+2. Create `TextModifierElement` that produces `TextModifierNode`
+3. Update `Text()` to: `Layout(modifier.textModifier(text, style, ...), EmptyMeasurePolicy, || {})`
+4. Remove `text_content()` from `MeasurePolicy` trait
+5. Delete `TextMeasurePolicy` (use empty/simple policy instead)
+
+**Reference Files:**
+- `/media/huge/composerepo/compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/BasicText.kt`
+- `/media/huge/composerepo/compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/modifiers/TextStringSimpleNode.kt`
+
+---
+
+## Work Remaining Before Full Parity
 
 1. ✅ **COMPLETED: Hook up the dispatch queues.**
-   - ✅ The app shell now drains `process_pointer_repasses` / `process_focus_invalidations` each frame
-     in `AppShell::run_dispatch_queues()` and clears the `needs_pointer_pass` / `needs_focus_sync`
-     flags on `LayoutNode` without forcing layout passes.
-   - Note: Propagating updated modifier slices to renderer/hit-test structures will be completed
-     as part of the widget migration work below.
-2. **Delete the widget-specific node types.**
-   - Rebuild `Button`, `Text`, and `Spacer` on top of `LayoutNode`/`SubcomposeLayoutNode` so
-     metadata, semantics, and modifier snapshots all flow through the same path.
-   - Remove the `RuntimeNodeMetadata` fallbacks once no caller needs them.
-3. **Centralise resolved modifier data.**
-   - Ensure every layout-tree builder passes the reconciled `modifier_slices`/`resolved_modifiers`
-     into `LayoutNodeData::new(...)` and delete helper calls like
-     `Modifier::empty().resolved_modifiers()` from the hot paths.
-4. **Add real integration coverage.**
+2. ✅ **COMPLETED: Delete the widget-specific node types.**
+3. ✅ **COMPLETED: Centralize resolved modifier data.**
+4. ⚠️ **Fix Text implementation to use modifier nodes.**
+   - Implement `TextModifierNode` following JC's `TextStringSimpleNode` pattern
+   - Move text content from `TextMeasurePolicy` to the modifier node
+   - Update rendering/semantics to extract text from modifier chain
+5. **Add real integration coverage.**
    - Extend the pointer/focus tests to synthesize events through `HitTestTarget` so we can verify
      suspending pointer handlers, `Modifier.clickable`, and focus callbacks operate end-to-end.
-5. **Document the true status.**
-   - README/NEXT_TASK should reflect the above reality until the missing pieces are implemented.
 
 ---
 
@@ -65,6 +100,9 @@ Use these upstream files while implementing the remaining pieces:
 | --- | --- | --- |
 | Modifier API | `androidx/compose/ui/Modifier.kt` | `crates/compose-ui/src/modifier/mod.rs` |
 | Node lifecycle | `ModifierNodeElement.kt`, `DelegatableNode.kt` | `crates/compose-foundation/src/modifier.rs` |
+| Text modifier nodes | `foundation/text/modifiers/TextStringSimpleNode.kt` | *TODO: create `TextModifierNode`* |
+| Text widget | `foundation/text/BasicText.kt` | `crates/compose-ui/src/widgets/text.rs` |
+| Layout modifier | `ui/layout/LayoutModifier.kt` | `crates/compose-foundation/src/modifier.rs` (LayoutModifierNode) |
 | Pointer input | `ui/input/pointer/*` | `crates/compose-ui/src/modifier/pointer_input.rs` |
 | Focus system | `FocusInvalidationManager.kt`, `FocusOwner.kt` | `crates/compose-ui/src/modifier/focus.rs` + dispatch managers |
 | Semantics | `semantics/*` | `crates/compose-ui/src/semantics` |
