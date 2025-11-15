@@ -8,7 +8,7 @@
 #![allow(non_snake_case)]
 
 use crate::composable;
-use crate::layout::policies::TextAwareMeasurePolicy;
+use crate::layout::policies::EmptyMeasurePolicy;
 use crate::modifier::Modifier;
 use crate::text_modifier_node::TextModifierElement;
 use crate::widgets::Layout;
@@ -129,16 +129,16 @@ where
     let current = value.into_text_source().resolve();
 
     // Create a text modifier element that will add TextModifierNode to the chain
-    // TextModifierNode handles drawing and semantics
+    // TextModifierNode handles measurement, drawing, and semantics
     let text_element = modifier_element(TextModifierElement::new(current.clone()));
     let final_modifier = Modifier::from_parts(vec![text_element]);
     let combined_modifier = modifier.then(final_modifier);
 
-    // Use TextAwareMeasurePolicy which measures the text
-    // (Bridge implementation until layout system fully supports LayoutModifierNode)
+    // Use EmptyMeasurePolicy - TextModifierNode handles all measurement via LayoutModifierNode::measure()
+    // This matches Jetpack Compose's BasicText architecture where TextStringSimpleNode provides measurement
     Layout(
         combined_modifier,
-        TextAwareMeasurePolicy::with_text(current),
+        EmptyMeasurePolicy,
         || {}, // No children
     )
 }

@@ -157,6 +157,18 @@ impl ModifierChainHandle {
         &self.inspector_snapshot
     }
 
+    /// Visits all LayoutModifierNodes in the chain with mutable access.
+    pub(crate) fn visit_layout_nodes_mut<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut dyn compose_foundation::ModifierNode),
+    {
+        self.chain.visit_nodes_mut(|node, capabilities| {
+            if capabilities.contains(NodeCapabilities::LAYOUT) {
+                f(node);
+            }
+        });
+    }
+
     fn compute_resolved(&self) -> ResolvedModifiers {
         let mut resolved = ResolvedModifiers::default();
         let mut layout = LayoutProperties::default();

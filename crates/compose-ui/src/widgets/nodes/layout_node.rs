@@ -491,6 +491,16 @@ impl LayoutNode {
     pub fn semantics_configuration(&self) -> Option<SemanticsConfiguration> {
         crate::modifier::collect_semantics_from_chain(self.modifier_chain.chain())
     }
+
+    /// Returns a reference to the modifier chain for layout/draw pipeline integration.
+    pub(crate) fn modifier_chain(&self) -> &ModifierChainHandle {
+        &self.modifier_chain
+    }
+
+    /// Returns a mutable reference to the modifier chain for layout/draw pipeline integration.
+    pub(crate) fn modifier_chain_mut(&mut self) -> &mut ModifierChainHandle {
+        &mut self.modifier_chain
+    }
 }
 
 /// Legacy bubbling function kept for test compatibility only.

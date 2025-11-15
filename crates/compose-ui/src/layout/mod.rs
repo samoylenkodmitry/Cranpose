@@ -26,7 +26,7 @@ use crate::modifier::{
 use crate::subcompose_layout::SubcomposeLayoutNode;
 use crate::widgets::nodes::{IntrinsicKind, LayoutNode, LayoutNodeCacheHandles};
 use compose_foundation::SemanticsConfiguration;
-use compose_ui_layout::{Constraints, MeasurePolicy};
+use compose_ui_layout::{Constraints, MeasurePolicy, MeasureResult};
 
 static NEXT_CACHE_EPOCH: AtomicU64 = AtomicU64::new(1);
 
@@ -634,6 +634,53 @@ impl LayoutBuilderState {
         ))))
     }
 
+    /// Attempts to measure a node by invoking LayoutModifierNode::measure() in the modifier chain.
+    /// Returns Ok(Size) if successful, Err if modifier nodes should not be used (fallback to policy).
+    fn try_measure_with_layout_modifiers(
+        state_rc: &Rc<RefCell<Self>>,
+        node_id: NodeId,
+        _measurables: &[Box<dyn Measurable>],
+        _measure_policy: &Rc<dyn MeasurePolicy>,
+        constraints: Constraints,
+    ) -> Result<Size, ()> {
+        use compose_foundation::LayoutModifierNode;
+        use crate::text_modifier_node::TextModifierNode;
+
+        let state = state_rc.borrow();
+        let mut applier = state.applier.borrow_typed();
+
+        // Try to access the LayoutNode and its modifier chain
+        let result = applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
+            let chain = layout_node.modifier_chain_mut();
+
+            // Look for a TextModifierNode (special case for now)
+            // TODO: Generalize to handle arbitrary LayoutModifierNode chains
+            let mut found_text_node = false;
+            let mut text_size = None;
+
+            chain.visit_layout_nodes_mut(|node| {
+                // Try to downcast to TextModifierNode
+                if let Some(text_node) = node.as_any_mut().downcast_mut::<TextModifierNode>() {
+                    // Create a dummy measurable for the content
+                    // TextModifierNode ignores it anyway since Text is a leaf
+                    let dummy_measurable = DummyMeasurable;
+                    let mut context = compose_foundation::BasicModifierNodeContext::new();
+                    let size = text_node.measure(&mut context, &dummy_measurable, constraints);
+                    text_size = Some(size);
+                    found_text_node = true;
+                }
+            });
+
+            if found_text_node {
+                text_size.ok_or(())
+            } else {
+                Err(())
+            }
+        });
+
+        result.map_err(|_| ())?.map_err(|_| ())
+    }
+
     fn measure_layout_node(
         state_rc: Rc<RefCell<Self>>,
         node_id: NodeId,
@@ -780,7 +827,37 @@ impl LayoutBuilderState {
             measure_constraints.max_height = f32::INFINITY;
         }
 
-        let mut policy_result = measure_policy.measure(measurables.as_slice(), measure_constraints);
+        // Try to invoke LayoutModifierNode::measure() if present
+        // This enables modifier nodes to participate in measurement (e.g., TextModifierNode)
+        let mut policy_result = {
+            let has_layout_nodes = modifier.elements().iter().any(|elem| {
+                elem.capabilities().contains(compose_foundation::NodeCapabilities::LAYOUT)
+            });
+
+            if has_layout_nodes {
+                // Access LayoutNode to invoke modifier nodes
+                // For now, use a simplified approach: create ContentMeasurable and try to apply modifiers
+                // Full implementation will build a proper modifier chain
+                // For the immediate case (Text), we can invoke the node directly
+                if let Ok(size_from_modifiers) = Self::try_measure_with_layout_modifiers(
+                    &state_rc,
+                    node_id,
+                    measurables.as_slice(),
+                    &measure_policy,
+                    measure_constraints,
+                ) {
+                    MeasureResult {
+                        size: size_from_modifiers,
+                        placements: Vec::new(),
+                    }
+                } else {
+                    // Fall back to direct policy measurement
+                    measure_policy.measure(measurables.as_slice(), measure_constraints)
+                }
+            } else {
+                measure_policy.measure(measurables.as_slice(), measure_constraints)
+            }
+        };
 
         if relaxed_width.is_some() || relaxed_height.is_some() {
             let width_exceeds = relaxed_width
@@ -1288,6 +1365,124 @@ impl Placeable for LayoutChildPlaceable {
 
     fn node_id(&self) -> NodeId {
         self.node_id
+    }
+}
+
+/// Dummy measurable used when a LayoutModifierNode doesn't need wrapped content (e.g., Text).
+struct DummyMeasurable;
+
+impl Measurable for DummyMeasurable {
+    fn measure(&self, _constraints: Constraints) -> Box<dyn Placeable> {
+        Box::new(DummyPlaceable)
+    }
+
+    fn min_intrinsic_width(&self, _height: f32) -> f32 {
+        0.0
+    }
+
+    fn max_intrinsic_width(&self, _height: f32) -> f32 {
+        0.0
+    }
+
+    fn min_intrinsic_height(&self, _width: f32) -> f32 {
+        0.0
+    }
+
+    fn max_intrinsic_height(&self, _width: f32) -> f32 {
+        0.0
+    }
+}
+
+struct DummyPlaceable;
+
+impl Placeable for DummyPlaceable {
+    fn place(&self, _x: f32, _y: f32) {}
+
+    fn width(&self) -> f32 {
+        0.0
+    }
+
+    fn height(&self) -> f32 {
+        0.0
+    }
+
+    fn node_id(&self) -> NodeId {
+        0
+    }
+}
+
+/// Measurable that wraps the content (measure_policy + children) for use in modifier chain.
+struct ContentMeasurable {
+    measure_policy: Rc<dyn MeasurePolicy>,
+    measurables: Vec<Box<dyn Measurable>>,
+    policy_result: Rc<RefCell<Option<MeasureResult>>>,
+}
+
+impl ContentMeasurable {
+    fn new(measure_policy: Rc<dyn MeasurePolicy>, measurables: Vec<Box<dyn Measurable>>) -> Self {
+        Self {
+            measure_policy,
+            measurables,
+            policy_result: Rc::new(RefCell::new(None)),
+        }
+    }
+
+    fn get_policy_result(&self) -> Option<MeasureResult> {
+        self.policy_result.borrow().clone()
+    }
+}
+
+impl Measurable for ContentMeasurable {
+    fn measure(&self, constraints: Constraints) -> Box<dyn Placeable> {
+        let result = self.measure_policy.measure(&self.measurables, constraints);
+        *self.policy_result.borrow_mut() = Some(result.clone());
+        Box::new(ContentPlaceable {
+            size: result.size,
+            policy_result: Rc::clone(&self.policy_result),
+        })
+    }
+
+    fn min_intrinsic_width(&self, height: f32) -> f32 {
+        self.measure_policy
+            .min_intrinsic_width(&self.measurables, height)
+    }
+
+    fn max_intrinsic_width(&self, height: f32) -> f32 {
+        self.measure_policy
+            .max_intrinsic_width(&self.measurables, height)
+    }
+
+    fn min_intrinsic_height(&self, width: f32) -> f32 {
+        self.measure_policy
+            .min_intrinsic_height(&self.measurables, width)
+    }
+
+    fn max_intrinsic_height(&self, width: f32) -> f32 {
+        self.measure_policy
+            .max_intrinsic_height(&self.measurables, width)
+    }
+}
+
+struct ContentPlaceable {
+    size: Size,
+    policy_result: Rc<RefCell<Option<MeasureResult>>>,
+}
+
+impl Placeable for ContentPlaceable {
+    fn place(&self, _x: f32, _y: f32) {
+        // Content placement is handled by the measure policy result
+    }
+
+    fn width(&self) -> f32 {
+        self.size.width
+    }
+
+    fn height(&self) -> f32 {
+        self.size.height
+    }
+
+    fn node_id(&self) -> NodeId {
+        0 // Not used for content placeable
     }
 }
 

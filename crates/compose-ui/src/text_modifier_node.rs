@@ -114,7 +114,7 @@ impl LayoutModifierNode for TextModifierNode {
 
         // Text is a leaf node - return the text size directly
         // We don't call measurable.measure() because there's no wrapped content
-        // (we use TextAwareMeasurePolicy which has no children)
+        // (Text uses EmptyMeasurePolicy which has no children)
         Size { width, height }
     }
 
