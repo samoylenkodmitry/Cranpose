@@ -7,7 +7,7 @@
 use compose_core::NodeId;
 use compose_foundation::{BasicModifierNodeContext, LayoutModifierNode};
 use compose_ui_graphics::Size;
-use compose_ui_layout::{Constraints, Measurable, Placeable};
+use compose_ui_layout::{Constraints, Measurable, MeasurePolicy, MeasureResult, Placeable};
 use std::cell::RefCell;
 use std::rc::Rc;
 

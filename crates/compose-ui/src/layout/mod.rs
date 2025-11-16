@@ -2,6 +2,8 @@ pub mod core;
 pub mod policies;
 mod modifier_measurable;
 
+use modifier_measurable::ModifierNodeMeasurable;
+
 use compose_core::collections::map::Entry;
 use compose_core::collections::map::HashMap;
 use std::{
@@ -635,51 +637,71 @@ impl LayoutBuilderState {
         ))))
     }
 
-    /// Attempts to measure a node by invoking LayoutModifierNode::measure() in the modifier chain.
-    /// Returns Ok(Size) if successful, Err if modifier nodes should not be used (fallback to policy).
-    fn try_measure_with_layout_modifiers(
+    /// Measures through the layout modifier coordinator chain.
+    /// Iterates through LayoutModifierNode instances and calls their measure() methods,
+    /// mirroring Jetpack Compose's LayoutModifierNodeCoordinator pattern.
+    ///
+    /// Returns Ok(MeasureResult) if successful, Err(()) if modifier nodes should not be used.
+    fn measure_through_modifier_chain(
         state_rc: &Rc<RefCell<Self>>,
         node_id: NodeId,
-        _measurables: &[Box<dyn Measurable>],
-        _measure_policy: &Rc<dyn MeasurePolicy>,
+        measurables: &[Box<dyn Measurable>],
+        measure_policy: &Rc<dyn MeasurePolicy>,
         constraints: Constraints,
-    ) -> Result<Size, ()> {
+    ) -> Result<MeasureResult, ()> {
         use compose_foundation::LayoutModifierNode;
         use crate::text_modifier_node::TextModifierNode;
 
-        let state = state_rc.borrow();
-        let mut applier = state.applier.borrow_typed();
+        // First, check if there are layout modifier nodes and handle special cases
+        // We need to scope the borrow carefully to avoid conflicts
+        let has_layout_nodes = {
+            let state = state_rc.borrow();
+            let mut applier = state.applier.borrow_typed();
+            applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
+                layout_node.modifier_chain().has_layout_nodes()
+            }).unwrap_or(false)
+        };
 
-        // Try to access the LayoutNode and its modifier chain
-        let result = applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
-            let chain = layout_node.modifier_chain_mut();
+        if !has_layout_nodes {
+            return Err(());
+        }
 
-            // Look for a TextModifierNode (special case for now)
-            // TODO: Generalize to handle arbitrary LayoutModifierNode chains
-            let mut found_text_node = false;
-            let mut text_size = None;
+        // Check for TextModifierNode special case
+        let text_size = {
+            let state = state_rc.borrow();
+            let mut applier = state.applier.borrow_typed();
 
-            chain.visit_layout_nodes_mut(|node| {
-                // Try to downcast to TextModifierNode
-                if let Some(text_node) = node.as_any_mut().downcast_mut::<TextModifierNode>() {
-                    // Create a dummy measurable for the content
-                    // TextModifierNode ignores it anyway since Text is a leaf
-                    let dummy_measurable = DummyMeasurable;
-                    let mut context = compose_foundation::BasicModifierNodeContext::new();
-                    let size = text_node.measure(&mut context, &dummy_measurable, constraints);
-                    text_size = Some(size);
-                    found_text_node = true;
-                }
+            applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
+                let chain_handle = layout_node.modifier_chain_mut();
+                let mut text_node_found = false;
+                let mut size = None;
+
+                chain_handle.visit_layout_nodes_mut(|node| {
+                    if !text_node_found {
+                        if let Some(text_node) = node.as_any_mut().downcast_mut::<TextModifierNode>() {
+                            let dummy_measurable = DummyMeasurable;
+                            let mut context = compose_foundation::BasicModifierNodeContext::new();
+                            let measured_size = text_node.measure(&mut context, &dummy_measurable, constraints);
+                            size = Some(measured_size);
+                            text_node_found = true;
+                        }
+                    }
+                });
+
+                size
+            }).unwrap_or(None)
+        };
+
+        if let Some(size) = text_size {
+            return Ok(MeasureResult {
+                size,
+                placements: Vec::new(),
             });
+        }
 
-            if found_text_node {
-                text_size.ok_or(())
-            } else {
-                Err(())
-            }
-        });
-
-        result.map_err(|_| ())?.map_err(|_| ())
+        // For the general case: just return error and fall back to policy measurement
+        // TODO: Build the full coordinator chain for non-text layout modifiers
+        Err(())
     }
 
     fn measure_layout_node(
@@ -828,34 +850,20 @@ impl LayoutBuilderState {
             measure_constraints.max_height = f32::INFINITY;
         }
 
-        // Try to invoke LayoutModifierNode::measure() if present
-        // This enables modifier nodes to participate in measurement (e.g., TextModifierNode)
+        // Measure through the layout modifier coordinator chain.
+        // This mirrors Jetpack Compose's LayoutModifierNodeCoordinator pattern.
         let mut policy_result = {
-            let has_layout_nodes = modifier.elements().iter().any(|elem| {
-                elem.capabilities().contains(compose_foundation::NodeCapabilities::LAYOUT)
-            });
-
-            if has_layout_nodes {
-                // Access LayoutNode to invoke modifier nodes
-                // For now, use a simplified approach: create ContentMeasurable and try to apply modifiers
-                // Full implementation will build a proper modifier chain
-                // For the immediate case (Text), we can invoke the node directly
-                if let Ok(size_from_modifiers) = Self::try_measure_with_layout_modifiers(
-                    &state_rc,
-                    node_id,
-                    measurables.as_slice(),
-                    &measure_policy,
-                    measure_constraints,
-                ) {
-                    MeasureResult {
-                        size: size_from_modifiers,
-                        placements: Vec::new(),
-                    }
-                } else {
-                    // Fall back to direct policy measurement
-                    measure_policy.measure(measurables.as_slice(), measure_constraints)
-                }
+            // Try to measure through modifier chain first
+            if let Ok(result) = Self::measure_through_modifier_chain(
+                &state_rc,
+                node_id,
+                measurables.as_slice(),
+                &measure_policy,
+                measure_constraints,
+            ) {
+                result
             } else {
+                // No layout modifier nodes, measure directly through policy
                 measure_policy.measure(measurables.as_slice(), measure_constraints)
             }
         };
@@ -1405,6 +1413,54 @@ impl Placeable for DummyPlaceable {
 
     fn height(&self) -> f32 {
         0.0
+    }
+
+    fn node_id(&self) -> NodeId {
+        0
+    }
+}
+
+/// Simple measurable that wraps a fixed size.
+/// Used in the modifier coordinator chain to pass measurement results between nodes.
+struct SizeMeasurable {
+    size: Size,
+}
+
+impl Measurable for SizeMeasurable {
+    fn measure(&self, _constraints: Constraints) -> Box<dyn Placeable> {
+        Box::new(SizePlaceable { size: self.size })
+    }
+
+    fn min_intrinsic_width(&self, _height: f32) -> f32 {
+        self.size.width
+    }
+
+    fn max_intrinsic_width(&self, _height: f32) -> f32 {
+        self.size.width
+    }
+
+    fn min_intrinsic_height(&self, _width: f32) -> f32 {
+        self.size.height
+    }
+
+    fn max_intrinsic_height(&self, _width: f32) -> f32 {
+        self.size.height
+    }
+}
+
+struct SizePlaceable {
+    size: Size,
+}
+
+impl Placeable for SizePlaceable {
+    fn place(&self, _x: f32, _y: f32) {}
+
+    fn width(&self) -> f32 {
+        self.size.width
+    }
+
+    fn height(&self) -> f32 {
+        self.size.height
     }
 
     fn node_id(&self) -> NodeId {
