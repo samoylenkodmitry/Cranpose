@@ -475,9 +475,9 @@ fn pointer_input_handlers_survive_temporary_chain_drop() {
             let events = events.clone();
             async move {
                 loop {
-                    let event = scope.await_pointer_event_scope(|s| async move {
-                        s.await_pointer_event().await
-                    }).await;
+                    let event = scope
+                        .await_pointer_event_scope(|s| async move { s.await_pointer_event().await })
+                        .await;
                     events.borrow_mut().push(event.kind);
                 }
             }
@@ -489,7 +489,11 @@ fn pointer_input_handlers_survive_temporary_chain_drop() {
     let slices = collect_slices_from_modifier(&modifier);
 
     // Verify we got a handler
-    assert_eq!(slices.pointer_inputs().len(), 1, "Should have extracted one pointer input handler");
+    assert_eq!(
+        slices.pointer_inputs().len(),
+        1,
+        "Should have extracted one pointer input handler"
+    );
 
     // Extract the handler - this is what the renderer does
     let handler = slices.pointer_inputs()[0].clone();
@@ -520,7 +524,11 @@ fn pointer_input_handlers_survive_temporary_chain_drop() {
     let events = received_events.borrow();
     assert_eq!(
         *events,
-        vec![PointerEventKind::Move, PointerEventKind::Down, PointerEventKind::Up],
+        vec![
+            PointerEventKind::Move,
+            PointerEventKind::Down,
+            PointerEventKind::Up
+        ],
         "All events should be received even after temporary chain is dropped"
     );
 }
@@ -541,9 +549,9 @@ fn multiple_temporary_chains_dont_interfere() {
             let events = events.clone();
             async move {
                 loop {
-                    let event = scope.await_pointer_event_scope(|s| async move {
-                        s.await_pointer_event().await
-                    }).await;
+                    let event = scope
+                        .await_pointer_event_scope(|s| async move { s.await_pointer_event().await })
+                        .await;
                     events.borrow_mut().push(("handler1", event.kind));
                 }
             }
@@ -557,9 +565,9 @@ fn multiple_temporary_chains_dont_interfere() {
             let events = events.clone();
             async move {
                 loop {
-                    let event = scope.await_pointer_event_scope(|s| async move {
-                        s.await_pointer_event().await
-                    }).await;
+                    let event = scope
+                        .await_pointer_event_scope(|s| async move { s.await_pointer_event().await })
+                        .await;
                     events.borrow_mut().push(("handler2", event.kind));
                 }
             }

@@ -523,7 +523,10 @@ impl Modifier {
         }
         match self.kind {
             ModifierKind::Empty => self,
-            ModifierKind::Single { elements, inspector } => {
+            ModifierKind::Single {
+                elements,
+                inspector,
+            } => {
                 let mut new_inspector = inspector.as_ref().clone();
                 new_inspector.push(metadata);
                 Self {
@@ -550,7 +553,7 @@ impl ComposeModifier for Modifier {
     where
         F: FnMut(R, &dyn AnyModifierElement) -> R,
     {
-        self.fold_in_impl(initial, &mut {operation})
+        self.fold_in_impl(initial, &mut { operation })
     }
 
     /// Accumulates a value by visiting modifier elements in reverse order (right to left).
@@ -560,7 +563,7 @@ impl ComposeModifier for Modifier {
     where
         F: FnMut(R, &dyn AnyModifierElement) -> R,
     {
-        self.fold_out_impl(initial, &mut {operation})
+        self.fold_out_impl(initial, &mut { operation })
     }
 
     /// Returns true if any element in the chain satisfies the predicate.
@@ -570,7 +573,7 @@ impl ComposeModifier for Modifier {
     where
         F: FnMut(&dyn AnyModifierElement) -> bool,
     {
-        self.any_impl(&mut {predicate})
+        self.any_impl(&mut { predicate })
     }
 
     /// Returns true only if all elements in the chain satisfy the predicate.
@@ -580,7 +583,7 @@ impl ComposeModifier for Modifier {
     where
         F: FnMut(&dyn AnyModifierElement) -> bool,
     {
-        self.all_impl(&mut {predicate})
+        self.all_impl(&mut { predicate })
     }
 }
 

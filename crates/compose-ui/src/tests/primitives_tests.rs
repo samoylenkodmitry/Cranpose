@@ -155,7 +155,6 @@ fn CounterRow(label: &'static str, count: State<i32>) -> NodeId {
     })
 }
 
-
 #[test]
 fn layout_column_produces_expected_measurements() {
     let mut composition = Composition::new(MemoryApplier::new());
@@ -166,14 +165,18 @@ fn layout_column_produces_expected_measurements() {
     composition
         .render(key, move || {
             let text_id_capture = Rc::clone(&text_id_capture);
-            Column(Modifier::empty().padding(10.0), ColumnSpec::default(), move || {
-                let id = Text("Hello", Modifier::empty());
-                *text_id_capture.borrow_mut() = Some(id);
-                Spacer(Size {
-                    width: 0.0,
-                    height: 30.0,
-                });
-            });
+            Column(
+                Modifier::empty().padding(10.0),
+                ColumnSpec::default(),
+                move || {
+                    let id = Text("Hello", Modifier::empty());
+                    *text_id_capture.borrow_mut() = Some(id);
+                    Spacer(Size {
+                        width: 0.0,
+                        height: 30.0,
+                    });
+                },
+            );
         })
         .expect("initial render");
 
@@ -216,9 +219,14 @@ fn modifier_offset_translates_layout() {
     composition
         .render(key, move || {
             let text_id_capture = Rc::clone(&text_id_capture);
-            Column(Modifier::empty().padding(10.0), ColumnSpec::default(), move || {
-                *text_id_capture.borrow_mut() = Some(Text("Hello", Modifier::empty().offset(5.0, 7.5)));
-            });
+            Column(
+                Modifier::empty().padding(10.0),
+                ColumnSpec::default(),
+                move || {
+                    *text_id_capture.borrow_mut() =
+                        Some(Text("Hello", Modifier::empty().offset(5.0, 7.5)));
+                },
+            );
         })
         .expect("initial render");
 
@@ -346,116 +354,122 @@ fn desktop_counter_layout_respects_container_bounds() {
             let footer_status_capture = Rc::clone(&footer_status_render);
             let footer_extra_capture = Rc::clone(&footer_extra_render);
 
-            Column(Modifier::empty().padding(16.0), ColumnSpec::default(), move || {
-                *header_box_capture.borrow_mut() = Some(Spacer(Size {
-                    width: 280.0,
-                    height: 40.0,
-                }));
+            Column(
+                Modifier::empty().padding(16.0),
+                ColumnSpec::default(),
+                move || {
+                    *header_box_capture.borrow_mut() = Some(Spacer(Size {
+                        width: 280.0,
+                        height: 40.0,
+                    }));
 
-                Spacer(Size {
-                    width: 0.0,
-                    height: 12.0,
-                });
+                    Spacer(Size {
+                        width: 0.0,
+                        height: 12.0,
+                    });
 
-                let row_chip_primary_inner = Rc::clone(&row_chip_primary_capture);
-                let row_chip_secondary_inner = Rc::clone(&row_chip_secondary_capture);
-                let row_chip_tertiary_inner = Rc::clone(&row_chip_tertiary_capture);
-                *info_row_capture.borrow_mut() = Some(Row(
-                    Modifier::empty().padding(8.0),
-                    RowSpec::new()
-                        .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
-                        .vertical_alignment(VerticalAlignment::CenterVertically),
-                    move || {
-                        *row_chip_primary_inner.borrow_mut() = Some(Spacer(Size {
-                            width: 120.0,
-                            height: 48.0,
-                        }));
-                        *row_chip_secondary_inner.borrow_mut() = Some(Spacer(Size {
-                            width: 96.0,
-                            height: 48.0,
-                        }));
-                        *row_chip_tertiary_inner.borrow_mut() = Some(Spacer(Size {
-                            width: 84.0,
-                            height: 48.0,
-                        }));
-                    },
-                ));
+                    let row_chip_primary_inner = Rc::clone(&row_chip_primary_capture);
+                    let row_chip_secondary_inner = Rc::clone(&row_chip_secondary_capture);
+                    let row_chip_tertiary_inner = Rc::clone(&row_chip_tertiary_capture);
+                    *info_row_capture.borrow_mut() = Some(Row(
+                        Modifier::empty().padding(8.0),
+                        RowSpec::new()
+                            .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
+                            .vertical_alignment(VerticalAlignment::CenterVertically),
+                        move || {
+                            *row_chip_primary_inner.borrow_mut() = Some(Spacer(Size {
+                                width: 120.0,
+                                height: 48.0,
+                            }));
+                            *row_chip_secondary_inner.borrow_mut() = Some(Spacer(Size {
+                                width: 96.0,
+                                height: 48.0,
+                            }));
+                            *row_chip_tertiary_inner.borrow_mut() = Some(Spacer(Size {
+                                width: 84.0,
+                                height: 48.0,
+                            }));
+                        },
+                    ));
 
-                Spacer(Size {
-                    width: 0.0,
-                    height: 16.0,
-                });
+                    Spacer(Size {
+                        width: 0.0,
+                        height: 16.0,
+                    });
 
-                let pointer_panel_inner = Rc::clone(&pointer_panel_capture);
-                let action_row_inner = Rc::clone(&action_row_capture);
-                let action_primary_inner = Rc::clone(&action_primary_capture);
-                let action_secondary_inner = Rc::clone(&action_secondary_capture);
-                let footer_row_inner = Rc::clone(&footer_row_capture);
-                let footer_status_inner = Rc::clone(&footer_status_capture);
-                let footer_extra_inner = Rc::clone(&footer_extra_capture);
+                    let pointer_panel_inner = Rc::clone(&pointer_panel_capture);
+                    let action_row_inner = Rc::clone(&action_row_capture);
+                    let action_primary_inner = Rc::clone(&action_primary_capture);
+                    let action_secondary_inner = Rc::clone(&action_secondary_capture);
+                    let footer_row_inner = Rc::clone(&footer_row_capture);
+                    let footer_status_inner = Rc::clone(&footer_status_capture);
+                    let footer_extra_inner = Rc::clone(&footer_extra_capture);
 
-                *panel_column_capture.borrow_mut() = Some(Column(
-                    Modifier::empty().padding(12.0).then(Modifier::empty().size(Size {
-                        width: 360.0,
-                        height: 180.0,
-                    })),
-                    ColumnSpec::default(),
-                    move || {
-                        *pointer_panel_inner.borrow_mut() = Some(Spacer(Size {
-                            width: 260.0,
-                            height: 60.0,
-                        }));
+                    *panel_column_capture.borrow_mut() = Some(Column(
+                        Modifier::empty()
+                            .padding(12.0)
+                            .then(Modifier::empty().size(Size {
+                                width: 360.0,
+                                height: 180.0,
+                            })),
+                        ColumnSpec::default(),
+                        move || {
+                            *pointer_panel_inner.borrow_mut() = Some(Spacer(Size {
+                                width: 260.0,
+                                height: 60.0,
+                            }));
 
-                        Spacer(Size {
-                            width: 0.0,
-                            height: 16.0,
-                        });
+                            Spacer(Size {
+                                width: 0.0,
+                                height: 16.0,
+                            });
 
-                        let action_primary_leaf = Rc::clone(&action_primary_inner);
-                        let action_secondary_leaf = Rc::clone(&action_secondary_inner);
-                        *action_row_inner.borrow_mut() = Some(Row(
-                            Modifier::empty().padding(8.0),
-                            RowSpec::new()
-                                .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
-                                .vertical_alignment(VerticalAlignment::CenterVertically),
-                            move || {
-                                *action_primary_leaf.borrow_mut() = Some(Spacer(Size {
-                                    width: 140.0,
-                                    height: 48.0,
-                                }));
-                                *action_secondary_leaf.borrow_mut() = Some(Spacer(Size {
-                                    width: 132.0,
-                                    height: 48.0,
-                                }));
-                            },
-                        ));
+                            let action_primary_leaf = Rc::clone(&action_primary_inner);
+                            let action_secondary_leaf = Rc::clone(&action_secondary_inner);
+                            *action_row_inner.borrow_mut() = Some(Row(
+                                Modifier::empty().padding(8.0),
+                                RowSpec::new()
+                                    .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
+                                    .vertical_alignment(VerticalAlignment::CenterVertically),
+                                move || {
+                                    *action_primary_leaf.borrow_mut() = Some(Spacer(Size {
+                                        width: 140.0,
+                                        height: 48.0,
+                                    }));
+                                    *action_secondary_leaf.borrow_mut() = Some(Spacer(Size {
+                                        width: 132.0,
+                                        height: 48.0,
+                                    }));
+                                },
+                            ));
 
-                        Spacer(Size {
-                            width: 0.0,
-                            height: 12.0,
-                        });
+                            Spacer(Size {
+                                width: 0.0,
+                                height: 12.0,
+                            });
 
-                        let footer_status_leaf = Rc::clone(&footer_status_inner);
-                        let footer_extra_leaf = Rc::clone(&footer_extra_inner);
-                        *footer_row_inner.borrow_mut() = Some(Row(
-                            Modifier::empty().padding(8.0),
-                            RowSpec::new()
-                                .horizontal_arrangement(LinearArrangement::SpacedBy(16.0))
-                                .vertical_alignment(VerticalAlignment::CenterVertically),
-                            move || {
-                                *footer_status_leaf.borrow_mut() = Some(Spacer(Size {
-                                    width: 220.0,
-                                    height: 52.0,
-                                }));
-                                *footer_extra_leaf.borrow_mut() = Some(Spacer(Size {
-                                    width: 80.0,
-                                    height: 52.0,
-                                }));
-                            },
-                        ));
-                    },
-                ));
-            });
+                            let footer_status_leaf = Rc::clone(&footer_status_inner);
+                            let footer_extra_leaf = Rc::clone(&footer_extra_inner);
+                            *footer_row_inner.borrow_mut() = Some(Row(
+                                Modifier::empty().padding(8.0),
+                                RowSpec::new()
+                                    .horizontal_arrangement(LinearArrangement::SpacedBy(16.0))
+                                    .vertical_alignment(VerticalAlignment::CenterVertically),
+                                move || {
+                                    *footer_status_leaf.borrow_mut() = Some(Spacer(Size {
+                                        width: 220.0,
+                                        height: 52.0,
+                                    }));
+                                    *footer_extra_leaf.borrow_mut() = Some(Spacer(Size {
+                                        width: 80.0,
+                                        height: 52.0,
+                                    }));
+                                },
+                            ));
+                        },
+                    ));
+                },
+            );
         })
         .expect("initial render");
 
@@ -805,13 +819,17 @@ fn test_fill_max_width_respects_parent_bounds() {
 
             // Outer Column with padding(20.0) and fill_max_width to ensure it has a defined width
             *column_capture.borrow_mut() = Some(Column(
-                Modifier::empty().fill_max_width().then(Modifier::empty().padding(20.0)),
+                Modifier::empty()
+                    .fill_max_width()
+                    .then(Modifier::empty().padding(20.0)),
                 ColumnSpec::default(),
                 move || {
                     let row_inner = Rc::clone(&row_capture);
                     // Row with fill_max_width() and padding(8.0)
                     *row_inner.borrow_mut() = Some(Row(
-                        Modifier::empty().fill_max_width().then(Modifier::empty().padding(8.0)),
+                        Modifier::empty()
+                            .fill_max_width()
+                            .then(Modifier::empty().padding(8.0)),
                         RowSpec::default(),
                         move || {
                             Text("Button 1", Modifier::empty().padding(4.0));
@@ -951,9 +969,13 @@ fn test_fill_max_width_with_background_and_double_padding() {
                             let row_cap3 = Rc::clone(&row_cap2);
                             // Row with fill_max_width() + padding + background + padding
                             *row_cap3.borrow_mut() = Some(Row(
-                                Modifier::empty().fill_max_width()
+                                Modifier::empty()
+                                    .fill_max_width()
                                     .then(Modifier::empty().padding(8.0))
-                                    .then(Modifier::empty().background(crate::Color(0.1, 0.1, 0.15, 0.6)))
+                                    .then(
+                                        Modifier::empty()
+                                            .background(crate::Color(0.1, 0.1, 0.15, 0.6)),
+                                    )
                                     .then(Modifier::empty().padding(8.0)),
                                 RowSpec::default(),
                                 move || {

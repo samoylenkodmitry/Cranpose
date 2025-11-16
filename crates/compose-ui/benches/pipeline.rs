@@ -29,10 +29,17 @@ fn pipeline_content(sections: usize, rows_per_section: usize) {
                     move || {
                         Text(format!("Section {section}"), Modifier::empty());
                         for row in 0..rows_per_section {
-                            Row(Modifier::empty().fill_max_width(), RowSpec::default(), move || {
-                                Text(format!("Item {section}-{row} title"), Modifier::empty().weight(1.0));
-                                Text(format!("Detail {section}-{row}"), Modifier::empty());
-                            });
+                            Row(
+                                Modifier::empty().fill_max_width(),
+                                RowSpec::default(),
+                                move || {
+                                    Text(
+                                        format!("Item {section}-{row} title"),
+                                        Modifier::empty().weight(1.0),
+                                    );
+                                    Text(format!("Detail {section}-{row}"), Modifier::empty());
+                                },
+                            );
                         }
                     },
                 );
@@ -63,10 +70,17 @@ fn recursive_section(depth: usize, rows_per_level: usize, level: usize) {
         move || {
             Text(format!("Level {level}"), Modifier::empty());
             for row in 0..rows_per_level {
-                Row(Modifier::empty().fill_max_width(), RowSpec::default(), move || {
-                    Text(format!("Node {level}-{row} title"), Modifier::empty().weight(1.0));
-                    Text(format!("Detail {level}-{row}"), Modifier::empty());
-                });
+                Row(
+                    Modifier::empty().fill_max_width(),
+                    RowSpec::default(),
+                    move || {
+                        Text(
+                            format!("Node {level}-{row} title"),
+                            Modifier::empty().weight(1.0),
+                        );
+                        Text(format!("Detail {level}-{row}"), Modifier::empty());
+                    },
+                );
             }
             recursive_section(depth - 1, rows_per_level, level + 1);
         },

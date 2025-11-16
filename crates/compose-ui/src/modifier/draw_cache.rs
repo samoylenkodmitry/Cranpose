@@ -13,7 +13,8 @@ impl Modifier {
             f(&mut scope);
             scope.into_primitives()
         });
-        let modifier = Self::with_element(DrawCommandElement::new(DrawCommand::Overlay(func.clone())));
+        let modifier =
+            Self::with_element(DrawCommandElement::new(DrawCommand::Overlay(func.clone())));
         self.then(modifier)
     }
 
@@ -26,7 +27,8 @@ impl Modifier {
             f(&mut scope);
             scope.into_primitives()
         });
-        let modifier = Self::with_element(DrawCommandElement::new(DrawCommand::Behind(func.clone())));
+        let modifier =
+            Self::with_element(DrawCommandElement::new(DrawCommand::Behind(func.clone())));
         self.then(modifier)
     }
 

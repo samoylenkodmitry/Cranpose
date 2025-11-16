@@ -18,49 +18,50 @@ fn gradient_follows_state_app(pointer_position: MutableState<Point>) {
     // where state is read and captured in the draw closure
 
     Column(
-        Modifier::empty().size(Size {
-            width: 200.0,
-            height: 200.0,
-        })
-        .then(Modifier::empty().draw_with_content({
-            // This reads state at composition time and captures the value
-            let position = pointer_position.get();
-            eprintln!("Creating draw closure with position: {:?}", position);
-            move |scope| {
-                // The closure uses the captured position
-                eprintln!("Drawing with captured position: {:?}", position);
-                scope.draw_rect(Brush::radial_gradient(
-                    vec![Color(1.0, 0.0, 0.0, 0.8), Color(0.0, 0.0, 0.0, 0.0)],
-                    position,
-                    50.0,
-                ));
-            }
-        }))
-        .then(Modifier::empty().pointer_input((), {
-            let pointer_position = pointer_position.clone();
-            move |scope: PointerInputScope| {
-                let pointer_position = pointer_position.clone();
-                async move {
-                    scope
-                        .await_pointer_event_scope(|await_scope| async move {
-                            loop {
-                                let event = await_scope.await_pointer_event().await;
-                                if let PointerEventKind::Move = event.kind {
-                                    eprintln!(
-                                        "Pointer event: setting position to {:?}",
-                                        event.position
-                                    );
-                                    pointer_position.set(Point {
-                                        x: event.position.x,
-                                        y: event.position.y,
-                                    });
-                                }
-                            }
-                        })
-                        .await;
+        Modifier::empty()
+            .size(Size {
+                width: 200.0,
+                height: 200.0,
+            })
+            .then(Modifier::empty().draw_with_content({
+                // This reads state at composition time and captures the value
+                let position = pointer_position.get();
+                eprintln!("Creating draw closure with position: {:?}", position);
+                move |scope| {
+                    // The closure uses the captured position
+                    eprintln!("Drawing with captured position: {:?}", position);
+                    scope.draw_rect(Brush::radial_gradient(
+                        vec![Color(1.0, 0.0, 0.0, 0.8), Color(0.0, 0.0, 0.0, 0.0)],
+                        position,
+                        50.0,
+                    ));
                 }
-            }
-        })),
+            }))
+            .then(Modifier::empty().pointer_input((), {
+                let pointer_position = pointer_position.clone();
+                move |scope: PointerInputScope| {
+                    let pointer_position = pointer_position.clone();
+                    async move {
+                        scope
+                            .await_pointer_event_scope(|await_scope| async move {
+                                loop {
+                                    let event = await_scope.await_pointer_event().await;
+                                    if let PointerEventKind::Move = event.kind {
+                                        eprintln!(
+                                            "Pointer event: setting position to {:?}",
+                                            event.position
+                                        );
+                                        pointer_position.set(Point {
+                                            x: event.position.x,
+                                            y: event.position.y,
+                                        });
+                                    }
+                                }
+                            })
+                            .await;
+                    }
+                }
+            })),
         ColumnSpec::default(),
         || {
             Text("Hover area", Modifier::empty().padding(8.0));
@@ -109,46 +110,47 @@ fn working_gradient_app(pointer_position: MutableState<Point>) {
     // This doesn't rely on recomposition, so it's more robust
 
     Column(
-        Modifier::empty().size(Size {
-            width: 200.0,
-            height: 200.0,
-        })
-        .then(Modifier::empty().draw_with_content({
-            // Clone the state handle, not the value
-            let pointer_position = pointer_position.clone();
-            move |scope| {
-                // Read state at draw time, not composition time
-                let position = pointer_position.get();
-                eprintln!("Drawing with current state position: {:?}", position);
-                scope.draw_rect(Brush::radial_gradient(
-                    vec![Color(0.0, 1.0, 0.0, 0.8), Color(0.0, 0.0, 0.0, 0.0)],
-                    position,
-                    50.0,
-                ));
-            }
-        }))
-        .then(Modifier::empty().pointer_input((), {
-            let pointer_position = pointer_position.clone();
-            move |scope: PointerInputScope| {
+        Modifier::empty()
+            .size(Size {
+                width: 200.0,
+                height: 200.0,
+            })
+            .then(Modifier::empty().draw_with_content({
+                // Clone the state handle, not the value
                 let pointer_position = pointer_position.clone();
-                async move {
-                    scope
-                        .await_pointer_event_scope(|await_scope| async move {
-                            loop {
-                                let event = await_scope.await_pointer_event().await;
-                                if let PointerEventKind::Move = event.kind {
-                                    eprintln!("Setting position to {:?}", event.position);
-                                    pointer_position.set(Point {
-                                        x: event.position.x,
-                                        y: event.position.y,
-                                    });
-                                }
-                            }
-                        })
-                        .await;
+                move |scope| {
+                    // Read state at draw time, not composition time
+                    let position = pointer_position.get();
+                    eprintln!("Drawing with current state position: {:?}", position);
+                    scope.draw_rect(Brush::radial_gradient(
+                        vec![Color(0.0, 1.0, 0.0, 0.8), Color(0.0, 0.0, 0.0, 0.0)],
+                        position,
+                        50.0,
+                    ));
                 }
-            }
-        })),
+            }))
+            .then(Modifier::empty().pointer_input((), {
+                let pointer_position = pointer_position.clone();
+                move |scope: PointerInputScope| {
+                    let pointer_position = pointer_position.clone();
+                    async move {
+                        scope
+                            .await_pointer_event_scope(|await_scope| async move {
+                                loop {
+                                    let event = await_scope.await_pointer_event().await;
+                                    if let PointerEventKind::Move = event.kind {
+                                        eprintln!("Setting position to {:?}", event.position);
+                                        pointer_position.set(Point {
+                                            x: event.position.x,
+                                            y: event.position.y,
+                                        });
+                                    }
+                                }
+                            })
+                            .await;
+                    }
+                }
+            })),
         ColumnSpec::default(),
         || {
             Text("Hover area", Modifier::empty().padding(8.0));

@@ -249,7 +249,11 @@ where
                     }
                 });
                 if let Err(err) = result {
-                    log::debug!("Could not process pointer repass for node #{}: {}", node_id, err);
+                    log::debug!(
+                        "Could not process pointer repass for node #{}: {}",
+                        node_id,
+                        err
+                    );
                 }
             });
         }
@@ -268,7 +272,11 @@ where
                     }
                 });
                 if let Err(err) = result {
-                    log::debug!("Could not process focus invalidation for node #{}: {}", node_id, err);
+                    log::debug!(
+                        "Could not process focus invalidation for node #{}: {}",
+                        node_id,
+                        err
+                    );
                 }
             });
         }

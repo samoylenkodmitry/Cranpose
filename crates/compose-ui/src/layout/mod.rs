@@ -1,8 +1,6 @@
 pub mod core;
-pub mod policies;
 mod modifier_measurable;
-
-use modifier_measurable::ModifierNodeMeasurable;
+pub mod policies;
 
 use compose_core::collections::map::Entry;
 use compose_core::collections::map::HashMap;
@@ -18,20 +16,329 @@ use compose_core::{
     Phase, RuntimeHandle, SlotBackend, SlotsHost, SnapshotStateObserver,
 };
 
-#[cfg(test)]
-use self::core::{HorizontalAlignment, VerticalAlignment};
 use self::core::Measurable;
 use self::core::Placeable;
+#[cfg(test)]
+use self::core::{HorizontalAlignment, VerticalAlignment};
 use crate::modifier::{
     collect_semantics_from_modifier, collect_slices_from_modifier, DimensionConstraint, EdgeInsets,
     Modifier, ModifierNodeSlices, Point, Rect as GeometryRect, ResolvedModifiers, Size,
 };
+use crate::modifier_nodes::{FillDirection, FillNode, OffsetNode, PaddingNode, SizeNode};
 use crate::subcompose_layout::SubcomposeLayoutNode;
+use crate::text_modifier_node::TextModifierNode;
 use crate::widgets::nodes::{IntrinsicKind, LayoutNode, LayoutNodeCacheHandles};
-use compose_foundation::SemanticsConfiguration;
+use compose_foundation::{LayoutModifierNode, SemanticsConfiguration};
 use compose_ui_layout::{Constraints, MeasurePolicy, MeasureResult};
 
 static NEXT_CACHE_EPOCH: AtomicU64 = AtomicU64::new(1);
+
+/// Result of measuring through the modifier node chain.
+struct ModifierChainMeasurement {
+    result: MeasureResult,
+    padding: EdgeInsets,
+    offset: Point,
+}
+
+/// Measurable wrapper that runs the layout node's measure policy and captures the result.
+struct MeasurePolicyMeasurable<'a> {
+    measure_policy: Rc<dyn MeasurePolicy>,
+    measurables: &'a [Box<dyn Measurable>],
+    result: Rc<RefCell<Option<MeasureResult>>>,
+}
+
+impl<'a> MeasurePolicyMeasurable<'a> {
+    fn new(
+        measure_policy: Rc<dyn MeasurePolicy>,
+        measurables: &'a [Box<dyn Measurable>],
+        result: Rc<RefCell<Option<MeasureResult>>>,
+    ) -> Self {
+        Self {
+            measure_policy,
+            measurables,
+            result,
+        }
+    }
+}
+
+impl<'a> Measurable for MeasurePolicyMeasurable<'a> {
+    fn measure(&self, constraints: Constraints) -> Box<dyn Placeable> {
+        let result = self.measure_policy.measure(self.measurables, constraints);
+        let size = result.size;
+        *self.result.borrow_mut() = Some(result);
+        Box::new(FixedPlaceable { size })
+    }
+
+    fn min_intrinsic_width(&self, height: f32) -> f32 {
+        self.measure_policy
+            .min_intrinsic_width(self.measurables, height)
+    }
+
+    fn max_intrinsic_width(&self, height: f32) -> f32 {
+        self.measure_policy
+            .max_intrinsic_width(self.measurables, height)
+    }
+
+    fn min_intrinsic_height(&self, width: f32) -> f32 {
+        self.measure_policy
+            .min_intrinsic_height(self.measurables, width)
+    }
+
+    fn max_intrinsic_height(&self, width: f32) -> f32 {
+        self.measure_policy
+            .max_intrinsic_height(self.measurables, width)
+    }
+}
+
+struct FixedPlaceable {
+    size: Size,
+}
+
+impl Placeable for FixedPlaceable {
+    fn place(&self, _x: f32, _y: f32) {}
+
+    fn width(&self) -> f32 {
+        self.size.width
+    }
+
+    fn height(&self) -> f32 {
+        self.size.height
+    }
+
+    fn node_id(&self) -> NodeId {
+        NodeId::default()
+    }
+}
+
+struct LayoutModifierAdapter {
+    measure: Box<dyn Fn(&dyn Measurable, Constraints) -> Size>,
+    min_intrinsic_width: Box<dyn Fn(&dyn Measurable, f32) -> f32>,
+    max_intrinsic_width: Box<dyn Fn(&dyn Measurable, f32) -> f32>,
+    min_intrinsic_height: Box<dyn Fn(&dyn Measurable, f32) -> f32>,
+    max_intrinsic_height: Box<dyn Fn(&dyn Measurable, f32) -> f32>,
+    padding: EdgeInsets,
+    offset: Point,
+}
+
+impl LayoutModifierAdapter {
+    fn padding(padding: EdgeInsets) -> Self {
+        Self {
+            measure: Box::new(move |measurable, constraints| {
+                let mut node = PaddingNode::new(padding);
+                let mut context = compose_foundation::BasicModifierNodeContext::new();
+                node.measure(&mut context, measurable, constraints)
+            }),
+            min_intrinsic_width: Box::new(move |measurable, height| {
+                let node = PaddingNode::new(padding);
+                node.min_intrinsic_width(measurable, height)
+            }),
+            max_intrinsic_width: Box::new(move |measurable, height| {
+                let node = PaddingNode::new(padding);
+                node.max_intrinsic_width(measurable, height)
+            }),
+            min_intrinsic_height: Box::new(move |measurable, width| {
+                let node = PaddingNode::new(padding);
+                node.min_intrinsic_height(measurable, width)
+            }),
+            max_intrinsic_height: Box::new(move |measurable, width| {
+                let node = PaddingNode::new(padding);
+                node.max_intrinsic_height(measurable, width)
+            }),
+            padding,
+            offset: Point::default(),
+        }
+    }
+
+    fn size(
+        min_width: Option<f32>,
+        max_width: Option<f32>,
+        min_height: Option<f32>,
+        max_height: Option<f32>,
+        enforce_incoming: bool,
+    ) -> Self {
+        Self {
+            measure: Box::new(move |measurable, constraints| {
+                let mut node = SizeNode::new(
+                    min_width,
+                    max_width,
+                    min_height,
+                    max_height,
+                    enforce_incoming,
+                );
+                let mut context = compose_foundation::BasicModifierNodeContext::new();
+                node.measure(&mut context, measurable, constraints)
+            }),
+            min_intrinsic_width: Box::new(move |measurable, height| {
+                let node = SizeNode::new(
+                    min_width,
+                    max_width,
+                    min_height,
+                    max_height,
+                    enforce_incoming,
+                );
+                node.min_intrinsic_width(measurable, height)
+            }),
+            max_intrinsic_width: Box::new(move |measurable, height| {
+                let node = SizeNode::new(
+                    min_width,
+                    max_width,
+                    min_height,
+                    max_height,
+                    enforce_incoming,
+                );
+                node.max_intrinsic_width(measurable, height)
+            }),
+            min_intrinsic_height: Box::new(move |measurable, width| {
+                let node = SizeNode::new(
+                    min_width,
+                    max_width,
+                    min_height,
+                    max_height,
+                    enforce_incoming,
+                );
+                node.min_intrinsic_height(measurable, width)
+            }),
+            max_intrinsic_height: Box::new(move |measurable, width| {
+                let node = SizeNode::new(
+                    min_width,
+                    max_width,
+                    min_height,
+                    max_height,
+                    enforce_incoming,
+                );
+                node.max_intrinsic_height(measurable, width)
+            }),
+            padding: EdgeInsets::default(),
+            offset: Point::default(),
+        }
+    }
+
+    fn fill(direction: FillDirection, fraction: f32) -> Self {
+        Self {
+            measure: Box::new(move |measurable, constraints| {
+                let mut node = FillNode::new(direction, fraction);
+                let mut context = compose_foundation::BasicModifierNodeContext::new();
+                node.measure(&mut context, measurable, constraints)
+            }),
+            min_intrinsic_width: Box::new(move |measurable, height| {
+                let node = FillNode::new(direction, fraction);
+                node.min_intrinsic_width(measurable, height)
+            }),
+            max_intrinsic_width: Box::new(move |measurable, height| {
+                let node = FillNode::new(direction, fraction);
+                node.max_intrinsic_width(measurable, height)
+            }),
+            min_intrinsic_height: Box::new(move |measurable, width| {
+                let node = FillNode::new(direction, fraction);
+                node.min_intrinsic_height(measurable, width)
+            }),
+            max_intrinsic_height: Box::new(move |measurable, width| {
+                let node = FillNode::new(direction, fraction);
+                node.max_intrinsic_height(measurable, width)
+            }),
+            padding: EdgeInsets::default(),
+            offset: Point::default(),
+        }
+    }
+
+    fn offset(offset: Point, rtl_aware: bool) -> Self {
+        Self {
+            measure: Box::new(move |measurable, constraints| {
+                let mut node = OffsetNode::new(offset.x, offset.y, rtl_aware);
+                let mut context = compose_foundation::BasicModifierNodeContext::new();
+                node.measure(&mut context, measurable, constraints)
+            }),
+            min_intrinsic_width: Box::new(move |measurable, height| {
+                let node = OffsetNode::new(offset.x, offset.y, rtl_aware);
+                node.min_intrinsic_width(measurable, height)
+            }),
+            max_intrinsic_width: Box::new(move |measurable, height| {
+                let node = OffsetNode::new(offset.x, offset.y, rtl_aware);
+                node.max_intrinsic_width(measurable, height)
+            }),
+            min_intrinsic_height: Box::new(move |measurable, width| {
+                let node = OffsetNode::new(offset.x, offset.y, rtl_aware);
+                node.min_intrinsic_height(measurable, width)
+            }),
+            max_intrinsic_height: Box::new(move |measurable, width| {
+                let node = OffsetNode::new(offset.x, offset.y, rtl_aware);
+                node.max_intrinsic_height(measurable, width)
+            }),
+            padding: EdgeInsets::default(),
+            offset,
+        }
+    }
+
+    fn text(text: String) -> Self {
+        let text_shared = Rc::new(text);
+        let measure_text = Rc::clone(&text_shared);
+        let min_width_text = Rc::clone(&text_shared);
+        let max_width_text = Rc::clone(&text_shared);
+        let min_height_text = Rc::clone(&text_shared);
+        let max_height_text = Rc::clone(&text_shared);
+
+        Self {
+            measure: Box::new(move |_measurable, constraints| {
+                let mut node = TextModifierNode::new((*measure_text).clone());
+                let mut context = compose_foundation::BasicModifierNodeContext::new();
+                node.measure(&mut context, &DummyMeasurable, constraints)
+            }),
+            min_intrinsic_width: Box::new(move |_measurable, _height| {
+                let node = TextModifierNode::new((*min_width_text).clone());
+                node.min_intrinsic_width(&DummyMeasurable, 0.0)
+            }),
+            max_intrinsic_width: Box::new(move |_measurable, _height| {
+                let node = TextModifierNode::new((*max_width_text).clone());
+                node.max_intrinsic_width(&DummyMeasurable, 0.0)
+            }),
+            min_intrinsic_height: Box::new(move |_measurable, _width| {
+                let node = TextModifierNode::new((*min_height_text).clone());
+                node.min_intrinsic_height(&DummyMeasurable, 0.0)
+            }),
+            max_intrinsic_height: Box::new(move |_measurable, _width| {
+                let node = TextModifierNode::new((*max_height_text).clone());
+                node.max_intrinsic_height(&DummyMeasurable, 0.0)
+            }),
+            padding: EdgeInsets::default(),
+            offset: Point::default(),
+        }
+    }
+
+    fn wrap<'a>(self, wrapped: Box<dyn Measurable + 'a>) -> Box<dyn Measurable + 'a> {
+        Box::new(AdapterMeasurable {
+            adapter: self,
+            wrapped,
+        })
+    }
+}
+
+struct AdapterMeasurable<'a> {
+    adapter: LayoutModifierAdapter,
+    wrapped: Box<dyn Measurable + 'a>,
+}
+
+impl<'a> Measurable for AdapterMeasurable<'a> {
+    fn measure(&self, constraints: Constraints) -> Box<dyn Placeable> {
+        let size = (self.adapter.measure)(&*self.wrapped, constraints);
+        Box::new(FixedPlaceable { size })
+    }
+
+    fn min_intrinsic_width(&self, height: f32) -> f32 {
+        (self.adapter.min_intrinsic_width)(&*self.wrapped, height)
+    }
+
+    fn max_intrinsic_width(&self, height: f32) -> f32 {
+        (self.adapter.max_intrinsic_width)(&*self.wrapped, height)
+    }
+
+    fn min_intrinsic_height(&self, width: f32) -> f32 {
+        (self.adapter.min_intrinsic_height)(&*self.wrapped, width)
+    }
+
+    fn max_intrinsic_height(&self, width: f32) -> f32 {
+        (self.adapter.max_intrinsic_height)(&*self.wrapped, width)
+    }
+}
 
 /// Discrete event callback reference produced during semantics extraction.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -642,66 +949,114 @@ impl LayoutBuilderState {
     /// mirroring Jetpack Compose's LayoutModifierNodeCoordinator pattern.
     ///
     /// Returns Ok(MeasureResult) if successful, Err(()) if modifier nodes should not be used.
+    ///
     fn measure_through_modifier_chain(
         state_rc: &Rc<RefCell<Self>>,
         node_id: NodeId,
         measurables: &[Box<dyn Measurable>],
         measure_policy: &Rc<dyn MeasurePolicy>,
         constraints: Constraints,
-    ) -> Result<MeasureResult, ()> {
-        use compose_foundation::LayoutModifierNode;
+    ) -> Result<ModifierChainMeasurement, ()> {
+        use crate::modifier_nodes::{FillNode, OffsetNode, PaddingNode, SizeNode};
         use crate::text_modifier_node::TextModifierNode;
 
-        // First, check if there are layout modifier nodes and handle special cases
-        // We need to scope the borrow carefully to avoid conflicts
-        let has_layout_nodes = {
+        let mut adapters: Vec<LayoutModifierAdapter> = Vec::new();
+        let mut padding = EdgeInsets::default();
+        let mut offset = Point::default();
+        let mut has_layout_nodes = false;
+        let mut unsupported_layout_node = false;
+
+        {
             let state = state_rc.borrow();
             let mut applier = state.applier.borrow_typed();
-            applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
-                layout_node.modifier_chain().has_layout_nodes()
-            }).unwrap_or(false)
-        };
 
-        if !has_layout_nodes {
+            applier
+                .with_node::<LayoutNode, _>(node_id, |layout_node| {
+                    let chain_handle = layout_node.modifier_chain_mut();
+                    has_layout_nodes = chain_handle.has_layout_nodes();
+
+                    if !has_layout_nodes {
+                        return;
+                    }
+
+                    chain_handle.visit_layout_nodes_mut(|node| {
+                        let any = node.as_any_mut();
+
+                        if let Some(padding_node) = any.downcast_mut::<PaddingNode>() {
+                            let node_padding = padding_node.padding();
+                            padding += node_padding;
+                            adapters.push(LayoutModifierAdapter::padding(node_padding));
+                        } else if let Some(size_node) = any.downcast_mut::<SizeNode>() {
+                            adapters.push(LayoutModifierAdapter::size(
+                                size_node.min_width(),
+                                size_node.max_width(),
+                                size_node.min_height(),
+                                size_node.max_height(),
+                                size_node.enforce_incoming(),
+                            ));
+                        } else if let Some(fill_node) = any.downcast_mut::<FillNode>() {
+                            adapters.push(LayoutModifierAdapter::fill(
+                                fill_node.direction(),
+                                fill_node.fraction(),
+                            ));
+                        } else if let Some(offset_node) = any.downcast_mut::<OffsetNode>() {
+                            let node_offset = offset_node.offset();
+                            offset.x += node_offset.x;
+                            offset.y += node_offset.y;
+                            adapters.push(LayoutModifierAdapter::offset(
+                                node_offset,
+                                offset_node.rtl_aware(),
+                            ));
+                        } else if let Some(text_node) = any.downcast_mut::<TextModifierNode>() {
+                            adapters
+                                .push(LayoutModifierAdapter::text(text_node.text().to_string()));
+                        } else {
+                            unsupported_layout_node = true;
+                        }
+                    });
+                })
+                .map_err(|_| ())?;
+        }
+
+        if !has_layout_nodes || unsupported_layout_node {
             return Err(());
         }
 
-        // Check for TextModifierNode special case
-        let text_size = {
-            let state = state_rc.borrow();
-            let mut applier = state.applier.borrow_typed();
+        let policy_result = Rc::new(RefCell::new(None));
+        let mut measurable: Box<dyn Measurable + '_> = Box::new(MeasurePolicyMeasurable::new(
+            Rc::clone(measure_policy),
+            measurables,
+            Rc::clone(&policy_result),
+        ));
 
-            applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
-                let chain_handle = layout_node.modifier_chain_mut();
-                let mut text_node_found = false;
-                let mut size = None;
+        // Reverse adapters for correct outer-to-inner measurement
+        // (e.g., Padding should wrap Text, not Text wrap Padding)
+        adapters.reverse();
 
-                chain_handle.visit_layout_nodes_mut(|node| {
-                    if !text_node_found {
-                        if let Some(text_node) = node.as_any_mut().downcast_mut::<TextModifierNode>() {
-                            let dummy_measurable = DummyMeasurable;
-                            let mut context = compose_foundation::BasicModifierNodeContext::new();
-                            let measured_size = text_node.measure(&mut context, &dummy_measurable, constraints);
-                            size = Some(measured_size);
-                            text_node_found = true;
-                        }
-                    }
-                });
-
-                size
-            }).unwrap_or(None)
-        };
-
-        if let Some(size) = text_size {
-            return Ok(MeasureResult {
-                size,
-                placements: Vec::new(),
-            });
+        for adapter in adapters.into_iter() {
+            measurable = adapter.wrap(measurable);
         }
 
-        // For the general case: just return error and fall back to policy measurement
-        // TODO: Build the full coordinator chain for non-text layout modifiers
-        Err(())
+        let placeable = measurable.measure(constraints);
+        let final_size = Size {
+            width: placeable.width(),
+            height: placeable.height(),
+        };
+
+        let placements = policy_result
+            .borrow_mut()
+            .take()
+            .map(|result| result.placements)
+            .unwrap_or_default();
+
+        Ok(ModifierChainMeasurement {
+            result: MeasureResult {
+                size: final_size,
+                placements,
+            },
+            padding,
+            offset,
+        })
     }
 
     fn measure_layout_node(
@@ -715,7 +1070,7 @@ impl LayoutBuilderState {
             state.cache_epoch
         };
         let LayoutNodeSnapshot {
-            modifier,
+            modifier: _,
             resolved_modifiers,
             measure_policy,
             children,
@@ -723,6 +1078,7 @@ impl LayoutBuilderState {
             needs_measure,
         } = snapshot;
         cache.activate(cache_epoch);
+        let layout_props = resolved_modifiers.layout_properties();
 
         // Selective measure: if node doesn't need measure and we have a cached result, use it
         if !needs_measure {
@@ -742,22 +1098,6 @@ impl LayoutBuilderState {
             })
             .ok();
             return Ok(cached);
-        }
-
-        let props = resolved_modifiers.layout_properties();
-        let padding = resolved_modifiers.padding();
-        let offset = resolved_modifiers.offset();
-        let mut inner_constraints = normalize_constraints(subtract_padding(constraints, padding));
-
-        if let DimensionConstraint::Points(width) = props.width() {
-            let constrained_width = width - padding.horizontal_sum();
-            inner_constraints.max_width = inner_constraints.max_width.min(constrained_width);
-            inner_constraints.min_width = inner_constraints.min_width.min(constrained_width);
-        }
-        if let DimensionConstraint::Points(height) = props.height() {
-            let constrained_height = height - padding.vertical_sum();
-            inner_constraints.max_height = inner_constraints.max_height.min(constrained_height);
-            inner_constraints.min_height = inner_constraints.min_height.min(constrained_height);
         }
 
         let (runtime_handle, applier_host) = {
@@ -809,109 +1149,175 @@ impl LayoutBuilderState {
             )));
         }
 
-        let needs_intrinsic_width = matches!(props.width(), DimensionConstraint::Intrinsic(_));
-        if needs_intrinsic_width {
-            let intrinsic_width = measure_policy
-                .min_intrinsic_width(measurables.as_slice(), inner_constraints.max_height);
-            let constrained_width = intrinsic_width.max(inner_constraints.min_width);
-            if constrained_width.is_finite() && constrained_width < inner_constraints.max_width {
-                inner_constraints.max_width = constrained_width;
-            }
-        }
+        // Try to measure through the modifier node chain first.
+        let chain_constraints = Constraints {
+            min_width: constraints.min_width,
+            max_width: if matches!(layout_props.width(), DimensionConstraint::Unspecified) {
+                f32::INFINITY
+            } else {
+                constraints.max_width
+            },
+            min_height: constraints.min_height,
+            max_height: if matches!(layout_props.height(), DimensionConstraint::Unspecified) {
+                f32::INFINITY
+            } else {
+                constraints.max_height
+            },
+        };
 
-        let needs_intrinsic_height = matches!(props.height(), DimensionConstraint::Intrinsic(_));
-        if needs_intrinsic_height {
-            let intrinsic_height = measure_policy
-                .min_intrinsic_height(measurables.as_slice(), inner_constraints.max_width);
-            let constrained_height = intrinsic_height.max(inner_constraints.min_height);
-            if constrained_height.is_finite() && constrained_height < inner_constraints.max_height {
-                inner_constraints.max_height = constrained_height;
-            }
-        }
+        let mut modifier_chain_result = Self::measure_through_modifier_chain(
+            &state_rc,
+            node_id,
+            measurables.as_slice(),
+            &measure_policy,
+            chain_constraints,
+        );
 
-        let mut measure_constraints = inner_constraints;
-        let mut relaxed_width = None;
-        if matches!(props.width(), DimensionConstraint::Unspecified)
-            && inner_constraints.min_width < inner_constraints.max_width
-            && constraints.min_width < constraints.max_width
-            && inner_constraints.max_width.is_finite()
+        if (chain_constraints.max_width != constraints.max_width
+            || chain_constraints.max_height != constraints.max_height)
+            && matches!(modifier_chain_result, Ok(ref result) if (constraints.max_width.is_finite() && result.result.size.width > constraints.max_width)
+                || (constraints.max_height.is_finite() && result.result.size.height > constraints.max_height))
         {
-            relaxed_width = Some(inner_constraints.max_width);
-            measure_constraints.max_width = f32::INFINITY;
-        }
-
-        let mut relaxed_height = None;
-        if matches!(props.height(), DimensionConstraint::Unspecified)
-            && inner_constraints.min_height < inner_constraints.max_height
-            && constraints.min_height < constraints.max_height
-            && inner_constraints.max_height.is_finite()
-        {
-            relaxed_height = Some(inner_constraints.max_height);
-            measure_constraints.max_height = f32::INFINITY;
-        }
-
-        // Measure through the layout modifier coordinator chain.
-        // This mirrors Jetpack Compose's LayoutModifierNodeCoordinator pattern.
-        let mut policy_result = {
-            // Try to measure through modifier chain first
-            if let Ok(result) = Self::measure_through_modifier_chain(
+            modifier_chain_result = Self::measure_through_modifier_chain(
                 &state_rc,
                 node_id,
                 measurables.as_slice(),
                 &measure_policy,
-                measure_constraints,
-            ) {
-                result
-            } else {
-                // No layout modifier nodes, measure directly through policy
-                measure_policy.measure(measurables.as_slice(), measure_constraints)
+                constraints,
+            );
+        }
+
+        let (width, height, policy_result, padding, offset) = if let Ok(result) =
+            modifier_chain_result
+        {
+            // Modifier chain succeeded - use the node-driven measurement.
+            // The size is already correct from the modifier chain (modifiers like SizeNode
+            // have already enforced their constraints), so we use it directly.
+            if let Some(err) = error.borrow_mut().take() {
+                return Err(err);
             }
+
+            (
+                result.result.size.width,
+                result.result.size.height,
+                result.result,
+                result.padding,
+                result.offset,
+            )
+        } else {
+            // No layout modifier nodes - fall back to ResolvedModifiers logic.
+            let props = layout_props;
+            let padding = resolved_modifiers.padding();
+            let offset = resolved_modifiers.offset();
+            let mut inner_constraints =
+                normalize_constraints(subtract_padding(constraints, padding));
+
+            if let DimensionConstraint::Points(width) = props.width() {
+                let constrained_width = width - padding.horizontal_sum();
+                inner_constraints.max_width = inner_constraints.max_width.min(constrained_width);
+                inner_constraints.min_width = inner_constraints.min_width.min(constrained_width);
+            }
+            if let DimensionConstraint::Points(height) = props.height() {
+                let constrained_height = height - padding.vertical_sum();
+                inner_constraints.max_height = inner_constraints.max_height.min(constrained_height);
+                inner_constraints.min_height = inner_constraints.min_height.min(constrained_height);
+            }
+
+            let needs_intrinsic_width = matches!(props.width(), DimensionConstraint::Intrinsic(_));
+            if needs_intrinsic_width {
+                let intrinsic_width = measure_policy
+                    .min_intrinsic_width(measurables.as_slice(), inner_constraints.max_height);
+                let constrained_width = intrinsic_width.max(inner_constraints.min_width);
+                if constrained_width.is_finite() && constrained_width < inner_constraints.max_width
+                {
+                    inner_constraints.max_width = constrained_width;
+                }
+            }
+
+            let needs_intrinsic_height =
+                matches!(props.height(), DimensionConstraint::Intrinsic(_));
+            if needs_intrinsic_height {
+                let intrinsic_height = measure_policy
+                    .min_intrinsic_height(measurables.as_slice(), inner_constraints.max_width);
+                let constrained_height = intrinsic_height.max(inner_constraints.min_height);
+                if constrained_height.is_finite()
+                    && constrained_height < inner_constraints.max_height
+                {
+                    inner_constraints.max_height = constrained_height;
+                }
+            }
+
+            let mut measure_constraints = inner_constraints;
+            let mut relaxed_width = None;
+            if matches!(props.width(), DimensionConstraint::Unspecified)
+                && inner_constraints.min_width < inner_constraints.max_width
+                && constraints.min_width < constraints.max_width
+                && inner_constraints.max_width.is_finite()
+            {
+                relaxed_width = Some(inner_constraints.max_width);
+                measure_constraints.max_width = f32::INFINITY;
+            }
+
+            let mut relaxed_height = None;
+            if matches!(props.height(), DimensionConstraint::Unspecified)
+                && inner_constraints.min_height < inner_constraints.max_height
+                && constraints.min_height < constraints.max_height
+                && inner_constraints.max_height.is_finite()
+            {
+                relaxed_height = Some(inner_constraints.max_height);
+                measure_constraints.max_height = f32::INFINITY;
+            }
+
+            let mut policy_result =
+                measure_policy.measure(measurables.as_slice(), measure_constraints);
+
+            if relaxed_width.is_some() || relaxed_height.is_some() {
+                let width_exceeds = relaxed_width
+                    .map(|limit| policy_result.size.width > limit && limit.is_finite())
+                    .unwrap_or(false);
+                let height_exceeds = relaxed_height
+                    .map(|limit| policy_result.size.height > limit && limit.is_finite())
+                    .unwrap_or(false);
+
+                if width_exceeds || height_exceeds {
+                    let mut tightened_constraints = measure_constraints;
+                    if let Some(limit) = relaxed_width {
+                        tightened_constraints.max_width = limit;
+                    }
+                    if let Some(limit) = relaxed_height {
+                        tightened_constraints.max_height = limit;
+                    }
+                    policy_result =
+                        measure_policy.measure(measurables.as_slice(), tightened_constraints);
+                }
+            }
+
+            if let Some(err) = error.borrow_mut().take() {
+                return Err(err);
+            }
+
+            let mut width = policy_result.size.width + padding.horizontal_sum();
+            let mut height = policy_result.size.height + padding.vertical_sum();
+
+            width = resolve_dimension(
+                width,
+                props.width(),
+                props.min_width(),
+                props.max_width(),
+                constraints.min_width,
+                constraints.max_width,
+            );
+            height = resolve_dimension(
+                height,
+                props.height(),
+                props.min_height(),
+                props.max_height(),
+                constraints.min_height,
+                constraints.max_height,
+            );
+
+            (width, height, policy_result, padding, offset)
         };
-
-        if relaxed_width.is_some() || relaxed_height.is_some() {
-            let width_exceeds = relaxed_width
-                .map(|limit| policy_result.size.width > limit && limit.is_finite())
-                .unwrap_or(false);
-            let height_exceeds = relaxed_height
-                .map(|limit| policy_result.size.height > limit && limit.is_finite())
-                .unwrap_or(false);
-
-            if width_exceeds || height_exceeds {
-                let mut tightened_constraints = measure_constraints;
-                if let Some(limit) = relaxed_width {
-                    tightened_constraints.max_width = limit;
-                }
-                if let Some(limit) = relaxed_height {
-                    tightened_constraints.max_height = limit;
-                }
-                policy_result =
-                    measure_policy.measure(measurables.as_slice(), tightened_constraints);
-            }
-        }
-
-        if let Some(err) = error.borrow_mut().take() {
-            return Err(err);
-        }
-
-        let mut width = policy_result.size.width + padding.horizontal_sum();
-        let mut height = policy_result.size.height + padding.vertical_sum();
-
-        width = resolve_dimension(
-            width,
-            props.width(),
-            props.min_width(),
-            props.max_width(),
-            constraints.min_width,
-            constraints.max_width,
-        );
-        height = resolve_dimension(
-            height,
-            props.height(),
-            props.min_height(),
-            props.max_height(),
-            constraints.min_height,
-            constraints.max_height,
-        );
 
         let mut measured_children = Vec::new();
         for &child_id in children.iter() {
@@ -959,7 +1365,6 @@ impl LayoutBuilderState {
 
         Ok(measured)
     }
-
 }
 
 /// Snapshot of a LayoutNode's data for measuring.
@@ -1696,7 +2101,8 @@ fn collect_runtime_metadata_inner(
 fn extract_text_from_layout_node(layout: &LayoutNode) -> Option<String> {
     // Use the semantics configuration which collects data from all SemanticsNode instances
     // in the modifier chain, including TextModifierNode
-    layout.semantics_configuration()
+    layout
+        .semantics_configuration()
         .and_then(|config| config.content_description)
 }
 

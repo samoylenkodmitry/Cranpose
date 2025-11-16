@@ -12,9 +12,11 @@ impl Modifier {
             .with_inspector_metadata(inspector_metadata("clickable", |info| {
                 info.add_property("onClick", "provided");
             }))
-            .then(Modifier::empty().semantics(|config: &mut SemanticsConfiguration| {
-                config.is_clickable = true;
-            }));
+            .then(
+                Modifier::empty().semantics(|config: &mut SemanticsConfiguration| {
+                    config.is_clickable = true;
+                }),
+            );
         self.then(modifier)
     }
 }

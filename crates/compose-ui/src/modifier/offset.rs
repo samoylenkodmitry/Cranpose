@@ -31,12 +31,11 @@ impl Modifier {
     ///
     /// Example: `Modifier::empty().absolute_offset(10.0, 20.0)`
     pub fn absolute_offset(self, x: f32, y: f32) -> Self {
-        let modifier =
-            Self::with_element(OffsetElement::new(x, y, false)).with_inspector_metadata(
-                inspector_metadata("absoluteOffset", move |info| {
-                    info.add_offset_components("absoluteOffsetX", "absoluteOffsetY", Point { x, y });
-                }),
-            );
+        let modifier = Self::with_element(OffsetElement::new(x, y, false)).with_inspector_metadata(
+            inspector_metadata("absoluteOffset", move |info| {
+                info.add_offset_components("absoluteOffsetX", "absoluteOffsetY", Point { x, y });
+            }),
+        );
         self.then(modifier)
     }
 }

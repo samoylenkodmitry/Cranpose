@@ -35,36 +35,48 @@ fn progress_tab(progress: MutableState<f32>) {
     PROGRESS_TAB_RENDERS.with(|c| c.set(c.get() + 1));
     let progress_value = progress.value();
 
-    Column(Modifier::empty().padding(8.0), ColumnSpec::default(), move || {
-        Text(
-            format!("Progress {:.2}", progress_value),
-            Modifier::empty().padding(2.0),
-        );
+    Column(
+        Modifier::empty().padding(8.0),
+        ColumnSpec::default(),
+        move || {
+            Text(
+                format!("Progress {:.2}", progress_value),
+                Modifier::empty().padding(2.0),
+            );
 
-        Row(
-            Modifier::empty().padding(2.0).then(Modifier::empty().height(12.0)),
-            RowSpec::default(),
-            {
-                move || {
-                    if progress_value > 0.0 {
-                        PROGRESS_BAR_BRANCH_CALLS.with(|c| c.set(c.get() + 1));
-                        Row(
-                            Modifier::empty().width(200.0 * progress_value).then(Modifier::empty().height(12.0)),
-                            RowSpec::default(),
-                            || {},
-                        );
+            Row(
+                Modifier::empty()
+                    .padding(2.0)
+                    .then(Modifier::empty().height(12.0)),
+                RowSpec::default(),
+                {
+                    move || {
+                        if progress_value > 0.0 {
+                            PROGRESS_BAR_BRANCH_CALLS.with(|c| c.set(c.get() + 1));
+                            Row(
+                                Modifier::empty()
+                                    .width(200.0 * progress_value)
+                                    .then(Modifier::empty().height(12.0)),
+                                RowSpec::default(),
+                                || {},
+                            );
+                        }
                     }
-                }
-            },
-        );
-    });
+                },
+            );
+        },
+    );
 }
 
 #[composable]
 fn summary_tab() {
-    Column(Modifier::empty().padding(8.0), ColumnSpec::default(), move || {
-        Text("Summary Tab", Modifier::empty().padding(2.0));
-    });
+    Column(
+        Modifier::empty().padding(8.0),
+        ColumnSpec::default(),
+        move || {
+            Text("Summary Tab", Modifier::empty().padding(2.0));
+        },
+    );
 }
 
 fn make_tab_renderer(active_tab: MutableState<i32>, progress: MutableState<f32>) -> impl FnMut() {
@@ -217,34 +229,42 @@ fn tab_switching_layout_pass_handles_conditional_nodes() {
 #[composable]
 fn alternating_recursive_node(depth: usize, horizontal: bool, index: usize) {
     let label = format!("Node {index} depth {depth}");
-    Column(Modifier::empty().padding(6.0), ColumnSpec::default(), move || {
-        Text(label.clone(), Modifier::empty().padding(2.0));
-        if depth > 1 {
-            if horizontal {
-                Row(Modifier::empty().fill_max_width(), RowSpec::default(), move || {
-                    for child_idx in 0..2 {
-                        let child_index = index * 2 + child_idx + 1;
-                        compose_core::with_key(&(depth, index, child_idx), || {
-                            alternating_recursive_node(depth - 1, false, child_index);
-                        });
-                    }
-                });
-            } else {
-                Column(
-                    Modifier::empty().fill_max_width(),
-                    ColumnSpec::default(),
-                    move || {
-                        for child_idx in 0..2 {
-                            let child_index = index * 2 + child_idx + 1;
-                            compose_core::with_key(&(depth, index, child_idx), || {
-                                alternating_recursive_node(depth - 1, true, child_index);
-                            });
-                        }
-                    },
-                );
+    Column(
+        Modifier::empty().padding(6.0),
+        ColumnSpec::default(),
+        move || {
+            Text(label.clone(), Modifier::empty().padding(2.0));
+            if depth > 1 {
+                if horizontal {
+                    Row(
+                        Modifier::empty().fill_max_width(),
+                        RowSpec::default(),
+                        move || {
+                            for child_idx in 0..2 {
+                                let child_index = index * 2 + child_idx + 1;
+                                compose_core::with_key(&(depth, index, child_idx), || {
+                                    alternating_recursive_node(depth - 1, false, child_index);
+                                });
+                            }
+                        },
+                    );
+                } else {
+                    Column(
+                        Modifier::empty().fill_max_width(),
+                        ColumnSpec::default(),
+                        move || {
+                            for child_idx in 0..2 {
+                                let child_index = index * 2 + child_idx + 1;
+                                compose_core::with_key(&(depth, index, child_idx), || {
+                                    alternating_recursive_node(depth - 1, true, child_index);
+                                });
+                            }
+                        },
+                    );
+                }
             }
-        }
-    });
+        },
+    );
 }
 
 #[composable]
@@ -307,23 +327,31 @@ enum RecursiveDemoTab {
 
 #[composable]
 fn simple_counter_placeholder() {
-    Column(Modifier::empty().padding(4.0), ColumnSpec::default(), move || {
-        Text("Counter placeholder", Modifier::empty().padding(2.0));
-    });
+    Column(
+        Modifier::empty().padding(4.0),
+        ColumnSpec::default(),
+        move || {
+            Text("Counter placeholder", Modifier::empty().padding(2.0));
+        },
+    );
 }
 
 #[composable]
 fn keyed_tab_switcher(active: MutableState<RecursiveDemoTab>, depth_state: MutableState<usize>) {
     let active_value = active.get();
     let depth_state_for_layout = depth_state.clone();
-    Column(Modifier::empty().padding(8.0), ColumnSpec::default(), move || {
-        compose_core::with_key(&active_value, || match active_value {
-            RecursiveDemoTab::Counter => simple_counter_placeholder(),
-            RecursiveDemoTab::Layout => {
-                recursive_layout_root(depth_state_for_layout.clone());
-            }
-        });
-    });
+    Column(
+        Modifier::empty().padding(8.0),
+        ColumnSpec::default(),
+        move || {
+            compose_core::with_key(&active_value, || match active_value {
+                RecursiveDemoTab::Counter => simple_counter_placeholder(),
+                RecursiveDemoTab::Layout => {
+                    recursive_layout_root(depth_state_for_layout.clone());
+                }
+            });
+        },
+    );
 }
 
 #[test]

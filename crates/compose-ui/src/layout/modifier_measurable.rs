@@ -7,7 +7,7 @@
 use compose_core::NodeId;
 use compose_foundation::{BasicModifierNodeContext, LayoutModifierNode};
 use compose_ui_graphics::Size;
-use compose_ui_layout::{Constraints, Measurable, MeasurePolicy, MeasureResult, Placeable};
+use compose_ui_layout::{Constraints, Measurable, Placeable};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -20,10 +20,7 @@ pub(crate) struct ModifierNodeMeasurable {
 }
 
 impl ModifierNodeMeasurable {
-    pub fn new(
-        node: Rc<RefCell<dyn LayoutModifierNode>>,
-        wrapped: Box<dyn Measurable>,
-    ) -> Self {
+    pub fn new(node: Rc<RefCell<dyn LayoutModifierNode>>, wrapped: Box<dyn Measurable>) -> Self {
         Self { node, wrapped }
     }
 }

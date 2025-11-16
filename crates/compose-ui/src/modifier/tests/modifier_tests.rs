@@ -14,7 +14,8 @@ use std::rc::Rc;
 
 #[test]
 fn padding_nodes_resolve_padding_values() {
-    let modifier = Modifier::empty().padding(4.0)
+    let modifier = Modifier::empty()
+        .padding(4.0)
         .then(Modifier::empty().padding_horizontal(2.0))
         .then(Modifier::empty().padding_each(1.0, 3.0, 5.0, 7.0));
     let mut handle = ModifierChainHandle::new();
@@ -50,7 +51,8 @@ fn weight_tracks_fill_flag() {
 
 #[test]
 fn offset_accumulates_across_chain() {
-    let modifier = Modifier::empty().offset(4.0, 6.0)
+    let modifier = Modifier::empty()
+        .offset(4.0, 6.0)
         .then(Modifier::empty().absolute_offset(-1.5, 2.5))
         .then(Modifier::empty().offset(0.5, -3.0));
     let total = modifier.resolved_modifiers().offset();
@@ -59,7 +61,8 @@ fn offset_accumulates_across_chain() {
 
 #[test]
 fn fold_in_iterates_in_insertion_order() {
-    let modifier = Modifier::empty().padding(2.0)
+    let modifier = Modifier::empty()
+        .padding(2.0)
         .then(Modifier::empty().background(Color(0.1, 0.2, 0.3, 1.0)))
         .then(Modifier::empty().clickable(|_| {}));
 
@@ -82,7 +85,8 @@ fn fold_in_iterates_in_insertion_order() {
 
 #[test]
 fn fold_out_iterates_in_reverse_order() {
-    let modifier = Modifier::empty().padding(2.0)
+    let modifier = Modifier::empty()
+        .padding(2.0)
         .then(Modifier::empty().background(Color(0.1, 0.2, 0.3, 1.0)))
         .then(Modifier::empty().clickable(|_| {}));
 
@@ -106,7 +110,8 @@ fn fold_out_iterates_in_reverse_order() {
 
 #[test]
 fn any_and_all_respect_predicates() {
-    let modifier = Modifier::empty().padding(2.0)
+    let modifier = Modifier::empty()
+        .padding(2.0)
         .then(Modifier::empty().background(Color(0.1, 0.2, 0.3, 1.0)))
         .then(Modifier::empty().clickable(|_| {}));
 
@@ -152,7 +157,8 @@ fn then_preserves_element_order_when_chaining() {
 
 #[test]
 fn inspector_metadata_records_padding_and_background() {
-    let modifier = Modifier::empty().padding_each(4.0, 2.0, 1.0, 3.0)
+    let modifier = Modifier::empty()
+        .padding_each(4.0, 2.0, 1.0, 3.0)
         .then(Modifier::empty().background(Color::rgba(0.8, 0.1, 0.2, 1.0)));
 
     let mut info = InspectorInfo::new();
@@ -172,7 +178,9 @@ fn inspector_metadata_records_padding_and_background() {
 
 #[test]
 fn inspector_metadata_records_size_and_clickable() {
-    let modifier = Modifier::empty().size_points(24.0, 48.0).then(Modifier::empty().clickable(|_| {}));
+    let modifier = Modifier::empty()
+        .size_points(24.0, 48.0)
+        .then(Modifier::empty().clickable(|_| {}));
 
     let mut info = InspectorInfo::new();
     modifier.inspect(&mut info);
@@ -206,7 +214,8 @@ fn required_size_sets_explicit_constraints() {
 
 #[test]
 fn alignment_modifiers_record_values() {
-    let modifier = Modifier::empty().align(Alignment::BOTTOM_END)
+    let modifier = Modifier::empty()
+        .align(Alignment::BOTTOM_END)
         .alignInColumn(HorizontalAlignment::CenterHorizontally)
         .alignInRow(VerticalAlignment::Top);
     let props = modifier.resolved_modifiers().layout_properties();
@@ -230,7 +239,8 @@ fn graphics_layer_modifier_updates_resolved_layer() {
 
 #[test]
 fn inspector_metadata_preserves_modifier_order() {
-    let modifier = Modifier::empty().width(16.0)
+    let modifier = Modifier::empty()
+        .width(16.0)
         .then(Modifier::empty().fill_max_height_fraction(0.5))
         .then(Modifier::empty().clip_to_bounds());
 
@@ -242,7 +252,9 @@ fn inspector_metadata_preserves_modifier_order() {
 
 #[test]
 fn inspector_debug_helpers_surface_properties() {
-    let modifier = Modifier::empty().offset(2.0, -1.0).then(Modifier::empty().clip_to_bounds());
+    let modifier = Modifier::empty()
+        .offset(2.0, -1.0)
+        .then(Modifier::empty().clip_to_bounds());
 
     let mut info = InspectorInfo::new();
     modifier.inspect(&mut info);
@@ -265,7 +277,8 @@ fn inspector_debug_helpers_surface_properties() {
 
 #[test]
 fn collect_inspector_records_include_weight_and_pointer_input_metadata() {
-    let modifier = Modifier::empty().padding(2.0)
+    let modifier = Modifier::empty()
+        .padding(2.0)
         .then(Modifier::empty().weight_with_fill(3.5, false))
         .then(Modifier::empty().pointer_input(7u64, |_| async move {}));
 

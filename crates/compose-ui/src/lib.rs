@@ -47,7 +47,6 @@ pub use modifier_nodes::{
     CornerShapeElement, CornerShapeNode, FillDirection, FillElement, FillNode, OffsetElement,
     OffsetNode, PaddingElement, PaddingNode, SizeElement, SizeNode,
 };
-pub use text_modifier_node::{TextModifierElement, TextModifierNode};
 pub use pointer_dispatch::{
     clear_pointer_repasses, has_pending_pointer_repasses, process_pointer_repasses,
     schedule_pointer_repass,
@@ -68,6 +67,7 @@ pub use subcompose_layout::{
     SubcomposeMeasureScope, SubcomposeMeasureScopeImpl,
 };
 pub use text::{measure_text, set_text_measurer, TextMeasurer, TextMetrics};
+pub use text_modifier_node::{TextModifierElement, TextModifierNode};
 
 // Debug utilities
 pub use debug::{

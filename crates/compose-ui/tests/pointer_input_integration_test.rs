@@ -11,7 +11,8 @@ use std::rc::Rc;
 #[composable]
 fn hover_tracking_app(hover_position: MutableState<Point>, is_hovered: MutableState<bool>) {
     Column(
-        Modifier::empty().padding(20.0)
+        Modifier::empty()
+            .padding(20.0)
             .then(Modifier::empty().size(Size {
                 width: 200.0,
                 height: 200.0,
@@ -102,31 +103,37 @@ fn test_pointer_input_async_handler_is_present() {
 
 #[composable]
 fn button_with_modifiers_app(click_count: MutableState<i32>) {
-    Column(Modifier::empty().padding(20.0), ColumnSpec::default(), move || {
-        Text(
-            format!("Clicks: {}", click_count.get()),
-            Modifier::empty().padding(8.0),
-        );
+    Column(
+        Modifier::empty().padding(20.0),
+        ColumnSpec::default(),
+        move || {
+            Text(
+                format!("Clicks: {}", click_count.get()),
+                Modifier::empty().padding(8.0),
+            );
 
-        // Button with draw_behind modifier (like the pause button)
-        Button(
-            Modifier::empty().rounded_corners(12.0).then(Modifier::empty().draw_behind(|scope| {
-                scope.draw_round_rect(
-                    Brush::solid(Color(0.2, 0.45, 0.9, 1.0)),
-                    CornerRadii::uniform(12.0),
-                );
-            })),
-            {
-                let count = click_count.clone();
-                move || {
-                    count.set(count.get() + 1);
-                }
-            },
-            || {
-                Text("Click me", Modifier::empty().padding(4.0));
-            },
-        );
-    });
+            // Button with draw_behind modifier (like the pause button)
+            Button(
+                Modifier::empty()
+                    .rounded_corners(12.0)
+                    .then(Modifier::empty().draw_behind(|scope| {
+                        scope.draw_round_rect(
+                            Brush::solid(Color(0.2, 0.45, 0.9, 1.0)),
+                            CornerRadii::uniform(12.0),
+                        );
+                    })),
+                {
+                    let count = click_count.clone();
+                    move || {
+                        count.set(count.get() + 1);
+                    }
+                },
+                || {
+                    Text("Click me", Modifier::empty().padding(4.0));
+                },
+            );
+        },
+    );
 }
 
 #[test]
@@ -167,28 +174,32 @@ fn test_button_with_draw_modifiers_is_clickable() {
 
 #[composable]
 fn dynamic_label_button_app(click_count: MutableState<i32>, is_active: MutableState<bool>) {
-    Column(Modifier::empty().padding(20.0), ColumnSpec::default(), move || {
-        let active = is_active.get();
-        let label = if active { "Active" } else { "Inactive" };
+    Column(
+        Modifier::empty().padding(20.0),
+        ColumnSpec::default(),
+        move || {
+            let active = is_active.get();
+            let label = if active { "Active" } else { "Inactive" };
 
-        Button(
-            Modifier::empty().padding(10.0),
-            {
-                let is_active = is_active.clone();
-                let count = click_count.clone();
-                move || {
-                    is_active.set(!is_active.get());
-                    count.set(count.get() + 1);
-                }
-            },
-            {
-                let label_str = label.to_string();
-                move || {
-                    Text(label_str.clone(), Modifier::empty().padding(4.0));
-                }
-            },
-        );
-    });
+            Button(
+                Modifier::empty().padding(10.0),
+                {
+                    let is_active = is_active.clone();
+                    let count = click_count.clone();
+                    move || {
+                        is_active.set(!is_active.get());
+                        count.set(count.get() + 1);
+                    }
+                },
+                {
+                    let label_str = label.to_string();
+                    move || {
+                        Text(label_str.clone(), Modifier::empty().padding(4.0));
+                    }
+                },
+            );
+        },
+    );
 }
 
 #[test]

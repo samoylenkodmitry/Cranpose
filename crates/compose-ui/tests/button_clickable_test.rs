@@ -10,25 +10,29 @@ use compose_ui::*;
 
 #[composable]
 fn simple_button_app(clicked_count: MutableState<i32>) {
-    Column(Modifier::empty().padding(20.0), ColumnSpec::default(), move || {
-        Text(
-            format!("Clicks: {}", clicked_count.get()),
-            Modifier::empty().padding(8.0),
-        );
+    Column(
+        Modifier::empty().padding(20.0),
+        ColumnSpec::default(),
+        move || {
+            Text(
+                format!("Clicks: {}", clicked_count.get()),
+                Modifier::empty().padding(8.0),
+            );
 
-        Button(
-            Modifier::empty().padding(10.0),
-            {
-                let count = clicked_count.clone();
-                move || {
-                    count.set(count.get() + 1);
-                }
-            },
-            || {
-                Text("Click me", Modifier::empty().padding(4.0));
-            },
-        );
-    });
+            Button(
+                Modifier::empty().padding(10.0),
+                {
+                    let count = clicked_count.clone();
+                    move || {
+                        count.set(count.get() + 1);
+                    }
+                },
+                || {
+                    Text("Click me", Modifier::empty().padding(4.0));
+                },
+            );
+        },
+    );
 }
 
 #[test]
@@ -81,43 +85,47 @@ fn test_button_creates_valid_composition() {
 
 #[composable]
 fn multi_button_app(button1_clicks: MutableState<i32>, button2_clicks: MutableState<i32>) {
-    Column(Modifier::empty().padding(20.0), ColumnSpec::default(), move || {
-        Text(
-            format!("Button 1 clicks: {}", button1_clicks.get()),
-            Modifier::empty().padding(8.0),
-        );
+    Column(
+        Modifier::empty().padding(20.0),
+        ColumnSpec::default(),
+        move || {
+            Text(
+                format!("Button 1 clicks: {}", button1_clicks.get()),
+                Modifier::empty().padding(8.0),
+            );
 
-        Button(
-            Modifier::empty().padding(10.0),
-            {
-                let clicks = button1_clicks.clone();
-                move || {
-                    clicks.set(clicks.get() + 1);
-                }
-            },
-            || {
-                Text("Button 1", Modifier::empty().padding(4.0));
-            },
-        );
+            Button(
+                Modifier::empty().padding(10.0),
+                {
+                    let clicks = button1_clicks.clone();
+                    move || {
+                        clicks.set(clicks.get() + 1);
+                    }
+                },
+                || {
+                    Text("Button 1", Modifier::empty().padding(4.0));
+                },
+            );
 
-        Text(
-            format!("Button 2 clicks: {}", button2_clicks.get()),
-            Modifier::empty().padding(8.0),
-        );
+            Text(
+                format!("Button 2 clicks: {}", button2_clicks.get()),
+                Modifier::empty().padding(8.0),
+            );
 
-        Button(
-            Modifier::empty().padding(10.0),
-            {
-                let clicks = button2_clicks.clone();
-                move || {
-                    clicks.set(clicks.get() + 10);
-                }
-            },
-            || {
-                Text("Button 2", Modifier::empty().padding(4.0));
-            },
-        );
-    });
+            Button(
+                Modifier::empty().padding(10.0),
+                {
+                    let clicks = button2_clicks.clone();
+                    move || {
+                        clicks.set(clicks.get() + 10);
+                    }
+                },
+                || {
+                    Text("Button 2", Modifier::empty().padding(4.0));
+                },
+            );
+        },
+    );
 }
 
 #[test]

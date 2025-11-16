@@ -13,7 +13,8 @@ use compose_ui::*;
 #[composable]
 fn test_hover_app(position: MutableState<Point>, event_count: MutableState<i32>) {
     Column(
-        Modifier::empty().padding(20.0)
+        Modifier::empty()
+            .padding(20.0)
             .then(Modifier::empty().size(Size {
                 width: 200.0,
                 height: 200.0,
@@ -112,40 +113,46 @@ fn pause_button_app(is_running: MutableState<bool>, click_count: MutableState<i3
         Color(0.2, 0.45, 0.9, 1.0)
     };
 
-    Column(Modifier::empty().padding(20.0), ColumnSpec::default(), move || {
-        Text(
-            format!(
-                "Running: {}, Clicks: {}",
-                is_running.get(),
-                click_count.get()
-            ),
-            Modifier::empty().padding(8.0),
-        );
+    Column(
+        Modifier::empty().padding(20.0),
+        ColumnSpec::default(),
+        move || {
+            Text(
+                format!(
+                    "Running: {}, Clicks: {}",
+                    is_running.get(),
+                    click_count.get()
+                ),
+                Modifier::empty().padding(8.0),
+            );
 
-        // Recreate the pause button structure from the demo
-        Button(
-            Modifier::empty().rounded_corners(16.0).then(Modifier::empty().draw_behind({
-                let color = button_color;
-                move |scope| {
-                    scope.draw_round_rect(Brush::solid(color), CornerRadii::uniform(16.0));
-                }
-            })),
-            {
-                let is_running = is_running.clone();
-                let click_count = click_count.clone();
-                move || {
-                    is_running.set(!is_running.get());
-                    click_count.set(click_count.get() + 1);
-                }
-            },
-            {
-                let label = if running { "Pause" } else { "Resume" };
-                move || {
-                    Text(label, Modifier::empty().padding(6.0));
-                }
-            },
-        );
-    });
+            // Recreate the pause button structure from the demo
+            Button(
+                Modifier::empty()
+                    .rounded_corners(16.0)
+                    .then(Modifier::empty().draw_behind({
+                        let color = button_color;
+                        move |scope| {
+                            scope.draw_round_rect(Brush::solid(color), CornerRadii::uniform(16.0));
+                        }
+                    })),
+                {
+                    let is_running = is_running.clone();
+                    let click_count = click_count.clone();
+                    move || {
+                        is_running.set(!is_running.get());
+                        click_count.set(click_count.get() + 1);
+                    }
+                },
+                {
+                    let label = if running { "Pause" } else { "Resume" };
+                    move || {
+                        Text(label, Modifier::empty().padding(6.0));
+                    }
+                },
+            );
+        },
+    );
 }
 
 #[test]

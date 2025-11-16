@@ -598,7 +598,8 @@ impl MeasurePolicy for LeafMeasurePolicy {
         constraints: Constraints,
     ) -> MeasureResult {
         // Use intrinsic size but constrain to provided constraints
-        let (width, height) = constraints.constrain(self.intrinsic_size.width, self.intrinsic_size.height);
+        let (width, height) =
+            constraints.constrain(self.intrinsic_size.width, self.intrinsic_size.height);
 
         MeasureResult::new(
             crate::modifier::Size { width, height },

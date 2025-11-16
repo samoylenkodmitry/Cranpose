@@ -99,68 +99,75 @@ pub fn combined_app() {
         *cell.borrow_mut() = Some(active_tab.clone());
     });
 
-    Column(Modifier::empty().padding(20.0), ColumnSpec::default(), move || {
-        let tab_state_for_row = active_tab.clone();
-        let tab_state_for_content = active_tab.clone();
-        Row(
-            Modifier::empty().fill_max_width().then(Modifier::empty().padding(8.0)),
-            RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
-            move || {
-                let tab_state = tab_state_for_row.clone();
-                let render_tab_button = move |tab: DemoTab| {
-                    let tab_state = tab_state.clone();
-                    let is_active = tab_state.get() == tab;
-                    Button(
-                        Modifier::empty().rounded_corners(12.0)
-                            .then(Modifier::empty().draw_behind(move |scope| {
-                                scope.draw_round_rect(
-                                    Brush::solid(if is_active {
-                                        Color(0.2, 0.45, 0.9, 1.0)
-                                    } else {
-                                        Color(0.3, 0.3, 0.3, 0.5)
-                                    }),
-                                    CornerRadii::uniform(12.0),
-                                );
-                            }))
-                            .then(Modifier::empty().padding(10.0)),
-                        {
-                            let tab_state = tab_state.clone();
-                            move || {
-                                if tab_state.get() != tab {
-                                    println!("{} button clicked", tab.label());
-                                    tab_state.set(tab);
+    Column(
+        Modifier::empty().padding(20.0),
+        ColumnSpec::default(),
+        move || {
+            let tab_state_for_row = active_tab.clone();
+            let tab_state_for_content = active_tab.clone();
+            Row(
+                Modifier::empty()
+                    .fill_max_width()
+                    .then(Modifier::empty().padding(8.0)),
+                RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
+                move || {
+                    let tab_state = tab_state_for_row.clone();
+                    let render_tab_button = move |tab: DemoTab| {
+                        let tab_state = tab_state.clone();
+                        let is_active = tab_state.get() == tab;
+                        Button(
+                            Modifier::empty()
+                                .rounded_corners(12.0)
+                                .then(Modifier::empty().draw_behind(move |scope| {
+                                    scope.draw_round_rect(
+                                        Brush::solid(if is_active {
+                                            Color(0.2, 0.45, 0.9, 1.0)
+                                        } else {
+                                            Color(0.3, 0.3, 0.3, 0.5)
+                                        }),
+                                        CornerRadii::uniform(12.0),
+                                    );
+                                }))
+                                .then(Modifier::empty().padding(10.0)),
+                            {
+                                let tab_state = tab_state.clone();
+                                move || {
+                                    if tab_state.get() != tab {
+                                        println!("{} button clicked", tab.label());
+                                        tab_state.set(tab);
+                                    }
                                 }
-                            }
-                        },
-                        {
-                            let label = tab.label();
-                            move || {
-                                Text(label, Modifier::empty().padding(4.0));
-                            }
-                        },
-                    );
-                };
+                            },
+                            {
+                                let label = tab.label();
+                                move || {
+                                    Text(label, Modifier::empty().padding(4.0));
+                                }
+                            },
+                        );
+                    };
 
-                render_tab_button(DemoTab::Counter);
-                render_tab_button(DemoTab::CompositionLocal);
-                render_tab_button(DemoTab::Async);
-                render_tab_button(DemoTab::Layout);
-            },
-        );
+                    render_tab_button(DemoTab::Counter);
+                    render_tab_button(DemoTab::CompositionLocal);
+                    render_tab_button(DemoTab::Async);
+                    render_tab_button(DemoTab::Layout);
+                },
+            );
 
-        Spacer(Size {
-            width: 0.0,
-            height: 12.0,
-        });
+            Spacer(Size {
+                width: 0.0,
+                height: 12.0,
+            });
 
-        let active = tab_state_for_content.get();
-        compose_core::with_key(&active, || match active {
-            DemoTab::Counter => counter_app(),
-            DemoTab::CompositionLocal => composition_local_example(),
-            DemoTab::Async => async_runtime_example(),
-            DemoTab::Layout => recursive_layout_example(),
-        });
-    });
+            let active = tab_state_for_content.get();
+            compose_core::with_key(&active, || match active {
+                DemoTab::Counter => counter_app(),
+                DemoTab::CompositionLocal => composition_local_example(),
+                DemoTab::Async => async_runtime_example(),
+                DemoTab::Layout => recursive_layout_example(),
+            });
+        },
+    );
 }
 
 #[composable]
@@ -168,7 +175,8 @@ fn recursive_layout_example() {
     let depth_state = compose_core::useState(|| 3usize);
 
     Column(
-        Modifier::empty().padding(32.0)
+        Modifier::empty()
+            .padding(32.0)
             .then(Modifier::empty().background(Color(0.08, 0.10, 0.18, 1.0)))
             .then(Modifier::empty().rounded_corners(24.0))
             .then(Modifier::empty().padding(20.0)),
@@ -176,7 +184,8 @@ fn recursive_layout_example() {
         move || {
             Text(
                 "Recursive Layout Playground",
-                Modifier::empty().padding(12.0)
+                Modifier::empty()
+                    .padding(12.0)
                     .then(Modifier::empty().background(Color(1.0, 1.0, 1.0, 0.08)))
                     .then(Modifier::empty().rounded_corners(16.0)),
             );
@@ -187,7 +196,9 @@ fn recursive_layout_example() {
             });
 
             Row(
-                Modifier::empty().fill_max_width().then(Modifier::empty().padding(8.0)),
+                Modifier::empty()
+                    .fill_max_width()
+                    .then(Modifier::empty().padding(8.0)),
                 RowSpec::new()
                     .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
                     .vertical_alignment(VerticalAlignment::CenterVertically),
@@ -196,7 +207,8 @@ fn recursive_layout_example() {
                     move || {
                         let depth = depth_state.get();
                         Button(
-                            Modifier::empty().rounded_corners(16.0)
+                            Modifier::empty()
+                                .rounded_corners(16.0)
                                 .then(Modifier::empty().draw_behind(|scope| {
                                     scope.draw_round_rect(
                                         Brush::solid(Color(0.35, 0.45, 0.85, 1.0)),
@@ -219,7 +231,8 @@ fn recursive_layout_example() {
                         );
 
                         Button(
-                            Modifier::empty().rounded_corners(16.0)
+                            Modifier::empty()
+                                .rounded_corners(16.0)
                                 .then(Modifier::empty().draw_behind(|scope| {
                                     scope.draw_round_rect(
                                         Brush::solid(Color(0.65, 0.35, 0.35, 1.0)),
@@ -243,7 +256,8 @@ fn recursive_layout_example() {
 
                         Text(
                             format!("Current depth: {}", depth.max(1)),
-                            Modifier::empty().padding(8.0)
+                            Modifier::empty()
+                                .padding(8.0)
                                 .then(Modifier::empty().background(Color(0.12, 0.16, 0.28, 0.8)))
                                 .then(Modifier::empty().rounded_corners(12.0)),
                         );
@@ -258,7 +272,8 @@ fn recursive_layout_example() {
 
             let depth = depth_state.get().max(1);
             Column(
-                Modifier::empty().fill_max_width()
+                Modifier::empty()
+                    .fill_max_width()
                     .then(Modifier::empty().padding(8.0))
                     .then(Modifier::empty().background(Color(0.06, 0.08, 0.16, 0.9)))
                     .then(Modifier::empty().rounded_corners(20.0))
@@ -283,7 +298,8 @@ fn recursive_layout_node(depth: usize, horizontal: bool, index: usize) {
     let accent = palette[index % palette.len()];
 
     Column(
-        Modifier::empty().rounded_corners(18.0)
+        Modifier::empty()
+            .rounded_corners(18.0)
             .then(Modifier::empty().draw_behind({
                 move |scope| {
                     scope.draw_round_rect(Brush::solid(accent), CornerRadii::uniform(18.0));
@@ -294,7 +310,8 @@ fn recursive_layout_node(depth: usize, horizontal: bool, index: usize) {
         move || {
             Text(
                 format!("Depth {}", depth),
-                Modifier::empty().padding(6.0)
+                Modifier::empty()
+                    .padding(6.0)
                     .then(Modifier::empty().background(Color(0.0, 0.0, 0.0, 0.25)))
                     .then(Modifier::empty().rounded_corners(10.0)),
             );
@@ -302,7 +319,8 @@ fn recursive_layout_node(depth: usize, horizontal: bool, index: usize) {
             if depth <= 1 {
                 Text(
                     format!("Leaf node #{index}"),
-                    Modifier::empty().padding(6.0)
+                    Modifier::empty()
+                        .padding(6.0)
                         .then(Modifier::empty().background(Color(1.0, 1.0, 1.0, 0.12)))
                         .then(Modifier::empty().rounded_corners(10.0)),
                 );
@@ -340,7 +358,8 @@ pub fn composition_local_example() {
     });
 
     Column(
-        Modifier::empty().padding(32.0)
+        Modifier::empty()
+            .padding(32.0)
             .then(Modifier::empty().background(Color(0.12, 0.10, 0.24, 1.0)))
             .then(Modifier::empty().rounded_corners(24.0))
             .then(Modifier::empty().padding(20.0)),
@@ -348,7 +367,8 @@ pub fn composition_local_example() {
         move || {
             Text(
                 "CompositionLocal Subscription Test",
-                Modifier::empty().padding(12.0)
+                Modifier::empty()
+                    .padding(12.0)
                     .then(Modifier::empty().background(Color(1.0, 1.0, 1.0, 0.1)))
                     .then(Modifier::empty().rounded_corners(16.0)),
             );
@@ -360,7 +380,8 @@ pub fn composition_local_example() {
 
             Text(
                 format!("Counter: {}", counter.get()),
-                Modifier::empty().padding(8.0)
+                Modifier::empty()
+                    .padding(8.0)
                     .then(Modifier::empty().background(Color(0.2, 0.3, 0.4, 0.7)))
                     .then(Modifier::empty().rounded_corners(12.0)),
             );
@@ -371,7 +392,8 @@ pub fn composition_local_example() {
             });
 
             Button(
-                Modifier::empty().rounded_corners(16.0)
+                Modifier::empty()
+                    .rounded_corners(16.0)
                     .then(Modifier::empty().draw_behind(|scope| {
                         scope.draw_round_rect(
                             Brush::solid(Color(0.2, 0.45, 0.9, 1.0)),
@@ -411,7 +433,8 @@ pub fn composition_local_example() {
 fn composition_local_content() {
     Text(
         format!("Outside provider (NOT reading): rand={}", random()),
-        Modifier::empty().padding(8.0)
+        Modifier::empty()
+            .padding(8.0)
             .then(Modifier::empty().background(Color(0.3, 0.3, 0.3, 0.5)))
             .then(Modifier::empty().rounded_corners(12.0)),
     );
@@ -430,7 +453,8 @@ fn composition_local_content() {
 
     Text(
         format!("NOT reading local: rand={}", random()),
-        Modifier::empty().padding(8.0)
+        Modifier::empty()
+            .padding(8.0)
             .then(Modifier::empty().background(Color(0.9, 0.6, 0.4, 0.5)))
             .then(Modifier::empty().rounded_corners(12.0)),
     );
@@ -442,7 +466,8 @@ fn composition_local_content_inner() {
     let holder = local.current();
     Text(
         format!("READING local: count={}, rand={}", holder.count, random()),
-        Modifier::empty().padding(8.0)
+        Modifier::empty()
+            .padding(8.0)
             .then(Modifier::empty().background(Color(0.6, 0.9, 0.4, 0.7)))
             .then(Modifier::empty().rounded_corners(12.0)),
     );
@@ -527,7 +552,8 @@ fn async_runtime_example() {
     }
 
     Column(
-        Modifier::empty().padding(32.0)
+        Modifier::empty()
+            .padding(32.0)
             .then(Modifier::empty().background(Color(0.10, 0.14, 0.28, 1.0)))
             .then(Modifier::empty().rounded_corners(24.0))
             .then(Modifier::empty().padding(20.0)),
@@ -537,7 +563,8 @@ fn async_runtime_example() {
             move || {
                 Text(
                     "Async Runtime Demo",
-                    Modifier::empty().padding(12.0)
+                    Modifier::empty()
+                        .padding(12.0)
                         .then(Modifier::empty().background(Color(1.0, 1.0, 1.0, 0.08)))
                         .then(Modifier::empty().rounded_corners(16.0)),
                 );
@@ -552,7 +579,8 @@ fn async_runtime_example() {
                 let progress_value = animation_snapshot.progress.clamp(0.0, 1.0);
                 let fill_width = 320.0 * progress_value;
                 Column(
-                    Modifier::empty().fill_max_width()
+                    Modifier::empty()
+                        .fill_max_width()
                         .then(Modifier::empty().padding(8.0))
                         .then(Modifier::empty().background(Color(0.06, 0.10, 0.22, 0.8)))
                         .then(Modifier::empty().rounded_corners(18.0))
@@ -571,7 +599,8 @@ fn async_runtime_example() {
                             });
 
                             Row(
-                                Modifier::empty().fill_max_width()
+                                Modifier::empty()
+                                    .fill_max_width()
                                     .then(Modifier::empty().height(26.0))
                                     .then(Modifier::empty().rounded_corners(13.0))
                                     .then(Modifier::empty().draw_behind(|scope| {
@@ -590,18 +619,27 @@ fn async_runtime_example() {
                                         compose_core::with_key(&(progress_width > 0.0), || {
                                             if progress_width > 0.0 {
                                                 Row(
-                                                    Modifier::empty().width(progress_width.min(360.0))
+                                                    Modifier::empty()
+                                                        .width(progress_width.min(360.0))
                                                         .then(Modifier::empty().height(26.0))
-                                                        .then(Modifier::empty().rounded_corners(13.0))
-                                                        .then(Modifier::empty().draw_behind(|scope| {
-                                                            scope.draw_round_rect(
-                                                                Brush::linear_gradient(vec![
-                                                                    Color(0.25, 0.55, 0.95, 1.0),
-                                                                    Color(0.15, 0.35, 0.80, 1.0),
-                                                                ]),
-                                                                CornerRadii::uniform(13.0),
-                                                            );
-                                                        })),
+                                                        .then(
+                                                            Modifier::empty().rounded_corners(13.0),
+                                                        )
+                                                        .then(Modifier::empty().draw_behind(
+                                                            |scope| {
+                                                                scope.draw_round_rect(
+                                                                    Brush::linear_gradient(vec![
+                                                                        Color(
+                                                                            0.25, 0.55, 0.95, 1.0,
+                                                                        ),
+                                                                        Color(
+                                                                            0.15, 0.35, 0.80, 1.0,
+                                                                        ),
+                                                                    ]),
+                                                                    CornerRadii::uniform(13.0),
+                                                                );
+                                                            },
+                                                        )),
                                                     RowSpec::default(),
                                                     || {},
                                                 );
@@ -630,7 +668,8 @@ fn async_runtime_example() {
                             "reverse"
                         }
                     ),
-                    Modifier::empty().padding(8.0)
+                    Modifier::empty()
+                        .padding(8.0)
                         .then(Modifier::empty().background(Color(0.18, 0.22, 0.36, 0.6)))
                         .then(Modifier::empty().rounded_corners(14.0)),
                 );
@@ -641,7 +680,9 @@ fn async_runtime_example() {
                 });
 
                 Row(
-                    Modifier::empty().fill_max_width().then(Modifier::empty().padding(4.0)),
+                    Modifier::empty()
+                        .fill_max_width()
+                        .then(Modifier::empty().padding(4.0)),
                     RowSpec::new()
                         .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
                         .vertical_alignment(VerticalAlignment::CenterVertically),
@@ -658,7 +699,8 @@ fn async_runtime_example() {
                                 Color(0.2, 0.45, 0.9, 1.0)
                             };
                             Button(
-                                Modifier::empty().rounded_corners(16.0)
+                                Modifier::empty()
+                                    .rounded_corners(16.0)
                                     .then(Modifier::empty().draw_behind({
                                         let color = button_color;
                                         move |scope| {
@@ -690,7 +732,8 @@ fn async_runtime_example() {
                             let reset_tick_state = reset_state.clone();
                             let toggle_state = toggle_state.clone();
                             Button(
-                                Modifier::empty().rounded_corners(16.0)
+                                Modifier::empty()
+                                    .rounded_corners(16.0)
                                     .then(Modifier::empty().draw_behind(|scope| {
                                         scope.draw_round_rect(
                                             Brush::solid(Color(0.16, 0.36, 0.82, 1.0)),
@@ -780,10 +823,13 @@ fn counter_app() {
                 println!("Rendering even branch");
                 Text(
                     "if counter % 2 == 0",
-                    Modifier::empty().padding(12.0)
-                        .then(Modifier::empty().rounded_corner_shape(RoundedCornerShape::new(
-                            16.0, 24.0, 16.0, 24.0,
-                        )))
+                    Modifier::empty()
+                        .padding(12.0)
+                        .then(
+                            Modifier::empty().rounded_corner_shape(RoundedCornerShape::new(
+                                16.0, 24.0, 16.0, 24.0,
+                            )),
+                        )
                         .then(Modifier::empty().draw_with_content(|scope| {
                             scope.draw_round_rect(
                                 Brush::solid(Color(1.0, 1.0, 1.0, 0.1)),
@@ -795,10 +841,13 @@ fn counter_app() {
                 println!("Rendering odd branch");
                 Text(
                     "if counter % 2 != 0",
-                    Modifier::empty().padding(12.0)
-                        .then(Modifier::empty().rounded_corner_shape(RoundedCornerShape::new(
-                            16.0, 24.0, 16.0, 24.0,
-                        )))
+                    Modifier::empty()
+                        .padding(12.0)
+                        .then(
+                            Modifier::empty().rounded_corner_shape(RoundedCornerShape::new(
+                                16.0, 24.0, 16.0, 24.0,
+                            )),
+                        )
                         .then(Modifier::empty().draw_with_content(|scope| {
                             scope.draw_round_rect(
                                 Brush::solid(Color(1.0, 1.0, 1.0, 0.5)),
@@ -812,7 +861,8 @@ fn counter_app() {
 
     compose_ui::Box(Modifier::empty(), BoxSpec::default(), move || {
         Column(
-            Modifier::empty().padding(32.0)
+            Modifier::empty()
+                .padding(32.0)
                 .then(Modifier::empty().rounded_corners(24.0))
                 .then(Modifier::empty().draw_behind({
                     let phase = wave_state.value();
@@ -842,10 +892,13 @@ fn counter_app() {
                     let wave = wave_main.clone();
                     Text(
                         "Compose-RS Playground",
-                        Modifier::empty().padding(12.0)
-                            .then(Modifier::empty().rounded_corner_shape(RoundedCornerShape::new(
-                                16.0, 24.0, 16.0, 24.0,
-                            )))
+                        Modifier::empty()
+                            .padding(12.0)
+                            .then(
+                                Modifier::empty().rounded_corner_shape(RoundedCornerShape::new(
+                                    16.0, 24.0, 16.0, 24.0,
+                                )),
+                            )
                             .then(Modifier::empty().draw_with_content(|scope| {
                                 scope.draw_round_rect(
                                     Brush::solid(Color(1.0, 1.0, 1.0, 0.1)),
@@ -860,7 +913,9 @@ fn counter_app() {
                     });
 
                     Row(
-                        Modifier::empty().fill_max_width().then(Modifier::empty().padding(8.0)),
+                        Modifier::empty()
+                            .fill_max_width()
+                            .then(Modifier::empty().padding(8.0)),
                         RowSpec::new()
                             .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
                             .vertical_alignment(VerticalAlignment::CenterVertically),
@@ -871,14 +926,22 @@ fn counter_app() {
                                 let wave_value = wave_value.value();
                                 Text(
                                     format!("Counter: {}", counter_display.get()),
-                                    Modifier::empty().padding(8.0)
-                                        .then(Modifier::empty().background(Color(0.0, 0.0, 0.0, 0.35)))
+                                    Modifier::empty()
+                                        .padding(8.0)
+                                        .then(
+                                            Modifier::empty()
+                                                .background(Color(0.0, 0.0, 0.0, 0.35)),
+                                        )
                                         .then(Modifier::empty().rounded_corners(12.0)),
                                 );
                                 Text(
                                     format!("Wave {:.2}", wave_value),
-                                    Modifier::empty().padding(8.0)
-                                        .then(Modifier::empty().background(Color(0.35, 0.55, 0.9, 0.5)))
+                                    Modifier::empty()
+                                        .padding(8.0)
+                                        .then(
+                                            Modifier::empty()
+                                                .background(Color(0.35, 0.55, 0.9, 0.5)),
+                                        )
                                         .then(Modifier::empty().rounded_corners(12.0))
                                         .then(Modifier::empty().graphics_layer(GraphicsLayer {
                                             alpha: 0.7 + wave_value * 0.3,
@@ -899,7 +962,8 @@ fn counter_app() {
                     let async_message_state = async_message.clone();
                     let fetch_request_state = fetch_request.clone();
                     Column(
-                        Modifier::empty().rounded_corners(20.0)
+                        Modifier::empty()
+                            .rounded_corners(20.0)
                             .then(Modifier::empty().draw_with_cache(|cache| {
                                 cache.on_draw_behind(|scope| {
                                     scope.draw_round_rect(
@@ -972,7 +1036,8 @@ fn counter_app() {
                             let fetch_request_state = fetch_request_state.clone();
                             Text(
                                 format!("Pointer: ({:.1}, {:.1})", pointer.x, pointer.y),
-                                Modifier::empty().padding(8.0)
+                                Modifier::empty()
+                                    .padding(8.0)
                                     .then(Modifier::empty().background(Color(0.1, 0.1, 0.15, 0.6)))
                                     .then(Modifier::empty().rounded_corners(12.0))
                                     .then(Modifier::empty().padding(8.0)),
@@ -984,7 +1049,8 @@ fn counter_app() {
                             });
 
                             Row(
-                                Modifier::empty().padding(8.0)
+                                Modifier::empty()
+                                    .padding(8.0)
                                     .then(Modifier::empty().rounded_corners(12.0))
                                     .then(Modifier::empty().background(Color(0.1, 0.1, 0.15, 0.6)))
                                     .then(Modifier::empty().padding(8.0)),
@@ -993,7 +1059,8 @@ fn counter_app() {
                                     .vertical_alignment(VerticalAlignment::CenterVertically),
                                 || {
                                     Button(
-                                        Modifier::empty().width_intrinsic(IntrinsicSize::Max)
+                                        Modifier::empty()
+                                            .width_intrinsic(IntrinsicSize::Max)
                                             .then(Modifier::empty().rounded_corners(12.0))
                                             .then(Modifier::empty().draw_behind(|scope| {
                                                 scope.draw_round_rect(
@@ -1006,15 +1073,18 @@ fn counter_app() {
                                         || {
                                             Text(
                                                 "OK",
-                                                Modifier::empty().padding(4.0).then(Modifier::empty().size(Size {
-                                                    width: 50.0,
-                                                    height: 50.0,
-                                                })),
+                                                Modifier::empty().padding(4.0).then(
+                                                    Modifier::empty().size(Size {
+                                                        width: 50.0,
+                                                        height: 50.0,
+                                                    }),
+                                                ),
                                             );
                                         },
                                     );
                                     Button(
-                                        Modifier::empty().width_intrinsic(IntrinsicSize::Max)
+                                        Modifier::empty()
+                                            .width_intrinsic(IntrinsicSize::Max)
                                             .then(Modifier::empty().rounded_corners(12.0))
                                             .then(Modifier::empty().draw_behind(|scope| {
                                                 scope.draw_round_rect(
@@ -1029,7 +1099,8 @@ fn counter_app() {
                                         },
                                     );
                                     Button(
-                                        Modifier::empty().width_intrinsic(IntrinsicSize::Max)
+                                        Modifier::empty()
+                                            .width_intrinsic(IntrinsicSize::Max)
                                             .then(Modifier::empty().rounded_corners(12.0))
                                             .then(Modifier::empty().draw_behind(|scope| {
                                                 scope.draw_round_rect(
@@ -1040,7 +1111,10 @@ fn counter_app() {
                                             .then(Modifier::empty().padding(10.0)),
                                         || {},
                                         || {
-                                            Text("Long Button Text", Modifier::empty().padding(4.0));
+                                            Text(
+                                                "Long Button Text",
+                                                Modifier::empty().padding(4.0),
+                                            );
                                         },
                                     );
                                 },
@@ -1054,12 +1128,15 @@ fn counter_app() {
                             let counter_inc = counter.clone();
                             let counter_dec = counter.clone();
                             Row(
-                                Modifier::empty().fill_max_width().then(Modifier::empty().padding(8.0)),
+                                Modifier::empty()
+                                    .fill_max_width()
+                                    .then(Modifier::empty().padding(8.0)),
                                 RowSpec::new()
                                     .horizontal_arrangement(LinearArrangement::SpacedBy(12.0)),
                                 move || {
                                     Button(
-                                        Modifier::empty().rounded_corners(16.0)
+                                        Modifier::empty()
+                                            .rounded_corners(16.0)
                                             .then(Modifier::empty().draw_with_cache(|cache| {
                                                 cache.on_draw_behind(|scope| {
                                                     scope.draw_round_rect(
@@ -1087,7 +1164,8 @@ fn counter_app() {
                                         },
                                     );
                                     Button(
-                                        Modifier::empty().rounded_corners(16.0)
+                                        Modifier::empty()
+                                            .rounded_corners(16.0)
                                             .then(Modifier::empty().draw_behind(|scope| {
                                                 scope.draw_round_rect(
                                                     Brush::solid(Color(0.4, 0.18, 0.3, 1.0)),
@@ -1114,7 +1192,8 @@ fn counter_app() {
                             let async_message_text = async_message_state.clone();
                             Text(
                                 async_message_text.get(),
-                                Modifier::empty().padding(10.0)
+                                Modifier::empty()
+                                    .padding(10.0)
                                     .then(Modifier::empty().background(Color(0.1, 0.18, 0.32, 0.6)))
                                     .then(Modifier::empty().rounded_corners(14.0)),
                             );
@@ -1127,7 +1206,8 @@ fn counter_app() {
                             let async_message_button = async_message_state.clone();
                             let fetch_request_button = fetch_request_state.clone();
                             Button(
-                                Modifier::empty().rounded_corners(16.0)
+                                Modifier::empty()
+                                    .rounded_corners(16.0)
                                     .then(Modifier::empty().draw_with_cache(|cache| {
                                         cache.on_draw_behind(|scope| {
                                             scope.draw_round_rect(

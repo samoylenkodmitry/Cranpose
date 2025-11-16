@@ -680,10 +680,14 @@ impl LayoutModifierNode for SizeNode {
         let measured_width = placeable.width();
         let measured_height = placeable.height();
 
-        // Return the target size when both min==max (fixed size), otherwise return measured size
+        // Return the target size when both min==max (fixed size), but only if it satisfies
+        // the wrapped constraints we passed down. Otherwise return measured size.
+        // This handles the case where enforce_incoming=true and incoming constraints are tighter.
         let result_width = if self.min_width.is_some()
             && self.max_width.is_some()
             && self.min_width == self.max_width
+            && target.min_width >= wrapped_constraints.min_width
+            && target.min_width <= wrapped_constraints.max_width
         {
             target.min_width
         } else {
@@ -693,6 +697,8 @@ impl LayoutModifierNode for SizeNode {
         let result_height = if self.min_height.is_some()
             && self.max_height.is_some()
             && self.min_height == self.max_height
+            && target.min_height >= wrapped_constraints.min_height
+            && target.min_height <= wrapped_constraints.max_height
         {
             target.min_height
         } else {
@@ -937,7 +943,10 @@ impl PointerInputNode for ClickableNode {
         let handler = self.on_click.clone();
         Some(Rc::new(move |event: PointerEvent| {
             if matches!(event.kind, PointerEventKind::Down) {
-                println!("ClickableNode handler received click at: {:?}", event.position);
+                println!(
+                    "ClickableNode handler received click at: {:?}",
+                    event.position
+                );
                 handler(Point {
                     x: event.position.x,
                     y: event.position.y,

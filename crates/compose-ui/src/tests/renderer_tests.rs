@@ -66,7 +66,8 @@ fn renderer_honors_resolved_background_shape() {
         .render(key, || {
             Text(
                 "Rounded".to_string(),
-                Modifier::empty().background(Color(0.5, 0.2, 0.2, 1.0))
+                Modifier::empty()
+                    .background(Color(0.5, 0.2, 0.2, 1.0))
                     .then(Modifier::empty().rounded_corners(12.0)),
             );
         })
@@ -96,7 +97,8 @@ fn renderer_translates_draw_commands() {
     composition
         .render(key, || {
             Column(
-                Modifier::empty().padding(10.0)
+                Modifier::empty()
+                    .padding(10.0)
                     .then(Modifier::empty().background(Color(0.3, 0.3, 0.9, 1.0)))
                     .then(Modifier::empty().draw_behind(|scope| {
                         scope.draw_rect(Brush::solid(Color(0.8, 0.0, 0.0, 1.0)));
@@ -105,12 +107,13 @@ fn renderer_translates_draw_commands() {
                 || {
                     Text(
                         "Content".to_string(),
-                        Modifier::empty().draw_behind(|scope| {
-                            scope.draw_rect(Brush::solid(Color(0.2, 0.2, 0.2, 1.0)));
-                        })
-                        .then(Modifier::empty().draw_with_content(|scope| {
-                            scope.draw_rect(Brush::solid(Color(0.0, 0.0, 0.0, 1.0)));
-                        })),
+                        Modifier::empty()
+                            .draw_behind(|scope| {
+                                scope.draw_rect(Brush::solid(Color(0.2, 0.2, 0.2, 1.0)));
+                            })
+                            .then(Modifier::empty().draw_with_content(|scope| {
+                                scope.draw_rect(Brush::solid(Color(0.0, 0.0, 0.0, 1.0)));
+                            })),
                     );
                 },
             );

@@ -80,8 +80,7 @@ impl ModifierChainHandle {
         resolver: &mut ModifierLocalAncestorResolver<'_>,
     ) -> Vec<ModifierInvalidation> {
         let elements = modifier.elements();
-        self.chain
-            .update_from_slice(&elements, &mut self.context);
+        self.chain.update_from_slice(&elements, &mut self.context);
         self.capabilities = self.chain.capabilities();
         self.aggregate_child_capabilities = self.chain.head().aggregate_child_capabilities();
         let modifier_local_invalidations = self
@@ -374,7 +373,9 @@ mod tests {
     fn resolved_modifiers_capture_background_and_shape() {
         let mut handle = ModifierChainHandle::new();
         let _ = handle.update(
-            &Modifier::empty().background(Color(0.2, 0.3, 0.4, 1.0)).then(Modifier::empty().rounded_corners(8.0)),
+            &Modifier::empty()
+                .background(Color(0.2, 0.3, 0.4, 1.0))
+                .then(Modifier::empty().rounded_corners(8.0)),
         );
         let resolved = handle.resolved_modifiers();
         let background = resolved
@@ -387,7 +388,9 @@ mod tests {
         );
 
         let _ = handle.update(
-            &Modifier::empty().rounded_corners(4.0).then(Modifier::empty().background(Color(0.9, 0.1, 0.1, 1.0))),
+            &Modifier::empty()
+                .rounded_corners(4.0)
+                .then(Modifier::empty().background(Color(0.9, 0.1, 0.1, 1.0))),
         );
         let resolved = handle.resolved_modifiers();
         let background = resolved

@@ -1,5 +1,5 @@
 use compose_core::{self};
-use compose_ui::{composable, Text, Modifier, Column, ColumnSpec};
+use compose_ui::{composable, Column, ColumnSpec, Modifier, Text};
 
 #[composable]
 fn conditional_text_with_external_state(counter_state: compose_core::MutableState<i32>) {
@@ -14,14 +14,17 @@ fn conditional_text_with_external_state(counter_state: compose_core::MutableStat
     });
 
     Column(Modifier::empty(), ColumnSpec::default(), move || {
-        Text(format!("Counter: {}", counter_state.get()), Modifier::empty());
+        Text(
+            format!("Counter: {}", counter_state.get()),
+            Modifier::empty(),
+        );
     });
 }
 
 #[test]
 fn test_conditional_text_reactivity() {
-    use compose_ui::run_test_composition;
     use compose_core::{MutableState, NodeError};
+    use compose_ui::run_test_composition;
     use std::cell::RefCell;
 
     thread_local! {
@@ -53,9 +56,7 @@ fn test_conditional_text_reactivity() {
     println!("Initial node count: {}", initial_node_count);
 
     // Get the counter state and increment it
-    let counter = TEST_COUNTER.with(|cell| {
-        cell.borrow().clone().expect("counter state not set")
-    });
+    let counter = TEST_COUNTER.with(|cell| cell.borrow().clone().expect("counter state not set"));
 
     // Increment the counter to 1 (odd)
     counter.set(1);
@@ -67,8 +68,10 @@ fn test_conditional_text_reactivity() {
     println!("After increment to 1, node count: {}", after_1_node_count);
 
     // The node count should stay the same - we're replacing one Text node with another
-    assert_eq!(initial_node_count, after_1_node_count,
-        "Node count should remain the same when counter changes from 0 to 1");
+    assert_eq!(
+        initial_node_count, after_1_node_count,
+        "Node count should remain the same when counter changes from 0 to 1"
+    );
 
     // Increment again to 2 (even)
     counter.set(2);
@@ -79,6 +82,8 @@ fn test_conditional_text_reactivity() {
     let after_2_node_count = tree.lines().count();
     println!("After increment to 2, node count: {}", after_2_node_count);
 
-    assert_eq!(initial_node_count, after_2_node_count,
-        "Node count should remain the same when counter changes from 1 to 2");
+    assert_eq!(
+        initial_node_count, after_2_node_count,
+        "Node count should remain the same when counter changes from 1 to 2"
+    );
 }

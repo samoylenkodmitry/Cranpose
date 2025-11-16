@@ -22,7 +22,10 @@ fn render_layout_node(
     parent_visual_clip: Option<Rect>,
     parent_hit_clip: Option<Rect>,
 ) {
-    eprintln!("DEBUG render_layout_node called for node_id={}", layout.node_id);
+    eprintln!(
+        "DEBUG render_layout_node called for node_id={}",
+        layout.node_id
+    );
     match &layout.node_data.kind {
         LayoutNodeKind::Text { value } => {
             render_text(

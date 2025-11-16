@@ -202,7 +202,8 @@ fn progress_demo(animation: MutableState<AnimationState>, stats: MutableState<Fr
             let fill_width = 320.0 * progress_value;
 
             Row(
-                Modifier::empty().fill_max_width()
+                Modifier::empty()
+                    .fill_max_width()
                     .then(Modifier::empty().height(26.0))
                     .then(Modifier::empty().rounded_corners(13.0))
                     .then(Modifier::empty().draw_behind(|scope| {
@@ -217,7 +218,8 @@ fn progress_demo(animation: MutableState<AnimationState>, stats: MutableState<Fr
                     move || {
                         if progress_width > 0.0 {
                             Row(
-                                Modifier::empty().width(progress_width.min(360.0))
+                                Modifier::empty()
+                                    .width(progress_width.min(360.0))
                                     .then(Modifier::empty().height(26.0))
                                     .then(Modifier::empty().rounded_corners(13.0))
                                     .then(Modifier::empty().draw_behind(|scope| {

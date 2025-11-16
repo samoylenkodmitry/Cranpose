@@ -28,13 +28,15 @@ impl Modifier {
             PointerInputElement::new(vec![KeyToken::new(&key)], pointer_input_handler(handler));
         let key_count = element.key_count();
         let handler_id = element.handler_id();
-        self.then(Self::with_element(element).with_inspector_metadata(inspector_metadata(
-            "pointerInput",
-            move |info| {
-                info.add_property("keyCount", key_count.to_string());
-                info.add_property("handlerId", handler_id.to_string());
-            },
-        )))
+        self.then(
+            Self::with_element(element).with_inspector_metadata(inspector_metadata(
+                "pointerInput",
+                move |info| {
+                    info.add_property("keyCount", key_count.to_string());
+                    info.add_property("handlerId", handler_id.to_string());
+                },
+            )),
+        )
     }
 }
 

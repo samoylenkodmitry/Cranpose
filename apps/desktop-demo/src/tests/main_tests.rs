@@ -74,7 +74,8 @@ fn async_runtime_test_content(
     }
 
     Column(
-        Modifier::empty().padding(32.0)
+        Modifier::empty()
+            .padding(32.0)
             .then(Modifier::empty().background(Color(0.10, 0.14, 0.28, 1.0)))
             .then(Modifier::empty().rounded_corners(24.0))
             .then(Modifier::empty().padding(20.0)),
@@ -87,7 +88,8 @@ fn async_runtime_test_content(
                 let fill_width = 320.0 * progress_value;
 
                 Column(
-                    Modifier::empty().fill_max_width()
+                    Modifier::empty()
+                        .fill_max_width()
                         .then(Modifier::empty().padding(8.0))
                         .then(Modifier::empty().background(Color(0.06, 0.10, 0.22, 0.8)))
                         .then(Modifier::empty().rounded_corners(18.0))
@@ -96,7 +98,8 @@ fn async_runtime_test_content(
                     {
                         move || {
                             Row(
-                                Modifier::empty().fill_max_width()
+                                Modifier::empty()
+                                    .fill_max_width()
                                     .then(Modifier::empty().height(26.0))
                                     .then(Modifier::empty().rounded_corners(13.0))
                                     .then(Modifier::empty().draw_behind(|scope| {
@@ -111,7 +114,8 @@ fn async_runtime_test_content(
                                     move || {
                                         if progress_width > 0.0 {
                                             Row(
-                                                Modifier::empty().width(progress_width.min(360.0))
+                                                Modifier::empty()
+                                                    .width(progress_width.min(360.0))
                                                     .then(Modifier::empty().height(26.0))
                                                     .then(Modifier::empty().rounded_corners(13.0))
                                                     .then(Modifier::empty().draw_behind(|scope| {
@@ -145,7 +149,8 @@ fn async_runtime_test_content(
                             "reverse"
                         }
                     ),
-                    Modifier::empty().padding(8.0)
+                    Modifier::empty()
+                        .padding(8.0)
                         .then(Modifier::empty().background(Color(0.18, 0.22, 0.36, 0.6)))
                         .then(Modifier::empty().rounded_corners(14.0)),
                 );

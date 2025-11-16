@@ -18,7 +18,8 @@ fn intrinsic_size_modifiers_accept_values() {
 #[test]
 fn intrinsic_size_can_be_combined_with_other_modifiers() {
     // Test that intrinsic size modifiers can be combined
-    let _combined = Modifier::empty().width_intrinsic(IntrinsicSize::Max)
+    let _combined = Modifier::empty()
+        .width_intrinsic(IntrinsicSize::Max)
         .then(Modifier::empty().padding(8.0))
         .then(Modifier::empty().background(Color(1.0, 0.0, 0.0, 1.0)));
 }
@@ -64,7 +65,8 @@ fn column_with_intrinsic_width() {
     // Test Column with intrinsic width - should size to fit widest child
     let mut composition = run_test_composition(|| {
         Column(
-            Modifier::empty().width_intrinsic(IntrinsicSize::Max)
+            Modifier::empty()
+                .width_intrinsic(IntrinsicSize::Max)
                 .then(Modifier::empty().background(Color(0.8, 0.8, 0.8, 1.0))),
             ColumnSpec::default(),
             || {
@@ -83,7 +85,8 @@ fn row_with_intrinsic_height() {
     // Test Row with intrinsic height - should size to fit tallest child
     let mut composition = run_test_composition(|| {
         Row(
-            Modifier::empty().height_intrinsic(IntrinsicSize::Max)
+            Modifier::empty()
+                .height_intrinsic(IntrinsicSize::Max)
                 .then(Modifier::empty().background(Color(0.8, 0.8, 0.8, 1.0))),
             RowSpec::default(),
             || {
@@ -150,7 +153,8 @@ fn intrinsic_size_with_padding() {
     // Test that padding is correctly applied when using intrinsic sizing
     let mut composition = run_test_composition(|| {
         Column(
-            Modifier::empty().width_intrinsic(IntrinsicSize::Max)
+            Modifier::empty()
+                .width_intrinsic(IntrinsicSize::Max)
                 .then(Modifier::empty().padding(16.0))
                 .then(Modifier::empty().background(Color(0.9, 0.9, 0.9, 1.0))),
             ColumnSpec::default(),
