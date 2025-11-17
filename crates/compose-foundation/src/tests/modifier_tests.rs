@@ -600,7 +600,15 @@ impl DelegatableNode for TestLayoutNode {
     }
 }
 
-impl ModifierNode for TestLayoutNode {}
+impl ModifierNode for TestLayoutNode {
+    fn as_layout_node(&self) -> Option<&dyn LayoutModifierNode> {
+        Some(self)
+    }
+
+    fn as_layout_node_mut(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+        Some(self)
+    }
+}
 
 impl LayoutModifierNode for TestLayoutNode {
     fn measure(

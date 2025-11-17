@@ -92,6 +92,14 @@ impl ModifierNode for TextModifierNode {
     fn as_semantics_node_mut(&mut self) -> Option<&mut dyn SemanticsNode> {
         Some(self)
     }
+
+    fn as_layout_node(&self) -> Option<&dyn LayoutModifierNode> {
+        Some(self)
+    }
+
+    fn as_layout_node_mut(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+        Some(self)
+    }
 }
 
 impl LayoutModifierNode for TextModifierNode {
