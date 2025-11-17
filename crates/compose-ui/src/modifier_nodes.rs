@@ -150,6 +150,14 @@ impl ModifierNode for PaddingNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
         context.invalidate(compose_foundation::InvalidationKind::Layout);
     }
+
+    fn as_layout_node(&self) -> Option<&dyn LayoutModifierNode> {
+        Some(self)
+    }
+
+    fn as_layout_node_mut(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+        Some(self)
+    }
 }
 
 impl LayoutModifierNode for PaddingNode {
@@ -613,6 +621,14 @@ impl DelegatableNode for SizeNode {
 impl ModifierNode for SizeNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
         context.invalidate(compose_foundation::InvalidationKind::Layout);
+    }
+
+    fn as_layout_node(&self) -> Option<&dyn LayoutModifierNode> {
+        Some(self)
+    }
+
+    fn as_layout_node_mut(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+        Some(self)
     }
 }
 
@@ -1455,6 +1471,14 @@ impl ModifierNode for OffsetNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
         context.invalidate(compose_foundation::InvalidationKind::Layout);
     }
+
+    fn as_layout_node(&self) -> Option<&dyn LayoutModifierNode> {
+        Some(self)
+    }
+
+    fn as_layout_node_mut(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+        Some(self)
+    }
 }
 
 impl LayoutModifierNode for OffsetNode {
@@ -1582,6 +1606,14 @@ impl DelegatableNode for FillNode {
 impl ModifierNode for FillNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
         context.invalidate(compose_foundation::InvalidationKind::Layout);
+    }
+
+    fn as_layout_node(&self) -> Option<&dyn LayoutModifierNode> {
+        Some(self)
+    }
+
+    fn as_layout_node_mut(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+        Some(self)
     }
 }
 

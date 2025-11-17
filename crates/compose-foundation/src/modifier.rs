@@ -371,6 +371,16 @@ pub trait ModifierNode: Any + DelegatableNode {
         None
     }
 
+    /// Returns this node as a layout modifier if it implements the trait.
+    fn as_layout_node(&self) -> Option<&dyn LayoutModifierNode> {
+        None
+    }
+
+    /// Returns this node as a mutable layout modifier if it implements the trait.
+    fn as_layout_node_mut(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+        None
+    }
+
     /// Visits every delegate node owned by this modifier.
     fn for_each_delegate<'b>(&'b self, _visitor: &mut dyn FnMut(&'b dyn ModifierNode)) {}
 
