@@ -11,8 +11,8 @@ use std::cell::{RefCell, Cell};
 use std::rc::Rc;
 
 use crate::modifier::{Size, Point};
-use crate::modifier::ModifierChainHandle;
 use crate::layout::{MeasurePolicy, MeasureResult, LayoutNodeContext};
+use crate::widgets::nodes::LayoutNode;
 
 /// Identifies what type of coordinator this is for debugging and downcast purposes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,17 +44,40 @@ pub trait NodeCoordinator: Measurable {
     fn place(&mut self, x: f32, y: f32);
 }
 
+/// Configuration extracted from a modifier node to allow measurement without holding applier borrow.
+enum NodeConfig {
+    Padding(crate::modifier::EdgeInsets),
+    Size {
+        min_width: Option<f32>,
+        max_width: Option<f32>,
+        min_height: Option<f32>,
+        max_height: Option<f32>,
+        enforce_incoming: bool,
+    },
+    Fill {
+        direction: crate::modifier_nodes::FillDirection,
+        fraction: f32,
+    },
+    Offset {
+        offset: crate::modifier::Point,
+        rtl_aware: bool,
+    },
+    Text(String),
+}
+
 /// Coordinator that wraps a single LayoutModifierNode from the reconciled chain.
 ///
 /// This is analogous to Jetpack Compose's LayoutModifierNodeCoordinator.
 /// It delegates measurement to the wrapped node, passing the inner coordinator as the measurable.
-pub struct LayoutModifierCoordinator {
-    /// Reference to the modifier chain to access the reconciled node.
-    chain_handle: ModifierChainHandle,
+pub struct LayoutModifierCoordinator<'a> {
+    /// Reference to the applier state to access the chain.
+    state_rc: Rc<RefCell<crate::layout::LayoutBuilderState>>,
+    /// The node ID to locate the LayoutNode.
+    node_id: NodeId,
     /// The index of this node in the modifier chain.
     node_index: usize,
     /// The inner (wrapped) coordinator.
-    wrapped: Box<dyn NodeCoordinator>,
+    wrapped: Box<dyn NodeCoordinator + 'a>,
     /// The measured size from the last measure pass.
     measured_size: Cell<Size>,
     /// Position relative to parent.
@@ -63,16 +86,18 @@ pub struct LayoutModifierCoordinator {
     context: Rc<RefCell<LayoutNodeContext>>,
 }
 
-impl LayoutModifierCoordinator {
+impl<'a> LayoutModifierCoordinator<'a> {
     /// Creates a new coordinator wrapping the specified node.
     pub fn new(
-        chain_handle: ModifierChainHandle,
+        state_rc: Rc<RefCell<crate::layout::LayoutBuilderState>>,
+        node_id: NodeId,
         node_index: usize,
-        wrapped: Box<dyn NodeCoordinator>,
+        wrapped: Box<dyn NodeCoordinator + 'a>,
         context: Rc<RefCell<LayoutNodeContext>>,
     ) -> Self {
         Self {
-            chain_handle,
+            state_rc,
+            node_id,
             node_index,
             wrapped,
             measured_size: Cell::new(Size::ZERO),
@@ -87,7 +112,7 @@ impl LayoutModifierCoordinator {
     }
 }
 
-impl NodeCoordinator for LayoutModifierCoordinator {
+impl<'a> NodeCoordinator for LayoutModifierCoordinator<'a> {
     fn kind(&self) -> CoordinatorKind {
         CoordinatorKind::LayoutModifier
     }
@@ -110,52 +135,129 @@ impl NodeCoordinator for LayoutModifierCoordinator {
     }
 }
 
-impl Measurable for LayoutModifierCoordinator {
+impl<'a> Measurable for LayoutModifierCoordinator<'a> {
     fn measure(&self, constraints: Constraints) -> Box<dyn Placeable> {
         use crate::modifier_nodes::{PaddingNode, SizeNode, FillNode, OffsetNode};
         use crate::text_modifier_node::TextModifierNode;
+        use compose_foundation::LayoutModifierNode;
 
-        // Access the reconciled node from the chain and invoke its measure method
-        let chain = self.chain_handle.chain();
+        // Extract node configuration from the chain, then release the applier borrow
+        // before invoking measure to avoid nested borrow conflicts
+        let node_config = {
+            let state = self.state_rc.borrow();
+            let mut applier = state.applier.borrow_typed();
 
-        // Get node entry to access the node mutably
-        let size = if let Some(entry_ref) = chain.node_ref_at(self.node_index) {
-            if let Some(node) = entry_ref.node() {
-                // Downcast to known types and call measure
-                let any = node.as_any();
-                if let Some(node) = any.downcast_ref::<PaddingNode>() {
-                    let mut ctx = self.context.borrow_mut();
-                    node.measure(&mut *ctx, self.wrapped.as_ref(), constraints)
-                } else if let Some(node) = any.downcast_ref::<SizeNode>() {
-                    let mut ctx = self.context.borrow_mut();
-                    node.measure(&mut *ctx, self.wrapped.as_ref(), constraints)
-                } else if let Some(node) = any.downcast_ref::<FillNode>() {
-                    let mut ctx = self.context.borrow_mut();
-                    node.measure(&mut *ctx, self.wrapped.as_ref(), constraints)
-                } else if let Some(node) = any.downcast_ref::<OffsetNode>() {
-                    let mut ctx = self.context.borrow_mut();
-                    node.measure(&mut *ctx, self.wrapped.as_ref(), constraints)
-                } else if let Some(node) = any.downcast_ref::<TextModifierNode>() {
-                    let mut ctx = self.context.borrow_mut();
-                    node.measure(&mut *ctx, self.wrapped.as_ref(), constraints)
-                } else {
-                    // Unknown node type - fall back to wrapped
-                    let placeable = self.wrapped.measure(constraints);
-                    Size {
-                        width: placeable.width(),
-                        height: placeable.height(),
+            applier
+                .with_node::<LayoutNode, _>(self.node_id, |layout_node| {
+                    let chain = layout_node.modifier_chain().chain();
+
+                    if let Some(entry_ref) = chain.node_ref_at(self.node_index) {
+                        if let Some(node) = entry_ref.node() {
+                            let any = node.as_any();
+                            // Extract node configuration for each type
+                            if let Some(node) = any.downcast_ref::<PaddingNode>() {
+                                Some(NodeConfig::Padding(node.padding()))
+                            } else if let Some(node) = any.downcast_ref::<SizeNode>() {
+                                Some(NodeConfig::Size {
+                                    min_width: node.min_width(),
+                                    max_width: node.max_width(),
+                                    min_height: node.min_height(),
+                                    max_height: node.max_height(),
+                                    enforce_incoming: node.enforce_incoming(),
+                                })
+                            } else if let Some(node) = any.downcast_ref::<FillNode>() {
+                                Some(NodeConfig::Fill {
+                                    direction: node.direction(),
+                                    fraction: node.fraction(),
+                                })
+                            } else if let Some(node) = any.downcast_ref::<OffsetNode>() {
+                                Some(NodeConfig::Offset {
+                                    offset: node.offset(),
+                                    rtl_aware: node.rtl_aware(),
+                                })
+                            } else if let Some(node) = any.downcast_ref::<TextModifierNode>() {
+                                Some(NodeConfig::Text(node.text().to_string()))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .ok()
+                .flatten()
+        };
+
+        // Now measure using the extracted configuration (applier borrow is released)
+        // Handle nested measurements by using try_borrow_mut
+        let size = if let Some(config) = node_config {
+            match self.context.try_borrow_mut() {
+                Ok(mut ctx) => {
+                    // Use the shared context directly
+                    match config {
+                        NodeConfig::Padding(padding) => {
+                            let node = PaddingNode::new(padding);
+                            node.measure(&mut *ctx, self.wrapped.as_ref(), constraints)
+                        }
+                        NodeConfig::Size { min_width, max_width, min_height, max_height, enforce_incoming } => {
+                            let node = SizeNode::new(min_width, max_width, min_height, max_height, enforce_incoming);
+                            node.measure(&mut *ctx, self.wrapped.as_ref(), constraints)
+                        }
+                        NodeConfig::Fill { direction, fraction } => {
+                            let node = FillNode::new(direction, fraction);
+                            node.measure(&mut *ctx, self.wrapped.as_ref(), constraints)
+                        }
+                        NodeConfig::Offset { offset, rtl_aware } => {
+                            let node = OffsetNode::new(offset.x, offset.y, rtl_aware);
+                            node.measure(&mut *ctx, self.wrapped.as_ref(), constraints)
+                        }
+                        NodeConfig::Text(text) => {
+                            let node = TextModifierNode::new(text);
+                            node.measure(&mut *ctx, self.wrapped.as_ref(), constraints)
+                        }
                     }
                 }
-            } else {
-                // No node at this index - fall back to wrapped
-                let placeable = self.wrapped.measure(constraints);
-                Size {
-                    width: placeable.width(),
-                    height: placeable.height(),
+                Err(_) => {
+                    // Context is already borrowed (nested measurement) - use a temporary context
+                    let mut temp_context = LayoutNodeContext::new();
+                    let size = match config {
+                        NodeConfig::Padding(padding) => {
+                            let node = PaddingNode::new(padding);
+                            node.measure(&mut temp_context, self.wrapped.as_ref(), constraints)
+                        }
+                        NodeConfig::Size { min_width, max_width, min_height, max_height, enforce_incoming } => {
+                            let node = SizeNode::new(min_width, max_width, min_height, max_height, enforce_incoming);
+                            node.measure(&mut temp_context, self.wrapped.as_ref(), constraints)
+                        }
+                        NodeConfig::Fill { direction, fraction } => {
+                            let node = FillNode::new(direction, fraction);
+                            node.measure(&mut temp_context, self.wrapped.as_ref(), constraints)
+                        }
+                        NodeConfig::Offset { offset, rtl_aware } => {
+                            let node = OffsetNode::new(offset.x, offset.y, rtl_aware);
+                            node.measure(&mut temp_context, self.wrapped.as_ref(), constraints)
+                        }
+                        NodeConfig::Text(text) => {
+                            let node = TextModifierNode::new(text);
+                            node.measure(&mut temp_context, self.wrapped.as_ref(), constraints)
+                        }
+                    };
+
+                    // Merge invalidations from temp context into shared context after measurement completes
+                    if let Ok(mut shared) = self.context.try_borrow_mut() {
+                        for kind in temp_context.take_invalidations() {
+                            shared.invalidate(kind);
+                        }
+                    }
+
+                    size
                 }
             }
         } else {
-            // Index out of bounds - fall back to wrapped
+            // Node not found or unknown type - fall back to wrapped
             let placeable = self.wrapped.measure(constraints);
             Size {
                 width: placeable.width(),
@@ -171,120 +273,149 @@ impl Measurable for LayoutModifierCoordinator {
         use crate::modifier_nodes::{PaddingNode, SizeNode, FillNode, OffsetNode};
         use crate::text_modifier_node::TextModifierNode;
 
-        let chain = self.chain_handle.chain();
+        let state = self.state_rc.borrow();
+        let mut applier = state.applier.borrow_typed();
 
-        if let Some(node) = chain.node::<PaddingNode>(self.node_index) {
-            node.min_intrinsic_width(self.wrapped.as_ref(), height)
-        } else if let Some(node) = chain.node::<SizeNode>(self.node_index) {
-            node.min_intrinsic_width(self.wrapped.as_ref(), height)
-        } else if let Some(node) = chain.node::<FillNode>(self.node_index) {
-            node.min_intrinsic_width(self.wrapped.as_ref(), height)
-        } else if let Some(node) = chain.node::<OffsetNode>(self.node_index) {
-            node.min_intrinsic_width(self.wrapped.as_ref(), height)
-        } else if let Some(node) = chain.node::<TextModifierNode>(self.node_index) {
-            node.min_intrinsic_width(self.wrapped.as_ref(), height)
-        } else {
-            self.wrapped.min_intrinsic_width(height)
-        }
+        applier
+            .with_node::<LayoutNode, _>(self.node_id, |layout_node| {
+                let chain = layout_node.modifier_chain().chain();
+
+                if let Some(node) = chain.node::<PaddingNode>(self.node_index) {
+                    node.min_intrinsic_width(self.wrapped.as_ref(), height)
+                } else if let Some(node) = chain.node::<SizeNode>(self.node_index) {
+                    node.min_intrinsic_width(self.wrapped.as_ref(), height)
+                } else if let Some(node) = chain.node::<FillNode>(self.node_index) {
+                    node.min_intrinsic_width(self.wrapped.as_ref(), height)
+                } else if let Some(node) = chain.node::<OffsetNode>(self.node_index) {
+                    node.min_intrinsic_width(self.wrapped.as_ref(), height)
+                } else if let Some(node) = chain.node::<TextModifierNode>(self.node_index) {
+                    node.min_intrinsic_width(self.wrapped.as_ref(), height)
+                } else {
+                    self.wrapped.min_intrinsic_width(height)
+                }
+            })
+            .unwrap_or_else(|_| self.wrapped.min_intrinsic_width(height))
     }
 
     fn max_intrinsic_width(&self, height: f32) -> f32 {
         use crate::modifier_nodes::{PaddingNode, SizeNode, FillNode, OffsetNode};
         use crate::text_modifier_node::TextModifierNode;
 
-        let chain = self.chain_handle.chain();
+        let state = self.state_rc.borrow();
+        let mut applier = state.applier.borrow_typed();
 
-        if let Some(node) = chain.node::<PaddingNode>(self.node_index) {
-            node.max_intrinsic_width(self.wrapped.as_ref(), height)
-        } else if let Some(node) = chain.node::<SizeNode>(self.node_index) {
-            node.max_intrinsic_width(self.wrapped.as_ref(), height)
-        } else if let Some(node) = chain.node::<FillNode>(self.node_index) {
-            node.max_intrinsic_width(self.wrapped.as_ref(), height)
-        } else if let Some(node) = chain.node::<OffsetNode>(self.node_index) {
-            node.max_intrinsic_width(self.wrapped.as_ref(), height)
-        } else if let Some(node) = chain.node::<TextModifierNode>(self.node_index) {
-            node.max_intrinsic_width(self.wrapped.as_ref(), height)
-        } else {
-            self.wrapped.max_intrinsic_width(height)
-        }
+        applier
+            .with_node::<LayoutNode, _>(self.node_id, |layout_node| {
+                let chain = layout_node.modifier_chain().chain();
+
+                if let Some(node) = chain.node::<PaddingNode>(self.node_index) {
+                    node.max_intrinsic_width(self.wrapped.as_ref(), height)
+                } else if let Some(node) = chain.node::<SizeNode>(self.node_index) {
+                    node.max_intrinsic_width(self.wrapped.as_ref(), height)
+                } else if let Some(node) = chain.node::<FillNode>(self.node_index) {
+                    node.max_intrinsic_width(self.wrapped.as_ref(), height)
+                } else if let Some(node) = chain.node::<OffsetNode>(self.node_index) {
+                    node.max_intrinsic_width(self.wrapped.as_ref(), height)
+                } else if let Some(node) = chain.node::<TextModifierNode>(self.node_index) {
+                    node.max_intrinsic_width(self.wrapped.as_ref(), height)
+                } else {
+                    self.wrapped.max_intrinsic_width(height)
+                }
+            })
+            .unwrap_or_else(|_| self.wrapped.max_intrinsic_width(height))
     }
 
     fn min_intrinsic_height(&self, width: f32) -> f32 {
         use crate::modifier_nodes::{PaddingNode, SizeNode, FillNode, OffsetNode};
         use crate::text_modifier_node::TextModifierNode;
 
-        let chain = self.chain_handle.chain();
+        let state = self.state_rc.borrow();
+        let mut applier = state.applier.borrow_typed();
 
-        if let Some(node) = chain.node::<PaddingNode>(self.node_index) {
-            node.min_intrinsic_height(self.wrapped.as_ref(), width)
-        } else if let Some(node) = chain.node::<SizeNode>(self.node_index) {
-            node.min_intrinsic_height(self.wrapped.as_ref(), width)
-        } else if let Some(node) = chain.node::<FillNode>(self.node_index) {
-            node.min_intrinsic_height(self.wrapped.as_ref(), width)
-        } else if let Some(node) = chain.node::<OffsetNode>(self.node_index) {
-            node.min_intrinsic_height(self.wrapped.as_ref(), width)
-        } else if let Some(node) = chain.node::<TextModifierNode>(self.node_index) {
-            node.min_intrinsic_height(self.wrapped.as_ref(), width)
-        } else {
-            self.wrapped.min_intrinsic_height(width)
-        }
+        applier
+            .with_node::<LayoutNode, _>(self.node_id, |layout_node| {
+                let chain = layout_node.modifier_chain().chain();
+
+                if let Some(node) = chain.node::<PaddingNode>(self.node_index) {
+                    node.min_intrinsic_height(self.wrapped.as_ref(), width)
+                } else if let Some(node) = chain.node::<SizeNode>(self.node_index) {
+                    node.min_intrinsic_height(self.wrapped.as_ref(), width)
+                } else if let Some(node) = chain.node::<FillNode>(self.node_index) {
+                    node.min_intrinsic_height(self.wrapped.as_ref(), width)
+                } else if let Some(node) = chain.node::<OffsetNode>(self.node_index) {
+                    node.min_intrinsic_height(self.wrapped.as_ref(), width)
+                } else if let Some(node) = chain.node::<TextModifierNode>(self.node_index) {
+                    node.min_intrinsic_height(self.wrapped.as_ref(), width)
+                } else {
+                    self.wrapped.min_intrinsic_height(width)
+                }
+            })
+            .unwrap_or_else(|_| self.wrapped.min_intrinsic_height(width))
     }
 
     fn max_intrinsic_height(&self, width: f32) -> f32 {
         use crate::modifier_nodes::{PaddingNode, SizeNode, FillNode, OffsetNode};
         use crate::text_modifier_node::TextModifierNode;
 
-        let chain = self.chain_handle.chain();
+        let state = self.state_rc.borrow();
+        let mut applier = state.applier.borrow_typed();
 
-        if let Some(node) = chain.node::<PaddingNode>(self.node_index) {
-            node.max_intrinsic_height(self.wrapped.as_ref(), width)
-        } else if let Some(node) = chain.node::<SizeNode>(self.node_index) {
-            node.max_intrinsic_height(self.wrapped.as_ref(), width)
-        } else if let Some(node) = chain.node::<FillNode>(self.node_index) {
-            node.max_intrinsic_height(self.wrapped.as_ref(), width)
-        } else if let Some(node) = chain.node::<OffsetNode>(self.node_index) {
-            node.max_intrinsic_height(self.wrapped.as_ref(), width)
-        } else if let Some(node) = chain.node::<TextModifierNode>(self.node_index) {
-            node.max_intrinsic_height(self.wrapped.as_ref(), width)
-        } else {
-            self.wrapped.max_intrinsic_height(width)
-        }
+        applier
+            .with_node::<LayoutNode, _>(self.node_id, |layout_node| {
+                let chain = layout_node.modifier_chain().chain();
+
+                if let Some(node) = chain.node::<PaddingNode>(self.node_index) {
+                    node.max_intrinsic_height(self.wrapped.as_ref(), width)
+                } else if let Some(node) = chain.node::<SizeNode>(self.node_index) {
+                    node.max_intrinsic_height(self.wrapped.as_ref(), width)
+                } else if let Some(node) = chain.node::<FillNode>(self.node_index) {
+                    node.max_intrinsic_height(self.wrapped.as_ref(), width)
+                } else if let Some(node) = chain.node::<OffsetNode>(self.node_index) {
+                    node.max_intrinsic_height(self.wrapped.as_ref(), width)
+                } else if let Some(node) = chain.node::<TextModifierNode>(self.node_index) {
+                    node.max_intrinsic_height(self.wrapped.as_ref(), width)
+                } else {
+                    self.wrapped.max_intrinsic_height(width)
+                }
+            })
+            .unwrap_or_else(|_| self.wrapped.max_intrinsic_height(width))
     }
 }
 
 /// Inner coordinator that wraps the layout node's intrinsic content (MeasurePolicy).
 ///
 /// This is analogous to Jetpack Compose's InnerNodeCoordinator.
-pub struct InnerCoordinator {
+pub struct InnerCoordinator<'a> {
     /// The measure policy to execute.
     measure_policy: Rc<dyn MeasurePolicy>,
     /// Child measurables.
-    measurables: Vec<Box<dyn Measurable>>,
+    measurables: &'a [Box<dyn Measurable>],
     /// Measured size from last measure pass.
     measured_size: Cell<Size>,
     /// Position relative to parent.
     position: Cell<Point>,
-    /// Cached measure result for placements.
-    last_measure_result: RefCell<Option<MeasureResult>>,
+    /// Shared result holder to store the measure result for placement.
+    result_holder: Rc<RefCell<Option<MeasureResult>>>,
 }
 
-impl InnerCoordinator {
+impl<'a> InnerCoordinator<'a> {
     /// Creates a new inner coordinator with the given measure policy and children.
     pub fn new(
         measure_policy: Rc<dyn MeasurePolicy>,
-        measurables: Vec<Box<dyn Measurable>>,
+        measurables: &'a [Box<dyn Measurable>],
+        result_holder: Rc<RefCell<Option<MeasureResult>>>,
     ) -> Self {
         Self {
             measure_policy,
             measurables,
             measured_size: Cell::new(Size::ZERO),
             position: Cell::new(Point::default()),
-            last_measure_result: RefCell::new(None),
+            result_holder,
         }
     }
 }
 
-impl NodeCoordinator for InnerCoordinator {
+impl<'a> NodeCoordinator for InnerCoordinator<'a> {
     fn kind(&self) -> CoordinatorKind {
         CoordinatorKind::Inner
     }
@@ -304,7 +435,7 @@ impl NodeCoordinator for InnerCoordinator {
     fn place(&mut self, x: f32, y: f32) {
         self.set_position(Point { x, y });
         // Execute placements from the last measure result
-        if let Some(result) = self.last_measure_result.borrow().as_ref() {
+        if let Some(result) = self.result_holder.borrow().as_ref() {
             for placement in &result.placements {
                 // Place children - actual implementation would go here
                 let _ = placement;
@@ -313,35 +444,35 @@ impl NodeCoordinator for InnerCoordinator {
     }
 }
 
-impl Measurable for InnerCoordinator {
+impl<'a> Measurable for InnerCoordinator<'a> {
     fn measure(&self, constraints: Constraints) -> Box<dyn Placeable> {
         // Execute the measure policy
-        let result = self.measure_policy.measure(&self.measurables, constraints);
-
-        // Cache the result for placement
-        *self.last_measure_result.borrow_mut() = Some(result.clone());
+        let result = self.measure_policy.measure(self.measurables, constraints);
 
         // Store measured size
         let size = result.size;
         self.measured_size.set(size);
 
+        // Store the result in the shared holder for placement extraction
+        *self.result_holder.borrow_mut() = Some(result);
+
         Box::new(CoordinatorPlaceable { size })
     }
 
     fn min_intrinsic_width(&self, height: f32) -> f32 {
-        self.measure_policy.min_intrinsic_width(&self.measurables, height)
+        self.measure_policy.min_intrinsic_width(self.measurables, height)
     }
 
     fn max_intrinsic_width(&self, height: f32) -> f32 {
-        self.measure_policy.max_intrinsic_width(&self.measurables, height)
+        self.measure_policy.max_intrinsic_width(self.measurables, height)
     }
 
     fn min_intrinsic_height(&self, width: f32) -> f32 {
-        self.measure_policy.min_intrinsic_height(&self.measurables, width)
+        self.measure_policy.min_intrinsic_height(self.measurables, width)
     }
 
     fn max_intrinsic_height(&self, width: f32) -> f32 {
-        self.measure_policy.max_intrinsic_height(&self.measurables, width)
+        self.measure_policy.max_intrinsic_height(self.measurables, width)
     }
 }
 
