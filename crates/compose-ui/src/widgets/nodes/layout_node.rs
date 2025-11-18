@@ -502,16 +502,6 @@ impl LayoutNode {
         &mut self.modifier_chain
     }
 }
-
-/// Legacy bubbling function kept for test compatibility only.
-/// DO NOT USE in production code - all bubbling now happens automatically
-/// via composer reconciliation and pop_parent().
-#[cfg(test)]
-#[allow(dead_code)]
-pub(crate) fn bubble_dirty_flags(node_id: compose_core::NodeId) {
-    compose_core::bubble_layout_dirty_in_composer::<LayoutNode>(node_id);
-}
-
 impl Clone for LayoutNode {
     fn clone(&self) -> Self {
         let mut node = Self {
