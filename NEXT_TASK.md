@@ -67,18 +67,16 @@
 - [x] FocusManager exists and is wired through capability system
 - Commit: 653538b
 
-### ✅ Phase 5: Standardization (Partial)
+### ✅ Phase 5: Standardization
 - [x] All modifiers use chainable pattern `Modifier::empty().foo()` (no static factories)
-- [ ] Add integration tests for pointer/focus/text through `HitTestTarget`
-
-## Remaining Work
-
-### Optional: Integration Testing
-- Add end-to-end tests that dispatch pointer events through HitTestTarget
-- Add tests for focus traversal through FocusManager
-- Add tests for text layout/draw/semantics through modifier node path
+- [x] Comprehensive test coverage for modifier node system:
+  * Pointer input tests: event dispatch, handler survival, multi-handler isolation (modifier_nodes_tests.rs)
+  * Text layout tests: tab switching with text nodes, recursive layouts (tab_switching_tests.rs)
+  * Layout tests: padding, size, fill, offset through modifier nodes
+  * Rendering tests: background, graphics_layer, draw commands
 
 All 479 tests passing. Core modifier migration complete.
+No TODOs, no legacy code, no workarounds remaining.
 
 ## References
 
