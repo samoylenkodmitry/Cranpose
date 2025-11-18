@@ -1,6 +1,5 @@
 pub mod coordinator;
 pub mod core;
-mod modifier_measurable;
 pub mod policies;
 
 use compose_core::collections::map::Entry;

@@ -1,13 +1,12 @@
 # Modifier System Migration Tracker
 
-## Status: ⚠️ Adapter walk exists, but NodeCoordinator-style chaining is missing
+## Status: ✅ NodeCoordinator chain implemented for layout measurement
 
-`measure_through_modifier_chain()` now collects built-in layout nodes (padding/size/fill/offset/text)
-and wraps the `MeasurePolicy` with temporary adapters, yet any unknown `LayoutModifierNode` forces a
-fallback to `ResolvedModifiers`. The adapters re-instantiate fresh nodes each measure with a fresh
-`BasicModifierNodeContext`, so invalidations/caches never reach `LayoutNode`, there is no
-NodeCoordinator equivalent for draw/pointer/lookahead, and Text remains a string-only stub with
-monospaced measurement, empty draw, and placeholder semantics.
+`measure_through_modifier_chain()` now builds a proper `NodeCoordinator` chain using
+`LayoutModifierCoordinator` instances that wrap each reconciled `LayoutModifierNode`, with
+`InnerCoordinator` wrapping the `MeasurePolicy`. Measurement invokes the actual reconciled nodes
+(not temporary copies) with a shared `LayoutNodeContext` that properly accumulates invalidations.
+Text remains a string-only stub with monospaced measurement, empty draw, and placeholder semantics.
 
 ## Completed Work
 
@@ -18,22 +17,27 @@ monospaced measurement, empty draw, and placeholder semantics.
    `MeasurePolicy`; bespoke `measure_*` helpers are gone.
 3. ✅ **Centralized modifier reconciliation.** `ModifierNodeChain` + `ModifierChainHandle` reconcile
    node instances with capability tracking and modifier locals.
-4. ✅ **Persistent `Modifier::then`.** `ModifierKind::Combined` mirrors Kotlin’s `CombinedModifier`
+4. ✅ **Persistent `Modifier::then`.** `ModifierKind::Combined` mirrors Kotlin's `CombinedModifier`
    (`crates/compose-ui/src/modifier/mod.rs:235-382`).
-5. ✅ **Layout modifier node implementations.** Padding/Size/Offset/Fill nodes expose full measure +
-   intrinsic logic (`crates/compose-ui/src/modifier_nodes.rs`), even though the pipeline doesn’t call
-   them yet.
+5. ✅ **Layout modifier node implementations.** Padding/Size/Offset/Fill/Text nodes expose full
+   measure + intrinsic logic (`crates/compose-ui/src/modifier_nodes.rs`).
+6. ✅ **NodeCoordinator chain for layout measurement.** `measure_through_modifier_chain()`
+   (`crates/compose-ui/src/layout/mod.rs:726-854`) builds a coordinator chain using
+   `LayoutModifierCoordinator` wrapping each `LayoutModifierNode` and `InnerCoordinator` wrapping
+   the `MeasurePolicy`. Coordinators invoke `measure()` on reconciled nodes (not temporary copies)
+   with a shared `LayoutNodeContext` that accumulates invalidations and processes them after
+   measurement (`crates/compose-ui/src/layout/coordinator.rs`).
 
 ## Architecture Overview
 
 - **Widgets**: Pure composables emitting `LayoutNode`s with policies (Empty/Flex/etc.).
 - **Modifier chain**: Builders chain via `self.then(...)`, flatten into `Vec<DynModifierElement>`
   for reconciliation, and also collapse into a `ResolvedModifiers` snapshot for layout/draw.
-- **Measure pipeline**: `measure_through_modifier_chain()` downcasts to built-in layout nodes
-  (`crates/compose-ui/src/layout/mod.rs:1243-1314`) and wraps them in fresh adapters using a new
-  `BasicModifierNodeContext` each pass (`layout/mod.rs:170-239`). Any unknown/custom
-  `LayoutModifierNode` triggers a fallback to `ResolvedModifiers`, and the adapters never reuse
-  `ModifierNode` state or invalidations.
+- **Measure pipeline**: `measure_through_modifier_chain()` builds a `NodeCoordinator` chain,
+  wrapping each reconciled `LayoutModifierNode` in a `LayoutModifierCoordinator` and the
+  `MeasurePolicy` in an `InnerCoordinator`. Coordinators invoke `measure()` on the actual
+  reconciled nodes with a shared `LayoutNodeContext`, enabling proper invalidation tracking.
+  Falls back to `ResolvedModifiers` only when no layout modifier nodes are present in the chain.
 - **Text**: `Text()` adds `TextModifierElement` + `EmptyMeasurePolicy`; the element stores only a
   `String`, the node measures via the monospaced stub in `crates/compose-ui/src/text.rs`, `draw()` is
   empty, `update()` cannot invalidate on text changes, and semantics just set `content_description`.
@@ -47,18 +51,14 @@ monospaced measurement, empty draw, and placeholder semantics.
   `ResolvedModifiers` on every pass (`crates/compose-ui/src/modifier/chain.rs:72-231`), so the
   persistent tree never reaches the runtime. Kotlin walks the `CombinedModifier` tree directly.
 
-### Layout modifier nodes bypassed
-- `measure_through_modifier_chain()` only recognizes built-in nodes
-  (`crates/compose-ui/src/layout/mod.rs:1243-1314`) and rebuilds temporary adapters with a fresh
-  `BasicModifierNodeContext` (`layout/mod.rs:170-239`); custom layout modifiers fall back to
-  `ResolvedModifiers`, reconciled nodes never receive real `ModifierNodeContext` calls, and any
-  invalidations during adapter measurement are lost because the context is throwaway.
-- `ModifierChainHandle::compute_resolved()` sums padding and overwrites later properties into a
+### Draw/pointer/semantics not yet using coordinator chain
+- Layout measurement now uses the `NodeCoordinator` chain, but draw, pointer input, and semantics
+  still consume `ResolvedModifiers` snapshots. The coordinator chain should be extended to support
+  these phases, with `DrawModifierNodeCoordinator`, `PointerInputModifierNodeCoordinator`, etc.
+- `ModifierChainHandle::compute_resolved()` still sums padding and overwrites later properties into a
   `ResolvedModifiers` snapshot (`crates/compose-ui/src/modifier/chain.rs:173-219`); stacked
-  modifiers lose ordering and “last background wins.”
-- `measure_layout_node()` still mutates constraints/offsets from that snapshot when the adapter walk
-  bails out (`crates/compose-ui/src/layout/mod.rs:1472-1666`), there is no NodeCoordinator to share
-  layout results with draw/pointer/semantics, and there is no lookahead/approach measurement hook.
+  modifiers lose ordering and "last background wins" for properties not driven by modifier nodes yet.
+- No lookahead/approach measurement hooks exist yet.
 
 ### Text modifier pipeline gap
 - `TextModifierElement` captures only a `String`
@@ -76,14 +76,11 @@ monospaced measurement, empty draw, and placeholder semantics.
 
 ## Remaining Work
 
-### 1. Drive layout/draw/pointer through modifier nodes
-- Build a `LayoutModifierNodeCoordinator`-style walk over `ModifierNodeChain`, wrapping measurables
-  and invoking each reconciled `LayoutModifierNode` (not fresh adapters) in order, with placements
-  and intrinsic queries, and wire those nodes to a real `ModifierNodeContext`.
-- Surface draw/pointer/semantics nodes from the same chain, preserve modifier ordering for layers/
-  clipping, and leave room for lookahead/approach measurement.
-- Stop mutating constraints/offsets from `ResolvedModifiers` once nodes drive the pipeline and draw
-  can consume the coordinator chain.
+### 1. Extend coordinator chain to draw/pointer/semantics
+- ✅ Layout measurement now uses `NodeCoordinator` chain with `LayoutModifierCoordinator`.
+- Surface draw/pointer/semantics nodes from the same chain using similar coordinator wrappers,
+  preserving modifier ordering for layers/clipping.
+- Add lookahead/approach measurement hooks to the coordinator interface.
 
 ### 2. Preserve the persistent modifier tree during reconciliation
 - Stop cloning intermediate element/inspector vectors; walk the `ModifierKind::Combined` tree
