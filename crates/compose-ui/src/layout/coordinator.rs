@@ -199,7 +199,7 @@ impl MeasurementProxy for GenericMeasurementProxy<String> {
 /// Extracts a measurement proxy from a layout modifier node.
 /// Returns None if the node type is unknown (for future extensibility).
 fn extract_measurement_proxy(node: &dyn LayoutModifierNode) -> Option<Box<dyn MeasurementProxy>> {
-    let any = (node as &dyn std::any::Any);
+    let any = node as &dyn std::any::Any;
 
     if let Some(padding_node) = any.downcast_ref::<PaddingNode>() {
         Some(Box::new(GenericMeasurementProxy::new(padding_node.padding())))
