@@ -6,8 +6,8 @@ use compose_core::{
 };
 use indexmap::IndexSet;
 
-use crate::modifier::{Modifier, Point, Size};
-use compose_foundation::{BasicModifierNodeContext, ModifierNodeChain};
+use crate::modifier::{Modifier, ModifierChainHandle, Point, ResolvedModifiers, Size};
+use compose_foundation::NodeCapabilities;
 
 pub use compose_ui_layout::{Constraints, MeasureResult, Placement};
 
@@ -117,8 +117,16 @@ impl SubcomposeLayoutNode {
         self.inner.borrow_mut().set_modifier(modifier);
     }
 
+    pub fn set_debug_modifiers(&mut self, enabled: bool) {
+        self.inner.borrow_mut().set_debug_modifiers(enabled);
+    }
+
     pub fn modifier(&self) -> Modifier {
         self.handle().modifier()
+    }
+
+    pub fn resolved_modifiers(&self) -> ResolvedModifiers {
+        self.inner.borrow().resolved_modifiers
     }
 
     pub fn state(&self) -> Ref<'_, SubcomposeState> {
@@ -182,11 +190,43 @@ impl SubcomposeLayoutNodeHandle {
     }
 
     pub fn layout_properties(&self) -> crate::modifier::LayoutProperties {
-        self.inner.borrow().modifier.layout_properties()
+        self.resolved_modifiers().layout_properties()
+    }
+
+    pub fn resolved_modifiers(&self) -> ResolvedModifiers {
+        self.inner.borrow().resolved_modifiers
     }
 
     pub fn total_offset(&self) -> Point {
-        self.inner.borrow().modifier.total_offset()
+        self.resolved_modifiers().offset()
+    }
+
+    pub fn modifier_capabilities(&self) -> NodeCapabilities {
+        self.inner.borrow().modifier_capabilities
+    }
+
+    pub fn has_layout_modifier_nodes(&self) -> bool {
+        self.modifier_capabilities()
+            .contains(NodeCapabilities::LAYOUT)
+    }
+
+    pub fn has_draw_modifier_nodes(&self) -> bool {
+        self.modifier_capabilities()
+            .contains(NodeCapabilities::DRAW)
+    }
+
+    pub fn has_pointer_input_modifier_nodes(&self) -> bool {
+        self.modifier_capabilities()
+            .contains(NodeCapabilities::POINTER_INPUT)
+    }
+
+    pub fn has_semantics_modifier_nodes(&self) -> bool {
+        self.modifier_capabilities()
+            .contains(NodeCapabilities::SEMANTICS)
+    }
+
+    pub fn set_debug_modifiers(&self, enabled: bool) {
+        self.inner.borrow_mut().set_debug_modifiers(enabled);
     }
 
     pub fn measure(
@@ -248,24 +288,28 @@ impl SubcomposeLayoutNodeHandle {
 
 struct SubcomposeLayoutNodeInner {
     modifier: Modifier,
-    mods: ModifierNodeChain,
-    modifier_context: BasicModifierNodeContext,
+    modifier_chain: ModifierChainHandle,
+    resolved_modifiers: ResolvedModifiers,
+    modifier_capabilities: NodeCapabilities,
     state: SubcomposeState,
     measure_policy: Rc<MeasurePolicy>,
     children: IndexSet<NodeId>,
     slots: SlotBackend,
+    debug_modifiers: bool,
 }
 
 impl SubcomposeLayoutNodeInner {
     fn new(measure_policy: Rc<MeasurePolicy>) -> Self {
         Self {
             modifier: Modifier::empty(),
-            mods: ModifierNodeChain::new(),
-            modifier_context: BasicModifierNodeContext::new(),
+            modifier_chain: ModifierChainHandle::new(),
+            resolved_modifiers: ResolvedModifiers::default(),
+            modifier_capabilities: NodeCapabilities::default(),
             state: SubcomposeState::default(),
             measure_policy,
             children: IndexSet::new(),
             slots: SlotBackend::default(),
+            debug_modifiers: false,
         }
     }
 
@@ -275,8 +319,21 @@ impl SubcomposeLayoutNodeInner {
 
     fn set_modifier(&mut self, modifier: Modifier) {
         self.modifier = modifier;
-        self.mods
-            .update_from_slice(self.modifier.elements(), &mut self.modifier_context);
+        self.modifier_chain.set_debug_logging(self.debug_modifiers);
+        let modifier_local_invalidations = self.modifier_chain.update(&self.modifier);
+        self.resolved_modifiers = self.modifier_chain.resolved_modifiers();
+        self.modifier_capabilities = self.modifier_chain.capabilities();
+        // Drain invalidations for now; subcompose nodes will route them when subsystems are ready.
+        let _ = self.modifier_chain.take_invalidations();
+        debug_assert!(
+            modifier_local_invalidations.is_empty(),
+            "subcompose layout nodes currently ignore modifier local invalidations"
+        );
+    }
+
+    fn set_debug_modifiers(&mut self, enabled: bool) {
+        self.debug_modifiers = enabled;
+        self.modifier_chain.set_debug_logging(enabled);
     }
 }
 

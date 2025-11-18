@@ -90,31 +90,38 @@ fn tabbed_progress_content() {
         },
     );
 
-    Column(Modifier::padding(8.0), ColumnSpec::default(), move || {
-        Text(
-            format!("Progress {:.2}", progress.value()),
-            Modifier::padding(2.0),
-        );
-        let progress_for_branch = progress.clone();
-        let active_for_branch = active_tab.clone();
-        Row(
-            Modifier::padding(2.0).then(Modifier::height(12.0)),
-            RowSpec::default(),
-            move || {
-                if active_for_branch.value() == 0 && progress_for_branch.value() > 0.0 {
-                    let progress_for_bar = progress_for_branch.clone();
-                    Row(
-                        Modifier::width(160.0 * progress_for_bar.value())
-                            .then(Modifier::height(12.0)),
-                        RowSpec::default(),
-                        move || {
-                            let _ = progress_for_bar.value();
-                        },
-                    );
-                }
-            },
-        );
-    });
+    Column(
+        Modifier::empty().padding(8.0),
+        ColumnSpec::default(),
+        move || {
+            Text(
+                format!("Progress {:.2}", progress.value()),
+                Modifier::empty().padding(2.0),
+            );
+            let progress_for_branch = progress.clone();
+            let active_for_branch = active_tab.clone();
+            Row(
+                Modifier::empty()
+                    .padding(2.0)
+                    .then(Modifier::empty().height(12.0)),
+                RowSpec::default(),
+                move || {
+                    if active_for_branch.value() == 0 && progress_for_branch.value() > 0.0 {
+                        let progress_for_bar = progress_for_branch.clone();
+                        Row(
+                            Modifier::empty()
+                                .width(160.0 * progress_for_bar.value())
+                                .then(Modifier::empty().height(12.0)),
+                            RowSpec::default(),
+                            move || {
+                                let _ = progress_for_bar.value();
+                            },
+                        );
+                    }
+                },
+            );
+        },
+    );
 }
 
 #[test]

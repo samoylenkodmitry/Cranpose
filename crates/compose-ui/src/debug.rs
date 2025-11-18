@@ -22,8 +22,11 @@
 //! ```
 
 use crate::layout::{LayoutBox, LayoutTree};
+use crate::modifier::{ModifierChainInspectorNode, ModifierInspectorRecord};
 use crate::renderer::{RecordedRenderScene, RenderOp};
+use compose_foundation::{ModifierNodeChain, NodeCapabilities};
 use std::fmt::Write;
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// Logs the current layout tree to stdout with indentation showing hierarchy
 pub fn log_layout_tree(layout: &LayoutTree) {
@@ -168,6 +171,136 @@ fn count_nodes(layout_box: &LayoutBox) -> usize {
         .iter()
         .map(|child| count_nodes(child))
         .sum::<usize>()
+}
+
+/// Logs the contents of a modifier node chain including capabilities.
+pub fn log_modifier_chain(chain: &ModifierNodeChain, nodes: &[ModifierChainInspectorNode]) {
+    let dump = format_modifier_chain(chain, nodes);
+    print!("{}", dump);
+}
+
+/// Formats the modifier chain using inspector data.
+pub fn format_modifier_chain(
+    chain: &ModifierNodeChain,
+    nodes: &[ModifierChainInspectorNode],
+) -> String {
+    let mut output = String::new();
+    writeln!(output, "\n=== MODIFIER CHAIN ===").ok();
+    writeln!(
+        output,
+        "Total nodes: {} (entries: {})",
+        nodes.len(),
+        chain.len()
+    )
+    .ok();
+    writeln!(
+        output,
+        "Aggregated capabilities: {}",
+        describe_capabilities(chain.capabilities())
+    )
+    .ok();
+    for node in nodes {
+        let indent = "  ".repeat(node.depth);
+        let inspector = node
+            .inspector
+            .as_ref()
+            .map(describe_inspector)
+            .unwrap_or_default();
+        let inspector_suffix = if inspector.is_empty() {
+            String::new()
+        } else {
+            format!(" {inspector}")
+        };
+        writeln!(
+            output,
+            "{}- {} caps={} agg={}{}",
+            indent,
+            node.type_name,
+            describe_capabilities(node.capabilities),
+            describe_capabilities(node.aggregate_child_capabilities),
+            inspector_suffix,
+        )
+        .ok();
+    }
+    writeln!(output, "=== END MODIFIER CHAIN ===\n").ok();
+    output
+}
+
+fn describe_capabilities(mask: NodeCapabilities) -> String {
+    let mut parts = Vec::new();
+    if mask.contains(NodeCapabilities::LAYOUT) {
+        parts.push("LAYOUT");
+    }
+    if mask.contains(NodeCapabilities::DRAW) {
+        parts.push("DRAW");
+    }
+    if mask.contains(NodeCapabilities::POINTER_INPUT) {
+        parts.push("POINTER_INPUT");
+    }
+    if mask.contains(NodeCapabilities::SEMANTICS) {
+        parts.push("SEMANTICS");
+    }
+    if mask.contains(NodeCapabilities::MODIFIER_LOCALS) {
+        parts.push("MODIFIER_LOCALS");
+    }
+    if mask.contains(NodeCapabilities::FOCUS) {
+        parts.push("FOCUS");
+    }
+    if parts.is_empty() {
+        "[NONE]".to_string()
+    } else {
+        format!("[{}]", parts.join("|"))
+    }
+}
+
+fn describe_inspector(record: &ModifierInspectorRecord) -> String {
+    if record.properties.is_empty() {
+        record.name.to_string()
+    } else {
+        let props = record
+            .properties
+            .iter()
+            .map(|prop| format!("{}={}", prop.name, prop.value))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("{}({})", record.name, props)
+    }
+}
+
+type TraceCallback = dyn Fn(&[ModifierChainInspectorNode]) + Send + Sync + 'static;
+
+fn trace_slot() -> &'static Mutex<Option<Arc<TraceCallback>>> {
+    static TRACE: OnceLock<Mutex<Option<Arc<TraceCallback>>>> = OnceLock::new();
+    TRACE.get_or_init(|| Mutex::new(None))
+}
+
+/// RAII guard returned when installing a modifier chain trace subscriber.
+pub struct ModifierChainTraceGuard {
+    active: bool,
+}
+
+impl Drop for ModifierChainTraceGuard {
+    fn drop(&mut self) {
+        if self.active {
+            *trace_slot().lock().unwrap() = None;
+        }
+    }
+}
+
+/// Installs a callback that receives modifier chain snapshots when debugging is enabled.
+pub fn install_modifier_chain_trace<F>(callback: F) -> ModifierChainTraceGuard
+where
+    F: Fn(&[ModifierChainInspectorNode]) + Send + Sync + 'static,
+{
+    *trace_slot().lock().unwrap() = Some(Arc::new(callback));
+    ModifierChainTraceGuard { active: true }
+}
+
+pub(crate) fn emit_modifier_chain_trace(nodes: &[ModifierChainInspectorNode]) {
+    let maybe = trace_slot().lock().unwrap().clone();
+    if let Some(callback) = maybe {
+        callback(nodes);
+    }
 }
 
 #[cfg(test)]

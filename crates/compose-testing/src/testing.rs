@@ -1,6 +1,7 @@
 use compose_core::{
     location_key, ApplierGuard, Composition, Key, MemoryApplier, NodeError, NodeId, RuntimeHandle,
 };
+use compose_ui::request_render_invalidation;
 
 #[cfg(test)]
 use compose_core::{
@@ -71,7 +72,11 @@ impl ComposeTestRule {
             }
 
             if handle.has_invalid_scopes() {
-                let _ = self.composition.process_invalid_scopes()?;
+                let changed = self.composition.process_invalid_scopes()?;
+                if changed {
+                    // Request render invalidation so tests can detect composition changes
+                    request_render_invalidation();
+                }
                 progressed = true;
             }
 
@@ -119,6 +124,9 @@ impl ComposeTestRule {
     fn render(&mut self) -> Result<(), NodeError> {
         if let Some(content) = self.content.as_mut() {
             self.composition.render(self.root_key, &mut **content)?;
+            // After composition runs, request render invalidation
+            // so that tests can detect when content has changed
+            request_render_invalidation();
         }
         Ok(())
     }

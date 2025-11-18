@@ -14,6 +14,7 @@ compose-ui-layout = { path = "../compose-ui-layout" }
 compose-ui-graphics = { path = "../compose-ui-graphics" }
 indexmap = "2"
 smallvec = "1.13"
+futures-task = "0.3"
 
 [features]
 default = []

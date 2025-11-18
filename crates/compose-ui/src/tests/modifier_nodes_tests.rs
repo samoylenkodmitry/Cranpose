@@ -1,11 +1,14 @@
 use super::*;
+use crate::modifier::{collect_slices_from_modifier, Modifier, PointerInputScope};
 use compose_core::NodeId;
 use compose_foundation::{
-    modifier_element, BasicModifierNodeContext, ModifierNodeChain, PointerButton, PointerButtons,
-    PointerPhase,
+    modifier_element, BasicModifierNodeContext, ModifierNodeChain, NodeCapabilities, PointerButton,
+    PointerButtons, PointerEvent, PointerEventKind, PointerPhase,
 };
 use compose_ui_layout::Placeable;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::future::pending;
+use std::rc::Rc;
 
 struct TestPlaceable {
     width: f32,
@@ -119,6 +122,20 @@ fn background_node_is_draw_only() {
     chain.update_from_slice(&elements, &mut context);
 
     assert_eq!(chain.len(), 1);
+    assert!(chain.has_nodes_for_invalidation(compose_foundation::InvalidationKind::Draw));
+    assert!(!chain.has_nodes_for_invalidation(compose_foundation::InvalidationKind::Layout));
+}
+
+#[test]
+fn corner_shape_node_is_draw_only() {
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+
+    let elements = vec![modifier_element(CornerShapeElement::new(
+        RoundedCornerShape::uniform(6.0),
+    ))];
+    chain.update_from_slice(&elements, &mut context);
+
     assert!(chain.has_nodes_for_invalidation(compose_foundation::InvalidationKind::Draw));
     assert!(!chain.has_nodes_for_invalidation(compose_foundation::InvalidationKind::Layout));
 }
@@ -264,9 +281,23 @@ fn mixed_modifier_chain_tracks_all_capabilities() {
     assert!(chain.has_nodes_for_invalidation(compose_foundation::InvalidationKind::PointerInput));
 
     // Verify correct node counts by type
-    assert_eq!(chain.layout_nodes().count(), 1); // padding
-    assert_eq!(chain.draw_nodes().count(), 2); // alpha + background
-    assert_eq!(chain.pointer_input_nodes().count(), 1); // clickable
+    let mut layout_nodes = 0;
+    chain.for_each_forward_matching(NodeCapabilities::LAYOUT, |_| {
+        layout_nodes += 1;
+    });
+    assert_eq!(layout_nodes, 1, "expected a single layout node");
+
+    let mut draw_nodes = 0;
+    chain.for_each_forward_matching(NodeCapabilities::DRAW, |_| {
+        draw_nodes += 1;
+    });
+    assert_eq!(draw_nodes, 2, "expected alpha + background draw nodes");
+
+    let mut pointer_nodes = 0;
+    chain.for_each_forward_matching(NodeCapabilities::POINTER_INPUT, |_| {
+        pointer_nodes += 1;
+    });
+    assert_eq!(pointer_nodes, 1, "expected exactly one pointer node");
 }
 
 #[test]
@@ -336,4 +367,247 @@ fn reordering_modifiers_with_stable_reuse() {
         padding_ptr, new_padding_ptr,
         "Padding node should be reused"
     );
+}
+
+#[test]
+fn pointer_input_coroutine_receives_events() {
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+    let recorded = Rc::new(RefCell::new(Vec::new()));
+    let modifier = Modifier::empty().pointer_input((), {
+        let recorded = recorded.clone();
+        move |scope: PointerInputScope| {
+            let recorded = recorded.clone();
+            async move {
+                scope
+                    .await_pointer_event_scope(|await_scope| async move {
+                        loop {
+                            let event = await_scope.await_pointer_event().await;
+                            recorded.borrow_mut().push(event.kind);
+                        }
+                    })
+                    .await;
+            }
+        }
+    });
+
+    let elements = modifier.elements();
+    chain.update_from_slice(&elements, &mut context);
+    let slices = collect_slices_from_modifier(&modifier);
+    assert_eq!(slices.pointer_inputs().len(), 1);
+    let handler = slices.pointer_inputs()[0].clone();
+
+    handler(PointerEvent::new(
+        PointerEventKind::Down,
+        Point { x: 0.0, y: 0.0 },
+        Point { x: 0.0, y: 0.0 },
+    ));
+    handler(PointerEvent::new(
+        PointerEventKind::Up,
+        Point { x: 1.0, y: 1.0 },
+        Point { x: 1.0, y: 1.0 },
+    ));
+
+    let events = recorded.borrow();
+    assert_eq!(*events, vec![PointerEventKind::Down, PointerEventKind::Up]);
+}
+
+#[test]
+fn pointer_input_restarts_on_key_change() {
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+    let starts = Rc::new(Cell::new(0));
+
+    let modifier = Modifier::empty().pointer_input(0u32, {
+        let starts = starts.clone();
+        move |_scope: PointerInputScope| {
+            let starts = starts.clone();
+            async move {
+                starts.set(starts.get() + 1);
+                pending::<()>().await;
+            }
+        }
+    });
+
+    let elements = modifier.elements();
+    chain.update_from_slice(&elements, &mut context);
+    assert_eq!(starts.get(), 1);
+
+    let modifier_updated = Modifier::empty().pointer_input(1u32, {
+        let starts = starts.clone();
+        move |_scope: PointerInputScope| {
+            let starts = starts.clone();
+            async move {
+                starts.set(starts.get() + 1);
+                pending::<()>().await;
+            }
+        }
+    });
+
+    let elements_updated = modifier_updated.elements();
+    chain.update_from_slice(&elements_updated, &mut context);
+    assert_eq!(starts.get(), 2);
+}
+
+/// Regression test for pointer input handlers from temporary chains.
+///
+/// This test validates that pointer input handlers extracted via `collect_slices_from_modifier()`
+/// continue to work correctly even after the temporary modifier chain is dropped.
+///
+/// Before the fix, the global task registry used weak references and tasks were removed in `Drop`,
+/// causing handlers to fail when the temporary chain was dropped. This led to the bug where
+/// mouse events weren't being delivered to async pointer input handlers in the desktop app.
+///
+/// The fix changed the registry to use strong `Rc` references and only remove tasks on explicit
+/// cancellation, allowing handlers from temporary chains to remain functional.
+#[test]
+fn pointer_input_handlers_survive_temporary_chain_drop() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    // Track received events
+    let received_events = Rc::new(RefCell::new(Vec::new()));
+
+    // Create a modifier with pointer input
+    let modifier = Modifier::empty().pointer_input(42u32, {
+        let events = received_events.clone();
+        move |scope: PointerInputScope| {
+            let events = events.clone();
+            async move {
+                loop {
+                    let event = scope
+                        .await_pointer_event_scope(|s| async move { s.await_pointer_event().await })
+                        .await;
+                    events.borrow_mut().push(event.kind);
+                }
+            }
+        }
+    });
+
+    // Collect slices from the modifier - this creates a TEMPORARY chain
+    // The chain will be dropped when this function returns, but the handler should still work!
+    let slices = collect_slices_from_modifier(&modifier);
+
+    // Verify we got a handler
+    assert_eq!(
+        slices.pointer_inputs().len(),
+        1,
+        "Should have extracted one pointer input handler"
+    );
+
+    // Extract the handler - this is what the renderer does
+    let handler = slices.pointer_inputs()[0].clone();
+
+    // At this point, the temporary ModifierChainHandle created by collect_slices_from_modifier
+    // has been dropped. Before the fix, this would have removed the task from the global registry.
+
+    // Now send events through the handler - this should work even though the chain is dropped!
+    handler(PointerEvent::new(
+        PointerEventKind::Move,
+        Point { x: 10.0, y: 20.0 },
+        Point { x: 10.0, y: 20.0 },
+    ));
+
+    handler(PointerEvent::new(
+        PointerEventKind::Down,
+        Point { x: 10.0, y: 20.0 },
+        Point { x: 10.0, y: 20.0 },
+    ));
+
+    handler(PointerEvent::new(
+        PointerEventKind::Up,
+        Point { x: 10.0, y: 20.0 },
+        Point { x: 10.0, y: 20.0 },
+    ));
+
+    // Verify all events were received by the async handler
+    let events = received_events.borrow();
+    assert_eq!(
+        *events,
+        vec![
+            PointerEventKind::Move,
+            PointerEventKind::Down,
+            PointerEventKind::Up
+        ],
+        "All events should be received even after temporary chain is dropped"
+    );
+}
+
+/// Test that multiple temporary chains can coexist without interfering with each other.
+#[test]
+fn multiple_temporary_chains_dont_interfere() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let events1 = Rc::new(RefCell::new(Vec::new()));
+    let events2 = Rc::new(RefCell::new(Vec::new()));
+
+    // Create first modifier
+    let modifier1 = Modifier::empty().pointer_input(1u32, {
+        let events = events1.clone();
+        move |scope: PointerInputScope| {
+            let events = events.clone();
+            async move {
+                loop {
+                    let event = scope
+                        .await_pointer_event_scope(|s| async move { s.await_pointer_event().await })
+                        .await;
+                    events.borrow_mut().push(("handler1", event.kind));
+                }
+            }
+        }
+    });
+
+    // Create second modifier
+    let modifier2 = Modifier::empty().pointer_input(2u32, {
+        let events = events2.clone();
+        move |scope: PointerInputScope| {
+            let events = events.clone();
+            async move {
+                loop {
+                    let event = scope
+                        .await_pointer_event_scope(|s| async move { s.await_pointer_event().await })
+                        .await;
+                    events.borrow_mut().push(("handler2", event.kind));
+                }
+            }
+        }
+    });
+
+    // Collect slices from both modifiers
+    let slices1 = collect_slices_from_modifier(&modifier1);
+    let slices2 = collect_slices_from_modifier(&modifier2);
+
+    let handler1 = slices1.pointer_inputs()[0].clone();
+    let handler2 = slices2.pointer_inputs()[0].clone();
+
+    // Send events to both handlers
+    handler1(PointerEvent::new(
+        PointerEventKind::Move,
+        Point { x: 1.0, y: 1.0 },
+        Point { x: 1.0, y: 1.0 },
+    ));
+
+    handler2(PointerEvent::new(
+        PointerEventKind::Down,
+        Point { x: 2.0, y: 2.0 },
+        Point { x: 2.0, y: 2.0 },
+    ));
+
+    handler1(PointerEvent::new(
+        PointerEventKind::Up,
+        Point { x: 1.0, y: 1.0 },
+        Point { x: 1.0, y: 1.0 },
+    ));
+
+    // Verify each handler only received its own events
+    let ev1 = events1.borrow();
+    let ev2 = events2.borrow();
+
+    assert_eq!(ev1.len(), 2, "Handler 1 should receive 2 events");
+    assert_eq!(ev1[0], ("handler1", PointerEventKind::Move));
+    assert_eq!(ev1[1], ("handler1", PointerEventKind::Up));
+
+    assert_eq!(ev2.len(), 1, "Handler 2 should receive 1 event");
+    assert_eq!(ev2[0], ("handler2", PointerEventKind::Down));
 }

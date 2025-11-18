@@ -518,6 +518,7 @@ dependencies = [
  "compose-core",
  "compose-foundation",
  "compose-macros",
+ "compose-ui",
 ]
 
 [[package]]
@@ -532,6 +533,7 @@ dependencies = [
  "compose-ui-graphics",
  "compose-ui-layout",
  "criterion",
+ "futures-task",
  "indexmap",
  "smallvec 1.15.1",
 ]

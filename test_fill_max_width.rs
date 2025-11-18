@@ -22,14 +22,14 @@ mod test {
                 let row_capture = Rc::clone(&row_id_render);
 
                 // Outer Column with padding(20.0)
-                Column(Modifier::padding(20.0), ColumnSpec::default(), move || {
+                Column(Modifier::empty().padding(20.0), ColumnSpec::default(), move || {
                     // Row with fill_max_width() and padding(8.0)
                     *row_capture.borrow_mut() = Some(Row(
-                        Modifier::fill_max_width().then(Modifier::padding(8.0)),
+                        Modifier::empty().fill_max_width().then(Modifier::empty().padding(8.0)),
                         RowSpec::default(),
                         move || {
-                            Text("Button 1", Modifier::padding(4.0));
-                            Text("Button 2", Modifier::padding(4.0));
+                            Text("Button 1", Modifier::empty().padding(4.0));
+                            Text("Button 2", Modifier::empty().padding(4.0));
                         },
                     ));
                 });

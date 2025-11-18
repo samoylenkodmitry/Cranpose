@@ -78,8 +78,7 @@ fn render_container(
     scene: &mut Scene,
     mut extra_clicks: Vec<ClickAction>,
 ) {
-    let modifier = &layout.node_data.modifier;
-    let style = NodeStyle::from_modifier(modifier);
+    let style = NodeStyle::from_layout_node(&layout.node_data);
     let node_layer = combine_layers(parent_layer, style.graphics_layer);
     let rect = layout.rect;
     let size = Size {
@@ -134,8 +133,8 @@ fn render_container(
         scene.push_shape(transformed_rect, brush, scaled_shape.clone(), visual_clip);
     }
 
-    if let Some(handler) = style.clickable {
-        extra_clicks.push(ClickAction::WithPoint(handler));
+    for handler in &style.click_actions {
+        extra_clicks.push(ClickAction::WithPoint(handler.clone()));
     }
 
     scene.push_hit(
@@ -170,8 +169,7 @@ fn render_text(
     parent_hit_clip: Option<Rect>,
     scene: &mut Scene,
 ) {
-    let modifier = &layout.node_data.modifier;
-    let style = NodeStyle::from_modifier(modifier);
+    let style = NodeStyle::from_layout_node(&layout.node_data);
     let node_layer = combine_layers(parent_layer, style.graphics_layer);
     let rect = layout.rect;
     let size = Size {
@@ -240,8 +238,8 @@ fn render_text(
         visual_clip,
     );
     let mut click_actions = Vec::new();
-    if let Some(handler) = style.clickable {
-        click_actions.push(ClickAction::WithPoint(handler));
+    for handler in &style.click_actions {
+        click_actions.push(ClickAction::WithPoint(handler.clone()));
     }
     scene.push_hit(
         transformed_rect,

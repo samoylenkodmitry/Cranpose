@@ -185,9 +185,9 @@ impl<T> State<T> {
 #[composable]
 pub fn Counter() {
     let count = remember(|| State::new(0));
-    Column(Modifier::padding(16.0)) {
+    Column(Modifier::empty().padding(16.0)) {
         Text(format!("Count = {}", count.get()));
-        Row(Modifier::gap(8.0)) {
+        Row(Modifier::empty().gap(8.0)) {
             Button(on_click = move || count.set(count.get() - 1)) { Text("-") }
             Button(on_click = move || count.set(count.get() + 1)) { Text("+") }
         }

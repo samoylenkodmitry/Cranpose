@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use compose_foundation::PointerEvent;
-use compose_ui::{Brush, DrawCommand, Modifier};
+use compose_ui::{Brush, DrawCommand, LayoutNodeData, ModifierNodeSlices};
 use compose_ui_graphics::{
     Color, CornerRadii, DrawPrimitive, GraphicsLayer, Point, Rect, RoundedCornerShape, Size,
 };
@@ -11,7 +11,7 @@ use crate::scene::Scene;
 pub(crate) struct NodeStyle {
     pub padding: compose_ui_graphics::EdgeInsets,
     pub background: Option<Color>,
-    pub clickable: Option<Rc<dyn Fn(Point)>>,
+    pub click_actions: Vec<Rc<dyn Fn(Point)>>,
     pub shape: Option<RoundedCornerShape>,
     pub pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
     pub draw_commands: Vec<DrawCommand>,
@@ -20,16 +20,20 @@ pub(crate) struct NodeStyle {
 }
 
 impl NodeStyle {
-    pub fn from_modifier(modifier: &Modifier) -> Self {
+    pub fn from_layout_node(data: &LayoutNodeData) -> Self {
+        let resolved = data.resolved_modifiers;
+        let slices: &ModifierNodeSlices = data.modifier_slices();
+        let resolved_background = resolved.background();
+        let pointer_inputs = slices.pointer_inputs().to_vec();
         Self {
-            padding: modifier.padding_values(),
-            background: modifier.background_color(),
-            clickable: modifier.click_handler(),
-            shape: modifier.corner_shape(),
-            pointer_inputs: modifier.pointer_inputs(),
-            draw_commands: modifier.draw_commands(),
-            graphics_layer: modifier.graphics_layer_values(),
-            clip_to_bounds: modifier.clips_to_bounds(),
+            padding: resolved.padding(),
+            background: resolved_background.map(|background| background.color()),
+            click_actions: slices.click_handlers().iter().cloned().collect(),
+            shape: resolved.corner_shape(),
+            pointer_inputs,
+            draw_commands: slices.draw_commands().to_vec(),
+            graphics_layer: resolved.graphics_layer(),
+            clip_to_bounds: slices.clip_to_bounds(),
         }
     }
 }

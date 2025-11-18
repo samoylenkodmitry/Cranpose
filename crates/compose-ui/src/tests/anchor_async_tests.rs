@@ -89,7 +89,7 @@ fn async_runtime_demo(animation: MutableState<AnimationState>, stats: MutableSta
         );
     }
 
-    Column(Modifier::default(), ColumnSpec::default(), {
+    Column(Modifier::empty(), ColumnSpec::default(), {
         let animation_snapshot = animation.value();
         let stats_snapshot = stats.value();
         let progress_value = animation_snapshot.progress.clamp(0.0, 1.0);
@@ -120,7 +120,7 @@ fn async_runtime_demo(animation: MutableState<AnimationState>, stats: MutableSta
                         "reverse"
                     }
                 ),
-                Modifier::default(),
+                Modifier::empty(),
             );
         }
     });
@@ -194,7 +194,7 @@ fn async_runtime_freezes_without_conditional_key() {
 
 #[composable]
 fn progress_demo(animation: MutableState<AnimationState>, stats: MutableState<FrameStats>) {
-    Column(Modifier::padding(12.0), ColumnSpec::default(), {
+    Column(Modifier::empty().padding(12.0), ColumnSpec::default(), {
         move || {
             let animation_snapshot = animation.value();
             let stats_snapshot = stats.value();
@@ -202,10 +202,11 @@ fn progress_demo(animation: MutableState<AnimationState>, stats: MutableState<Fr
             let fill_width = 320.0 * progress_value;
 
             Row(
-                Modifier::fill_max_width()
-                    .then(Modifier::height(26.0))
-                    .then(Modifier::rounded_corners(13.0))
-                    .then(Modifier::draw_behind(|scope| {
+                Modifier::empty()
+                    .fill_max_width()
+                    .then(Modifier::empty().height(26.0))
+                    .then(Modifier::empty().rounded_corners(13.0))
+                    .then(Modifier::empty().draw_behind(|scope| {
                         scope.draw_round_rect(
                             Brush::solid(Color(0.12, 0.16, 0.30, 1.0)),
                             CornerRadii::uniform(13.0),
@@ -217,10 +218,11 @@ fn progress_demo(animation: MutableState<AnimationState>, stats: MutableState<Fr
                     move || {
                         if progress_width > 0.0 {
                             Row(
-                                Modifier::width(progress_width.min(360.0))
-                                    .then(Modifier::height(26.0))
-                                    .then(Modifier::rounded_corners(13.0))
-                                    .then(Modifier::draw_behind(|scope| {
+                                Modifier::empty()
+                                    .width(progress_width.min(360.0))
+                                    .then(Modifier::empty().height(26.0))
+                                    .then(Modifier::empty().rounded_corners(13.0))
+                                    .then(Modifier::empty().draw_behind(|scope| {
                                         scope.draw_round_rect(
                                             Brush::linear_gradient(vec![
                                                 Color(0.25, 0.55, 0.95, 1.0),
@@ -247,7 +249,7 @@ fn progress_demo(animation: MutableState<AnimationState>, stats: MutableState<Fr
                         "reverse"
                     }
                 ),
-                Modifier::padding(8.0),
+                Modifier::empty().padding(8.0),
             );
         }
     });

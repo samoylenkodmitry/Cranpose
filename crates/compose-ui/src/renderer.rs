@@ -1,7 +1,5 @@
-use crate::layout::{LayoutBox, LayoutNodeKind, LayoutTree};
-use crate::modifier::{
-    Brush, DrawCommand as ModifierDrawCommand, Modifier, Rect, RoundedCornerShape, Size,
-};
+use crate::layout::{LayoutBox, LayoutNodeData, LayoutNodeKind, LayoutTree};
+use crate::modifier::{Brush, DrawCommand as ModifierDrawCommand, Rect, RoundedCornerShape, Size};
 use compose_core::NodeId;
 use compose_ui_graphics::DrawPrimitive;
 
@@ -82,7 +80,7 @@ impl HeadlessRenderer {
         match &layout.node_data.kind {
             LayoutNodeKind::Text { value } => {
                 let (mut behind, mut overlay) =
-                    evaluate_modifier(layout.node_id, &layout.node_data.modifier, rect);
+                    evaluate_modifier(layout.node_id, &layout.node_data, rect);
                 operations.append(&mut behind);
                 operations.push(RenderOp::Text {
                     node_id: layout.node_id,
@@ -93,7 +91,7 @@ impl HeadlessRenderer {
             }
             _ => {
                 let (mut behind, mut overlay) =
-                    evaluate_modifier(layout.node_id, &layout.node_data.modifier, rect);
+                    evaluate_modifier(layout.node_id, &layout.node_data, rect);
                 operations.append(&mut behind);
                 for child in &layout.children {
                     self.render_box(child, operations);
@@ -106,15 +104,17 @@ impl HeadlessRenderer {
 
 fn evaluate_modifier(
     node_id: NodeId,
-    modifier: &Modifier,
+    data: &LayoutNodeData,
     rect: Rect,
 ) -> (Vec<RenderOp>, Vec<RenderOp>) {
+    let resolved = data.resolved_modifiers;
+    let _ = resolved;
     let mut behind = Vec::new();
     let mut overlay = Vec::new();
 
-    if let Some(color) = modifier.background_color() {
-        let brush = Brush::solid(color);
-        let primitive = if let Some(shape) = modifier.corner_shape() {
+    if let Some(background) = resolved.background() {
+        let brush = Brush::solid(background.color());
+        let primitive = if let Some(shape) = background.shape() {
             let radii = resolve_radii(shape, rect);
             DrawPrimitive::RoundRect { rect, brush, radii }
         } else {
@@ -132,7 +132,7 @@ fn evaluate_modifier(
         height: rect.height,
     };
 
-    for command in modifier.draw_commands() {
+    for command in data.modifier_slices().draw_commands() {
         match command {
             ModifierDrawCommand::Behind(func) => {
                 for primitive in func(size) {

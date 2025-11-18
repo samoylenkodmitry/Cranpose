@@ -34,7 +34,7 @@ fn renderer_emits_background_and_text() {
         .render(key, || {
             Text(
                 "Hello".to_string(),
-                Modifier::background(Color(0.1, 0.2, 0.3, 1.0)),
+                Modifier::empty().background(Color(0.1, 0.2, 0.3, 1.0)),
             );
         })
         .expect("initial render");
@@ -59,27 +59,61 @@ fn renderer_emits_background_and_text() {
 }
 
 #[test]
+fn renderer_honors_resolved_background_shape() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let key = location_key(file!(), line!(), column!());
+    composition
+        .render(key, || {
+            Text(
+                "Rounded".to_string(),
+                Modifier::empty()
+                    .background(Color(0.5, 0.2, 0.2, 1.0))
+                    .then(Modifier::empty().rounded_corners(12.0)),
+            );
+        })
+        .expect("initial render");
+
+    let root = composition.root().expect("text root");
+    let layout = compute_layout(&mut composition, root);
+    let renderer = HeadlessRenderer::new();
+    let scene = renderer.render(&layout);
+
+    assert!(
+        matches!(
+            &scene.operations()[0],
+            RenderOp::Primitive {
+                primitive: DrawPrimitive::RoundRect { .. },
+                ..
+            }
+        ),
+        "expected rounded rect background primitive"
+    );
+}
+
+#[test]
 fn renderer_translates_draw_commands() {
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());
     composition
         .render(key, || {
             Column(
-                Modifier::padding(10.0)
-                    .then(Modifier::background(Color(0.3, 0.3, 0.9, 1.0)))
-                    .then(Modifier::draw_behind(|scope| {
+                Modifier::empty()
+                    .padding(10.0)
+                    .then(Modifier::empty().background(Color(0.3, 0.3, 0.9, 1.0)))
+                    .then(Modifier::empty().draw_behind(|scope| {
                         scope.draw_rect(Brush::solid(Color(0.8, 0.0, 0.0, 1.0)));
                     })),
                 ColumnSpec::default(),
                 || {
                     Text(
                         "Content".to_string(),
-                        Modifier::draw_behind(|scope| {
-                            scope.draw_rect(Brush::solid(Color(0.2, 0.2, 0.2, 1.0)));
-                        })
-                        .then(Modifier::draw_with_content(|scope| {
-                            scope.draw_rect(Brush::solid(Color(0.0, 0.0, 0.0, 1.0)));
-                        })),
+                        Modifier::empty()
+                            .draw_behind(|scope| {
+                                scope.draw_rect(Brush::solid(Color(0.2, 0.2, 0.2, 1.0)));
+                            })
+                            .then(Modifier::empty().draw_with_content(|scope| {
+                                scope.draw_rect(Brush::solid(Color(0.0, 0.0, 0.0, 1.0)));
+                            })),
                     );
                 },
             );
@@ -144,7 +178,7 @@ fn renderer_renders_subcompose_background() {
     composition
         .render(key, || {
             SubcomposeLayout(
-                Modifier::background(Color(0.4, 0.4, 0.4, 1.0)),
+                Modifier::empty().background(Color(0.4, 0.4, 0.4, 1.0)),
                 |scope, constraints| {
                     let children = scope.subcompose(SlotId::new(0), || {
                         Text("Subcomposed".to_string(), Modifier::empty());

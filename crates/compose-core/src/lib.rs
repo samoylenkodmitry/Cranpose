@@ -783,6 +783,12 @@ pub trait Node: Any {
     fn needs_layout(&self) -> bool {
         false
     }
+    /// Mark this node as needing semantics recomputation.
+    fn mark_needs_semantics(&self) {}
+    /// Check if this node needs semantics recomputation.
+    fn needs_semantics(&self) -> bool {
+        false
+    }
 }
 
 /// Unified API for bubbling layout dirty flags from a node to the root (Applier context).
@@ -805,6 +811,25 @@ pub trait Node: Any {
 /// - Call from applier-level operations that modify the tree structure
 pub fn bubble_layout_dirty(applier: &mut dyn Applier, node_id: NodeId) {
     bubble_layout_dirty_applier(applier, node_id);
+}
+
+/// Unified API for bubbling semantics dirty flags from a node to the root (Applier context).
+///
+/// This mirrors [`bubble_layout_dirty`] but toggles semantics-specific dirty
+/// flags instead of layout ones, allowing semantics updates to propagate during
+/// the apply phase without forcing layout work.
+pub fn bubble_semantics_dirty(applier: &mut dyn Applier, node_id: NodeId) {
+    bubble_semantics_dirty_applier(applier, node_id);
+}
+
+/// Schedules semantics bubbling for a node using the active composer if present.
+///
+/// This defers the work to the apply phase where we can safely mutate the
+/// applier tree without re-entrantly borrowing the composer during composition.
+pub fn queue_semantics_invalidation(node_id: NodeId) {
+    let _ = composer_context::try_with_composer(|composer| {
+        composer.enqueue_semantics_invalidation(node_id);
+    });
 }
 
 /// Unified API for bubbling layout dirty flags from a node to the root (Composer context).
@@ -831,6 +856,16 @@ pub fn bubble_layout_dirty(applier: &mut dyn Applier, node_id: NodeId) {
 /// - Call from widget composition when layout-affecting state changes
 pub fn bubble_layout_dirty_in_composer<N: Node + 'static>(node_id: NodeId) {
     bubble_layout_dirty_composer::<N>(node_id);
+}
+
+/// Unified API for bubbling semantics dirty flags from a node to the root (Composer context).
+///
+/// This mirrors [`bubble_layout_dirty_in_composer`] but routes through the semantics
+/// dirty flag instead of the layout one. Modifier nodes can request semantics
+/// invalidations without triggering measure/layout work, and the runtime can
+/// query the root to determine whether the semantics tree needs rebuilding.
+pub fn bubble_semantics_dirty_in_composer<N: Node + 'static>(node_id: NodeId) {
+    bubble_semantics_dirty_composer::<N>(node_id);
 }
 
 /// Internal implementation for applier-based bubbling.
@@ -868,6 +903,36 @@ fn bubble_layout_dirty_applier(applier: &mut dyn Applier, mut node_id: NodeId) {
     }
 }
 
+/// Internal implementation for applier-based bubbling of semantics dirtiness.
+fn bubble_semantics_dirty_applier(applier: &mut dyn Applier, mut node_id: NodeId) {
+    if let Ok(node) = applier.get_mut(node_id) {
+        node.mark_needs_semantics();
+    }
+
+    loop {
+        let parent_id = match applier.get_mut(node_id) {
+            Ok(node) => node.parent(),
+            Err(_) => None,
+        };
+
+        match parent_id {
+            Some(pid) => {
+                if let Ok(parent) = applier.get_mut(pid) {
+                    if !parent.needs_semantics() {
+                        parent.mark_needs_semantics();
+                        node_id = pid;
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+            None => break,
+        }
+    }
+}
+
 /// Internal implementation for composer-based bubbling.
 /// This uses with_node_mut and works during composition with a concrete node type.
 /// The node type N must implement Node (which includes mark_needs_layout, parent, etc.).
@@ -892,6 +957,37 @@ fn bubble_layout_dirty_composer<N: Node + 'static>(mut node_id: NodeId) {
                 true // Continue bubbling
             } else {
                 false // Already dirty, stop (O(1) optimization)
+            }
+        })
+        .unwrap_or(false);
+
+        if should_continue {
+            node_id = parent_id;
+        } else {
+            break;
+        }
+    }
+}
+
+/// Internal implementation for composer-based bubbling of semantics dirtiness.
+fn bubble_semantics_dirty_composer<N: Node + 'static>(mut node_id: NodeId) {
+    // Mark the starting node semantics-dirty.
+    let _ = with_node_mut(node_id, |node: &mut N| {
+        node.mark_needs_semantics();
+    });
+
+    loop {
+        let parent_id = match with_node_mut(node_id, |node: &mut N| node.parent()) {
+            Ok(Some(pid)) => pid,
+            _ => break,
+        };
+
+        let should_continue = with_node_mut(parent_id, |node: &mut N| {
+            if !node.needs_semantics() {
+                node.mark_needs_semantics();
+                true
+            } else {
+                false
             }
         })
         .unwrap_or(false);
@@ -1069,6 +1165,10 @@ impl<A: Applier + 'static> ConcreteApplierHost<A> {
         self.inner.borrow_mut()
     }
 
+    pub fn try_borrow_typed(&self) -> Result<RefMut<'_, A>, std::cell::BorrowMutError> {
+        self.inner.try_borrow_mut()
+    }
+
     pub fn into_inner(self) -> A {
         self.inner.into_inner()
     }
@@ -1233,6 +1333,14 @@ impl Composer {
 
     fn commands_mut(&self) -> RefMut<'_, Vec<Command>> {
         self.core.commands.borrow_mut()
+    }
+
+    pub(crate) fn enqueue_semantics_invalidation(&self, id: NodeId) {
+        self.commands_mut()
+            .push(Box::new(move |applier: &mut dyn Applier| {
+                bubble_semantics_dirty(applier, id);
+                Ok(())
+            }));
     }
 
     fn scope_stack(&self) -> RefMut<'_, Vec<RecomposeScope>> {

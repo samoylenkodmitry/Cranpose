@@ -8,6 +8,7 @@ description = "Testing utilities and harness for Compose-RS"
 [dependencies]
 compose-core = { path = "../compose-core" }
 compose-foundation = { path = "../compose-foundation" }
+compose-ui = { path = "../compose-ui" }
 
 [dev-dependencies]
 compose-macros = { path = "../compose-macros" }

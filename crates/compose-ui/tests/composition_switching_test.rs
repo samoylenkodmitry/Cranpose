@@ -14,25 +14,29 @@ fn counter_view(counter: MutableState<i32>, render_count: MutableState<i32>) {
     // Track render count
     render_count.set(render_count.get() + 1);
 
-    Column(Modifier::padding(20.0), ColumnSpec::default(), move || {
-        Text(
-            format!("Counter: {}", counter.get()),
-            Modifier::padding(8.0),
-        );
+    Column(
+        Modifier::empty().padding(20.0),
+        ColumnSpec::default(),
+        move || {
+            Text(
+                format!("Counter: {}", counter.get()),
+                Modifier::empty().padding(8.0),
+            );
 
-        Button(
-            Modifier::padding(10.0),
-            {
-                let counter = counter.clone();
-                move || {
-                    counter.set(counter.get() + 1);
-                }
-            },
-            || {
-                Text("Increment", Modifier::padding(4.0));
-            },
-        );
-    });
+            Button(
+                Modifier::empty().padding(10.0),
+                {
+                    let counter = counter.clone();
+                    move || {
+                        counter.set(counter.get() + 1);
+                    }
+                },
+                || {
+                    Text("Increment", Modifier::empty().padding(4.0));
+                },
+            );
+        },
+    );
 }
 
 /// Helper for an alternative view
@@ -41,25 +45,29 @@ fn alternative_view(counter: MutableState<i32>, render_count: MutableState<i32>)
     // Track render count
     render_count.set(render_count.get() + 1);
 
-    Column(Modifier::padding(20.0), ColumnSpec::default(), move || {
-        Text(
-            format!("Alternative: {}", counter.get()),
-            Modifier::padding(8.0),
-        );
+    Column(
+        Modifier::empty().padding(20.0),
+        ColumnSpec::default(),
+        move || {
+            Text(
+                format!("Alternative: {}", counter.get()),
+                Modifier::empty().padding(8.0),
+            );
 
-        Button(
-            Modifier::padding(10.0),
-            {
-                let counter = counter.clone();
-                move || {
-                    counter.set(counter.get() + 1);
-                }
-            },
-            || {
-                Text("Add", Modifier::padding(4.0));
-            },
-        );
-    });
+            Button(
+                Modifier::empty().padding(10.0),
+                {
+                    let counter = counter.clone();
+                    move || {
+                        counter.set(counter.get() + 1);
+                    }
+                },
+                || {
+                    Text("Add", Modifier::empty().padding(4.0));
+                },
+            );
+        },
+    );
 }
 
 /// Combined app that switches between views
@@ -71,61 +79,69 @@ fn combined_switching_app(
     render_count1: MutableState<i32>,
     render_count2: MutableState<i32>,
 ) {
-    Column(Modifier::padding(20.0), ColumnSpec::default(), move || {
-        let show_counter_inner = show_counter.clone();
-        let show_counter_for_button1 = show_counter.clone();
-        let show_counter_for_button2 = show_counter.clone();
-        let counter1_inner = counter1.clone();
-        let counter2_inner = counter2.clone();
-        let render_count1_inner = render_count1.clone();
-        let render_count2_inner = render_count2.clone();
+    Column(
+        Modifier::empty().padding(20.0),
+        ColumnSpec::default(),
+        move || {
+            let show_counter_inner = show_counter.clone();
+            let show_counter_for_button1 = show_counter.clone();
+            let show_counter_for_button2 = show_counter.clone();
+            let counter1_inner = counter1.clone();
+            let counter2_inner = counter2.clone();
+            let render_count1_inner = render_count1.clone();
+            let render_count2_inner = render_count2.clone();
 
-        // Switch buttons
-        Row(Modifier::padding(8.0), RowSpec::default(), move || {
-            Button(
-                Modifier::padding(10.0),
-                {
-                    let show_counter = show_counter_for_button1.clone();
-                    move || {
-                        show_counter.set(true);
-                    }
-                },
-                || {
-                    Text("Counter View", Modifier::padding(4.0));
+            // Switch buttons
+            Row(
+                Modifier::empty().padding(8.0),
+                RowSpec::default(),
+                move || {
+                    Button(
+                        Modifier::empty().padding(10.0),
+                        {
+                            let show_counter = show_counter_for_button1.clone();
+                            move || {
+                                show_counter.set(true);
+                            }
+                        },
+                        || {
+                            Text("Counter View", Modifier::empty().padding(4.0));
+                        },
+                    );
+
+                    Spacer(Size {
+                        width: 8.0,
+                        height: 0.0,
+                    });
+
+                    Button(
+                        Modifier::empty().padding(10.0),
+                        {
+                            let show_counter = show_counter_for_button2.clone();
+                            move || {
+                                show_counter.set(false);
+                            }
+                        },
+                        || {
+                            Text("Alternative View", Modifier::empty().padding(4.0));
+                        },
+                    );
                 },
             );
 
             Spacer(Size {
-                width: 8.0,
-                height: 0.0,
+                width: 0.0,
+                height: 12.0,
             });
 
-            Button(
-                Modifier::padding(10.0),
-                {
-                    let show_counter = show_counter_for_button2.clone();
-                    move || {
-                        show_counter.set(false);
-                    }
-                },
-                || {
-                    Text("Alternative View", Modifier::padding(4.0));
-                },
-            );
-        });
-
-        Spacer(Size {
-            width: 0.0,
-            height: 12.0,
-        });
-
-        // Conditionally show one view or the other
-        if show_counter_inner.get() {
-            counter_view(counter1_inner.clone(), render_count1_inner.clone());
-        } else {
-            alternative_view(counter2_inner.clone(), render_count2_inner.clone());
-        }
-    });
+            // Conditionally show one view or the other
+            if show_counter_inner.get() {
+                counter_view(counter1_inner.clone(), render_count1_inner.clone());
+            } else {
+                alternative_view(counter2_inner.clone(), render_count2_inner.clone());
+            }
+        },
+    );
 }
 
 #[test]
@@ -290,18 +306,22 @@ fn test_node_cleanup_on_view_switch() {
         let show_first = show_first.clone();
         move || {
             let show_first_inner = show_first.clone();
-            Column(Modifier::padding(20.0), ColumnSpec::default(), move || {
-                if show_first_inner.get() {
-                    // First view with 3 text nodes
-                    Text("First A", Modifier::empty());
-                    Text("First B", Modifier::empty());
-                    Text("First C", Modifier::empty());
-                } else {
-                    // Second view with 2 text nodes
-                    Text("Second A", Modifier::empty());
-                    Text("Second B", Modifier::empty());
-                }
-            });
+            Column(
+                Modifier::empty().padding(20.0),
+                ColumnSpec::default(),
+                move || {
+                    if show_first_inner.get() {
+                        // First view with 3 text nodes
+                        Text("First A", Modifier::empty());
+                        Text("First B", Modifier::empty());
+                        Text("First C", Modifier::empty());
+                    } else {
+                        // Second view with 2 text nodes
+                        Text("Second A", Modifier::empty());
+                        Text("Second B", Modifier::empty());
+                    }
+                },
+            );
         }
     })
     .expect("initial render succeeds");
@@ -840,13 +860,16 @@ fn test_composition_local_content_inner(local_holder: compose_core::CompositionL
     let value = local_holder.current();
     Text(
         format!("READING local: count={}", value),
-        Modifier::padding(8.0),
+        Modifier::empty().padding(8.0),
     );
 }
 
 #[composable]
 fn test_composition_local_content(local_holder: compose_core::CompositionLocal<i32>) {
-    Text("Outside provider (NOT reading)", Modifier::padding(8.0));
+    Text(
+        "Outside provider (NOT reading)",
+        Modifier::empty().padding(8.0),
+    );
 
     Spacer(Size {
         width: 0.0,
@@ -860,7 +883,7 @@ fn test_composition_local_content(local_holder: compose_core::CompositionLocal<i
         height: 8.0,
     });
 
-    Text("NOT reading local", Modifier::padding(8.0));
+    Text("NOT reading local", Modifier::empty().padding(8.0));
 }
 
 #[composable]
@@ -868,50 +891,57 @@ fn test_composition_local_demo(
     counter: MutableState<i32>,
     local_holder: compose_core::CompositionLocal<i32>,
 ) {
-    Column(Modifier::padding(20.0), ColumnSpec::default(), move || {
-        Text("CompositionLocal Subscription Test", Modifier::padding(8.0));
+    Column(
+        Modifier::empty().padding(20.0),
+        ColumnSpec::default(),
+        move || {
+            Text(
+                "CompositionLocal Subscription Test",
+                Modifier::empty().padding(8.0),
+            );
 
-        Spacer(Size {
-            width: 0.0,
-            height: 12.0,
-        });
+            Spacer(Size {
+                width: 0.0,
+                height: 12.0,
+            });
 
-        Text(
-            format!("Counter: {}", counter.get()),
-            Modifier::padding(8.0),
-        );
+            Text(
+                format!("Counter: {}", counter.get()),
+                Modifier::empty().padding(8.0),
+            );
 
-        Spacer(Size {
-            width: 0.0,
-            height: 12.0,
-        });
+            Spacer(Size {
+                width: 0.0,
+                height: 12.0,
+            });
 
-        Button(
-            Modifier::padding(10.0),
-            {
-                let counter = counter.clone();
+            Button(
+                Modifier::empty().padding(10.0),
+                {
+                    let counter = counter.clone();
+                    move || {
+                        counter.set(counter.get() + 1);
+                    }
+                },
+                || {
+                    Text("Increment", Modifier::empty().padding(4.0));
+                },
+            );
+
+            Spacer(Size {
+                width: 0.0,
+                height: 12.0,
+            });
+
+            let current_count = counter.get();
+            CompositionLocalProvider(vec![local_holder.provides(current_count)], {
+                let local_holder = local_holder.clone();
                 move || {
-                    counter.set(counter.get() + 1);
+                    test_composition_local_content(local_holder.clone());
                 }
-            },
-            || {
-                Text("Increment", Modifier::padding(4.0));
-            },
-        );
-
-        Spacer(Size {
-            width: 0.0,
-            height: 12.0,
-        });
-
-        let current_count = counter.get();
-        CompositionLocalProvider(vec![local_holder.provides(current_count)], {
-            let local_holder = local_holder.clone();
-            move || {
-                test_composition_local_content(local_holder.clone());
-            }
-        });
-    });
+            });
+        },
+    );
 }
 
 #[test]
@@ -948,33 +978,41 @@ fn composition_local_increment_keeps_node_count_stable() {
 
 #[composable]
 fn composable_view_a() {
-    Column(Modifier::padding(20.0), ColumnSpec::default(), || {
-        Text("View A - Line 1", Modifier::empty());
-        Text("View A - Line 2", Modifier::empty());
-        Button(
-            Modifier::empty(),
-            || {},
-            || {
-                Text("Button A", Modifier::empty());
-            },
-        );
-    });
+    Column(
+        Modifier::empty().padding(20.0),
+        ColumnSpec::default(),
+        || {
+            Text("View A - Line 1", Modifier::empty());
+            Text("View A - Line 2", Modifier::empty());
+            Button(
+                Modifier::empty(),
+                || {},
+                || {
+                    Text("Button A", Modifier::empty());
+                },
+            );
+        },
+    );
 }
 
 #[composable]
 fn composable_view_b() {
-    Column(Modifier::padding(20.0), ColumnSpec::default(), || {
-        Text("View B - Line 1", Modifier::empty());
-        Text("View B - Line 2", Modifier::empty());
-        Text("View B - Line 3", Modifier::empty());
-        Button(
-            Modifier::empty(),
-            || {},
-            || {
-                Text("Button B", Modifier::empty());
-            },
-        );
-    });
+    Column(
+        Modifier::empty().padding(20.0),
+        ColumnSpec::default(),
+        || {
+            Text("View B - Line 1", Modifier::empty());
+            Text("View B - Line 2", Modifier::empty());
+            Text("View B - Line 3", Modifier::empty());
+            Button(
+                Modifier::empty(),
+                || {},
+                || {
+                    Text("Button B", Modifier::empty());
+                },
+            );
+        },
+    );
 }
 
 #[test]

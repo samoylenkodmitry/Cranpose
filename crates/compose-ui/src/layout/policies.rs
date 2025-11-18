@@ -578,6 +578,105 @@ impl MeasurePolicy for FlexMeasurePolicy {
     }
 }
 
+/// MeasurePolicy for leaf nodes with fixed intrinsic size (like Spacer).
+/// This policy respects the provided constraints but has a preferred intrinsic size.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LeafMeasurePolicy {
+    pub intrinsic_size: crate::modifier::Size,
+}
+
+impl LeafMeasurePolicy {
+    pub fn new(intrinsic_size: crate::modifier::Size) -> Self {
+        Self { intrinsic_size }
+    }
+}
+
+impl MeasurePolicy for LeafMeasurePolicy {
+    fn measure(
+        &self,
+        _measurables: &[Box<dyn Measurable>],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        // Use intrinsic size but constrain to provided constraints
+        let (width, height) =
+            constraints.constrain(self.intrinsic_size.width, self.intrinsic_size.height);
+
+        MeasureResult::new(
+            crate::modifier::Size { width, height },
+            vec![], // Leaf nodes have no children
+        )
+    }
+
+    fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+        self.intrinsic_size.width
+    }
+
+    fn max_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+        self.intrinsic_size.width
+    }
+
+    fn min_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+        self.intrinsic_size.height
+    }
+
+    fn max_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+        self.intrinsic_size.height
+    }
+}
+
+/// EmptyMeasurePolicy that delegates all measurement to modifier nodes.
+///
+/// This is used when a Layout has no child layout logic - all measurement
+/// is handled by modifier nodes (e.g., TextModifierNode for Text widgets).
+/// Matches Jetpack Compose's EmptyMeasurePolicy pattern used in BasicText.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EmptyMeasurePolicy;
+
+impl EmptyMeasurePolicy {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for EmptyMeasurePolicy {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MeasurePolicy for EmptyMeasurePolicy {
+    fn measure(
+        &self,
+        _measurables: &[Box<dyn Measurable>],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        // Empty policy returns the maximum available space
+        // The actual measurement is handled by modifier nodes in the chain
+        let (width, height) = constraints.constrain(0.0, 0.0);
+
+        MeasureResult::new(
+            crate::modifier::Size { width, height },
+            vec![], // No children
+        )
+    }
+
+    fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+        0.0
+    }
+
+    fn max_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+        0.0
+    }
+
+    fn min_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+        0.0
+    }
+
+    fn max_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+        0.0
+    }
+}
+
 #[cfg(test)]
 #[path = "tests/policies_tests.rs"]
 mod tests;

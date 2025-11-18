@@ -6,8 +6,11 @@ use compose_foundation::PointerEventKind;
 use compose_render_common::{HitTestTarget, RenderScene, Renderer};
 use compose_runtime_std::StdRuntime;
 use compose_ui::{
-    log_layout_tree, log_render_scene, log_screen_summary, HeadlessRenderer, LayoutEngine,
-    LayoutTree,
+    has_pending_focus_invalidations, has_pending_pointer_repasses, log_layout_tree,
+    log_render_scene, log_screen_summary, peek_focus_invalidation, peek_pointer_invalidation,
+    peek_render_invalidation, process_focus_invalidations, process_pointer_repasses,
+    request_render_invalidation, take_focus_invalidation, take_pointer_invalidation,
+    take_render_invalidation, HeadlessRenderer, LayoutEngine, LayoutNode, LayoutTree,
 };
 use compose_ui_graphics::Size;
 
@@ -87,7 +90,12 @@ where
     }
 
     pub fn should_render(&self) -> bool {
-        if self.layout_dirty || self.scene_dirty {
+        if self.layout_dirty
+            || self.scene_dirty
+            || peek_render_invalidation()
+            || peek_pointer_invalidation()
+            || peek_focus_invalidation()
+        {
             return true;
         }
         self.runtime.take_frame_request() || self.composition.should_render()
@@ -105,6 +113,8 @@ where
                 Ok(changed) => {
                     if changed {
                         self.layout_dirty = true;
+                        // Request render invalidation so the scene gets rebuilt
+                        request_render_invalidation();
                     }
                 }
                 Err(NodeError::Missing { id }) => {
@@ -112,10 +122,12 @@ where
                     // This is expected when scopes try to recompose after their nodes are gone
                     log::debug!("Recomposition skipped: node {} no longer exists", id);
                     self.layout_dirty = true;
+                    request_render_invalidation();
                 }
                 Err(err) => {
                     log::error!("recomposition failed: {err}");
                     self.layout_dirty = true;
+                    request_render_invalidation();
                 }
             }
         }
@@ -163,6 +175,7 @@ where
 
     fn process_frame(&mut self) {
         self.run_layout_phase();
+        self.run_dispatch_queues();
         self.run_render_phase();
     }
 
@@ -221,7 +234,61 @@ where
         }
     }
 
+    fn run_dispatch_queues(&mut self) {
+        // Process pointer input repasses
+        // Similar to Jetpack Compose's pointer input invalidation processing,
+        // we service nodes that need pointer input state updates without forcing layout/draw
+        if has_pending_pointer_repasses() {
+            let mut applier = self.composition.applier_mut();
+            process_pointer_repasses(|node_id| {
+                // Access the LayoutNode and clear its dirty flag
+                let result = applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
+                    if layout_node.needs_pointer_pass() {
+                        layout_node.clear_needs_pointer_pass();
+                        log::trace!("Cleared pointer repass flag for node #{}", node_id);
+                    }
+                });
+                if let Err(err) = result {
+                    log::debug!(
+                        "Could not process pointer repass for node #{}: {}",
+                        node_id,
+                        err
+                    );
+                }
+            });
+        }
+
+        // Process focus invalidations
+        // Mirrors Jetpack Compose's FocusInvalidationManager.invalidateNodes(),
+        // processing nodes that need focus state synchronization
+        if has_pending_focus_invalidations() {
+            let mut applier = self.composition.applier_mut();
+            process_focus_invalidations(|node_id| {
+                // Access the LayoutNode and clear its dirty flag
+                let result = applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
+                    if layout_node.needs_focus_sync() {
+                        layout_node.clear_needs_focus_sync();
+                        log::trace!("Cleared focus sync flag for node #{}", node_id);
+                    }
+                });
+                if let Err(err) = result {
+                    log::debug!(
+                        "Could not process focus invalidation for node #{}: {}",
+                        node_id,
+                        err
+                    );
+                }
+            });
+        }
+    }
+
     fn run_render_phase(&mut self) {
+        let render_dirty = take_render_invalidation();
+        let pointer_dirty = take_pointer_invalidation();
+        let focus_dirty = take_focus_invalidation();
+        if render_dirty || pointer_dirty || focus_dirty {
+            self.scene_dirty = true;
+        }
         if !self.scene_dirty {
             return;
         }

@@ -3,7 +3,7 @@
 use crate::Brush;
 use std::ops::AddAssign;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Point {
     pub x: f32,
     pub y: f32,

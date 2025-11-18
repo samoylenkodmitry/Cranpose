@@ -1,3 +1,4 @@
+pub mod coordinator;
 pub mod core;
 pub mod policies;
 
@@ -15,19 +16,74 @@ use compose_core::{
     Phase, RuntimeHandle, SlotBackend, SlotsHost, SnapshotStateObserver,
 };
 
+use self::core::Measurable;
+use self::core::Placeable;
+use self::coordinator::NodeCoordinator;
 #[cfg(test)]
-use self::core::VerticalAlignment;
-use self::core::{HorizontalAlignment, LinearArrangement, Measurable, Placeable};
+use self::core::{HorizontalAlignment, VerticalAlignment};
 use crate::modifier::{
-    DimensionConstraint, EdgeInsets, Modifier, Point, Rect as GeometryRect, Size,
+    collect_semantics_from_modifier, collect_slices_from_modifier, DimensionConstraint, EdgeInsets,
+    Modifier, ModifierNodeSlices, Point, Rect as GeometryRect, ResolvedModifiers, Size,
 };
+use crate::modifier_nodes::{FillDirection, FillNode, OffsetNode, PaddingNode, SizeNode};
 use crate::subcompose_layout::SubcomposeLayoutNode;
-use crate::widgets::nodes::{
-    ButtonNode, IntrinsicKind, LayoutNode, LayoutNodeCacheHandles, SpacerNode, TextNode,
-};
-use compose_ui_layout::{Constraints, MeasurePolicy};
+use crate::text_modifier_node::TextModifierNode;
+use compose_foundation::InvalidationKind;
+use compose_foundation::ModifierNodeContext;
+use crate::widgets::nodes::{IntrinsicKind, LayoutNode, LayoutNodeCacheHandles};
+use compose_foundation::{LayoutModifierNode, SemanticsConfiguration, NodeCapabilities};
+use compose_ui_layout::{Constraints, MeasurePolicy, MeasureResult};
+
+/// Runtime context for modifier nodes during measurement.
+///
+/// Unlike `BasicModifierNodeContext`, this context accumulates invalidations
+/// that can be processed after measurement to set dirty flags on the LayoutNode.
+#[derive(Default)]
+pub(crate) struct LayoutNodeContext {
+    invalidations: Vec<InvalidationKind>,
+    update_requested: bool,
+    active_capabilities: Vec<NodeCapabilities>,
+}
+
+impl LayoutNodeContext {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn take_invalidations(&mut self) -> Vec<InvalidationKind> {
+        std::mem::take(&mut self.invalidations)
+    }
+}
+
+impl ModifierNodeContext for LayoutNodeContext {
+    fn invalidate(&mut self, kind: InvalidationKind) {
+        if !self.invalidations.contains(&kind) {
+            self.invalidations.push(kind);
+        }
+    }
+
+    fn request_update(&mut self) {
+        self.update_requested = true;
+    }
+
+    fn push_active_capabilities(&mut self, capabilities: NodeCapabilities) {
+        self.active_capabilities.push(capabilities);
+    }
+
+    fn pop_active_capabilities(&mut self) {
+        self.active_capabilities.pop();
+    }
+}
 
 static NEXT_CACHE_EPOCH: AtomicU64 = AtomicU64::new(1);
+
+/// Result of measuring through the modifier node chain.
+struct ModifierChainMeasurement {
+    result: MeasureResult,
+    padding: EdgeInsets,
+    offset: Point,
+}
+
 
 /// Discrete event callback reference produced during semantics extraction.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -52,13 +108,20 @@ pub enum SemanticsAction {
 }
 
 /// Semantic role describing how a node should participate in accessibility and hit testing.
+/// Roles are now derived from SemanticsConfiguration rather than widget types.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticsRole {
+    /// Generic container or layout node
     Layout,
+    /// Subcomposition boundary
     Subcompose,
+    /// Text content (derived from TextNode for backward compatibility)
     Text { value: String },
+    /// Spacer (non-interactive)
     Spacer,
+    /// Button (derived from is_button semantics flag)
     Button,
+    /// Unknown or unspecified role
     Unknown,
 }
 
@@ -69,6 +132,7 @@ pub struct SemanticsNode {
     pub role: SemanticsRole,
     pub actions: Vec<SemanticsAction>,
     pub children: Vec<SemanticsNode>,
+    pub description: Option<String>,
 }
 
 impl SemanticsNode {
@@ -77,12 +141,14 @@ impl SemanticsNode {
         role: SemanticsRole,
         actions: Vec<SemanticsAction>,
         children: Vec<SemanticsNode>,
+        description: Option<String>,
     ) -> Self {
         Self {
             node_id,
             role,
             actions,
             children,
+            description,
         }
     }
 }
@@ -100,6 +166,50 @@ impl SemanticsTree {
 
     pub fn root(&self) -> &SemanticsNode {
         &self.root
+    }
+}
+
+/// Caches semantics configurations for layout nodes, similar to Jetpack Compose's SemanticsOwner.
+/// This enables lazy semantics tree construction and efficient invalidation.
+#[derive(Default)]
+pub struct SemanticsOwner {
+    configurations: RefCell<HashMap<NodeId, Option<SemanticsConfiguration>>>,
+}
+
+impl SemanticsOwner {
+    pub fn new() -> Self {
+        Self {
+            configurations: RefCell::new(HashMap::default()),
+        }
+    }
+
+    /// Returns the cached configuration for the given node, computing it if necessary.
+    pub fn get_or_compute(
+        &self,
+        node_id: NodeId,
+        applier: &mut MemoryApplier,
+    ) -> Option<SemanticsConfiguration> {
+        // Check cache first
+        if let Some(cached) = self.configurations.borrow().get(&node_id) {
+            return cached.clone();
+        }
+
+        // Compute and cache
+        let config = compute_semantics_for_node(applier, node_id);
+        self.configurations
+            .borrow_mut()
+            .insert(node_id, config.clone());
+        config
+    }
+
+    /// Invalidates the cached configuration for a specific node.
+    pub fn invalidate(&self, node_id: NodeId) {
+        self.configurations.borrow_mut().remove(&node_id);
+    }
+
+    /// Clears all cached configurations.
+    pub fn clear(&self) {
+        self.configurations.borrow_mut().clear();
     }
 }
 
@@ -152,12 +262,32 @@ impl LayoutBox {
 #[derive(Debug, Clone)]
 pub struct LayoutNodeData {
     pub modifier: Modifier,
+    pub resolved_modifiers: ResolvedModifiers,
+    pub modifier_slices: ModifierNodeSlices,
     pub kind: LayoutNodeKind,
 }
 
 impl LayoutNodeData {
-    pub fn new(modifier: Modifier, kind: LayoutNodeKind) -> Self {
-        Self { modifier, kind }
+    pub fn new(
+        modifier: Modifier,
+        resolved_modifiers: ResolvedModifiers,
+        modifier_slices: ModifierNodeSlices,
+        kind: LayoutNodeKind,
+    ) -> Self {
+        Self {
+            modifier,
+            resolved_modifiers,
+            modifier_slices,
+            kind,
+        }
+    }
+
+    pub fn resolved_modifiers(&self) -> ResolvedModifiers {
+        self.resolved_modifiers
+    }
+
+    pub fn modifier_slices(&self) -> &ModifierNodeSlices {
+        &self.modifier_slices
     }
 }
 
@@ -275,15 +405,31 @@ pub fn measure_layout(
 
     // Selective measure: only increment epoch if something needs measuring
     // O(1) check - just look at root's dirty flag (bubbling ensures correctness)
-    let needs_measure = {
-        let node = applier.get_mut(root)?;
-        node.needs_layout()
-    };
+    let (needs_measure, _needs_semantics, cached_epoch) =
+        match applier.with_node::<LayoutNode, _>(root, |node| {
+            (
+                node.needs_layout(),
+                node.needs_semantics(),
+                node.cache_handles().epoch(),
+            )
+        }) {
+            Ok(tuple) => tuple,
+            Err(NodeError::TypeMismatch { .. }) => {
+                let (layout_dirty, semantics_dirty) = {
+                    let node = applier.get_mut(root)?;
+                    (node.needs_layout(), node.needs_semantics())
+                };
+                (layout_dirty, semantics_dirty, 0)
+            }
+            Err(err) => return Err(err),
+        };
 
     let epoch = if needs_measure {
         NEXT_CACHE_EPOCH.fetch_add(1, Ordering::Relaxed)
+    } else if cached_epoch != 0 {
+        cached_epoch
     } else {
-        // Reuse current epoch when tree is clean - don't increment
+        // Fallback when caller root isn't a LayoutNode (e.g. tests using Spacer directly).
         NEXT_CACHE_EPOCH.load(Ordering::Relaxed)
     };
 
@@ -295,12 +441,16 @@ pub fn measure_layout(
         let mut applier_ref = applier_host.borrow_typed();
         collect_runtime_metadata(&mut *applier_ref, &measured)?
     };
+    let semantics_snapshot = {
+        let mut applier_ref = applier_host.borrow_typed();
+        collect_semantics_snapshot(&mut *applier_ref, &measured)?
+    };
     drop(builder);
     let applier_inner = Rc::try_unwrap(applier_host)
         .unwrap_or_else(|_| panic!("layout builder should be sole owner of applier host"))
         .into_inner();
     *applier = applier_inner;
-    let semantics_root = build_semantics_node(&measured, &metadata);
+    let semantics_root = build_semantics_node(&measured, &metadata, &semantics_snapshot);
     let semantics = SemanticsTree::new(semantics_root);
     let layout_tree = build_layout_tree_from_metadata(&measured, &metadata);
     Ok(LayoutMeasurements::new(measured, semantics, layout_tree))
@@ -366,16 +516,33 @@ impl LayoutBuilderState {
         }
     }
 
-    fn with_applier_result<R>(
+    fn try_with_applier_result<R>(
         state_rc: &Rc<RefCell<Self>>,
         f: impl FnOnce(&mut MemoryApplier) -> Result<R, NodeError>,
-    ) -> Result<R, NodeError> {
+    ) -> Option<Result<R, NodeError>> {
         let host = {
             let state = state_rc.borrow();
             Rc::clone(&state.applier)
         };
-        let mut applier = host.borrow_typed();
-        f(&mut *applier)
+
+        // Try to borrow - if already borrowed (nested call), return None
+        let Ok(mut applier) = host.try_borrow_typed() else {
+            return None;
+        };
+
+        Some(f(&mut *applier))
+    }
+
+    fn with_applier_result<R>(
+        state_rc: &Rc<RefCell<Self>>,
+        f: impl FnOnce(&mut MemoryApplier) -> Result<R, NodeError>,
+    ) -> Result<R, NodeError> {
+        Self::try_with_applier_result(state_rc, f).unwrap_or_else(|| {
+            Err(NodeError::MissingContext {
+                id: NodeId::default(),
+                reason: "applier already borrowed",
+            })
+        })
     }
 
     fn measure_node(
@@ -385,13 +552,15 @@ impl LayoutBuilderState {
     ) -> Result<Rc<MeasuredNode>, NodeError> {
         let constraints = normalize_constraints(constraints);
 
+        // Try SubcomposeLayoutNode first
         if let Some(subcompose) =
             Self::try_measure_subcompose(Rc::clone(&state_rc), node_id, constraints)?
         {
             return Ok(subcompose);
         }
 
-        if let Some(snapshot) = Self::with_applier_result(&state_rc, |applier| {
+        // Try LayoutNode (the primary modern path)
+        if let Some(result) = Self::try_with_applier_result(&state_rc, |applier| {
             match applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
                 LayoutNodeSnapshot::from_layout_node(layout_node)
             }) {
@@ -399,28 +568,16 @@ impl LayoutBuilderState {
                 Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => Ok(None),
                 Err(err) => Err(err),
             }
-        })? {
-            return Self::measure_layout_node(Rc::clone(&state_rc), node_id, snapshot, constraints);
+        }) {
+            // Applier was available, process the result
+            if let Some(snapshot) = result? {
+                return Self::measure_layout_node(Rc::clone(&state_rc), node_id, snapshot, constraints);
+            }
         }
+        // If applier was busy (None) or snapshot was None, fall through to fallback
 
-        if let Some(text) =
-            Self::with_applier_result(&state_rc, |applier| try_clone::<TextNode>(applier, node_id))?
-        {
-            return Ok(measure_text(node_id, &text, constraints));
-        }
-
-        if let Some(spacer) = Self::with_applier_result(&state_rc, |applier| {
-            try_clone::<SpacerNode>(applier, node_id)
-        })? {
-            return Ok(measure_spacer(node_id, &spacer, constraints));
-        }
-
-        if let Some(button) = Self::with_applier_result(&state_rc, |applier| {
-            try_clone::<ButtonNode>(applier, node_id)
-        })? {
-            return Self::measure_button(Rc::clone(&state_rc), node_id, button, constraints);
-        }
-
+        // No legacy fallbacks - all widgets now use LayoutNode or SubcomposeLayoutNode
+        // If we reach here, it's an unknown node type (shouldn't happen in normal use)
         Ok(Rc::new(MeasuredNode::new(
             node_id,
             Size::default(),
@@ -439,8 +596,11 @@ impl LayoutBuilderState {
             Rc::clone(&state.applier)
         };
 
-        let (node_handle, props, offset) = {
-            let mut applier = applier_host.borrow_typed();
+        let (node_handle, resolved_modifiers) = {
+            // Try to borrow - if already borrowed (nested measurement), return None
+            let Ok(mut applier) = applier_host.try_borrow_typed() else {
+                return Ok(None);
+            };
             let node = match applier.get_mut(node_id) {
                 Ok(node) => node,
                 Err(NodeError::Missing { .. }) => return Ok(None),
@@ -449,9 +609,8 @@ impl LayoutBuilderState {
             let any = node.as_any_mut();
             if let Some(subcompose) = any.downcast_mut::<SubcomposeLayoutNode>() {
                 let handle = subcompose.handle();
-                let props = handle.layout_properties();
-                let offset = handle.total_offset();
-                (handle, props, offset)
+                let resolved_modifiers = handle.resolved_modifiers();
+                (handle, resolved_modifiers)
             } else {
                 return Ok(None);
             }
@@ -460,7 +619,10 @@ impl LayoutBuilderState {
         let runtime_handle = {
             let mut state = state_rc.borrow_mut();
             if state.runtime_handle.is_none() {
-                state.runtime_handle = applier_host.borrow_typed().runtime_handle();
+                // Try to borrow - if already borrowed, we can't get runtime handle
+                if let Ok(applier) = applier_host.try_borrow_typed() {
+                    state.runtime_handle = applier.runtime_handle();
+                }
             }
             state
                 .runtime_handle
@@ -471,7 +633,9 @@ impl LayoutBuilderState {
                 })?
         };
 
-        let padding = props.padding();
+        let props = resolved_modifiers.layout_properties();
+        let padding = resolved_modifiers.padding();
+        let offset = resolved_modifiers.offset();
         let mut inner_constraints = normalize_constraints(subtract_padding(constraints, padding));
 
         if let DimensionConstraint::Points(width) = props.width() {
@@ -552,6 +716,142 @@ impl LayoutBuilderState {
         ))))
     }
 
+    /// Measures through the layout modifier coordinator chain using reconciled modifier nodes.
+    /// Iterates through LayoutModifierNode instances from the ModifierNodeChain and calls
+    /// their measure() methods, mirroring Jetpack Compose's LayoutModifierNodeCoordinator pattern.
+    ///
+    /// Returns Ok(MeasureResult) if successful, Err(()) if modifier nodes should not be used.
+    ///
+    fn measure_through_modifier_chain(
+        state_rc: &Rc<RefCell<Self>>,
+        node_id: NodeId,
+        measurables: &[Box<dyn Measurable>],
+        measure_policy: &Rc<dyn MeasurePolicy>,
+        constraints: Constraints,
+    ) -> Result<ModifierChainMeasurement, ()> {
+        use crate::modifier_nodes::{OffsetNode, PaddingNode};
+        use compose_foundation::NodeCapabilities;
+
+        // Collect layout node information from the modifier chain
+        let mut layout_node_indices: Vec<usize> = Vec::new();
+        let mut padding = EdgeInsets::default();
+        let mut offset = Point::default();
+
+        {
+            let state = state_rc.borrow();
+            let mut applier = state.applier.borrow_typed();
+
+            applier
+                .with_node::<LayoutNode, _>(node_id, |layout_node| {
+                    let chain_handle = layout_node.modifier_chain();
+
+                    if !chain_handle.has_layout_nodes() {
+                        return;
+                    }
+
+                    // Collect indices of layout modifier nodes
+                    chain_handle.chain().for_each_forward_matching(
+                        NodeCapabilities::LAYOUT,
+                        |node_ref| {
+                            if let Some(index) = node_ref.entry_index() {
+                                layout_node_indices.push(index);
+
+                                // Calculate padding and offset for backward compat
+                                if let Some(node) = node_ref.node() {
+                                    let any = node.as_any();
+                                    if let Some(padding_node) = any.downcast_ref::<PaddingNode>() {
+                                        padding += padding_node.padding();
+                                    } else if let Some(offset_node) = any.downcast_ref::<OffsetNode>() {
+                                        let delta = offset_node.offset();
+                                        offset.x += delta.x;
+                                        offset.y += delta.y;
+                                    }
+                                }
+                            }
+                        },
+                    );
+                })
+                .map_err(|_| ())?;
+        }
+
+        if layout_node_indices.is_empty() {
+            return Err(());
+        }
+
+        // Build the coordinator chain from innermost to outermost
+        // Reverse order: rightmost modifier is measured first (innermost), leftmost is outer
+        layout_node_indices.reverse();
+
+        // Create a shared context for this measurement pass to track invalidations
+        let shared_context = Rc::new(RefCell::new(LayoutNodeContext::new()));
+
+        // Create the inner coordinator that wraps the measure policy
+        let policy_result = Rc::new(RefCell::new(None));
+        let inner_coordinator: Box<dyn NodeCoordinator + '_> = Box::new(
+            crate::layout::coordinator::InnerCoordinator::new(
+                Rc::clone(measure_policy),
+                measurables,
+                Rc::clone(&policy_result),
+            )
+        );
+
+        // Wrap each layout modifier node in a coordinator, building the chain
+        let mut current_coordinator = inner_coordinator;
+        for node_index in layout_node_indices {
+            current_coordinator = Box::new(
+                crate::layout::coordinator::LayoutModifierCoordinator::new(
+                    Rc::clone(state_rc),
+                    node_id,
+                    node_index,
+                    current_coordinator,
+                    Rc::clone(&shared_context),
+                )
+            );
+        }
+
+        // Measure through the complete coordinator chain
+        let placeable = current_coordinator.measure(constraints);
+        let final_size = Size {
+            width: placeable.width(),
+            height: placeable.height(),
+        };
+
+        let placements = policy_result
+            .borrow_mut()
+            .take()
+            .map(|result| result.placements)
+            .unwrap_or_default();
+
+        // Process any invalidations requested during measurement
+        let invalidations = shared_context.borrow_mut().take_invalidations();
+        if !invalidations.is_empty() {
+            // Mark the LayoutNode as needing the appropriate passes
+            Self::with_applier_result(state_rc, |applier| {
+                applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
+                    for kind in invalidations {
+                        match kind {
+                            InvalidationKind::Layout => layout_node.mark_needs_measure(),
+                            InvalidationKind::Draw => layout_node.mark_needs_redraw(),
+                            InvalidationKind::Semantics => layout_node.mark_needs_semantics(),
+                            InvalidationKind::PointerInput => layout_node.mark_needs_pointer_pass(),
+                            InvalidationKind::Focus => layout_node.mark_needs_focus_sync(),
+                        }
+                    }
+                })
+            })
+            .ok();
+        }
+
+        Ok(ModifierChainMeasurement {
+            result: MeasureResult {
+                size: final_size,
+                placements,
+            },
+            padding,
+            offset,
+        })
+    }
+
     fn measure_layout_node(
         state_rc: Rc<RefCell<Self>>,
         node_id: NodeId,
@@ -563,13 +863,15 @@ impl LayoutBuilderState {
             state.cache_epoch
         };
         let LayoutNodeSnapshot {
-            modifier,
+            modifier: _,
+            resolved_modifiers,
             measure_policy,
             children,
             cache,
             needs_measure,
         } = snapshot;
         cache.activate(cache_epoch);
+        let layout_props = resolved_modifiers.layout_properties();
 
         // Selective measure: if node doesn't need measure and we have a cached result, use it
         if !needs_measure {
@@ -591,22 +893,6 @@ impl LayoutBuilderState {
             return Ok(cached);
         }
 
-        let props = modifier.layout_properties();
-        let padding = props.padding();
-        let offset = modifier.total_offset();
-        let mut inner_constraints = normalize_constraints(subtract_padding(constraints, padding));
-
-        if let DimensionConstraint::Points(width) = props.width() {
-            let constrained_width = width - padding.horizontal_sum();
-            inner_constraints.max_width = inner_constraints.max_width.min(constrained_width);
-            inner_constraints.min_width = inner_constraints.min_width.min(constrained_width);
-        }
-        if let DimensionConstraint::Points(height) = props.height() {
-            let constrained_height = height - padding.vertical_sum();
-            inner_constraints.max_height = inner_constraints.max_height.min(constrained_height);
-            inner_constraints.min_height = inner_constraints.min_height.min(constrained_height);
-        }
-
         let (runtime_handle, applier_host) = {
             let state = state_rc.borrow();
             (state.runtime_handle.clone(), Rc::clone(&state.applier))
@@ -620,25 +906,18 @@ impl LayoutBuilderState {
         for &child_id in children.iter() {
             let measured = Rc::new(RefCell::new(None));
             let position = Rc::new(RefCell::new(None));
-            let child_info = {
+            let cache_handles = {
                 let mut applier = applier_host.borrow_typed();
-                match applier.with_node::<LayoutNode, _>(child_id, |layout_node| {
-                    let props = layout_node.modifier.layout_properties();
-                    (layout_node.cache_handles(), props.width(), props.height())
-                }) {
+                match applier
+                    .with_node::<LayoutNode, _>(child_id, |layout_node| layout_node.cache_handles())
+                {
                     Ok(value) => Some(value),
-                    Err(NodeError::TypeMismatch { .. }) => Some((
-                        LayoutNodeCacheHandles::default(),
-                        DimensionConstraint::Unspecified,
-                        DimensionConstraint::Unspecified,
-                    )),
+                    Err(NodeError::TypeMismatch { .. }) => Some(LayoutNodeCacheHandles::default()),
                     Err(NodeError::Missing { .. }) => None,
                     Err(err) => return Err(err),
                 }
             };
-            let Some((cache_handles, _child_width_constraint, _child_height_constraint)) =
-                child_info
-            else {
+            let Some(cache_handles) = cache_handles else {
                 continue;
             };
             cache_handles.activate(cache_epoch);
@@ -663,93 +942,175 @@ impl LayoutBuilderState {
             )));
         }
 
-        let needs_intrinsic_width = matches!(props.width(), DimensionConstraint::Intrinsic(_));
-        if needs_intrinsic_width {
-            let intrinsic_width = measure_policy
-                .min_intrinsic_width(measurables.as_slice(), inner_constraints.max_height);
-            let constrained_width = intrinsic_width.max(inner_constraints.min_width);
-            if constrained_width.is_finite() && constrained_width < inner_constraints.max_width {
-                inner_constraints.max_width = constrained_width;
-            }
-        }
+        // Try to measure through the modifier node chain first.
+        let chain_constraints = Constraints {
+            min_width: constraints.min_width,
+            max_width: if matches!(layout_props.width(), DimensionConstraint::Unspecified) {
+                f32::INFINITY
+            } else {
+                constraints.max_width
+            },
+            min_height: constraints.min_height,
+            max_height: if matches!(layout_props.height(), DimensionConstraint::Unspecified) {
+                f32::INFINITY
+            } else {
+                constraints.max_height
+            },
+        };
 
-        let needs_intrinsic_height = matches!(props.height(), DimensionConstraint::Intrinsic(_));
-        if needs_intrinsic_height {
-            let intrinsic_height = measure_policy
-                .min_intrinsic_height(measurables.as_slice(), inner_constraints.max_width);
-            let constrained_height = intrinsic_height.max(inner_constraints.min_height);
-            if constrained_height.is_finite() && constrained_height < inner_constraints.max_height {
-                inner_constraints.max_height = constrained_height;
-            }
-        }
-
-        let mut measure_constraints = inner_constraints;
-        let mut relaxed_width = None;
-        if matches!(props.width(), DimensionConstraint::Unspecified)
-            && inner_constraints.min_width < inner_constraints.max_width
-            && constraints.min_width < constraints.max_width
-            && inner_constraints.max_width.is_finite()
-        {
-            relaxed_width = Some(inner_constraints.max_width);
-            measure_constraints.max_width = f32::INFINITY;
-        }
-
-        let mut relaxed_height = None;
-        if matches!(props.height(), DimensionConstraint::Unspecified)
-            && inner_constraints.min_height < inner_constraints.max_height
-            && constraints.min_height < constraints.max_height
-            && inner_constraints.max_height.is_finite()
-        {
-            relaxed_height = Some(inner_constraints.max_height);
-            measure_constraints.max_height = f32::INFINITY;
-        }
-
-        let mut policy_result = measure_policy.measure(measurables.as_slice(), measure_constraints);
-
-        if relaxed_width.is_some() || relaxed_height.is_some() {
-            let width_exceeds = relaxed_width
-                .map(|limit| policy_result.size.width > limit && limit.is_finite())
-                .unwrap_or(false);
-            let height_exceeds = relaxed_height
-                .map(|limit| policy_result.size.height > limit && limit.is_finite())
-                .unwrap_or(false);
-
-            if width_exceeds || height_exceeds {
-                let mut tightened_constraints = measure_constraints;
-                if let Some(limit) = relaxed_width {
-                    tightened_constraints.max_width = limit;
-                }
-                if let Some(limit) = relaxed_height {
-                    tightened_constraints.max_height = limit;
-                }
-                policy_result =
-                    measure_policy.measure(measurables.as_slice(), tightened_constraints);
-            }
-        }
-
-        if let Some(err) = error.borrow_mut().take() {
-            return Err(err);
-        }
-
-        let mut width = policy_result.size.width + padding.horizontal_sum();
-        let mut height = policy_result.size.height + padding.vertical_sum();
-
-        width = resolve_dimension(
-            width,
-            props.width(),
-            props.min_width(),
-            props.max_width(),
-            constraints.min_width,
-            constraints.max_width,
+        let mut modifier_chain_result = Self::measure_through_modifier_chain(
+            &state_rc,
+            node_id,
+            measurables.as_slice(),
+            &measure_policy,
+            chain_constraints,
         );
-        height = resolve_dimension(
-            height,
-            props.height(),
-            props.min_height(),
-            props.max_height(),
-            constraints.min_height,
-            constraints.max_height,
-        );
+
+        if (chain_constraints.max_width != constraints.max_width
+            || chain_constraints.max_height != constraints.max_height)
+            && matches!(modifier_chain_result, Ok(ref result) if (constraints.max_width.is_finite() && result.result.size.width > constraints.max_width)
+                || (constraints.max_height.is_finite() && result.result.size.height > constraints.max_height))
+        {
+            modifier_chain_result = Self::measure_through_modifier_chain(
+                &state_rc,
+                node_id,
+                measurables.as_slice(),
+                &measure_policy,
+                constraints,
+            );
+        }
+
+        let (width, height, policy_result, padding, offset) = if let Ok(result) =
+            modifier_chain_result
+        {
+            // Modifier chain succeeded - use the node-driven measurement.
+            // The size is already correct from the modifier chain (modifiers like SizeNode
+            // have already enforced their constraints), so we use it directly.
+            if let Some(err) = error.borrow_mut().take() {
+                return Err(err);
+            }
+
+            (
+                result.result.size.width,
+                result.result.size.height,
+                result.result,
+                result.padding,
+                result.offset,
+            )
+        } else {
+            // No layout modifier nodes - fall back to ResolvedModifiers logic.
+            let props = layout_props;
+            let padding = resolved_modifiers.padding();
+            let offset = resolved_modifiers.offset();
+            let mut inner_constraints =
+                normalize_constraints(subtract_padding(constraints, padding));
+
+            if let DimensionConstraint::Points(width) = props.width() {
+                let constrained_width = width - padding.horizontal_sum();
+                inner_constraints.max_width = inner_constraints.max_width.min(constrained_width);
+                inner_constraints.min_width = inner_constraints.min_width.min(constrained_width);
+            }
+            if let DimensionConstraint::Points(height) = props.height() {
+                let constrained_height = height - padding.vertical_sum();
+                inner_constraints.max_height = inner_constraints.max_height.min(constrained_height);
+                inner_constraints.min_height = inner_constraints.min_height.min(constrained_height);
+            }
+
+            let needs_intrinsic_width = matches!(props.width(), DimensionConstraint::Intrinsic(_));
+            if needs_intrinsic_width {
+                let intrinsic_width = measure_policy
+                    .min_intrinsic_width(measurables.as_slice(), inner_constraints.max_height);
+                let constrained_width = intrinsic_width.max(inner_constraints.min_width);
+                if constrained_width.is_finite() && constrained_width < inner_constraints.max_width
+                {
+                    inner_constraints.max_width = constrained_width;
+                }
+            }
+
+            let needs_intrinsic_height =
+                matches!(props.height(), DimensionConstraint::Intrinsic(_));
+            if needs_intrinsic_height {
+                let intrinsic_height = measure_policy
+                    .min_intrinsic_height(measurables.as_slice(), inner_constraints.max_width);
+                let constrained_height = intrinsic_height.max(inner_constraints.min_height);
+                if constrained_height.is_finite()
+                    && constrained_height < inner_constraints.max_height
+                {
+                    inner_constraints.max_height = constrained_height;
+                }
+            }
+
+            let mut measure_constraints = inner_constraints;
+            let mut relaxed_width = None;
+            if matches!(props.width(), DimensionConstraint::Unspecified)
+                && inner_constraints.min_width < inner_constraints.max_width
+                && constraints.min_width < constraints.max_width
+                && inner_constraints.max_width.is_finite()
+            {
+                relaxed_width = Some(inner_constraints.max_width);
+                measure_constraints.max_width = f32::INFINITY;
+            }
+
+            let mut relaxed_height = None;
+            if matches!(props.height(), DimensionConstraint::Unspecified)
+                && inner_constraints.min_height < inner_constraints.max_height
+                && constraints.min_height < constraints.max_height
+                && inner_constraints.max_height.is_finite()
+            {
+                relaxed_height = Some(inner_constraints.max_height);
+                measure_constraints.max_height = f32::INFINITY;
+            }
+
+            let mut policy_result =
+                measure_policy.measure(measurables.as_slice(), measure_constraints);
+
+            if relaxed_width.is_some() || relaxed_height.is_some() {
+                let width_exceeds = relaxed_width
+                    .map(|limit| policy_result.size.width > limit && limit.is_finite())
+                    .unwrap_or(false);
+                let height_exceeds = relaxed_height
+                    .map(|limit| policy_result.size.height > limit && limit.is_finite())
+                    .unwrap_or(false);
+
+                if width_exceeds || height_exceeds {
+                    let mut tightened_constraints = measure_constraints;
+                    if let Some(limit) = relaxed_width {
+                        tightened_constraints.max_width = limit;
+                    }
+                    if let Some(limit) = relaxed_height {
+                        tightened_constraints.max_height = limit;
+                    }
+                    policy_result =
+                        measure_policy.measure(measurables.as_slice(), tightened_constraints);
+                }
+            }
+
+            if let Some(err) = error.borrow_mut().take() {
+                return Err(err);
+            }
+
+            let mut width = policy_result.size.width + padding.horizontal_sum();
+            let mut height = policy_result.size.height + padding.vertical_sum();
+
+            width = resolve_dimension(
+                width,
+                props.width(),
+                props.min_width(),
+                props.max_width(),
+                constraints.min_width,
+                constraints.max_width,
+            );
+            height = resolve_dimension(
+                height,
+                props.height(),
+                props.min_height(),
+                props.max_height(),
+                constraints.min_height,
+                constraints.max_height,
+            );
+
+            (width, height, policy_result, padding, offset)
+        };
 
         let mut measured_children = Vec::new();
         for &child_id in children.iter() {
@@ -797,25 +1158,6 @@ impl LayoutBuilderState {
 
         Ok(measured)
     }
-
-    fn measure_button(
-        state_rc: Rc<RefCell<Self>>,
-        node_id: NodeId,
-        node: ButtonNode,
-        constraints: Constraints,
-    ) -> Result<Rc<MeasuredNode>, NodeError> {
-        use crate::layout::policies::FlexMeasurePolicy;
-        let mut layout = LayoutNode::new(
-            node.modifier.clone(),
-            Rc::new(FlexMeasurePolicy::column(
-                LinearArrangement::Start,
-                HorizontalAlignment::Start,
-            )),
-        );
-        layout.children = node.children.clone();
-        let snapshot = LayoutNodeSnapshot::from_layout_node(&layout);
-        Self::measure_layout_node(state_rc, node_id, snapshot, constraints)
-    }
 }
 
 /// Snapshot of a LayoutNode's data for measuring.
@@ -826,6 +1168,7 @@ impl LayoutBuilderState {
 /// dirty (some nodes changed), clean nodes can skip measure and use cached results.
 struct LayoutNodeSnapshot {
     modifier: Modifier,
+    resolved_modifiers: ResolvedModifiers,
     measure_policy: Rc<dyn MeasurePolicy>,
     children: Vec<NodeId>,
     cache: LayoutNodeCacheHandles,
@@ -837,6 +1180,7 @@ impl LayoutNodeSnapshot {
     fn from_layout_node(node: &LayoutNode) -> Self {
         Self {
             modifier: node.modifier.clone(),
+            resolved_modifiers: node.resolved_modifiers(),
             measure_policy: Rc::clone(&node.measure_policy),
             children: node.children.iter().copied().collect(),
             cache: node.cache_handles(),
@@ -1172,10 +1516,15 @@ impl Measurable for LayoutChildMeasurable {
     }
 
     fn flex_parent_data(&self) -> Option<compose_ui_layout::FlexParentData> {
-        let mut applier = self.applier.borrow_typed();
+        // Try to borrow the applier - if it's already borrowed (nested measurement), return None.
+        // This is safe because parent data doesn't change during measurement.
+        let Ok(mut applier) = self.applier.try_borrow_typed() else {
+            return None;
+        };
+
         applier
             .with_node::<LayoutNode, _>(self.node_id, |layout_node| {
-                let props = layout_node.modifier.layout_properties();
+                let props = layout_node.resolved_modifiers().layout_properties();
                 props.weight().map(|weight_data| {
                     compose_ui_layout::FlexParentData::new(weight_data.weight, weight_data.fill)
                 })
@@ -1231,6 +1580,129 @@ impl Placeable for LayoutChildPlaceable {
     }
 }
 
+/// Simple measurable that wraps a fixed size.
+/// Used in the modifier coordinator chain to pass measurement results between nodes.
+struct SizeMeasurable {
+    size: Size,
+}
+
+impl Measurable for SizeMeasurable {
+    fn measure(&self, _constraints: Constraints) -> Box<dyn Placeable> {
+        Box::new(SizePlaceable { size: self.size })
+    }
+
+    fn min_intrinsic_width(&self, _height: f32) -> f32 {
+        self.size.width
+    }
+
+    fn max_intrinsic_width(&self, _height: f32) -> f32 {
+        self.size.width
+    }
+
+    fn min_intrinsic_height(&self, _width: f32) -> f32 {
+        self.size.height
+    }
+
+    fn max_intrinsic_height(&self, _width: f32) -> f32 {
+        self.size.height
+    }
+}
+
+struct SizePlaceable {
+    size: Size,
+}
+
+impl Placeable for SizePlaceable {
+    fn place(&self, _x: f32, _y: f32) {}
+
+    fn width(&self) -> f32 {
+        self.size.width
+    }
+
+    fn height(&self) -> f32 {
+        self.size.height
+    }
+
+    fn node_id(&self) -> NodeId {
+        0
+    }
+}
+
+/// Measurable that wraps the content (measure_policy + children) for use in modifier chain.
+struct ContentMeasurable {
+    measure_policy: Rc<dyn MeasurePolicy>,
+    measurables: Vec<Box<dyn Measurable>>,
+    policy_result: Rc<RefCell<Option<MeasureResult>>>,
+}
+
+impl ContentMeasurable {
+    fn new(measure_policy: Rc<dyn MeasurePolicy>, measurables: Vec<Box<dyn Measurable>>) -> Self {
+        Self {
+            measure_policy,
+            measurables,
+            policy_result: Rc::new(RefCell::new(None)),
+        }
+    }
+
+    fn get_policy_result(&self) -> Option<MeasureResult> {
+        self.policy_result.borrow().clone()
+    }
+}
+
+impl Measurable for ContentMeasurable {
+    fn measure(&self, constraints: Constraints) -> Box<dyn Placeable> {
+        let result = self.measure_policy.measure(&self.measurables, constraints);
+        *self.policy_result.borrow_mut() = Some(result.clone());
+        Box::new(ContentPlaceable {
+            size: result.size,
+            policy_result: Rc::clone(&self.policy_result),
+        })
+    }
+
+    fn min_intrinsic_width(&self, height: f32) -> f32 {
+        self.measure_policy
+            .min_intrinsic_width(&self.measurables, height)
+    }
+
+    fn max_intrinsic_width(&self, height: f32) -> f32 {
+        self.measure_policy
+            .max_intrinsic_width(&self.measurables, height)
+    }
+
+    fn min_intrinsic_height(&self, width: f32) -> f32 {
+        self.measure_policy
+            .min_intrinsic_height(&self.measurables, width)
+    }
+
+    fn max_intrinsic_height(&self, width: f32) -> f32 {
+        self.measure_policy
+            .max_intrinsic_height(&self.measurables, width)
+    }
+}
+
+struct ContentPlaceable {
+    size: Size,
+    policy_result: Rc<RefCell<Option<MeasureResult>>>,
+}
+
+impl Placeable for ContentPlaceable {
+    fn place(&self, _x: f32, _y: f32) {
+        // Content placement is handled by the measure policy result
+    }
+
+    fn width(&self) -> f32 {
+        self.size.width
+    }
+
+    fn height(&self) -> f32 {
+        self.size.height
+    }
+
+    fn node_id(&self) -> NodeId {
+        0 // Not used for content placeable
+    }
+}
+
 fn measure_node_with_host(
     applier: Rc<ConcreteApplierHost<MemoryApplier>>,
     runtime_handle: Option<RuntimeHandle>,
@@ -1247,28 +1719,15 @@ fn measure_node_with_host(
     builder.measure_node(node_id, constraints)
 }
 
-fn measure_text(node_id: NodeId, node: &TextNode, constraints: Constraints) -> Rc<MeasuredNode> {
-    let base = measure_text_content(&node.text);
-    measure_leaf(node_id, node.modifier.clone(), base, constraints)
-}
-
-fn measure_spacer(
-    node_id: NodeId,
-    node: &SpacerNode,
-    constraints: Constraints,
-) -> Rc<MeasuredNode> {
-    measure_leaf(node_id, Modifier::empty(), node.size, constraints)
-}
-
 fn measure_leaf(
     node_id: NodeId,
-    modifier: Modifier,
+    resolved_modifiers: ResolvedModifiers,
     base_size: Size,
     constraints: Constraints,
 ) -> Rc<MeasuredNode> {
-    let props = modifier.layout_properties();
-    let padding = props.padding();
-    let offset = modifier.total_offset();
+    let props = resolved_modifiers.layout_properties();
+    let padding = resolved_modifiers.padding();
+    let offset = resolved_modifiers.offset();
 
     let mut width = base_size.width + padding.horizontal_sum();
     let mut height = base_size.height + padding.vertical_sum();
@@ -1301,6 +1760,8 @@ fn measure_leaf(
 #[derive(Clone)]
 struct RuntimeNodeMetadata {
     modifier: Modifier,
+    resolved_modifiers: ResolvedModifiers,
+    modifier_slices: ModifierNodeSlices,
     role: SemanticsRole,
     actions: Vec<SemanticsAction>,
     button_handler: Option<Rc<RefCell<dyn FnMut()>>>,
@@ -1310,6 +1771,8 @@ impl Default for RuntimeNodeMetadata {
     fn default() -> Self {
         Self {
             modifier: Modifier::empty(),
+            resolved_modifiers: ResolvedModifiers::default(),
+            modifier_slices: ModifierNodeSlices::default(),
             role: SemanticsRole::Unknown,
             actions: Vec::new(),
             button_handler: None,
@@ -1324,6 +1787,48 @@ fn collect_runtime_metadata(
     let mut map = HashMap::default();
     collect_runtime_metadata_inner(applier, node, &mut map)?;
     Ok(map)
+}
+
+/// Collects semantics configurations for all nodes in the measured tree using the SemanticsOwner cache.
+fn collect_semantics_with_owner(
+    applier: &mut MemoryApplier,
+    node: &MeasuredNode,
+    owner: &SemanticsOwner,
+) -> Result<(), NodeError> {
+    // Compute and cache configuration for this node
+    owner.get_or_compute(node.node_id, applier);
+
+    // Recurse to children
+    for child in &node.children {
+        collect_semantics_with_owner(applier, &child.node, owner)?;
+    }
+    Ok(())
+}
+
+fn collect_semantics_snapshot(
+    applier: &mut MemoryApplier,
+    node: &MeasuredNode,
+) -> Result<HashMap<NodeId, Option<SemanticsConfiguration>>, NodeError> {
+    let owner = SemanticsOwner::new();
+    collect_semantics_with_owner(applier, node, &owner)?;
+
+    // Extract all cached configurations into a map
+    let mut map = HashMap::default();
+    extract_configurations_recursive(node, &owner, &mut map);
+    Ok(map)
+}
+
+fn extract_configurations_recursive(
+    node: &MeasuredNode,
+    owner: &SemanticsOwner,
+    map: &mut HashMap<NodeId, Option<SemanticsConfiguration>>,
+) {
+    if let Some(config) = owner.configurations.borrow().get(&node.node_id) {
+        map.insert(node.node_id, config.clone());
+    }
+    for child in &node.children {
+        extract_configurations_recursive(&child.node, owner, map);
+    }
 }
 
 fn collect_runtime_metadata_inner(
@@ -1341,51 +1846,55 @@ fn collect_runtime_metadata_inner(
     Ok(())
 }
 
+/// Extracts text content from a LayoutNode's modifier chain.
+///
+/// Searches the modifier chain for a TextModifierNode and returns its text content.
+/// This replaces the old approach of checking measure_policy.text_content().
+///
+/// We extract text from the semantics configuration, which TextModifierNode
+/// populates via its SemanticsNode implementation.
+fn extract_text_from_layout_node(layout: &LayoutNode) -> Option<String> {
+    // Use the semantics configuration which collects data from all SemanticsNode instances
+    // in the modifier chain, including TextModifierNode
+    layout
+        .semantics_configuration()
+        .and_then(|config| config.content_description)
+}
+
 fn runtime_metadata_for(
     applier: &mut MemoryApplier,
     node_id: NodeId,
 ) -> Result<RuntimeNodeMetadata, NodeError> {
+    // Try LayoutNode (the primary modern path)
     if let Some(layout) = try_clone::<LayoutNode>(applier, node_id)? {
+        // Extract text content from the modifier chain instead of measure policy
+        let role = if let Some(text) = extract_text_from_layout_node(&layout) {
+            SemanticsRole::Text { value: text }
+        } else {
+            SemanticsRole::Layout
+        };
+
         return Ok(RuntimeNodeMetadata {
             modifier: layout.modifier.clone(),
-            role: SemanticsRole::Layout,
+            resolved_modifiers: layout.resolved_modifiers(),
+            modifier_slices: layout.modifier_slices_snapshot(),
+            role,
             actions: Vec::new(),
             button_handler: None,
         });
     }
-    if let Some(button) = try_clone::<ButtonNode>(applier, node_id)? {
-        return Ok(RuntimeNodeMetadata {
-            modifier: button.modifier.clone(),
-            role: SemanticsRole::Button,
-            actions: vec![SemanticsAction::Click {
-                handler: SemanticsCallback::new(node_id),
-            }],
-            button_handler: Some(button.on_click.clone()),
-        });
-    }
-    if let Some(text) = try_clone::<TextNode>(applier, node_id)? {
-        return Ok(RuntimeNodeMetadata {
-            modifier: text.modifier.clone(),
-            role: SemanticsRole::Text {
-                value: text.text.clone(),
-            },
-            actions: Vec::new(),
-            button_handler: None,
-        });
-    }
-    if try_clone::<SpacerNode>(applier, node_id)?.is_some() {
-        return Ok(RuntimeNodeMetadata {
-            modifier: Modifier::empty(),
-            role: SemanticsRole::Spacer,
-            actions: Vec::new(),
-            button_handler: None,
-        });
-    }
-    if let Ok(modifier) =
-        applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| node.modifier())
+
+    // Try SubcomposeLayoutNode
+    if let Ok((modifier, resolved_modifiers)) = applier
+        .with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
+            (node.modifier(), node.resolved_modifiers())
+        })
     {
+        let modifier_slices = collect_slices_from_modifier(&modifier);
         return Ok(RuntimeNodeMetadata {
             modifier,
+            resolved_modifiers,
+            modifier_slices,
             role: SemanticsRole::Subcompose,
             actions: Vec::new(),
             button_handler: None,
@@ -1394,17 +1903,76 @@ fn runtime_metadata_for(
     Ok(RuntimeNodeMetadata::default())
 }
 
+/// Computes semantics configuration for a node by reading from its modifier chain.
+/// This is the primary entry point for extracting semantics from nodes, replacing
+/// the widget-specific fallbacks with pure modifier-node traversal.
+fn compute_semantics_for_node(
+    applier: &mut MemoryApplier,
+    node_id: NodeId,
+) -> Option<SemanticsConfiguration> {
+    // Try LayoutNode (the primary modern path)
+    match applier.with_node::<LayoutNode, _>(node_id, |layout| {
+        let config = layout.semantics_configuration();
+        layout.clear_needs_semantics();
+        config
+    }) {
+        Ok(config) => return config,
+        Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => {}
+        Err(_) => return None,
+    }
+
+    // Try SubcomposeLayoutNode
+    if let Ok(modifier) =
+        applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| node.modifier())
+    {
+        return collect_semantics_from_modifier(&modifier);
+    }
+
+    None
+}
+
+/// Builds a semantics node from measured tree data and semantics configurations.
+/// Roles and actions are now derived entirely from SemanticsConfiguration, with
+/// metadata consulted only for legacy widget type information.
 fn build_semantics_node(
     node: &MeasuredNode,
     metadata: &HashMap<NodeId, RuntimeNodeMetadata>,
+    semantics: &HashMap<NodeId, Option<SemanticsConfiguration>>,
 ) -> SemanticsNode {
     let info = metadata.get(&node.node_id).cloned().unwrap_or_default();
+
+    // Start with the widget-derived role as a fallback
+    let mut role = info.role.clone();
+    let mut actions = Vec::new();
+    let mut description = None;
+
+    // Override with semantics configuration if present
+    if let Some(config) = semantics.get(&node.node_id).cloned().flatten() {
+        // Role synthesis: prefer semantics flags over widget type
+        if config.is_button {
+            role = SemanticsRole::Button;
+        }
+
+        // Action synthesis: create click action if node is clickable
+        if config.is_clickable {
+            actions.push(SemanticsAction::Click {
+                handler: SemanticsCallback::new(node.node_id),
+            });
+        }
+
+        // Description from configuration
+        if let Some(desc) = config.content_description {
+            description = Some(desc);
+        }
+    }
+
     let children = node
         .children
         .iter()
-        .map(|child| build_semantics_node(&child.node, metadata))
+        .map(|child| build_semantics_node(&child.node, metadata, semantics))
         .collect();
-    SemanticsNode::new(node.node_id, info.role, info.actions, children)
+
+    SemanticsNode::new(node.node_id, role, actions, children, description)
 }
 
 fn build_layout_tree_from_metadata(
@@ -1428,7 +1996,12 @@ fn build_layout_tree_from_metadata(
         };
         let info = metadata.get(&node.node_id).cloned().unwrap_or_default();
         let kind = layout_kind_from_metadata(node.node_id, &info);
-        let data = LayoutNodeData::new(info.modifier.clone(), kind);
+        let data = LayoutNodeData::new(
+            info.modifier.clone(),
+            info.resolved_modifiers,
+            info.modifier_slices.clone(),
+            kind,
+        );
         let children = node
             .children
             .iter()
@@ -1463,14 +2036,6 @@ fn layout_kind_from_metadata(_node_id: NodeId, info: &RuntimeNodeMetadata) -> La
             LayoutNodeKind::Button { on_click: handler }
         }
         SemanticsRole::Unknown => LayoutNodeKind::Unknown,
-    }
-}
-
-fn measure_text_content(text: &str) -> Size {
-    let metrics = crate::text::measure_text(text);
-    Size {
-        width: metrics.width,
-        height: metrics.height,
     }
 }
 
