@@ -1227,10 +1227,13 @@ impl ModifierNodeChain {
 
     /// Detaches every node in the chain and clears internal storage.
     pub fn detach_all(&mut self) {
-        for mut entry in std::mem::take(&mut self.entries) {
+        for entry in std::mem::take(&mut self.entries) {
             detach_node_tree(&mut **entry.node.borrow_mut());
-            let state = entry.node.borrow().node_state();
-            state.set_capabilities(NodeCapabilities::empty());
+            {
+                let node_borrow = entry.node.borrow();
+                let state = node_borrow.node_state();
+                state.set_capabilities(NodeCapabilities::empty());
+            }
         }
         self.aggregated_capabilities = NodeCapabilities::empty();
         self.head_aggregate_child_capabilities = NodeCapabilities::empty();
@@ -1376,8 +1379,15 @@ impl ModifierNodeChain {
             if matches!(link, NodeLink::Entry(path) if path.delegates().is_empty()) {
                 return None;
             }
-            let candidate = self.resolve_node(link);
-            if node_data_ptr(candidate) == target {
+            let matches_target = match link {
+                NodeLink::Head => node_data_ptr(self.head_sentinel.as_ref()) == target,
+                NodeLink::Tail => node_data_ptr(self.tail_sentinel.as_ref()) == target,
+                NodeLink::Entry(path) => {
+                    let node_borrow = self.entries[path.entry()].node.borrow();
+                    node_data_ptr(&**node_borrow) == target
+                }
+            };
+            if matches_target {
                 Some(self.make_node_ref(link.clone()))
             } else {
                 None
@@ -1410,6 +1420,12 @@ impl ModifierNodeChain {
         })
     }
 
+    /// Returns an Rc clone of the node at the given index for shared ownership.
+    /// This is used by coordinators to hold direct references to nodes.
+    pub fn get_node_rc(&self, index: usize) -> Option<Rc<RefCell<Box<dyn ModifierNode>>>> {
+        self.entries.get(index).map(|entry| Rc::clone(&entry.node))
+    }
+
     /// Returns true if the chain contains any nodes matching the given invalidation kind.
     pub fn has_nodes_for_invalidation(&self, kind: InvalidationKind) -> bool {
         self.aggregated_capabilities
@@ -1422,8 +1438,20 @@ impl ModifierNodeChain {
         F: FnMut(&dyn ModifierNode, NodeCapabilities),
     {
         for link in &self.ordered_nodes {
-            let node = self.resolve_node(link);
-            f(node, node.node_state().capabilities());
+            match link {
+                NodeLink::Head => {
+                    let node = self.head_sentinel.as_ref();
+                    f(node, node.node_state().capabilities());
+                }
+                NodeLink::Tail => {
+                    let node = self.tail_sentinel.as_ref();
+                    f(node, node.node_state().capabilities());
+                }
+                NodeLink::Entry(path) => {
+                    let node_borrow = self.entries[path.entry()].node.borrow();
+                    f(&**node_borrow, node_borrow.node_state().capabilities());
+                }
+            }
         }
     }
 
@@ -1434,9 +1462,23 @@ impl ModifierNodeChain {
     {
         for index in 0..self.ordered_nodes.len() {
             let link = self.ordered_nodes[index].clone();
-            let node = self.resolve_node_mut_from_link(link);
-            let capabilities = node.node_state().capabilities();
-            f(node, capabilities);
+            match link {
+                NodeLink::Head => {
+                    let node = self.head_sentinel.as_mut();
+                    let capabilities = node.node_state().capabilities();
+                    f(node, capabilities);
+                }
+                NodeLink::Tail => {
+                    let node = self.tail_sentinel.as_mut();
+                    let capabilities = node.node_state().capabilities();
+                    f(node, capabilities);
+                }
+                NodeLink::Entry(path) => {
+                    let mut node_borrow = self.entries[path.entry()].node.borrow_mut();
+                    let capabilities = node_borrow.node_state().capabilities();
+                    f(&mut **node_borrow, capabilities);
+                }
+            }
         }
     }
 
@@ -1470,15 +1512,36 @@ impl ModifierNodeChain {
 
         let mut previous = NodeLink::Head;
         for link in self.ordered_nodes.iter().cloned() {
-            self.node_state_for_link(&previous)
-                .set_child_link(Some(link.clone()));
-            self.node_state_for_link(&link)
-                .set_parent_link(Some(previous.clone()));
+            // Set child link on previous
+            match &previous {
+                NodeLink::Head => self.head_sentinel.node_state().set_child_link(Some(link.clone())),
+                NodeLink::Tail => self.tail_sentinel.node_state().set_child_link(Some(link.clone())),
+                NodeLink::Entry(path) => {
+                    let node_borrow = self.entries[path.entry()].node.borrow();
+                    node_borrow.node_state().set_child_link(Some(link.clone()));
+                }
+            }
+            // Set parent link on current
+            match &link {
+                NodeLink::Head => self.head_sentinel.node_state().set_parent_link(Some(previous.clone())),
+                NodeLink::Tail => self.tail_sentinel.node_state().set_parent_link(Some(previous.clone())),
+                NodeLink::Entry(path) => {
+                    let node_borrow = self.entries[path.entry()].node.borrow();
+                    node_borrow.node_state().set_parent_link(Some(previous.clone()));
+                }
+            }
             previous = link;
         }
 
-        self.node_state_for_link(&previous)
-            .set_child_link(Some(NodeLink::Tail));
+        // Set child link on last node to Tail
+        match &previous {
+            NodeLink::Head => self.head_sentinel.node_state().set_child_link(Some(NodeLink::Tail)),
+            NodeLink::Tail => self.tail_sentinel.node_state().set_child_link(Some(NodeLink::Tail)),
+            NodeLink::Entry(path) => {
+                let node_borrow = self.entries[path.entry()].node.borrow();
+                node_borrow.node_state().set_child_link(Some(NodeLink::Tail));
+            }
+        }
         self.tail_sentinel
             .node_state()
             .set_parent_link(Some(previous.clone()));
@@ -1486,10 +1549,24 @@ impl ModifierNodeChain {
 
         let mut aggregate = NodeCapabilities::empty();
         for link in self.ordered_nodes.iter().rev() {
-            let node = self.resolve_node(link);
-            aggregate |= node.node_state().capabilities();
-            node.node_state()
-                .set_aggregate_child_capabilities(aggregate);
+            match link {
+                NodeLink::Head => {
+                    let state = self.head_sentinel.node_state();
+                    aggregate |= state.capabilities();
+                    state.set_aggregate_child_capabilities(aggregate);
+                }
+                NodeLink::Tail => {
+                    let state = self.tail_sentinel.node_state();
+                    aggregate |= state.capabilities();
+                    state.set_aggregate_child_capabilities(aggregate);
+                }
+                NodeLink::Entry(path) => {
+                    let node_borrow = self.entries[path.entry()].node.borrow();
+                    let state = node_borrow.node_state();
+                    aggregate |= state.capabilities();
+                    state.set_aggregate_child_capabilities(aggregate);
+                }
+            }
         }
 
         self.aggregated_capabilities = aggregate;
@@ -1532,87 +1609,70 @@ impl ModifierNodeChain {
         });
     }
 
-    fn node_state_for_link(&self, link: &NodeLink) -> &NodeState {
-        match link {
-            NodeLink::Head => self.head_sentinel.node_state(),
-            NodeLink::Tail => self.tail_sentinel.node_state(),
-            NodeLink::Entry(path) => self.resolve_entry_node(path).node_state(),
-        }
-    }
-
-    fn resolve_node(&self, link: &NodeLink) -> &dyn ModifierNode {
-        match link {
-            NodeLink::Head => self.head_sentinel.as_ref(),
-            NodeLink::Tail => self.tail_sentinel.as_ref(),
-            NodeLink::Entry(path) => self.resolve_entry_node(path),
-        }
-    }
-
-    fn resolve_node_mut_from_link(&mut self, link: NodeLink) -> &mut dyn ModifierNode {
-        match link {
-            NodeLink::Head => self.head_sentinel.as_mut(),
-            NodeLink::Tail => self.tail_sentinel.as_mut(),
-            NodeLink::Entry(path) => self.resolve_entry_node_mut(path),
-        }
-    }
-
-    fn resolve_entry_node(&self, path: &NodePath) -> &dyn ModifierNode {
-        let mut node: &dyn ModifierNode = self.entries[path.entry()].node.as_ref();
-        for &delegate_index in path.delegates() {
-            node = nth_delegate(node, delegate_index).expect("invalid delegate path");
-        }
-        node
-    }
-
-    fn resolve_entry_node_mut(&mut self, path: NodePath) -> &mut dyn ModifierNode {
-        let (entry, delegates) = path.into_parts();
-        let mut node: &mut dyn ModifierNode = self.entries[entry].node.as_mut();
-        for delegate_index in delegates {
-            node = nth_delegate_mut(node, delegate_index).expect("invalid delegate path");
-        }
-        node
-    }
 }
 
 impl<'a> ModifierChainNodeRef<'a> {
-    fn raw_node(&self) -> &'a dyn ModifierNode {
-        self.chain.resolve_node(&self.link)
-    }
-
-    fn state(&self) -> &'a NodeState {
-        self.chain.node_state_for_link(&self.link)
+    /// Helper to get NodeState, properly handling RefCell for entries.
+    /// Returns NodeState values by calling a closure with the state.
+    fn with_state<R>(&self, f: impl FnOnce(&NodeState) -> R) -> R {
+        match &self.link {
+            NodeLink::Head => f(self.chain.head_sentinel.node_state()),
+            NodeLink::Tail => f(self.chain.tail_sentinel.node_state()),
+            NodeLink::Entry(path) => {
+                let node_borrow = self.chain.entries[path.entry()].node.borrow();
+                f(node_borrow.node_state())
+            }
+        }
     }
 
     /// Returns the underlying modifier node when this reference targets a real entry.
+    ///
+    /// DEPRECATED: With Rc<RefCell<>> storage, this method can't return references
+    /// for entry nodes without unsafe code. Use `with_node()` instead.
     pub fn node(&self) -> Option<&'a dyn ModifierNode> {
-        if self.state().is_sentinel() {
-            None
-        } else {
-            Some(self.raw_node())
+        match &self.link {
+            NodeLink::Head => None, // Head sentinel
+            NodeLink::Tail => None, // Tail sentinel
+            NodeLink::Entry(_) => {
+                panic!("node() called on entry node - use with_node() instead or chain.get_node_rc()")
+            }
+        }
+    }
+
+    /// Provides access to the node via a closure, properly handling RefCell borrows.
+    /// Returns None for sentinel nodes.
+    pub fn with_node<R>(&self, f: impl FnOnce(&dyn ModifierNode) -> R) -> Option<R> {
+        match &self.link {
+            NodeLink::Head => None, // Head sentinel
+            NodeLink::Tail => None, // Tail sentinel
+            NodeLink::Entry(path) => {
+                let node_borrow = self.chain.entries[path.entry()].node.borrow();
+                Some(f(&**node_borrow))
+            }
         }
     }
 
     /// Returns the parent reference, including sentinel head when applicable.
     pub fn parent(&self) -> Option<Self> {
-        self.state()
-            .parent_link()
+        self.with_state(|state| state.parent_link())
             .map(|link| self.chain.make_node_ref(link))
     }
 
     /// Returns the child reference, including sentinel tail for the last entry.
     pub fn child(&self) -> Option<Self> {
-        self.state()
-            .child_link()
+        self.with_state(|state| state.child_link())
             .map(|link| self.chain.make_node_ref(link))
     }
 
     /// Returns the capability mask for this specific node.
     pub fn kind_set(&self) -> NodeCapabilities {
-        if self.state().is_sentinel() {
-            NodeCapabilities::empty()
-        } else {
-            self.state().capabilities()
-        }
+        self.with_state(|state| {
+            if state.is_sentinel() {
+                NodeCapabilities::empty()
+            } else {
+                state.capabilities()
+            }
+        })
     }
 
     /// Returns the entry index backing this node when it is part of the chain.
@@ -1636,7 +1696,7 @@ impl<'a> ModifierChainNodeRef<'a> {
         if self.is_tail() {
             NodeCapabilities::empty()
         } else {
-            self.state().aggregate_child_capabilities()
+            self.with_state(|state| state.aggregate_child_capabilities())
         }
     }
 
@@ -1652,7 +1712,7 @@ impl<'a> ModifierChainNodeRef<'a> {
 
     /// Returns true if this reference targets either sentinel.
     pub fn is_sentinel(&self) -> bool {
-        self.state().is_sentinel()
+        self.with_state(|state| state.is_sentinel())
     }
 
     /// Returns true if this node has any capability bits present in `mask`.

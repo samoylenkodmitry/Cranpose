@@ -736,7 +736,7 @@ impl LayoutBuilderState {
         use compose_foundation::NodeCapabilities;
 
         // Collect layout node information from the modifier chain
-        let mut layout_node_indices: Vec<usize> = Vec::new();
+        let mut layout_node_data: Vec<(usize, Rc<RefCell<Box<dyn compose_foundation::ModifierNode>>>)> = Vec::new();
         let mut padding = EdgeInsets::default();
         let mut offset = Point::default();
 
@@ -752,12 +752,15 @@ impl LayoutBuilderState {
                         return;
                     }
 
-                    // Collect indices of layout modifier nodes
+                    // Collect indices and node Rc clones for layout modifier nodes
                     chain_handle.chain().for_each_forward_matching(
                         NodeCapabilities::LAYOUT,
                         |node_ref| {
                             if let Some(index) = node_ref.entry_index() {
-                                layout_node_indices.push(index);
+                                // Get the Rc clone for this node
+                                if let Some(node_rc) = chain_handle.chain().get_node_rc(index) {
+                                    layout_node_data.push((index, node_rc));
+                                }
 
                                 // Calculate padding and offset for backward compat
                                 if let Some(node) = node_ref.node() {
@@ -777,13 +780,13 @@ impl LayoutBuilderState {
                 .map_err(|_| ())?;
         }
 
-        if layout_node_indices.is_empty() {
+        if layout_node_data.is_empty() {
             return Err(());
         }
 
         // Build the coordinator chain from innermost to outermost
         // Reverse order: rightmost modifier is measured first (innermost), leftmost is outer
-        layout_node_indices.reverse();
+        layout_node_data.reverse();
 
         // Create a shared context for this measurement pass to track invalidations
         let shared_context = Rc::new(RefCell::new(LayoutNodeContext::new()));
@@ -800,12 +803,13 @@ impl LayoutBuilderState {
 
         // Wrap each layout modifier node in a coordinator, building the chain
         let mut current_coordinator = inner_coordinator;
-        for node_index in layout_node_indices {
+        for (node_index, node_rc) in layout_node_data {
             current_coordinator = Box::new(
                 crate::layout::coordinator::LayoutModifierCoordinator::new(
                     Rc::clone(state_rc),
                     node_id,
                     node_index,
+                    node_rc,
                     current_coordinator,
                     Rc::clone(&shared_context),
                 )
