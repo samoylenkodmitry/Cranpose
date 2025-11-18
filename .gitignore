@@ -16,6 +16,9 @@
 # Logs
 *.log
 
+# Temporary test output
+*.tmp
+
 # Misc
 *.swp
 *.swo
