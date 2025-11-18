@@ -114,9 +114,11 @@ pub fn collect_modifier_slices(chain: &ModifierNodeChain) -> ModifierNodeSlices 
         // Collect click handlers from ClickableNode
         if let Some(clickable) = any.downcast_ref::<ClickableNode>() {
             slices.click_handlers.push(clickable.handler());
+            // Skip adding to pointer_inputs to avoid duplicate invocation
+            return;
         }
 
-        // Collect general pointer input handlers
+        // Collect general pointer input handlers (non-clickable)
         if let Some(handler) = node
             .as_pointer_input_node()
             .and_then(|n| n.pointer_input_handler())
