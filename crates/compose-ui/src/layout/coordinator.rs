@@ -14,55 +14,217 @@ use crate::modifier::{Size, Point, EdgeInsets};
 use crate::layout::{MeasurePolicy, MeasureResult, LayoutNodeContext};
 use crate::widgets::nodes::LayoutNode;
 
-/// Snapshot of layout modifier node configuration to allow measurement without holding applier borrow.
-enum NodeKind {
-    Padding(EdgeInsets),
-    Size {
-        min_width: Option<f32>,
-        max_width: Option<f32>,
-        min_height: Option<f32>,
-        max_height: Option<f32>,
-        enforce: bool,
-    },
-    Fill {
-        direction: crate::modifier_nodes::FillDirection,
-        fraction: f32,
-    },
-    Offset {
-        offset: Point,
-        rtl_aware: bool,
-    },
-    Text(String),
+/// Trait for nodes that can create a measurement proxy to work around borrow checker constraints.
+///
+/// In Jetpack Compose, coordinators can hold direct references to nodes. In Rust, we need to
+/// work around the borrow checker by extracting enough information to perform measurement
+/// without holding a borrow to the modifier chain.
+trait MeasurementProxy {
+    fn measure_proxy(&self, context: &mut dyn ModifierNodeContext, wrapped: &dyn Measurable, constraints: Constraints) -> Size;
+    fn min_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32;
+    fn max_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32;
+    fn min_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32;
+    fn max_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32;
 }
 
-impl NodeKind {
-    fn measure(&self, context: &mut LayoutNodeContext, wrapped: &dyn Measurable, constraints: Constraints) -> Size {
-        use crate::modifier_nodes::{PaddingNode, SizeNode, FillNode, OffsetNode};
-        use crate::text_modifier_node::TextModifierNode;
-        use compose_foundation::LayoutModifierNode;
+/// Generic proxy that works for any layout modifier node by recreating it from configuration data.
+struct GenericMeasurementProxy<T> {
+    data: T,
+}
 
-        match self {
-            NodeKind::Padding(padding) => {
-                let node = PaddingNode::new(*padding);
-                node.measure(context, wrapped, constraints)
-            }
-            NodeKind::Size { min_width, max_width, min_height, max_height, enforce } => {
-                let node = SizeNode::new(*min_width, *max_width, *min_height, *max_height, *enforce);
-                node.measure(context, wrapped, constraints)
-            }
-            NodeKind::Fill { direction, fraction } => {
-                let node = FillNode::new(*direction, *fraction);
-                node.measure(context, wrapped, constraints)
-            }
-            NodeKind::Offset { offset, rtl_aware } => {
-                let node = OffsetNode::new(offset.x, offset.y, *rtl_aware);
-                node.measure(context, wrapped, constraints)
-            }
-            NodeKind::Text(text) => {
-                let node = TextModifierNode::new(text.clone());
-                node.measure(context, wrapped, constraints)
-            }
-        }
+impl<T> GenericMeasurementProxy<T> {
+    fn new(data: T) -> Self {
+        Self { data }
+    }
+}
+
+// Implement proxy for known node types
+use crate::modifier_nodes::{PaddingNode, SizeNode, FillNode, OffsetNode, FillDirection};
+use crate::text_modifier_node::TextModifierNode;
+
+// Proxy implementations for each known node type
+impl MeasurementProxy for GenericMeasurementProxy<EdgeInsets> {
+    fn measure_proxy(&self, context: &mut dyn ModifierNodeContext, wrapped: &dyn Measurable, constraints: Constraints) -> Size {
+        let node = PaddingNode::new(self.data);
+        node.measure(context, wrapped, constraints)
+    }
+
+    fn min_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
+        let node = PaddingNode::new(self.data);
+        node.min_intrinsic_width(wrapped, height)
+    }
+
+    fn max_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
+        let node = PaddingNode::new(self.data);
+        node.max_intrinsic_width(wrapped, height)
+    }
+
+    fn min_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32 {
+        let node = PaddingNode::new(self.data);
+        node.min_intrinsic_height(wrapped, width)
+    }
+
+    fn max_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32 {
+        let node = PaddingNode::new(self.data);
+        node.max_intrinsic_height(wrapped, width)
+    }
+}
+
+struct SizeNodeConfig {
+    min_width: Option<f32>,
+    max_width: Option<f32>,
+    min_height: Option<f32>,
+    max_height: Option<f32>,
+    enforce: bool,
+}
+
+impl MeasurementProxy for GenericMeasurementProxy<SizeNodeConfig> {
+    fn measure_proxy(&self, context: &mut dyn ModifierNodeContext, wrapped: &dyn Measurable, constraints: Constraints) -> Size {
+        let node = SizeNode::new(self.data.min_width, self.data.max_width, self.data.min_height, self.data.max_height, self.data.enforce);
+        node.measure(context, wrapped, constraints)
+    }
+
+    fn min_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
+        let node = SizeNode::new(self.data.min_width, self.data.max_width, self.data.min_height, self.data.max_height, self.data.enforce);
+        node.min_intrinsic_width(wrapped, height)
+    }
+
+    fn max_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
+        let node = SizeNode::new(self.data.min_width, self.data.max_width, self.data.min_height, self.data.max_height, self.data.enforce);
+        node.max_intrinsic_width(wrapped, height)
+    }
+
+    fn min_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32 {
+        let node = SizeNode::new(self.data.min_width, self.data.max_width, self.data.min_height, self.data.max_height, self.data.enforce);
+        node.min_intrinsic_height(wrapped, width)
+    }
+
+    fn max_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32 {
+        let node = SizeNode::new(self.data.min_width, self.data.max_width, self.data.min_height, self.data.max_height, self.data.enforce);
+        node.max_intrinsic_height(wrapped, width)
+    }
+}
+
+struct FillNodeConfig {
+    direction: FillDirection,
+    fraction: f32,
+}
+
+impl MeasurementProxy for GenericMeasurementProxy<FillNodeConfig> {
+    fn measure_proxy(&self, context: &mut dyn ModifierNodeContext, wrapped: &dyn Measurable, constraints: Constraints) -> Size {
+        let node = FillNode::new(self.data.direction, self.data.fraction);
+        node.measure(context, wrapped, constraints)
+    }
+
+    fn min_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
+        let node = FillNode::new(self.data.direction, self.data.fraction);
+        node.min_intrinsic_width(wrapped, height)
+    }
+
+    fn max_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
+        let node = FillNode::new(self.data.direction, self.data.fraction);
+        node.max_intrinsic_width(wrapped, height)
+    }
+
+    fn min_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32 {
+        let node = FillNode::new(self.data.direction, self.data.fraction);
+        node.min_intrinsic_height(wrapped, width)
+    }
+
+    fn max_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32 {
+        let node = FillNode::new(self.data.direction, self.data.fraction);
+        node.max_intrinsic_height(wrapped, width)
+    }
+}
+
+struct OffsetNodeConfig {
+    offset: Point,
+    rtl_aware: bool,
+}
+
+impl MeasurementProxy for GenericMeasurementProxy<OffsetNodeConfig> {
+    fn measure_proxy(&self, context: &mut dyn ModifierNodeContext, wrapped: &dyn Measurable, constraints: Constraints) -> Size {
+        let node = OffsetNode::new(self.data.offset.x, self.data.offset.y, self.data.rtl_aware);
+        node.measure(context, wrapped, constraints)
+    }
+
+    fn min_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
+        let node = OffsetNode::new(self.data.offset.x, self.data.offset.y, self.data.rtl_aware);
+        node.min_intrinsic_width(wrapped, height)
+    }
+
+    fn max_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
+        let node = OffsetNode::new(self.data.offset.x, self.data.offset.y, self.data.rtl_aware);
+        node.max_intrinsic_width(wrapped, height)
+    }
+
+    fn min_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32 {
+        let node = OffsetNode::new(self.data.offset.x, self.data.offset.y, self.data.rtl_aware);
+        node.min_intrinsic_height(wrapped, width)
+    }
+
+    fn max_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32 {
+        let node = OffsetNode::new(self.data.offset.x, self.data.offset.y, self.data.rtl_aware);
+        node.max_intrinsic_height(wrapped, width)
+    }
+}
+
+impl MeasurementProxy for GenericMeasurementProxy<String> {
+    fn measure_proxy(&self, context: &mut dyn ModifierNodeContext, wrapped: &dyn Measurable, constraints: Constraints) -> Size {
+        let node = TextModifierNode::new(self.data.clone());
+        node.measure(context, wrapped, constraints)
+    }
+
+    fn min_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
+        let node = TextModifierNode::new(self.data.clone());
+        node.min_intrinsic_width(wrapped, height)
+    }
+
+    fn max_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
+        let node = TextModifierNode::new(self.data.clone());
+        node.max_intrinsic_width(wrapped, height)
+    }
+
+    fn min_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32 {
+        let node = TextModifierNode::new(self.data.clone());
+        node.min_intrinsic_height(wrapped, width)
+    }
+
+    fn max_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32 {
+        let node = TextModifierNode::new(self.data.clone());
+        node.max_intrinsic_height(wrapped, width)
+    }
+}
+
+/// Extracts a measurement proxy from a layout modifier node.
+/// Returns None if the node type is unknown (for future extensibility).
+fn extract_measurement_proxy(node: &dyn LayoutModifierNode) -> Option<Box<dyn MeasurementProxy>> {
+    let any = (node as &dyn std::any::Any);
+
+    if let Some(padding_node) = any.downcast_ref::<PaddingNode>() {
+        Some(Box::new(GenericMeasurementProxy::new(padding_node.padding())))
+    } else if let Some(size_node) = any.downcast_ref::<SizeNode>() {
+        Some(Box::new(GenericMeasurementProxy::new(SizeNodeConfig {
+            min_width: size_node.min_width(),
+            max_width: size_node.max_width(),
+            min_height: size_node.min_height(),
+            max_height: size_node.max_height(),
+            enforce: size_node.enforce_incoming(),
+        })))
+    } else if let Some(fill_node) = any.downcast_ref::<FillNode>() {
+        Some(Box::new(GenericMeasurementProxy::new(FillNodeConfig {
+            direction: fill_node.direction(),
+            fraction: fill_node.fraction(),
+        })))
+    } else if let Some(offset_node) = any.downcast_ref::<OffsetNode>() {
+        Some(Box::new(GenericMeasurementProxy::new(OffsetNodeConfig {
+            offset: offset_node.offset(),
+            rtl_aware: offset_node.rtl_aware(),
+        })))
+    } else if let Some(text_node) = any.downcast_ref::<TextModifierNode>() {
+        Some(Box::new(GenericMeasurementProxy::new(text_node.text().to_string())))
+    } else {
+        None
     }
 }
 
@@ -163,92 +325,63 @@ impl<'a> NodeCoordinator for LayoutModifierCoordinator<'a> {
 
     fn place(&mut self, x: f32, y: f32) {
         self.set_position(Point { x, y });
-        // NOTE: Placement propagation not yet implemented.
-        // In Jetpack Compose, this would call wrapped.place() with appropriate transformations.
-        // Currently, placement is handled through MeasureResult placements after measurement.
-        // This will be implemented when coordinators are extended to handle the full layout pass.
+        // Propagate placement through the coordinator chain
+        self.wrapped.place(x, y);
     }
 }
 
 impl<'a> Measurable for LayoutModifierCoordinator<'a> {
     fn measure(&self, constraints: Constraints) -> Box<dyn Placeable> {
-        use crate::modifier_nodes::{PaddingNode, SizeNode, FillNode, OffsetNode};
-        use crate::text_modifier_node::TextModifierNode;
+        // Extract a measurement proxy from the node to work around Rust's borrow checker.
+        // In Jetpack Compose, coordinators can hold direct references to nodes, but in Rust
+        // we need to extract configuration data first, release the borrow, then perform
+        // measurement. This preserves node behavior while avoiding nested borrow panics.
 
-        // Invoke the reconciled node's measure method. To avoid nested borrow conflicts
-        // (where calling node.measure() tries to reborrow the applier that we're already
-        // borrowing), we use the shared LayoutNodeContext directly and only borrow the
-        // applier when needed within the node's measure implementation.
-        //
-        // For now, we handle known node types explicitly. When custom stateful LayoutModifierNodes
-        // are added, this will need to be refactored to support dynamic dispatch without
-        // nested borrows (possibly by changing coordinator ownership/lifetime model).
-
-        let size = {
+        let proxy = {
             let state = self.state_rc.borrow();
             let mut applier = state.applier.borrow_typed();
 
-            let result = applier.with_node::<LayoutNode, _>(self.node_id, |layout_node| {
-                let chain = layout_node.modifier_chain().chain();
+            applier
+                .with_node::<LayoutNode, _>(self.node_id, |layout_node| {
+                    let chain = layout_node.modifier_chain().chain();
 
-                if let Some(entry_ref) = chain.node_ref_at(self.node_index) {
-                    if let Some(node) = entry_ref.node() {
-                        let any = node.as_any();
-
-                        // Try to downcast to known types and invoke their measure
-                        // The nodes delegate to wrapped.measure() which will eventually
-                        // need to reborrow the applier, so we check first then release.
-                        if let Some(padding_node) = any.downcast_ref::<PaddingNode>() {
-                            let padding = padding_node.padding();
-                            Some((NodeKind::Padding(padding), ()))
-                        } else if let Some(size_node) = any.downcast_ref::<SizeNode>() {
-                            let min_width = size_node.min_width();
-                            let max_width = size_node.max_width();
-                            let min_height = size_node.min_height();
-                            let max_height = size_node.max_height();
-                            let enforce = size_node.enforce_incoming();
-                            Some((NodeKind::Size { min_width, max_width, min_height, max_height, enforce }, ()))
-                        } else if let Some(fill_node) = any.downcast_ref::<FillNode>() {
-                            Some((NodeKind::Fill { direction: fill_node.direction(), fraction: fill_node.fraction() }, ()))
-                        } else if let Some(offset_node) = any.downcast_ref::<OffsetNode>() {
-                            Some((NodeKind::Offset { offset: offset_node.offset(), rtl_aware: offset_node.rtl_aware() }, ()))
-                        } else if let Some(text_node) = any.downcast_ref::<TextModifierNode>() {
-                            Some((NodeKind::Text(text_node.text().to_string()), ()))
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            });
-
-            drop(applier);
-            drop(state);
-
-            // Now invoke measure with the extracted node info, applier borrow released
-            match result {
-                Ok(Some((node_kind, _))) => {
-                    match self.context.try_borrow_mut() {
-                        Ok(mut ctx) => node_kind.measure(&mut *ctx, self.wrapped.as_ref(), constraints),
-                        Err(_) => {
-                            let mut temp = LayoutNodeContext::new();
-                            let size = node_kind.measure(&mut temp, self.wrapped.as_ref(), constraints);
-                            if let Ok(mut shared) = self.context.try_borrow_mut() {
-                                for kind in temp.take_invalidations() {
-                                    shared.invalidate(kind);
-                                }
+                    if let Some(entry_ref) = chain.node_ref_at(self.node_index) {
+                        if let Some(node) = entry_ref.node() {
+                            if let Some(layout_modifier) = node.as_layout_node() {
+                                return extract_measurement_proxy(layout_modifier);
                             }
-                            size
                         }
                     }
+                    None
+                })
+                .unwrap_or(None)
+        };
+
+        let size = if let Some(proxy) = proxy {
+            // Use the proxy to measure with the applier borrow released
+            match self.context.try_borrow_mut() {
+                Ok(mut ctx) => proxy.measure_proxy(&mut *ctx, self.wrapped.as_ref(), constraints),
+                Err(_) => {
+                    // Context already borrowed - use a temporary context
+                    let mut temp = LayoutNodeContext::new();
+                    let size = proxy.measure_proxy(&mut temp, self.wrapped.as_ref(), constraints);
+
+                    // Merge invalidations from temp context to shared
+                    if let Ok(mut shared) = self.context.try_borrow_mut() {
+                        for kind in temp.take_invalidations() {
+                            shared.invalidate(kind);
+                        }
+                    }
+
+                    size
                 }
-                _ => {
-                    let placeable = self.wrapped.measure(constraints);
-                    Size { width: placeable.width(), height: placeable.height() }
-                }
+            }
+        } else {
+            // Unknown node type - pass through to wrapped coordinator
+            let placeable = self.wrapped.measure(constraints);
+            Size {
+                width: placeable.width(),
+                height: placeable.height(),
             }
         };
 
@@ -257,83 +390,115 @@ impl<'a> Measurable for LayoutModifierCoordinator<'a> {
     }
 
     fn min_intrinsic_width(&self, height: f32) -> f32 {
-        let state = self.state_rc.borrow();
-        let mut applier = state.applier.borrow_typed();
+        let proxy = {
+            let state = self.state_rc.borrow();
+            let mut applier = state.applier.borrow_typed();
 
-        applier
-            .with_node::<LayoutNode, _>(self.node_id, |layout_node| {
-                let chain = layout_node.modifier_chain().chain();
+            applier
+                .with_node::<LayoutNode, _>(self.node_id, |layout_node| {
+                    let chain = layout_node.modifier_chain().chain();
 
-                if let Some(entry_ref) = chain.node_ref_at(self.node_index) {
-                    if let Some(node) = entry_ref.node() {
-                        if let Some(layout_modifier) = node.as_layout_node() {
-                            return layout_modifier.min_intrinsic_width(self.wrapped.as_ref(), height);
+                    if let Some(entry_ref) = chain.node_ref_at(self.node_index) {
+                        if let Some(node) = entry_ref.node() {
+                            if let Some(layout_modifier) = node.as_layout_node() {
+                                return extract_measurement_proxy(layout_modifier);
+                            }
                         }
                     }
-                }
-                self.wrapped.min_intrinsic_width(height)
-            })
-            .unwrap_or_else(|_| self.wrapped.min_intrinsic_width(height))
+                    None
+                })
+                .unwrap_or(None)
+        };
+
+        if let Some(proxy) = proxy {
+            proxy.min_intrinsic_width_proxy(self.wrapped.as_ref(), height)
+        } else {
+            self.wrapped.min_intrinsic_width(height)
+        }
     }
 
     fn max_intrinsic_width(&self, height: f32) -> f32 {
-        let state = self.state_rc.borrow();
-        let mut applier = state.applier.borrow_typed();
+        let proxy = {
+            let state = self.state_rc.borrow();
+            let mut applier = state.applier.borrow_typed();
 
-        applier
-            .with_node::<LayoutNode, _>(self.node_id, |layout_node| {
-                let chain = layout_node.modifier_chain().chain();
+            applier
+                .with_node::<LayoutNode, _>(self.node_id, |layout_node| {
+                    let chain = layout_node.modifier_chain().chain();
 
-                if let Some(entry_ref) = chain.node_ref_at(self.node_index) {
-                    if let Some(node) = entry_ref.node() {
-                        if let Some(layout_modifier) = node.as_layout_node() {
-                            return layout_modifier.max_intrinsic_width(self.wrapped.as_ref(), height);
+                    if let Some(entry_ref) = chain.node_ref_at(self.node_index) {
+                        if let Some(node) = entry_ref.node() {
+                            if let Some(layout_modifier) = node.as_layout_node() {
+                                return extract_measurement_proxy(layout_modifier);
+                            }
                         }
                     }
-                }
-                self.wrapped.max_intrinsic_width(height)
-            })
-            .unwrap_or_else(|_| self.wrapped.max_intrinsic_width(height))
+                    None
+                })
+                .unwrap_or(None)
+        };
+
+        if let Some(proxy) = proxy {
+            proxy.max_intrinsic_width_proxy(self.wrapped.as_ref(), height)
+        } else {
+            self.wrapped.max_intrinsic_width(height)
+        }
     }
 
     fn min_intrinsic_height(&self, width: f32) -> f32 {
-        let state = self.state_rc.borrow();
-        let mut applier = state.applier.borrow_typed();
+        let proxy = {
+            let state = self.state_rc.borrow();
+            let mut applier = state.applier.borrow_typed();
 
-        applier
-            .with_node::<LayoutNode, _>(self.node_id, |layout_node| {
-                let chain = layout_node.modifier_chain().chain();
+            applier
+                .with_node::<LayoutNode, _>(self.node_id, |layout_node| {
+                    let chain = layout_node.modifier_chain().chain();
 
-                if let Some(entry_ref) = chain.node_ref_at(self.node_index) {
-                    if let Some(node) = entry_ref.node() {
-                        if let Some(layout_modifier) = node.as_layout_node() {
-                            return layout_modifier.min_intrinsic_height(self.wrapped.as_ref(), width);
+                    if let Some(entry_ref) = chain.node_ref_at(self.node_index) {
+                        if let Some(node) = entry_ref.node() {
+                            if let Some(layout_modifier) = node.as_layout_node() {
+                                return extract_measurement_proxy(layout_modifier);
+                            }
                         }
                     }
-                }
-                self.wrapped.min_intrinsic_height(width)
-            })
-            .unwrap_or_else(|_| self.wrapped.min_intrinsic_height(width))
+                    None
+                })
+                .unwrap_or(None)
+        };
+
+        if let Some(proxy) = proxy {
+            proxy.min_intrinsic_height_proxy(self.wrapped.as_ref(), width)
+        } else {
+            self.wrapped.min_intrinsic_height(width)
+        }
     }
 
     fn max_intrinsic_height(&self, width: f32) -> f32 {
-        let state = self.state_rc.borrow();
-        let mut applier = state.applier.borrow_typed();
+        let proxy = {
+            let state = self.state_rc.borrow();
+            let mut applier = state.applier.borrow_typed();
 
-        applier
-            .with_node::<LayoutNode, _>(self.node_id, |layout_node| {
-                let chain = layout_node.modifier_chain().chain();
+            applier
+                .with_node::<LayoutNode, _>(self.node_id, |layout_node| {
+                    let chain = layout_node.modifier_chain().chain();
 
-                if let Some(entry_ref) = chain.node_ref_at(self.node_index) {
-                    if let Some(node) = entry_ref.node() {
-                        if let Some(layout_modifier) = node.as_layout_node() {
-                            return layout_modifier.max_intrinsic_height(self.wrapped.as_ref(), width);
+                    if let Some(entry_ref) = chain.node_ref_at(self.node_index) {
+                        if let Some(node) = entry_ref.node() {
+                            if let Some(layout_modifier) = node.as_layout_node() {
+                                return extract_measurement_proxy(layout_modifier);
+                            }
                         }
                     }
-                }
-                self.wrapped.max_intrinsic_height(width)
-            })
-            .unwrap_or_else(|_| self.wrapped.max_intrinsic_height(width))
+                    None
+                })
+                .unwrap_or(None)
+        };
+
+        if let Some(proxy) = proxy {
+            proxy.max_intrinsic_height_proxy(self.wrapped.as_ref(), width)
+        } else {
+            self.wrapped.max_intrinsic_height(width)
+        }
     }
 }
 
