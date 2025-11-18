@@ -941,7 +941,7 @@ struct ModifierNodeEntry {
     key: Option<u64>,
     hash_code: u64,
     element: DynModifierElement,
-    node: Box<dyn ModifierNode>,
+    node: Rc<RefCell<Box<dyn ModifierNode>>>,
     capabilities: NodeCapabilities,
 }
 
@@ -954,17 +954,19 @@ impl ModifierNodeEntry {
         hash_code: u64,
         capabilities: NodeCapabilities,
     ) -> Self {
+        // Wrap the boxed node in Rc<RefCell<>> for shared ownership
+        let node_rc = Rc::new(RefCell::new(node));
         let entry = Self {
             element_type,
             key,
             hash_code,
             element,
-            node,
+            node: Rc::clone(&node_rc),
             capabilities,
         };
         entry
             .node
-            .as_ref()
+            .borrow()
             .node_state()
             .set_capabilities(entry.capabilities);
         entry
@@ -1158,12 +1160,12 @@ impl ModifierNodeChain {
             if let Some(mut entry) = reused_entry {
                 {
                     let entry_mut = entry.as_mut();
-                    if !entry_mut.node.node_state().is_attached() {
-                        attach_node_tree(entry_mut.node.as_mut(), context);
+                    if !entry_mut.node.borrow().node_state().is_attached() {
+                        attach_node_tree(&mut **entry_mut.node.borrow_mut(), context);
                     }
 
                     if !same_element {
-                        element.update_node(entry_mut.node.as_mut());
+                        element.update_node(&mut **entry_mut.node.borrow_mut());
                     }
 
                     entry_mut.key = key;
@@ -1173,7 +1175,7 @@ impl ModifierNodeChain {
                     entry_mut.capabilities = capabilities;
                     entry_mut
                         .node
-                        .as_ref()
+                        .borrow()
                         .node_state()
                         .set_capabilities(entry_mut.capabilities);
                 }
@@ -1189,15 +1191,15 @@ impl ModifierNodeChain {
                 ));
                 {
                     let entry_mut = entry.as_mut();
-                    attach_node_tree(entry_mut.node.as_mut(), context);
-                    element.update_node(entry_mut.node.as_mut());
+                    attach_node_tree(&mut **entry_mut.node.borrow_mut(), context);
+                    element.update_node(&mut **entry_mut.node.borrow_mut());
                 }
                 new_entries.push(entry);
             }
         }
 
         for mut entry in old_entries {
-            detach_node_tree(entry.node.as_mut());
+            detach_node_tree(&mut **entry.node.borrow_mut());
         }
 
         self.entries = new_entries;
@@ -1219,15 +1221,15 @@ impl ModifierNodeChain {
     /// Jetpack Compose's `onReset` callback.
     pub fn reset(&mut self) {
         for entry in &mut self.entries {
-            reset_node_tree(entry.node.as_mut());
+            reset_node_tree(&mut **entry.node.borrow_mut());
         }
     }
 
     /// Detaches every node in the chain and clears internal storage.
     pub fn detach_all(&mut self) {
         for mut entry in std::mem::take(&mut self.entries) {
-            detach_node_tree(entry.node.as_mut());
-            let state = entry.node.as_ref().node_state();
+            detach_node_tree(&mut **entry.node.borrow_mut());
+            let state = entry.node.borrow().node_state();
             state.set_capabilities(NodeCapabilities::empty());
         }
         self.aggregated_capabilities = NodeCapabilities::empty();
@@ -1365,7 +1367,7 @@ impl ModifierNodeChain {
 
         let target = node_data_ptr(node);
         for (index, entry) in self.entries.iter().enumerate() {
-            if node_data_ptr(entry.node.as_ref()) == target {
+            if node_data_ptr(&**entry.node.borrow()) == target {
                 return Some(self.make_node_ref(NodeLink::Entry(NodePath::root(index))));
             }
         }
@@ -1384,17 +1386,28 @@ impl ModifierNodeChain {
     }
 
     /// Downcasts the node at `index` to the requested type.
-    pub fn node<N: ModifierNode + 'static>(&self, index: usize) -> Option<&N> {
-        self.entries
-            .get(index)
-            .and_then(|entry| entry.node.as_ref().as_any().downcast_ref::<N>())
+    /// Returns a `Ref` guard that dereferences to the node type.
+    pub fn node<N: ModifierNode + 'static>(&self, index: usize) -> Option<std::cell::Ref<'_, N>> {
+        self.entries.get(index).and_then(|entry| {
+            std::cell::Ref::filter_map(entry.node.borrow(), |boxed_node| {
+                boxed_node.as_any().downcast_ref::<N>()
+            })
+            .ok()
+        })
     }
 
     /// Downcasts the node at `index` to the requested mutable type.
-    pub fn node_mut<N: ModifierNode + 'static>(&mut self, index: usize) -> Option<&mut N> {
-        self.entries
-            .get_mut(index)
-            .and_then(|entry| entry.node.as_mut().as_any_mut().downcast_mut::<N>())
+    /// Returns a `RefMut` guard that dereferences to the node type.
+    pub fn node_mut<N: ModifierNode + 'static>(
+        &self,
+        index: usize,
+    ) -> Option<std::cell::RefMut<'_, N>> {
+        self.entries.get(index).and_then(|entry| {
+            std::cell::RefMut::filter_map(entry.node.borrow_mut(), |boxed_node| {
+                boxed_node.as_any_mut().downcast_mut::<N>()
+            })
+            .ok()
+        })
     }
 
     /// Returns true if the chain contains any nodes matching the given invalidation kind.
@@ -1493,8 +1506,9 @@ impl ModifierNodeChain {
         self.ordered_nodes.clear();
         for (index, entry) in self.entries.iter().enumerate() {
             let mut path = Vec::new();
+            let node_borrow = entry.node.borrow();
             Self::enumerate_link_order(
-                entry.node.as_ref(),
+                &**node_borrow,
                 index,
                 &mut path,
                 &mut self.ordered_nodes,
