@@ -191,6 +191,7 @@ fn run_app(options: ComposeAppOptions, content: impl FnMut() + 'static) -> ! {
 }
 
 #[cfg(feature = "renderer-pixels")]
+#[allow(dead_code)]
 fn run_pixels_app(options: &ComposeAppOptions, content: impl FnMut() + 'static) -> ! {
     let event_loop = EventLoopBuilder::new()
         .build()

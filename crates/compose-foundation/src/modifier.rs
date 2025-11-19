@@ -7,6 +7,8 @@
 //! implementation focuses on the core runtime plumbing so UI crates can
 //! begin migrating without expanding the public API surface.
 
+#![allow(private_interfaces)]
+
 use std::any::{type_name, Any, TypeId};
 use std::cell::{Cell, RefCell};
 use std::collections::hash_map::DefaultHasher;
@@ -1325,6 +1327,7 @@ impl ModifierNodeChain {
             if let Some(entry) = next_new.take() {
                 final_entries.push(entry);
                 next_new = new_iter.next();
+                let _ = new_entry_pos;
                 new_entry_pos += 1;
             }
         }

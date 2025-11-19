@@ -1,4 +1,4 @@
-use crate::layout::{LayoutBox, LayoutNodeData, LayoutNodeKind, LayoutTree};
+use crate::layout::{LayoutBox, LayoutNodeData, LayoutTree};
 use crate::modifier::{DrawCommand as ModifierDrawCommand, Rect, Size};
 use compose_core::NodeId;
 use compose_ui_graphics::DrawPrimitive;

@@ -8,6 +8,8 @@
 //!
 //! The Modifier.Node system provides excellent performance through:
 //! - **Node reuse** — Node instances are reused across recompositions (zero allocations when stable)
+
+#![allow(dead_code)]
 //! - **Targeted invalidation** — Only affected phases (layout/draw/pointer/focus) are invalidated
 //! - **Lifecycle hooks** — `on_attach`, `on_detach`, `update` for efficient state management
 //! - **Capability-driven dispatch** — Nodes declare capabilities via `NodeCapabilities` bits

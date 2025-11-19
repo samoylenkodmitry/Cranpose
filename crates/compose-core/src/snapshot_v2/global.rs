@@ -191,6 +191,7 @@ pub fn advance_global_snapshot(new_id: SnapshotId) {
 }
 
 /// Get the current global snapshot ID.
+#[allow(dead_code)]
 pub fn global_snapshot_id() -> SnapshotId {
     let global = GlobalSnapshot::get_or_create();
     global.snapshot_id()

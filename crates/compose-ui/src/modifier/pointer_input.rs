@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::{inspector_metadata, Modifier, PointerEvent};
 use compose_foundation::{
     impl_pointer_input_node, DelegatableNode, ModifierNode, ModifierNodeContext,
@@ -12,7 +14,7 @@ use std::fmt;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::pin::Pin;
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};

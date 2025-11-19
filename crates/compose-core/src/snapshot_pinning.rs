@@ -88,8 +88,8 @@ impl PinningTable {
     }
 }
 
-/// Global pinning table protected by a mutex.
 thread_local! {
+    // Global pinning table protected by a mutex.
     static PINNING_TABLE: RefCell<PinningTable> = RefCell::new(PinningTable::new());
 }
 

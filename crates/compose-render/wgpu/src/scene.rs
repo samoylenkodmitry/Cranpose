@@ -82,7 +82,7 @@ impl HitTestTarget for HitRegion {
         }
 
         if let Err(err) = run_in_mutable_snapshot(|| {
-            for (i, handler) in self.pointer_inputs.iter().enumerate() {
+            for (_i, handler) in self.pointer_inputs.iter().enumerate() {
                 handler(event);
             }
             if kind == PointerEventKind::Down {

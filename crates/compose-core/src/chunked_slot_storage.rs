@@ -58,6 +58,7 @@ pub struct ChunkedSlotStorage {
     last_start_was_gap: bool,
 }
 
+#[allow(dead_code)]
 struct GroupFrame {
     key: Key,
     start: usize,
@@ -317,6 +318,7 @@ impl ChunkedSlotStorage {
 
     /// Lookup the current position of an anchor ID.
     /// Returns None if the anchor is not found or invalid.
+    #[allow(dead_code)]
     fn lookup_anchor_position(&self, anchor_id: usize) -> Option<usize> {
         if anchor_id < self.anchors.len() {
             let pos = self.anchors[anchor_id];

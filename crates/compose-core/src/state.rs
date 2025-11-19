@@ -1,3 +1,5 @@
+#![allow(private_interfaces)]
+
 use crate::collections::map::HashSet;
 use std::any::Any;
 use std::cell::{Cell, RefCell};
@@ -103,6 +105,7 @@ impl StateRecord {
 
     /// Clears the value from this record to free memory.
     /// Used when marking records as reusable - clears the value to reduce memory usage.
+    #[allow(dead_code)]
     pub(crate) fn clear_for_reuse(&self) {
         self.clear_value();
     }
@@ -496,7 +499,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         }
 
         let refreshed = {
-            let mut head_guard = self.head.write().unwrap();
+            let head_guard = self.head.write().unwrap();
             let current_head = head_guard.clone();
             let refreshed = readable_record_for(&current_head, snapshot_id, invalid).unwrap_or_else(
                 || {

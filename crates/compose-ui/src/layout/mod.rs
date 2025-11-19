@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub mod coordinator;
 pub mod core;
 pub mod policies;
@@ -25,13 +27,11 @@ use crate::modifier::{
     collect_semantics_from_modifier, collect_slices_from_modifier, DimensionConstraint, EdgeInsets,
     Modifier, ModifierNodeSlices, Point, Rect as GeometryRect, ResolvedModifiers, Size,
 };
-use crate::modifier_nodes::{FillDirection, FillNode, OffsetNode, PaddingNode, SizeNode};
 use crate::subcompose_layout::SubcomposeLayoutNode;
-use crate::text_modifier_node::TextModifierNode;
 use compose_foundation::InvalidationKind;
 use compose_foundation::ModifierNodeContext;
 use crate::widgets::nodes::{IntrinsicKind, LayoutNode, LayoutNodeCacheHandles};
-use compose_foundation::{LayoutModifierNode, SemanticsConfiguration, NodeCapabilities};
+use compose_foundation::{SemanticsConfiguration, NodeCapabilities};
 use compose_ui_layout::{Constraints, MeasurePolicy, MeasureResult};
 
 /// Runtime context for modifier nodes during measurement.
@@ -744,7 +744,7 @@ impl LayoutBuilderState {
             let state = state_rc.borrow();
             let mut applier = state.applier.borrow_typed();
 
-            applier
+            let _ = applier
                 .with_node::<LayoutNode, _>(node_id, |layout_node| {
                     let chain_handle = layout_node.modifier_chain();
 

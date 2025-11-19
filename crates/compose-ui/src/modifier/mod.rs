@@ -6,6 +6,7 @@
 //! from the modifier nodes.
 
 #![allow(non_snake_case)]
+#![allow(dead_code)]
 
 use std::fmt;
 use std::rc::Rc;
@@ -859,7 +860,7 @@ impl fmt::Display for Modifier {
                 }
                 write!(f, "]")
             }
-            ModifierKind::Combined { outer, inner } => {
+            ModifierKind::Combined { outer: _, inner: _ } => {
                 // Flatten the representation for display
                 // This matches Kotlin's CombinedModifier toString behavior
                 write!(f, "[")?;

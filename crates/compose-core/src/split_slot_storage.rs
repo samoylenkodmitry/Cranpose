@@ -60,6 +60,7 @@ pub struct SplitSlotStorage {
     last_start_was_gap: bool,
 }
 
+#[allow(dead_code)]
 struct GroupFrame {
     key: Key,
     start: usize,

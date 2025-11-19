@@ -721,6 +721,7 @@ pub fn pop_parent() {
     with_current_composer(|composer| composer.pop_parent());
 }
 
+#[allow(dead_code)]
 #[derive(Default)]
 struct GroupFrame {
     key: Key,
@@ -729,6 +730,7 @@ struct GroupFrame {
     force_children_recompose: bool,
 }
 
+#[allow(dead_code)]
 const INVALID_ANCHOR_POS: usize = usize::MAX;
 
 // ═══════════════════════════════════════════════════════════════════════════

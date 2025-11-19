@@ -1,15 +1,17 @@
+#![allow(private_interfaces)]
+
 use compose_foundation::{
-    BasicModifierNodeContext, InvalidationKind, ModifierInvalidation, ModifierNodeChain,
+    BasicModifierNodeContext, ModifierInvalidation, ModifierNodeChain,
     NodeCapabilities,
 };
 
 use super::{
-    local::ModifierLocalManager, Color, DimensionConstraint, EdgeInsets, GraphicsLayer,
+    local::ModifierLocalManager, DimensionConstraint, EdgeInsets,
     LayoutProperties, Modifier, ModifierInspectorRecord, ModifierLocalAncestorResolver,
-    ModifierLocalToken, Point, ResolvedModifierLocal, ResolvedModifiers, RoundedCornerShape,
+    ModifierLocalToken, Point, ResolvedModifierLocal, ResolvedModifiers,
 };
 use crate::modifier_nodes::{
-    AlignmentNode, BackgroundNode, CornerShapeNode, FillDirection, FillNode, GraphicsLayerNode,
+    AlignmentNode, FillDirection, FillNode,
     IntrinsicAxis, IntrinsicSizeNode, OffsetNode, PaddingNode, SizeNode, WeightNode,
 };
 use std::any::type_name_of_val;
@@ -113,13 +115,13 @@ impl ModifierChainHandle {
     }
 
     /// Returns mutable access to the modifier node context.
-    pub fn context_mut(&self) -> std::cell::RefMut<BasicModifierNodeContext> {
+    pub fn context_mut(&self) -> std::cell::RefMut<'_, BasicModifierNodeContext> {
         self.context.borrow_mut()
     }
 
     /// Returns mutable references to both the chain and context.
     /// This is a convenience method for measurement that avoids borrow conflicts.
-    pub fn chain_and_context_mut(&mut self) -> (&mut ModifierNodeChain, std::cell::RefMut<BasicModifierNodeContext>) {
+    pub fn chain_and_context_mut(&mut self) -> (&mut ModifierNodeChain, std::cell::RefMut<'_, BasicModifierNodeContext>) {
         (&mut self.chain, self.context.borrow_mut())
     }
 

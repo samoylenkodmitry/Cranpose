@@ -320,8 +320,8 @@ impl AnySnapshot {
     }
 }
 
-/// Thread-local storage for the current snapshot.
 thread_local! {
+    // Thread-local storage for the current snapshot.
     static CURRENT_SNAPSHOT: RefCell<Option<AnySnapshot>> = RefCell::new(None);
 }
 
@@ -402,25 +402,25 @@ pub(crate) fn peek_next_snapshot_id() -> SnapshotId {
 /// Global counter for unique observer IDs.
 static NEXT_OBSERVER_ID: AtomicUsize = AtomicUsize::new(1);
 
-/// Global map of apply observers indexed by unique ID.
 thread_local! {
+    // Global map of apply observers indexed by unique ID.
     static APPLY_OBSERVERS: RefCell<HashMap<usize, ApplyObserver>> = RefCell::new(HashMap::default());
 }
 
-/// Thread-local last-writer registry used for conflict detection in v2.
-///
-/// Maps a state object id to the snapshot id of the most recent successful apply
-/// that modified the object. This is a simplified conflict tracking mechanism
-/// for Phase 2.1 before full record-chain merging is implemented.
-///
-/// Thread-local ensures test isolation - each test thread has its own registry.
 thread_local! {
+    // Thread-local last-writer registry used for conflict detection in v2.
+    //
+    // Maps a state object id to the snapshot id of the most recent successful apply
+    // that modified the object. This is a simplified conflict tracking mechanism
+    // for Phase 2.1 before full record-chain merging is implemented.
+    //
+    // Thread-local ensures test isolation - each test thread has its own registry.
     static LAST_WRITES: RefCell<HashMap<StateObjectId, SnapshotId>> = RefCell::new(HashMap::default());
 }
 
-/// Thread-local weak set of state objects with multiple records for periodic garbage collection.
-/// Mirrors Kotlin's `extraStateObjects` WeakSet.
 thread_local! {
+    // Thread-local weak set of state objects with multiple records for periodic garbage collection.
+    // Mirrors Kotlin's `extraStateObjects` WeakSet.
     static EXTRA_STATE_OBJECTS: RefCell<crate::snapshot_weak_set::SnapshotWeakSet> = RefCell::new(crate::snapshot_weak_set::SnapshotWeakSet::new());
 }
 
@@ -474,6 +474,7 @@ pub(crate) fn notify_apply_observers(modified: &[Arc<dyn StateObject>], snapshot
 }
 
 /// Get the last successful writer snapshot id for a given object id.
+#[allow(dead_code)]
 pub(crate) fn get_last_write(id: StateObjectId) -> Option<SnapshotId> {
     LAST_WRITES.with(|cell| cell.borrow().get(&id).copied())
 }
@@ -514,6 +515,7 @@ pub(crate) fn check_and_overwrite_unused_records_locked() {
 /// Mirrors Kotlin's `processForUnusedRecordsLocked()`. After a state is modified:
 /// 1. Calls `overwrite_unused_records()` to clean up old records
 /// 2. If the state has multiple records, adds it to `EXTRA_STATE_OBJECTS` for future cleanup
+#[allow(dead_code)]
 pub(crate) fn process_for_unused_records_locked(state: &Arc<dyn crate::state::StateObject>) {
     if state.overwrite_unused_records() {
         // State has multiple records - track it for future cleanup

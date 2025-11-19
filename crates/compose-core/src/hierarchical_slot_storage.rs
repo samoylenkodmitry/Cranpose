@@ -54,6 +54,7 @@ pub struct HierarchicalSlotStorage {
     next_child_id: usize,
 }
 
+#[allow(dead_code)]
 struct StorageFrame {
     /// Which child storage index we switched to (None = root).
     child_store_id: Option<usize>,

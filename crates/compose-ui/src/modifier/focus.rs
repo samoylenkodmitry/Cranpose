@@ -4,6 +4,8 @@
 //! focus system. Focus nodes participate in focus traversal, track focus state,
 //! and integrate with the modifier chain lifecycle.
 
+#![allow(dead_code)]
+
 use std::cell::Cell;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;

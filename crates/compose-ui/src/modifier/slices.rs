@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::fmt;
 use std::rc::Rc;
 
@@ -5,7 +7,7 @@ use compose_foundation::{ModifierNodeChain, NodeCapabilities, PointerEvent};
 use compose_ui_graphics::GraphicsLayer;
 
 use crate::draw::DrawCommand;
-use crate::modifier::{Brush, Modifier};
+use crate::modifier::Modifier;
 use crate::modifier_nodes::{BackgroundNode, ClickableNode, ClipToBoundsNode, CornerShapeNode, DrawCommandNode, GraphicsLayerNode};
 use crate::text_modifier_node::TextModifierNode;
 use std::cell::RefCell;

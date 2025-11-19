@@ -4,7 +4,9 @@
 //! drawing, and hit testing. Each LayoutModifierNode gets its own coordinator instance
 //! that persists across recomposition, enabling proper state and invalidation tracking.
 
-use compose_foundation::{LayoutModifierNode, MeasurementProxy, ModifierNodeContext, NodeCapabilities};
+#![allow(dead_code)]
+
+use compose_foundation::ModifierNodeContext;
 use compose_ui_layout::{Constraints, Measurable, Placeable};
 use compose_core::NodeId;
 use std::cell::{RefCell, Cell};
@@ -12,7 +14,6 @@ use std::rc::Rc;
 
 use crate::modifier::{Size, Point};
 use crate::layout::{MeasurePolicy, MeasureResult, LayoutNodeContext};
-use crate::widgets::nodes::LayoutNode;
 
 /// Identifies what type of coordinator this is for debugging and downcast purposes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +76,7 @@ pub struct LayoutModifierCoordinator<'a> {
 
 impl<'a> LayoutModifierCoordinator<'a> {
     /// Creates a new coordinator wrapping the specified node.
+    #[allow(private_interfaces)]
     pub fn new(
         state_rc: Rc<RefCell<crate::layout::LayoutBuilderState>>,
         node_id: NodeId,

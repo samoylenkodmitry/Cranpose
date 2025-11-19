@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -499,6 +501,7 @@ impl ModifierLocalManager {
         Self::default()
     }
 
+    #[allow(private_interfaces)]
     pub fn sync(
         &mut self,
         chain: &ModifierNodeChain,

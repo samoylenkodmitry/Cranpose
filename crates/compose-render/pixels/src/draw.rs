@@ -21,6 +21,7 @@ static FONT: Lazy<Font<'static>> = Lazy::new(|| {
     f
 });
 
+#[allow(dead_code)]
 pub(crate) struct RusttypeTextMeasurer;
 
 pub struct CachedRusttypeTextMeasurer {
