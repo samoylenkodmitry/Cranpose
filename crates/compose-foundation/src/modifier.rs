@@ -10,6 +10,7 @@
 use std::any::{type_name, Any, TypeId};
 use std::cell::{Cell, RefCell};
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::{BitOr, BitOrAssign};
@@ -1018,6 +1019,13 @@ where
     result
 }
 
+/// Attaches a node tree by calling on_attach for all unattached nodes.
+///
+/// # Safety
+/// Callers must ensure no immutable RefCell borrows are held on the node
+/// when calling this function. The on_attach callback may trigger mutations
+/// (invalidations, state updates, etc.) that require mutable access, which
+/// would panic if an immutable borrow is held across the call.
 fn attach_node_tree(node: &mut dyn ModifierNode, context: &mut dyn ModifierNodeContext) {
     visit_node_tree_mut(node, &mut |n| {
         if !n.node_state().is_attached() {
@@ -1091,49 +1099,91 @@ impl Default for ModifierNodeChain {
     }
 }
 
-/// Helper function to find the best matching entry for reuse during update.
-/// Returns the index of the best match, or None if no match found.
+/// Index structure for O(1) modifier entry lookups during update.
 ///
-/// Matching priority (from highest to lowest):
-/// 1. Keyed match: same type + same key
-/// 2. Exact match: same type + no key + same hash + equals_element
-/// 3. Type match: same type + no key (will require update)
-fn find_matching_entry(
-    entries: &[Box<ModifierNodeEntry>],
-    used: &[bool],
-    element_type: TypeId,
-    key: Option<u64>,
-    hash_code: u64,
-    element: &DynModifierElement,
-) -> Option<usize> {
-    if let Some(key_value) = key {
-        // Priority 1: Keyed lookup
+/// This avoids O(n²) complexity by pre-building hash maps that allow constant-time
+/// lookups for matching entries by key, hash, or type.
+struct EntryIndex {
+    /// Map (TypeId, key) → index for keyed entries
+    keyed: HashMap<(TypeId, u64), Vec<usize>>,
+    /// Map (TypeId, hash) → indices for unkeyed entries with specific hash
+    hashed: HashMap<(TypeId, u64), Vec<usize>>,
+    /// Map TypeId → indices for all unkeyed entries of that type
+    typed: HashMap<TypeId, Vec<usize>>,
+}
+
+impl EntryIndex {
+    fn build(entries: &[Box<ModifierNodeEntry>]) -> Self {
+        let mut keyed = HashMap::new();
+        let mut hashed = HashMap::new();
+        let mut typed = HashMap::new();
+
         for (i, entry) in entries.iter().enumerate() {
-            if !used[i] && entry.element_type == element_type && entry.key == Some(key_value) {
-                return Some(i);
-            }
-        }
-    } else {
-        // Priority 2: Exact match (hash + equality)
-        for (i, entry) in entries.iter().enumerate() {
-            if !used[i]
-                && entry.key.is_none()
-                && entry.hash_code == hash_code
-                && entry.element.as_ref().equals_element(element.as_ref())
-            {
-                return Some(i);
+            if let Some(key_value) = entry.key {
+                // Keyed entry
+                keyed.entry((entry.element_type, key_value))
+                    .or_insert_with(Vec::new)
+                    .push(i);
+            } else {
+                // Unkeyed entry - add to both hash and type indices
+                hashed.entry((entry.element_type, entry.hash_code))
+                    .or_insert_with(Vec::new)
+                    .push(i);
+                typed.entry(entry.element_type)
+                    .or_insert_with(Vec::new)
+                    .push(i);
             }
         }
 
-        // Priority 3: Type match only (will need update)
-        for (i, entry) in entries.iter().enumerate() {
-            if !used[i] && entry.element_type == element_type && entry.key.is_none() {
-                return Some(i);
-            }
-        }
+        Self { keyed, hashed, typed }
     }
 
-    None
+    /// Find the best matching entry for reuse.
+    ///
+    /// Matching priority (from highest to lowest):
+    /// 1. Keyed match: same type + same key
+    /// 2. Exact match: same type + no key + same hash + equals_element
+    /// 3. Type match: same type + no key (will require update)
+    fn find_match(
+        &self,
+        entries: &[Box<ModifierNodeEntry>],
+        used: &[bool],
+        element_type: TypeId,
+        key: Option<u64>,
+        hash_code: u64,
+        element: &DynModifierElement,
+    ) -> Option<usize> {
+        if let Some(key_value) = key {
+            // Priority 1: Keyed lookup - O(1)
+            if let Some(candidates) = self.keyed.get(&(element_type, key_value)) {
+                for &i in candidates {
+                    if !used[i] {
+                        return Some(i);
+                    }
+                }
+            }
+        } else {
+            // Priority 2: Exact match (hash + equality) - O(1) lookup + O(k) equality checks
+            if let Some(candidates) = self.hashed.get(&(element_type, hash_code)) {
+                for &i in candidates {
+                    if !used[i] && entries[i].element.as_ref().equals_element(element.as_ref()) {
+                        return Some(i);
+                    }
+                }
+            }
+
+            // Priority 3: Type match only - O(1) lookup + O(k) scan
+            if let Some(candidates) = self.typed.get(&element_type) {
+                for &i in candidates {
+                    if !used[i] {
+                        return Some(i);
+                    }
+                }
+            }
+        }
+
+        None
+    }
 }
 
 impl ModifierNodeChain {
@@ -1152,28 +1202,33 @@ impl ModifierNodeChain {
 
     /// Reconcile the chain against the provided elements, attaching newly
     /// created nodes and detaching nodes that are no longer required.
+    ///
+    /// This method achieves O(n) complexity by building an index structure
+    /// for O(1) lookups, avoiding the naive O(n²) double-loop approach.
     pub fn update_from_slice(
         &mut self,
         elements: &[DynModifierElement],
         context: &mut dyn ModifierNodeContext,
     ) {
-        // Optimization: Avoid O(n²) complexity by marking matches instead of removing
         let mut old_entries = std::mem::take(&mut self.entries);
         let mut old_used = vec![false; old_entries.len()];
         let mut new_entries: Vec<Box<ModifierNodeEntry>> = Vec::with_capacity(elements.len());
 
+        // Build index for O(1) lookups - O(m) where m = old_entries.len()
+        let index = EntryIndex::build(&old_entries);
+
         // Track which old entry index maps to which position in new list
         let mut match_order: Vec<Option<usize>> = vec![None; old_entries.len()];
 
-        // Process each new element, reusing old entries where possible
+        // Process each new element, reusing old entries where possible - O(n)
         for (new_pos, element) in elements.iter().enumerate() {
             let element_type = element.element_type();
             let key = element.key();
             let hash_code = element.hash_code();
             let capabilities = element.capabilities();
 
-            // Find best matching old entry (in priority order)
-            let matched_idx = find_matching_entry(
+            // Find best matching old entry via index - O(1) amortized
+            let matched_idx = index.find_match(
                 &old_entries,
                 &old_used,
                 element_type,
@@ -1191,11 +1246,15 @@ impl ModifierNodeChain {
                 // Check if element actually changed
                 let same_element = entry.element.as_ref().equals_element(element.as_ref());
 
-                // Minimize RefCell borrows
+                // Re-attach node if it was detached during a previous update
+                // SAFETY: We explicitly drop the immutable borrow before calling attach_node_tree
+                // to avoid re-entrancy issues. The on_attach callback may trigger mutations
+                // (e.g., invalidations, state changes) that could attempt to borrow the node,
+                // causing a RefCell panic if we held the immutable borrow across the call.
                 {
                     let node_borrow = entry.node.borrow();
                     if !node_borrow.node_state().is_attached() {
-                        drop(node_borrow);
+                        drop(node_borrow); // Release borrow before on_attach
                         attach_node_tree(&mut **entry.node.borrow_mut(), context);
                     }
                 }
