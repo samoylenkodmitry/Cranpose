@@ -399,9 +399,119 @@ fn dispose(&self) {
 }
 ```
 
-### Garbage Collection
+### Garbage Collection (Record Reuse System)
 
-The snapshot system includes sophisticated GC to reclaim memory from obsolete records.
+**IMPORTANT**: This is NOT traditional garbage collection. Rust's `Arc` already provides automatic memory management. This system is about **record chain cleanup** and **reuse optimization**.
+
+#### Why Needed in Rust (Not Just Copy-Paste from Kotlin)
+
+**The Problem:**
+```rust
+let state = SnapshotMutableState::new(0);
+
+// Without record reuse:
+for i in 0..1000 {
+    state.set(i);  // Creates new record each time
+}
+// Result: 1000 records in chain, even though only latest matters!
+// Memory: ~64KB for records that will never be read
+```
+
+**Why Rust's Arc Doesn't Help:**
+- **Arc keeps records alive**: Each record has `next: Cell<Option<Arc<StateRecord>>>`
+- **Chain references prevent collection**: Head → Record1 → Record2 → Record3...
+- **Arc only frees when refcount = 0**, but head always holds reference to entire chain
+- **Without cleanup**: Infinite record chain growth = memory leak
+
+**What This System Actually Does:**
+1. **Identifies obsolete records**: Records older than `lowest_pinned_snapshot` can't be read
+2. **Marks for reuse**: Set `snapshot_id = INVALID_SNAPSHOT` instead of dropping
+3. **Reuses on next write**: `writable_record()` checks for INVALID records first
+4. **Prevents chain growth**: Bounded memory regardless of write count
+
+#### Real-World Impact
+
+**Without record reuse** (hypothetical):
+```rust
+// UI counter that updates every frame (60 FPS)
+let counter = SnapshotMutableState::new(0);
+
+for frame in 0..3600 {  // 1 minute at 60 FPS
+    counter.set(frame);
+}
+
+// Memory: 3600 records × 64 bytes = ~230 KB
+// After 1 hour: ~13 MB just for one counter!
+```
+
+**With record reuse**:
+```rust
+// Same scenario, but records are reused
+// Memory: ~3-10 records (bounded by concurrent snapshot count)
+// Memory: ~200-640 bytes regardless of time
+```
+
+#### Actual Usage in Code
+
+The cleanup runs automatically on every global write:
+
+```rust
+// state.rs:647
+state.set(new_value);
+  ↓
+advance_global_snapshot(new_id);  // state.rs:647
+  ↓
+check_and_overwrite_unused_records_locked();  // global.rs:190
+  ↓
+EXTRA_STATE_OBJECTS.remove_if(|state| {
+    state.overwrite_unused_records()  // Cleanup happens here
+});
+```
+
+**Frequency:** Every write to global snapshot (most common case).
+
+#### The Algorithm Explained
+
+#### Kotlin vs Rust: Why Both Need This
+
+**Kotlin (Original Compose):**
+- JVM GC collects unreferenced objects automatically
+- **Still needs record reuse** because record chains hold strong references
+- JVM GC won't collect records still referenced by chain
+- Same problem: unbounded chain growth without manual cleanup
+
+**Rust (This Implementation):**
+- `Arc` provides automatic reference counting
+- **Same problem as Kotlin**: chain references prevent automatic cleanup
+- `Arc` only drops when refcount = 0, but chain maintains references
+- **Not a copy-paste bug**: Genuinely required for memory bounds
+
+**Key Insight:** This isn't about memory safety (Rust guarantees that). It's about **memory efficiency**. Without this system, memory usage grows O(n) with write count instead of O(1).
+
+#### Visual Example: Why Arc Alone Fails
+
+```rust
+// Initial state
+state.head -> [id=1, value=0, next=None]
+             Arc::strong_count = 1
+
+// After state.set(10)
+state.head -> [id=2, value=10, next] -> [id=1, value=0, next=None]
+             Arc::strong_count = 1    Arc::strong_count = 1 ← Still alive!
+
+// After state.set(20)
+state.head -> [id=3, value=20, next] -> [id=2, value=10, next] -> [id=1, value=0, next=None]
+                                        ↑ Can't drop: still referenced by id=3
+
+// After 1000 writes: Chain of 1000 records, all kept alive by next pointers
+// Arc can't help because references form a chain
+
+// WITH record reuse:
+state.head -> [id=1003, value=1000, next] -> [id=INVALID, reusable] -> [id=1, value=0, next=None]
+             ↑ Latest                       ↑ Marked for reuse        ↑ PREEXISTING (kept)
+
+// Next write reuses INVALID record instead of allocating
+```
 
 #### Pinning System
 
