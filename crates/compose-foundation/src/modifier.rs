@@ -1691,7 +1691,22 @@ impl<'a> ModifierChainNodeRef<'a> {
             NodeLink::Tail => f(self.chain.tail_sentinel.node_state()),
             NodeLink::Entry(path) => {
                 let node_borrow = self.chain.entries[path.entry()].node.borrow();
-                f(node_borrow.node_state())
+                // Navigate through delegates if path has them
+                if path.delegates().is_empty() {
+                    f(node_borrow.node_state())
+                } else {
+                    // Navigate to the delegate node
+                    let mut current: &dyn ModifierNode = &**node_borrow;
+                    for &delegate_index in path.delegates() {
+                        if let Some(delegate) = nth_delegate(current, delegate_index) {
+                            current = delegate;
+                        } else {
+                            // Fallback to root node state if delegate path is invalid
+                            return f(node_borrow.node_state());
+                        }
+                    }
+                    f(current.node_state())
+                }
             }
         }
     }
@@ -1704,7 +1719,22 @@ impl<'a> ModifierChainNodeRef<'a> {
             NodeLink::Tail => None, // Tail sentinel
             NodeLink::Entry(path) => {
                 let node_borrow = self.chain.entries[path.entry()].node.borrow();
-                Some(f(&**node_borrow))
+                // Navigate through delegates if path has them
+                if path.delegates().is_empty() {
+                    Some(f(&**node_borrow))
+                } else {
+                    // Navigate to the delegate node
+                    let mut current: &dyn ModifierNode = &**node_borrow;
+                    for &delegate_index in path.delegates() {
+                        if let Some(delegate) = nth_delegate(current, delegate_index) {
+                            current = delegate;
+                        } else {
+                            // Return None if delegate path is invalid
+                            return None;
+                        }
+                    }
+                    Some(f(current))
+                }
             }
         }
     }
