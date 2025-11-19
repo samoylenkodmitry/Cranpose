@@ -1316,9 +1316,7 @@ impl ModifierNodeChain {
         F: FnMut(ModifierChainNodeRef<'_>, &dyn ModifierNode),
     {
         self.for_each_forward_matching(mask, |node_ref| {
-            if let Some(node) = node_ref.node() {
-                f(node_ref, node);
-            }
+            node_ref.with_node(|node| f(node_ref.clone(), node));
         });
     }
 
@@ -1449,7 +1447,21 @@ impl ModifierNodeChain {
                 }
                 NodeLink::Entry(path) => {
                     let node_borrow = self.entries[path.entry()].node.borrow();
-                    f(&**node_borrow, node_borrow.node_state().capabilities());
+                    // Navigate through delegates if path has them
+                    if path.delegates().is_empty() {
+                        f(&**node_borrow, node_borrow.node_state().capabilities());
+                    } else {
+                        // Navigate to the delegate node
+                        let mut current: &dyn ModifierNode = &**node_borrow;
+                        for &delegate_index in path.delegates() {
+                            if let Some(delegate) = nth_delegate(current, delegate_index) {
+                                current = delegate;
+                            } else {
+                                return; // Invalid delegate path
+                            }
+                        }
+                        f(current, current.node_state().capabilities());
+                    }
                 }
             }
         }
@@ -1475,8 +1487,23 @@ impl ModifierNodeChain {
                 }
                 NodeLink::Entry(path) => {
                     let mut node_borrow = self.entries[path.entry()].node.borrow_mut();
-                    let capabilities = node_borrow.node_state().capabilities();
-                    f(&mut **node_borrow, capabilities);
+                    // Navigate through delegates if path has them
+                    if path.delegates().is_empty() {
+                        let capabilities = node_borrow.node_state().capabilities();
+                        f(&mut **node_borrow, capabilities);
+                    } else {
+                        // Navigate to the delegate node mutably
+                        let mut current: &mut dyn ModifierNode = &mut **node_borrow;
+                        for &delegate_index in path.delegates() {
+                            if let Some(delegate) = nth_delegate_mut(current, delegate_index) {
+                                current = delegate;
+                            } else {
+                                return; // Invalid delegate path
+                            }
+                        }
+                        let capabilities = current.node_state().capabilities();
+                        f(current, capabilities);
+                    }
                 }
             }
         }
@@ -1518,7 +1545,18 @@ impl ModifierNodeChain {
                 NodeLink::Tail => self.tail_sentinel.node_state().set_child_link(Some(link.clone())),
                 NodeLink::Entry(path) => {
                     let node_borrow = self.entries[path.entry()].node.borrow();
-                    node_borrow.node_state().set_child_link(Some(link.clone()));
+                    // Navigate to delegate if needed
+                    if path.delegates().is_empty() {
+                        node_borrow.node_state().set_child_link(Some(link.clone()));
+                    } else {
+                        let mut current: &dyn ModifierNode = &**node_borrow;
+                        for &delegate_index in path.delegates() {
+                            if let Some(delegate) = nth_delegate(current, delegate_index) {
+                                current = delegate;
+                            }
+                        }
+                        current.node_state().set_child_link(Some(link.clone()));
+                    }
                 }
             }
             // Set parent link on current
@@ -1527,7 +1565,18 @@ impl ModifierNodeChain {
                 NodeLink::Tail => self.tail_sentinel.node_state().set_parent_link(Some(previous.clone())),
                 NodeLink::Entry(path) => {
                     let node_borrow = self.entries[path.entry()].node.borrow();
-                    node_borrow.node_state().set_parent_link(Some(previous.clone()));
+                    // Navigate to delegate if needed
+                    if path.delegates().is_empty() {
+                        node_borrow.node_state().set_parent_link(Some(previous.clone()));
+                    } else {
+                        let mut current: &dyn ModifierNode = &**node_borrow;
+                        for &delegate_index in path.delegates() {
+                            if let Some(delegate) = nth_delegate(current, delegate_index) {
+                                current = delegate;
+                            }
+                        }
+                        current.node_state().set_parent_link(Some(previous.clone()));
+                    }
                 }
             }
             previous = link;
@@ -1539,7 +1588,18 @@ impl ModifierNodeChain {
             NodeLink::Tail => self.tail_sentinel.node_state().set_child_link(Some(NodeLink::Tail)),
             NodeLink::Entry(path) => {
                 let node_borrow = self.entries[path.entry()].node.borrow();
-                node_borrow.node_state().set_child_link(Some(NodeLink::Tail));
+                // Navigate to delegate if needed
+                if path.delegates().is_empty() {
+                    node_borrow.node_state().set_child_link(Some(NodeLink::Tail));
+                } else {
+                    let mut current: &dyn ModifierNode = &**node_borrow;
+                    for &delegate_index in path.delegates() {
+                        if let Some(delegate) = nth_delegate(current, delegate_index) {
+                            current = delegate;
+                        }
+                    }
+                    current.node_state().set_child_link(Some(NodeLink::Tail));
+                }
             }
         }
         self.tail_sentinel
@@ -1562,7 +1622,18 @@ impl ModifierNodeChain {
                 }
                 NodeLink::Entry(path) => {
                     let node_borrow = self.entries[path.entry()].node.borrow();
-                    let state = node_borrow.node_state();
+                    // Navigate to delegate if needed
+                    let state = if path.delegates().is_empty() {
+                        node_borrow.node_state()
+                    } else {
+                        let mut current: &dyn ModifierNode = &**node_borrow;
+                        for &delegate_index in path.delegates() {
+                            if let Some(delegate) = nth_delegate(current, delegate_index) {
+                                current = delegate;
+                            }
+                        }
+                        current.node_state()
+                    };
                     aggregate |= state.capabilities();
                     state.set_aggregate_child_capabilities(aggregate);
                 }
@@ -1621,20 +1692,6 @@ impl<'a> ModifierChainNodeRef<'a> {
             NodeLink::Entry(path) => {
                 let node_borrow = self.chain.entries[path.entry()].node.borrow();
                 f(node_borrow.node_state())
-            }
-        }
-    }
-
-    /// Returns the underlying modifier node when this reference targets a real entry.
-    ///
-    /// DEPRECATED: With Rc<RefCell<>> storage, this method can't return references
-    /// for entry nodes without unsafe code. Use `with_node()` instead.
-    pub fn node(&self) -> Option<&'a dyn ModifierNode> {
-        match &self.link {
-            NodeLink::Head => None, // Head sentinel
-            NodeLink::Tail => None, // Tail sentinel
-            NodeLink::Entry(_) => {
-                panic!("node() called on entry node - use with_node() instead or chain.get_node_rc()")
             }
         }
     }
