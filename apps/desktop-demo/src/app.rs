@@ -1404,31 +1404,80 @@ pub fn simple_card_showcase() {
             height: 16.0,
         });
 
+        // Card with border effect (outer box creates border)
         compose_ui::Box(
             Modifier::empty()
-                .padding(16.0)
-                .then(Modifier::empty().size(Size {
-                    width: 300.0,
-                    height: 200.0,
-                }))
-                .then(Modifier::empty().background(Color(0.2, 0.25, 0.35, 0.9)))
-                .then(Modifier::empty().rounded_corners(16.0)),
+                .padding(3.0)
+                .then(Modifier::empty().background(Color(0.4, 0.6, 0.9, 0.8)))
+                .then(Modifier::empty().rounded_corners(18.0)),
             BoxSpec::default(),
             || {
-                Column(
-                    Modifier::empty().padding(8.0),
-                    ColumnSpec::default(),
+                compose_ui::Box(
+                    Modifier::empty()
+                        .padding(16.0)
+                        .then(Modifier::empty().size(Size {
+                            width: 300.0,
+                            height: 200.0,
+                        }))
+                        .then(Modifier::empty().background(Color(0.15, 0.18, 0.25, 0.95)))
+                        .then(Modifier::empty().rounded_corners(16.0)),
+                    BoxSpec::default(),
                     || {
-                        Text(
-                            "Card Title",
-                            Modifier::empty()
-                                .padding(6.0)
-                                .then(Modifier::empty().background(Color(0.3, 0.5, 0.8, 0.5)))
-                                .then(Modifier::empty().rounded_corners(8.0)),
-                        );
-                        Text(
-                            "Card content goes here with padding",
-                            Modifier::empty().padding(4.0),
+                        Column(
+                            Modifier::empty().padding(8.0),
+                            ColumnSpec::default(),
+                            || {
+                                Text(
+                                    "Card Title",
+                                    Modifier::empty()
+                                        .padding(8.0)
+                                        .then(Modifier::empty().background(Color(0.3, 0.5, 0.8, 0.6)))
+                                        .then(Modifier::empty().rounded_corners(8.0)),
+                                );
+
+                                Spacer(Size {
+                                    width: 0.0,
+                                    height: 8.0,
+                                });
+
+                                Text(
+                                    "Card content goes here with padding",
+                                    Modifier::empty().padding(4.0),
+                                );
+
+                                Spacer(Size {
+                                    width: 0.0,
+                                    height: 12.0,
+                                });
+
+                                // Action buttons row
+                                Row(
+                                    Modifier::empty(),
+                                    RowSpec::default(),
+                                    || {
+                                        Text(
+                                            "Action 1",
+                                            Modifier::empty()
+                                                .padding(8.0)
+                                                .then(Modifier::empty().background(Color(0.2, 0.7, 0.4, 0.7)))
+                                                .then(Modifier::empty().rounded_corners(6.0)),
+                                        );
+
+                                        Spacer(Size {
+                                            width: 8.0,
+                                            height: 0.0,
+                                        });
+
+                                        Text(
+                                            "Action 2",
+                                            Modifier::empty()
+                                                .padding(8.0)
+                                                .then(Modifier::empty().background(Color(0.8, 0.3, 0.3, 0.7)))
+                                                .then(Modifier::empty().rounded_corners(6.0)),
+                                        );
+                                    },
+                                );
+                            },
                         );
                     },
                 );
@@ -1457,34 +1506,64 @@ pub fn positioned_boxes_showcase() {
         // This allows overlapping boxes with offset positioning
         compose_ui::Box(
             Modifier::empty()
-                .size_points(320.0, 240.0)
+                .size_points(360.0, 280.0)
                 .then(Modifier::empty().background(Color(0.05, 0.05, 0.15, 0.5)))
                 .then(Modifier::empty().rounded_corners(8.0)),
             BoxSpec::default(),
             || {
+                // Box A - Purple, top-left
                 compose_ui::Box(
                     Modifier::empty()
                         .size_points(100.0, 100.0)
                         .then(Modifier::empty().offset(20.0, 20.0))
                         .then(Modifier::empty().padding(8.0))
-                        .then(Modifier::empty().background(Color(0.4, 0.2, 0.6, 0.8)))
+                        .then(Modifier::empty().background(Color(0.6, 0.2, 0.7, 0.85)))
                         .then(Modifier::empty().rounded_corners(12.0)),
                     BoxSpec::default(),
                     || {
-                        Text("Box A", Modifier::empty().padding(8.0));
+                        Text("Box A", Modifier::empty().padding(6.0));
                     },
                 );
 
+                // Box B - Green, bottom-right
                 compose_ui::Box(
                     Modifier::empty()
                         .size_points(100.0, 100.0)
-                        .then(Modifier::empty().offset(180.0, 120.0))
+                        .then(Modifier::empty().offset(220.0, 160.0))
                         .then(Modifier::empty().padding(8.0))
-                        .then(Modifier::empty().background(Color(0.2, 0.5, 0.4, 0.8)))
+                        .then(Modifier::empty().background(Color(0.2, 0.7, 0.4, 0.85)))
                         .then(Modifier::empty().rounded_corners(12.0)),
                     BoxSpec::default(),
                     || {
-                        Text("Box B", Modifier::empty().padding(8.0));
+                        Text("Box B", Modifier::empty().padding(6.0));
+                    },
+                );
+
+                // Box C - Orange, center-top (smaller)
+                compose_ui::Box(
+                    Modifier::empty()
+                        .size_points(80.0, 60.0)
+                        .then(Modifier::empty().offset(140.0, 30.0))
+                        .then(Modifier::empty().padding(6.0))
+                        .then(Modifier::empty().background(Color(0.9, 0.5, 0.2, 0.85)))
+                        .then(Modifier::empty().rounded_corners(10.0)),
+                    BoxSpec::default(),
+                    || {
+                        Text("C", Modifier::empty().padding(4.0));
+                    },
+                );
+
+                // Box D - Blue, center-left (larger)
+                compose_ui::Box(
+                    Modifier::empty()
+                        .size_points(120.0, 80.0)
+                        .then(Modifier::empty().offset(40.0, 140.0))
+                        .then(Modifier::empty().padding(8.0))
+                        .then(Modifier::empty().background(Color(0.2, 0.5, 0.9, 0.85)))
+                        .then(Modifier::empty().rounded_corners(14.0)),
+                    BoxSpec::default(),
+                    || {
+                        Text("Box D", Modifier::empty().padding(6.0));
                     },
                 );
             },
@@ -1508,28 +1587,69 @@ pub fn item_list_showcase() {
             height: 16.0,
         });
 
+        // List with alternating colors and borders
         Column(
             Modifier::empty().padding(16.0),
             ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
             || {
                 for i in 0..5 {
-                    Row(
+                    // Alternate colors: even = blue-ish, odd = purple-ish
+                    let (bg_color, border_color) = if i % 2 == 0 {
+                        (Color(0.12, 0.16, 0.28, 0.8), Color(0.3, 0.5, 0.8, 0.9))
+                    } else {
+                        (Color(0.18, 0.12, 0.28, 0.8), Color(0.5, 0.3, 0.8, 0.9))
+                    };
+
+                    // Border wrapper
+                    compose_ui::Box(
                         Modifier::empty()
-                            .padding(8.0)
-                            .then(Modifier::empty().size_points(400.0, 50.0))
-                            .then(Modifier::empty().background(Color(0.15, 0.2, 0.3, 0.7)))
-                            .then(Modifier::empty().rounded_corners(10.0)),
-                        RowSpec::default(),
+                            .padding(2.0)
+                            .then(Modifier::empty().background(border_color))
+                            .then(Modifier::empty().rounded_corners(12.0)),
+                        BoxSpec::default(),
                         move || {
-                            let text = match i {
-                                0 => "Item #0",
-                                1 => "Item #1",
-                                2 => "Item #2",
-                                3 => "Item #3",
-                                4 => "Item #4",
-                                _ => "Item",
-                            };
-                            Text(text, Modifier::empty().padding_horizontal(12.0));
+                            Row(
+                                Modifier::empty()
+                                    .padding(8.0)
+                                    .then(Modifier::empty().size_points(400.0, 50.0))
+                                    .then(Modifier::empty().background(bg_color))
+                                    .then(Modifier::empty().rounded_corners(10.0)),
+                                RowSpec::default(),
+                                move || {
+                                    let text = match i {
+                                        0 => "Item #0",
+                                        1 => "Item #1",
+                                        2 => "Item #2",
+                                        3 => "Item #3",
+                                        4 => "Item #4",
+                                        _ => "Item",
+                                    };
+                                    Text(text, Modifier::empty().padding_horizontal(12.0));
+
+                                    Spacer(Size {
+                                        width: 0.0,
+                                        height: 0.0,
+                                    });
+
+                                    // Status indicator
+                                    let status_color = if i % 3 == 0 {
+                                        Color(0.2, 0.8, 0.3, 0.9) // Green
+                                    } else if i % 3 == 1 {
+                                        Color(0.9, 0.7, 0.2, 0.9) // Yellow
+                                    } else {
+                                        Color(0.8, 0.3, 0.2, 0.9) // Red
+                                    };
+
+                                    compose_ui::Box(
+                                        Modifier::empty()
+                                            .size_points(12.0, 12.0)
+                                            .then(Modifier::empty().background(status_color))
+                                            .then(Modifier::empty().rounded_corners(6.0)),
+                                        BoxSpec::default(),
+                                        || {},
+                                    );
+                                },
+                            );
                         },
                     );
                 }

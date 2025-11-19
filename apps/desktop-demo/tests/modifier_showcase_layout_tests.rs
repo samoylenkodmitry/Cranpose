@@ -157,11 +157,15 @@ fn test_simple_card_layout_positions() {
     // Validate hierarchy - all children should be within parent bounds
     validate_layout_hierarchy(layout.root()).expect("Layout hierarchy should be valid");
 
-    // Simple card should have a title and description
+    // Simple card should have title, description, and action buttons
     let title = find_box_with_text(layout.root(), "Card Title")
         .expect("Should find Card Title");
     let description = find_box_with_text(layout.root(), "Card content goes here with padding")
         .expect("Should find description");
+    let action1 = find_box_with_text(layout.root(), "Action 1")
+        .expect("Should find Action 1 button");
+    let action2 = find_box_with_text(layout.root(), "Action 2")
+        .expect("Should find Action 2 button");
 
     // Title should be above description
     assert!(
@@ -171,7 +175,31 @@ fn test_simple_card_layout_positions() {
         description.rect.y
     );
 
-    println!("✓ Simple card layout is correct");
+    // Description should be above action buttons
+    assert!(
+        description.rect.y < action1.rect.y,
+        "Description should be above Action 1: desc.y={:.2} vs action1.y={:.2}",
+        description.rect.y,
+        action1.rect.y
+    );
+
+    // Action buttons should be on same horizontal level
+    assert!(
+        (action1.rect.y - action2.rect.y).abs() < 2.0,
+        "Action buttons should be at same vertical position: action1.y={:.2} vs action2.y={:.2}",
+        action1.rect.y,
+        action2.rect.y
+    );
+
+    // Action 1 should be left of Action 2
+    assert!(
+        action1.rect.x < action2.rect.x,
+        "Action 1 should be left of Action 2: action1.x={:.2} vs action2.x={:.2}",
+        action1.rect.x,
+        action2.rect.x
+    );
+
+    println!("✓ Simple card with border and action buttons layout is correct");
 }
 
 #[test]
@@ -188,27 +216,45 @@ fn test_positioned_boxes_layout() {
     println!("=== Positioned Boxes Layout ===");
     println!("{}", dump_layout_tree(layout.root(), 0));
 
-    // Validate hierarchy - should now pass after fixing the overflow bug
+    // Validate hierarchy - should pass with new container size
     validate_layout_hierarchy(layout.root()).expect("Layout hierarchy should be valid");
 
-    // Positioned boxes showcase has boxes named Box A and Box B
+    // Now has 4 boxes: A (top-left), B (bottom-right), C (center-top), D (center-left)
     let box_a = find_box_with_text(layout.root(), "Box A")
         .expect("Should find Box A");
     let box_b = find_box_with_text(layout.root(), "Box B")
         .expect("Should find Box B");
+    let box_c = find_box_with_text(layout.root(), "C")
+        .expect("Should find Box C");
+    let box_d = find_box_with_text(layout.root(), "Box D")
+        .expect("Should find Box D");
 
     println!("Box A: pos=({:.1}, {:.1}) size=({:.1}x{:.1})",
         box_a.rect.x, box_a.rect.y, box_a.rect.width, box_a.rect.height);
     println!("Box B: pos=({:.1}, {:.1}) size=({:.1}x{:.1})",
         box_b.rect.x, box_b.rect.y, box_b.rect.width, box_b.rect.height);
+    println!("Box C: pos=({:.1}, {:.1}) size=({:.1}x{:.1})",
+        box_c.rect.x, box_c.rect.y, box_c.rect.width, box_c.rect.height);
+    println!("Box D: pos=({:.1}, {:.1}) size=({:.1}x{:.1})",
+        box_d.rect.x, box_d.rect.y, box_d.rect.width, box_d.rect.height);
 
-    // Verify boxes are properly positioned within container
-    // Box A should be at top-left with offset (20, 20)
-    // Box B should be at bottom-right with offset (180, 120)
+    // Verify relative positioning
+    // Box A (top-left) should be leftmost and topmost
     assert!(box_a.rect.x < box_b.rect.x, "Box A should be left of Box B");
     assert!(box_a.rect.y < box_b.rect.y, "Box A should be above Box B");
 
-    println!("✓ Positioned boxes layout is correct");
+    // Box C should be above Box D (center-top vs center-left)
+    assert!(box_c.rect.y < box_d.rect.y, "Box C should be above Box D");
+
+    // Box B should be rightmost
+    assert!(box_b.rect.x > box_a.rect.x && box_b.rect.x > box_c.rect.x && box_b.rect.x > box_d.rect.x,
+        "Box B should be rightmost");
+
+    // Box A should be topmost
+    assert!(box_a.rect.y <= box_b.rect.y && box_a.rect.y <= box_c.rect.y && box_a.rect.y <= box_d.rect.y,
+        "Box A should be topmost or equal");
+
+    println!("✓ Positioned boxes (4 boxes with different sizes) layout is correct");
 }
 
 #[test]
@@ -263,7 +309,26 @@ fn test_item_list_spacing() {
         spacing_diff
     );
 
-    println!("✓ Item list spacing is correct");
+    // Render the scene to count backgrounds (for borders and status indicators)
+    let renderer = HeadlessRenderer::new();
+    let scene = renderer.render(&layout);
+
+    let background_count = scene.operations().iter().filter(|op| {
+        matches!(op, RenderOp::Primitive { .. })
+    }).count();
+
+    // Should have backgrounds for:
+    // - Title background (1)
+    // - Each item: border + background + status indicator (3 * 5 = 15)
+    // Total: 1 + 15 = 16 backgrounds
+    println!("Background primitives found: {}", background_count);
+    assert!(
+        background_count >= 16,
+        "Should have at least 16 background primitives (title + 5 items with borders and status), got {}",
+        background_count
+    );
+
+    println!("✓ Item list with alternating colors, borders, and status indicators is correct");
 }
 
 #[test]
