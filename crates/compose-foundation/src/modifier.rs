@@ -7,8 +7,6 @@
 //! implementation focuses on the core runtime plumbing so UI crates can
 //! begin migrating without expanding the public API surface.
 
-#![allow(private_interfaces)]
-
 use std::any::{type_name, Any, TypeId};
 use std::cell::{Cell, RefCell};
 use std::collections::hash_map::DefaultHasher;
@@ -143,7 +141,7 @@ impl ModifierNodeContext for BasicModifierNodeContext {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct NodePath {
+pub(crate) struct NodePath {
     entry: usize,
     delegates: Vec<usize>,
 }
@@ -180,6 +178,10 @@ pub(crate) enum NodeLink {
 }
 
 /// Runtime state tracked for every [`ModifierNode`].
+///
+/// This type is part of the internal node system API and should not be directly
+/// constructed or manipulated by external code. Modifier nodes automatically receive
+/// and manage their NodeState through the modifier chain infrastructure.
 #[derive(Debug)]
 pub struct NodeState {
     aggregate_child_capabilities: Cell<NodeCapabilities>,
@@ -235,19 +237,19 @@ impl NodeState {
         self.aggregate_child_capabilities.get()
     }
 
-    pub fn set_parent_link(&self, parent: Option<NodeLink>) {
+    pub(crate) fn set_parent_link(&self, parent: Option<NodeLink>) {
         *self.parent.borrow_mut() = parent;
     }
 
-    pub fn parent_link(&self) -> Option<NodeLink> {
+    pub(crate) fn parent_link(&self) -> Option<NodeLink> {
         self.parent.borrow().clone()
     }
 
-    pub fn set_child_link(&self, child: Option<NodeLink>) {
+    pub(crate) fn set_child_link(&self, child: Option<NodeLink>) {
         *self.child.borrow_mut() = child;
     }
 
-    pub fn child_link(&self) -> Option<NodeLink> {
+    pub(crate) fn child_link(&self) -> Option<NodeLink> {
         self.child.borrow().clone()
     }
 

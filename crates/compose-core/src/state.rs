@@ -1,4 +1,3 @@
-#![allow(private_interfaces)]
 // StateRecord uses Arc with Cell for single-threaded shared ownership in the snapshot system.
 #![allow(clippy::arc_with_non_send_sync)]
 
@@ -21,7 +20,7 @@ const INVALID_SNAPSHOT_ID: SnapshotId = 0;
 const SNAPSHOT_ID_MAX: SnapshotId = usize::MAX;
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, Default)]
-pub(crate) struct ObjectId(pub(crate) usize);
+pub struct ObjectId(pub(crate) usize);
 
 impl ObjectId {
     pub(crate) fn new<T: ?Sized + 'static>(object: &Arc<T>) -> Self {
@@ -41,7 +40,7 @@ impl ObjectId {
 /// are accessed only from the UI thread via thread-local snapshot system. The `Arc`
 /// is used for cheap cloning and shared ownership within a single thread.
 #[allow(clippy::arc_with_non_send_sync)]
-pub(crate) struct StateRecord {
+pub struct StateRecord {
     snapshot_id: Cell<SnapshotId>,
     tombstone: Cell<bool>,
     next: Cell<Option<Arc<StateRecord>>>,
