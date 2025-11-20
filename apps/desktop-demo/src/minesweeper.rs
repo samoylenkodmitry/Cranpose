@@ -1,7 +1,8 @@
 use compose_core::{self, MutableState};
+use compose_foundation::PointerEventKind;
 use compose_ui::{
-    composable, Brush, Button, Color, Column, ColumnSpec, CornerRadii, LinearArrangement, Modifier,
-    Row, RowSpec, Size, Spacer, Text, VerticalAlignment,
+    composable, BoxSpec, Brush, Button, Color, Column, ColumnSpec, CornerRadii, LinearArrangement,
+    Modifier, Point, PointerInputScope, Row, RowSpec, Size, Spacer, Text, VerticalAlignment,
 };
 
 // Game difficulty levels
@@ -494,37 +495,116 @@ pub fn minesweeper_game() {
                 height: 16.0,
             });
 
-            // Game grid
+            // Game grid - use with_key to force recreation when dimensions change
             let grid_for_render = grid.clone();
             let flag_mode_for_render = flag_mode.clone();
-            Column(
-                Modifier::empty()
-                    .padding(12.0)
-                    .background(Color(0.06, 0.08, 0.16, 0.9))
-                    .rounded_corners(20.0),
-                ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(4.0)),
-                move || {
-                    let current_grid = grid_for_render.get();
-                    for row in 0..current_grid.height {
-                        let grid_for_row = grid_for_render.clone();
-                        let flag_mode_for_row = flag_mode_for_render.clone();
-                        Row(
-                            Modifier::empty(),
-                            RowSpec::new()
-                                .horizontal_arrangement(LinearArrangement::SpacedBy(4.0)),
+            let grid_key = grid_for_render.get();
+            let grid_size_key = (grid_key.width, grid_key.height);
+
+            // Mouse pointer follower
+            let pointer_position = compose_core::useState(|| Point { x: 0.0, y: 0.0 });
+            let pointer_inside = compose_core::useState(|| false);
+
+            compose_core::with_key(&grid_size_key, || {
+                let pointer_pos = pointer_position.clone();
+                let pointer_in = pointer_inside.clone();
+                let flag_mode_for_pointer = flag_mode_for_render.clone();
+
+                compose_ui::Box(
+                    Modifier::empty()
+                        .pointer_input((), {
+                            let pointer_position = pointer_pos.clone();
+                            let pointer_inside = pointer_in.clone();
+                            move |scope: PointerInputScope| {
+                                let pointer_position = pointer_position.clone();
+                                let pointer_inside = pointer_inside.clone();
+                                async move {
+                                    scope
+                                        .await_pointer_event_scope(|await_scope| async move {
+                                            loop {
+                                                let event = await_scope.await_pointer_event().await;
+                                                match event.kind {
+                                                    PointerEventKind::Move => {
+                                                        pointer_position.set(Point {
+                                                            x: event.position.x,
+                                                            y: event.position.y,
+                                                        });
+                                                        pointer_inside.set(true);
+                                                    }
+                                                    PointerEventKind::Cancel => {
+                                                        pointer_inside.set(false);
+                                                    }
+                                                    _ => {}
+                                                }
+                                            }
+                                        })
+                                        .await;
+                                }
+                            }
+                        }),
+                    BoxSpec::default(),
+                    move || {
+                        let grid_for_column = grid_for_render.clone();
+                        let flag_mode_for_column = flag_mode_for_render.clone();
+
+                        Column(
+                            Modifier::empty()
+                                .padding(12.0)
+                                .background(Color(0.06, 0.08, 0.16, 0.9))
+                                .rounded_corners(20.0),
+                            ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(4.0)),
                             move || {
-                                let grid_row = grid_for_row.clone();
-                                let flag_mode_row = flag_mode_for_row.clone();
-                                for col in 0..current_grid.width {
-                                    let grid_cell = grid_row.clone();
-                                    let flag_mode_cell = flag_mode_row.clone();
-                                    render_cell(grid_cell, flag_mode_cell, row, col);
+                                let current_grid = grid_for_column.get();
+                                for row in 0..current_grid.height {
+                                    let grid_for_row = grid_for_column.clone();
+                                    let flag_mode_for_row = flag_mode_for_column.clone();
+                                    Row(
+                                        Modifier::empty(),
+                                        RowSpec::new()
+                                            .horizontal_arrangement(LinearArrangement::SpacedBy(4.0)),
+                                        move || {
+                                            let grid_row = grid_for_row.clone();
+                                            let flag_mode_row = flag_mode_for_row.clone();
+                                            let width = grid_row.get().width;
+                                            for col in 0..width {
+                                                let grid_cell = grid_row.clone();
+                                                let flag_mode_cell = flag_mode_row.clone();
+                                                render_cell(grid_cell, flag_mode_cell, row, col);
+                                            }
+                                        },
+                                    );
                                 }
                             },
                         );
-                    }
-                },
-            );
+
+                        // Render pointer follower if mouse is inside
+                        let is_inside = pointer_in.get();
+                        if is_inside {
+                            let pos = pointer_pos.get();
+                            let is_flag_mode = flag_mode_for_pointer.get();
+                            let icon = if is_flag_mode { "🚩" } else { "🔍" };
+                            let icon_color = if is_flag_mode {
+                                Color(0.9, 0.6, 0.2, 0.9)
+                            } else {
+                                Color(0.4, 0.6, 0.9, 0.9)
+                            };
+
+                            compose_ui::Box(
+                                Modifier::empty()
+                                    .size_points(30.0, 30.0)
+                                    .offset(pos.x - 15.0, pos.y - 15.0)
+                                    .rounded_corners(15.0)
+                                    .background(icon_color)
+                                    .padding(5.0),
+                                BoxSpec::default(),
+                                move || {
+                                    Text(icon, Modifier::empty());
+                                },
+                            );
+                        }
+                    },
+                );
+            });
         },
     );
 }
@@ -537,6 +617,12 @@ fn render_cell(
     col: usize,
 ) {
     let grid = grid_state.get();
+
+    // Safety check: ensure we're within grid bounds
+    if row >= grid.height || col >= grid.width {
+        return;
+    }
+
     let cell_state = grid.states[row][col];
     let is_mine = grid.mines[row][col];
     let adjacent_count = grid.adjacent_counts[row][col];
