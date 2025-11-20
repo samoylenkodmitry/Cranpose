@@ -60,7 +60,7 @@ impl BoxWithConstraintsScopeImpl {
         }
     }
 
-    fn to_dp(&self, raw: f32) -> Dp {
+    fn to_dp(self, raw: f32) -> Dp {
         Dp::from_px(raw, self.density)
     }
 

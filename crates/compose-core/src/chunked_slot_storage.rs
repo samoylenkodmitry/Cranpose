@@ -3,6 +3,9 @@
 //! This backend divides the slot array into fixed-size chunks (256 slots each),
 //! allowing insertions and deletions to only shift slots within or between
 //! adjacent chunks rather than rotating the entire storage. This improves
+
+// Complex slot state machine logic benefits from explicit nested pattern matching for clarity
+#![allow(clippy::collapsible_match)]
 //! performance for large compositions with frequent insertions.
 //!
 //! ## Implementation Details
@@ -277,10 +280,7 @@ impl ChunkedSlotStorage {
             let (dst_chunk, dst_offset) = self.global_to_chunk(i + 1);
 
             // Use mem::replace to move without cloning
-            let temp = std::mem::replace(
-                &mut self.chunks[src_chunk][src_offset],
-                ChunkedSlot::default(),
-            );
+            let temp = std::mem::take(&mut self.chunks[src_chunk][src_offset]);
             // Capacity is guaranteed by the loop above
             self.chunks[dst_chunk][dst_offset] = temp;
         }

@@ -6,6 +6,9 @@
 //! - Efficient group skipping and scope-based recomposition
 //! - Batch anchor rebuilding for large structural changes
 
+// Complex slot state machine logic benefits from explicit nested pattern matching for clarity
+#![allow(clippy::collapsible_match)]
+
 use crate::{
     slot_storage::{GroupId, SlotStorage, StartGroup, ValueSlotId},
     AnchorId, Key, NodeId, Owned, ScopeId,
@@ -1540,11 +1543,10 @@ impl SlotTable {
             .map(|frame| (frame.start, frame.end.min(self.slots.len())))
         {
             // Mark unreachable slots within this group as gaps
-            if self.cursor < group_end {
-                if self.mark_range_as_gaps(self.cursor, group_end, Some(owner_start)) {
+            if self.cursor < group_end
+                && self.mark_range_as_gaps(self.cursor, group_end, Some(owner_start)) {
                     marked = true;
                 }
-            }
 
             // Update the frame end to current cursor
             // NOTE: We do NOT update the group's len field, because gap slots

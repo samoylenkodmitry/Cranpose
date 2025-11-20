@@ -554,9 +554,7 @@ pub(crate) fn optimistic_merges(
         };
 
         let (previous_opt, found_base) = mutable::find_previous_record(&head, base_parent_id);
-        let Some(previous) = previous_opt else {
-            return None;
-        };
+        let previous = previous_opt?;
 
         if !found_base || previous.snapshot_id() == crate::state::PREEXISTING_SNAPSHOT_ID {
             continue;
@@ -566,17 +564,13 @@ pub(crate) fn optimistic_merges(
             continue;
         }
 
-        let Some(applied) = mutable::find_record_by_id(&head, *writer_id) else {
-            return None;
-        };
+        let applied = mutable::find_record_by_id(&head, *writer_id)?;
 
-        let Some(merged) = state.merge_records(
+        let merged = state.merge_records(
             Arc::clone(&previous),
             Arc::clone(&current),
             Arc::clone(&applied),
-        ) else {
-            return None;
-        };
+        )?;
 
         result
             .get_or_insert_with(HashMap::default)
@@ -688,15 +682,18 @@ impl SnapshotState {
         let mut modified = self.modified.borrow_mut();
 
         // Only call observer on first write
-        if !modified.contains_key(&state_id) {
-            if let Some(ref observer) = self.write_observer {
-                observer(&*state);
+        match modified.entry(state_id) {
+            std::collections::hash_map::Entry::Vacant(e) => {
+                if let Some(ref observer) = self.write_observer {
+                    observer(&*state);
+                }
+                // Store the Arc and writer id in the modified set
+                e.insert((state, writer_id));
             }
-            // Store the Arc and writer id in the modified set
-            modified.insert(state_id, (state, writer_id));
-        } else {
-            // Update the writer id to reflect the most recent writer for this state.
-            modified.insert(state_id, (state, writer_id));
+            std::collections::hash_map::Entry::Occupied(mut e) => {
+                // Update the writer id to reflect the most recent writer for this state.
+                e.insert((state, writer_id));
+            }
         }
     }
 

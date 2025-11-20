@@ -261,7 +261,7 @@ impl NestedMutableSnapshot {
                 return SnapshotApplyResult::Success;
             }
             // Ask parent to merge child's modifications; it will detect conflicts.
-            if parent.merge_child_modifications(&*child_modified).is_err() {
+            if parent.merge_child_modifications(&child_modified).is_err() {
                 return SnapshotApplyResult::Failure;
             }
 

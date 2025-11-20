@@ -1,29 +1,8 @@
 #![doc = r"Core runtime pieces for the Compose-RS experiment."]
+// Structural lints - complex types are inherent to a UI framework with deep composition trees
 #![allow(clippy::type_complexity)]
-#![allow(clippy::collapsible_if)]
-#![allow(clippy::redundant_closure)]
-#![allow(clippy::collapsible_else_if)]
-#![allow(clippy::manual_let_else)]
-#![allow(clippy::unnecessary_cast)]
+// Thread-local initialization - we intentionally use non-const initializers in some places
 #![allow(clippy::missing_const_for_thread_local)]
-#![allow(clippy::manual_map)]
-#![allow(clippy::useless_vec)]
-#![allow(clippy::derivable_impls)]
-#![allow(clippy::map_entry)]
-#![allow(clippy::unused_unit)]
-#![allow(clippy::boxed_local)]
-#![allow(clippy::extra_unused_type_parameters)]
-#![allow(clippy::needless_borrow)]
-#![allow(clippy::manual_while_let_some)]
-#![allow(clippy::only_used_in_recursion)]
-#![allow(clippy::mem_replace_with_default)]
-#![allow(clippy::default_constructed_unit_structs)]
-#![allow(clippy::collapsible_match)]
-#![allow(clippy::explicit_auto_deref)]
-#![allow(clippy::question_mark)]
-#![allow(clippy::readonly_write_lock)]
-#![allow(clippy::while_let_loop)]
-#![allow(clippy::manual_inspect)]
 
 pub extern crate self as compose_core;
 
@@ -658,6 +637,7 @@ impl Drop for DisposableEffectState {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DisposableEffectScope;
 
+#[derive(Default)]
 pub struct DisposableEffectResult {
     cleanup: Option<Box<dyn FnOnce()>>,
 }
@@ -680,11 +660,6 @@ impl DisposableEffectResult {
     }
 }
 
-impl Default for DisposableEffectResult {
-    fn default() -> Self {
-        Self { cleanup: None }
-    }
-}
 
 #[allow(non_snake_case)]
 pub fn SideEffect(effect: impl FnOnce() + 'static) {
@@ -970,12 +945,8 @@ fn bubble_layout_dirty_composer<N: Node + 'static>(mut node_id: NodeId) {
     });
 
     // Then bubble up to ancestors
-    loop {
-        // Get parent of current node
-        let parent_id = match with_node_mut(node_id, |node: &mut N| node.parent()) {
-            Ok(Some(pid)) => pid,
-            _ => break, // No parent or error - stop bubbling
-        };
+    while let Ok(Some(pid)) = with_node_mut(node_id, |node: &mut N| node.parent()) {
+        let parent_id = pid;
 
         // Mark parent as needing layout
         let should_continue = with_node_mut(parent_id, |node: &mut N| {
@@ -1003,11 +974,8 @@ fn bubble_semantics_dirty_composer<N: Node + 'static>(mut node_id: NodeId) {
         node.mark_needs_semantics();
     });
 
-    loop {
-        let parent_id = match with_node_mut(node_id, |node: &mut N| node.parent()) {
-            Ok(Some(pid)) => pid,
-            _ => break,
-        };
+    while let Ok(Some(pid)) = with_node_mut(node_id, |node: &mut N| node.parent()) {
+        let parent_id = pid;
 
         let should_continue = with_node_mut(parent_id, |node: &mut N| {
             if !node.needs_semantics() {
@@ -1339,7 +1307,7 @@ impl Composer {
         observer.observe_reads(
             scope_clone,
             move |scope_ref| scope_ref.invalidate(),
-            move || block(),
+            block,
         )
     }
 
@@ -1958,7 +1926,7 @@ impl Composer {
     }
 
     pub fn push_parent(&self, id: NodeId) {
-        let remembered = self.remember(|| ParentChildren::default());
+        let remembered = self.remember(ParentChildren::default);
         let reused = self.core.last_node_reused.take().unwrap_or(true);
         let in_subcompose = !self.core.subcompose_stack.borrow().is_empty();
         let previous = if reused || in_subcompose {
@@ -2129,19 +2097,12 @@ struct ParentFrame {
     new_children: Vec<NodeId>,
 }
 
+#[derive(Default)]
 struct SubcomposeFrame {
     nodes: Vec<NodeId>,
     scopes: Vec<RecomposeScope>,
 }
 
-impl Default for SubcomposeFrame {
-    fn default() -> Self {
-        Self {
-            nodes: Vec::new(),
-            scopes: Vec::new(),
-        }
-    }
-}
 
 #[derive(Default, Clone)]
 struct LocalContext {
@@ -2712,7 +2673,7 @@ pub struct Composition<A: Applier + 'static> {
 
 impl<A: Applier + 'static> Composition<A> {
     pub fn new(applier: A) -> Self {
-        Self::with_runtime(applier, Runtime::new(Arc::new(DefaultScheduler::default())))
+        Self::with_runtime(applier, Runtime::new(Arc::new(DefaultScheduler)))
     }
 
     pub fn with_runtime(applier: A, runtime: Runtime) -> Self {

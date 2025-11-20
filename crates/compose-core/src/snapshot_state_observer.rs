@@ -269,7 +269,7 @@ impl SnapshotStateObserverInner {
     ) -> Rc<RefCell<ScopeEntry>> {
         // ---------- FAST PATH: real compose scope ----------
         if let Some(rc_scope) = (&scope as &dyn Any).downcast_ref::<RecomposeScope>() {
-            let id: usize = rc_scope.id() as usize; // or `.0` or similar
+            let id: usize = rc_scope.id(); // or `.0` or similar
 
             let mut fast = self.fast_scopes.borrow_mut();
 
@@ -313,7 +313,7 @@ impl SnapshotStateObserverInner {
         // Create a transparent mutable snapshot (not readonly!) for observation
         // This matches Kotlin's Snapshot.observeInternal behavior
         let snapshot = take_transparent_observer_mutable_snapshot(Some(read_observer), None);
-        let result = snapshot.enter(|| block());
+        let result = snapshot.enter(block);
         snapshot.dispose();
         result
     }
