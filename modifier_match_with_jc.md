@@ -1,4 +1,5 @@
 # Modifier System: Jetpack Compose Parity Checkpoint
+# (Main-branch reality snapshot merged with work-branch gaps)
 
 **Status**: `main` advertises parity; the work branch is validating and fixing remaining gaps.
 

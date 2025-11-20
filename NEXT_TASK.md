@@ -1,4 +1,5 @@
 # RS-Compose Development Roadmap
+# (Main branch snapshot reconciled with work-branch findings)
 
 **Last Updated**: April 2026  
 **Modifier System Status**: `main` reports parity; the work branch is validating and fixing remaining gaps.  
