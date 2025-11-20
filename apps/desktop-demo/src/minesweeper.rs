@@ -582,40 +582,63 @@ pub fn minesweeper_game() {
                         if is_inside {
                             let pos = pointer_pos.get();
                             let is_flag_mode = flag_mode_for_pointer.get();
+                            let grid_for_cursor = grid_for_render.clone();
+                            let current_grid = grid_for_cursor.get();
 
-                            // Use gradient colors to indicate mode
-                            let gradient_colors = if is_flag_mode {
-                                // Orange/red gradient for flag mode
-                                vec![
-                                    Color(0.9, 0.6, 0.2, 0.8),
-                                    Color(0.8, 0.3, 0.1, 0.6),
-                                ]
-                            } else {
-                                // Blue/cyan gradient for reveal mode
-                                vec![
-                                    Color(0.4, 0.6, 0.9, 0.8),
-                                    Color(0.2, 0.4, 0.7, 0.6),
-                                ]
-                            };
+                            // Snap cursor to cell centers
+                            // Account for grid padding (12.0) and cell size (35.0) + spacing (4.0)
+                            let grid_padding = 12.0;
+                            let cell_size = 35.0;
+                            let cell_spacing = 4.0;
+                            let cell_pitch = cell_size + cell_spacing;
 
-                            compose_ui::Box(
-                                Modifier::empty()
-                                    .size_points(40.0, 40.0)
-                                    .offset(pos.x - 20.0, pos.y - 20.0)
-                                    .rounded_corners(20.0)
-                                    .draw_behind(move |scope| {
-                                        scope.draw_round_rect(
-                                            Brush::radial_gradient(
-                                                gradient_colors.clone(),
-                                                Point { x: 20.0, y: 20.0 },
-                                                20.0,
-                                            ),
-                                            CornerRadii::uniform(20.0),
-                                        );
-                                    }),
-                                BoxSpec::default(),
-                                || {},
-                            );
+                            // Calculate which cell we're hovering over
+                            let rel_x = pos.x - grid_padding;
+                            let rel_y = pos.y - grid_padding;
+
+                            let col = (rel_x / cell_pitch).floor() as i32;
+                            let row = (rel_y / cell_pitch).floor() as i32;
+
+                            // Only show cursor if over a valid cell
+                            if row >= 0 && row < current_grid.height as i32 && col >= 0 && col < current_grid.width as i32 {
+                                // Calculate cell center position
+                                let cell_center_x = grid_padding + (col as f32) * cell_pitch + cell_size / 2.0;
+                                let cell_center_y = grid_padding + (row as f32) * cell_pitch + cell_size / 2.0;
+
+                                // Use gradient colors to indicate mode
+                                let gradient_colors = if is_flag_mode {
+                                    // Orange/red gradient for flag mode
+                                    vec![
+                                        Color(0.9, 0.6, 0.2, 0.8),
+                                        Color(0.8, 0.3, 0.1, 0.6),
+                                    ]
+                                } else {
+                                    // Blue/cyan gradient for reveal mode
+                                    vec![
+                                        Color(0.4, 0.6, 0.9, 0.8),
+                                        Color(0.2, 0.4, 0.7, 0.6),
+                                    ]
+                                };
+
+                                compose_ui::Box(
+                                    Modifier::empty()
+                                        .size_points(40.0, 40.0)
+                                        .offset(cell_center_x - 20.0, cell_center_y - 20.0)
+                                        .rounded_corners(20.0)
+                                        .draw_behind(move |scope| {
+                                            scope.draw_round_rect(
+                                                Brush::radial_gradient(
+                                                    gradient_colors.clone(),
+                                                    Point { x: 20.0, y: 20.0 },
+                                                    20.0,
+                                                ),
+                                                CornerRadii::uniform(20.0),
+                                            );
+                                        }),
+                                    BoxSpec::default(),
+                                    || {},
+                                );
+                            }
                         }
                     },
                 );
@@ -642,25 +665,18 @@ fn render_cell(
     let is_mine = grid.mines[row][col];
     let adjacent_count = grid.adjacent_counts[row][col];
 
-    let (bg_color, text_content) = match cell_state {
-        CellState::Hidden => (Color(0.3, 0.35, 0.45, 1.0), String::new()),
-        CellState::Flagged => (Color(0.9, 0.6, 0.2, 1.0), "🚩".to_string()),
-        CellState::Revealed => {
-            if is_mine {
-                (Color(0.8, 0.2, 0.2, 1.0), "💣".to_string())
-            } else if adjacent_count > 0 {
-                (
-                    Color(0.15, 0.18, 0.25, 1.0),
-                    adjacent_count.to_string(),
-                )
-            } else {
-                (Color(0.15, 0.18, 0.25, 1.0), String::new())
-            }
-        }
+    let bg_color = match cell_state {
+        CellState::Hidden => Color(0.3, 0.35, 0.45, 1.0),
+        CellState::Flagged => Color(0.9, 0.6, 0.2, 1.0),
+        CellState::Revealed => Color(0.15, 0.18, 0.25, 1.0),
     };
 
-    let has_text = !text_content.is_empty();
-    let text_to_show = text_content.clone();
+    // Special color for mines
+    let bg_color = if cell_state == CellState::Revealed && is_mine {
+        Color(0.8, 0.2, 0.2, 1.0)
+    } else {
+        bg_color
+    };
 
     Button(
         Modifier::empty()
@@ -687,8 +703,19 @@ fn render_cell(
             }
         },
         move || {
-            if has_text {
-                Text(text_to_show.clone(), Modifier::empty());
+            // Determine text content based on cell state
+            match cell_state {
+                CellState::Flagged => {
+                    Text("🚩", Modifier::empty());
+                }
+                CellState::Revealed => {
+                    if is_mine {
+                        Text("💣", Modifier::empty());
+                    } else if adjacent_count > 0 {
+                        Text(adjacent_count.to_string(), Modifier::empty());
+                    }
+                }
+                CellState::Hidden => {}
             }
         },
     );
