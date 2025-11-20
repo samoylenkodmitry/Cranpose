@@ -1,29 +1,44 @@
-# Modifier Migration Reality Check
+# Modifier System: Jetpack Compose Parity Checkpoint
 
-Concise snapshot of how the modifier system differs from Jetpack Compose and what must change next.
+**Status**: ⚠️ Parity claim from origin/main is under validation; outstanding gaps remain on the work branch.
 
-## Current Snapshot (modifier-specific)
+This document merges the parity narrative from origin/main with the current reality checks discovered while exercising the modifier runtime.
 
-- **Direct measurement with placement offsets**: `LayoutModifierNode::measure` now returns a `LayoutModifierMeasureResult` that includes placement offsets, and `LayoutModifierCoordinator` stores that offset and applies it during `place`.
-- **Unused proxy surface**: The `LayoutModifierNode` trait still exposes `create_measurement_proxy`, and built-in nodes implement proxies, but `LayoutModifierCoordinator` measures nodes directly and never consults the proxy API. The snapshot surface diverges from Kotlin without providing value today.
-- **Flattened Resolution**: `ModifierChainHandle::compute_resolved` flattens standard modifiers (Padding, Size, Offset) into a single `ResolvedModifiers` struct. This loses ordering (e.g., `padding(10).background(...).padding(20)` becomes just 30 padding and one background).
-- **Slice Coalescing**: `ModifierNodeSlices` collects draw commands and pointer inputs but reduces text content and graphics layers to "last write wins", preventing composition of these effects.
+## What origin/main reports as complete (Nov 2025)
 
-## Mismatches vs Jetpack Compose
+- ✅ **Live Node References**: Coordinators hold `Rc<RefCell<Box<dyn ModifierNode>>>` directly, matching Kotlin's object references.
+- ✅ **Placement Control**: `LayoutModifierNode::measure` returns `LayoutModifierMeasureResult` with size and placement offsets.
+- ✅ **Node Lifecycle**: Proper `on_attach()`, `on_detach()`, `on_reset()` callbacks.
+- ✅ **Capability Dispatch**: Bitflag-based capability system for traversal.
+- ✅ **Node Reuse**: Zero allocations when modifier chains remain stable across recompositions.
 
-- **Flattened layout semantics**: Kotlin traverses the node chain for layout behavior; the Rust path still aggregates padding/size/offset into `ResolvedModifiers`, discarding modifier order.
-- **Draw/text composition gaps**: Kotlin composes multiple draw/text layers; `ModifierNodeSlices` coalesces text and graphics layers to the rightmost entry instead of composing them.
-- **Stray proxy API**: Kotlin coordinators call nodes directly. Rust now measures nodes directly too, but the exposed `MeasurementProxy` API remains unused noise.
+## Reality checks on the work branch
 
-## Roadmap (integrates “open protocol” proposal)
+- **Flattened resolution**: `ModifierChainHandle::compute_resolved` still aggregates padding/size/offset into a single `ResolvedModifiers`, losing ordering (e.g., `padding.background.padding`).
+- **Slice coalescing**: `ModifierNodeSlices` collects draw commands and pointer inputs but collapses text content and graphics layers to "last write wins", blocking composition of multiple layers.
+- **Unused measurement proxy**: The `MeasurementProxy` API remains in the public surface even though `LayoutModifierCoordinator` measures nodes directly. Keeping it without integration adds maintenance overhead.
+
+## Reconciliation plan (merge of origin/main and work-branch needs)
 
 1. **Eliminate layout flattening**
-   - Route padding/size/offset/intrinsic behavior through layout nodes instead of `ResolvedModifiers`.
+   - Route padding/size/offset/intrinsic behavior through live nodes and coordinators instead of `ResolvedModifiers`.
    - Add coverage for mixed chains (e.g., `padding.background.padding`) to ensure ordering is preserved.
 
 2. **Make draw/text slices composable**
-   - Allow multiple text and graphics-layer entries to stack instead of last-write-wins semantics.
+   - Allow multiple text entries and graphics layers to stack instead of last-write-wins semantics.
    - Preserve chain order when emitting draw commands and pointer handlers.
 
-3. **Resolve the measurement proxy story**
-   - Either remove `MeasurementProxy` and related implementations or integrate it meaningfully (e.g., for borrow-safe async measurement). Right now it is unused surface area.
+3. **Decide the measurement proxy story**
+   - Either remove `MeasurementProxy` and related implementations or integrate it meaningfully (e.g., borrow-safe async measurement).
+   - Update documentation and tests so the public API matches runtime behavior.
+
+4. **Continue origin/main focus areas once parity is re-validated**
+   - Performance optimization of modifier traversal and capability caching.
+   - Advanced features such as animated/conditional modifiers and custom coordinators.
+   - Developer experience: clearer errors, guides, and examples.
+
+## Reference documentation
+
+- **[MODIFIERS.md](./MODIFIERS.md)** - Complete modifier system internals (37KB, Nov 2025)
+- **[SNAPSHOTS_AND_SLOTS.md](./SNAPSHOTS_AND_SLOTS.md)** - Snapshot and slot table system (54KB, Nov 2025)
+- **[NEXT_TASK.md](./NEXT_TASK.md)** - Broader project roadmap with modifier corrections highlighted
