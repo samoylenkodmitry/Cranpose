@@ -2241,13 +2241,11 @@ impl<T: Clone + 'static> MutableStateInner<T> {
 
 pub struct State<T: Clone + 'static> {
     id: StateId,
-    runtime: RuntimeHandle,
     _phantom: PhantomData<T>,
 }
 
 pub struct MutableState<T: Clone + 'static> {
     id: StateId,
-    runtime: RuntimeHandle,
     _phantom: PhantomData<T>,
 }
 
@@ -2261,13 +2259,11 @@ impl<T: Clone + 'static> Eq for State<T> {}
 
 impl<T: Clone + 'static> Clone for State<T> {
     fn clone(&self) -> Self {
-        Self {
-            id: self.id,
-            runtime: self.runtime.clone(),
-            _phantom: PhantomData,
-        }
+        *self
     }
 }
+
+impl<T: Clone + 'static> Copy for State<T> {}
 
 impl<T: Clone + 'static> PartialEq for MutableState<T> {
     fn eq(&self, other: &Self) -> bool {
@@ -2279,13 +2275,11 @@ impl<T: Clone + 'static> Eq for MutableState<T> {}
 
 impl<T: Clone + 'static> Clone for MutableState<T> {
     fn clone(&self) -> Self {
-        Self {
-            id: self.id,
-            runtime: self.runtime.clone(),
-            _phantom: PhantomData,
-        }
+        *self
     }
 }
+
+impl<T: Clone + 'static> Copy for MutableState<T> {}
 
 
 impl<T: Clone + 'static> MutableState<T> {
@@ -2299,7 +2293,6 @@ impl<T: Clone + 'static> MutableState<T> {
 
         Self {
             id,
-            runtime: runtime.clone(),
             _phantom: PhantomData,
         }
     }
@@ -2307,9 +2300,15 @@ impl<T: Clone + 'static> MutableState<T> {
     pub fn as_state(&self) -> State<T> {
         State {
             id: self.id,
-            runtime: self.runtime.clone(),
             _phantom: PhantomData,
         }
+    }
+
+    fn with_runtime_handle<R>(&self, f: impl FnOnce(&RuntimeHandle) -> R) -> R {
+        runtime::current_runtime_handle()
+            .as_ref()
+            .map(f)
+            .expect("MutableState accessed outside of runtime context")
     }
 
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
@@ -2317,25 +2316,29 @@ impl<T: Clone + 'static> MutableState<T> {
     }
 
     pub fn update<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
-        let result = self.runtime.with_state(self.id, |inner: &MutableStateInner<T>| {
-            inner.runtime.assert_ui_thread();
-            let mut value = inner.state.get();
-            let tracker = UpdateScope::new(inner.state.id());
-            let result = f(&mut value);
-            let wrote_elsewhere = tracker.finish();
-            if !wrote_elsewhere {
-                inner.state.set(value);
-            }
-            result
-        }).expect("Runtime dropped");
+        let result = self.with_runtime_handle(|runtime| {
+            runtime.with_state(self.id, |inner: &MutableStateInner<T>| {
+                inner.runtime.assert_ui_thread();
+                let mut value = inner.state.get();
+                let tracker = UpdateScope::new(inner.state.id());
+                let result = f(&mut value);
+                let wrote_elsewhere = tracker.finish();
+                if !wrote_elsewhere {
+                    inner.state.set(value);
+                }
+                result
+            }).expect("Runtime dropped")
+        });
         self.schedule_invalidation();
         result
     }
 
     pub fn replace(&self, value: T) {
-        self.runtime.with_state(self.id, |inner: &MutableStateInner<T>| {
-            inner.runtime.assert_ui_thread();
-            inner.state.set(value);
+        self.with_runtime_handle(|runtime| {
+            runtime.with_state(self.id, |inner: &MutableStateInner<T>| {
+                inner.runtime.assert_ui_thread();
+                inner.state.set(value);
+            });
         });
         self.schedule_invalidation();
     }
@@ -2357,32 +2360,39 @@ impl<T: Clone + 'static> MutableState<T> {
     }
 
     fn schedule_invalidation(&self) {
-        self.runtime.with_state(self.id, |inner: &MutableStateInner<T>| {
-            inner.invalidate_watchers();
+        self.with_runtime_handle(|runtime| {
+            runtime.with_state(self.id, |inner: &MutableStateInner<T>| {
+                inner.invalidate_watchers();
+            });
         });
     }
 
     #[cfg(test)]
     pub(crate) fn watcher_count(&self) -> usize {
-        self.runtime.with_state(self.id, |inner: &MutableStateInner<T>| {
-            inner.watchers.borrow().len()
-        }).unwrap_or(0)
+        self.with_runtime_handle(|runtime| {
+            runtime.with_state(self.id, |inner: &MutableStateInner<T>| {
+                inner.watchers.borrow().len()
+            }).unwrap_or(0)
+        })
     }
 }
 
 impl<T: fmt::Debug + Clone + 'static> fmt::Debug for MutableState<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.runtime.with_state(self.id, |inner: &MutableStateInner<T>| {
-            inner.with_value(|value| {
+        runtime::current_runtime_handle()
+            .and_then(|runtime| {
+                runtime.with_state(self.id, |inner: &MutableStateInner<T>| {
+                    inner.with_value(|value| {
+                        f.debug_struct("MutableState")
+                            .field("value", value)
+                            .finish()
+                    })
+                })
+            }).unwrap_or_else(|| {
                 f.debug_struct("MutableState")
-                    .field("value", value)
+                    .field("value", &"<unavailable>")
                     .finish()
             })
-        }).unwrap_or_else(|| {
-            f.debug_struct("MutableState")
-                .field("value", &"<unavailable>")
-                .finish()
-        })
     }
 }
 
@@ -2623,30 +2633,34 @@ impl<T: Clone + 'static> State<T> {
         if let Some(Some(scope)) =
             with_current_composer_opt(|composer| composer.current_recompose_scope())
         {
-            self.runtime.with_state(self.id, |inner: &MutableStateInner<T>| {
-                let mut watchers = inner.watchers.borrow_mut();
-                watchers.retain(|w| w.strong_count() > 0);
-                let id = scope.id();
-                let already_registered = watchers
-                    .iter()
-                    .any(|w| w.upgrade().map(|inner| inner.id == id).unwrap_or(false));
-                if !already_registered {
-                    watchers.push(scope.downgrade());
-                }
-            });
+            if let Some(runtime) = runtime::current_runtime_handle() {
+                runtime.with_state(self.id, |inner: &MutableStateInner<T>| {
+                    let mut watchers = inner.watchers.borrow_mut();
+                    watchers.retain(|w| w.strong_count() > 0);
+                    let id = scope.id();
+                    let already_registered = watchers
+                        .iter()
+                        .any(|w| w.upgrade().map(|inner| inner.id == id).unwrap_or(false));
+                    if !already_registered {
+                        watchers.push(scope.downgrade());
+                    }
+                });
+            }
         }
     }
 
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
         self.subscribe_current_scope();
-        self.runtime.with_state(self.id, |inner: &MutableStateInner<T>| inner.with_value(f))
-            .expect("Runtime dropped")
+        runtime::current_runtime_handle()
+            .and_then(|runtime| runtime.with_state(self.id, |inner: &MutableStateInner<T>| inner.with_value(f)))
+            .expect("State accessed outside of runtime context")
     }
 
     pub fn value(&self) -> T {
         self.subscribe_current_scope();
-        self.runtime.with_state(self.id, |inner: &MutableStateInner<T>| inner.state.get())
-            .expect("Runtime dropped")
+        runtime::current_runtime_handle()
+            .and_then(|runtime| runtime.with_state(self.id, |inner: &MutableStateInner<T>| inner.state.get()))
+            .expect("State accessed outside of runtime context")
     }
 
     pub fn get(&self) -> T {
@@ -2656,13 +2670,16 @@ impl<T: Clone + 'static> State<T> {
 
 impl<T: fmt::Debug + Clone + 'static> fmt::Debug for State<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.runtime.with_state(self.id, |inner: &MutableStateInner<T>| {
-            inner.with_value(|value| f.debug_struct("State").field("value", value).finish())
-        }).unwrap_or_else(|| {
-            f.debug_struct("State")
-                .field("value", &"<unavailable>")
-                .finish()
-        })
+        runtime::current_runtime_handle()
+            .and_then(|runtime| {
+                runtime.with_state(self.id, |inner: &MutableStateInner<T>| {
+                    inner.with_value(|value| f.debug_struct("State").field("value", value).finish())
+                })
+            }).unwrap_or_else(|| {
+                f.debug_struct("State")
+                    .field("value", &"<unavailable>")
+                    .finish()
+            })
     }
 }
 
