@@ -116,6 +116,7 @@ struct RuntimeInner {
     tasks: RefCell<Vec<TaskEntry>>, // FUTURE(no_std): migrate to smallvec-backed storage.
     next_task_id: Cell<u64>,
     task_waker: RefCell<Option<Waker>>,
+    state_arena: crate::StateArena, // Arena-managed state storage for lightweight handles.
 }
 
 struct TaskEntry {
@@ -144,6 +145,7 @@ impl RuntimeInner {
             tasks: RefCell::new(Vec::new()),
             next_task_id: Cell::new(1),
             task_waker: RefCell::new(None),
+            state_arena: crate::StateArena::new(),
         }
     }
 
@@ -400,6 +402,11 @@ impl RuntimeInner {
         }
     }
 
+    /// Provides access to the state arena for state cell operations.
+    pub(crate) fn state_arena(&self) -> &crate::StateArena {
+        &self.state_arena
+    }
+
     fn drain_frame_callbacks(&self, frame_time_nanos: u64) {
         let mut callbacks = self.frame_callbacks.borrow_mut();
         let mut pending: Vec<Box<dyn FnOnce(u64) + 'static>> = Vec::with_capacity(callbacks.len());
@@ -510,6 +517,26 @@ impl RuntimeHandle {
         if let Some(inner) = self.inner.upgrade() {
             inner.schedule();
         }
+    }
+
+    /// Allocates a new state cell in the runtime's arena.
+    pub(crate) fn alloc_state<T: Clone + 'static>(&self, value: T) -> crate::StateId {
+        self.inner
+            .upgrade()
+            .map(|inner| inner.state_arena.alloc(value, self.clone()))
+            .expect("Runtime dropped")
+    }
+
+    /// Access a state cell via the arena with a closure.
+    pub(crate) fn with_state<T: Clone + 'static, R>(
+        &self,
+        id: crate::StateId,
+        f: impl FnOnce(&crate::MutableStateInner<T>) -> R,
+    ) -> Option<R> {
+        self.inner.upgrade().map(|inner| {
+            let state_ref = inner.state_arena().get_typed::<T>(id);
+            f(&*state_ref)
+        })
     }
 
     pub fn enqueue_node_update(&self, command: Command) {
@@ -717,7 +744,7 @@ thread_local! {
     static LAST_RUNTIME: RefCell<Option<RuntimeHandle>> = const { RefCell::new(None) };
 }
 
-fn current_runtime_handle() -> Option<RuntimeHandle> {
+pub(crate) fn current_runtime_handle() -> Option<RuntimeHandle> {
     if let Some(handle) = ACTIVE_RUNTIMES.with(|stack| stack.borrow().last().cloned()) {
         return Some(handle);
     }

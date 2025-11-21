@@ -2091,6 +2091,99 @@ struct LocalContext {
     values: HashMap<LocalKey, Rc<dyn Any>>,
 }
 
+/// Stable identifier for a state cell in the arena.
+///
+/// This is a lightweight, Copy-able handle that can be captured by closures
+/// without any cloning. The actual state storage lives in the runtime's arena.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct StateId(u32);
+
+/// Type-erased trait for state cells stored in the arena.
+///
+/// This allows the arena to store heterogeneous state cells of different types
+/// while providing safe downcasting through the Any trait.
+trait AnyStateCell {
+    fn as_any(&self) -> &dyn Any;
+    #[allow(dead_code)]
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+}
+
+/// Typed wrapper around MutableStateInner for arena storage.
+struct TypedStateCell<T: Clone + 'static> {
+    inner: MutableStateInner<T>,
+}
+
+impl<T: Clone + 'static> AnyStateCell for TypedStateCell<T> {
+    fn as_any(&self) -> &dyn Any {
+        &self.inner
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        &mut self.inner
+    }
+}
+
+/// Arena that owns all MutableStateInner instances for the runtime.
+///
+/// This provides centralized memory management for state, making MutableState<T>
+/// handles lightweight and Copy-able. All state operations go through this arena.
+struct StateArena {
+    cells: RefCell<Vec<Option<Box<dyn AnyStateCell>>>>,
+    // FUTURE: add free list and generation counters for ID reuse
+}
+
+impl StateArena {
+    fn new() -> Self {
+        Self {
+            cells: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// Allocates a new state cell in the arena and returns its ID.
+    fn alloc<T: Clone + 'static>(&self, value: T, runtime: RuntimeHandle) -> StateId {
+        let inner = MutableStateInner::new(value, runtime);
+        let cell: Box<dyn AnyStateCell> = Box::new(TypedStateCell { inner });
+
+        let mut cells = self.cells.borrow_mut();
+        let id = cells.len() as u32;
+        cells.push(Some(cell));
+        StateId(id)
+    }
+
+    /// Gets an immutable reference to a typed state cell.
+    ///
+    /// # Panics
+    /// Panics if the ID is invalid or the type doesn't match.
+    fn get_typed<T: Clone + 'static>(&self, id: StateId) -> Ref<'_, MutableStateInner<T>> {
+        Ref::map(self.cells.borrow(), |cells| {
+            cells
+                .get(id.0 as usize)
+                .and_then(|cell| cell.as_ref())
+                .expect("Invalid StateId")
+                .as_any()
+                .downcast_ref::<MutableStateInner<T>>()
+                .expect("StateId type mismatch")
+        })
+    }
+
+    /// Gets a mutable reference to a typed state cell.
+    ///
+    /// # Panics
+    /// Panics if the ID is invalid or the type doesn't match.
+    #[allow(dead_code)]
+    fn get_typed_mut<T: Clone + 'static>(&self, id: StateId) -> RefMut<'_, MutableStateInner<T>> {
+        RefMut::map(self.cells.borrow_mut(), |cells| {
+            cells
+                .get_mut(id.0 as usize)
+                .and_then(|cell| cell.as_mut())
+                .expect("Invalid StateId")
+                .as_any_mut()
+                .downcast_mut::<MutableStateInner<T>>()
+                .expect("StateId type mismatch")
+        })
+    }
+}
+
 struct MutableStateInner<T: Clone + 'static> {
     state: Arc<SnapshotMutableState<T>>,
     watchers: RefCell<Vec<Weak<RecomposeScopeInner>>>, // FUTURE(no_std): move to stack-allocated subscription list.
@@ -2106,16 +2199,20 @@ impl<T: Clone + 'static> MutableStateInner<T> {
         }
     }
 
-    fn install_snapshot_observer(this: &Rc<Self>) {
-        let runtime_handle = this.runtime.clone();
-        let weak_inner = Rc::downgrade(this);
-        this.state.add_apply_observer(Box::new(move || {
-            let runtime = runtime_handle.clone();
-            let weak_for_task = weak_inner.clone();
-            runtime.enqueue_ui_task(Box::new(move || {
-                if let Some(inner) = weak_for_task.upgrade() {
+    fn install_snapshot_observer_with_id(
+        id: StateId,
+        inner: &MutableStateInner<T>,
+        runtime: RuntimeHandle,
+    ) {
+        let runtime_handle = runtime.clone();
+        let state_id = id;
+        inner.state.add_apply_observer(Box::new(move || {
+            let runtime_clone = runtime_handle.clone();
+            let id_for_task = state_id;
+            runtime_handle.enqueue_ui_task(Box::new(move || {
+                runtime_clone.with_state(id_for_task, |inner: &MutableStateInner<T>| {
                     inner.invalidate_watchers();
-                }
+                });
             }));
         }));
     }
@@ -2143,16 +2240,20 @@ impl<T: Clone + 'static> MutableStateInner<T> {
 }
 
 pub struct State<T: Clone + 'static> {
-    inner: Rc<MutableStateInner<T>>, // FUTURE(no_std): replace Rc with arena-managed state handles.
+    id: StateId,
+    runtime: RuntimeHandle,
+    _phantom: PhantomData<T>,
 }
 
 pub struct MutableState<T: Clone + 'static> {
-    inner: Rc<MutableStateInner<T>>, // FUTURE(no_std): replace Rc with arena-managed state handles.
+    id: StateId,
+    runtime: RuntimeHandle,
+    _phantom: PhantomData<T>,
 }
 
 impl<T: Clone + 'static> PartialEq for State<T> {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.inner, &other.inner)
+        self.id == other.id
     }
 }
 
@@ -2161,14 +2262,16 @@ impl<T: Clone + 'static> Eq for State<T> {}
 impl<T: Clone + 'static> Clone for State<T> {
     fn clone(&self) -> Self {
         Self {
-            inner: Rc::clone(&self.inner),
+            id: self.id,
+            runtime: self.runtime.clone(),
+            _phantom: PhantomData,
         }
     }
 }
 
 impl<T: Clone + 'static> PartialEq for MutableState<T> {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.inner, &other.inner)
+        self.id == other.id
     }
 }
 
@@ -2177,21 +2280,35 @@ impl<T: Clone + 'static> Eq for MutableState<T> {}
 impl<T: Clone + 'static> Clone for MutableState<T> {
     fn clone(&self) -> Self {
         Self {
-            inner: Rc::clone(&self.inner),
+            id: self.id,
+            runtime: self.runtime.clone(),
+            _phantom: PhantomData,
         }
     }
 }
 
+
 impl<T: Clone + 'static> MutableState<T> {
     pub fn with_runtime(value: T, runtime: RuntimeHandle) -> Self {
-        let inner = Rc::new(MutableStateInner::new(value, runtime));
-        MutableStateInner::install_snapshot_observer(&inner);
-        Self { inner }
+        let id = runtime.alloc_state(value);
+
+        // Install snapshot observer after allocation
+        runtime.with_state(id, |inner: &MutableStateInner<T>| {
+            MutableStateInner::install_snapshot_observer_with_id(id, inner, runtime.clone());
+        });
+
+        Self {
+            id,
+            runtime: runtime.clone(),
+            _phantom: PhantomData,
+        }
     }
 
     pub fn as_state(&self) -> State<T> {
         State {
-            inner: Rc::clone(&self.inner),
+            id: self.id,
+            runtime: self.runtime.clone(),
+            _phantom: PhantomData,
         }
     }
 
@@ -2200,21 +2317,26 @@ impl<T: Clone + 'static> MutableState<T> {
     }
 
     pub fn update<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
-        self.inner.runtime.assert_ui_thread();
-        let mut value = self.inner.state.get();
-        let tracker = UpdateScope::new(self.inner.state.id());
-        let result = f(&mut value);
-        let wrote_elsewhere = tracker.finish();
-        if !wrote_elsewhere {
-            self.inner.state.set(value);
-        }
+        let result = self.runtime.with_state(self.id, |inner: &MutableStateInner<T>| {
+            inner.runtime.assert_ui_thread();
+            let mut value = inner.state.get();
+            let tracker = UpdateScope::new(inner.state.id());
+            let result = f(&mut value);
+            let wrote_elsewhere = tracker.finish();
+            if !wrote_elsewhere {
+                inner.state.set(value);
+            }
+            result
+        }).expect("Runtime dropped");
         self.schedule_invalidation();
         result
     }
 
     pub fn replace(&self, value: T) {
-        self.inner.runtime.assert_ui_thread();
-        self.inner.state.set(value);
+        self.runtime.with_state(self.id, |inner: &MutableStateInner<T>| {
+            inner.runtime.assert_ui_thread();
+            inner.state.set(value);
+        });
         self.schedule_invalidation();
     }
 
@@ -2235,20 +2357,30 @@ impl<T: Clone + 'static> MutableState<T> {
     }
 
     fn schedule_invalidation(&self) {
-        self.inner.invalidate_watchers();
+        self.runtime.with_state(self.id, |inner: &MutableStateInner<T>| {
+            inner.invalidate_watchers();
+        });
     }
 
     #[cfg(test)]
     pub(crate) fn watcher_count(&self) -> usize {
-        self.inner.watchers.borrow().len()
+        self.runtime.with_state(self.id, |inner: &MutableStateInner<T>| {
+            inner.watchers.borrow().len()
+        }).unwrap_or(0)
     }
 }
 
 impl<T: fmt::Debug + Clone + 'static> fmt::Debug for MutableState<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.inner.with_value(|value| {
+        self.runtime.with_state(self.id, |inner: &MutableStateInner<T>| {
+            inner.with_value(|value| {
+                f.debug_struct("MutableState")
+                    .field("value", value)
+                    .finish()
+            })
+        }).unwrap_or_else(|| {
             f.debug_struct("MutableState")
-                .field("value", value)
+                .field("value", &"<unavailable>")
                 .finish()
         })
     }
@@ -2491,26 +2623,30 @@ impl<T: Clone + 'static> State<T> {
         if let Some(Some(scope)) =
             with_current_composer_opt(|composer| composer.current_recompose_scope())
         {
-            let mut watchers = self.inner.watchers.borrow_mut();
-            watchers.retain(|w| w.strong_count() > 0);
-            let id = scope.id();
-            let already_registered = watchers
-                .iter()
-                .any(|w| w.upgrade().map(|inner| inner.id == id).unwrap_or(false));
-            if !already_registered {
-                watchers.push(scope.downgrade());
-            }
+            self.runtime.with_state(self.id, |inner: &MutableStateInner<T>| {
+                let mut watchers = inner.watchers.borrow_mut();
+                watchers.retain(|w| w.strong_count() > 0);
+                let id = scope.id();
+                let already_registered = watchers
+                    .iter()
+                    .any(|w| w.upgrade().map(|inner| inner.id == id).unwrap_or(false));
+                if !already_registered {
+                    watchers.push(scope.downgrade());
+                }
+            });
         }
     }
 
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
         self.subscribe_current_scope();
-        self.inner.with_value(f)
+        self.runtime.with_state(self.id, |inner: &MutableStateInner<T>| inner.with_value(f))
+            .expect("Runtime dropped")
     }
 
     pub fn value(&self) -> T {
         self.subscribe_current_scope();
-        self.inner.state.get()
+        self.runtime.with_state(self.id, |inner: &MutableStateInner<T>| inner.state.get())
+            .expect("Runtime dropped")
     }
 
     pub fn get(&self) -> T {
@@ -2520,8 +2656,13 @@ impl<T: Clone + 'static> State<T> {
 
 impl<T: fmt::Debug + Clone + 'static> fmt::Debug for State<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.inner
-            .with_value(|value| f.debug_struct("State").field("value", value).finish())
+        self.runtime.with_state(self.id, |inner: &MutableStateInner<T>| {
+            inner.with_value(|value| f.debug_struct("State").field("value", value).finish())
+        }).unwrap_or_else(|| {
+            f.debug_struct("State")
+                .field("value", &"<unavailable>")
+                .finish()
+        })
     }
 }
 
