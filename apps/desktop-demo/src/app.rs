@@ -11,6 +11,8 @@ use compose_ui::{
 };
 use std::cell::RefCell;
 
+mod mineswapper2;
+
 thread_local! {
     pub static TEST_COMPOSITION_LOCAL_COUNTER: RefCell<Option<MutableState<i32>>> = RefCell::new(None);
     pub static TEST_ACTIVE_TAB_STATE: RefCell<Option<MutableState<DemoTab>>> = RefCell::new(None);
@@ -23,6 +25,7 @@ pub enum DemoTab {
     Async,
     Layout,
     ModifierShowcase,
+    Mineswapper2,
 }
 
 impl DemoTab {
@@ -33,6 +36,7 @@ impl DemoTab {
             DemoTab::Async => "Async Runtime",
             DemoTab::Layout => "Recursive Layout",
             DemoTab::ModifierShowcase => "Modifiers Showcase",
+            DemoTab::Mineswapper2 => "Mineswapper2",
         }
     }
 }
@@ -154,6 +158,7 @@ pub fn combined_app() {
                     render_tab_button(DemoTab::Async);
                     render_tab_button(DemoTab::Layout);
                     render_tab_button(DemoTab::ModifierShowcase);
+                    render_tab_button(DemoTab::Mineswapper2);
                 },
             );
 
@@ -169,6 +174,7 @@ pub fn combined_app() {
                 DemoTab::Async => async_runtime_example(),
                 DemoTab::Layout => recursive_layout_example(),
                 DemoTab::ModifierShowcase => modifier_showcase_tab(),
+                DemoTab::Mineswapper2 => mineswapper2::mineswapper2_tab(),
             });
         },
     );
