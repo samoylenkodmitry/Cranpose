@@ -5,7 +5,6 @@
 //! reprocessing without forcing layout/draw passes.
 
 use compose_core::NodeId;
-use compose_foundation::{FocusNode, FocusState};
 use std::cell::RefCell;
 use std::collections::HashSet;
 

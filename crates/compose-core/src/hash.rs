@@ -1,5 +1,3 @@
-use core::hash::Hash;
-use std::hash::Hasher;
 
 #[cfg(feature = "std-hash")]
 pub mod default {

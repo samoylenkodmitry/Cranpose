@@ -426,6 +426,7 @@ pub fn derivedStateOf<T: 'static + Clone>(compute: impl Fn() -> T + 'static) -> 
 
 pub struct ProvidedValue {
     key: LocalKey,
+    #[allow(clippy::type_complexity)] // Closure returns trait object for flexible local values
     apply: Box<dyn Fn(&Composer) -> Rc<dyn Any>>, // FUTURE(no_std): return arena-backed local storage pointer.
 }
 
@@ -633,6 +634,7 @@ impl Drop for DisposableEffectState {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DisposableEffectScope;
 
+#[derive(Default)]
 pub struct DisposableEffectResult {
     cleanup: Option<Box<dyn FnOnce()>>,
 }
@@ -655,11 +657,6 @@ impl DisposableEffectResult {
     }
 }
 
-impl Default for DisposableEffectResult {
-    fn default() -> Self {
-        Self { cleanup: None }
-    }
-}
 
 #[allow(non_snake_case)]
 pub fn SideEffect(effect: impl FnOnce() + 'static) {
@@ -720,16 +717,6 @@ pub fn push_parent(id: NodeId) {
 pub fn pop_parent() {
     with_current_composer(|composer| composer.pop_parent());
 }
-
-#[derive(Default)]
-struct GroupFrame {
-    key: Key,
-    start: usize, // Physical position (will be phased out)
-    end: usize,   // Physical position (will be phased out)
-    force_children_recompose: bool,
-}
-
-const INVALID_ANCHOR_POS: usize = usize::MAX;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Public SlotStorage trait and newtypes
@@ -943,12 +930,8 @@ fn bubble_layout_dirty_composer<N: Node + 'static>(mut node_id: NodeId) {
     });
 
     // Then bubble up to ancestors
-    loop {
-        // Get parent of current node
-        let parent_id = match with_node_mut(node_id, |node: &mut N| node.parent()) {
-            Ok(Some(pid)) => pid,
-            _ => break, // No parent or error - stop bubbling
-        };
+    while let Ok(Some(pid)) = with_node_mut(node_id, |node: &mut N| node.parent()) {
+        let parent_id = pid;
 
         // Mark parent as needing layout
         let should_continue = with_node_mut(parent_id, |node: &mut N| {
@@ -976,11 +959,8 @@ fn bubble_semantics_dirty_composer<N: Node + 'static>(mut node_id: NodeId) {
         node.mark_needs_semantics();
     });
 
-    loop {
-        let parent_id = match with_node_mut(node_id, |node: &mut N| node.parent()) {
-            Ok(Some(pid)) => pid,
-            _ => break,
-        };
+    while let Ok(Some(pid)) = with_node_mut(node_id, |node: &mut N| node.parent()) {
+        let parent_id = pid;
 
         let should_continue = with_node_mut(parent_id, |node: &mut N| {
             if !node.needs_semantics() {
@@ -1065,6 +1045,10 @@ impl MemoryApplier {
 
     pub fn len(&self) -> usize {
         self.nodes.iter().filter(|n| n.is_some()).count()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub fn set_runtime_handle(&mut self, handle: RuntimeHandle) {
@@ -1311,7 +1295,7 @@ impl Composer {
         observer.observe_reads(
             scope_clone,
             move |scope_ref| scope_ref.invalidate(),
-            move || block(),
+            block,
         )
     }
 
@@ -1930,7 +1914,7 @@ impl Composer {
     }
 
     pub fn push_parent(&self, id: NodeId) {
-        let remembered = self.remember(|| ParentChildren::default());
+        let remembered = self.remember(ParentChildren::default);
         let reused = self.core.last_node_reused.take().unwrap_or(true);
         let in_subcompose = !self.core.subcompose_stack.borrow().is_empty();
         let previous = if reused || in_subcompose {
@@ -2101,19 +2085,12 @@ struct ParentFrame {
     new_children: Vec<NodeId>,
 }
 
+#[derive(Default)]
 struct SubcomposeFrame {
     nodes: Vec<NodeId>,
     scopes: Vec<RecomposeScope>,
 }
 
-impl Default for SubcomposeFrame {
-    fn default() -> Self {
-        Self {
-            nodes: Vec::new(),
-            scopes: Vec::new(),
-        }
-    }
-}
 
 #[derive(Default, Clone)]
 struct LocalContext {
@@ -2347,7 +2324,7 @@ impl<T: Clone + 'static> SnapshotStateList<T> {
     where
         I: IntoIterator<Item = T>,
     {
-        self.state.update(|values| values.extend(iter.into_iter()));
+        self.state.update(|values| values.extend(iter));
     }
 
     pub fn insert(&self, index: usize, value: T) {
@@ -2456,7 +2433,7 @@ where
     where
         I: IntoIterator<Item = (K, V)>,
     {
-        self.state.update(|map| map.extend(iter.into_iter()));
+        self.state.update(|map| map.extend(iter));
         // extend returns (), but update requires returning something: we can just rely on ()
     }
 
@@ -2619,9 +2596,7 @@ pub struct CallbackHolder {
 impl CallbackHolder {
     /// Create a new holder with a no-op callback so that callers can immediately invoke it.
     pub fn new() -> Self {
-        Self {
-            rc: Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>)),
-        }
+        Self::default()
     }
 
     /// Replace the stored callback with a new closure provided by the caller.
@@ -2637,6 +2612,14 @@ impl CallbackHolder {
         let rc = self.rc.clone();
         move || {
             (rc.borrow_mut())();
+        }
+    }
+}
+
+impl Default for CallbackHolder {
+    fn default() -> Self {
+        Self {
+            rc: Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>)),
         }
     }
 }
@@ -2677,7 +2660,7 @@ pub struct Composition<A: Applier + 'static> {
 
 impl<A: Applier + 'static> Composition<A> {
     pub fn new(applier: A) -> Self {
-        Self::with_runtime(applier, Runtime::new(Arc::new(DefaultScheduler::default())))
+        Self::with_runtime(applier, Runtime::new(Arc::new(DefaultScheduler)))
     }
 
     pub fn with_runtime(applier: A, runtime: Runtime) -> Self {

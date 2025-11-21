@@ -5,14 +5,16 @@ use compose_ui_graphics::Dp;
 use compose_ui_layout::{Alignment, Constraints, HorizontalAlignment, VerticalAlignment};
 
 /// Marker trait matching Jetpack Compose's `BoxScope` API.
-#[allow(dead_code)]
+///
+/// Future API - methods will be enabled as alignment modifiers are implemented.
 pub trait BoxScope {
     /// Align content within the Box using 2D alignment.
     fn align(&self, alignment: Alignment) -> Modifier;
 }
 
 /// Marker trait for Column scope - provides horizontal alignment.
-#[allow(dead_code)]
+///
+/// Future API - methods will be enabled as alignment and weight modifiers are implemented.
 pub trait ColumnScope {
     /// Align content horizontally within the Column.
     fn align(&self, alignment: HorizontalAlignment) -> Modifier;
@@ -21,7 +23,8 @@ pub trait ColumnScope {
 }
 
 /// Marker trait for Row scope - provides vertical alignment.
-#[allow(dead_code)]
+///
+/// Future API - methods will be enabled as alignment and weight modifiers are implemented.
 pub trait RowScope {
     /// Align content vertically within the Row.
     fn align(&self, alignment: VerticalAlignment) -> Modifier;
@@ -60,7 +63,7 @@ impl BoxWithConstraintsScopeImpl {
         }
     }
 
-    fn to_dp(&self, raw: f32) -> Dp {
+    fn to_dp(self, raw: f32) -> Dp {
         Dp::from_px(raw, self.density)
     }
 
@@ -90,8 +93,9 @@ impl BoxScope for BoxScopeImpl {
 }
 
 /// Concrete implementation of ColumnScope.
+///
+/// Future API - will be used once Column accepts a scoped content parameter.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[allow(dead_code)]
 pub struct ColumnScopeImpl;
 
 impl ColumnScope for ColumnScopeImpl {
@@ -105,8 +109,9 @@ impl ColumnScope for ColumnScopeImpl {
 }
 
 /// Concrete implementation of RowScope.
+///
+/// Future API - will be used once Row accepts a scoped content parameter.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[allow(dead_code)]
 pub struct RowScopeImpl;
 
 impl RowScope for RowScopeImpl {

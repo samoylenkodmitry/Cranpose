@@ -240,6 +240,7 @@ fn dynamic_modifiers_showcase(frame: i32) {
 }
 
 /// Helper to check if a node exists and count its children
+#[allow(dead_code)]
 fn count_children(applier: &mut MemoryApplier, node_id: usize) -> Option<usize> {
     applier
         .with_node(node_id, |node: &mut compose_ui::LayoutNode| {

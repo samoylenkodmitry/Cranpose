@@ -4,7 +4,6 @@ use crate::snapshot_v2::take_mutable_snapshot;
 use crate::state::{MutationPolicy, SnapshotMutableState};
 use crate::SnapshotStateObserver;
 use compose_macros::composable;
-use compose_ui::{Column, ColumnSpec, Modifier, Row, RowSpec, Text};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};

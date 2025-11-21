@@ -27,7 +27,7 @@ impl TextMeasurer for MonospacedTextMeasurer {
 
 fn global_text_measurer() -> &'static RwLock<Box<dyn TextMeasurer>> {
     static TEXT_MEASURER: OnceLock<RwLock<Box<dyn TextMeasurer>>> = OnceLock::new();
-    TEXT_MEASURER.get_or_init(|| RwLock::new(Box::new(MonospacedTextMeasurer::default())))
+    TEXT_MEASURER.get_or_init(|| RwLock::new(Box::new(MonospacedTextMeasurer)))
 }
 
 pub fn set_text_measurer<M: TextMeasurer>(measurer: M) {

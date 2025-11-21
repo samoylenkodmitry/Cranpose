@@ -193,7 +193,7 @@ impl WgpuRenderer {
         if let Some(gpu_renderer) = &mut self.gpu_renderer {
             gpu_renderer
                 .render(view, &self.scene.shapes, &self.scene.texts, width, height)
-                .map_err(|e| WgpuRendererError::Wgpu(e))
+                .map_err(WgpuRendererError::Wgpu)
         } else {
             Err(WgpuRendererError::Wgpu(
                 "GPU renderer not initialized. Call init_gpu() first.".to_string(),

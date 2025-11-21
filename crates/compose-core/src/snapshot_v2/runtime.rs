@@ -35,7 +35,7 @@ static SNAPSHOT_RUNTIME: LazyLock<Mutex<SnapshotRuntime>> =
     LazyLock::new(|| Mutex::new(SnapshotRuntime::new()));
 
 thread_local! {
-    static RUNTIME_LOCK_DEPTH: Cell<usize> = Cell::new(0);
+    static RUNTIME_LOCK_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
 
 struct RuntimeLockGuard;

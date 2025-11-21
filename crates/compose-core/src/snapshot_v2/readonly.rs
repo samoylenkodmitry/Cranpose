@@ -6,6 +6,12 @@ use super::*;
 ///
 /// This snapshot cannot be used to modify state. Any attempts to write
 /// to state objects while this snapshot is active will fail.
+///
+/// # Thread Safety
+/// Contains `Cell<T>` and `RefCell<T>` which are not `Send`/`Sync`. This is safe because
+/// snapshots are stored in thread-local storage and never shared across threads. The `Arc`
+/// is used for cheap cloning within a single thread, not for cross-thread sharing.
+#[allow(clippy::arc_with_non_send_sync)]
 pub struct ReadonlySnapshot {
     state: SnapshotState,
 }
@@ -96,6 +102,7 @@ mod tests {
     use std::cell::Cell;
 
     // Mock StateObject for testing
+    #[allow(dead_code)]
     struct MockStateObject {
         value: Cell<i32>,
     }

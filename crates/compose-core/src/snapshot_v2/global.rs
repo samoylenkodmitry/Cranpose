@@ -6,6 +6,12 @@ use super::*;
 ///
 /// This is a special singleton snapshot that represents the global state.
 /// All non-nested snapshots implicitly depend on the global snapshot.
+///
+/// # Thread Safety
+/// Contains `Cell<T>` which is not `Send`/`Sync`. This is safe because snapshots
+/// are stored in thread-local storage and never shared across threads. The `Arc`
+/// is used for cheap cloning within a single thread, not for cross-thread sharing.
+#[allow(clippy::arc_with_non_send_sync)]
 pub struct GlobalSnapshot {
     state: SnapshotState,
     nested_count: Cell<usize>,
@@ -42,7 +48,7 @@ impl GlobalSnapshot {
 }
 
 thread_local! {
-    static GLOBAL_SNAPSHOT: RefCell<Option<Arc<GlobalSnapshot>>> = RefCell::new(None);
+    static GLOBAL_SNAPSHOT: RefCell<Option<Arc<GlobalSnapshot>>> = const { RefCell::new(None) };
 }
 
 /// Clear the global snapshot (for testing only).
@@ -191,6 +197,7 @@ pub fn advance_global_snapshot(new_id: SnapshotId) {
 }
 
 /// Get the current global snapshot ID.
+#[cfg(test)]
 pub fn global_snapshot_id() -> SnapshotId {
     let global = GlobalSnapshot::get_or_create();
     global.snapshot_id()

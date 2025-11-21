@@ -18,6 +18,10 @@
 //! The current snapshot is stored in thread-local storage and automatically
 //! managed by the snapshot system.
 
+// All snapshot types use Arc with Cell/RefCell for single-threaded shared ownership.
+// This is safe because snapshots are thread-local and never cross thread boundaries.
+#![allow(clippy::arc_with_non_send_sync)]
+
 use crate::collections::map::HashMap; // FUTURE(no_std): replace HashMap/HashSet with arena-backed maps.
 use crate::collections::map::HashSet;
 use crate::snapshot_id_set::{SnapshotId, SnapshotIdSet};
@@ -320,9 +324,9 @@ impl AnySnapshot {
     }
 }
 
-/// Thread-local storage for the current snapshot.
 thread_local! {
-    static CURRENT_SNAPSHOT: RefCell<Option<AnySnapshot>> = RefCell::new(None);
+    // Thread-local storage for the current snapshot.
+    static CURRENT_SNAPSHOT: RefCell<Option<AnySnapshot>> = const { RefCell::new(None) };
 }
 
 /// Get the current snapshot, or None if not in a snapshot context.
@@ -402,25 +406,25 @@ pub(crate) fn peek_next_snapshot_id() -> SnapshotId {
 /// Global counter for unique observer IDs.
 static NEXT_OBSERVER_ID: AtomicUsize = AtomicUsize::new(1);
 
-/// Global map of apply observers indexed by unique ID.
 thread_local! {
+    // Global map of apply observers indexed by unique ID.
     static APPLY_OBSERVERS: RefCell<HashMap<usize, ApplyObserver>> = RefCell::new(HashMap::default());
 }
 
-/// Thread-local last-writer registry used for conflict detection in v2.
-///
-/// Maps a state object id to the snapshot id of the most recent successful apply
-/// that modified the object. This is a simplified conflict tracking mechanism
-/// for Phase 2.1 before full record-chain merging is implemented.
-///
-/// Thread-local ensures test isolation - each test thread has its own registry.
 thread_local! {
+    // Thread-local last-writer registry used for conflict detection in v2.
+    //
+    // Maps a state object id to the snapshot id of the most recent successful apply
+    // that modified the object. This is a simplified conflict tracking mechanism
+    // for Phase 2.1 before full record-chain merging is implemented.
+    //
+    // Thread-local ensures test isolation - each test thread has its own registry.
     static LAST_WRITES: RefCell<HashMap<StateObjectId, SnapshotId>> = RefCell::new(HashMap::default());
 }
 
-/// Thread-local weak set of state objects with multiple records for periodic garbage collection.
-/// Mirrors Kotlin's `extraStateObjects` WeakSet.
 thread_local! {
+    // Thread-local weak set of state objects with multiple records for periodic garbage collection.
+    // Mirrors Kotlin's `extraStateObjects` WeakSet.
     static EXTRA_STATE_OBJECTS: RefCell<crate::snapshot_weak_set::SnapshotWeakSet> = RefCell::new(crate::snapshot_weak_set::SnapshotWeakSet::new());
 }
 
@@ -474,6 +478,7 @@ pub(crate) fn notify_apply_observers(modified: &[Arc<dyn StateObject>], snapshot
 }
 
 /// Get the last successful writer snapshot id for a given object id.
+#[allow(dead_code)]
 pub(crate) fn get_last_write(id: StateObjectId) -> Option<SnapshotId> {
     LAST_WRITES.with(|cell| cell.borrow().get(&id).copied())
 }
@@ -514,6 +519,7 @@ pub(crate) fn check_and_overwrite_unused_records_locked() {
 /// Mirrors Kotlin's `processForUnusedRecordsLocked()`. After a state is modified:
 /// 1. Calls `overwrite_unused_records()` to clean up old records
 /// 2. If the state has multiple records, adds it to `EXTRA_STATE_OBJECTS` for future cleanup
+#[allow(dead_code)]
 pub(crate) fn process_for_unused_records_locked(state: &Arc<dyn crate::state::StateObject>) {
     if state.overwrite_unused_records() {
         // State has multiple records - track it for future cleanup
@@ -548,9 +554,7 @@ pub(crate) fn optimistic_merges(
         };
 
         let (previous_opt, found_base) = mutable::find_previous_record(&head, base_parent_id);
-        let Some(previous) = previous_opt else {
-            return None;
-        };
+        let previous = previous_opt?;
 
         if !found_base || previous.snapshot_id() == crate::state::PREEXISTING_SNAPSHOT_ID {
             continue;
@@ -560,17 +564,13 @@ pub(crate) fn optimistic_merges(
             continue;
         }
 
-        let Some(applied) = mutable::find_record_by_id(&head, *writer_id) else {
-            return None;
-        };
+        let applied = mutable::find_record_by_id(&head, *writer_id)?;
 
-        let Some(merged) = state.merge_records(
+        let merged = state.merge_records(
             Arc::clone(&previous),
             Arc::clone(&current),
             Arc::clone(&applied),
-        ) else {
-            return None;
-        };
+        )?;
 
         result
             .get_or_insert_with(HashMap::default)
@@ -581,6 +581,11 @@ pub(crate) fn optimistic_merges(
 }
 
 /// Merge two read observers into one.
+///
+/// # Thread Safety
+/// The resulting Arc-wrapped closure may capture non-Send closures. This is safe
+/// because observers are only invoked on the UI thread where they were created.
+#[allow(clippy::arc_with_non_send_sync)]
 pub fn merge_read_observers(
     a: Option<ReadObserver>,
     b: Option<ReadObserver>,
@@ -597,6 +602,11 @@ pub fn merge_read_observers(
 }
 
 /// Merge two write observers into one.
+///
+/// # Thread Safety
+/// The resulting Arc-wrapped closure may capture non-Send closures. This is safe
+/// because observers are only invoked on the UI thread where they were created.
+#[allow(clippy::arc_with_non_send_sync)]
 pub fn merge_write_observers(
     a: Option<WriteObserver>,
     b: Option<WriteObserver>,
@@ -627,6 +637,7 @@ pub(crate) struct SnapshotState {
     /// Write observer, if any.
     pub(crate) write_observer: Option<WriteObserver>,
     /// Modified state objects.
+    #[allow(clippy::type_complexity)] // HashMap value is (Arc, SnapshotId) - reasonable for tracking state
     pub(crate) modified: RefCell<HashMap<StateObjectId, (Arc<dyn StateObject>, SnapshotId)>>,
     /// Optional callback invoked once when disposed.
     on_dispose: RefCell<Option<Box<dyn FnOnce()>>>,
@@ -672,15 +683,18 @@ impl SnapshotState {
         let mut modified = self.modified.borrow_mut();
 
         // Only call observer on first write
-        if !modified.contains_key(&state_id) {
-            if let Some(ref observer) = self.write_observer {
-                observer(&*state);
+        match modified.entry(state_id) {
+            std::collections::hash_map::Entry::Vacant(e) => {
+                if let Some(ref observer) = self.write_observer {
+                    observer(&*state);
+                }
+                // Store the Arc and writer id in the modified set
+                e.insert((state, writer_id));
             }
-            // Store the Arc and writer id in the modified set
-            modified.insert(state_id, (state, writer_id));
-        } else {
-            // Update the writer id to reflect the most recent writer for this state.
-            modified.insert(state_id, (state, writer_id));
+            std::collections::hash_map::Entry::Occupied(mut e) => {
+                // Update the writer id to reflect the most recent writer for this state.
+                e.insert((state, writer_id));
+            }
         }
     }
 
@@ -1161,6 +1175,7 @@ mod tests {
         use std::cell::Cell;
 
         // Mock StateObject for testing
+        #[allow(dead_code)]
         struct TestState {
             value: Cell<i32>,
         }
@@ -1221,6 +1236,7 @@ mod tests {
         use crate::state::StateObject;
         use std::cell::Cell;
 
+        #[allow(dead_code)]
         struct TestState {
             value: Cell<i32>,
         }

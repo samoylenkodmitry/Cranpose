@@ -1,3 +1,4 @@
+
 use std::fmt;
 use std::rc::Rc;
 
@@ -5,7 +6,7 @@ use compose_foundation::{ModifierNodeChain, NodeCapabilities, PointerEvent};
 use compose_ui_graphics::GraphicsLayer;
 
 use crate::draw::DrawCommand;
-use crate::modifier::{Brush, Modifier};
+use crate::modifier::Modifier;
 use crate::modifier_nodes::{BackgroundNode, ClickableNode, ClipToBoundsNode, CornerShapeNode, DrawCommandNode, GraphicsLayerNode};
 use crate::text_modifier_node::TextModifierNode;
 use std::cell::RefCell;
@@ -65,24 +66,6 @@ impl ModifierNodeSlices {
 
     pub fn graphics_layer(&self) -> Option<GraphicsLayer> {
         self.graphics_layer
-    }
-
-    fn extend(&mut self, other: ModifierNodeSlices) {
-        self.draw_commands.extend(other.draw_commands);
-        self.pointer_inputs.extend(other.pointer_inputs.into_iter());
-        self.click_handlers.extend(other.click_handlers.into_iter());
-        self.clip_to_bounds |= other.clip_to_bounds;
-        // Take the last text content (rightmost modifier wins)
-        if other.text_content.is_some() {
-            self.text_content = other.text_content;
-        }
-        // Take the last graphics layer (rightmost modifier wins)
-        if other.graphics_layer.is_some() {
-            self.graphics_layer = other.graphics_layer;
-        }
-        if self.chain_guard.is_none() {
-            self.chain_guard = other.chain_guard;
-        }
     }
 
     pub fn with_chain_guard(mut self, handle: ModifierChainHandle) -> Self {

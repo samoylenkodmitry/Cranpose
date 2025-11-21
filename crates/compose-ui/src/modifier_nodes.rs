@@ -1358,6 +1358,7 @@ impl PointerEventHandlerNode {
         }
     }
 
+    #[allow(dead_code)] // TODO: pointer input implementation
     pub fn handler(&self) -> Rc<dyn Fn(PointerEvent)> {
         self.handler.clone()
     }
@@ -1409,6 +1410,7 @@ pub struct PointerEventHandlerElement {
 }
 
 impl PointerEventHandlerElement {
+    #[allow(dead_code)] // TODO: pointer input implementation
     pub fn new(handler: Rc<dyn Fn(PointerEvent)>) -> Self {
         Self { handler }
     }

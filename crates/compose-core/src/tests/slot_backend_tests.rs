@@ -914,7 +914,7 @@ fn test_chunked_read_after_root_finalize() {
     // pass 1
     storage.reset();
     let _g = storage.begin_group(9100);
-    let slot = storage.alloc_value_slot(|| 10i32);
+    let _slot = storage.alloc_value_slot(|| 10i32);
     storage.end_group();
     storage.flush();
 
@@ -973,7 +973,7 @@ fn test_backends_gap_restore_shorter_children_respects_parent_frame() {
             kind
         );
 
-        let res_child = storage.begin_group(2001);
+        let _res_child = storage.begin_group(2001);
         // Child might be restored from gap or freshly created depending on backend
         let v1_new = storage.alloc_value_slot(|| 111u32);
         storage.write_value(v1_new, 111u32);

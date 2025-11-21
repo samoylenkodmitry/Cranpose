@@ -6,6 +6,9 @@
 //! - Efficient group skipping and scope-based recomposition
 //! - Batch anchor rebuilding for large structural changes
 
+// Complex slot state machine logic benefits from explicit nested pattern matching for clarity
+#![allow(clippy::collapsible_match)]
+
 use crate::{
     slot_storage::{GroupId, SlotStorage, StartGroup, ValueSlotId},
     AnchorId, Key, NodeId, Owned, ScopeId,
@@ -125,7 +128,6 @@ impl Default for Slot {
 
 impl SlotTable {
     const INITIAL_CAP: usize = 32;
-    const GAP_BLOCK: usize = 32; // tune 16/32/64
     const LOCAL_GAP_SCAN: usize = 256; // tune
 
     pub fn new() -> Self {
@@ -149,82 +151,6 @@ impl SlotTable {
         }
     }
 
-    /// Ensure that at `cursor` there is at least 1 gap slot.
-    /// We do this by pulling a small block of gap slots from the tail forward,
-    /// shifting everything in between once, and fixing frames/anchors.
-    fn ensure_gap_at(&mut self, cursor: usize) {
-        // if already a gap, nothing to do
-        if matches!(self.slots.get(cursor), Some(Slot::Gap { .. })) {
-            return;
-        }
-
-        // make sure we actually have tail gaps to steal from
-        self.ensure_capacity(); // <- your existing one, will append gaps at the end
-                                // after this, the last N slots are guaranteed to be gaps with INVALID anchors
-
-        loop {
-            // how many gaps we want to pull forward
-            let mut tail_start = self.slots.len();
-            let mut block = 0usize;
-
-            while tail_start > cursor && block < Self::GAP_BLOCK {
-                match self.slots.get(tail_start - 1) {
-                    Some(Slot::Gap { anchor, .. }) if *anchor == AnchorId::INVALID => {
-                        tail_start -= 1;
-                        block += 1;
-                    }
-                    _ => break,
-                }
-            }
-
-            if block == 0 {
-                // no tail gaps yet, grow and try again
-                self.grow_slots();
-                continue;
-            }
-
-            if tail_start > cursor {
-                // 1) shift group frames and anchors for the slice [cursor..tail_start)
-                //    because we're about to move it right by `block`.
-                self.shift_group_frames(cursor, block as isize);
-                self.shift_anchor_positions_from(cursor, block as isize);
-            }
-
-            // 2) actually move the slice up in the Vec
-            //
-            // we currently have:
-            //   [ ... cursor | ...... live slots ...... | gap gap gap gap ]
-            // we want:
-            //   [ ... cursor | gap gap gap gap | ...... live slots ...... ]
-            //
-            // we can do that with rotate_right because we already reserved space.
-            const MAX_ROTATE_WINDOW: usize = 4096; // tune
-
-            let end = tail_start + block;
-            let win = end - cursor;
-            if win > MAX_ROTATE_WINDOW {
-                // too expensive to pull from the tail — just grow and put a gap right here
-                // or fall back to “overwrite here” logic
-                self.force_gap_here(cursor);
-                return;
-            }
-
-            let end = tail_start + block;
-            self.slots[cursor..end].rotate_right(block);
-
-            // 3) now fill [cursor .. cursor+block) with fresh gaps
-            for i in 0..block {
-                self.slots[cursor + i] = Slot::Gap {
-                    anchor: AnchorId::INVALID,
-                    group_key: None,
-                    group_scope: None,
-                    group_len: 0,
-                };
-            }
-            // done: cursor is guaranteed to be a gap now
-            break;
-        }
-    }
     fn force_gap_here(&mut self, cursor: usize) {
         // we *know* we have capacity (ensure_capacity() already ran)
         // so just overwrite the slot at cursor with a fresh gap
@@ -1154,16 +1080,6 @@ impl SlotTable {
         self.update_group_bounds();
         cursor
     }
-    fn update_anchor_for_slot(&mut self, slot_index: usize) {
-        let anchor_id = self.slots[slot_index].anchor_id().0;
-        if anchor_id == 0 {
-            return;
-        }
-        if anchor_id >= self.anchors.len() {
-            self.anchors.resize(anchor_id + 1, INVALID_ANCHOR_POS);
-        }
-        self.anchors[anchor_id] = slot_index;
-    }
     fn shift_anchor_positions_from(&mut self, start_slot: usize, delta: isize) {
         for pos in &mut self.anchors {
             if *pos != INVALID_ANCHOR_POS && *pos >= start_slot {
@@ -1537,11 +1453,10 @@ impl SlotTable {
             .map(|frame| (frame.start, frame.end.min(self.slots.len())))
         {
             // Mark unreachable slots within this group as gaps
-            if self.cursor < group_end {
-                if self.mark_range_as_gaps(self.cursor, group_end, Some(owner_start)) {
+            if self.cursor < group_end
+                && self.mark_range_as_gaps(self.cursor, group_end, Some(owner_start)) {
                     marked = true;
                 }
-            }
 
             // Update the frame end to current cursor
             // NOTE: We do NOT update the group's len field, because gap slots

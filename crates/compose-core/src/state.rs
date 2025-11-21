@@ -1,3 +1,6 @@
+// StateRecord uses Arc with Cell for single-threaded shared ownership in the snapshot system.
+#![allow(clippy::arc_with_non_send_sync)]
+
 use crate::collections::map::HashSet;
 use std::any::Any;
 use std::cell::{Cell, RefCell};
@@ -17,7 +20,7 @@ const INVALID_SNAPSHOT_ID: SnapshotId = 0;
 const SNAPSHOT_ID_MAX: SnapshotId = usize::MAX;
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, Default)]
-pub(crate) struct ObjectId(pub(crate) usize);
+pub struct ObjectId(pub(crate) usize);
 
 impl ObjectId {
     pub(crate) fn new<T: ?Sized + 'static>(object: &Arc<T>) -> Self {
@@ -30,7 +33,14 @@ impl ObjectId {
     }
 }
 
-pub(crate) struct StateRecord {
+/// A record in the state history chain.
+///
+/// # Thread Safety
+/// Contains `Cell<T>` which is not `Send`/`Sync`. This is safe because state records
+/// are accessed only from the UI thread via thread-local snapshot system. The `Arc`
+/// is used for cheap cloning and shared ownership within a single thread.
+#[allow(clippy::arc_with_non_send_sync)]
+pub struct StateRecord {
     snapshot_id: Cell<SnapshotId>,
     tombstone: Cell<bool>,
     next: Cell<Option<Arc<StateRecord>>>,
@@ -63,9 +73,8 @@ impl StateRecord {
 
     #[inline]
     pub(crate) fn next(&self) -> Option<Arc<StateRecord>> {
-        self.next.take().map(|arc| {
-            self.next.set(Some(Arc::clone(&arc)));
-            arc
+        self.next.take().inspect(|arc| {
+            self.next.set(Some(Arc::clone(arc)));
         })
     }
 
@@ -103,6 +112,7 @@ impl StateRecord {
 
     /// Clears the value from this record to free memory.
     /// Used when marking records as reusable - clears the value to reduce memory usage.
+    #[allow(dead_code)]
     pub(crate) fn clear_for_reuse(&self) {
         self.clear_value();
     }
@@ -258,7 +268,7 @@ pub(crate) fn used_locked(head: &Arc<StateRecord>) -> Option<Arc<StateRecord>> {
 /// Returns a record that is either:
 /// - A reused record (if `used_locked()` found one), marked with SNAPSHOT_ID_MAX
 /// - A newly created record, prepended to the state's record chain via `prepend_state_record()`
-pub(crate) fn new_overwritable_record_locked<T: Any + Clone>(
+pub(crate) fn new_overwritable_record_locked(
     state: &dyn StateObject,
 ) -> Arc<StateRecord> {
     let state_head = state.first_record();
@@ -307,7 +317,7 @@ pub(crate) fn overwrite_unused_records_locked<T: Any + Clone>(state: &dyn StateO
     // Calculate reuse limit: records below this ID are invisible to all open snapshots
     // Mirrors Kotlin's: val reuseLimit = pinningTable.lowestOrDefault(nextSnapshotId)
     let reuse_limit =
-        lowest_pinned_snapshot().unwrap_or_else(|| crate::snapshot_v2::peek_next_snapshot_id());
+        lowest_pinned_snapshot().unwrap_or_else(crate::snapshot_v2::peek_next_snapshot_id);
 
     let mut retained_records = 0;
 
@@ -496,7 +506,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         }
 
         let refreshed = {
-            let mut head_guard = self.head.write().unwrap();
+            let head_guard = self.head.read().unwrap();
             let current_head = head_guard.clone();
             let refreshed = readable_record_for(&current_head, snapshot_id, invalid).unwrap_or_else(
                 || {
@@ -514,7 +524,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
             Arc::clone(&refreshed)
         };
 
-        let overwritable = new_overwritable_record_locked::<T>(self);
+        let overwritable = new_overwritable_record_locked(self);
         overwritable.assign_value::<T>(&refreshed);
         overwritable.set_snapshot_id(snapshot_id);
         overwritable.set_tombstone(false);
@@ -1013,7 +1023,7 @@ mod tests {
         let invalid_rec = StateRecord::new(INVALID_SNAPSHOT_ID, 0i32, current_head.next());
         current_head.set_next(Some(invalid_rec.clone()));
 
-        let result = new_overwritable_record_locked::<i32>(&*state);
+        let result = new_overwritable_record_locked(&*state);
 
         // Should reuse the INVALID record
         assert!(Arc::ptr_eq(&result, &invalid_rec));
@@ -1032,7 +1042,7 @@ mod tests {
         let state = SnapshotMutableState::new_in_arc(100i32, Arc::new(NeverEqual));
         let old_head = state.first_record();
 
-        let result = new_overwritable_record_locked::<i32>(&*state);
+        let result = new_overwritable_record_locked(&*state);
 
         // Should create a new record
         assert_eq!(result.snapshot_id(), SNAPSHOT_ID_MAX);

@@ -37,6 +37,7 @@ impl SnapshotWeakSet {
     ///
     /// Uses binary search to find the insertion point, maintaining sort order.
     /// Duplicates are allowed (same hash can appear multiple times).
+    #[allow(dead_code)]
     pub(crate) fn add<T: StateObject + 'static>(&mut self, state: &Arc<T>) {
         let hash = Arc::as_ptr(state) as *const () as usize;
         let trait_obj: Arc<dyn StateObject> = state.clone();
@@ -56,6 +57,7 @@ impl SnapshotWeakSet {
     /// Add a trait object to the set (for use with Arc<dyn StateObject>).
     ///
     /// This is a specialized version of `add` that works with trait objects directly.
+    #[allow(dead_code)]
     pub(crate) fn add_trait_object(&mut self, state: &Arc<dyn StateObject>) {
         let hash = Arc::as_ptr(state) as *const () as usize;
         let weak = Arc::downgrade(state);

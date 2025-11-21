@@ -9,6 +9,8 @@ pub mod nodes;
 
 // Re-export commonly used items
 pub use modifier::*;
+#[allow(unused_imports)] // Module exists for API compatibility
+pub use modifier_helpers::*;
 pub use measurement_proxy::*;
 pub use nodes::input::{
     PointerButton, PointerButtons, PointerEvent, PointerEventKind, PointerId, PointerPhase,
@@ -21,7 +23,10 @@ pub mod prelude {
         ModifierNodeContext, ModifierNodeElement, PointerInputNode, SemanticsNode, Size,
     };
     pub use crate::measurement_proxy::*;
+
+    #[allow(unused_imports)] // Helper module exists for API compatibility
     pub use crate::modifier_helpers::*;
+
     pub use crate::nodes::input::prelude::*;
     // Re-export the helper macros for convenience
     pub use crate::{

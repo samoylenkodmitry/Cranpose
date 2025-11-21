@@ -28,7 +28,7 @@ fn intrinsic_size_can_be_combined_with_other_modifiers() {
 fn equal_width_buttons_api_demonstration() {
     // This test demonstrates the equal-width buttons use case from the roadmap.
     // The actual intrinsic measurement calculation will be implemented in the layout engine.
-    let mut composition = run_test_composition(|| {
+    let composition = run_test_composition(|| {
         // Using Row with equal-width buttons via IntrinsicSize.Max
         // This would make all buttons as wide as the widest button
         Row(Modifier::empty(), RowSpec::default(), || {
@@ -63,7 +63,7 @@ fn equal_width_buttons_api_demonstration() {
 #[test]
 fn column_with_intrinsic_width() {
     // Test Column with intrinsic width - should size to fit widest child
-    let mut composition = run_test_composition(|| {
+    let composition = run_test_composition(|| {
         Column(
             Modifier::empty()
                 .width_intrinsic(IntrinsicSize::Max)
@@ -83,7 +83,7 @@ fn column_with_intrinsic_width() {
 #[test]
 fn row_with_intrinsic_height() {
     // Test Row with intrinsic height - should size to fit tallest child
-    let mut composition = run_test_composition(|| {
+    let composition = run_test_composition(|| {
         Row(
             Modifier::empty()
                 .height_intrinsic(IntrinsicSize::Max)
@@ -151,7 +151,7 @@ fn min_intrinsic_vs_max_intrinsic() {
 #[test]
 fn intrinsic_size_with_padding() {
     // Test that padding is correctly applied when using intrinsic sizing
-    let mut composition = run_test_composition(|| {
+    let composition = run_test_composition(|| {
         Column(
             Modifier::empty()
                 .width_intrinsic(IntrinsicSize::Max)

@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity)]
+
 use std::fmt::Debug;
 use std::time::Instant;
 
@@ -38,8 +40,8 @@ where
     pub fn new(mut renderer: R, root_key: Key, content: impl FnMut() + 'static) -> Self {
         let runtime = StdRuntime::new();
         let mut composition = Composition::with_runtime(MemoryApplier::new(), runtime.runtime());
-        let mut build = content;
-        if let Err(err) = composition.render(root_key, move || build()) {
+        let build = content;
+        if let Err(err) = composition.render(root_key, build) {
             log::error!("initial render failed: {err}");
         }
         renderer.scene_mut().clear();

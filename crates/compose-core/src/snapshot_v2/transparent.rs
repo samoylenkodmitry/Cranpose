@@ -9,6 +9,12 @@ use super::*;
 ///
 /// This snapshot type is optimized for cases where observers need to be
 /// temporarily added or removed without creating a new snapshot structure.
+///
+/// # Thread Safety
+/// Contains `Cell<T>` and `RefCell<T>` which are not `Send`/`Sync`. This is safe because
+/// snapshots are stored in thread-local storage and never shared across threads. The `Arc`
+/// is used for cheap cloning within a single thread, not for cross-thread sharing.
+#[allow(clippy::arc_with_non_send_sync)]
 pub struct TransparentObserverMutableSnapshot {
     state: SnapshotState,
     parent: Option<Weak<TransparentObserverMutableSnapshot>>,
@@ -170,6 +176,12 @@ impl TransparentObserverMutableSnapshot {
 /// A transparent read-only snapshot.
 ///
 /// Similar to TransparentObserverMutableSnapshot but for read-only snapshots.
+///
+/// # Thread Safety
+/// Contains `Cell<T>` and `RefCell<T>` which are not `Send`/`Sync`. This is safe because
+/// snapshots are stored in thread-local storage and never shared across threads. The `Arc`
+/// is used for cheap cloning within a single thread, not for cross-thread sharing.
+#[allow(clippy::arc_with_non_send_sync)]
 pub struct TransparentObserverSnapshot {
     state: SnapshotState,
     parent: Option<Weak<TransparentObserverSnapshot>>,
@@ -326,6 +338,7 @@ mod tests {
 
         let _guard = reset_runtime();
 
+        #[allow(dead_code)]
         struct MockState {
             value: Cell<i32>,
         }

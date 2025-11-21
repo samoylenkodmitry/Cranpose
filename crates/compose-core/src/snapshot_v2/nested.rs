@@ -6,6 +6,12 @@ use super::*;
 ///
 /// This is a read-only snapshot that has a parent snapshot. It inherits
 /// the parent's invalid set and can be disposed independently.
+///
+/// # Thread Safety
+/// Contains `Cell<T>` and `RefCell<T>` which are not `Send`/`Sync`. This is safe because
+/// snapshots are stored in thread-local storage and never shared across threads. The `Arc`
+/// is used for cheap cloning within a single thread, not for cross-thread sharing.
+#[allow(clippy::arc_with_non_send_sync)]
 pub struct NestedReadonlySnapshot {
     state: SnapshotState,
     parent: Weak<NestedReadonlySnapshot>,
@@ -104,6 +110,12 @@ impl NestedReadonlySnapshot {
 /// This is a mutable snapshot that has a parent. Changes made in this
 /// snapshot are applied to the parent when `apply()` is called, not
 /// to the global snapshot.
+///
+/// # Thread Safety
+/// Contains `Cell<T>` and `RefCell<T>` which are not `Send`/`Sync`. This is safe because
+/// snapshots are stored in thread-local storage and never shared across threads. The `Arc`
+/// is used for cheap cloning within a single thread, not for cross-thread sharing.
+#[allow(clippy::arc_with_non_send_sync)]
 pub struct NestedMutableSnapshot {
     state: SnapshotState,
     parent: Weak<MutableSnapshot>,
@@ -249,7 +261,7 @@ impl NestedMutableSnapshot {
                 return SnapshotApplyResult::Success;
             }
             // Ask parent to merge child's modifications; it will detect conflicts.
-            if parent.merge_child_modifications(&*child_modified).is_err() {
+            if parent.merge_child_modifications(&child_modified).is_err() {
                 return SnapshotApplyResult::Failure;
             }
 

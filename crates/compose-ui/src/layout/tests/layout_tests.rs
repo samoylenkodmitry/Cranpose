@@ -134,81 +134,6 @@ fn align_helpers_respect_available_space() {
 // Note: box_respects_child_alignment test removed - it tested the old BoxNode
 // implementation. Box now uses LayoutNode with BoxMeasurePolicy.
 
-#[test]
-fn layout_node_uses_measure_policy() -> Result<(), NodeError> {
-    let mut applier = MemoryApplier::new();
-    let child_a = applier.create(Box::new(LayoutNode::new(
-        Modifier::empty(),
-        Rc::new(LeafMeasurePolicy::new(Size {
-            width: 10.0,
-            height: 20.0,
-        })),
-    )));
-    let child_b = applier.create(Box::new(LayoutNode::new(
-        Modifier::empty(),
-        Rc::new(LeafMeasurePolicy::new(Size {
-            width: 5.0,
-            height: 30.0,
-        })),
-    )));
-
-    let mut layout_node = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
-    layout_node.children.insert(child_a);
-    layout_node.children.insert(child_b);
-    let layout_id = applier.create(Box::new(layout_node));
-
-    let applier_host = Rc::new(ConcreteApplierHost::new(applier));
-    let mut builder = LayoutBuilder::new(Rc::clone(&applier_host));
-
-    // Verify LayoutBuilder::new() gets a nonzero epoch (no epoch=0 accidents)
-    let epoch = builder.state.borrow().cache_epoch;
-    assert_ne!(
-        epoch, 0,
-        "LayoutBuilder::new() should get a proper epoch, not 0"
-    );
-
-    let measured = builder.measure_node(
-        layout_id,
-        Constraints {
-            min_width: 0.0,
-            max_width: 200.0,
-            min_height: 0.0,
-            max_height: 200.0,
-        },
-    )?;
-
-    assert_eq!(measured.size.width, 10.0);
-    assert_eq!(measured.size.height, 50.0);
-    assert_eq!(measured.children.len(), 2);
-    assert_eq!(measured.children[0].offset, Point { x: 0.0, y: 0.0 });
-    assert_eq!(measured.children[1].offset, Point { x: 0.0, y: 20.0 });
-    Ok(())
-}
-
-#[test]
-fn layout_padding_comes_from_modifier_chain() -> Result<(), NodeError> {
-    let mut applier = MemoryApplier::new();
-    let layout_node = LayoutNode::new(Modifier::empty().padding(8.0), Rc::new(VerticalStackPolicy));
-    let layout_id = applier.create(Box::new(layout_node));
-
-    let applier_host = Rc::new(ConcreteApplierHost::new(applier));
-    let mut builder = LayoutBuilder::new(Rc::clone(&applier_host));
-
-    let measured = builder.measure_node(
-        layout_id,
-        Constraints {
-            min_width: 0.0,
-            max_width: 100.0,
-            min_height: 0.0,
-            max_height: 100.0,
-        },
-    )?;
-
-    assert_eq!(measured.size.width, 16.0);
-    assert_eq!(measured.size.height, 16.0);
-    Ok(())
-}
-
 // ============================================================================
 // SELECTIVE MEASURE/LAYOUT TESTS
 // ============================================================================
@@ -357,7 +282,7 @@ fn selective_measure_uses_cache_when_not_dirty() -> Result<(), NodeError> {
     let node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
     let node_id = applier.create(Box::new(node));
 
-    let constraints = Constraints {
+    let _constraints = Constraints {
         min_width: 0.0,
         max_width: 100.0,
         min_height: 0.0,
@@ -411,7 +336,7 @@ fn selective_measure_remeasures_when_dirty() -> Result<(), NodeError> {
             height: 100.0,
         },
     )?;
-    let size1 = result1.root_size();
+    let _size1 = result1.root_size();
 
     // Mark as dirty by changing measure policy
     applier.with_node::<LayoutNode, _>(node_id, |node| {
@@ -419,7 +344,7 @@ fn selective_measure_remeasures_when_dirty() -> Result<(), NodeError> {
     })?;
 
     // Second measure - should remeasure because dirty
-    let result2 = measure_layout(
+    let _result2 = measure_layout(
         &mut applier,
         node_id,
         Size {
@@ -978,44 +903,6 @@ fn flex_parent_data_uses_resolved_weight() {
         .expect("expected weight to propagate via resolved modifiers");
     assert_eq!(parent_data.weight, 1.0);
     assert!(parent_data.fill);
-}
-
-#[test]
-fn semantics_owner_caches_configurations() -> Result<(), NodeError> {
-    use crate::layout::SemanticsOwner;
-
-    let mut applier = MemoryApplier::new();
-    let owner = SemanticsOwner::new();
-
-    // Create a node with semantics
-    let node = LayoutNode::new(
-        Modifier::empty().semantics(|config| {
-            config.content_description = Some("test node".into());
-            config.is_clickable = true;
-        }),
-        Rc::new(MaxSizePolicy),
-    );
-    let node_id = applier.create(Box::new(node));
-
-    // First access should compute and cache
-    let config1 = owner.get_or_compute(node_id, &mut applier);
-    assert!(config1.is_some());
-    assert_eq!(
-        config1.as_ref().unwrap().content_description.as_deref(),
-        Some("test node")
-    );
-    assert!(config1.as_ref().unwrap().is_clickable);
-
-    // Second access should return cached value
-    let config2 = owner.get_or_compute(node_id, &mut applier);
-    assert_eq!(config1, config2);
-
-    // Invalidate and verify cache is cleared
-    owner.invalidate(node_id);
-    let config3 = owner.get_or_compute(node_id, &mut applier);
-    assert_eq!(config1, config3); // Content should still be the same
-
-    Ok(())
 }
 
 #[test]

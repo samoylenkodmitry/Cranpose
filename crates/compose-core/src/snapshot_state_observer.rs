@@ -1,3 +1,9 @@
+// Observer callbacks use Arc for shared ownership but may capture non-Send types.
+// This is safe because callbacks are always invoked on the UI thread where they were created.
+#![allow(clippy::arc_with_non_send_sync)]
+// Complex types are inherent to the observer pattern with nested callbacks and state tracking
+#![allow(clippy::type_complexity)]
+
 use crate::collections::map::HashSet;
 use crate::snapshot_v2::{register_apply_observer, ReadObserver, StateObjectId};
 use crate::state::StateObject;
@@ -236,6 +242,9 @@ impl SnapshotStateObserverInner {
         self.scopes.borrow_mut().clear();
     }
 
+    // Arc-wrapped closure captures Weak which may not be Send/Sync. This is safe because
+    // the observer callback is only invoked on the UI thread where it was registered.
+    #[allow(clippy::arc_with_non_send_sync)]
     fn start(&self, weak_self: Weak<SnapshotStateObserverInner>) {
         if self.apply_handle.borrow().is_some() {
             return;
@@ -262,7 +271,7 @@ impl SnapshotStateObserverInner {
     ) -> Rc<RefCell<ScopeEntry>> {
         // ---------- FAST PATH: real compose scope ----------
         if let Some(rc_scope) = (&scope as &dyn Any).downcast_ref::<RecomposeScope>() {
-            let id: usize = rc_scope.id() as usize; // or `.0` or similar
+            let id: usize = rc_scope.id(); // or `.0` or similar
 
             let mut fast = self.fast_scopes.borrow_mut();
 
@@ -306,7 +315,7 @@ impl SnapshotStateObserverInner {
         // Create a transparent mutable snapshot (not readonly!) for observation
         // This matches Kotlin's Snapshot.observeInternal behavior
         let snapshot = take_transparent_observer_mutable_snapshot(Some(read_observer), None);
-        let result = snapshot.enter(|| block());
+        let result = snapshot.enter(block);
         snapshot.dispose();
         result
     }
@@ -469,7 +478,7 @@ impl ScopeEntry {
 mod tests {
     use super::*;
     use crate::snapshot_v2::{reset_runtime_for_tests, TestRuntimeGuard};
-    use crate::snapshot_v2::{take_mutable_snapshot, SnapshotApplyResult};
+    use crate::snapshot_v2::take_mutable_snapshot;
     use crate::state::{NeverEqual, SnapshotMutableState};
     use std::cell::Cell;
 

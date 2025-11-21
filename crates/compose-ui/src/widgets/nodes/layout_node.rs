@@ -1,3 +1,4 @@
+
 use crate::{
     layout::MeasuredNode,
     modifier::{
@@ -344,11 +345,6 @@ impl LayoutNode {
         self.needs_layout.set(false);
     }
 
-    /// Clears the redraw dirty flag after rendering.
-    pub(crate) fn clear_needs_redraw(&self) {
-        self.needs_redraw.set(false);
-    }
-
     /// Marks this node as needing a fresh pointer-input pass.
     pub fn mark_needs_pointer_pass(&self) {
         self.needs_pointer_pass.set(true);
@@ -408,13 +404,6 @@ impl LayoutNode {
     /// Get this node's parent.
     pub fn parent(&self) -> Option<NodeId> {
         self.parent.get()
-    }
-
-    fn resolve_modifier_local_from_ancestors(
-        &self,
-        token: ModifierLocalToken,
-    ) -> Option<ResolvedModifierLocal> {
-        resolve_modifier_local_from_parent_chain(self.parent(), token)
     }
 
     pub(crate) fn cache_handles(&self) -> LayoutNodeCacheHandles {
@@ -497,10 +486,6 @@ impl LayoutNode {
         &self.modifier_chain
     }
 
-    /// Returns a mutable reference to the modifier chain for layout/draw pipeline integration.
-    pub(crate) fn modifier_chain_mut(&mut self) -> &mut ModifierChainHandle {
-        &mut self.modifier_chain
-    }
 }
 impl Clone for LayoutNode {
     fn clone(&self) -> Self {
@@ -770,26 +755,10 @@ mod tests {
     }
 
     #[test]
-    fn draw_invalidation_requires_draw_capability() {
-        let mut node = fresh_node();
-        node.clear_needs_measure();
-        node.clear_needs_layout();
-        node.clear_needs_redraw();
-        node.modifier_capabilities = NodeCapabilities::LAYOUT;
-        node.modifier_child_capabilities = node.modifier_capabilities;
-
-        node.dispatch_modifier_invalidations(&[invalidation(InvalidationKind::Draw)]);
-
-        assert!(!node.needs_layout());
-        assert!(!node.needs_redraw());
-    }
-
-    #[test]
     fn draw_invalidation_marks_redraw_flag_when_capable() {
         let mut node = fresh_node();
         node.clear_needs_measure();
         node.clear_needs_layout();
-        node.clear_needs_redraw();
         node.modifier_capabilities = NodeCapabilities::DRAW;
         node.modifier_child_capabilities = node.modifier_capabilities;
 

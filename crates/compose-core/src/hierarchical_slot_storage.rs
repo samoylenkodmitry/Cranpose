@@ -54,10 +54,12 @@ pub struct HierarchicalSlotStorage {
     next_child_id: usize,
 }
 
+/// Frame tracking which storage is currently active in the hierarchy.
 struct StorageFrame {
     /// Which child storage index we switched to (None = root).
     child_store_id: Option<usize>,
     /// Group ID that owns this storage.
+    #[allow(dead_code)] // Tracked for debugging/future child storage management
     group_id: usize,
 }
 
@@ -90,8 +92,10 @@ impl HierarchicalSlotStorage {
     }
 
     /// Allocate a new child storage for a group.
-    /// Reserved for future use when implementing automatic child storage allocation.
-    #[allow(dead_code)]
+    ///
+    /// Infrastructure for future hierarchical storage feature where groups can own
+    /// isolated storage to prevent sibling recomposition interference.
+    #[allow(dead_code)] // Planned for automatic child storage allocation heuristics
     fn alloc_child_storage(&mut self, group_id: usize) -> usize {
         let id = self.next_child_id;
         self.next_child_id += 1;
@@ -107,7 +111,9 @@ impl HierarchicalSlotStorage {
     }
 
     /// Pop the storage stack when exiting a child storage.
-    #[allow(dead_code)]
+    ///
+    /// Pairs with alloc_child_storage for future hierarchical storage feature.
+    #[allow(dead_code)] // Planned for automatic child storage allocation heuristics
     fn pop_child_storage(&mut self) {
         if let Some(frame) = self.storage_stack.last() {
             if frame.child_store_id.is_some() {

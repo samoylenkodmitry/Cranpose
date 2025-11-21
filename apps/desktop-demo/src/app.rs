@@ -14,8 +14,8 @@ use std::cell::RefCell;
 mod mineswapper2;
 
 thread_local! {
-    pub static TEST_COMPOSITION_LOCAL_COUNTER: RefCell<Option<MutableState<i32>>> = RefCell::new(None);
-    pub static TEST_ACTIVE_TAB_STATE: RefCell<Option<MutableState<DemoTab>>> = RefCell::new(None);
+    pub static TEST_COMPOSITION_LOCAL_COUNTER: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
+    pub static TEST_ACTIVE_TAB_STATE: RefCell<Option<MutableState<DemoTab>>> = const { RefCell::new(None) };
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -78,7 +78,7 @@ impl Default for FrameStats {
 
 fn local_holder() -> CompositionLocal<Holder> {
     thread_local! {
-        static LOCAL_HOLDER: RefCell<Option<CompositionLocal<Holder>>> = RefCell::new(None);
+        static LOCAL_HOLDER: RefCell<Option<CompositionLocal<Holder>>> = const { RefCell::new(None) };
     }
     LOCAL_HOLDER.with(|cell| {
         let mut opt = cell.borrow_mut();

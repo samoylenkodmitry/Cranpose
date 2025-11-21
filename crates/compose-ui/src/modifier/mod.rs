@@ -42,7 +42,7 @@ use compose_ui_layout::{Alignment, HorizontalAlignment, IntrinsicSize, VerticalA
 #[allow(unused_imports)]
 pub use focus::{FocusDirection, FocusRequester};
 #[allow(unused_imports)]
-pub use local::{modifier_local_of, ModifierLocalKey, ModifierLocalReadScope};
+pub use local::{ModifierLocalKey, ModifierLocalReadScope};
 pub(crate) use local::{
     ModifierLocalAncestorResolver, ModifierLocalSource, ModifierLocalToken, ResolvedModifierLocal,
 };
@@ -55,35 +55,6 @@ use crate::modifier_nodes::ClipToBoundsElement;
 use focus::{FocusRequesterElement, FocusTargetElement};
 use local::{ModifierLocalConsumerElement, ModifierLocalProviderElement};
 use semantics::SemanticsElement;
-
-/// Trait mirroring Jetpack Compose's `Modifier` interface.
-///
-/// Implementors expose helper operations that fold over modifier elements or
-/// evaluate predicates against the chain without materializing intermediate
-/// allocations. This matches Kotlin's `foldIn`, `foldOut`, `any`, and `all`
-/// helpers and allows downstream code to treat modifiers abstractly instead of
-/// poking at cached resolved state.
-pub trait ComposeModifier {
-    /// Accumulates a value by visiting modifier elements in insertion order.
-    fn fold_in<R, F>(&self, initial: R, operation: F) -> R
-    where
-        F: FnMut(R, &dyn AnyModifierElement) -> R;
-
-    /// Accumulates a value by visiting modifier elements in reverse order.
-    fn fold_out<R, F>(&self, initial: R, operation: F) -> R
-    where
-        F: FnMut(R, &dyn AnyModifierElement) -> R;
-
-    /// Returns true when any element satisfies the predicate.
-    fn any<F>(&self, predicate: F) -> bool
-    where
-        F: FnMut(&dyn AnyModifierElement) -> bool;
-
-    /// Returns true only if all elements satisfy the predicate.
-    fn all<F>(&self, predicate: F) -> bool
-    where
-        F: FnMut(&dyn AnyModifierElement) -> bool;
-}
 
 /// Minimal inspector metadata storage.
 #[derive(Clone, Debug, Default)]
@@ -132,6 +103,7 @@ impl InspectorInfo {
         self.add_property(name, format!("{alignment:?}"));
     }
 
+    #[allow(dead_code)] // use for debugging
     pub fn debug_properties(&self) -> Vec<(&'static str, String)> {
         self.properties
             .iter()
@@ -139,6 +111,7 @@ impl InspectorInfo {
             .collect()
     }
 
+    #[allow(dead_code)] // use for debugging
     pub fn describe(&self) -> String {
         self.properties
             .iter()
@@ -179,16 +152,6 @@ impl InspectorMetadata {
         Self { name, info }
     }
 
-    fn append_to(&self, target: &mut InspectorInfo) {
-        if self.info.is_empty() {
-            target.add_property(self.name, "applied");
-        } else {
-            for property in self.info.properties() {
-                target.add_property(property.name, property.value.clone());
-            }
-        }
-    }
-
     fn is_empty(&self) -> bool {
         self.info.is_empty()
     }
@@ -215,17 +178,6 @@ where
     F: FnOnce(&mut InspectorInfo),
 {
     InspectorMetadata::new(name, recorder)
-}
-
-/// Trait implemented by modifiers that can describe themselves for tooling.
-pub trait InspectableModifier {
-    /// Human-readable name exposed to inspector tooling.
-    fn inspector_name(&self) -> &'static str {
-        "Modifier"
-    }
-
-    /// Records inspector metadata for the modifier chain.
-    fn inspect(&self, _info: &mut InspectorInfo) {}
 }
 
 /// Internal representation of modifier composition structure.
@@ -538,10 +490,6 @@ impl Modifier {
         self.resolved_modifiers().padding()
     }
 
-    pub(crate) fn total_offset(&self) -> Point {
-        self.resolved_modifiers().offset()
-    }
-
     pub(crate) fn layout_properties(&self) -> LayoutProperties {
         self.resolved_modifiers().layout_properties()
     }
@@ -635,149 +583,6 @@ impl Modifier {
     }
 }
 
-impl ComposeModifier for Modifier {
-    /// Accumulates a value by visiting modifier elements in insertion order (left to right).
-    /// Mirrors Jetpack Compose CombinedModifier:
-    /// `inner.foldIn(outer.foldIn(initial, operation), operation)`
-    fn fold_in<R, F>(&self, initial: R, operation: F) -> R
-    where
-        F: FnMut(R, &dyn AnyModifierElement) -> R,
-    {
-        self.fold_in_impl(initial, &mut { operation })
-    }
-
-    /// Accumulates a value by visiting modifier elements in reverse order (right to left).
-    /// Mirrors Jetpack Compose CombinedModifier:
-    /// `outer.foldOut(inner.foldOut(initial, operation), operation)`
-    fn fold_out<R, F>(&self, initial: R, operation: F) -> R
-    where
-        F: FnMut(R, &dyn AnyModifierElement) -> R,
-    {
-        self.fold_out_impl(initial, &mut { operation })
-    }
-
-    /// Returns true if any element in the chain satisfies the predicate.
-    /// Mirrors Jetpack Compose CombinedModifier:
-    /// `outer.any(predicate) || inner.any(predicate)`
-    fn any<F>(&self, predicate: F) -> bool
-    where
-        F: FnMut(&dyn AnyModifierElement) -> bool,
-    {
-        self.any_impl(&mut { predicate })
-    }
-
-    /// Returns true only if all elements in the chain satisfy the predicate.
-    /// Mirrors Jetpack Compose CombinedModifier:
-    /// `outer.all(predicate) && inner.all(predicate)`
-    fn all<F>(&self, predicate: F) -> bool
-    where
-        F: FnMut(&dyn AnyModifierElement) -> bool,
-    {
-        self.all_impl(&mut { predicate })
-    }
-}
-
-impl Modifier {
-    /// Internal implementation of `fold_in` that can be called recursively.
-    fn fold_in_impl<R>(
-        &self,
-        mut initial: R,
-        operation: &mut dyn FnMut(R, &dyn AnyModifierElement) -> R,
-    ) -> R {
-        match &self.kind {
-            ModifierKind::Empty => initial,
-            ModifierKind::Single { elements, .. } => {
-                for element in elements.iter() {
-                    let erased: &dyn AnyModifierElement = element.as_ref();
-                    initial = operation(initial, erased);
-                }
-                initial
-            }
-            ModifierKind::Combined { outer, inner } => {
-                // Process outer first, then inner (like Kotlin's CombinedModifier)
-                let after_outer = outer.fold_in_impl(initial, operation);
-                inner.fold_in_impl(after_outer, operation)
-            }
-        }
-    }
-
-    /// Internal implementation of `fold_out` that can be called recursively.
-    fn fold_out_impl<R>(
-        &self,
-        mut initial: R,
-        operation: &mut dyn FnMut(R, &dyn AnyModifierElement) -> R,
-    ) -> R {
-        match &self.kind {
-            ModifierKind::Empty => initial,
-            ModifierKind::Single { elements, .. } => {
-                for element in elements.iter().rev() {
-                    let erased: &dyn AnyModifierElement = element.as_ref();
-                    initial = operation(initial, erased);
-                }
-                initial
-            }
-            ModifierKind::Combined { outer, inner } => {
-                // Process inner first (in reverse), then outer (in reverse)
-                let after_inner = inner.fold_out_impl(initial, operation);
-                outer.fold_out_impl(after_inner, operation)
-            }
-        }
-    }
-
-    /// Internal implementation of `any` that can be called recursively.
-    fn any_impl(&self, predicate: &mut dyn FnMut(&dyn AnyModifierElement) -> bool) -> bool {
-        match &self.kind {
-            ModifierKind::Empty => false,
-            ModifierKind::Single { elements, .. } => {
-                for element in elements.iter() {
-                    if predicate(element.as_ref()) {
-                        return true;
-                    }
-                }
-                false
-            }
-            ModifierKind::Combined { outer, inner } => {
-                outer.any_impl(predicate) || inner.any_impl(predicate)
-            }
-        }
-    }
-
-    /// Internal implementation of `all` that can be called recursively.
-    fn all_impl(&self, predicate: &mut dyn FnMut(&dyn AnyModifierElement) -> bool) -> bool {
-        match &self.kind {
-            ModifierKind::Empty => true,
-            ModifierKind::Single { elements, .. } => {
-                for element in elements.iter() {
-                    if !predicate(element.as_ref()) {
-                        return false;
-                    }
-                }
-                true
-            }
-            ModifierKind::Combined { outer, inner } => {
-                outer.all_impl(predicate) && inner.all_impl(predicate)
-            }
-        }
-    }
-}
-
-impl InspectableModifier for Modifier {
-    fn inspect(&self, info: &mut InspectorInfo) {
-        match &self.kind {
-            ModifierKind::Empty => {}
-            ModifierKind::Single { inspector, .. } => {
-                for metadata in inspector.iter() {
-                    metadata.append_to(info);
-                }
-            }
-            ModifierKind::Combined { outer, inner } => {
-                outer.inspect(info);
-                inner.inspect(info);
-            }
-        }
-    }
-}
-
 impl PartialEq for Modifier {
     fn eq(&self, other: &Self) -> bool {
         match (&self.kind, &other.kind) {
@@ -859,7 +664,7 @@ impl fmt::Display for Modifier {
                 }
                 write!(f, "]")
             }
-            ModifierKind::Combined { outer, inner } => {
+            ModifierKind::Combined { outer: _, inner: _ } => {
                 // Flatten the representation for display
                 // This matches Kotlin's CombinedModifier toString behavior
                 write!(f, "[")?;
@@ -916,21 +721,13 @@ impl ResolvedBackground {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Default)]
 pub struct ResolvedModifiers {
     padding: EdgeInsets,
     layout: LayoutProperties,
     offset: Point,
 }
 
-impl Default for ResolvedModifiers {
-    fn default() -> Self {
-        Self {
-            padding: EdgeInsets::default(),
-            layout: LayoutProperties::default(),
-            offset: Point::default(),
-        }
-    }
-}
 
 impl ResolvedModifiers {
     pub fn padding(&self) -> EdgeInsets {
@@ -947,10 +744,6 @@ impl ResolvedModifiers {
 
     pub(crate) fn set_padding(&mut self, padding: EdgeInsets) {
         self.padding = padding;
-    }
-
-    pub(crate) fn add_padding(&mut self, padding: EdgeInsets) {
-        self.padding += padding;
     }
 
     pub(crate) fn set_layout_properties(&mut self, layout: LayoutProperties) {
@@ -1037,41 +830,6 @@ impl LayoutProperties {
         self.row_alignment
     }
 
-    fn merged(self, other: LayoutProperties) -> LayoutProperties {
-        let mut result = self;
-        result.padding += other.padding;
-        if other.width != DimensionConstraint::Unspecified {
-            result.width = other.width;
-        }
-        if other.height != DimensionConstraint::Unspecified {
-            result.height = other.height;
-        }
-        if other.min_width.is_some() {
-            result.min_width = other.min_width;
-        }
-        if other.min_height.is_some() {
-            result.min_height = other.min_height;
-        }
-        if other.max_width.is_some() {
-            result.max_width = other.max_width;
-        }
-        if other.max_height.is_some() {
-            result.max_height = other.max_height;
-        }
-        if other.weight.is_some() {
-            result.weight = other.weight;
-        }
-        if other.box_alignment.is_some() {
-            result.box_alignment = other.box_alignment;
-        }
-        if other.column_alignment.is_some() {
-            result.column_alignment = other.column_alignment;
-        }
-        if other.row_alignment.is_some() {
-            result.row_alignment = other.row_alignment;
-        }
-        result
-    }
 }
 
 #[cfg(test)]

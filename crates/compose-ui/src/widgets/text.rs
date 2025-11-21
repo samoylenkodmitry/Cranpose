@@ -65,7 +65,7 @@ impl IntoTextSource for String {
     }
 }
 
-impl<'a> IntoTextSource for &'a str {
+impl IntoTextSource for &str {
     fn into_text_source(self) -> TextSource {
         TextSource::Static(self.to_string())
     }

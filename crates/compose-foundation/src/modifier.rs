@@ -141,7 +141,7 @@ impl ModifierNodeContext for BasicModifierNodeContext {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct NodePath {
+pub(crate) struct NodePath {
     entry: usize,
     delegates: Vec<usize>,
 }
@@ -178,6 +178,10 @@ pub(crate) enum NodeLink {
 }
 
 /// Runtime state tracked for every [`ModifierNode`].
+///
+/// This type is part of the internal node system API and should not be directly
+/// constructed or manipulated by external code. Modifier nodes automatically receive
+/// and manage their NodeState through the modifier chain infrastructure.
 #[derive(Debug)]
 pub struct NodeState {
     aggregate_child_capabilities: Cell<NodeCapabilities>,
@@ -186,6 +190,12 @@ pub struct NodeState {
     child: RefCell<Option<NodeLink>>,
     attached: Cell<bool>,
     is_sentinel: bool,
+}
+
+impl Default for NodeState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl NodeState {
@@ -227,19 +237,19 @@ impl NodeState {
         self.aggregate_child_capabilities.get()
     }
 
-    pub fn set_parent_link(&self, parent: Option<NodeLink>) {
+    pub(crate) fn set_parent_link(&self, parent: Option<NodeLink>) {
         *self.parent.borrow_mut() = parent;
     }
 
-    pub fn parent_link(&self) -> Option<NodeLink> {
+    pub(crate) fn parent_link(&self) -> Option<NodeLink> {
         self.parent.borrow().clone()
     }
 
-    pub fn set_child_link(&self, child: Option<NodeLink>) {
+    pub(crate) fn set_child_link(&self, child: Option<NodeLink>) {
         *self.child.borrow_mut() = child;
     }
 
-    pub fn child_link(&self) -> Option<NodeLink> {
+    pub(crate) fn child_link(&self) -> Option<NodeLink> {
         self.child.borrow().clone()
     }
 
@@ -532,6 +542,7 @@ pub trait SemanticsNode: ModifierNode {
 /// This mirrors Jetpack Compose's FocusState enum which tracks whether
 /// a node is focused, has a focused child, or is inactive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Default)]
 pub enum FocusState {
     /// The focusable component is currently active (i.e. it receives key events).
     Active,
@@ -543,6 +554,7 @@ pub enum FocusState {
     Captured,
     /// The focusable component does not receive any key events. (ie it is not active,
     /// nor are any of its descendants active).
+    #[default]
     Inactive,
 }
 
@@ -566,11 +578,6 @@ impl FocusState {
     }
 }
 
-impl Default for FocusState {
-    fn default() -> Self {
-        Self::Inactive
-    }
-}
 
 /// Marker trait for focus modifier nodes.
 ///
@@ -978,7 +985,7 @@ fn visit_node_tree_mut(
     node.for_each_delegate_mut(&mut |child| visit_node_tree_mut(child, visitor));
 }
 
-fn nth_delegate<'a>(node: &'a dyn ModifierNode, target: usize) -> Option<&'a dyn ModifierNode> {
+fn nth_delegate(node: &dyn ModifierNode, target: usize) -> Option<&dyn ModifierNode> {
     let mut current = 0usize;
     let mut result: Option<&dyn ModifierNode> = None;
     node.for_each_delegate(&mut |child| {
@@ -990,10 +997,10 @@ fn nth_delegate<'a>(node: &'a dyn ModifierNode, target: usize) -> Option<&'a dyn
     result
 }
 
-fn nth_delegate_mut<'a>(
-    node: &'a mut dyn ModifierNode,
+fn nth_delegate_mut(
+    node: &mut dyn ModifierNode,
     target: usize,
-) -> Option<&'a mut dyn ModifierNode> {
+) -> Option<&mut dyn ModifierNode> {
     let mut current = 0usize;
     let mut result: Option<&mut dyn ModifierNode> = None;
     node.for_each_delegate_mut(&mut |child| {
@@ -1059,7 +1066,7 @@ fn detach_node_tree(node: &mut dyn ModifierNode) {
 /// same type. Removed nodes detach automatically so callers do not need
 /// to manually manage their lifetimes.
 pub struct ModifierNodeChain {
-    entries: Vec<Box<ModifierNodeEntry>>,
+    entries: Vec<ModifierNodeEntry>,
     aggregated_capabilities: NodeCapabilities,
     head_aggregate_child_capabilities: NodeCapabilities,
     head_sentinel: Box<SentinelNode>,
@@ -1113,7 +1120,7 @@ struct EntryIndex {
 }
 
 impl EntryIndex {
-    fn build(entries: &[Box<ModifierNodeEntry>]) -> Self {
+    fn build(entries: &[ModifierNodeEntry]) -> Self {
         let mut keyed = HashMap::new();
         let mut hashed = HashMap::new();
         let mut typed = HashMap::new();
@@ -1146,7 +1153,7 @@ impl EntryIndex {
     /// 3. Type match: same type + no key (will require update)
     fn find_match(
         &self,
-        entries: &[Box<ModifierNodeEntry>],
+        entries: &[ModifierNodeEntry],
         used: &[bool],
         element_type: TypeId,
         key: Option<u64>,
@@ -1212,7 +1219,7 @@ impl ModifierNodeChain {
     ) {
         let mut old_entries = std::mem::take(&mut self.entries);
         let mut old_used = vec![false; old_entries.len()];
-        let mut new_entries: Vec<Box<ModifierNodeEntry>> = Vec::with_capacity(elements.len());
+        let mut new_entries: Vec<ModifierNodeEntry> = Vec::with_capacity(elements.len());
 
         // Build index for O(1) lookups - O(m) where m = old_entries.len()
         let index = EntryIndex::build(&old_entries);
@@ -1274,14 +1281,14 @@ impl ModifierNodeChain {
 
             } else {
                 // Create new entry and insert at correct position
-                let entry = Box::new(ModifierNodeEntry::new(
+                let entry = ModifierNodeEntry::new(
                     element_type,
                     key,
                     element.clone(),
                     element.create_node(),
                     hash_code,
                     capabilities,
-                ));
+                );
                 attach_node_tree(&mut **entry.node.borrow_mut(), context);
                 element.update_node(&mut **entry.node.borrow_mut());
                 new_entries.push(entry);
@@ -1290,7 +1297,7 @@ impl ModifierNodeChain {
 
         // Assemble final list in correct order
         // First, create a temporary list of (position, entry) pairs for matched entries
-        let mut matched_entries: Vec<(usize, Box<ModifierNodeEntry>)> = Vec::new();
+        let mut matched_entries: Vec<(usize, ModifierNodeEntry)> = Vec::new();
         for (entry, (used, order)) in old_entries.into_iter().zip(old_used.into_iter().zip(match_order)) {
             if used {
                 matched_entries.push((order.unwrap(), entry));
@@ -1304,12 +1311,11 @@ impl ModifierNodeChain {
 
         // Merge matched entries with newly created entries
         // new_entries currently only has newly created entries
-        let mut final_entries: Vec<Box<ModifierNodeEntry>> = Vec::with_capacity(elements.len());
+        let mut final_entries: Vec<ModifierNodeEntry> = Vec::with_capacity(elements.len());
         let mut matched_iter = matched_entries.into_iter();
         let mut new_iter = new_entries.into_iter();
         let mut next_matched = matched_iter.next();
         let mut next_new = new_iter.next();
-        let mut new_entry_pos = 0;
 
         for pos in 0..elements.len() {
             if let Some((matched_pos, _)) = next_matched {
@@ -1325,7 +1331,6 @@ impl ModifierNodeChain {
             if let Some(entry) = next_new.take() {
                 final_entries.push(entry);
                 next_new = new_iter.next();
-                new_entry_pos += 1;
             }
         }
 

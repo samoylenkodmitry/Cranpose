@@ -414,7 +414,7 @@ impl GpuRenderer {
             eprintln!(
                 "INFO: Rendering {} shapes in {} chunks (max {} per draw)",
                 total_shape_count,
-                (total_shape_count + MAX_SHAPES_PER_DRAW - 1) / MAX_SHAPES_PER_DRAW,
+                total_shape_count.div_ceil(MAX_SHAPES_PER_DRAW),
                 MAX_SHAPES_PER_DRAW
             );
         }

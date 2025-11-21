@@ -1,12 +1,10 @@
 //! Integration tests for pointer input with async handlers and button interactions
 
 use compose_core::MutableState;
-use compose_foundation::{PointerEvent, PointerEventKind};
+use compose_foundation::PointerEventKind;
 use compose_macros::composable;
 use compose_testing::ComposeTestRule;
 use compose_ui::*;
-use std::cell::RefCell;
-use std::rc::Rc;
 
 #[composable]
 fn hover_tracking_app(hover_position: MutableState<Point>, is_hovered: MutableState<bool>) {

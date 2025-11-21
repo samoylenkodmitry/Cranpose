@@ -31,7 +31,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 /// Logs the current layout tree to stdout with indentation showing hierarchy
 pub fn log_layout_tree(layout: &LayoutTree) {
     println!("\n=== LAYOUT TREE (Current Screen) ===");
-    log_layout_box(&layout.root(), 0);
+    log_layout_box(layout.root(), 0);
     println!("=== END LAYOUT TREE ===\n");
 }
 
@@ -85,7 +85,7 @@ pub fn log_render_scene(scene: &RecordedRenderScene) {
 pub fn format_layout_tree(layout: &LayoutTree) -> String {
     let mut output = String::new();
     writeln!(output, "=== LAYOUT TREE (Current Screen) ===").ok();
-    format_layout_box(&mut output, &layout.root(), 0);
+    format_layout_box(&mut output, layout.root(), 0);
     writeln!(output, "=== END LAYOUT TREE ===").ok();
     output
 }
@@ -147,7 +147,7 @@ pub fn format_render_scene(scene: &RecordedRenderScene) -> String {
 /// Logs a compact summary of what's on screen (counts by type)
 pub fn log_screen_summary(layout: &LayoutTree, scene: &RecordedRenderScene) {
     println!("\n=== SCREEN SUMMARY ===");
-    println!("Total nodes in layout: {}", count_nodes(&layout.root()));
+    println!("Total nodes in layout: {}", count_nodes(layout.root()));
 
     let mut text_count = 0;
     let mut primitive_count = 0;
@@ -169,7 +169,7 @@ fn count_nodes(layout_box: &LayoutBox) -> usize {
     1 + layout_box
         .children
         .iter()
-        .map(|child| count_nodes(child))
+        .map(count_nodes)
         .sum::<usize>()
 }
 

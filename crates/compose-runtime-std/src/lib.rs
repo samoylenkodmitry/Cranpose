@@ -111,7 +111,7 @@ impl StdRuntime {
         let runtime = Runtime::new(scheduler.clone());
         Self {
             scheduler,
-            clock: Arc::new(StdClock::default()),
+            clock: Arc::new(StdClock),
             runtime,
         }
     }

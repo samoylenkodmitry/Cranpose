@@ -64,12 +64,12 @@ where
     let content_ref: Rc<RefCell<F>> = Rc::new(RefCell::new(content));
     SubcomposeLayout(modifier, move |scope, constraints| {
         let scope_impl = BoxWithConstraintsScopeImpl::new(constraints);
-        let scope_for_content = scope_impl.clone();
+        let scope_for_content = scope_impl;
         let measurables = {
             let content_ref = Rc::clone(&content_ref);
             scope.subcompose(SlotId::new(0), move || {
                 let mut content = content_ref.borrow_mut();
-                content(scope_for_content.clone());
+                content(scope_for_content);
             })
         };
         let width_dp = if scope_impl.max_width().0.is_finite() {

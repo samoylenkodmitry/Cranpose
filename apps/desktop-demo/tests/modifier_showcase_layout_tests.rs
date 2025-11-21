@@ -358,7 +358,7 @@ fn test_complex_chain_modifier_ordering() {
 
     for (i, op) in scene.operations().iter().enumerate() {
         match op {
-            RenderOp::Primitive { node_id, layer, primitive } => {
+            RenderOp::Primitive { node_id, layer, primitive: _ } => {
                 println!("  [{}] Primitive node={} layer={:?}", i, node_id, layer);
                 background_count += 1;
             }

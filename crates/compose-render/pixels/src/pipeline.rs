@@ -119,7 +119,7 @@ fn render_container(
 
     if let Some(color) = style.background {
         let brush = apply_layer_to_brush(Brush::solid(color), node_layer);
-        scene.push_shape(transformed_rect, brush, scaled_shape.clone(), visual_clip);
+        scene.push_shape(transformed_rect, brush, scaled_shape, visual_clip);
     }
 
     // Render text content if present in modifier slices.
@@ -149,7 +149,7 @@ fn render_container(
 
     scene.push_hit(
         transformed_rect,
-        scaled_shape.clone(),
+        scaled_shape,
         extra_clicks,
         style.pointer_inputs.clone(),
         hit_clip,
