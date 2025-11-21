@@ -4,11 +4,9 @@
 /// - Dynamic modifier updates during recomposition
 /// - Performance with large modifier chains
 /// - Real-world UI patterns (cards, lists, buttons)
-
 use compose_core::{location_key, Composition, MemoryApplier};
 use compose_ui::{
-    composable, Box as ComposeBox, BoxSpec, Column, ColumnSpec, Modifier, Row, RowSpec, Size,
-    Text,
+    composable, Box as ComposeBox, BoxSpec, Column, ColumnSpec, Modifier, Row, RowSpec, Size, Text,
 };
 
 /// Demonstrates a typical card UI pattern with complex modifier stacking
@@ -25,13 +23,17 @@ fn card(title: &'static str, content: &'static str) {
             .offset(0.0, 0.0),
         BoxSpec::default(),
         move || {
-            Column(Modifier::empty().padding(8.0), ColumnSpec::default(), move || {
-                // Title with bottom padding
-                Text(title, Modifier::empty().padding_each(0.0, 0.0, 0.0, 12.0));
+            Column(
+                Modifier::empty().padding(8.0),
+                ColumnSpec::default(),
+                move || {
+                    // Title with bottom padding
+                    Text(title, Modifier::empty().padding_each(0.0, 0.0, 0.0, 12.0));
 
-                // Content with padding
-                Text(content, Modifier::empty().padding(4.0));
-            });
+                    // Content with padding
+                    Text(content, Modifier::empty().padding(4.0));
+                },
+            );
         },
     );
 }
@@ -66,12 +68,10 @@ fn long_list(item_count: usize) {
         move || {
             for i in 0..item_count {
                 Row(
-                    Modifier::empty()
-                        .padding_symmetric(8.0, 4.0)
-                        .size(Size {
-                            width: 400.0,
-                            height: 60.0,
-                        }),
+                    Modifier::empty().padding_symmetric(8.0, 4.0).size(Size {
+                        width: 400.0,
+                        height: 60.0,
+                    }),
                     RowSpec::default(),
                     move || {
                         let text = if i < 10 {
@@ -136,21 +136,27 @@ fn showcase() {
         // Section 2: Dynamic modifiers
         Text(
             "=== Dynamic Modifiers ===",
-            Modifier::empty().padding_symmetric(0.0, 32.0).padding_each(0.0, 0.0, 0.0, 16.0),
+            Modifier::empty()
+                .padding_symmetric(0.0, 32.0)
+                .padding_each(0.0, 0.0, 0.0, 16.0),
         );
         animated_box(5); // Frame 5
 
         // Section 3: Performance test with list
         Text(
             "=== Performance: 50 Items ===",
-            Modifier::empty().padding_symmetric(0.0, 32.0).padding_each(0.0, 0.0, 0.0, 16.0),
+            Modifier::empty()
+                .padding_symmetric(0.0, 32.0)
+                .padding_each(0.0, 0.0, 0.0, 16.0),
         );
         long_list(50);
 
         // Section 4: Reorderable modifiers
         Text(
             "=== Modifier Reordering ===",
-            Modifier::empty().padding_symmetric(0.0, 32.0).padding_each(0.0, 0.0, 0.0, 16.0),
+            Modifier::empty()
+                .padding_symmetric(0.0, 32.0)
+                .padding_each(0.0, 0.0, 0.0, 16.0),
         );
         reorderable_modifiers(true); // Large padding
     });
@@ -185,15 +191,11 @@ fn main() {
     composition
         .render(location_key(file!(), line!(), column!()), || {
             // Same structure but with different modifier values
-            Column(
-                Modifier::empty(),
-                ColumnSpec::default(),
-                || {
-                    Text("Updated!", Modifier::empty());
-                    animated_box(10); // Different frame
-                    reorderable_modifiers(false); // Different padding
-                },
-            );
+            Column(Modifier::empty(), ColumnSpec::default(), || {
+                Text("Updated!", Modifier::empty());
+                animated_box(10); // Different frame
+                reorderable_modifiers(false); // Different padding
+            });
         })
         .unwrap();
     let recomp_duration = recomp_start.elapsed();
@@ -213,10 +215,7 @@ fn main() {
         .unwrap();
     let stress_duration = stress_start.elapsed();
     println!("✅ 1000 items rendered: {:?}", stress_duration);
-    println!(
-        "📈 Per-item average: {:?}",
-        stress_duration / 1000
-    );
+    println!("📈 Per-item average: {:?}", stress_duration / 1000);
 
     println!("\n🎉 Showcase complete!");
     println!("All modifier system features working correctly.");

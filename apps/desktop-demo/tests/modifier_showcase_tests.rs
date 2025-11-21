@@ -1,10 +1,9 @@
 /// Integration tests for modifier showcases that validate actual layout positions and sizes.
 /// These tests verify that modifiers produce correct measurements and coordinates.
-
 use compose_core::{location_key, Composition, MemoryApplier};
 use compose_ui::{
-    composable, Box as ComposeBox, BoxSpec, Column, ColumnSpec, Color, LinearArrangement,
-    Modifier, Row, RowSpec, Size, Spacer, Text,
+    composable, Box as ComposeBox, BoxSpec, Color, Column, ColumnSpec, LinearArrangement, Modifier,
+    Row, RowSpec, Size, Spacer, Text,
 };
 
 // Re-implement showcase functions for testing
@@ -266,7 +265,10 @@ fn collect_all_nodes(applier: &mut MemoryApplier, node_id: usize) -> Vec<usize> 
 fn test_simple_card_layout() {
     let mut composition = Composition::new(MemoryApplier::new());
     composition
-        .render(location_key(file!(), line!(), column!()), simple_card_showcase)
+        .render(
+            location_key(file!(), line!(), column!()),
+            simple_card_showcase,
+        )
         .unwrap();
 
     let root = composition.root().expect("Should have root");
@@ -324,7 +326,10 @@ fn test_positioned_boxes_layout() {
 fn test_item_list_layout() {
     let mut composition = Composition::new(MemoryApplier::new());
     composition
-        .render(location_key(file!(), line!(), column!()), item_list_showcase)
+        .render(
+            location_key(file!(), line!(), column!()),
+            item_list_showcase,
+        )
         .unwrap();
 
     let root = composition.root().expect("Should have root");
@@ -489,7 +494,10 @@ fn test_long_list_performance() {
 
     let start = std::time::Instant::now();
     composition
-        .render(location_key(file!(), line!(), column!()), long_list_showcase)
+        .render(
+            location_key(file!(), line!(), column!()),
+            long_list_showcase,
+        )
         .unwrap();
     let duration = start.elapsed();
 

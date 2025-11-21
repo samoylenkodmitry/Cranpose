@@ -657,7 +657,6 @@ impl DisposableEffectResult {
     }
 }
 
-
 #[allow(non_snake_case)]
 pub fn SideEffect(effect: impl FnOnce() + 'static) {
     with_current_composer(|composer| composer.register_side_effect(effect));
@@ -1292,11 +1291,7 @@ impl Composer {
     fn observe_scope<R>(&self, scope: &RecomposeScope, block: impl FnOnce() -> R) -> R {
         let observer = self.observer();
         let scope_clone = scope.clone();
-        observer.observe_reads(
-            scope_clone,
-            move |scope_ref| scope_ref.invalidate(),
-            block,
-        )
+        observer.observe_reads(scope_clone, move |scope_ref| scope_ref.invalidate(), block)
     }
 
     fn slots(&self) -> Ref<'_, SlotBackend> {
@@ -2090,7 +2085,6 @@ struct SubcomposeFrame {
     nodes: Vec<NodeId>,
     scopes: Vec<RecomposeScope>,
 }
-
 
 #[derive(Default, Clone)]
 struct LocalContext {

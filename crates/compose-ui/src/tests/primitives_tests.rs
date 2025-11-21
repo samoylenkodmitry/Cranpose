@@ -5,13 +5,12 @@ use crate::modifier::{Modifier, Size};
 use crate::subcompose_layout::{Constraints, SubcomposeLayoutNode};
 use crate::widgets::nodes::LayoutNode;
 use crate::widgets::{
-    BoxWithConstraints, Column, ColumnSpec, DynamicTextSource, Row, RowSpec,
-    Spacer, Text,
+    BoxWithConstraints, Column, ColumnSpec, DynamicTextSource, Row, RowSpec, Spacer, Text,
 };
 use crate::{run_test_composition, LayoutEngine};
 use compose_core::{
-    self, location_key, Applier, Composer, Composition, ConcreteApplierHost, MemoryApplier,
-    NodeId, Phase, SlotBackend, SlotStorage, SlotsHost, SnapshotStateObserver, State,
+    self, location_key, Applier, Composer, Composition, ConcreteApplierHost, MemoryApplier, NodeId,
+    Phase, SlotBackend, SlotStorage, SlotsHost, SnapshotStateObserver, State,
 };
 use compose_ui_layout::{HorizontalAlignment, LinearArrangement, VerticalAlignment};
 use std::cell::{Cell, RefCell};
@@ -1077,10 +1076,7 @@ fn modifier_chain_text_with_padding() {
 
     composition
         .render(key, move || {
-            *text_id_render.borrow_mut() = Some(Text(
-                "Hello",
-                Modifier::empty().padding(10.0),
-            ));
+            *text_id_render.borrow_mut() = Some(Text("Hello", Modifier::empty().padding(10.0)));
         })
         .expect("render");
 
@@ -1155,7 +1151,8 @@ fn modifier_chain_size_enforcement() {
         .expect("compute layout");
 
     let spacer_node_id = spacer_id.borrow().expect("spacer node id");
-    let spacer_layout = find_node_layout(layout_tree.root(), spacer_node_id).expect("spacer layout");
+    let spacer_layout =
+        find_node_layout(layout_tree.root(), spacer_node_id).expect("spacer layout");
 
     const EPSILON: f32 = 1e-3;
     assert!(
@@ -1184,12 +1181,10 @@ fn modifier_chain_padding_then_size() {
     composition
         .render(key, move || {
             *node_id_render.borrow_mut() = Some(Box(
-                Modifier::empty()
-                    .padding(10.0)
-                    .size(Size {
-                        width: 100.0,
-                        height: 80.0,
-                    }),
+                Modifier::empty().padding(10.0).size(Size {
+                    width: 100.0,
+                    height: 80.0,
+                }),
                 BoxSpec::default(),
                 || {
                     Spacer(Size {

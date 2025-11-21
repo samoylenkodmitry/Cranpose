@@ -41,11 +41,11 @@ pub use compose_ui_graphics::{
 use compose_ui_layout::{Alignment, HorizontalAlignment, IntrinsicSize, VerticalAlignment};
 #[allow(unused_imports)]
 pub use focus::{FocusDirection, FocusRequester};
-#[allow(unused_imports)]
-pub use local::{ModifierLocalKey, ModifierLocalReadScope};
 pub(crate) use local::{
     ModifierLocalAncestorResolver, ModifierLocalSource, ModifierLocalToken, ResolvedModifierLocal,
 };
+#[allow(unused_imports)]
+pub use local::{ModifierLocalKey, ModifierLocalReadScope};
 #[allow(unused_imports)]
 pub use pointer_input::{AwaitPointerEventScope, PointerInputScope};
 pub use semantics::{collect_semantics_from_chain, collect_semantics_from_modifier};
@@ -410,9 +410,10 @@ impl Modifier {
 
         let element = DebugChainElement { tag };
         let modifier = Modifier::from_parts(vec![modifier_element(element)]);
-        self.then(modifier).with_inspector_metadata(inspector_metadata("debugChain", move |info| {
-            info.add_property("tag", tag);
-        }))
+        self.then(modifier)
+            .with_inspector_metadata(inspector_metadata("debugChain", move |info| {
+                info.add_property("tag", tag);
+            }))
     }
 
     /// Concatenates this modifier with another.
@@ -720,14 +721,12 @@ impl ResolvedBackground {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct ResolvedModifiers {
     padding: EdgeInsets,
     layout: LayoutProperties,
     offset: Point,
 }
-
 
 impl ResolvedModifiers {
     pub fn padding(&self) -> EdgeInsets {
@@ -829,7 +828,6 @@ impl LayoutProperties {
     pub fn row_alignment(&self) -> Option<VerticalAlignment> {
         self.row_alignment
     }
-
 }
 
 #[cfg(test)]

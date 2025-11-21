@@ -480,7 +480,9 @@ pub trait LayoutModifierNode: ModifierNode {
     ///     }
     /// }
     /// ```
-    fn create_measurement_proxy(&self) -> Option<Box<dyn crate::measurement_proxy::MeasurementProxy>> {
+    fn create_measurement_proxy(
+        &self,
+    ) -> Option<Box<dyn crate::measurement_proxy::MeasurementProxy>> {
         None
     }
 }
@@ -541,8 +543,7 @@ pub trait SemanticsNode: ModifierNode {
 ///
 /// This mirrors Jetpack Compose's FocusState enum which tracks whether
 /// a node is focused, has a focused child, or is inactive.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum FocusState {
     /// The focusable component is currently active (i.e. it receives key events).
     Active,
@@ -577,7 +578,6 @@ impl FocusState {
         matches!(self, FocusState::Captured)
     }
 }
-
 
 /// Marker trait for focus modifier nodes.
 ///
@@ -997,10 +997,7 @@ fn nth_delegate(node: &dyn ModifierNode, target: usize) -> Option<&dyn ModifierN
     result
 }
 
-fn nth_delegate_mut(
-    node: &mut dyn ModifierNode,
-    target: usize,
-) -> Option<&mut dyn ModifierNode> {
+fn nth_delegate_mut(node: &mut dyn ModifierNode, target: usize) -> Option<&mut dyn ModifierNode> {
     let mut current = 0usize;
     let mut result: Option<&mut dyn ModifierNode> = None;
     node.for_each_delegate_mut(&mut |child| {
@@ -1128,21 +1125,28 @@ impl EntryIndex {
         for (i, entry) in entries.iter().enumerate() {
             if let Some(key_value) = entry.key {
                 // Keyed entry
-                keyed.entry((entry.element_type, key_value))
+                keyed
+                    .entry((entry.element_type, key_value))
                     .or_insert_with(Vec::new)
                     .push(i);
             } else {
                 // Unkeyed entry - add to both hash and type indices
-                hashed.entry((entry.element_type, entry.hash_code))
+                hashed
+                    .entry((entry.element_type, entry.hash_code))
                     .or_insert_with(Vec::new)
                     .push(i);
-                typed.entry(entry.element_type)
+                typed
+                    .entry(entry.element_type)
                     .or_insert_with(Vec::new)
                     .push(i);
             }
         }
 
-        Self { keyed, hashed, typed }
+        Self {
+            keyed,
+            hashed,
+            typed,
+        }
     }
 
     /// Find the best matching entry for reuse.
@@ -1277,8 +1281,11 @@ impl ModifierNodeChain {
                 entry.key = key;
                 entry.element_type = element_type;
                 entry.capabilities = capabilities;
-                entry.node.borrow().node_state().set_capabilities(capabilities);
-
+                entry
+                    .node
+                    .borrow()
+                    .node_state()
+                    .set_capabilities(capabilities);
             } else {
                 // Create new entry and insert at correct position
                 let entry = ModifierNodeEntry::new(
@@ -1298,7 +1305,10 @@ impl ModifierNodeChain {
         // Assemble final list in correct order
         // First, create a temporary list of (position, entry) pairs for matched entries
         let mut matched_entries: Vec<(usize, ModifierNodeEntry)> = Vec::new();
-        for (entry, (used, order)) in old_entries.into_iter().zip(old_used.into_iter().zip(match_order)) {
+        for (entry, (used, order)) in old_entries
+            .into_iter()
+            .zip(old_used.into_iter().zip(match_order))
+        {
             if used {
                 matched_entries.push((order.unwrap(), entry));
             } else {
@@ -1673,8 +1683,14 @@ impl ModifierNodeChain {
         for link in self.ordered_nodes.iter().cloned() {
             // Set child link on previous
             match &previous {
-                NodeLink::Head => self.head_sentinel.node_state().set_child_link(Some(link.clone())),
-                NodeLink::Tail => self.tail_sentinel.node_state().set_child_link(Some(link.clone())),
+                NodeLink::Head => self
+                    .head_sentinel
+                    .node_state()
+                    .set_child_link(Some(link.clone())),
+                NodeLink::Tail => self
+                    .tail_sentinel
+                    .node_state()
+                    .set_child_link(Some(link.clone())),
                 NodeLink::Entry(path) => {
                     let node_borrow = self.entries[path.entry()].node.borrow();
                     // Navigate to delegate if needed
@@ -1693,13 +1709,21 @@ impl ModifierNodeChain {
             }
             // Set parent link on current
             match &link {
-                NodeLink::Head => self.head_sentinel.node_state().set_parent_link(Some(previous.clone())),
-                NodeLink::Tail => self.tail_sentinel.node_state().set_parent_link(Some(previous.clone())),
+                NodeLink::Head => self
+                    .head_sentinel
+                    .node_state()
+                    .set_parent_link(Some(previous.clone())),
+                NodeLink::Tail => self
+                    .tail_sentinel
+                    .node_state()
+                    .set_parent_link(Some(previous.clone())),
                 NodeLink::Entry(path) => {
                     let node_borrow = self.entries[path.entry()].node.borrow();
                     // Navigate to delegate if needed
                     if path.delegates().is_empty() {
-                        node_borrow.node_state().set_parent_link(Some(previous.clone()));
+                        node_borrow
+                            .node_state()
+                            .set_parent_link(Some(previous.clone()));
                     } else {
                         let mut current: &dyn ModifierNode = &**node_borrow;
                         for &delegate_index in path.delegates() {
@@ -1716,13 +1740,21 @@ impl ModifierNodeChain {
 
         // Set child link on last node to Tail
         match &previous {
-            NodeLink::Head => self.head_sentinel.node_state().set_child_link(Some(NodeLink::Tail)),
-            NodeLink::Tail => self.tail_sentinel.node_state().set_child_link(Some(NodeLink::Tail)),
+            NodeLink::Head => self
+                .head_sentinel
+                .node_state()
+                .set_child_link(Some(NodeLink::Tail)),
+            NodeLink::Tail => self
+                .tail_sentinel
+                .node_state()
+                .set_child_link(Some(NodeLink::Tail)),
             NodeLink::Entry(path) => {
                 let node_borrow = self.entries[path.entry()].node.borrow();
                 // Navigate to delegate if needed
                 if path.delegates().is_empty() {
-                    node_borrow.node_state().set_child_link(Some(NodeLink::Tail));
+                    node_borrow
+                        .node_state()
+                        .set_child_link(Some(NodeLink::Tail));
                 } else {
                     let mut current: &dyn ModifierNode = &**node_borrow;
                     for &delegate_index in path.delegates() {
@@ -1787,12 +1819,7 @@ impl ModifierNodeChain {
         for (index, entry) in self.entries.iter().enumerate() {
             let mut path = Vec::new();
             let node_borrow = entry.node.borrow();
-            Self::enumerate_link_order(
-                &**node_borrow,
-                index,
-                &mut path,
-                &mut self.ordered_nodes,
-            );
+            Self::enumerate_link_order(&**node_borrow, index, &mut path, &mut self.ordered_nodes);
         }
     }
 
@@ -1811,7 +1838,6 @@ impl ModifierNodeChain {
             delegate_index += 1;
         });
     }
-
 }
 
 impl<'a> ModifierChainNodeRef<'a> {

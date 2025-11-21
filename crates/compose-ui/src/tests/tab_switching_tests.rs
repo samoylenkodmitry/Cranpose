@@ -395,9 +395,7 @@ fn recursive_layout_nodes_preserve_extent() {
                     box_node.node_id
                 );
             }
-            LayoutNodeKind::Spacer
-            | LayoutNodeKind::Button { .. }
-            | LayoutNodeKind::Unknown => {}
+            LayoutNodeKind::Spacer | LayoutNodeKind::Button { .. } | LayoutNodeKind::Unknown => {}
         }
         for child in &box_node.children {
             assert_positive_extents(child);

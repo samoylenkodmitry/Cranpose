@@ -1,4 +1,3 @@
-
 use crate::{
     layout::MeasuredNode,
     modifier::{
@@ -485,7 +484,6 @@ impl LayoutNode {
     pub(crate) fn modifier_chain(&self) -> &ModifierChainHandle {
         &self.modifier_chain
     }
-
 }
 impl Clone for LayoutNode {
     fn clone(&self) -> Self {

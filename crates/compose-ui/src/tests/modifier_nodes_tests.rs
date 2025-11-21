@@ -999,7 +999,10 @@ fn stateful_measure_exposes_proxy_reconstruction_issue() {
 
     // Check that measure_count was incremented
     let count_after_first = node.measure_count.get();
-    assert_eq!(count_after_first, 1, "First measure should increment count to 1");
+    assert_eq!(
+        count_after_first, 1,
+        "First measure should increment count to 1"
+    );
 
     // Second measurement: This time via the proxy
     // Phase 1's proxy will reconstruct the node, resetting measure_count to 0

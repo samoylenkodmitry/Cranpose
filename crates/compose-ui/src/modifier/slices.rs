@@ -1,4 +1,3 @@
-
 use std::fmt;
 use std::rc::Rc;
 
@@ -7,7 +6,10 @@ use compose_ui_graphics::GraphicsLayer;
 
 use crate::draw::DrawCommand;
 use crate::modifier::Modifier;
-use crate::modifier_nodes::{BackgroundNode, ClickableNode, ClipToBoundsNode, CornerShapeNode, DrawCommandNode, GraphicsLayerNode};
+use crate::modifier_nodes::{
+    BackgroundNode, ClickableNode, ClipToBoundsNode, CornerShapeNode, DrawCommandNode,
+    GraphicsLayerNode,
+};
 use crate::text_modifier_node::TextModifierNode;
 use std::cell::RefCell;
 
@@ -163,8 +165,8 @@ pub fn collect_modifier_slices(chain: &ModifierNodeChain) -> ModifierNodeSlices 
         let shape = corner_shape.into_inner();
 
         let draw_cmd = Rc::new(move |size: crate::modifier::Size| {
-            use compose_ui_graphics::DrawPrimitive;
             use crate::modifier::{Brush, Rect};
+            use compose_ui_graphics::DrawPrimitive;
 
             let brush = Brush::solid(color);
             let rect = Rect {
@@ -182,7 +184,9 @@ pub fn collect_modifier_slices(chain: &ModifierNodeChain) -> ModifierNodeSlices 
             }
         });
 
-        slices.draw_commands.insert(0, DrawCommand::Behind(draw_cmd));
+        slices
+            .draw_commands
+            .insert(0, DrawCommand::Behind(draw_cmd));
     }
 
     slices

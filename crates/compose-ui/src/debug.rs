@@ -166,11 +166,7 @@ pub fn log_screen_summary(layout: &LayoutTree, scene: &RecordedRenderScene) {
 }
 
 fn count_nodes(layout_box: &LayoutBox) -> usize {
-    1 + layout_box
-        .children
-        .iter()
-        .map(count_nodes)
-        .sum::<usize>()
+    1 + layout_box.children.iter().map(count_nodes).sum::<usize>()
 }
 
 /// Logs the contents of a modifier node chain including capabilities.

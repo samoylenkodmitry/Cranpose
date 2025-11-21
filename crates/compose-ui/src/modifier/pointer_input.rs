@@ -1,4 +1,3 @@
-
 use super::{inspector_metadata, Modifier, PointerEvent};
 use compose_foundation::{
     impl_pointer_input_node, DelegatableNode, ModifierNode, ModifierNodeContext,

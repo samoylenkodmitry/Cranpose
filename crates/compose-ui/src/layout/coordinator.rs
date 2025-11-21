@@ -4,23 +4,20 @@
 //! drawing, and hit testing. Each LayoutModifierNode gets its own coordinator instance
 //! that persists across recomposition, enabling proper state and invalidation tracking.
 
-
+use compose_core::NodeId;
 use compose_foundation::ModifierNodeContext;
 use compose_ui_layout::{Constraints, Measurable, Placeable};
-use compose_core::NodeId;
-use std::cell::{RefCell, Cell};
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use crate::modifier::{Size, Point};
-use crate::layout::{MeasurePolicy, MeasureResult, LayoutNodeContext};
+use crate::layout::{LayoutNodeContext, MeasurePolicy, MeasureResult};
+use crate::modifier::{Point, Size};
 
 /// Core coordinator trait that all coordinators implement.
 ///
 /// Coordinators are chained together, with each one wrapping the next inner coordinator.
 /// This forms a measurement and placement chain that mirrors the modifier chain.
-pub trait NodeCoordinator: Measurable {
-}
-
+pub trait NodeCoordinator: Measurable {}
 
 /// Coordinator that wraps a single LayoutModifierNode from the reconciled chain.
 ///
@@ -58,11 +55,9 @@ impl<'a> LayoutModifierCoordinator<'a> {
             context,
         }
     }
-
 }
 
-impl<'a> NodeCoordinator for LayoutModifierCoordinator<'a> {
-}
+impl<'a> NodeCoordinator for LayoutModifierCoordinator<'a> {}
 
 impl<'a> Measurable for LayoutModifierCoordinator<'a> {
     fn measure(&self, constraints: Constraints) -> Box<dyn Placeable> {
@@ -73,11 +68,14 @@ impl<'a> Measurable for LayoutModifierCoordinator<'a> {
             let node_borrow = self.node.borrow();
             if let Some(layout_node) = node_borrow.as_layout_node() {
                 match self.context.try_borrow_mut() {
-                    Ok(mut ctx) => layout_node.measure(&mut *ctx, self.wrapped.as_ref(), constraints),
+                    Ok(mut ctx) => {
+                        layout_node.measure(&mut *ctx, self.wrapped.as_ref(), constraints)
+                    }
                     Err(_) => {
                         // Context already borrowed - use a temporary context
                         let mut temp = LayoutNodeContext::new();
-                        let result = layout_node.measure(&mut temp, self.wrapped.as_ref(), constraints);
+                        let result =
+                            layout_node.measure(&mut temp, self.wrapped.as_ref(), constraints);
 
                         // Merge invalidations from temp context to shared
                         if let Ok(mut shared) = self.context.try_borrow_mut() {
@@ -176,8 +174,7 @@ impl<'a> InnerCoordinator<'a> {
     }
 }
 
-impl<'a> NodeCoordinator for InnerCoordinator<'a> {
-}
+impl<'a> NodeCoordinator for InnerCoordinator<'a> {}
 
 impl<'a> Measurable for InnerCoordinator<'a> {
     fn measure(&self, constraints: Constraints) -> Box<dyn Placeable> {
@@ -195,19 +192,23 @@ impl<'a> Measurable for InnerCoordinator<'a> {
     }
 
     fn min_intrinsic_width(&self, height: f32) -> f32 {
-        self.measure_policy.min_intrinsic_width(self.measurables, height)
+        self.measure_policy
+            .min_intrinsic_width(self.measurables, height)
     }
 
     fn max_intrinsic_width(&self, height: f32) -> f32 {
-        self.measure_policy.max_intrinsic_width(self.measurables, height)
+        self.measure_policy
+            .max_intrinsic_width(self.measurables, height)
     }
 
     fn min_intrinsic_height(&self, width: f32) -> f32 {
-        self.measure_policy.min_intrinsic_height(self.measurables, width)
+        self.measure_policy
+            .min_intrinsic_height(self.measurables, width)
     }
 
     fn max_intrinsic_height(&self, width: f32) -> f32 {
-        self.measure_policy.max_intrinsic_height(self.measurables, width)
+        self.measure_policy
+            .max_intrinsic_height(self.measurables, width)
     }
 }
 

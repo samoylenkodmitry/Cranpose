@@ -1,8 +1,7 @@
 use super::{
-    inspector_metadata, Alignment, Color, DimensionConstraint,
-    EdgeInsets, GraphicsLayer, HorizontalAlignment, Modifier,
-    ModifierChainHandle, Point, SemanticsConfiguration,
-    Size, VerticalAlignment,
+    inspector_metadata, Alignment, Color, DimensionConstraint, EdgeInsets, GraphicsLayer,
+    HorizontalAlignment, Modifier, ModifierChainHandle, Point, SemanticsConfiguration, Size,
+    VerticalAlignment,
 };
 use compose_foundation::{
     DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState,
@@ -96,8 +95,8 @@ fn alignment_modifiers_record_values() {
 
 #[test]
 fn graphics_layer_modifier_creates_node() {
-    use crate::modifier_nodes::GraphicsLayerNode;
     use crate::modifier::ModifierChainHandle;
+    use crate::modifier_nodes::GraphicsLayerNode;
 
     let layer = GraphicsLayer {
         alpha: 0.5,
@@ -112,11 +111,14 @@ fn graphics_layer_modifier_creates_node() {
     // Verify the node exists in the chain by checking for DRAW capability
     let chain = handle.chain();
     let mut has_graphics_layer = false;
-    chain.for_each_node_with_capability(compose_foundation::NodeCapabilities::DRAW, |_ref, node| {
-        if node.as_any().downcast_ref::<GraphicsLayerNode>().is_some() {
-            has_graphics_layer = true;
-        }
-    });
+    chain.for_each_node_with_capability(
+        compose_foundation::NodeCapabilities::DRAW,
+        |_ref, node| {
+            if node.as_any().downcast_ref::<GraphicsLayerNode>().is_some() {
+                has_graphics_layer = true;
+            }
+        },
+    );
     assert!(has_graphics_layer, "Expected GraphicsLayerNode in chain");
 }
 

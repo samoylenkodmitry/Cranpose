@@ -268,9 +268,7 @@ pub(crate) fn used_locked(head: &Arc<StateRecord>) -> Option<Arc<StateRecord>> {
 /// Returns a record that is either:
 /// - A reused record (if `used_locked()` found one), marked with SNAPSHOT_ID_MAX
 /// - A newly created record, prepended to the state's record chain via `prepend_state_record()`
-pub(crate) fn new_overwritable_record_locked(
-    state: &dyn StateObject,
-) -> Arc<StateRecord> {
+pub(crate) fn new_overwritable_record_locked(state: &dyn StateObject) -> Arc<StateRecord> {
     let state_head = state.first_record();
 
     // Try to reuse an existing record

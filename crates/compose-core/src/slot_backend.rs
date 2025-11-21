@@ -16,8 +16,7 @@ pub fn make_backend(kind: SlotBackendKind) -> SlotBackend {
 }
 
 /// Available slot storage backend implementations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SlotBackendKind {
     /// Baseline gap-buffer implementation (default).
     #[default]
@@ -29,7 +28,6 @@ pub enum SlotBackendKind {
     /// Split storage separating layout from payload.
     Split,
 }
-
 
 /// Unified slot storage backend that can use any implementation.
 pub enum SlotBackend {

@@ -9,20 +9,16 @@ use compose_ui::*;
 fn test_padding_affects_child_position() {
     let mut composition = run_test_composition(|| {
         // Box with padding - child should be offset by padding amount
-        Box(
-            Modifier::empty().padding(20.0),
-            BoxSpec::default(),
-            || {
-                Box(
-                    Modifier::empty().size(Size {
-                        width: 50.0,
-                        height: 50.0,
-                    }),
-                    BoxSpec::default(),
-                    || {},
-                );
-            },
-        );
+        Box(Modifier::empty().padding(20.0), BoxSpec::default(), || {
+            Box(
+                Modifier::empty().size(Size {
+                    width: 50.0,
+                    height: 50.0,
+                }),
+                BoxSpec::default(),
+                || {},
+            );
+        });
     });
 
     let root = composition.root().expect("has root");
@@ -68,33 +64,29 @@ fn test_padding_affects_child_position() {
 #[test]
 fn test_offset_modifier_affects_position() {
     let mut composition = run_test_composition(|| {
-        Column(
-            Modifier::empty(),
-            ColumnSpec::default(),
-            || {
-                // First box - no offset
-                Box(
-                    Modifier::empty().size(Size {
+        Column(Modifier::empty(), ColumnSpec::default(), || {
+            // First box - no offset
+            Box(
+                Modifier::empty().size(Size {
+                    width: 50.0,
+                    height: 50.0,
+                }),
+                BoxSpec::default(),
+                || {},
+            );
+
+            // Second box - with offset
+            Box(
+                Modifier::empty()
+                    .size(Size {
                         width: 50.0,
                         height: 50.0,
-                    }),
-                    BoxSpec::default(),
-                    || {},
-                );
-
-                // Second box - with offset
-                Box(
-                    Modifier::empty()
-                        .size(Size {
-                            width: 50.0,
-                            height: 50.0,
-                        })
-                        .offset(30.0, 15.0),
-                    BoxSpec::default(),
-                    || {},
-                );
-            },
-        );
+                    })
+                    .offset(30.0, 15.0),
+                BoxSpec::default(),
+                || {},
+            );
+        });
     });
 
     let root = composition.root().expect("has root");
@@ -133,9 +125,7 @@ fn test_offset_modifier_affects_position() {
 fn test_padding_and_offset_combined() {
     let mut composition = run_test_composition(|| {
         Box(
-            Modifier::empty()
-                .padding(10.0)
-                .offset(20.0, 30.0),
+            Modifier::empty().padding(10.0).offset(20.0, 30.0),
             BoxSpec::default(),
             || {
                 Box(
@@ -201,31 +191,27 @@ fn test_no_double_offset_application() {
     // This test verifies that offsets aren't applied twice
     // (once during measure, once during place)
     let mut composition = run_test_composition(|| {
-        Column(
-            Modifier::empty(),
-            ColumnSpec::default(),
-            || {
-                Box(
-                    Modifier::empty()
-                        .size(Size {
-                            width: 100.0,
-                            height: 50.0,
-                        })
-                        .offset(25.0, 10.0),
-                    BoxSpec::default(),
-                    || {},
-                );
-
-                Box(
-                    Modifier::empty().size(Size {
+        Column(Modifier::empty(), ColumnSpec::default(), || {
+            Box(
+                Modifier::empty()
+                    .size(Size {
                         width: 100.0,
                         height: 50.0,
-                    }),
-                    BoxSpec::default(),
-                    || {},
-                );
-            },
-        );
+                    })
+                    .offset(25.0, 10.0),
+                BoxSpec::default(),
+                || {},
+            );
+
+            Box(
+                Modifier::empty().size(Size {
+                    width: 100.0,
+                    height: 50.0,
+                }),
+                BoxSpec::default(),
+                || {},
+            );
+        });
     });
 
     let root = composition.root().expect("has root");
@@ -268,26 +254,18 @@ fn test_no_double_offset_application() {
 #[test]
 fn test_nested_padding_accumulates() {
     let mut composition = run_test_composition(|| {
-        Box(
-            Modifier::empty().padding(10.0),
-            BoxSpec::default(),
-            || {
+        Box(Modifier::empty().padding(10.0), BoxSpec::default(), || {
+            Box(Modifier::empty().padding(5.0), BoxSpec::default(), || {
                 Box(
-                    Modifier::empty().padding(5.0),
+                    Modifier::empty().size(Size {
+                        width: 30.0,
+                        height: 30.0,
+                    }),
                     BoxSpec::default(),
-                    || {
-                        Box(
-                            Modifier::empty().size(Size {
-                                width: 30.0,
-                                height: 30.0,
-                            }),
-                            BoxSpec::default(),
-                            || {},
-                        );
-                    },
+                    || {},
                 );
-            },
-        );
+            });
+        });
     });
 
     let root = composition.root().expect("has root");

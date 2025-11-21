@@ -1,4 +1,3 @@
-
 #[cfg(feature = "std-hash")]
 pub mod default {
     pub use std::collections::hash_map::DefaultHasher;

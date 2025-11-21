@@ -190,8 +190,8 @@ impl LayoutModifierNode for PaddingNode {
                 width: inner_width + horizontal_padding,
                 height: inner_height + vertical_padding,
             },
-            self.padding.left,  // Place child offset by left padding
-            self.padding.top,   // Place child offset by top padding
+            self.padding.left, // Place child offset by left padding
+            self.padding.top,  // Place child offset by top padding
         )
     }
 
@@ -269,8 +269,8 @@ impl MeasurementProxy for PaddingMeasurementProxy {
                 width: inner_width + horizontal_padding,
                 height: inner_height + vertical_padding,
             },
-            self.padding.left,  // Place child offset by left padding
-            self.padding.top,   // Place child offset by top padding
+            self.padding.left, // Place child offset by left padding
+            self.padding.top,  // Place child offset by top padding
         )
     }
 
@@ -1805,8 +1805,8 @@ impl LayoutModifierNode for OffsetNode {
                 width: placeable.width(),
                 height: placeable.height(),
             },
-            self.x,  // Place child offset by x
-            self.y,  // Place child offset by y
+            self.x, // Place child offset by x
+            self.y, // Place child offset by y
         )
     }
 
@@ -1863,8 +1863,8 @@ impl MeasurementProxy for OffsetMeasurementProxy {
                 width: placeable.width(),
                 height: placeable.height(),
             },
-            self.x,  // Place child offset by x
-            self.y,  // Place child offset by y
+            self.x, // Place child offset by x
+            self.y, // Place child offset by y
         )
     }
 

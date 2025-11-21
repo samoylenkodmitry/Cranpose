@@ -1,4 +1,3 @@
-
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -32,7 +31,6 @@ impl ModifierLocalToken {
     fn id(&self) -> ModifierLocalId {
         self.id
     }
-
 }
 
 /// Type-safe key referencing a modifier local value.

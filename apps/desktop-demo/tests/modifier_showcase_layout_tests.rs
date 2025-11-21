@@ -49,13 +49,7 @@ fn dump_layout_tree(layout_box: &LayoutBox, depth: usize) -> String {
 
     let mut output = format!(
         "{}[{}] pos=({:.1}, {:.1}) size=({:.1}x{:.1}){}\n",
-        indent,
-        layout_box.node_id,
-        rect.x,
-        rect.y,
-        rect.width,
-        rect.height,
-        text_content
+        indent, layout_box.node_id, rect.x, rect.y, rect.width, rect.height, text_content
     );
 
     for child in &layout_box.children {
@@ -148,8 +142,7 @@ fn test_simple_card_layout_positions() {
     })
     .expect("Simple card should render");
 
-    let layout = compute_layout_from_rule(&mut rule, 800.0, 600.0)
-        .expect("Should compute layout");
+    let layout = compute_layout_from_rule(&mut rule, 800.0, 600.0).expect("Should compute layout");
 
     println!("=== Simple Card Layout ===");
     println!("{}", dump_layout_tree(layout.root(), 0));
@@ -158,14 +151,13 @@ fn test_simple_card_layout_positions() {
     validate_layout_hierarchy(layout.root()).expect("Layout hierarchy should be valid");
 
     // Simple card should have title, description, and action buttons
-    let title = find_box_with_text(layout.root(), "Card Title")
-        .expect("Should find Card Title");
+    let title = find_box_with_text(layout.root(), "Card Title").expect("Should find Card Title");
     let description = find_box_with_text(layout.root(), "Card content goes here with padding")
         .expect("Should find description");
-    let action1 = find_box_with_text(layout.root(), "Action 1")
-        .expect("Should find Action 1 button");
-    let action2 = find_box_with_text(layout.root(), "Action 2")
-        .expect("Should find Action 2 button");
+    let action1 =
+        find_box_with_text(layout.root(), "Action 1").expect("Should find Action 1 button");
+    let action2 =
+        find_box_with_text(layout.root(), "Action 2").expect("Should find Action 2 button");
 
     // Title should be above description
     assert!(
@@ -210,8 +202,7 @@ fn test_positioned_boxes_layout() {
     })
     .expect("Positioned boxes should render");
 
-    let layout = compute_layout_from_rule(&mut rule, 800.0, 600.0)
-        .expect("Should compute layout");
+    let layout = compute_layout_from_rule(&mut rule, 800.0, 600.0).expect("Should compute layout");
 
     println!("=== Positioned Boxes Layout ===");
     println!("{}", dump_layout_tree(layout.root(), 0));
@@ -220,23 +211,27 @@ fn test_positioned_boxes_layout() {
     validate_layout_hierarchy(layout.root()).expect("Layout hierarchy should be valid");
 
     // Now has 4 boxes: A (top-left), B (bottom-right), C (center-top), D (center-left)
-    let box_a = find_box_with_text(layout.root(), "Box A")
-        .expect("Should find Box A");
-    let box_b = find_box_with_text(layout.root(), "Box B")
-        .expect("Should find Box B");
-    let box_c = find_box_with_text(layout.root(), "C")
-        .expect("Should find Box C");
-    let box_d = find_box_with_text(layout.root(), "Box D")
-        .expect("Should find Box D");
+    let box_a = find_box_with_text(layout.root(), "Box A").expect("Should find Box A");
+    let box_b = find_box_with_text(layout.root(), "Box B").expect("Should find Box B");
+    let box_c = find_box_with_text(layout.root(), "C").expect("Should find Box C");
+    let box_d = find_box_with_text(layout.root(), "Box D").expect("Should find Box D");
 
-    println!("Box A: pos=({:.1}, {:.1}) size=({:.1}x{:.1})",
-        box_a.rect.x, box_a.rect.y, box_a.rect.width, box_a.rect.height);
-    println!("Box B: pos=({:.1}, {:.1}) size=({:.1}x{:.1})",
-        box_b.rect.x, box_b.rect.y, box_b.rect.width, box_b.rect.height);
-    println!("Box C: pos=({:.1}, {:.1}) size=({:.1}x{:.1})",
-        box_c.rect.x, box_c.rect.y, box_c.rect.width, box_c.rect.height);
-    println!("Box D: pos=({:.1}, {:.1}) size=({:.1}x{:.1})",
-        box_d.rect.x, box_d.rect.y, box_d.rect.width, box_d.rect.height);
+    println!(
+        "Box A: pos=({:.1}, {:.1}) size=({:.1}x{:.1})",
+        box_a.rect.x, box_a.rect.y, box_a.rect.width, box_a.rect.height
+    );
+    println!(
+        "Box B: pos=({:.1}, {:.1}) size=({:.1}x{:.1})",
+        box_b.rect.x, box_b.rect.y, box_b.rect.width, box_b.rect.height
+    );
+    println!(
+        "Box C: pos=({:.1}, {:.1}) size=({:.1}x{:.1})",
+        box_c.rect.x, box_c.rect.y, box_c.rect.width, box_c.rect.height
+    );
+    println!(
+        "Box D: pos=({:.1}, {:.1}) size=({:.1}x{:.1})",
+        box_d.rect.x, box_d.rect.y, box_d.rect.width, box_d.rect.height
+    );
 
     // Verify relative positioning
     // Box A (top-left) should be leftmost and topmost
@@ -247,12 +242,18 @@ fn test_positioned_boxes_layout() {
     assert!(box_c.rect.y < box_d.rect.y, "Box C should be above Box D");
 
     // Box B should be rightmost
-    assert!(box_b.rect.x > box_a.rect.x && box_b.rect.x > box_c.rect.x && box_b.rect.x > box_d.rect.x,
-        "Box B should be rightmost");
+    assert!(
+        box_b.rect.x > box_a.rect.x && box_b.rect.x > box_c.rect.x && box_b.rect.x > box_d.rect.x,
+        "Box B should be rightmost"
+    );
 
     // Box A should be topmost
-    assert!(box_a.rect.y <= box_b.rect.y && box_a.rect.y <= box_c.rect.y && box_a.rect.y <= box_d.rect.y,
-        "Box A should be topmost or equal");
+    assert!(
+        box_a.rect.y <= box_b.rect.y
+            && box_a.rect.y <= box_c.rect.y
+            && box_a.rect.y <= box_d.rect.y,
+        "Box A should be topmost or equal"
+    );
 
     println!("✓ Positioned boxes (4 boxes with different sizes) layout is correct");
 }
@@ -265,8 +266,7 @@ fn test_item_list_spacing() {
     })
     .expect("Item list should render");
 
-    let layout = compute_layout_from_rule(&mut rule, 800.0, 600.0)
-        .expect("Should compute layout");
+    let layout = compute_layout_from_rule(&mut rule, 800.0, 600.0).expect("Should compute layout");
 
     println!("=== Item List Layout ===");
     println!("{}", dump_layout_tree(layout.root(), 0));
@@ -275,22 +275,13 @@ fn test_item_list_spacing() {
     validate_layout_hierarchy(layout.root()).expect("Layout hierarchy should be valid");
 
     // Find all items
-    let item1 = find_box_with_text(layout.root(), "Item #0")
-        .expect("Should find Item #0");
-    let item2 = find_box_with_text(layout.root(), "Item #1")
-        .expect("Should find Item #1");
-    let item3 = find_box_with_text(layout.root(), "Item #2")
-        .expect("Should find Item #2");
+    let item1 = find_box_with_text(layout.root(), "Item #0").expect("Should find Item #0");
+    let item2 = find_box_with_text(layout.root(), "Item #1").expect("Should find Item #1");
+    let item3 = find_box_with_text(layout.root(), "Item #2").expect("Should find Item #2");
 
     // Items should be vertically stacked
-    assert!(
-        item1.rect.y < item2.rect.y,
-        "Item 1 should be above Item 2"
-    );
-    assert!(
-        item2.rect.y < item3.rect.y,
-        "Item 2 should be above Item 3"
-    );
+    assert!(item1.rect.y < item2.rect.y, "Item 1 should be above Item 2");
+    assert!(item2.rect.y < item3.rect.y, "Item 2 should be above Item 3");
 
     // Calculate spacing between items
     let spacing_1_2 = item2.rect.y - (item1.rect.y + item1.rect.height);
@@ -313,9 +304,11 @@ fn test_item_list_spacing() {
     let renderer = HeadlessRenderer::new();
     let scene = renderer.render(&layout);
 
-    let background_count = scene.operations().iter().filter(|op| {
-        matches!(op, RenderOp::Primitive { .. })
-    }).count();
+    let background_count = scene
+        .operations()
+        .iter()
+        .filter(|op| matches!(op, RenderOp::Primitive { .. }))
+        .count();
 
     // Should have backgrounds for:
     // - Title background (1)
@@ -339,8 +332,7 @@ fn test_complex_chain_modifier_ordering() {
     })
     .expect("Complex chain should render");
 
-    let layout = compute_layout_from_rule(&mut rule, 800.0, 600.0)
-        .expect("Should compute layout");
+    let layout = compute_layout_from_rule(&mut rule, 800.0, 600.0).expect("Should compute layout");
 
     println!("=== Complex Chain Layout ===");
     println!("{}", dump_layout_tree(layout.root(), 0));
@@ -358,12 +350,23 @@ fn test_complex_chain_modifier_ordering() {
 
     for (i, op) in scene.operations().iter().enumerate() {
         match op {
-            RenderOp::Primitive { node_id, layer, primitive: _ } => {
+            RenderOp::Primitive {
+                node_id,
+                layer,
+                primitive: _,
+            } => {
                 println!("  [{}] Primitive node={} layer={:?}", i, node_id, layer);
                 background_count += 1;
             }
-            RenderOp::Text { node_id, rect, value } => {
-                println!("  [{}] Text node={} pos=({:.1},{:.1}) \"{}\"", i, node_id, rect.x, rect.y, value);
+            RenderOp::Text {
+                node_id,
+                rect,
+                value,
+            } => {
+                println!(
+                    "  [{}] Text node={} pos=({:.1},{:.1}) \"{}\"",
+                    i, node_id, rect.x, rect.y, value
+                );
                 text_count += 1;
             }
         }
@@ -393,17 +396,19 @@ fn test_complex_chain_modifier_ordering() {
 
     // Validate nested backgrounds are properly rendered
     // Find the "Nested!" text to verify it's surrounded by colored backgrounds
-    let nested_text = find_box_with_text(layout.root(), "Nested!")
-        .expect("Should find 'Nested!' text");
+    let nested_text =
+        find_box_with_text(layout.root(), "Nested!").expect("Should find 'Nested!' text");
     let offset_text = find_box_with_text(layout.root(), "Offset + Sized")
         .expect("Should find 'Offset + Sized' text");
 
-    println!("\nNested! text at: ({:.1}, {:.1}) size=({:.1}x{:.1})",
-        nested_text.rect.x, nested_text.rect.y,
-        nested_text.rect.width, nested_text.rect.height);
-    println!("Offset + Sized text at: ({:.1}, {:.1}) size=({:.1}x{:.1})",
-        offset_text.rect.x, offset_text.rect.y,
-        offset_text.rect.width, offset_text.rect.height);
+    println!(
+        "\nNested! text at: ({:.1}, {:.1}) size=({:.1}x{:.1})",
+        nested_text.rect.x, nested_text.rect.y, nested_text.rect.width, nested_text.rect.height
+    );
+    println!(
+        "Offset + Sized text at: ({:.1}, {:.1}) size=({:.1}x{:.1})",
+        offset_text.rect.x, offset_text.rect.y, offset_text.rect.width, offset_text.rect.height
+    );
 
     // The offset box should be offset by 20px horizontally
     assert!(
@@ -424,8 +429,7 @@ fn test_dynamic_modifiers_size_changes() {
     })
     .expect("Dynamic modifiers should render");
 
-    let layout = compute_layout_from_rule(&mut rule, 800.0, 600.0)
-        .expect("Should compute layout");
+    let layout = compute_layout_from_rule(&mut rule, 800.0, 600.0).expect("Should compute layout");
 
     println!("=== Dynamic Modifiers (Initial) ===");
     println!("{}", dump_layout_tree(layout.root(), 0));
@@ -460,7 +464,8 @@ fn test_dynamic_modifiers_frame_advancement() {
 
     // Advance to frame 5 (x = 50)
     frame.set(5);
-    rule.pump_until_idle().expect("Should recompose after frame advance");
+    rule.pump_until_idle()
+        .expect("Should recompose after frame advance");
     let layout5 = compute_layout_from_rule(&mut rule, 800.0, 600.0)
         .expect("Should compute layout at frame 5");
     println!("\n=== Dynamic Modifiers Frame 5 (x=50) ===");
@@ -469,7 +474,8 @@ fn test_dynamic_modifiers_frame_advancement() {
 
     // Advance to frame 10 (x = 100)
     frame.set(10);
-    rule.pump_until_idle().expect("Should recompose after frame advance");
+    rule.pump_until_idle()
+        .expect("Should recompose after frame advance");
     let layout10 = compute_layout_from_rule(&mut rule, 800.0, 600.0)
         .expect("Should compute layout at frame 10");
     println!("\n=== Dynamic Modifiers Frame 10 (x=100) ===");
@@ -478,7 +484,8 @@ fn test_dynamic_modifiers_frame_advancement() {
 
     // Advance to frame 19 (x = 190, close to boundary)
     frame.set(19);
-    rule.pump_until_idle().expect("Should recompose after frame advance");
+    rule.pump_until_idle()
+        .expect("Should recompose after frame advance");
     let layout19 = compute_layout_from_rule(&mut rule, 800.0, 600.0)
         .expect("Should compute layout at frame 19");
     println!("\n=== Dynamic Modifiers Frame 19 (x=190) ===");

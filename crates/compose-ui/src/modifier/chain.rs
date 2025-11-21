@@ -4,18 +4,17 @@
 use compose_foundation::InvalidationKind;
 
 use compose_foundation::{
-    BasicModifierNodeContext, ModifierInvalidation, ModifierNodeChain,
-    NodeCapabilities,
+    BasicModifierNodeContext, ModifierInvalidation, ModifierNodeChain, NodeCapabilities,
 };
 
 use super::{
-    local::ModifierLocalManager, DimensionConstraint, EdgeInsets,
-    LayoutProperties, Modifier, ModifierInspectorRecord, ModifierLocalAncestorResolver,
-    ModifierLocalToken, Point, ResolvedModifierLocal, ResolvedModifiers,
+    local::ModifierLocalManager, DimensionConstraint, EdgeInsets, LayoutProperties, Modifier,
+    ModifierInspectorRecord, ModifierLocalAncestorResolver, ModifierLocalToken, Point,
+    ResolvedModifierLocal, ResolvedModifiers,
 };
 use crate::modifier_nodes::{
-    AlignmentNode, FillDirection, FillNode,
-    IntrinsicAxis, IntrinsicSizeNode, OffsetNode, PaddingNode, SizeNode, WeightNode,
+    AlignmentNode, FillDirection, FillNode, IntrinsicAxis, IntrinsicSizeNode, OffsetNode,
+    PaddingNode, SizeNode, WeightNode,
 };
 use std::any::type_name_of_val;
 use std::cell::RefCell;
@@ -85,7 +84,8 @@ impl ModifierChainHandle {
         resolver: &mut ModifierLocalAncestorResolver<'_>,
     ) -> Vec<ModifierInvalidation> {
         let elements = modifier.elements();
-        self.chain.update_from_slice(&elements, &mut *self.context.borrow_mut());
+        self.chain
+            .update_from_slice(&elements, &mut *self.context.borrow_mut());
         self.capabilities = self.chain.capabilities();
         self.aggregate_child_capabilities = self.chain.head().aggregate_child_capabilities();
         let modifier_local_invalidations = self
@@ -124,7 +124,12 @@ impl ModifierChainHandle {
 
     /// Returns mutable references to both the chain and context.
     /// This is a convenience method for measurement that avoids borrow conflicts.
-    pub fn chain_and_context_mut(&mut self) -> (&mut ModifierNodeChain, std::cell::RefMut<'_, BasicModifierNodeContext>) {
+    pub fn chain_and_context_mut(
+        &mut self,
+    ) -> (
+        &mut ModifierNodeChain,
+        std::cell::RefMut<'_, BasicModifierNodeContext>,
+    ) {
         (&mut self.chain, self.context.borrow_mut())
     }
 
@@ -388,7 +393,10 @@ mod tests {
 
         // Background and shape are now captured in modifier slices as draw commands
         let slices = collect_modifier_slices(handle.chain());
-        assert!(!slices.draw_commands().is_empty(), "Expected draw commands for background");
+        assert!(
+            !slices.draw_commands().is_empty(),
+            "Expected draw commands for background"
+        );
 
         let _ = handle.update(
             &Modifier::empty()
@@ -396,11 +404,17 @@ mod tests {
                 .then(Modifier::empty().background(Color(0.9, 0.1, 0.1, 1.0))),
         );
         let slices = collect_modifier_slices(handle.chain());
-        assert!(!slices.draw_commands().is_empty(), "Expected draw commands after update");
+        assert!(
+            !slices.draw_commands().is_empty(),
+            "Expected draw commands after update"
+        );
 
         let _ = handle.update(&Modifier::empty());
         let slices = collect_modifier_slices(handle.chain());
-        assert!(slices.draw_commands().is_empty(), "Expected no draw commands with empty modifier");
+        assert!(
+            slices.draw_commands().is_empty(),
+            "Expected no draw commands with empty modifier"
+        );
     }
 
     #[test]

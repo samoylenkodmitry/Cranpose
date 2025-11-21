@@ -154,40 +154,36 @@ fn test_column_with_padding_and_sized_children() {
 #[test]
 fn test_row_with_offset_children() {
     let mut composition = run_test_composition(|| {
-        Row(
-            Modifier::empty(),
-            RowSpec::default(),
-            || {
-                Box(
-                    Modifier::empty().size(Size {
-                        width: 40.0,
-                        height: 30.0,
-                    }),
-                    BoxSpec::default(),
-                    || {},
-                );
-                Box(
-                    Modifier::empty()
-                        .size(Size {
-                            width: 50.0,
-                            height: 35.0,
-                        })
-                        .offset(5.0, 10.0),
-                    BoxSpec::default(),
-                    || {},
-                );
-                Box(
-                    Modifier::empty()
-                        .size(Size {
-                            width: 30.0,
-                            height: 25.0,
-                        })
-                        .offset(0.0, -5.0),
-                    BoxSpec::default(),
-                    || {},
-                );
-            },
-        );
+        Row(Modifier::empty(), RowSpec::default(), || {
+            Box(
+                Modifier::empty().size(Size {
+                    width: 40.0,
+                    height: 30.0,
+                }),
+                BoxSpec::default(),
+                || {},
+            );
+            Box(
+                Modifier::empty()
+                    .size(Size {
+                        width: 50.0,
+                        height: 35.0,
+                    })
+                    .offset(5.0, 10.0),
+                BoxSpec::default(),
+                || {},
+            );
+            Box(
+                Modifier::empty()
+                    .size(Size {
+                        width: 30.0,
+                        height: 25.0,
+                    })
+                    .offset(0.0, -5.0),
+                BoxSpec::default(),
+                || {},
+            );
+        });
     });
 
     let root = composition.root().expect("has root");

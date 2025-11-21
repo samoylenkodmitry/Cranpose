@@ -1114,9 +1114,7 @@ fn sentinel_links_follow_chain_order() {
     let is_draw = second
         .with_node(|node| node.as_any().downcast_ref::<TestDrawNode>().is_some())
         .unwrap_or(false);
-    assert!(is_draw,
-        "second node should be draw"
-    );
+    assert!(is_draw, "second node should be draw");
     assert!(second.child().unwrap().is_tail());
 
     let tail = chain.tail();
@@ -1177,17 +1175,19 @@ fn delegate_nodes_participate_in_traversal() {
     let order: Vec<&'static str> = chain
         .head_to_tail()
         .map(|node_ref| {
-            node_ref.with_node(|node| {
-                if node.as_any().downcast_ref::<DelegatingHostNode>().is_some() {
-                    "host"
-                } else if node.as_any().downcast_ref::<DelegatedDrawNode>().is_some() {
-                    "delegate"
-                } else if node.as_any().downcast_ref::<TestDrawNode>().is_some() {
-                    "draw"
-                } else {
-                    "unknown"
-                }
-            }).unwrap_or("unknown")
+            node_ref
+                .with_node(|node| {
+                    if node.as_any().downcast_ref::<DelegatingHostNode>().is_some() {
+                        "host"
+                    } else if node.as_any().downcast_ref::<DelegatedDrawNode>().is_some() {
+                        "delegate"
+                    } else if node.as_any().downcast_ref::<TestDrawNode>().is_some() {
+                        "draw"
+                    } else {
+                        "unknown"
+                    }
+                })
+                .unwrap_or("unknown")
         })
         .collect();
 
@@ -1237,7 +1237,11 @@ fn semantics_delegates_are_visited_by_forward_matching() {
     let mut visits = 0;
     chain.for_each_forward_matching(NodeCapabilities::SEMANTICS, |node_ref| {
         let is_delegated = node_ref
-            .with_node(|node| node.as_any().downcast_ref::<DelegatedSemanticsNode>().is_some())
+            .with_node(|node| {
+                node.as_any()
+                    .downcast_ref::<DelegatedSemanticsNode>()
+                    .is_some()
+            })
             .unwrap_or(false);
         if is_delegated {
             visits += 1;
@@ -1285,7 +1289,11 @@ fn pointer_delegates_are_visited_by_forward_matching() {
     let mut visits = 0;
     chain.for_each_forward_matching(NodeCapabilities::POINTER_INPUT, |node_ref| {
         let is_delegated = node_ref
-            .with_node(|node| node.as_any().downcast_ref::<DelegatedPointerNode>().is_some())
+            .with_node(|node| {
+                node.as_any()
+                    .downcast_ref::<DelegatedPointerNode>()
+                    .is_some()
+            })
             .unwrap_or(false);
         if is_delegated {
             visits += 1;
@@ -1318,9 +1326,9 @@ fn delegate_parent_links_owner() {
     let delegate_ref = chain
         .head_to_tail()
         .find(|node_ref| {
-            node_ref.with_node(|node| {
-                node as *const dyn ModifierNode as *const () == delegate_ptr
-            }).unwrap_or(false)
+            node_ref
+                .with_node(|node| node as *const dyn ModifierNode as *const () == delegate_ptr)
+                .unwrap_or(false)
         })
         .expect("delegate should be discoverable");
 
@@ -1364,15 +1372,17 @@ fn chain_iterators_follow_expected_order() {
     let forward: Vec<&'static str> = chain
         .head_to_tail()
         .map(|node_ref| {
-            node_ref.with_node(|node| {
-                if node.as_any().downcast_ref::<TestLayoutNode>().is_some() {
-                    "layout"
-                } else if node.as_any().downcast_ref::<TestDrawNode>().is_some() {
-                    "draw"
-                } else {
-                    "unknown"
-                }
-            }).unwrap_or("unknown")
+            node_ref
+                .with_node(|node| {
+                    if node.as_any().downcast_ref::<TestLayoutNode>().is_some() {
+                        "layout"
+                    } else if node.as_any().downcast_ref::<TestDrawNode>().is_some() {
+                        "draw"
+                    } else {
+                        "unknown"
+                    }
+                })
+                .unwrap_or("unknown")
         })
         .collect();
     assert_eq!(forward, vec!["layout", "draw"]);
@@ -1380,15 +1390,17 @@ fn chain_iterators_follow_expected_order() {
     let backward: Vec<&'static str> = chain
         .tail_to_head()
         .map(|node_ref| {
-            node_ref.with_node(|node| {
-                if node.as_any().downcast_ref::<TestLayoutNode>().is_some() {
-                    "layout"
-                } else if node.as_any().downcast_ref::<TestDrawNode>().is_some() {
-                    "draw"
-                } else {
-                    "unknown"
-                }
-            }).unwrap_or("unknown")
+            node_ref
+                .with_node(|node| {
+                    if node.as_any().downcast_ref::<TestLayoutNode>().is_some() {
+                        "layout"
+                    } else if node.as_any().downcast_ref::<TestDrawNode>().is_some() {
+                        "draw"
+                    } else {
+                        "unknown"
+                    }
+                })
+                .unwrap_or("unknown")
         })
         .collect();
     assert_eq!(backward, vec!["draw", "layout"]);

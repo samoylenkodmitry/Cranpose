@@ -637,7 +637,8 @@ pub(crate) struct SnapshotState {
     /// Write observer, if any.
     pub(crate) write_observer: Option<WriteObserver>,
     /// Modified state objects.
-    #[allow(clippy::type_complexity)] // HashMap value is (Arc, SnapshotId) - reasonable for tracking state
+    #[allow(clippy::type_complexity)]
+    // HashMap value is (Arc, SnapshotId) - reasonable for tracking state
     pub(crate) modified: RefCell<HashMap<StateObjectId, (Arc<dyn StateObject>, SnapshotId)>>,
     /// Optional callback invoked once when disposed.
     on_dispose: RefCell<Option<Box<dyn FnOnce()>>>,

@@ -18,9 +18,9 @@ use compose_core::{
     Phase, RuntimeHandle, SlotBackend, SlotsHost, SnapshotStateObserver,
 };
 
+use self::coordinator::NodeCoordinator;
 use self::core::Measurable;
 use self::core::Placeable;
-use self::coordinator::NodeCoordinator;
 #[cfg(test)]
 use self::core::{HorizontalAlignment, VerticalAlignment};
 use crate::modifier::{
@@ -28,10 +28,10 @@ use crate::modifier::{
     Modifier, ModifierNodeSlices, Point, Rect as GeometryRect, ResolvedModifiers, Size,
 };
 use crate::subcompose_layout::SubcomposeLayoutNode;
+use crate::widgets::nodes::{IntrinsicKind, LayoutNode, LayoutNodeCacheHandles};
 use compose_foundation::InvalidationKind;
 use compose_foundation::ModifierNodeContext;
-use crate::widgets::nodes::{IntrinsicKind, LayoutNode, LayoutNodeCacheHandles};
-use compose_foundation::{SemanticsConfiguration, NodeCapabilities};
+use compose_foundation::{NodeCapabilities, SemanticsConfiguration};
 use compose_ui_layout::{Constraints, MeasurePolicy, MeasureResult};
 
 /// Runtime context for modifier nodes during measurement.
@@ -83,7 +83,6 @@ struct ModifierChainMeasurement {
     padding: EdgeInsets,
     offset: Point,
 }
-
 
 /// Discrete event callback reference produced during semantics extraction.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -454,7 +453,6 @@ struct LayoutBuilder {
 }
 
 impl LayoutBuilder {
-
     fn new_with_epoch(applier: Rc<ConcreteApplierHost<MemoryApplier>>, epoch: u64) -> Self {
         Self {
             state: Rc::new(RefCell::new(LayoutBuilderState::new_with_epoch(
@@ -553,7 +551,12 @@ impl LayoutBuilderState {
         }) {
             // Applier was available, process the result
             if let Some(snapshot) = result? {
-                return Self::measure_layout_node(Rc::clone(&state_rc), node_id, snapshot, constraints);
+                return Self::measure_layout_node(
+                    Rc::clone(&state_rc),
+                    node_id,
+                    snapshot,
+                    constraints,
+                );
             }
         }
         // If applier was busy (None) or snapshot was None, fall through to fallback
@@ -715,8 +718,12 @@ impl LayoutBuilderState {
         use compose_foundation::NodeCapabilities;
 
         // Collect layout node information from the modifier chain
-        #[allow(clippy::type_complexity)] // Tuple of (index, boxed trait object) is reasonable for modifier nodes
-        let mut layout_node_data: Vec<(usize, Rc<RefCell<Box<dyn compose_foundation::ModifierNode>>>)> = Vec::new();
+        #[allow(clippy::type_complexity)]
+        // Tuple of (index, boxed trait object) is reasonable for modifier nodes
+        let mut layout_node_data: Vec<(
+            usize,
+            Rc<RefCell<Box<dyn compose_foundation::ModifierNode>>>,
+        )> = Vec::new();
         let mut padding = EdgeInsets::default();
         let mut offset = Point::default();
 
@@ -724,39 +731,38 @@ impl LayoutBuilderState {
             let state = state_rc.borrow();
             let mut applier = state.applier.borrow_typed();
 
-            let _ = applier
-                .with_node::<LayoutNode, _>(node_id, |layout_node| {
-                    let chain_handle = layout_node.modifier_chain();
+            let _ = applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
+                let chain_handle = layout_node.modifier_chain();
 
-                    if !chain_handle.has_layout_nodes() {
-                        return;
-                    }
+                if !chain_handle.has_layout_nodes() {
+                    return;
+                }
 
-                    // Collect indices and node Rc clones for layout modifier nodes
-                    chain_handle.chain().for_each_forward_matching(
-                        NodeCapabilities::LAYOUT,
-                        |node_ref| {
-                            if let Some(index) = node_ref.entry_index() {
-                                // Get the Rc clone for this node
-                                if let Some(node_rc) = chain_handle.chain().get_node_rc(index) {
-                                    layout_node_data.push((index, node_rc));
-                                }
-
-                                // Calculate padding and offset for backward compat
-                                node_ref.with_node(|node| {
-                                    let any = node.as_any();
-                                    if let Some(padding_node) = any.downcast_ref::<PaddingNode>() {
-                                        padding += padding_node.padding();
-                                    } else if let Some(offset_node) = any.downcast_ref::<OffsetNode>() {
-                                        let delta = offset_node.offset();
-                                        offset.x += delta.x;
-                                        offset.y += delta.y;
-                                    }
-                                });
+                // Collect indices and node Rc clones for layout modifier nodes
+                chain_handle.chain().for_each_forward_matching(
+                    NodeCapabilities::LAYOUT,
+                    |node_ref| {
+                        if let Some(index) = node_ref.entry_index() {
+                            // Get the Rc clone for this node
+                            if let Some(node_rc) = chain_handle.chain().get_node_rc(index) {
+                                layout_node_data.push((index, node_rc));
                             }
-                        },
-                    );
-                });
+
+                            // Calculate padding and offset for backward compat
+                            node_ref.with_node(|node| {
+                                let any = node.as_any();
+                                if let Some(padding_node) = any.downcast_ref::<PaddingNode>() {
+                                    padding += padding_node.padding();
+                                } else if let Some(offset_node) = any.downcast_ref::<OffsetNode>() {
+                                    let delta = offset_node.offset();
+                                    offset.x += delta.x;
+                                    offset.y += delta.y;
+                                }
+                            });
+                        }
+                    },
+                );
+            });
         }
 
         // Even if there are no layout modifiers, we use the coordinator chain
@@ -772,24 +778,21 @@ impl LayoutBuilderState {
 
         // Create the inner coordinator that wraps the measure policy
         let policy_result = Rc::new(RefCell::new(None));
-        let inner_coordinator: Box<dyn NodeCoordinator + '_> = Box::new(
-            coordinator::InnerCoordinator::new(
+        let inner_coordinator: Box<dyn NodeCoordinator + '_> =
+            Box::new(coordinator::InnerCoordinator::new(
                 Rc::clone(measure_policy),
                 measurables,
                 Rc::clone(&policy_result),
-            )
-        );
+            ));
 
         // Wrap each layout modifier node in a coordinator, building the chain
         let mut current_coordinator = inner_coordinator;
         for (_node_index, node_rc) in layout_node_data {
-            current_coordinator = Box::new(
-                coordinator::LayoutModifierCoordinator::new(
-                    node_rc,
-                    current_coordinator,
-                    Rc::clone(&shared_context),
-                )
-            );
+            current_coordinator = Box::new(coordinator::LayoutModifierCoordinator::new(
+                node_rc,
+                current_coordinator,
+                Rc::clone(&shared_context),
+            ));
         }
 
         // Measure through the complete coordinator chain
@@ -950,8 +953,10 @@ impl LayoutBuilderState {
 
         if (chain_constraints.max_width != constraints.max_width
             || chain_constraints.max_height != constraints.max_height)
-            && ((constraints.max_width.is_finite() && modifier_chain_result.result.size.width > constraints.max_width)
-                || (constraints.max_height.is_finite() && modifier_chain_result.result.size.height > constraints.max_height))
+            && ((constraints.max_width.is_finite()
+                && modifier_chain_result.result.size.width > constraints.max_width)
+                || (constraints.max_height.is_finite()
+                    && modifier_chain_result.result.size.height > constraints.max_height))
         {
             modifier_chain_result = Self::measure_through_modifier_chain(
                 &state_rc,

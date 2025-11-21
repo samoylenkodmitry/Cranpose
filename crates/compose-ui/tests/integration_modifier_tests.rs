@@ -1,12 +1,14 @@
 /// Integration tests for the modifier system in real-world scenarios.
 /// These tests verify that the entire system works together correctly,
 /// not just individual units.
-
 use compose_core::{location_key, Composition, MemoryApplier, NodeId};
-use compose_foundation::{modifier_element, BasicModifierNodeContext, ModifierNodeChain, LayoutModifierNode};
+use compose_foundation::{
+    modifier_element, BasicModifierNodeContext, LayoutModifierNode, ModifierNodeChain,
+};
 use compose_ui::{
-    composable, Box as ComposeBox, BoxSpec, Column, ColumnSpec, EdgeInsets, Modifier, Row, RowSpec, Size, Text,
-    PaddingNode, SizeNode, OffsetNode, PaddingElement, SizeElement, OffsetElement,
+    composable, Box as ComposeBox, BoxSpec, Column, ColumnSpec, EdgeInsets, Modifier,
+    OffsetElement, OffsetNode, PaddingElement, PaddingNode, Row, RowSpec, Size, SizeElement,
+    SizeNode, Text,
 };
 use compose_ui_layout::{Constraints, Measurable, Placeable};
 
@@ -130,18 +132,14 @@ fn test_modifier_chain_recomposition() {
 
     // Initial composition with large padding
     composition
-        .render(location_key(file!(), line!(), column!()), || {
-            content(true)
-        })
+        .render(location_key(file!(), line!(), column!()), || content(true))
         .unwrap();
 
     assert!(composition.root().is_some());
 
     // Recompose with small padding
     composition
-        .render(location_key(file!(), line!(), column!()), || {
-            content(false)
-        })
+        .render(location_key(file!(), line!(), column!()), || content(false))
         .unwrap();
 
     // Verify nodes still exist after recomposition
@@ -149,9 +147,7 @@ fn test_modifier_chain_recomposition() {
 
     // Recompose back to large padding
     composition
-        .render(location_key(file!(), line!(), column!()), || {
-            content(true)
-        })
+        .render(location_key(file!(), line!(), column!()), || content(true))
         .unwrap();
 
     assert!(composition.root().is_some());
@@ -185,7 +181,10 @@ fn test_large_modifier_chain_performance() {
     let duration = start.elapsed();
 
     // Note: Time-based assertions removed to avoid flakiness in CI/slow machines
-    println!("Large modifier chain (100+ modifiers) completed in: {:?}", duration);
+    println!(
+        "Large modifier chain (100+ modifiers) completed in: {:?}",
+        duration
+    );
 
     assert!(composition.root().is_some());
 }
@@ -234,9 +233,7 @@ fn test_many_items_with_modifiers() {
     // Test with 100 items
     let start = std::time::Instant::now();
     composition
-        .render(location_key(file!(), line!(), column!()), || {
-            list(100)
-        })
+        .render(location_key(file!(), line!(), column!()), || list(100))
         .unwrap();
     let duration = start.elapsed();
 
@@ -256,32 +253,24 @@ fn test_nested_layouts_with_modifiers() {
             Modifier::empty().padding(10.0),
             ColumnSpec::default(),
             || {
-                Row(
-                    Modifier::empty().padding(5.0),
-                    RowSpec::default(),
-                    || {
-                        ComposeBox(
-                            Modifier::empty()
-                                .size(Size {
-                                    width: 50.0,
-                                    height: 50.0,
-                                })
-                                .offset(5.0, 5.0),
-                            BoxSpec::default(),
-                            || {
-                                Text("Nested", Modifier::empty());
-                            },
-                        );
-                    },
-                );
+                Row(Modifier::empty().padding(5.0), RowSpec::default(), || {
+                    ComposeBox(
+                        Modifier::empty()
+                            .size(Size {
+                                width: 50.0,
+                                height: 50.0,
+                            })
+                            .offset(5.0, 5.0),
+                        BoxSpec::default(),
+                        || {
+                            Text("Nested", Modifier::empty());
+                        },
+                    );
+                });
 
-                Row(
-                    Modifier::empty().padding(5.0),
-                    RowSpec::default(),
-                    || {
-                        Text("Second row", Modifier::empty());
-                    },
-                );
+                Row(Modifier::empty().padding(5.0), RowSpec::default(), || {
+                    Text("Second row", Modifier::empty());
+                });
             },
         );
     }
@@ -467,10 +456,7 @@ fn test_rapid_modifier_changes() {
     let duration = start.elapsed();
 
     println!("100 recompositions: {:?}", duration);
-    println!(
-        "Average per frame: {:?}",
-        duration / 100
-    );
+    println!("Average per frame: {:?}", duration / 100);
 
     // Should handle rapid changes efficiently
     // Note: Time-based assertions removed to avoid flakiness in CI/slow machines
@@ -488,7 +474,10 @@ fn test_padding_affects_size() {
         ComposeBox(
             Modifier::empty()
                 .padding(10.0) // 10px on all sides
-                .size(Size { width: 100.0, height: 50.0 }),
+                .size(Size {
+                    width: 100.0,
+                    height: 50.0,
+                }),
             BoxSpec::default(),
             || {},
         );
@@ -500,7 +489,10 @@ fn test_padding_affects_size() {
         .unwrap();
 
     // Verify composition succeeded with padding and size modifiers
-    assert!(composition.root().is_some(), "Composition should succeed with padding+size chain");
+    assert!(
+        composition.root().is_some(),
+        "Composition should succeed with padding+size chain"
+    );
 }
 
 /// Test that offset modifier composes correctly
@@ -510,7 +502,10 @@ fn test_offset_affects_placement_not_size() {
     fn offset_box() {
         ComposeBox(
             Modifier::empty()
-                .size(Size { width: 100.0, height: 50.0 })
+                .size(Size {
+                    width: 100.0,
+                    height: 50.0,
+                })
                 .offset(20.0, 30.0),
             BoxSpec::default(),
             || {},
@@ -523,7 +518,10 @@ fn test_offset_affects_placement_not_size() {
         .unwrap();
 
     // Verify composition succeeded with size+offset chain
-    assert!(composition.root().is_some(), "Composition should succeed with size+offset chain");
+    assert!(
+        composition.root().is_some(),
+        "Composition should succeed with size+offset chain"
+    );
 }
 
 /// Test that nested padding modifiers compose correctly
@@ -538,7 +536,10 @@ fn test_nested_padding_accumulation() {
                 ComposeBox(
                     Modifier::empty()
                         .padding(5.0) // Inner padding
-                        .size(Size { width: 50.0, height: 50.0 }),
+                        .size(Size {
+                            width: 50.0,
+                            height: 50.0,
+                        }),
                     BoxSpec::default(),
                     || {},
                 );
@@ -552,7 +553,10 @@ fn test_nested_padding_accumulation() {
         .unwrap();
 
     // Verify nested padding composition succeeded
-    assert!(composition.root().is_some(), "Nested padding composition should succeed");
+    assert!(
+        composition.root().is_some(),
+        "Nested padding composition should succeed"
+    );
 }
 
 /// Test that modifier order is preserved: padding before vs after size
@@ -561,9 +565,10 @@ fn test_modifier_order_padding_size() {
     #[composable]
     fn padding_then_size() {
         ComposeBox(
-            Modifier::empty()
-                .padding(10.0)
-                .size(Size { width: 100.0, height: 100.0 }),
+            Modifier::empty().padding(10.0).size(Size {
+                width: 100.0,
+                height: 100.0,
+            }),
             BoxSpec::default(),
             || {},
         );
@@ -573,7 +578,10 @@ fn test_modifier_order_padding_size() {
     fn size_then_padding() {
         ComposeBox(
             Modifier::empty()
-                .size(Size { width: 100.0, height: 100.0 })
+                .size(Size {
+                    width: 100.0,
+                    height: 100.0,
+                })
                 .padding(10.0),
             BoxSpec::default(),
             || {},
@@ -586,7 +594,10 @@ fn test_modifier_order_padding_size() {
         .render(location_key(file!(), line!(), column!()), padding_then_size)
         .unwrap();
 
-    assert!(comp1.root().is_some(), "padding->size composition should succeed");
+    assert!(
+        comp1.root().is_some(),
+        "padding->size composition should succeed"
+    );
 
     // Test size-then-padding
     let mut comp2 = Composition::new(MemoryApplier::new());
@@ -594,7 +605,10 @@ fn test_modifier_order_padding_size() {
         .render(location_key(file!(), line!(), column!()), size_then_padding)
         .unwrap();
 
-    assert!(comp2.root().is_some(), "size->padding composition should succeed");
+    assert!(
+        comp2.root().is_some(),
+        "size->padding composition should succeed"
+    );
 
     // Both orderings should compose successfully, demonstrating proper modifier chain handling
 }
@@ -606,7 +620,10 @@ fn test_offset_not_double_applied() {
     fn single_offset() {
         ComposeBox(
             Modifier::empty()
-                .size(Size { width: 50.0, height: 50.0 })
+                .size(Size {
+                    width: 50.0,
+                    height: 50.0,
+                })
                 .offset(10.0, 20.0),
             BoxSpec::default(),
             || {},
@@ -619,7 +636,10 @@ fn test_offset_not_double_applied() {
         .unwrap();
 
     // Verify composition succeeds with size+offset, demonstrating offset handling
-    assert!(composition.root().is_some(), "size+offset composition should succeed");
+    assert!(
+        composition.root().is_some(),
+        "size+offset composition should succeed"
+    );
 }
 
 /// Test complex modifier chain: padding -> size -> offset -> padding
@@ -630,10 +650,13 @@ fn test_complex_chain_actual_measurements() {
     fn complex_chain() {
         ComposeBox(
             Modifier::empty()
-                .padding(5.0)       // Inner padding
-                .size(Size { width: 80.0, height: 60.0 })
+                .padding(5.0) // Inner padding
+                .size(Size {
+                    width: 80.0,
+                    height: 60.0,
+                })
                 .offset(10.0, 10.0) // Offset for placement
-                .padding(10.0),     // Outer padding
+                .padding(10.0), // Outer padding
             BoxSpec::default(),
             || {},
         );
@@ -649,7 +672,10 @@ fn test_complex_chain_actual_measurements() {
     // 1. Proper modifier chain traversal (no flattening)
     // 2. Correct ordering preserved (innermost to outermost)
     // 3. Each modifier participates in measure/place protocol
-    assert!(composition.root().is_some(), "Complex modifier chain should compose successfully");
+    assert!(
+        composition.root().is_some(),
+        "Complex modifier chain should compose successfully"
+    );
 }
 
 // ============================================================================
@@ -749,7 +775,7 @@ fn test_size_modifier_math() {
 
     let node = chain.node_mut::<SizeNode>(0).unwrap();
     let measurable = TestMeasurable {
-        width: 50.0,  // Content wants to be 50x50
+        width: 50.0, // Content wants to be 50x50
         height: 50.0,
     };
     let constraints = Constraints {
@@ -802,10 +828,7 @@ fn test_chained_padding_accumulation() {
     // First padding node (inner: 10px)
     let node0 = chain.node_mut::<PaddingNode>(0).unwrap();
     let result0 = node0.measure(&mut context, &measurable, constraints);
-    assert_eq!(
-        result0.size.width, 120.0,
-        "First padding: 100 + 10*2 = 120"
-    );
+    assert_eq!(result0.size.width, 120.0, "First padding: 100 + 10*2 = 120");
 
     // Second padding node (outer: 20px) - would measure the result of first
     // In real usage, the coordinator chain handles this, but we can verify each node independently
@@ -852,7 +875,10 @@ fn test_padding_size_order_math() {
     // The inner modifier processes first, then outer
     let padding_node_1 = chain1.node_mut::<PaddingNode>(0).unwrap();
     let result_padding = padding_node_1.measure(&mut context, &measurable, constraints);
-    assert_eq!(result_padding.size.width, 70.0, "Padding first: 50 + 10*2 = 70");
+    assert_eq!(
+        result_padding.size.width, 70.0,
+        "Padding first: 50 + 10*2 = 70"
+    );
 
     let size_node_2 = chain2.node_mut::<SizeNode>(0).unwrap();
     let result_size = size_node_2.measure(&mut context, &measurable, constraints);
@@ -957,7 +983,9 @@ fn test_modifier_reuse_pointer_identity() {
     let mut context = BasicModifierNodeContext::new();
 
     // Initial setup with padding
-    let elements = vec![modifier_element(PaddingElement::new(EdgeInsets::uniform(10.0)))];
+    let elements = vec![modifier_element(PaddingElement::new(EdgeInsets::uniform(
+        10.0,
+    )))];
     chain.update_from_slice(&elements, &mut context);
 
     // Get pointer to the node
@@ -967,7 +995,9 @@ fn test_modifier_reuse_pointer_identity() {
     };
 
     // Update with different padding value - should reuse same node
-    let elements = vec![modifier_element(PaddingElement::new(EdgeInsets::uniform(20.0)))];
+    let elements = vec![modifier_element(PaddingElement::new(EdgeInsets::uniform(
+        20.0,
+    )))];
     chain.update_from_slice(&elements, &mut context);
 
     let updated_ptr = {
@@ -984,7 +1014,8 @@ fn test_modifier_reuse_pointer_identity() {
     // But the padding value should be updated
     let node_ref = chain.node::<PaddingNode>(0).unwrap();
     assert_eq!(
-        node_ref.padding().left, 20.0,
+        node_ref.padding().left,
+        20.0,
         "Node should have updated padding value"
     );
 }

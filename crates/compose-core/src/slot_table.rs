@@ -1454,9 +1454,10 @@ impl SlotTable {
         {
             // Mark unreachable slots within this group as gaps
             if self.cursor < group_end
-                && self.mark_range_as_gaps(self.cursor, group_end, Some(owner_start)) {
-                    marked = true;
-                }
+                && self.mark_range_as_gaps(self.cursor, group_end, Some(owner_start))
+            {
+                marked = true;
+            }
 
             // Update the frame end to current cursor
             // NOTE: We do NOT update the group's len field, because gap slots

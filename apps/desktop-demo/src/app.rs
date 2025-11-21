@@ -112,9 +112,7 @@ pub fn combined_app() {
             let tab_state_for_row = active_tab.clone();
             let tab_state_for_content = active_tab.clone();
             Row(
-                Modifier::empty()
-                    .fill_max_width()
-                    .padding(8.0),
+                Modifier::empty().fill_max_width().padding(8.0),
                 RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
                 move || {
                     let tab_state = tab_state_for_row.clone();
@@ -206,9 +204,7 @@ fn recursive_layout_example() {
             });
 
             Row(
-                Modifier::empty()
-                    .fill_max_width()
-                    .padding(8.0),
+                Modifier::empty().fill_max_width().padding(8.0),
                 RowSpec::new()
                     .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
                     .vertical_alignment(VerticalAlignment::CenterVertically),
@@ -635,21 +631,15 @@ fn async_runtime_example() {
                                                         .then(
                                                             Modifier::empty().rounded_corners(13.0),
                                                         )
-                                                        .draw_behind(
-                                                            |scope| {
-                                                                scope.draw_round_rect(
-                                                                    Brush::linear_gradient(vec![
-                                                                        Color(
-                                                                            0.25, 0.55, 0.95, 1.0,
-                                                                        ),
-                                                                        Color(
-                                                                            0.15, 0.35, 0.80, 1.0,
-                                                                        ),
-                                                                    ]),
-                                                                    CornerRadii::uniform(13.0),
-                                                                );
-                                                            },
-                                                        ),
+                                                        .draw_behind(|scope| {
+                                                            scope.draw_round_rect(
+                                                                Brush::linear_gradient(vec![
+                                                                    Color(0.25, 0.55, 0.95, 1.0),
+                                                                    Color(0.15, 0.35, 0.80, 1.0),
+                                                                ]),
+                                                                CornerRadii::uniform(13.0),
+                                                            );
+                                                        }),
                                                     RowSpec::default(),
                                                     || {},
                                                 );
@@ -690,9 +680,7 @@ fn async_runtime_example() {
                 });
 
                 Row(
-                    Modifier::empty()
-                        .fill_max_width()
-                        .padding(4.0),
+                    Modifier::empty().fill_max_width().padding(4.0),
                     RowSpec::new()
                         .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
                         .vertical_alignment(VerticalAlignment::CenterVertically),
@@ -923,9 +911,7 @@ fn counter_app() {
                     });
 
                     Row(
-                        Modifier::empty()
-                            .fill_max_width()
-                            .padding(8.0),
+                        Modifier::empty().fill_max_width().padding(8.0),
                         RowSpec::new()
                             .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
                             .vertical_alignment(VerticalAlignment::CenterVertically),
@@ -1138,9 +1124,7 @@ fn counter_app() {
                             let counter_inc = counter.clone();
                             let counter_dec = counter.clone();
                             Row(
-                                Modifier::empty()
-                                    .fill_max_width()
-                                    .padding(8.0),
+                                Modifier::empty().fill_max_width().padding(8.0),
                                 RowSpec::new()
                                     .horizontal_arrangement(LinearArrangement::SpacedBy(12.0)),
                                 move || {
@@ -1287,9 +1271,7 @@ fn modifier_showcase_tab() {
     let selected_showcase = compose_core::useState(|| ShowcaseType::SimpleCard);
 
     Row(
-        Modifier::empty()
-            .fill_max_width()
-            .padding(8.0),
+        Modifier::empty().fill_max_width().padding(8.0),
         RowSpec::new()
             .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
             .vertical_alignment(VerticalAlignment::Top),
@@ -1377,15 +1359,13 @@ fn modifier_showcase_tab() {
                     let selected_showcase_inner = selected_showcase.clone();
                     move || {
                         let showcase_to_render = selected_showcase_inner.get();
-                        compose_core::with_key(&showcase_to_render, || {
-                            match showcase_to_render {
-                                ShowcaseType::SimpleCard => simple_card_showcase(),
-                                ShowcaseType::PositionedBoxes => positioned_boxes_showcase(),
-                                ShowcaseType::ItemList => item_list_showcase(),
-                                ShowcaseType::ComplexChain => complex_chain_showcase(),
-                                ShowcaseType::DynamicModifiers => dynamic_modifiers_showcase(),
-                                ShowcaseType::LongList => long_list_showcase(),
-                            }
+                        compose_core::with_key(&showcase_to_render, || match showcase_to_render {
+                            ShowcaseType::SimpleCard => simple_card_showcase(),
+                            ShowcaseType::PositionedBoxes => positioned_boxes_showcase(),
+                            ShowcaseType::ItemList => item_list_showcase(),
+                            ShowcaseType::ComplexChain => complex_chain_showcase(),
+                            ShowcaseType::DynamicModifiers => dynamic_modifiers_showcase(),
+                            ShowcaseType::LongList => long_list_showcase(),
                         });
                     }
                 },
@@ -1457,32 +1437,28 @@ pub fn simple_card_showcase() {
                                 });
 
                                 // Action buttons row
-                                Row(
-                                    Modifier::empty(),
-                                    RowSpec::default(),
-                                    || {
-                                        Text(
-                                            "Action 1",
-                                            Modifier::empty()
-                                                .padding(8.0)
-                                                .background(Color(0.2, 0.7, 0.4, 0.7))
-                                                .rounded_corners(6.0),
-                                        );
+                                Row(Modifier::empty(), RowSpec::default(), || {
+                                    Text(
+                                        "Action 1",
+                                        Modifier::empty()
+                                            .padding(8.0)
+                                            .background(Color(0.2, 0.7, 0.4, 0.7))
+                                            .rounded_corners(6.0),
+                                    );
 
-                                        Spacer(Size {
-                                            width: 8.0,
-                                            height: 0.0,
-                                        });
+                                    Spacer(Size {
+                                        width: 8.0,
+                                        height: 0.0,
+                                    });
 
-                                        Text(
-                                            "Action 2",
-                                            Modifier::empty()
-                                                .padding(8.0)
-                                                .background(Color(0.8, 0.3, 0.3, 0.7))
-                                                .rounded_corners(6.0),
-                                        );
-                                    },
-                                );
+                                    Text(
+                                        "Action 2",
+                                        Modifier::empty()
+                                            .padding(8.0)
+                                            .background(Color(0.8, 0.3, 0.3, 0.7))
+                                            .rounded_corners(6.0),
+                                    );
+                                });
                             },
                         );
                     },
@@ -1880,12 +1856,7 @@ pub fn long_list_showcase() {
                                 width: 400.0,
                                 height: 40.0,
                             })
-                            .background(Color(
-                                0.12 + (i as f32 * 0.005),
-                                0.15,
-                                0.25,
-                                0.7,
-                            ))
+                            .background(Color(0.12 + (i as f32 * 0.005), 0.15, 0.25, 0.7))
                             .rounded_corners(8.0),
                         RowSpec::default(),
                         move || {

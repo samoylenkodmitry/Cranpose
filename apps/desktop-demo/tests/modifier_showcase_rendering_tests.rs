@@ -1,6 +1,5 @@
 /// Integration tests that validate modifier showcases render correctly using dump_tree()
 /// These tests verify the actual rendering output, not just structure.
-
 use compose_core::MutableState;
 use compose_macros::composable;
 use compose_testing::ComposeTestRule;
@@ -165,7 +164,10 @@ fn test_simple_card_renders_correctly() {
     println!("=== Simple Card Tree Structure ===\n{}", tree);
 
     // Validate structure exists
-    assert!(tree.contains("dyn compose_core::Node"), "Should contain Node");
+    assert!(
+        tree.contains("dyn compose_core::Node"),
+        "Should contain Node"
+    );
 
     // Count nodes - should have consistent structure
     let root = rule.root_id();
@@ -185,13 +187,20 @@ fn test_positioned_boxes_renders_correctly() {
     println!("=== Positioned Boxes Tree Structure ===\n{}", tree);
 
     // Validate structure
-    assert!(tree.contains("dyn compose_core::Node"), "Should contain Node");
+    assert!(
+        tree.contains("dyn compose_core::Node"),
+        "Should contain Node"
+    );
 
     let initial_count = rule.applier_mut().len();
     println!("Total nodes in positioned boxes: {}", initial_count);
 
     // Should have at least 7 nodes (Column, Text, Spacer, Box A with Text, Box B with Text)
-    assert!(initial_count >= 7, "Should have at least 7 nodes, got {}", initial_count);
+    assert!(
+        initial_count >= 7,
+        "Should have at least 7 nodes, got {}",
+        initial_count
+    );
 }
 
 #[test]
@@ -215,7 +224,8 @@ fn test_dynamic_modifiers_recomposition_preserves_structure() {
 
     // Advance to frame 5
     frame.set(5);
-    rule.pump_until_idle().expect("Should recompose for frame 5");
+    rule.pump_until_idle()
+        .expect("Should recompose for frame 5");
 
     let tree_frame5 = rule.dump_tree();
     let count_frame5 = rule.applier_mut().len();
@@ -229,7 +239,8 @@ fn test_dynamic_modifiers_recomposition_preserves_structure() {
 
     // Advance to frame 10
     frame.set(10);
-    rule.pump_until_idle().expect("Should recompose for frame 10");
+    rule.pump_until_idle()
+        .expect("Should recompose for frame 10");
 
     let count_frame10 = rule.applier_mut().len();
     println!("=== Frame 10 ===\nNodes: {}", count_frame10);
@@ -282,7 +293,11 @@ fn test_item_list_with_spacing() {
     println!("Total nodes: {}", node_count);
 
     // Should have Column + 5 Rows + 5 Texts = at least 11 nodes
-    assert!(node_count >= 11, "Should have at least 11 nodes for 5-item list, got {}", node_count);
+    assert!(
+        node_count >= 11,
+        "Should have at least 11 nodes for 5-item list, got {}",
+        node_count
+    );
 }
 
 #[test]
@@ -373,7 +388,10 @@ fn test_long_list_performance_and_structure() {
     let tree = rule.dump_tree();
     let node_count = rule.applier_mut().len();
     println!("Total nodes: {}", node_count);
-    println!("=== Long List Tree Structure (first 500 chars) ===\n{}", &tree[..tree.len().min(500)]);
+    println!(
+        "=== Long List Tree Structure (first 500 chars) ===\n{}",
+        &tree[..tree.len().min(500)]
+    );
 
     // Performance check: 50 items should render quickly
     assert!(
@@ -404,13 +422,11 @@ fn test_modifier_showcase_recomposition_stability() {
             let showcase_index_inner = showcase_index.clone();
             Column(Modifier::empty(), ColumnSpec::default(), move || {
                 let current_index = showcase_index_inner.get();
-                compose_core::with_key(&current_index, || {
-                    match current_index {
-                        0 => simple_card_showcase(),
-                        1 => positioned_boxes_showcase(),
-                        2 => dynamic_modifiers_showcase(0),
-                        _ => simple_card_showcase(),
-                    }
+                compose_core::with_key(&current_index, || match current_index {
+                    0 => simple_card_showcase(),
+                    1 => positioned_boxes_showcase(),
+                    2 => dynamic_modifiers_showcase(0),
+                    _ => simple_card_showcase(),
                 });
             });
         }
@@ -422,19 +438,22 @@ fn test_modifier_showcase_recomposition_stability() {
 
     // Switch to positioned boxes
     showcase_index.set(1);
-    rule.pump_until_idle().expect("Should switch to positioned boxes");
+    rule.pump_until_idle()
+        .expect("Should switch to positioned boxes");
     let count1 = rule.applier_mut().len();
     println!("Showcase 1 (positioned boxes): {} nodes", count1);
 
     // Switch to dynamic modifiers
     showcase_index.set(2);
-    rule.pump_until_idle().expect("Should switch to dynamic modifiers");
+    rule.pump_until_idle()
+        .expect("Should switch to dynamic modifiers");
     let count2 = rule.applier_mut().len();
     println!("Showcase 2 (dynamic modifiers): {} nodes", count2);
 
     // Switch back to simple card
     showcase_index.set(0);
-    rule.pump_until_idle().expect("Should switch back to simple card");
+    rule.pump_until_idle()
+        .expect("Should switch back to simple card");
     let count0_again = rule.applier_mut().len();
     println!("Showcase 0 again: {} nodes", count0_again);
 
@@ -464,8 +483,7 @@ fn test_modifier_showcase_recomposition_stability() {
         assert_eq!(
             current_count, expected,
             "Rapid switch {} to showcase {} should have consistent count",
-            i,
-            idx
+            i, idx
         );
     }
 }
