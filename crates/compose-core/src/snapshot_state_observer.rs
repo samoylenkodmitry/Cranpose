@@ -378,6 +378,23 @@ impl SnapshotStateObserverInner {
         }
         drop(scopes);
 
+        {
+            let fast_scopes = self.fast_scopes.borrow();
+            for entry in fast_scopes.iter().flatten() {
+                let entry_ref = entry.borrow();
+                if entry_ref
+                    .observed
+                    .iter()
+                    .any(|id| modified_ids.contains(id))
+                {
+                    let ptr = Rc::as_ptr(entry) as usize;
+                    if seen.insert(ptr) {
+                        to_notify.push(entry.clone());
+                    }
+                }
+            }
+        }
+
         if to_notify.is_empty() {
             return;
         }
