@@ -12,6 +12,9 @@ use compose_ui::{
 use std::cell::RefCell;
 
 mod mineswapper2;
+mod web_fetch;
+
+use web_fetch::web_fetch_example;
 
 thread_local! {
     pub static TEST_COMPOSITION_LOCAL_COUNTER: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
@@ -23,6 +26,7 @@ pub enum DemoTab {
     Counter,
     CompositionLocal,
     Async,
+    WebFetch,
     Layout,
     ModifierShowcase,
     Mineswapper2,
@@ -34,6 +38,7 @@ impl DemoTab {
             DemoTab::Counter => "Counter App",
             DemoTab::CompositionLocal => "CompositionLocal Test",
             DemoTab::Async => "Async Runtime",
+            DemoTab::WebFetch => "Web Fetch",
             DemoTab::Layout => "Recursive Layout",
             DemoTab::ModifierShowcase => "Modifiers Showcase",
             DemoTab::Mineswapper2 => "Mineswapper2",
@@ -156,6 +161,7 @@ pub fn combined_app() {
                     render_tab_button(DemoTab::Counter);
                     render_tab_button(DemoTab::CompositionLocal);
                     render_tab_button(DemoTab::Async);
+                    render_tab_button(DemoTab::WebFetch);
                     render_tab_button(DemoTab::Layout);
                     render_tab_button(DemoTab::ModifierShowcase);
                     render_tab_button(DemoTab::Mineswapper2);
@@ -172,6 +178,7 @@ pub fn combined_app() {
                 DemoTab::Counter => counter_app(),
                 DemoTab::CompositionLocal => composition_local_example(),
                 DemoTab::Async => async_runtime_example(),
+                DemoTab::WebFetch => web_fetch_example(),
                 DemoTab::Layout => recursive_layout_example(),
                 DemoTab::ModifierShowcase => modifier_showcase_tab(),
                 DemoTab::Mineswapper2 => mineswapper2::mineswapper2_tab(),
