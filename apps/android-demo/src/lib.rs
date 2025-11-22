@@ -154,7 +154,10 @@ pub extern "C" fn android_main(app: ndk::native_activity::NativeActivity) {
     log::info!("Starting Compose-RS Android Demo");
 
     // Set the Android context for ndk-context
-    ndk_context::initialize_android_context(app.vm().cast(), app.activity().cast());
+    // SAFETY: This is called once at app startup with valid JNI pointers from NativeActivity
+    unsafe {
+        ndk_context::initialize_android_context(app.vm().cast(), app.activity().cast());
+    }
 
     // For now, just log that we started and keep the app running
     // Full Android integration with wgpu surface will be implemented later
