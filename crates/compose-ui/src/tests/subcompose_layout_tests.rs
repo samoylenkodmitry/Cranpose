@@ -99,7 +99,7 @@ fn measure_subcomposes_content() {
         assert_eq!(constraints, Constraints::tight(0.0, 0.0));
         let measurables = scope.subcompose(SlotId::new(1), || {
             compose_core::with_current_composer(|composer| {
-                composer.emit_node(|| DummyNode::default());
+                composer.emit_node(|| DummyNode);
             });
         });
         for measurable in measurables {
@@ -140,7 +140,7 @@ fn subcompose_reuses_nodes_across_measures() {
     let policy: Rc<MeasurePolicy> = Rc::new(move |scope, _constraints| {
         let measurables = scope.subcompose(SlotId::new(99), || {
             compose_core::with_current_composer(|composer| {
-                composer.emit_node(|| DummyNode::default());
+                composer.emit_node(|| DummyNode);
             });
         });
         for measurable in measurables {
@@ -206,12 +206,12 @@ fn inactive_slots_move_to_reusable_pool() {
     let mut slots = SlotBackend::default();
     let mut applier = compose_core::MemoryApplier::new();
     let toggle = MutableState::with_runtime(true, handle.clone());
-    let toggle_capture = toggle.clone();
+    let toggle_capture = toggle;
     let policy: Rc<MeasurePolicy> = Rc::new(move |scope, _constraints| {
         if toggle_capture.value() {
             scope.subcompose(SlotId::new(1), || {
                 compose_core::with_current_composer(|composer| {
-                    composer.emit_node(|| DummyNode::default());
+                    composer.emit_node(|| DummyNode);
                 });
             });
         }

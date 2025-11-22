@@ -284,13 +284,9 @@ pub fn mineswapper2_tab() {
                                     .horizontal_arrangement(LinearArrangement::SpacedBy(8.0))
                                     .vertical_alignment(VerticalAlignment::CenterVertically),
                                 {
-                                    let game_state = game_state;
-                                    let preset_state = preset_state;
                                     move || {
                                         for preset in GRID_PRESETS {
                                             let is_active = preset_state.get() == preset;
-                                            let game_state = game_state;
-                                            let preset_state = preset_state;
                                             Button(
                                                 Modifier::empty()
                                                     .rounded_corners(12.0)
@@ -337,8 +333,6 @@ pub fn mineswapper2_tab() {
                                     })
                                     .padding(10.0),
                                 {
-                                    let game_state = game_state;
-                                    let preset_state = preset_state;
                                     move || {
                                         let preset = preset_state.get();
                                         game_state.set(MineswapperGame::new_from_preset(

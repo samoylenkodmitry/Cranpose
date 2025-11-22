@@ -58,7 +58,6 @@ fn test_child_recomposition_preserves_parent() {
         let text_state = MutableState::with_runtime("Hello".to_string(), runtime.clone());
 
         rule.set_content({
-            let text_state = text_state.clone();
             move || {
                 Column(|| {
                     let value = text_state.value();
@@ -89,7 +88,6 @@ fn test_conditional_composable_preserves_siblings() {
         let show_middle = MutableState::with_runtime(true, runtime.clone());
 
         rule.set_content({
-            let show_middle = show_middle.clone();
             move || {
                 Column(|| {
                     Text("A".to_string());

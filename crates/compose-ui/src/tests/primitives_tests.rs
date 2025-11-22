@@ -17,8 +17,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 thread_local! {
-    static COUNTER_ROW_INVOCATIONS: Cell<usize> = Cell::new(0);
-    static COUNTER_TEXT_ID: RefCell<Option<NodeId>> = RefCell::new(None);
+    static COUNTER_ROW_INVOCATIONS: Cell<usize> = const { Cell::new(0) };
+    static COUNTER_TEXT_ID: RefCell<Option<NodeId>> = const { RefCell::new(None) };
 }
 
 fn prepare_measure_composer(
@@ -145,7 +145,7 @@ fn CounterRow(label: &'static str, count: State<i32>) -> NodeId {
     COUNTER_ROW_INVOCATIONS.with(|calls| calls.set(calls.get() + 1));
     Column(Modifier::empty(), ColumnSpec::default(), move || {
         Text(label, Modifier::empty());
-        let count_for_text = count.clone();
+        let count_for_text = count;
         let text_id = Text(
             DynamicTextSource::new(move || format!("Count = {}", count_for_text.value())),
             Modifier::empty(),
@@ -386,7 +386,7 @@ fn test_fill_max_width_respects_parent_bounds() {
 
     let root_layout = layout_tree.root();
 
-    fn find_layout<'a>(node: &'a LayoutBox, target: NodeId) -> Option<&'a LayoutBox> {
+    fn find_layout(node: &LayoutBox, target: NodeId) -> Option<&LayoutBox> {
         if node.node_id == target {
             return Some(node);
         }
@@ -402,8 +402,8 @@ fn test_fill_max_width_respects_parent_bounds() {
         .expect("column node id");
     let row_node_id = row_id.borrow().as_ref().copied().expect("row node id");
 
-    let column_layout = find_layout(&root_layout, column_node_id).expect("column layout");
-    let row_layout = find_layout(&root_layout, row_node_id).expect("row layout");
+    let column_layout = find_layout(root_layout, column_node_id).expect("column layout");
+    let row_layout = find_layout(root_layout, row_node_id).expect("row layout");
 
     // Debug output
     println!("\n=== Layout Debug ===");
@@ -535,7 +535,7 @@ fn test_fill_max_width_with_background_and_double_padding() {
 
     let root_layout = layout_tree.root();
 
-    fn find_layout<'a>(node: &'a LayoutBox, target: NodeId) -> Option<&'a LayoutBox> {
+    fn find_layout(node: &LayoutBox, target: NodeId) -> Option<&LayoutBox> {
         if node.node_id == target {
             return Some(node);
         }
@@ -556,9 +556,9 @@ fn test_fill_max_width_with_background_and_double_padding() {
         .expect("inner column");
     let row_node = row_id.borrow().as_ref().copied().expect("row");
 
-    let outer_layout = find_layout(&root_layout, outer_column_node).expect("outer column layout");
-    let inner_layout = find_layout(&root_layout, inner_column_node).expect("inner column layout");
-    let row_layout = find_layout(&root_layout, row_node).expect("row layout");
+    let outer_layout = find_layout(root_layout, outer_column_node).expect("outer column layout");
+    let inner_layout = find_layout(root_layout, inner_column_node).expect("inner column layout");
+    let row_layout = find_layout(root_layout, row_node).expect("row layout");
 
     println!("\n=== Counter App Structure Test ===");
     println!("Window: 800px");
@@ -683,7 +683,7 @@ fn test_fill_max_width_should_not_propagate_to_wrapping_parent() {
 
     let root_layout = layout_tree.root();
 
-    fn find_layout<'a>(node: &'a LayoutBox, target: NodeId) -> Option<&'a LayoutBox> {
+    fn find_layout(node: &LayoutBox, target: NodeId) -> Option<&LayoutBox> {
         if node.node_id == target {
             return Some(node);
         }
@@ -696,9 +696,9 @@ fn test_fill_max_width_should_not_propagate_to_wrapping_parent() {
     let inner_node = inner_column_id.borrow().as_ref().copied().expect("inner");
     let row_node = row_id.borrow().as_ref().copied().expect("row");
 
-    let outer_layout = find_layout(&root_layout, outer_node).expect("outer layout");
-    let inner_layout = find_layout(&root_layout, inner_node).expect("inner layout");
-    let row_layout = find_layout(&root_layout, row_node).expect("row layout");
+    let outer_layout = find_layout(root_layout, outer_node).expect("outer layout");
+    let inner_layout = find_layout(root_layout, inner_node).expect("inner layout");
+    let row_layout = find_layout(root_layout, row_node).expect("row layout");
 
     println!("\n=== Fill Propagation Test ===");
     println!("Window: 800px");
@@ -801,7 +801,7 @@ fn wrap_column_with_fill_child_uses_content_width() {
         )
         .expect("compute layout");
 
-    fn find_layout<'a>(node: &'a LayoutBox, target: NodeId) -> Option<&'a LayoutBox> {
+    fn find_layout(node: &LayoutBox, target: NodeId) -> Option<&LayoutBox> {
         if node.node_id == target {
             return Some(node);
         }
@@ -923,7 +923,7 @@ fn fill_child_respects_explicit_parent_width() {
         )
         .expect("compute layout");
 
-    fn find_layout<'a>(node: &'a LayoutBox, target: NodeId) -> Option<&'a LayoutBox> {
+    fn find_layout(node: &LayoutBox, target: NodeId) -> Option<&LayoutBox> {
         if node.node_id == target {
             return Some(node);
         }
@@ -1017,7 +1017,7 @@ fn fill_max_height_child_clamps_to_parent() {
         )
         .expect("compute layout");
 
-    fn find_layout<'a>(node: &'a LayoutBox, target: NodeId) -> Option<&'a LayoutBox> {
+    fn find_layout(node: &LayoutBox, target: NodeId) -> Option<&LayoutBox> {
         if node.node_id == target {
             return Some(node);
         }

@@ -578,10 +578,17 @@ pub struct TestRuntime {
 }
 
 #[cfg(test)]
+impl Default for TestRuntime {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
 impl TestRuntime {
     pub fn new() -> Self {
         Self {
-            runtime: Runtime::new(Arc::new(TestScheduler::default())),
+            runtime: Runtime::new(Arc::new(TestScheduler)),
         }
     }
 

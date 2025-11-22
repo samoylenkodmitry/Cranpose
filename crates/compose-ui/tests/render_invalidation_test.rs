@@ -33,9 +33,9 @@ fn test_render_invalidation_on_conditional_change() {
 
     eprintln!("=== Initial composition ===");
     rule.set_content({
-        let c = counter.clone();
+        let c = counter;
         move || {
-            conditional_text_app(c.clone());
+            conditional_text_app(c);
         }
     })
     .expect("initial render succeeds");

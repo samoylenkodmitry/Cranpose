@@ -28,7 +28,7 @@ fn test_conditional_text_reactivity() {
     use std::cell::RefCell;
 
     thread_local! {
-        static TEST_COUNTER: RefCell<Option<MutableState<i32>>> = RefCell::new(None);
+        static TEST_COUNTER: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
     }
 
     // Helper function to drain recompositions

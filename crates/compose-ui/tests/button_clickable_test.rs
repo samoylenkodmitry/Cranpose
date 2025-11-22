@@ -22,7 +22,7 @@ fn simple_button_app(clicked_count: MutableState<i32>) {
             Button(
                 Modifier::empty().padding(10.0),
                 {
-                    let count = clicked_count.clone();
+                    let count = clicked_count;
                     move || {
                         count.set(count.get() + 1);
                     }
@@ -48,9 +48,9 @@ fn test_button_creates_valid_composition() {
 
     // Set content with a button
     rule.set_content({
-        let count = clicked_count.clone();
+        let count = clicked_count;
         move || {
-            simple_button_app(count.clone());
+            simple_button_app(count);
         }
     })
     .expect("initial render succeeds");
@@ -97,7 +97,7 @@ fn multi_button_app(button1_clicks: MutableState<i32>, button2_clicks: MutableSt
             Button(
                 Modifier::empty().padding(10.0),
                 {
-                    let clicks = button1_clicks.clone();
+                    let clicks = button1_clicks;
                     move || {
                         clicks.set(clicks.get() + 1);
                     }
@@ -115,7 +115,7 @@ fn multi_button_app(button1_clicks: MutableState<i32>, button2_clicks: MutableSt
             Button(
                 Modifier::empty().padding(10.0),
                 {
-                    let clicks = button2_clicks.clone();
+                    let clicks = button2_clicks;
                     move || {
                         clicks.set(clicks.get() + 10);
                     }
@@ -139,10 +139,10 @@ fn test_multiple_buttons_in_composition() {
     let button2_clicks = MutableState::with_runtime(0, runtime.clone());
 
     rule.set_content({
-        let clicks1 = button1_clicks.clone();
-        let clicks2 = button2_clicks.clone();
+        let clicks1 = button1_clicks;
+        let clicks2 = button2_clicks;
         move || {
-            multi_button_app(clicks1.clone(), clicks2.clone());
+            multi_button_app(clicks1, clicks2);
         }
     })
     .expect("initial render succeeds");

@@ -56,14 +56,14 @@ fn tabbed_progress_content() {
     let progress = useState(|| 0.6f32);
     let active_tab = useState(|| 0i32);
 
-    let progress_effect = progress.clone();
-    let active_effect = active_tab.clone();
+    let progress_effect = progress;
+    let active_effect = active_tab;
     launched_effect_async_impl(
         location_key(file!(), line!(), column!()),
         (),
         move |scope| {
-            let progress = progress_effect.clone();
-            let active_tab = active_effect.clone();
+            let progress = progress_effect;
+            let active_tab = active_effect;
             Box::pin(async move {
                 let clock = scope.runtime().frame_clock();
                 let mut phase: u32 = 0;
@@ -98,8 +98,8 @@ fn tabbed_progress_content() {
                 format!("Progress {:.2}", progress.value()),
                 Modifier::empty().padding(2.0),
             );
-            let progress_for_branch = progress.clone();
-            let active_for_branch = active_tab.clone();
+            let progress_for_branch = progress;
+            let active_for_branch = active_tab;
             Row(
                 Modifier::empty()
                     .padding(2.0)
@@ -107,7 +107,7 @@ fn tabbed_progress_content() {
                 RowSpec::default(),
                 move || {
                     if active_for_branch.value() == 0 && progress_for_branch.value() > 0.0 {
-                        let progress_for_bar = progress_for_branch.clone();
+                        let progress_for_bar = progress_for_branch;
                         Row(
                             Modifier::empty()
                                 .width(160.0 * progress_for_bar.value())

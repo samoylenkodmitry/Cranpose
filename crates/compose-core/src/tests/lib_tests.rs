@@ -23,32 +23,32 @@ struct TestDummyNode;
 impl Node for TestDummyNode {}
 
 fn runtime_handle() -> (RuntimeHandle, Runtime) {
-    let runtime = Runtime::new(Arc::new(TestScheduler::default()));
+    let runtime = Runtime::new(Arc::new(TestScheduler));
     (runtime.handle(), runtime)
 }
 
 thread_local! {
-    static INVOCATIONS: Cell<usize> = Cell::new(0);
+    static INVOCATIONS: Cell<usize> = const { Cell::new(0) };
 }
 
 thread_local! {
-    static PARENT_RECOMPOSITIONS: Cell<usize> = Cell::new(0);
-    static CHILD_RECOMPOSITIONS: Cell<usize> = Cell::new(0);
+    static PARENT_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
+    static CHILD_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
     static CAPTURED_PARENT_STATE: RefCell<Option<compose_core::MutableState<i32>>> =
-        RefCell::new(None);
-    static SIDE_EFFECT_LOG: RefCell<Vec<&'static str>> = RefCell::new(Vec::new()); // FUTURE(no_std): replace Vec with ring buffer for testing.
-    static DISPOSABLE_EFFECT_LOG: RefCell<Vec<&'static str>> = RefCell::new(Vec::new()); // FUTURE(no_std): replace Vec with ring buffer for testing.
+        const { RefCell::new(None) };
+    static SIDE_EFFECT_LOG: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) }; // FUTURE(no_std): replace Vec with ring buffer for testing.
+    static DISPOSABLE_EFFECT_LOG: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) }; // FUTURE(no_std): replace Vec with ring buffer for testing.
     static DISPOSABLE_STATE: RefCell<Option<compose_core::MutableState<i32>>> =
-        RefCell::new(None);
+        const { RefCell::new(None) };
     static SIDE_EFFECT_STATE: RefCell<Option<compose_core::MutableState<i32>>> =
-        RefCell::new(None);
+        const { RefCell::new(None) };
 }
 
 thread_local! {
     static DROP_REENTRY_STATE: RefCell<Option<compose_core::MutableState<ReentrantDropState>>> =
-        RefCell::new(None);
-    static DROP_REENTRY_ACTIVE: Cell<bool> = Cell::new(false);
-    static DROP_REENTRY_LAST_VALUE: Cell<Option<usize>> = Cell::new(None);
+        const { RefCell::new(None) };
+    static DROP_REENTRY_ACTIVE: Cell<bool> = const { Cell::new(false) };
+    static DROP_REENTRY_LAST_VALUE: Cell<Option<usize>> = const { Cell::new(None) };
 }
 
 struct ReentrantDropState {
@@ -172,7 +172,7 @@ fn subcompose_reuses_nodes_across_calls() {
             setup_composer(&mut slots, &mut applier, handle.clone(), None);
         composer.set_phase(Phase::Measure);
         let (_, first_nodes) = composer.subcompose(&mut state, SlotId::new(7), |composer| {
-            composer.emit_node(|| TestDummyNode::default())
+            composer.emit_node(|| TestDummyNode)
         });
         assert_eq!(first_nodes.len(), 1);
         first_id = first_nodes[0];
@@ -187,7 +187,7 @@ fn subcompose_reuses_nodes_across_calls() {
             setup_composer(&mut slots, &mut applier, handle.clone(), None);
         composer.set_phase(Phase::Measure);
         let (_, second_nodes) = composer.subcompose(&mut state, SlotId::new(7), |composer| {
-            composer.emit_node(|| TestDummyNode::default())
+            composer.emit_node(|| TestDummyNode)
         });
         assert_eq!(second_nodes.len(), 1);
         assert_eq!(second_nodes[0], first_id);
@@ -339,7 +339,7 @@ fn mutable_state_snapshot_handles_reentrant_drop_reads() {
     );
 
     DROP_REENTRY_STATE.with(|slot| {
-        *slot.borrow_mut() = Some(state.clone());
+        *slot.borrow_mut() = Some(state);
     });
     DROP_REENTRY_LAST_VALUE.with(|last| last.set(None));
 
@@ -372,7 +372,7 @@ fn launched_effect_runs_and_cancels() {
     let render = |composition: &mut Composition<MemoryApplier>, key_state: &MutableState<i32>| {
         let runs = Arc::clone(&runs);
         let scopes_for_render = Rc::clone(&captured_scopes);
-        let state = key_state.clone();
+        let state = *key_state;
         composition
             .render(0, move || {
                 let key = state.value();
@@ -457,11 +457,9 @@ fn launched_effect_background_updates_ui() {
     let receiver = Rc::new(RefCell::new(Some(rx)));
 
     {
-        let state = state.clone();
         let receiver = Rc::clone(&receiver);
         composition
             .render(0, move || {
-                let state = state.clone();
                 let receiver = Rc::clone(&receiver);
                 LaunchedEffect!((), move |scope| {
                     if let Some(rx) = receiver.borrow_mut().take() {
@@ -498,13 +496,10 @@ fn launched_effect_background_ignores_late_result_after_cancel() {
     let receiver = Rc::new(RefCell::new(Some(rx)));
 
     {
-        let key_state = key_state.clone();
-        let result_state = result_state.clone();
         let receiver = Rc::clone(&receiver);
         composition
             .render(0, move || {
                 let key = key_state.value();
-                let result_state = result_state.clone();
                 let receiver = Rc::clone(&receiver);
                 LaunchedEffect!(key, move |scope| {
                     if key == 0 {
@@ -523,13 +518,10 @@ fn launched_effect_background_ignores_late_result_after_cancel() {
     key_state.set_value(1);
 
     {
-        let key_state = key_state.clone();
-        let result_state = result_state.clone();
         let receiver = Rc::clone(&receiver);
         composition
             .render(0, move || {
                 let key = key_state.value();
-                let result_state = result_state.clone();
                 let receiver = Rc::clone(&receiver);
                 LaunchedEffect!(key, move |scope| {
                     if key == 0 {
@@ -638,14 +630,13 @@ fn anchor_survives_conditional_removal() {
     let captured_scope: Rc<RefCell<Option<LaunchedEffectScope>>> = Rc::new(RefCell::new(None));
 
     let render = |composition: &mut Composition<MemoryApplier>| {
-        let toggle = toggle.clone();
         let runs = Arc::clone(&runs);
         let captured_scope = Rc::clone(&captured_scope);
         composition
             .render(0, move || {
                 if toggle.value() {
                     compose_core::with_current_composer(|composer| {
-                        composer.emit_node(|| TestDummyNode::default());
+                        composer.emit_node(|| TestDummyNode);
                     });
                 }
 
@@ -731,13 +722,12 @@ fn launched_effect_async_survives_conditional_cycle() {
     let spawns = Arc::new(AtomicUsize::new(0));
 
     let mut render = {
-        let gate = gate.clone();
         let log = log.clone();
         let spawns = Arc::clone(&spawns);
         move || {
             if gate.value() {
                 compose_core::with_current_composer(|composer| {
-                    composer.emit_node(|| TestDummyNode::default());
+                    composer.emit_node(|| TestDummyNode);
                 });
             }
 
@@ -872,66 +862,55 @@ fn launched_effect_async_keeps_frames_after_backward_forward_flip() {
     let animation = MutableState::with_runtime(TestAnimation::default(), runtime.clone());
     let stats = MutableState::with_runtime(TestFrameStats::default(), runtime.clone());
 
-    let mut render = {
-        let animation = animation.clone();
-        let stats = stats.clone();
-        move || {
-            {
-                let animation_state = animation.clone();
-                let stats_state = stats.clone();
-                compose_core::LaunchedEffectAsync!((), move |scope| {
-                    let animation = animation_state.clone();
-                    let stats = stats_state.clone();
-                    Box::pin(async move {
-                        let clock = scope.runtime().frame_clock();
-                        let mut last_time: Option<u64> = None;
-                        while scope.is_active() {
-                            let nanos = clock.next_frame().await;
-                            if !scope.is_active() {
-                                break;
-                            }
+    let mut render = move || {
+        compose_core::LaunchedEffectAsync!((), move |scope| {
+            Box::pin(async move {
+                let clock = scope.runtime().frame_clock();
+                let mut last_time: Option<u64> = None;
+                while scope.is_active() {
+                    let nanos = clock.next_frame().await;
+                    if !scope.is_active() {
+                        break;
+                    }
 
-                            if let Some(previous) = last_time {
-                                let mut delta = nanos.saturating_sub(previous);
-                                if delta == 0 {
-                                    delta = 16_666_667;
-                                }
-                                let dt_ms = delta as f32 / 1_000_000.0;
-                                stats.update(|state| {
-                                    state.frames = state.frames.wrapping_add(1);
-                                    state.last_frame_ms = dt_ms;
-                                });
-                                animation.update(|anim| {
-                                    let next =
-                                        anim.progress + 0.1 * anim.direction * (dt_ms / 600.0);
-                                    if next >= 1.0 {
-                                        anim.progress = 1.0;
-                                        anim.direction = -1.0;
-                                    } else if next <= 0.0 {
-                                        anim.progress = 0.0;
-                                        anim.direction = 1.0;
-                                    } else {
-                                        anim.progress = next;
-                                    }
-                                });
-                            }
-
-                            last_time = Some(nanos);
+                    if let Some(previous) = last_time {
+                        let mut delta = nanos.saturating_sub(previous);
+                        if delta == 0 {
+                            delta = 16_666_667;
                         }
-                    })
-                });
-            }
+                        let dt_ms = delta as f32 / 1_000_000.0;
+                        stats.update(|state| {
+                            state.frames = state.frames.wrapping_add(1);
+                            state.last_frame_ms = dt_ms;
+                        });
+                        animation.update(|anim| {
+                            let next = anim.progress + 0.1 * anim.direction * (dt_ms / 600.0);
+                            if next >= 1.0 {
+                                anim.progress = 1.0;
+                                anim.direction = -1.0;
+                            } else if next <= 0.0 {
+                                anim.progress = 0.0;
+                                anim.direction = 1.0;
+                            } else {
+                                anim.progress = next;
+                            }
+                        });
+                    }
 
-            let snapshot = animation.value();
-            if snapshot.progress > 0.0 {
-                compose_core::with_current_composer(|composer| {
-                    composer.emit_node(|| TestDummyNode::default());
-                });
-            }
+                    last_time = Some(nanos);
+                }
+            })
+        });
 
-            // Touch stats to subscribe the current scope.
-            let _stats = stats.value();
+        let snapshot = animation.value();
+        if snapshot.progress > 0.0 {
+            compose_core::with_current_composer(|composer| {
+                composer.emit_node(|| TestDummyNode);
+            });
         }
+
+        // Touch stats to subscribe the current scope.
+        let _stats = stats.value();
     };
 
     let key = location_key(file!(), line!(), column!());
@@ -1020,7 +999,7 @@ fn stats_scope_survives_conditional_gap() {
                 let progress_for_slot = progress;
                 composer.with_group(location_key(file!(), line!(), column!()), |composer| {
                     if progress_for_slot > 0.0 {
-                        let id = composer.emit_node(|| TestDummyNode::default());
+                        let id = composer.emit_node(|| TestDummyNode);
                         log.borrow_mut()
                             .push(format!("dummy {}", progress_for_slot));
                         composer
@@ -1030,7 +1009,7 @@ fn stats_scope_survives_conditional_gap() {
                 });
 
                 composer.with_group(location_key(file!(), line!(), column!()), |composer| {
-                    let id = composer.emit_node(|| TestTextNode::default());
+                    let id = composer.emit_node(TestTextNode::default);
                     log.borrow_mut()
                         .push(format!("frames {}", stats_snapshot.frames));
                     composer
@@ -1044,10 +1023,8 @@ fn stats_scope_survives_conditional_gap() {
     }
 
     let mut render = {
-        let animation = animation.clone();
-        let stats = stats.clone();
         let log = Rc::clone(&log);
-        move || runtime_demo(animation.clone(), stats.clone(), Rc::clone(&log))
+        move || runtime_demo(animation, stats, Rc::clone(&log))
     };
 
     let key = location_key(file!(), line!(), column!());
@@ -1139,7 +1116,7 @@ fn slot_table_remember_replaces_mismatched_type() {
 #[composable]
 fn counted_text(value: i32) -> NodeId {
     INVOCATIONS.with(|calls| calls.set(calls.get() + 1));
-    let id = compose_test_node(|| TestTextNode::default());
+    let id = compose_test_node(TestTextNode::default);
     with_node_mut(id, |node: &mut TestTextNode| {
         node.text = format!("{}", value);
     })
@@ -1159,7 +1136,7 @@ fn parent_passes_state() -> NodeId {
     let state = compose_core::useState(|| 0);
     CAPTURED_PARENT_STATE.with(|slot| {
         if slot.borrow().is_none() {
-            *slot.borrow_mut() = Some(state.clone());
+            *slot.borrow_mut() = Some(state);
         }
     });
     child_reads_state(state.as_state())
@@ -1172,31 +1149,31 @@ fn side_effect_component() -> NodeId {
     let _ = state.value();
     SIDE_EFFECT_STATE.with(|slot| {
         if slot.borrow().is_none() {
-            *slot.borrow_mut() = Some(state.clone());
+            *slot.borrow_mut() = Some(state);
         }
     });
     compose_core::SideEffect(|| {
         SIDE_EFFECT_LOG.with(|log| log.borrow_mut().push("effect"));
     });
-    compose_test_node(|| TestTextNode::default())
+    compose_test_node(TestTextNode::default)
 }
 
 #[composable]
 fn disposable_effect_host() -> NodeId {
     let state = compose_core::useState(|| 0);
-    DISPOSABLE_STATE.with(|slot| *slot.borrow_mut() = Some(state.clone()));
+    DISPOSABLE_STATE.with(|slot| *slot.borrow_mut() = Some(state));
     DisposableEffect!(state.value(), |scope| {
         DISPOSABLE_EFFECT_LOG.with(|log| log.borrow_mut().push("start"));
         scope.on_dispose(|| {
             DISPOSABLE_EFFECT_LOG.with(|log| log.borrow_mut().push("dispose"));
         })
     });
-    compose_test_node(|| TestTextNode::default())
+    compose_test_node(TestTextNode::default)
 }
 
 #[test]
 fn frame_callbacks_fire_in_registration_order() {
-    let runtime = Runtime::new(Arc::new(TestScheduler::default()));
+    let runtime = Runtime::new(Arc::new(TestScheduler));
     let handle = runtime.handle();
     let clock = runtime.frame_clock();
     let events: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
@@ -1224,13 +1201,12 @@ fn frame_callbacks_fire_in_registration_order() {
 
 #[test]
 fn next_frame_future_resolves_after_callback() {
-    let runtime = Runtime::new(Arc::new(TestScheduler::default()));
+    let runtime = Runtime::new(Arc::new(TestScheduler));
     let handle = runtime.handle();
     let clock = runtime.frame_clock();
     let state = MutableState::with_runtime(0u64, handle.clone());
 
     {
-        let state = state.clone();
         let clock = clock.clone();
         handle
             .spawn_ui(async move {
@@ -1256,7 +1232,7 @@ fn next_frame_future_resolves_after_callback() {
 
 #[test]
 fn cancelling_frame_callback_prevents_execution() {
-    let runtime = Runtime::new(Arc::new(TestScheduler::default()));
+    let runtime = Runtime::new(Arc::new(TestScheduler));
     let handle = runtime.handle();
     let clock = runtime.frame_clock();
     let events: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
@@ -1283,7 +1259,6 @@ fn launched_effect_async_restarts_on_key_change() {
     let log: Rc<RefCell<Vec<i32>>> = Rc::new(RefCell::new(Vec::new()));
 
     let mut render = {
-        let key_state = key_state.clone();
         let log = log.clone();
         move || {
             let key = key_state.value();
@@ -1345,7 +1320,7 @@ fn launched_effect_async_restarts_on_key_change() {
 
 #[test]
 fn draining_callbacks_clears_needs_frame() {
-    let runtime = Runtime::new(Arc::new(TestScheduler::default()));
+    let runtime = Runtime::new(Arc::new(TestScheduler));
     let handle = runtime.handle();
     let clock = runtime.frame_clock();
 
@@ -1368,7 +1343,7 @@ fn frame_callback_node(events: Rc<RefCell<Vec<&'static str>>>) -> NodeId {
         scope.on_dispose(move || drop(registration));
         DisposableEffectResult::default()
     });
-    compose_test_node(|| TestTextNode::default())
+    compose_test_node(TestTextNode::default)
 }
 
 #[test]
@@ -1379,7 +1354,6 @@ fn disposing_scope_cancels_pending_frame_callback() {
     let active = compose_core::MutableState::with_runtime(true, runtime_handle.clone());
     let mut render = {
         let events = events.clone();
-        let active = active.clone();
         move || {
             if active.value() {
                 frame_callback_node(events.clone());
@@ -1411,7 +1385,7 @@ fn remember_state_roundtrip() {
                 with_current_composer(|composer| {
                     composer.with_group(location_key(file!(), line!(), column!()), |composer| {
                         let count = composer.use_state(|| 0);
-                        let node_id = composer.emit_node(|| TestTextNode::default());
+                        let node_id = composer.emit_node(TestTextNode::default);
                         composer
                             .with_node_mut(node_id, |node: &mut TestTextNode| {
                                 node.text = format!("{}", count.get());
@@ -1447,8 +1421,8 @@ fn state_update_schedules_render() {
 #[test]
 fn recompose_does_not_use_stale_indices_when_prior_scope_changes_length() {
     thread_local! {
-        static STABLE_RECOMPOSE_A: Cell<usize> = Cell::new(0);
-        static STABLE_RECOMPOSE_B: Cell<usize> = Cell::new(0);
+        static STABLE_RECOMPOSE_A: Cell<usize> = const { Cell::new(0) };
+        static STABLE_RECOMPOSE_B: Cell<usize> = const { Cell::new(0) };
     }
 
     #[composable]
@@ -1478,8 +1452,8 @@ fn recompose_does_not_use_stale_indices_when_prior_scope_changes_length() {
         toggle_a: MutableState<bool>,
     ) {
         compose_core::with_key(&"root", || {
-            compose_core::with_key(&"A", || logging_group_a(state_a.clone(), toggle_a.clone()));
-            compose_core::with_key(&"B", || logging_group_b(state_b.clone()));
+            compose_core::with_key(&"A", || logging_group_a(state_a, toggle_a));
+            compose_core::with_key(&"B", || logging_group_b(state_b));
         });
     }
 
@@ -1489,12 +1463,7 @@ fn recompose_does_not_use_stale_indices_when_prior_scope_changes_length() {
     let state_b = MutableState::with_runtime(0i32, runtime.clone());
     let toggle_a = MutableState::with_runtime(false, runtime.clone());
 
-    let mut render = {
-        let state_a = state_a.clone();
-        let state_b = state_b.clone();
-        let toggle_a = toggle_a.clone();
-        move || logging_root(state_a.clone(), state_b.clone(), toggle_a.clone())
-    };
+    let mut render = { move || logging_root(state_a, state_b, toggle_a) };
 
     composition
         .render(location_key(file!(), line!(), column!()), &mut render)
@@ -1522,7 +1491,7 @@ fn recompose_does_not_use_stale_indices_when_prior_scope_changes_length() {
 #[test]
 fn recompose_handles_removed_scopes_gracefully() {
     thread_local! {
-        static REMOVED_SCOPE_LOG: RefCell<Vec<&'static str>> = RefCell::new(Vec::new());
+        static REMOVED_SCOPE_LOG: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
     }
 
     fn render_optional_scope(
@@ -1531,11 +1500,10 @@ fn recompose_handles_removed_scopes_gracefully() {
         toggle_group: &MutableState<bool>,
     ) {
         if toggle_group.value() {
-            let state_clone = state_a.clone();
+            let state_clone = *state_a;
             composer.with_group(21, |composer| {
-                let state_capture = state_clone.clone();
+                let state_capture = state_clone;
                 composer.set_recompose_callback({
-                    let state_capture = state_capture.clone();
                     move |composer| {
                         let _ = state_capture.value();
                         composer.register_side_effect(|| {
@@ -1557,8 +1525,6 @@ fn recompose_handles_removed_scopes_gracefully() {
     let toggle_group = MutableState::with_runtime(true, runtime.clone());
 
     let mut render = {
-        let state_a = state_a.clone();
-        let toggle_group = toggle_group.clone();
         move || {
             with_current_composer(|composer| {
                 render_optional_scope(composer, &state_a, &toggle_group);
@@ -1673,7 +1639,7 @@ fn state_invalidation_skips_parent_scope() {
     CHILD_RECOMPOSITIONS.with(|calls| assert_eq!(calls.get(), 1));
 
     let state = CAPTURED_PARENT_STATE
-        .with(|slot| slot.borrow().clone())
+        .with(|slot| *slot.borrow())
         .expect("captured state");
 
     PARENT_RECOMPOSITIONS.with(|calls| calls.set(0));
@@ -1782,7 +1748,7 @@ fn apply_child_diff(
 fn reorder_keyed_children_emits_moves() {
     let mut slots = SlotBackend::default();
     let mut applier = MemoryApplier::new();
-    let runtime = Runtime::new(Arc::new(TestScheduler::default()));
+    let runtime = Runtime::new(Arc::new(TestScheduler));
     let parent_id = applier.create(Box::new(RecordingNode::default()));
 
     let child_a = applier.create(Box::new(TrackingChild {
@@ -1844,7 +1810,7 @@ fn reorder_keyed_children_emits_moves() {
 fn insert_and_remove_emit_expected_ops() {
     let mut slots = SlotBackend::default();
     let mut applier = MemoryApplier::new();
-    let runtime = Runtime::new(Arc::new(TestScheduler::default()));
+    let runtime = Runtime::new(Arc::new(TestScheduler));
     let parent_id = applier.create(Box::new(RecordingNode::default()));
 
     let child_a = applier.create(Box::new(TrackingChild {
@@ -1939,8 +1905,8 @@ fn composable_skips_when_inputs_unchanged() {
 #[test]
 fn composition_local_provider_scopes_values() {
     thread_local! {
-        static CHILD_RECOMPOSITIONS: Cell<usize> = Cell::new(0);
-        static LAST_VALUE: Cell<i32> = Cell::new(0);
+        static CHILD_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
+        static LAST_VALUE: Cell<i32> = const { Cell::new(0) };
     }
 
     let local_counter = compositionLocalOf(|| 0);
@@ -1963,7 +1929,7 @@ fn composition_local_provider_scopes_values() {
     }
 
     composition
-        .render(1, || parent(local_counter.clone(), provided_state.clone()))
+        .render(1, || parent(local_counter.clone(), provided_state))
         .expect("initial composition");
 
     assert_eq!(CHILD_RECOMPOSITIONS.with(|c| c.get()), 1);
@@ -1981,7 +1947,7 @@ fn composition_local_provider_scopes_values() {
 #[test]
 fn composition_local_default_value_used_outside_provider() {
     thread_local! {
-        static READ_VALUE: Cell<i32> = Cell::new(0);
+        static READ_VALUE: Cell<i32> = const { Cell::new(0) };
     }
 
     let local_counter = compositionLocalOf(|| 7);
@@ -2004,8 +1970,8 @@ fn composition_local_default_value_used_outside_provider() {
 fn composition_local_simple_subscription_test() {
     // Simplified test to verify basic subscription behavior
     thread_local! {
-        static READER_RECOMPOSITIONS: Cell<usize> = Cell::new(0);
-        static LAST_VALUE: Cell<i32> = Cell::new(-1);
+        static READER_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
+        static LAST_VALUE: Cell<i32> = const { Cell::new(-1) };
     }
 
     let local_value = compositionLocalOf(|| 0);
@@ -2030,7 +1996,7 @@ fn composition_local_simple_subscription_test() {
     }
 
     composition
-        .render(1, || root(local_value.clone(), trigger.clone()))
+        .render(1, || root(local_value.clone(), trigger))
         .expect("initial composition");
 
     println!(
@@ -2068,13 +2034,13 @@ fn composition_local_tracks_reads_and_recomposes_selectively() {
     // This test verifies that CompositionLocal establishes subscriptions
     // and ONLY recomposes composables that actually read .current()
     thread_local! {
-        static OUTSIDE_RECOMPOSITIONS: Cell<usize> = Cell::new(0);
-        static NOT_CHANGING_TEXT_RECOMPOSITIONS: Cell<usize> = Cell::new(0);
-        static INSIDE_RECOMPOSITIONS: Cell<usize> = Cell::new(0);
-        static READING_TEXT_RECOMPOSITIONS: Cell<usize> = Cell::new(0);
-        static NON_READING_TEXT_RECOMPOSITIONS: Cell<usize> = Cell::new(0);
-        static INSIDE_INSIDE_RECOMPOSITIONS: Cell<usize> = Cell::new(0);
-        static LAST_READ_VALUE: Cell<i32> = Cell::new(-999);
+        static OUTSIDE_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
+        static NOT_CHANGING_TEXT_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
+        static INSIDE_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
+        static READING_TEXT_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
+        static NON_READING_TEXT_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
+        static INSIDE_INSIDE_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
+        static LAST_READ_VALUE: Cell<i32> = const { Cell::new(-999) };
     }
 
     let local_count = compositionLocalOf(|| 0);
@@ -2139,7 +2105,7 @@ fn composition_local_tracks_reads_and_recomposes_selectively() {
 
     // Initial composition
     composition
-        .render(1, || outside(local_count.clone(), trigger.clone()))
+        .render(1, || outside(local_count.clone(), trigger))
         .expect("initial composition");
 
     assert_eq!(OUTSIDE_RECOMPOSITIONS.with(|c| c.get()), 1);
@@ -2194,7 +2160,7 @@ fn composition_local_tracks_reads_and_recomposes_selectively() {
 #[test]
 fn static_composition_local_provides_values() {
     thread_local! {
-        static READ_VALUE: Cell<i32> = Cell::new(0);
+        static READ_VALUE: Cell<i32> = const { Cell::new(0) };
     }
 
     let local_counter = staticCompositionLocalOf(|| 0);
@@ -2221,7 +2187,7 @@ fn static_composition_local_provides_values() {
 #[test]
 fn static_composition_local_default_value_used_outside_provider() {
     thread_local! {
-        static READ_VALUE: Cell<i32> = Cell::new(0);
+        static READ_VALUE: Cell<i32> = const { Cell::new(0) };
     }
 
     let local_counter = staticCompositionLocalOf(|| 7);
@@ -2243,7 +2209,7 @@ fn static_composition_local_default_value_used_outside_provider() {
 #[test]
 fn compose_with_reuse_skips_then_recomposes() {
     thread_local! {
-        static INVOCATIONS: Cell<usize> = Cell::new(0);
+        static INVOCATIONS: Cell<usize> = const { Cell::new(0) };
     }
 
     let mut composition = Composition::new(MemoryApplier::new());
@@ -2253,10 +2219,10 @@ fn compose_with_reuse_skips_then_recomposes() {
     let slot_key = location_key(file!(), line!(), column!());
 
     let mut render_with_options = |options: RecomposeOptions| {
-        let state_clone = state.clone();
+        let state_clone = state;
         composition
             .render(root_key, || {
-                let local_state = state_clone.clone();
+                let local_state = state_clone;
                 with_current_composer(|composer| {
                     composer.compose_with_reuse(slot_key, options, |composer| {
                         let scope = composer.current_recompose_scope().expect("scope available");
@@ -2292,7 +2258,7 @@ fn compose_with_reuse_skips_then_recomposes() {
 #[test]
 fn compose_with_reuse_forces_recomposition_when_requested() {
     thread_local! {
-        static INVOCATIONS: Cell<usize> = Cell::new(0);
+        static INVOCATIONS: Cell<usize> = const { Cell::new(0) };
     }
 
     let mut composition = Composition::new(MemoryApplier::new());
@@ -2302,10 +2268,10 @@ fn compose_with_reuse_forces_recomposition_when_requested() {
     let slot_key = location_key(file!(), line!(), column!());
 
     let mut render_with_options = |options: RecomposeOptions| {
-        let state_clone = state.clone();
+        let state_clone = state;
         composition
             .render(root_key, || {
-                let local_state = state_clone.clone();
+                let local_state = state_clone;
                 with_current_composer(|composer| {
                     composer.compose_with_reuse(slot_key, options, |composer| {
                         let scope = composer.current_recompose_scope().expect("scope available");
@@ -2339,8 +2305,8 @@ fn compose_with_reuse_forces_recomposition_when_requested() {
 #[test]
 fn inactive_scopes_delay_invalidation_until_reactivated() {
     thread_local! {
-        static CAPTURED_SCOPE: RefCell<Option<RecomposeScope>> = RefCell::new(None);
-        static INVOCATIONS: Cell<usize> = Cell::new(0);
+        static CAPTURED_SCOPE: RefCell<Option<RecomposeScope>> = const { RefCell::new(None) };
+        static INVOCATIONS: Cell<usize> = const { Cell::new(0) };
     }
 
     let mut composition = Composition::new(MemoryApplier::new());
@@ -2359,7 +2325,7 @@ fn inactive_scopes_delay_invalidation_until_reactivated() {
     }
 
     composition
-        .render(root_key, || capture_scope(state.clone()))
+        .render(root_key, || capture_scope(state))
         .expect("initial composition");
 
     assert_eq!(INVOCATIONS.with(|count| count.get()), 1);
@@ -2463,7 +2429,7 @@ fn anchor_progress_content(toggle: MutableState<bool>, stats: MutableState<i32>)
         composer.with_group(location_key(file!(), line!(), column!()), |composer| {
             if show_progress {
                 composer.with_group(location_key(file!(), line!(), column!()), |composer| {
-                    composer.emit_node(|| TestDummyNode::default());
+                    composer.emit_node(|| TestDummyNode);
                 });
             }
         });
@@ -2487,11 +2453,7 @@ fn stats_watchers_survive_conditional_toggle() {
     let toggle = MutableState::with_runtime(true, runtime.clone());
     let stats = MutableState::with_runtime(0i32, runtime.clone());
 
-    let mut render = {
-        let toggle = toggle.clone();
-        let stats = stats.clone();
-        move || anchor_progress_content(toggle.clone(), stats.clone())
-    };
+    let mut render = { move || anchor_progress_content(toggle, stats) };
 
     let key = location_key(file!(), line!(), column!());
     composition
@@ -2655,15 +2617,15 @@ fn slot_table_tab_switching_preserves_scopes() {
     let tab2_counter = MutableState::with_runtime(0i32, runtime.clone());
 
     thread_local! {
-        static TAB1_RENDERS: Cell<usize> = Cell::new(0);
-        static TAB2_RENDERS: Cell<usize> = Cell::new(0);
+        static TAB1_RENDERS: Cell<usize> = const { Cell::new(0) };
+        static TAB2_RENDERS: Cell<usize> = const { Cell::new(0) };
     }
 
     #[composable]
     fn tab_content_1(counter: MutableState<i32>) {
         TAB1_RENDERS.with(|c| c.set(c.get() + 1));
         let count = counter.value();
-        let id = compose_test_node(|| TestTextNode::default());
+        let id = compose_test_node(TestTextNode::default);
         with_node_mut(id, |node: &mut TestTextNode| {
             node.text = format!("Tab 1: {}", count);
         })
@@ -2674,7 +2636,7 @@ fn slot_table_tab_switching_preserves_scopes() {
     fn tab_content_2(counter: MutableState<i32>) {
         TAB2_RENDERS.with(|c| c.set(c.get() + 1));
         let count = counter.value();
-        let id = compose_test_node(|| TestTextNode::default());
+        let id = compose_test_node(TestTextNode::default);
         with_node_mut(id, |node: &mut TestTextNode| {
             node.text = format!("Tab 2: {}", count);
         })
@@ -2682,14 +2644,11 @@ fn slot_table_tab_switching_preserves_scopes() {
     }
 
     let mut render = {
-        let active_tab = active_tab.clone();
-        let tab1_counter = tab1_counter.clone();
-        let tab2_counter = tab2_counter.clone();
         move || {
             let tab = active_tab.value();
             match tab {
-                0 => tab_content_1(tab1_counter.clone()),
-                1 => tab_content_2(tab2_counter.clone()),
+                0 => tab_content_1(tab1_counter),
+                1 => tab_content_2(tab2_counter),
                 _ => {}
             }
         }
@@ -2795,16 +2754,16 @@ fn slot_table_conditional_rendering_preserves_sibling_scopes() {
     let bottom_counter = MutableState::with_runtime(0i32, runtime.clone());
 
     thread_local! {
-        static TOP_RENDERS: Cell<usize> = Cell::new(0);
-        static MIDDLE_RENDERS: Cell<usize> = Cell::new(0);
-        static BOTTOM_RENDERS: Cell<usize> = Cell::new(0);
+        static TOP_RENDERS: Cell<usize> = const { Cell::new(0) };
+        static MIDDLE_RENDERS: Cell<usize> = const { Cell::new(0) };
+        static BOTTOM_RENDERS: Cell<usize> = const { Cell::new(0) };
     }
 
     #[composable]
     fn top_component(counter: MutableState<i32>) {
         TOP_RENDERS.with(|c| c.set(c.get() + 1));
         let count = counter.value();
-        let id = compose_test_node(|| TestTextNode::default());
+        let id = compose_test_node(TestTextNode::default);
         with_node_mut(id, |node: &mut TestTextNode| {
             node.text = format!("Top: {}", count);
         })
@@ -2815,7 +2774,7 @@ fn slot_table_conditional_rendering_preserves_sibling_scopes() {
     fn middle_component(counter: MutableState<i32>) {
         MIDDLE_RENDERS.with(|c| c.set(c.get() + 1));
         let count = counter.value();
-        let id = compose_test_node(|| TestTextNode::default());
+        let id = compose_test_node(TestTextNode::default);
         with_node_mut(id, |node: &mut TestTextNode| {
             node.text = format!("Middle: {}", count);
         })
@@ -2826,7 +2785,7 @@ fn slot_table_conditional_rendering_preserves_sibling_scopes() {
     fn bottom_component(counter: MutableState<i32>) {
         BOTTOM_RENDERS.with(|c| c.set(c.get() + 1));
         let count = counter.value();
-        let id = compose_test_node(|| TestTextNode::default());
+        let id = compose_test_node(TestTextNode::default);
         with_node_mut(id, |node: &mut TestTextNode| {
             node.text = format!("Bottom: {}", count);
         })
@@ -2834,18 +2793,14 @@ fn slot_table_conditional_rendering_preserves_sibling_scopes() {
     }
 
     let mut render = {
-        let show_middle = show_middle.clone();
-        let top_counter = top_counter.clone();
-        let middle_counter = middle_counter.clone();
-        let bottom_counter = bottom_counter.clone();
         move || {
-            top_component(top_counter.clone());
+            top_component(top_counter);
 
             if show_middle.value() {
-                middle_component(middle_counter.clone());
+                middle_component(middle_counter);
             }
 
-            bottom_component(bottom_counter.clone());
+            bottom_component(bottom_counter);
         }
     };
 
@@ -2950,9 +2905,9 @@ fn slot_table_gaps_work_with_nested_conditionals() {
     let after_counter = MutableState::with_runtime(0i32, runtime.clone());
 
     thread_local! {
-        static OUTER_RENDERS: Cell<usize> = Cell::new(0);
-        static INNER_RENDERS: Cell<usize> = Cell::new(0);
-        static AFTER_RENDERS: Cell<usize> = Cell::new(0);
+        static OUTER_RENDERS: Cell<usize> = const { Cell::new(0) };
+        static INNER_RENDERS: Cell<usize> = const { Cell::new(0) };
+        static AFTER_RENDERS: Cell<usize> = const { Cell::new(0) };
     }
 
     #[composable]
@@ -2982,20 +2937,11 @@ fn slot_table_gaps_work_with_nested_conditionals() {
     }
 
     let mut render = {
-        let outer_visible = outer_visible.clone();
-        let inner_visible = inner_visible.clone();
-        let outer_counter = outer_counter.clone();
-        let inner_counter = inner_counter.clone();
-        let after_counter = after_counter.clone();
         move || {
             if outer_visible.value() {
-                outer_content(
-                    inner_visible.clone(),
-                    outer_counter.clone(),
-                    inner_counter.clone(),
-                );
+                outer_content(inner_visible, outer_counter, inner_counter);
             }
-            after_content(after_counter.clone());
+            after_content(after_counter);
         }
     };
 
@@ -3075,7 +3021,7 @@ fn slot_table_multiple_rapid_tab_switches() {
     let active_tab = MutableState::with_runtime(0i32, runtime.clone());
 
     thread_local! {
-        static RENDER_LOG: RefCell<Vec<String>> = RefCell::new(Vec::new());
+        static RENDER_LOG: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     }
 
     #[composable]
@@ -3085,7 +3031,7 @@ fn slot_table_multiple_rapid_tab_switches() {
         // Multiple nodes to make the slot table more complex
         let count = counter.value();
         for i in 0..3 {
-            let id = compose_test_node(|| TestTextNode::default());
+            let id = compose_test_node(TestTextNode::default);
             with_node_mut(id, |node: &mut TestTextNode| {
                 node.text = format!("Tab {} Item {} ({})", tab_id, i, count);
             })
@@ -3100,12 +3046,11 @@ fn slot_table_multiple_rapid_tab_switches() {
         .collect();
 
     let mut render = {
-        let active_tab = active_tab.clone();
         let tab_counters = tab_counters.clone();
         move || {
             let tab = active_tab.value();
             if tab >= 0 && (tab as usize) < tab_counters.len() {
-                tab_with_multiple_elements(tab, tab_counters[tab as usize].clone());
+                tab_with_multiple_elements(tab, tab_counters[tab as usize]);
             }
         }
     };
@@ -3119,7 +3064,7 @@ fn slot_table_multiple_rapid_tab_switches() {
             active_tab.set_value(tab);
             composition
                 .render(key, &mut render)
-                .expect(&format!("render cycle {} tab {}", cycle, tab));
+                .unwrap_or_else(|_| panic!("render cycle {} tab {}", cycle, tab));
 
             let log = RENDER_LOG.with(|log| log.borrow().clone());
             assert!(
@@ -3167,8 +3112,8 @@ fn tab_switching_with_keyed_children() {
     let counter = MutableState::with_runtime(0i32, runtime.clone());
 
     thread_local! {
-        static TAB1_KEYED_RENDERS: Cell<usize> = Cell::new(0);
-        static TAB2_KEYED_RENDERS: Cell<usize> = Cell::new(0);
+        static TAB1_KEYED_RENDERS: Cell<usize> = const { Cell::new(0) };
+        static TAB2_KEYED_RENDERS: Cell<usize> = const { Cell::new(0) };
     }
 
     #[composable]
@@ -3181,7 +3126,7 @@ fn tab_switching_with_keyed_children() {
 
         let count = counter.value();
         compose_core::with_key(&format!("item_{}", tab_id), || {
-            let id = compose_test_node(|| TestTextNode::default());
+            let id = compose_test_node(TestTextNode::default);
             with_node_mut(id, |node: &mut TestTextNode| {
                 node.text = format!("Tab {} with key: {}", tab_id, count);
             })
@@ -3190,11 +3135,9 @@ fn tab_switching_with_keyed_children() {
     }
 
     let mut render = {
-        let active_tab = active_tab.clone();
-        let counter = counter.clone();
         move || {
             let tab = active_tab.value();
-            keyed_content(tab, counter.clone());
+            keyed_content(tab, counter);
         }
     };
 
@@ -3249,14 +3192,14 @@ fn tab_switching_with_different_node_types() {
     let active_tab = MutableState::with_runtime(0i32, runtime.clone());
 
     thread_local! {
-        static TEXT_NODE_COUNT: Cell<usize> = Cell::new(0);
-        static DUMMY_NODE_COUNT: Cell<usize> = Cell::new(0);
+        static TEXT_NODE_COUNT: Cell<usize> = const { Cell::new(0) };
+        static DUMMY_NODE_COUNT: Cell<usize> = const { Cell::new(0) };
     }
 
     #[composable]
     fn text_tab() {
         TEXT_NODE_COUNT.with(|c| c.set(c.get() + 1));
-        let id = compose_test_node(|| TestTextNode::default());
+        let id = compose_test_node(TestTextNode::default);
         with_node_mut(id, |node: &mut TestTextNode| {
             node.text = "Text Node Tab".to_string();
         })
@@ -3270,7 +3213,6 @@ fn tab_switching_with_different_node_types() {
     }
 
     let mut render = {
-        let active_tab = active_tab.clone();
         move || match active_tab.value() {
             0 => text_tab(),
             _ => dummy_tab(),
@@ -3316,8 +3258,8 @@ fn tab_switching_with_dynamic_lists() {
     let list_size = MutableState::with_runtime(3usize, runtime.clone());
 
     thread_local! {
-        static LIST_TAB_CALLED: Cell<bool> = Cell::new(false);
-        static LAST_ITEM_COUNT: Cell<usize> = Cell::new(0);
+        static LIST_TAB_CALLED: Cell<bool> = const { Cell::new(false) };
+        static LAST_ITEM_COUNT: Cell<usize> = const { Cell::new(0) };
     }
 
     #[composable]
@@ -3325,7 +3267,7 @@ fn tab_switching_with_dynamic_lists() {
         LIST_TAB_CALLED.with(|c| c.set(true));
         LAST_ITEM_COUNT.with(|c| c.set(count));
         for i in 0..count {
-            let id = compose_test_node(|| TestTextNode::default());
+            let id = compose_test_node(TestTextNode::default);
             with_node_mut(id, |node: &mut TestTextNode| {
                 node.text = format!("Item {}", i);
             })
@@ -3334,8 +3276,6 @@ fn tab_switching_with_dynamic_lists() {
     }
 
     let mut render = {
-        let active_tab = active_tab.clone();
-        let list_size = list_size.clone();
         move || {
             LIST_TAB_CALLED.with(|c| c.set(false));
             if active_tab.value() == 0 {
@@ -3416,15 +3356,15 @@ fn tab_switching_with_nested_components() {
     let inner_counter = MutableState::with_runtime(0i32, runtime.clone());
 
     thread_local! {
-        static OUTER_RENDERS: Cell<usize> = Cell::new(0);
-        static INNER_RENDERS: Cell<usize> = Cell::new(0);
+        static OUTER_RENDERS: Cell<usize> = const { Cell::new(0) };
+        static INNER_RENDERS: Cell<usize> = const { Cell::new(0) };
     }
 
     #[composable]
     fn inner_component(counter: MutableState<i32>) {
         INNER_RENDERS.with(|c| c.set(c.get() + 1));
         let count = counter.value();
-        let id = compose_test_node(|| TestTextNode::default());
+        let id = compose_test_node(TestTextNode::default);
         with_node_mut(id, |node: &mut TestTextNode| {
             node.text = format!("Inner: {}", count);
         })
@@ -3436,7 +3376,7 @@ fn tab_switching_with_nested_components() {
         println!("outer_component called");
         OUTER_RENDERS.with(|c| c.set(c.get() + 1));
         let count = outer_counter.value();
-        let id = compose_test_node(|| TestTextNode::default());
+        let id = compose_test_node(TestTextNode::default);
         with_node_mut(id, |node: &mut TestTextNode| {
             node.text = format!("Outer: {}", count);
         })
@@ -3451,15 +3391,12 @@ fn tab_switching_with_nested_components() {
     }
 
     let mut render = {
-        let active_tab = active_tab.clone();
-        let outer_counter = outer_counter.clone();
-        let inner_counter = inner_counter.clone();
         move || {
             let tab = active_tab.value();
             println!("Render closure called, active_tab={}", tab);
             if tab == 0 {
                 println!("About to call outer_component");
-                outer_component(outer_counter.clone(), inner_counter.clone());
+                outer_component(outer_counter, inner_counter);
             } else {
                 empty_tab();
             }
@@ -3557,8 +3494,8 @@ fn debug_nested_component_slot_table_state() {
     let inner_counter = MutableState::with_runtime(0i32, runtime.clone());
 
     thread_local! {
-        static OUTER_RENDERS: Cell<usize> = Cell::new(0);
-        static INNER_RENDERS: Cell<usize> = Cell::new(0);
+        static OUTER_RENDERS: Cell<usize> = const { Cell::new(0) };
+        static INNER_RENDERS: Cell<usize> = const { Cell::new(0) };
     }
 
     #[composable]
@@ -3575,12 +3512,9 @@ fn debug_nested_component_slot_table_state() {
     }
 
     let mut render = {
-        let active_tab = active_tab.clone();
-        let outer_counter = outer_counter.clone();
-        let inner_counter = inner_counter.clone();
         move || {
             if active_tab.value() == 0 {
-                outer_component(outer_counter.clone(), inner_counter.clone());
+                outer_component(outer_counter, inner_counter);
             }
         }
     };
@@ -3657,7 +3591,7 @@ fn tab_switching_memory_slot_reuse() {
     fn tab_with_markers(tab_id: i32) {
         // Create multiple nodes to occupy slots
         for i in 0..5 {
-            let id = compose_test_node(|| TestTextNode::default());
+            let id = compose_test_node(TestTextNode::default);
             with_node_mut(id, |node: &mut TestTextNode| {
                 node.text = format!("Tab {} Item {}", tab_id, i);
             })
@@ -3666,7 +3600,6 @@ fn tab_switching_memory_slot_reuse() {
     }
 
     let mut render = {
-        let active_tab = active_tab.clone();
         move || {
             tab_with_markers(active_tab.value());
         }
@@ -3685,7 +3618,7 @@ fn tab_switching_memory_slot_reuse() {
             active_tab.set_value(tab);
             composition
                 .render(key, &mut render)
-                .expect(&format!("render cycle {} tab {}", cycle, tab));
+                .unwrap_or_else(|_| panic!("render cycle {} tab {}", cycle, tab));
         }
     }
 
@@ -3707,8 +3640,8 @@ fn tab_switching_with_state_during_switch() {
     let shared_counter = MutableState::with_runtime(0i32, runtime.clone());
 
     thread_local! {
-        static TAB0_RENDERS: Cell<usize> = Cell::new(0);
-        static TAB1_RENDERS: Cell<usize> = Cell::new(0);
+        static TAB0_RENDERS: Cell<usize> = const { Cell::new(0) };
+        static TAB1_RENDERS: Cell<usize> = const { Cell::new(0) };
     }
 
     #[composable]
@@ -3719,7 +3652,7 @@ fn tab_switching_with_state_during_switch() {
             TAB1_RENDERS.with(|c| c.set(c.get() + 1));
         }
         let count = counter.value();
-        let id = compose_test_node(|| TestTextNode::default());
+        let id = compose_test_node(TestTextNode::default);
         with_node_mut(id, |node: &mut TestTextNode| {
             node.text = format!("Tab {} Count {}", tab_id, count);
         })
@@ -3727,10 +3660,8 @@ fn tab_switching_with_state_during_switch() {
     }
 
     let mut render = {
-        let active_tab = active_tab.clone();
-        let shared_counter = shared_counter.clone();
         move || {
-            tab_content(active_tab.value(), shared_counter.clone());
+            tab_content(active_tab.value(), shared_counter);
         }
     };
 
@@ -3782,14 +3713,14 @@ fn tab_switching_with_empty_tab() {
     let counter = MutableState::with_runtime(0i32, runtime.clone());
 
     thread_local! {
-        static CONTENT_RENDERS: Cell<usize> = Cell::new(0);
+        static CONTENT_RENDERS: Cell<usize> = const { Cell::new(0) };
     }
 
     #[composable]
     fn content_tab(counter: MutableState<i32>) {
         CONTENT_RENDERS.with(|c| c.set(c.get() + 1));
         let count = counter.value();
-        let id = compose_test_node(|| TestTextNode::default());
+        let id = compose_test_node(TestTextNode::default);
         with_node_mut(id, |node: &mut TestTextNode| {
             node.text = format!("Content: {}", count);
         })
@@ -3802,10 +3733,8 @@ fn tab_switching_with_empty_tab() {
     }
 
     let mut render = {
-        let active_tab = active_tab.clone();
-        let counter = counter.clone();
         move || match active_tab.value() {
-            0 => content_tab(counter.clone()),
+            0 => content_tab(counter),
             _ => empty_tab(),
         }
     };
@@ -3856,7 +3785,7 @@ fn tab_switching_preserves_node_order() {
     let active_tab = MutableState::with_runtime(0i32, runtime.clone());
 
     thread_local! {
-        static RENDER_ORDER: RefCell<Vec<String>> = RefCell::new(Vec::new());
+        static RENDER_ORDER: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     }
 
     #[composable]
@@ -3865,7 +3794,7 @@ fn tab_switching_preserves_node_order() {
         let prefix = if tab_id == 0 { "A" } else { "B" };
         for i in 0..3 {
             RENDER_ORDER.with(|o| o.borrow_mut().push(format!("{}_{}", prefix, i)));
-            let id = compose_test_node(|| TestTextNode::default());
+            let id = compose_test_node(TestTextNode::default);
             with_node_mut(id, |node: &mut TestTextNode| {
                 node.text = format!("{} Item {}", prefix, i);
             })
@@ -3874,7 +3803,6 @@ fn tab_switching_preserves_node_order() {
     }
 
     let mut render = {
-        let active_tab = active_tab.clone();
         move || {
             let tab = active_tab.value();
             if tab <= 1 {
@@ -3938,7 +3866,7 @@ fn composition_works_with_hierarchical_backend() {
 fn test_composition_with_backend(backend: SlotBackendKind) {
     let key = 12345u64;
     let applier = MemoryApplier::new();
-    let runtime = Runtime::new(Arc::new(TestScheduler::default()));
+    let runtime = Runtime::new(Arc::new(TestScheduler));
     let mut composition = Composition::with_backend(applier, runtime.clone(), backend);
 
     // Track recompositions

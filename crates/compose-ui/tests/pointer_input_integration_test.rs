@@ -16,33 +16,29 @@ fn hover_tracking_app(hover_position: MutableState<Point>, is_hovered: MutableSt
                 height: 200.0,
             }))
             .then(Modifier::empty().pointer_input((), {
-                let position = hover_position.clone();
-                let hovered = is_hovered.clone();
-                move |scope: PointerInputScope| {
-                    let position = position.clone();
-                    let hovered = hovered.clone();
-                    async move {
-                        scope
-                            .await_pointer_event_scope(|await_scope| async move {
-                                loop {
-                                    let event = await_scope.await_pointer_event().await;
-                                    match event.kind {
-                                        PointerEventKind::Move => {
-                                            position.set(Point {
-                                                x: event.position.x,
-                                                y: event.position.y,
-                                            });
-                                            hovered.set(true);
-                                        }
-                                        PointerEventKind::Cancel => {
-                                            hovered.set(false);
-                                        }
-                                        _ => {}
+                let position = hover_position;
+                let hovered = is_hovered;
+                move |scope: PointerInputScope| async move {
+                    scope
+                        .await_pointer_event_scope(|await_scope| async move {
+                            loop {
+                                let event = await_scope.await_pointer_event().await;
+                                match event.kind {
+                                    PointerEventKind::Move => {
+                                        position.set(Point {
+                                            x: event.position.x,
+                                            y: event.position.y,
+                                        });
+                                        hovered.set(true);
                                     }
+                                    PointerEventKind::Cancel => {
+                                        hovered.set(false);
+                                    }
+                                    _ => {}
                                 }
-                            })
-                            .await;
-                    }
+                            }
+                        })
+                        .await;
                 }
             })),
         ColumnSpec::default(),
@@ -64,10 +60,10 @@ fn test_pointer_input_async_handler_is_present() {
     let is_hovered = MutableState::with_runtime(false, runtime.clone());
 
     rule.set_content({
-        let pos = hover_position.clone();
-        let hovered = is_hovered.clone();
+        let pos = hover_position;
+        let hovered = is_hovered;
         move || {
-            hover_tracking_app(pos.clone(), hovered.clone());
+            hover_tracking_app(pos, hovered);
         }
     })
     .expect("initial render succeeds");
@@ -75,7 +71,7 @@ fn test_pointer_input_async_handler_is_present() {
     // Verify initial state
     assert_eq!(hover_position.get().x, 0.0);
     assert_eq!(hover_position.get().y, 0.0);
-    assert_eq!(is_hovered.get(), false);
+    assert!(!is_hovered.get());
 
     // The composition should have created a Column with a pointer_input modifier
     let node_count = rule.applier_mut().len();
@@ -121,7 +117,7 @@ fn button_with_modifiers_app(click_count: MutableState<i32>) {
                         );
                     })),
                 {
-                    let count = click_count.clone();
+                    let count = click_count;
                     move || {
                         count.set(count.get() + 1);
                     }
@@ -146,9 +142,9 @@ fn test_button_with_draw_modifiers_is_clickable() {
     let click_count = MutableState::with_runtime(0, runtime.clone());
 
     rule.set_content({
-        let count = click_count.clone();
+        let count = click_count;
         move || {
-            button_with_modifiers_app(count.clone());
+            button_with_modifiers_app(count);
         }
     })
     .expect("initial render succeeds");
@@ -182,8 +178,7 @@ fn dynamic_label_button_app(click_count: MutableState<i32>, is_active: MutableSt
             Button(
                 Modifier::empty().padding(10.0),
                 {
-                    let is_active = is_active.clone();
-                    let count = click_count.clone();
+                    let count = click_count;
                     move || {
                         is_active.set(!is_active.get());
                         count.set(count.get() + 1);
@@ -212,17 +207,17 @@ fn test_button_with_dynamic_content_updates_correctly() {
     let is_active = MutableState::with_runtime(false, runtime.clone());
 
     rule.set_content({
-        let count = click_count.clone();
-        let active = is_active.clone();
+        let count = click_count;
+        let active = is_active;
         move || {
-            dynamic_label_button_app(count.clone(), active.clone());
+            dynamic_label_button_app(count, active);
         }
     })
     .expect("initial render succeeds");
 
     // Verify initial state
     assert_eq!(click_count.get(), 0);
-    assert_eq!(is_active.get(), false);
+    assert!(!is_active.get());
 
     // Manually toggle the state (simulating a click)
     is_active.set(true);
@@ -234,7 +229,7 @@ fn test_button_with_dynamic_content_updates_correctly() {
 
     // Verify state updated
     assert_eq!(click_count.get(), 1);
-    assert_eq!(is_active.get(), true);
+    assert!(is_active.get());
 
     // Toggle again
     is_active.set(false);
@@ -244,7 +239,7 @@ fn test_button_with_dynamic_content_updates_correctly() {
         .expect("recompose after second toggle");
 
     assert_eq!(click_count.get(), 2);
-    assert_eq!(is_active.get(), false);
+    assert!(!is_active.get());
 
     println!("✓ Button with dynamic content updates correctly through state changes");
 }

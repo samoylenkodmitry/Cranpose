@@ -26,7 +26,6 @@ fn counter_view(counter: MutableState<i32>, render_count: MutableState<i32>) {
             Button(
                 Modifier::empty().padding(10.0),
                 {
-                    let counter = counter.clone();
                     move || {
                         counter.set(counter.get() + 1);
                     }
@@ -57,7 +56,6 @@ fn alternative_view(counter: MutableState<i32>, render_count: MutableState<i32>)
             Button(
                 Modifier::empty().padding(10.0),
                 {
-                    let counter = counter.clone();
                     move || {
                         counter.set(counter.get() + 1);
                     }
@@ -83,13 +81,13 @@ fn combined_switching_app(
         Modifier::empty().padding(20.0),
         ColumnSpec::default(),
         move || {
-            let show_counter_inner = show_counter.clone();
-            let show_counter_for_button1 = show_counter.clone();
-            let show_counter_for_button2 = show_counter.clone();
-            let counter1_inner = counter1.clone();
-            let counter2_inner = counter2.clone();
-            let render_count1_inner = render_count1.clone();
-            let render_count2_inner = render_count2.clone();
+            let show_counter_inner = show_counter;
+            let show_counter_for_button1 = show_counter;
+            let show_counter_for_button2 = show_counter;
+            let counter1_inner = counter1;
+            let counter2_inner = counter2;
+            let render_count1_inner = render_count1;
+            let render_count2_inner = render_count2;
 
             // Switch buttons
             Row(
@@ -99,7 +97,7 @@ fn combined_switching_app(
                     Button(
                         Modifier::empty().padding(10.0),
                         {
-                            let show_counter = show_counter_for_button1.clone();
+                            let show_counter = show_counter_for_button1;
                             move || {
                                 show_counter.set(true);
                             }
@@ -117,7 +115,7 @@ fn combined_switching_app(
                     Button(
                         Modifier::empty().padding(10.0),
                         {
-                            let show_counter = show_counter_for_button2.clone();
+                            let show_counter = show_counter_for_button2;
                             move || {
                                 show_counter.set(false);
                             }
@@ -136,9 +134,9 @@ fn combined_switching_app(
 
             // Conditionally show one view or the other
             if show_counter_inner.get() {
-                counter_view(counter1_inner.clone(), render_count1_inner.clone());
+                counter_view(counter1_inner, render_count1_inner);
             } else {
-                alternative_view(counter2_inner.clone(), render_count2_inner.clone());
+                alternative_view(counter2_inner, render_count2_inner);
             }
         },
     );
@@ -157,18 +155,13 @@ fn test_switching_between_views_doesnt_duplicate_content() {
 
     // Initial render - show counter view
     rule.set_content({
-        let show_counter = show_counter.clone();
-        let counter1 = counter1.clone();
-        let counter2 = counter2.clone();
-        let render_count1 = render_count1.clone();
-        let render_count2 = render_count2.clone();
         move || {
             combined_switching_app(
-                show_counter.clone(),
-                counter1.clone(),
-                counter2.clone(),
-                render_count1.clone(),
-                render_count2.clone(),
+                show_counter,
+                counter1,
+                counter2,
+                render_count1,
+                render_count2,
             );
         }
     })
@@ -303,9 +296,8 @@ fn test_node_cleanup_on_view_switch() {
     let show_first = MutableState::with_runtime(true, runtime.clone());
 
     rule.set_content({
-        let show_first = show_first.clone();
         move || {
-            let show_first_inner = show_first.clone();
+            let show_first_inner = show_first;
             Column(
                 Modifier::empty().padding(20.0),
                 ColumnSpec::default(),
@@ -358,7 +350,7 @@ fn test_node_cleanup_on_view_switch() {
     for i in 0..5 {
         show_first.set(i % 2 == 0);
         rule.pump_until_idle()
-            .expect(&format!("recompose on switch {}", i));
+            .unwrap_or_else(|_| panic!("recompose on switch {}", i));
         let count = rule.applier_mut().len();
         let expected = if i % 2 == 0 { 4 } else { 3 };
         assert_eq!(
@@ -379,13 +371,10 @@ fn test_multiple_switches_with_state_changes() {
     let counter_b = MutableState::with_runtime(0, runtime.clone());
 
     rule.set_content({
-        let show_view_a = show_view_a.clone();
-        let counter_a = counter_a.clone();
-        let counter_b = counter_b.clone();
         move || {
-            let show_view_a_inner = show_view_a.clone();
-            let counter_a_inner = counter_a.clone();
-            let counter_b_inner = counter_b.clone();
+            let show_view_a_inner = show_view_a;
+            let counter_a_inner = counter_a;
+            let counter_b_inner = counter_b;
             Column(Modifier::empty(), ColumnSpec::default(), move || {
                 if show_view_a_inner.get() {
                     Text(
@@ -395,7 +384,7 @@ fn test_multiple_switches_with_state_changes() {
                     Button(
                         Modifier::empty(),
                         {
-                            let counter_a = counter_a_inner.clone();
+                            let counter_a = counter_a_inner;
                             move || counter_a.set(counter_a.get() + 1)
                         },
                         || {
@@ -410,7 +399,7 @@ fn test_multiple_switches_with_state_changes() {
                     Button(
                         Modifier::empty(),
                         {
-                            let counter_b = counter_b_inner.clone();
+                            let counter_b = counter_b_inner;
                             move || counter_b.set(counter_b.get() + 1)
                         },
                         || {
@@ -505,14 +494,12 @@ fn test_deeply_nested_conditional_switching() {
     let show_inner = MutableState::with_runtime(true, runtime.clone());
 
     rule.set_content({
-        let show_outer = show_outer.clone();
-        let show_inner = show_inner.clone();
         move || {
-            let show_outer_inner = show_outer.clone();
-            let show_inner_inner = show_inner.clone();
+            let show_outer_inner = show_outer;
+            let show_inner_inner = show_inner;
             Column(Modifier::empty(), ColumnSpec::default(), move || {
                 if show_outer_inner.get() {
-                    let show_inner_for_column = show_inner_inner.clone();
+                    let show_inner_for_column = show_inner_inner;
                     Column(Modifier::empty(), ColumnSpec::default(), move || {
                         if show_inner_for_column.get() {
                             Text("Outer A, Inner A", Modifier::empty());
@@ -564,9 +551,8 @@ fn test_switching_with_different_node_counts() {
     let view_type = MutableState::with_runtime(0, runtime.clone());
 
     rule.set_content({
-        let view_type = view_type.clone();
         move || {
-            let view_type_inner = view_type.clone();
+            let view_type_inner = view_type;
             Column(Modifier::empty(), ColumnSpec::default(), move || {
                 match view_type_inner.get() {
                     0 => {
@@ -641,34 +627,26 @@ fn test_conditional_with_complex_button_structure() {
     let counter = MutableState::with_runtime(0, runtime.clone());
 
     rule.set_content({
-        let show_first = show_first.clone();
-        let counter = counter.clone();
         move || {
-            let show_first_inner = show_first.clone();
-            let counter_inner = counter.clone();
+            let show_first_inner = show_first;
+            let counter_inner = counter;
             Column(Modifier::empty(), ColumnSpec::default(), move || {
                 if show_first_inner.get() {
                     // Complex structure with nested buttons
                     Column(Modifier::empty(), ColumnSpec::default(), {
-                        let counter = counter_inner.clone();
+                        let counter = counter_inner;
                         move || {
                             Text("First View", Modifier::empty());
                             Button(
                                 Modifier::empty(),
-                                {
-                                    let counter = counter.clone();
-                                    move || counter.set(counter.get() + 1)
-                                },
+                                move || counter.set(counter.get() + 1),
                                 || {
                                     Text("Button 1", Modifier::empty());
                                 },
                             );
                             Button(
                                 Modifier::empty(),
-                                {
-                                    let counter = counter.clone();
-                                    move || counter.set(counter.get() + 10)
-                                },
+                                move || counter.set(counter.get() + 10),
                                 || {
                                     Text("Button 2", Modifier::empty());
                                 },
@@ -681,7 +659,7 @@ fn test_conditional_with_complex_button_structure() {
                     Button(
                         Modifier::empty(),
                         {
-                            let counter = counter_inner.clone();
+                            let counter = counter_inner;
                             move || counter.set(counter.get() - 1)
                         },
                         || {
@@ -745,17 +723,16 @@ fn test_clicking_same_switch_button_twice_no_duplication() {
     let show_counter = MutableState::with_runtime(true, runtime.clone());
 
     rule.set_content({
-        let show_counter = show_counter.clone();
         move || {
-            let show_counter_copy = show_counter.clone();
-            let show_counter_for_button = show_counter.clone();
+            let show_counter_copy = show_counter;
+            let show_counter_for_button = show_counter;
             Column(Modifier::empty(), ColumnSpec::default(), move || {
                 // Row with switching buttons
                 Row(Modifier::empty(), RowSpec::default(), {
-                    let show_counter = show_counter_for_button.clone();
+                    let show_counter = show_counter_for_button;
                     move || {
-                        let show_counter_for_btn1 = show_counter.clone();
-                        let show_counter_for_btn2 = show_counter.clone();
+                        let show_counter_for_btn1 = show_counter;
+                        let show_counter_for_btn2 = show_counter;
 
                         Button(
                             Modifier::empty(),
@@ -918,7 +895,6 @@ fn test_composition_local_demo(
             Button(
                 Modifier::empty().padding(10.0),
                 {
-                    let counter = counter.clone();
                     move || {
                         counter.set(counter.get() + 1);
                     }
@@ -953,10 +929,9 @@ fn composition_local_increment_keeps_node_count_stable() {
     let local_holder = compositionLocalOf(|| 0);
 
     rule.set_content({
-        let counter = counter.clone();
         let local_holder = local_holder.clone();
         move || {
-            test_composition_local_demo(counter.clone(), local_holder.clone());
+            test_composition_local_demo(counter, local_holder.clone());
         }
     })
     .expect("initial render succeeds");
@@ -1025,9 +1000,8 @@ fn test_switching_between_composable_functions() {
     let show_a = MutableState::with_runtime(true, runtime.clone());
 
     rule.set_content({
-        let show_a = show_a.clone();
         move || {
-            let show_a_inner = show_a.clone();
+            let show_a_inner = show_a;
             Column(Modifier::empty(), ColumnSpec::default(), move || {
                 if show_a_inner.get() {
                     composable_view_a();
@@ -1083,7 +1057,7 @@ fn test_switching_between_composable_functions() {
     for i in 0..5 {
         show_a.set(i % 2 == 0);
         rule.pump_until_idle()
-            .expect(&format!("rapid switch {}", i));
+            .unwrap_or_else(|_| panic!("rapid switch {}", i));
         let count = rule.applier_mut().len();
         let expected = if i % 2 == 0 { 6 } else { 7 };
         assert_eq!(

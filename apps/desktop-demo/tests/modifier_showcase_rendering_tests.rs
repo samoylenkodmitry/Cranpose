@@ -209,7 +209,6 @@ fn test_dynamic_modifiers_recomposition_preserves_structure() {
     let frame = MutableState::with_runtime(0, rule.runtime_handle());
 
     rule.set_content({
-        let frame = frame;
         move || {
             dynamic_modifiers_showcase(frame.get());
         }
@@ -413,7 +412,6 @@ fn test_modifier_showcase_recomposition_stability() {
     let showcase_index = MutableState::with_runtime(0, rule.runtime_handle());
 
     rule.set_content({
-        let showcase_index = showcase_index;
         move || {
             let showcase_index_inner = showcase_index;
             Column(Modifier::empty(), ColumnSpec::default(), move || {
@@ -464,7 +462,7 @@ fn test_modifier_showcase_recomposition_stability() {
         let idx = i % 3;
         showcase_index.set(idx);
         rule.pump_until_idle()
-            .expect(&format!("Rapid switch {}", i));
+            .unwrap_or_else(|_| panic!("Rapid switch {}", i));
 
         let current_count = rule.applier_mut().len();
 

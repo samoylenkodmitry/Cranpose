@@ -116,7 +116,6 @@ pub fn combined_app() {
                 RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
                 move || {
                     let render_tab_button = {
-                        let tab_state_for_row = tab_state_for_row;
                         move |tab: DemoTab| {
                             let tab_state_for_tab = tab_state_for_row;
                             let is_active = tab_state_for_tab.get() == tab;
@@ -212,7 +211,6 @@ fn recursive_layout_example() {
                     .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
                     .vertical_alignment(VerticalAlignment::CenterVertically),
                 {
-                    let depth_state = depth_state;
                     move || {
                         let depth = depth_state.get();
                         Button(
@@ -226,7 +224,6 @@ fn recursive_layout_example() {
                                 })
                                 .padding(10.0),
                             {
-                                let depth_state = depth_state;
                                 move || {
                                     let next = (depth_state.get() + 1).min(96);
                                     if next != depth_state.get() {
@@ -250,7 +247,6 @@ fn recursive_layout_example() {
                                 })
                                 .padding(10.0),
                             {
-                                let depth_state = depth_state;
                                 move || {
                                     let next = depth_state.get().saturating_sub(1).max(1);
                                     if next != depth_state.get() {
@@ -411,7 +407,6 @@ pub fn composition_local_example() {
                     })
                     .padding(12.0),
                 {
-                    let counter = counter;
                     move || {
                         let new_val = counter.get() + 1;
                         println!("Incrementing counter to {}", new_val);
@@ -712,10 +707,7 @@ fn async_runtime_example() {
                                         }
                                     })
                                     .padding(12.0),
-                                {
-                                    let toggle_state = toggle_state;
-                                    move || toggle_state.set(!toggle_state.get())
-                                },
+                                move || toggle_state.set(!toggle_state.get()),
                                 {
                                     let label = if running {
                                         "Pause animation"
@@ -731,7 +723,6 @@ fn async_runtime_example() {
                             let reset_animation = animation_state;
                             let reset_stats = stats_state;
                             let reset_tick_state = reset_state;
-                            let toggle_state = toggle_state;
                             Button(
                                 Modifier::empty()
                                     .rounded_corners(16.0)
@@ -884,8 +875,6 @@ fn counter_app() {
                 let pointer_position_main = pointer_position;
                 let pointer_down_main = pointer_down;
                 let wave_main = wave_state;
-                let async_message = async_message;
-                let fetch_request = fetch_request;
                 move || {
                     let counter = counter_main;
                     let pointer_position = pointer_position_main;
@@ -992,47 +981,40 @@ fn counter_app() {
                             .pointer_input((), {
                                 let pointer_position_state = pointer_position;
                                 let pointer_down_state = pointer_down;
-                                move |scope: PointerInputScope| {
-                                    let pointer_position_state = pointer_position_state;
-                                    let pointer_down_state = pointer_down_state;
-                                    async move {
-                                        scope
-                                            .await_pointer_event_scope(|await_scope| async move {
-                                                loop {
-                                                    let event =
-                                                        await_scope.await_pointer_event().await;
-                                                    println!(
+                                move |scope: PointerInputScope| async move {
+                                    scope
+                                        .await_pointer_event_scope(|await_scope| async move {
+                                            loop {
+                                                let event = await_scope.await_pointer_event().await;
+                                                println!(
                                                     "Pointer event: kind={:?} pos=({:.1}, {:.1})",
                                                     event.kind, event.position.x, event.position.y
                                                 );
-                                                    match event.kind {
-                                                        PointerEventKind::Down => {
-                                                            pointer_down_state.set(true)
-                                                        }
-                                                        PointerEventKind::Up => {
-                                                            pointer_down_state.set(false)
-                                                        }
-                                                        PointerEventKind::Move => {
-                                                            pointer_position_state.set(Point {
-                                                                x: event.position.x,
-                                                                y: event.position.y,
-                                                            });
-                                                        }
-                                                        PointerEventKind::Cancel => {
-                                                            pointer_down_state.set(false)
-                                                        }
+                                                match event.kind {
+                                                    PointerEventKind::Down => {
+                                                        pointer_down_state.set(true)
+                                                    }
+                                                    PointerEventKind::Up => {
+                                                        pointer_down_state.set(false)
+                                                    }
+                                                    PointerEventKind::Move => {
+                                                        pointer_position_state.set(Point {
+                                                            x: event.position.x,
+                                                            y: event.position.y,
+                                                        });
+                                                    }
+                                                    PointerEventKind::Cancel => {
+                                                        pointer_down_state.set(false)
                                                     }
                                                 }
-                                            })
-                                            .await;
-                                    }
+                                            }
+                                        })
+                                        .await;
                                 }
                             })
                             .padding(16.0),
                         ColumnSpec::default(),
                         move || {
-                            let async_message_state = async_message_state;
-                            let fetch_request_state = fetch_request_state;
                             Text(
                                 format!("Pointer: ({:.1}, {:.1})", pointer.x, pointer.y),
                                 Modifier::empty()
@@ -1330,7 +1312,6 @@ fn modifier_showcase_tab() {
                                     })
                                     .padding(10.0),
                                 {
-                                    let showcase_state = showcase_state;
                                     move || {
                                         if showcase_state.get() != showcase_type {
                                             showcase_state.set(showcase_type);

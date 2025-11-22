@@ -50,7 +50,7 @@ fn composition_local_view_duplicates_regression() {
     TEST_COMPOSITION_LOCAL_COUNTER.with(|cell| cell.borrow_mut().take());
 
     let mut rule = ComposeTestRule::new();
-    rule.set_content(|| combined_app())
+    rule.set_content(combined_app)
         .expect("install combined app content");
     rule.pump_until_idle()
         .expect("initial idle after counter view");

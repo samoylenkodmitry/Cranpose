@@ -114,8 +114,8 @@ fn removing_slots_deactivates_scopes() {
     let scope_b = RecomposeScope::new_for_test(runtime.handle());
 
     let mut state = SubcomposeState::default();
-    state.register_active(SlotId::new(1), &[10], &[scope_a.clone()]);
-    state.register_active(SlotId::new(2), &[20], &[scope_b.clone()]);
+    state.register_active(SlotId::new(1), &[10], std::slice::from_ref(&scope_a));
+    state.register_active(SlotId::new(2), &[20], std::slice::from_ref(&scope_b));
 
     let moved = state.dispose_or_reuse_starting_from_index(1);
     assert_eq!(moved, vec![20]);

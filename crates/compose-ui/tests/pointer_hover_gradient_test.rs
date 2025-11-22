@@ -38,28 +38,24 @@ fn gradient_follows_state_app(pointer_position: MutableState<Point>) {
                 }
             }))
             .then(Modifier::empty().pointer_input((), {
-                let pointer_position = pointer_position.clone();
-                move |scope: PointerInputScope| {
-                    let pointer_position = pointer_position.clone();
-                    async move {
-                        scope
-                            .await_pointer_event_scope(|await_scope| async move {
-                                loop {
-                                    let event = await_scope.await_pointer_event().await;
-                                    if let PointerEventKind::Move = event.kind {
-                                        eprintln!(
-                                            "Pointer event: setting position to {:?}",
-                                            event.position
-                                        );
-                                        pointer_position.set(Point {
-                                            x: event.position.x,
-                                            y: event.position.y,
-                                        });
-                                    }
+                move |scope: PointerInputScope| async move {
+                    scope
+                        .await_pointer_event_scope(|await_scope| async move {
+                            loop {
+                                let event = await_scope.await_pointer_event().await;
+                                if let PointerEventKind::Move = event.kind {
+                                    eprintln!(
+                                        "Pointer event: setting position to {:?}",
+                                        event.position
+                                    );
+                                    pointer_position.set(Point {
+                                        x: event.position.x,
+                                        y: event.position.y,
+                                    });
                                 }
-                            })
-                            .await;
-                    }
+                            }
+                        })
+                        .await;
                 }
             })),
         ColumnSpec::default(),
@@ -81,9 +77,9 @@ fn test_manual_state_change_triggers_recomposition() {
 
     eprintln!("\n=== Initial composition ===");
     rule.set_content({
-        let pos = pointer_position.clone();
+        let pos = pointer_position;
         move || {
-            gradient_follows_state_app(pos.clone());
+            gradient_follows_state_app(pos);
         }
     })
     .expect("initial render succeeds");
@@ -117,7 +113,6 @@ fn working_gradient_app(pointer_position: MutableState<Point>) {
             })
             .then(Modifier::empty().draw_with_content({
                 // Clone the state handle, not the value
-                let pointer_position = pointer_position.clone();
                 move |scope| {
                     // Read state at draw time, not composition time
                     let position = pointer_position.get();
@@ -130,25 +125,21 @@ fn working_gradient_app(pointer_position: MutableState<Point>) {
                 }
             }))
             .then(Modifier::empty().pointer_input((), {
-                let pointer_position = pointer_position.clone();
-                move |scope: PointerInputScope| {
-                    let pointer_position = pointer_position.clone();
-                    async move {
-                        scope
-                            .await_pointer_event_scope(|await_scope| async move {
-                                loop {
-                                    let event = await_scope.await_pointer_event().await;
-                                    if let PointerEventKind::Move = event.kind {
-                                        eprintln!("Setting position to {:?}", event.position);
-                                        pointer_position.set(Point {
-                                            x: event.position.x,
-                                            y: event.position.y,
-                                        });
-                                    }
+                move |scope: PointerInputScope| async move {
+                    scope
+                        .await_pointer_event_scope(|await_scope| async move {
+                            loop {
+                                let event = await_scope.await_pointer_event().await;
+                                if let PointerEventKind::Move = event.kind {
+                                    eprintln!("Setting position to {:?}", event.position);
+                                    pointer_position.set(Point {
+                                        x: event.position.x,
+                                        y: event.position.y,
+                                    });
                                 }
-                            })
-                            .await;
-                    }
+                            }
+                        })
+                        .await;
                 }
             })),
         ColumnSpec::default(),
@@ -171,9 +162,9 @@ fn test_correct_pattern_reads_state_at_draw_time() {
 
     eprintln!("\n=== Initial composition (correct pattern) ===");
     rule.set_content({
-        let pos = pointer_position.clone();
+        let pos = pointer_position;
         move || {
-            working_gradient_app(pos.clone());
+            working_gradient_app(pos);
         }
     })
     .expect("initial render succeeds");

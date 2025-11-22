@@ -43,14 +43,14 @@ impl Node for DummyNode {}
 #[composable]
 fn async_runtime_demo(animation: MutableState<AnimationState>, stats: MutableState<FrameStats>) {
     {
-        let animation_state = animation.clone();
-        let stats_state = stats.clone();
+        let animation_state = animation;
+        let stats_state = stats;
         launched_effect_async_impl(
             location_key(file!(), line!(), column!()),
             (),
             move |scope| {
-                let animation = animation_state.clone();
-                let stats = stats_state.clone();
+                let animation = animation_state;
+                let stats = stats_state;
                 Box::pin(async move {
                     let clock = scope.runtime().frame_clock();
                     let mut last_time: Option<u64> = None;
@@ -102,7 +102,7 @@ fn async_runtime_demo(animation: MutableState<AnimationState>, stats: MutableSta
                         composer.with_group(
                             location_key(file!(), line!(), column!()),
                             |composer| {
-                                composer.emit_node(|| DummyNode::default());
+                                composer.emit_node(|| DummyNode);
                             },
                         );
                     }
@@ -142,11 +142,7 @@ fn async_runtime_freezes_without_conditional_key() {
     let animation = MutableState::with_runtime(AnimationState::default(), runtime.clone());
     let stats = MutableState::with_runtime(FrameStats::default(), runtime.clone());
 
-    let mut render = {
-        let animation = animation.clone();
-        let stats = stats.clone();
-        move || async_runtime_demo(animation.clone(), stats.clone())
-    };
+    let mut render = { move || async_runtime_demo(animation, stats) };
 
     composition
         .render(location_key(file!(), line!(), column!()), &mut render)
@@ -264,11 +260,7 @@ fn stats_state_invalidates_after_direction_flip() {
 
     animation.update(|anim| anim.progress = 0.5);
 
-    let mut render = {
-        let animation = animation.clone();
-        let stats = stats.clone();
-        move || progress_demo(animation.clone(), stats.clone())
-    };
+    let mut render = { move || progress_demo(animation, stats) };
 
     let key = location_key(file!(), line!(), column!());
     composition

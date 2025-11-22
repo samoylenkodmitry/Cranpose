@@ -862,7 +862,7 @@ fn test_chunked_anchor_rebuild_after_shift() {
     let _g = storage.begin_group(1400);
     let mut ids = Vec::new();
     for i in 0..8 {
-        let s = storage.alloc_value_slot(|| i as i32);
+        let s = storage.alloc_value_slot(|| i);
         ids.push(s);
     }
     storage.end_group();

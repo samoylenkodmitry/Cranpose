@@ -4,8 +4,8 @@ use compose_macros::composable;
 use std::cell::Cell;
 
 thread_local! {
-    static PROGRESS_TAB_RENDERS: Cell<usize> = Cell::new(0);
-    static PROGRESS_BAR_BRANCH_CALLS: Cell<usize> = Cell::new(0);
+    static PROGRESS_TAB_RENDERS: Cell<usize> = const { Cell::new(0) };
+    static PROGRESS_BAR_BRANCH_CALLS: Cell<usize> = const { Cell::new(0) };
 }
 
 fn expected_layout_counts(depth: usize, horizontal: bool) -> (usize, usize) {
@@ -90,7 +90,7 @@ fn summary_tab() {
 
 fn make_tab_renderer(active_tab: MutableState<i32>, progress: MutableState<f32>) -> impl FnMut() {
     move || match active_tab.value() {
-        0 => progress_tab(progress.clone()),
+        0 => progress_tab(progress),
         _ => summary_tab(),
     }
 }
@@ -103,7 +103,7 @@ fn tab_switching_restores_conditional_layout_nodes() {
     let progress = MutableState::with_runtime(0.75f32, runtime.clone());
 
     let key = location_key(file!(), line!(), column!());
-    let mut render = make_tab_renderer(active_tab.clone(), progress.clone());
+    let mut render = make_tab_renderer(active_tab, progress);
 
     reset_progress_counters();
     composition
@@ -156,7 +156,7 @@ fn tab_switching_multiple_toggle_cycles_stays_responsive() {
     let progress = MutableState::with_runtime(0.4f32, runtime.clone());
 
     let key = location_key(file!(), line!(), column!());
-    let mut render = make_tab_renderer(active_tab.clone(), progress.clone());
+    let mut render = make_tab_renderer(active_tab, progress);
 
     composition
         .render(key, &mut render)
@@ -193,7 +193,7 @@ fn tab_switching_layout_pass_handles_conditional_nodes() {
     let progress = MutableState::with_runtime(0.8f32, runtime.clone());
 
     let key = location_key(file!(), line!(), column!());
-    let mut render = make_tab_renderer(active_tab.clone(), progress.clone());
+    let mut render = make_tab_renderer(active_tab, progress);
 
     composition
         .render(key, &mut render)
@@ -348,7 +348,7 @@ fn simple_counter_placeholder() {
 #[composable]
 fn keyed_tab_switcher(active: MutableState<RecursiveDemoTab>, depth_state: MutableState<usize>) {
     let active_value = active.get();
-    let depth_state_for_layout = depth_state.clone();
+    let depth_state_for_layout = depth_state;
     Column(
         Modifier::empty().padding(8.0),
         ColumnSpec::default(),
@@ -356,7 +356,7 @@ fn keyed_tab_switcher(active: MutableState<RecursiveDemoTab>, depth_state: Mutab
             compose_core::with_key(&active_value, || match active_value {
                 RecursiveDemoTab::Counter => simple_counter_placeholder(),
                 RecursiveDemoTab::Layout => {
-                    recursive_layout_root(depth_state_for_layout.clone());
+                    recursive_layout_root(depth_state_for_layout);
                 }
             });
         },
@@ -442,7 +442,7 @@ fn recursive_layout_updates_keep_all_branches() {
 
     composition
         .render(key, &mut || {
-            recursive_layout_root(depth_state.clone());
+            recursive_layout_root(depth_state);
         })
         .expect("initial render");
 
@@ -484,9 +484,7 @@ fn tab_switching_recursive_layout_preserves_branches() {
     let key = location_key(file!(), line!(), column!());
 
     composition
-        .render(key, &mut || {
-            keyed_tab_switcher(active_tab.clone(), depth_state.clone())
-        })
+        .render(key, &mut || keyed_tab_switcher(active_tab, depth_state))
         .expect("initial render");
 
     active_tab.set(RecursiveDemoTab::Layout);
@@ -544,7 +542,7 @@ fn recursive_layout_depth_decrease_then_increase_restores_branches() {
 
     composition
         .render(key, &mut || {
-            recursive_layout_root(depth_state.clone());
+            recursive_layout_root(depth_state);
         })
         .expect("initial render");
 

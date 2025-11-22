@@ -503,17 +503,9 @@ impl Hash for InvalidationElement {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct InvalidationNode {
     state: NodeState,
-}
-
-impl Default for InvalidationNode {
-    fn default() -> Self {
-        Self {
-            state: NodeState::new(),
-        }
-    }
 }
 
 impl DelegatableNode for InvalidationNode {
@@ -717,7 +709,7 @@ impl ModifierNodeElement for TestDrawElement {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct MaskOnlyNode {
     state: NodeState,
 }
@@ -729,14 +721,6 @@ impl DelegatableNode for MaskOnlyNode {
 }
 
 impl ModifierNode for MaskOnlyNode {}
-
-impl Default for MaskOnlyNode {
-    fn default() -> Self {
-        Self {
-            state: NodeState::new(),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct MaskOnlyElement;

@@ -67,7 +67,7 @@ fn recursive_decrease_increase_preserves_structure() {
     println!("\n=== Initial render at depth 3 ===");
     composition
         .render(key, &mut || {
-            recursive_root(depth_state.clone());
+            recursive_root(depth_state);
         })
         .expect("initial render");
 
@@ -176,7 +176,7 @@ fn recursive_decrease_increase_multiple_cycles() {
     // Initial render at depth 3
     composition
         .render(key, &mut || {
-            recursive_root(depth_state.clone());
+            recursive_root(depth_state);
         })
         .expect("initial render");
 

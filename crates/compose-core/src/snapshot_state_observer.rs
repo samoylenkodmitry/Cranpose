@@ -7,7 +7,6 @@
 use crate::collections::map::HashSet;
 use crate::snapshot_v2::{register_apply_observer, ReadObserver, StateObjectId};
 use crate::state::StateObject;
-use ahash::HashSetExt;
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
@@ -386,7 +385,8 @@ impl ObservedIds {
                 if small.len() < MAX_OBSERVED_STATES {
                     small.push(id);
                 } else {
-                    let mut large = HashSet::with_capacity(small.len() + 1);
+                    let mut large =
+                        HashSet::with_capacity_and_hasher(small.len() + 1, Default::default());
                     for existing in small.iter() {
                         large.insert(*existing);
                     }

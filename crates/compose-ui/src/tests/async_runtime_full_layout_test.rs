@@ -69,16 +69,16 @@ fn async_runtime_full_layout(
 ) {
     // LaunchedEffectAsync - exactly like the demo
     {
-        let animation_state = animation.clone();
-        let stats_state = stats.clone();
-        let running_state = is_running.clone();
+        let animation_state = animation;
+        let stats_state = stats;
+        let running_state = is_running;
         launched_effect_async_impl(
             location_key(file!(), line!(), column!()),
             (),
             move |scope| {
-                let animation = animation_state.clone();
-                let stats = stats_state.clone();
-                let running = running_state.clone();
+                let animation = animation_state;
+                let stats = stats_state;
+                let running = running_state;
                 Box::pin(async move {
                     let clock = scope.runtime().frame_clock();
                     let mut last_time: Option<u64> = None;
@@ -226,7 +226,7 @@ fn async_runtime_full_layout(
 
             // Button Row
             {
-                let is_running_for_button = is_running.clone();
+                let is_running_for_button = is_running;
                 Row(
                     Modifier::empty().padding(4.0),
                     RowSpec::default(),
@@ -242,7 +242,7 @@ fn async_runtime_full_layout(
                         Button(
                             Modifier::empty().padding(12.0),
                             {
-                                let toggle_state = is_running_for_button.clone();
+                                let toggle_state = is_running_for_button;
                                 move || toggle_state.set(!toggle_state.get())
                             },
                             move || {
@@ -294,7 +294,7 @@ fn async_runtime_full_layout_freezes_after_forward_flip() {
     // Initial render
     composition
         .render(location_key(file!(), line!(), column!()), &mut || {
-            async_runtime_full_layout(is_running.clone(), animation.clone(), stats.clone());
+            async_runtime_full_layout(is_running, animation, stats);
         })
         .expect("initial render");
     drain_all(&mut composition).expect("initial drain");

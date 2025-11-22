@@ -35,7 +35,6 @@ fn conditional_outside_closure_app(counter: MutableState<i32>) {
 
     // This should work because state is read inside the closure
     Column(Modifier::empty().padding(16.0), ColumnSpec::default(), {
-        let counter = counter.clone();
         move || {
             Text(
                 format!("Counter: {}", counter.get()),
@@ -49,7 +48,6 @@ fn conditional_outside_closure_app(counter: MutableState<i32>) {
 fn conditional_inside_closure_app(counter: MutableState<i32>) {
     // CORRECT PATTERN: Conditional is inside the content closure
     Column(Modifier::empty().padding(16.0), ColumnSpec::default(), {
-        let counter = counter.clone();
         move || {
             // State is read here, inside the closure
             if counter.get() % 2 == 0 {
@@ -77,9 +75,9 @@ fn test_conditional_inside_closure_works() {
 
     eprintln!("\n=== Testing CORRECT pattern (conditional inside closure) ===");
     rule.set_content({
-        let c = counter.clone();
+        let c = counter;
         move || {
-            conditional_inside_closure_app(c.clone());
+            conditional_inside_closure_app(c);
         }
     })
     .expect("initial render succeeds");
@@ -88,7 +86,7 @@ fn test_conditional_inside_closure_works() {
     for i in 1..=3 {
         counter.set(i);
         rule.pump_until_idle()
-            .expect(&format!("recompose to {}", i));
+            .unwrap_or_else(|_| panic!("recompose to {}", i));
         eprintln!("Counter changed to {}", i);
     }
 
@@ -103,7 +101,7 @@ fn test_demo_app_pattern_analysis() {
     eprintln!("========================================\n");
 
     eprintln!("In apps/desktop-demo/src/app.rs:");
-    eprintln!("");
+    eprintln!();
     eprintln!("BROKEN (line 774-802):");
     eprintln!("  if counter.get() % 2 == 0 {{");
     eprintln!("    Text(\"if counter % 2 == 0\", ...);");
@@ -112,14 +110,14 @@ fn test_demo_app_pattern_analysis() {
     eprintln!("  }}");
     eprintln!("  ↑ Conditional OUTSIDE any closure");
     eprintln!("  ↑ Doesn't update visually when counter changes");
-    eprintln!("");
+    eprintln!();
     eprintln!("WORKS (line 860):");
     eprintln!("  Row(Modifier..., move || {{");
     eprintln!("    Text(format!(\"Counter: {{}}\", counter.get()), ...);");
     eprintln!("  }})");
     eprintln!("  ↑ Text INSIDE the Row's content closure");
     eprintln!("  ↑ Updates correctly");
-    eprintln!("");
+    eprintln!();
     eprintln!("DIAGNOSIS:");
     eprintln!("  - Both read from the same state");
     eprintln!("  - Both trigger recomposition");

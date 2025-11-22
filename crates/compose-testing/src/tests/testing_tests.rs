@@ -18,12 +18,10 @@ fn compose_test_rule_reports_content_and_root() {
         let recompositions = Rc::new(Cell::new(0));
 
         rule.set_content({
-            let state = state.clone();
             let recompositions = Rc::clone(&recompositions);
             move || {
                 recompositions.set(recompositions.get() + 1);
-                let id =
-                    with_current_composer(|composer| composer.emit_node(|| TestNode::default()));
+                let id = with_current_composer(|composer| composer.emit_node(TestNode::default));
                 let value = state.value();
                 with_node_mut(id, |node: &mut TestNode| {
                     node.value = value;

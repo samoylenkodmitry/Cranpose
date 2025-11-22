@@ -126,6 +126,7 @@ impl Default for SnapshotWeakSet {
 }
 
 #[cfg(test)]
+#[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
     use crate::snapshot_id_set::{SnapshotId, SnapshotIdSet};
@@ -220,7 +221,7 @@ mod tests {
     #[test]
     fn test_weak_set_maintains_sort_order() {
         let mut set = SnapshotWeakSet::new();
-        let states: Vec<_> = (0..10).map(|i| MockState::new(i)).collect();
+        let states: Vec<_> = (0..10).map(MockState::new).collect();
 
         // Add in random order
         for state in &states {
@@ -308,7 +309,7 @@ mod tests {
         let initial_capacity = set.entries.capacity();
 
         // Add more than initial capacity
-        let states: Vec<_> = (0..20).map(|i| MockState::new(i)).collect();
+        let states: Vec<_> = (0..20).map(MockState::new).collect();
         for state in &states {
             set.add(state);
         }
@@ -343,7 +344,7 @@ mod tests {
     #[test]
     fn test_weak_set_remove_all() {
         let mut set = SnapshotWeakSet::new();
-        let states: Vec<_> = (0..5).map(|i| MockState::new(i)).collect();
+        let states: Vec<_> = (0..5).map(MockState::new).collect();
 
         for state in &states {
             set.add(state);

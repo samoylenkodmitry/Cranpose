@@ -178,13 +178,7 @@ fn async_runtime_freezes_without_conditional_key() {
     let is_running = MutableState::with_runtime(true, runtime.clone());
     let reset_signal = MutableState::with_runtime(0u64, runtime.clone());
 
-    let mut render = {
-        let animation = animation;
-        let stats = stats;
-        let is_running = is_running;
-        let reset_signal = reset_signal;
-        move || async_runtime_test_content(animation, stats, is_running, reset_signal)
-    };
+    let mut render = move || async_runtime_test_content(animation, stats, is_running, reset_signal);
 
     composition
         .render(location_key(file!(), line!(), column!()), &mut render)
