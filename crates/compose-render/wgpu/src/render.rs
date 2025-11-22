@@ -724,17 +724,27 @@ impl GpuRenderer {
                 (text_draw.color.a() * 255.0) as u8,
             );
 
-            log::info!("  Text '{}' pos:({:.0},{:.0}) size:{:.0}x{:.0} color:rgba({},{},{},{})",
+            log::info!("  Text '{}' pos:({:.0},{:.0}) size:{:.0}x{:.0} color:rgba({},{},{},{}) scale:{} clip:{:?}",
                 text_draw.text.chars().take(15).collect::<String>(),
                 text_draw.rect.x, text_draw.rect.y,
                 text_draw.rect.width, text_draw.rect.height,
-                color.r(), color.g(), color.b(), color.a());
+                color.r(), color.g(), color.b(), color.a(),
+                text_draw.scale,
+                text_draw.clip);
+
+            // Log buffer metrics
+            let buffer_metrics = cached.buffer.metrics();
+            let (buffer_width, buffer_height) = cached.buffer.size();
+            log::info!("    Buffer: font_size={:.1} line_height={:.1} size={}x{} runs={}",
+                buffer_metrics.font_size, buffer_metrics.line_height,
+                buffer_width, buffer_height,
+                cached.buffer.layout_runs().count());
 
             text_areas.push(TextArea {
                 buffer: &cached.buffer,
                 left: text_draw.rect.x,
                 top: text_draw.rect.y,
-                scale: 1.0,
+                scale: text_draw.scale,
                 bounds: TextBounds {
                     left: text_draw.clip.map(|c| c.x as i32).unwrap_or(0),
                     top: text_draw.clip.map(|c| c.y as i32).unwrap_or(0),
@@ -753,6 +763,9 @@ impl GpuRenderer {
 
         // Prepare all text at once
         if !text_areas.is_empty() {
+            log::info!("Calling text_renderer.prepare with {} areas, resolution {}x{}",
+                text_areas.len(), width, height);
+
             self.text_renderer
                 .prepare(
                     &self.device,
@@ -799,16 +812,20 @@ impl GpuRenderer {
                 occlusion_query_set: None,
             });
 
+            log::info!("Calling text_renderer.render");
+
             self.text_renderer
                 .render(&self.text_atlas, &mut text_pass)
                 .map_err(|e| {
                     log::error!("Text render error: {:?}", e);
                     format!("Text render error: {:?}", e)
                 })?;
+
+            log::info!("Text render call completed");
         }
 
         if !text_areas.is_empty() {
-            log::info!("Text rendered successfully");
+            log::info!("Text rendered successfully, submitting command buffer");
         }
 
         self.queue.submit(std::iter::once(text_encoder.finish()));
