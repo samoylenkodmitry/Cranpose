@@ -775,12 +775,17 @@ fn web_fetch_example() {
         let status_state = fetch_status;
         let request_state = request_counter;
         let request_key = request_state.get();
-        LaunchedEffectAsync!(request_key, move |_scope| {
+        LaunchedEffect!(request_key, move |scope| {
             let status = status_state;
-            Box::pin(async move {
-                status.set(FetchStatus::Loading);
-                let fetch_result: Result<String, anyhow::Error> = async {
-                    let client = reqwest::Client::builder()
+            status.set(FetchStatus::Loading);
+
+            scope.launch_background(
+                move |token| {
+                    if token.is_cancelled() {
+                        return Err(anyhow!("request cancelled"));
+                    }
+
+                    let client = reqwest::blocking::Client::builder()
                         .user_agent("compose-rs-desktop-demo/0.1")
                         .build()
                         .context("building HTTP client")?;
@@ -788,25 +793,22 @@ fn web_fetch_example() {
                     let response = client
                         .get("https://api.github.com/zen")
                         .send()
-                        .await
                         .context("sending request")?;
 
                     let status = response.status();
-                    let body = response.text().await.context("reading response body")?;
+                    let body = response.text().context("reading response body")?;
 
                     if status.is_success() {
                         Ok(body.trim().to_string())
                     } else {
                         Err(anyhow!("Request failed with status {}: {}", status, body))
                     }
-                }
-                .await;
-
-                match fetch_result {
+                },
+                move |fetch_result| match fetch_result {
                     Ok(text) => status.set(FetchStatus::Success(text)),
                     Err(error) => status.set(FetchStatus::Error(error.to_string())),
-                }
-            })
+                },
+            );
         });
     }
 
@@ -836,9 +838,10 @@ fn web_fetch_example() {
 
                 Text(
                     concat!(
-                        "This tab uses LaunchedEffectAsync to request a short motto ",
-                        "from api.github.com/zen. Each click spawns an async fetch ",
-                        "and updates the UI when the response arrives.",
+                        "This tab uses LaunchedEffect with a background worker to ",
+                        "request a short motto from api.github.com/zen. Each click ",
+                        "spawns a request and updates the UI when the response ",
+                        "arrives.",
                     ),
                     Modifier::empty()
                         .padding(12.0)
