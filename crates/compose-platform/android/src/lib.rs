@@ -1,5 +1,4 @@
-use compose_foundation::geometry::Offset;
-use compose_ui_graphics::density::Density;
+use compose_ui_graphics::Point;
 
 /// Platform abstraction for Android.
 ///
@@ -33,16 +32,16 @@ impl AndroidPlatform {
     ///
     /// Android provides pointer positions in physical pixels; this method
     /// scales them back to logical pixels using the platform's current scale factor.
-    pub fn pointer_position(&self, physical_x: f64, physical_y: f64) -> Offset {
+    pub fn pointer_position(&self, physical_x: f64, physical_y: f64) -> Point {
         let scale = self.scale_factor;
-        Offset {
+        Point {
             x: (physical_x / scale) as f32,
             y: (physical_y / scale) as f32,
         }
     }
 
-    /// Returns the current density for use with compose-ui.
-    pub fn density(&self) -> Density {
-        Density::new(self.scale_factor as f32)
+    /// Returns the current scale factor (density).
+    pub fn scale_factor(&self) -> f32 {
+        self.scale_factor as f32
     }
 }

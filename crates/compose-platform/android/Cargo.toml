@@ -6,5 +6,4 @@ license = "Apache-2.0"
 description = "Android platform adapter for Compose-RS"
 
 [dependencies]
-compose-foundation = { path = "../../compose-foundation" }
 compose-ui-graphics = { path = "../../compose-ui-graphics" }
