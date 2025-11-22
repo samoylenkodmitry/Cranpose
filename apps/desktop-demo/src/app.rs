@@ -109,15 +109,15 @@ pub fn combined_app() {
         Modifier::empty().padding(20.0),
         ColumnSpec::default(),
         move || {
-            let tab_state_for_row = active_tab;
-            let tab_state_for_content = active_tab;
+            let tab_state_for_row = active_tab.clone();
+            let tab_state_for_content = active_tab.clone();
             Row(
                 Modifier::empty().fill_max_width().padding(8.0),
                 RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
                 move || {
-                    let tab_state = tab_state_for_row;
+                    let tab_state = tab_state_for_row.clone();
                     let render_tab_button = move |tab: DemoTab| {
-                        let tab_state = tab_state;
+                        let tab_state = tab_state.clone();
                         let is_active = tab_state.get() == tab;
                         Button(
                             Modifier::empty()
@@ -134,6 +134,7 @@ pub fn combined_app() {
                                 })
                                 .padding(10.0),
                             {
+                                let tab_state = tab_state.clone();
                                 move || {
                                     if tab_state.get() != tab {
                                         println!("{} button clicked", tab.label());
@@ -208,7 +209,7 @@ fn recursive_layout_example() {
                     .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
                     .vertical_alignment(VerticalAlignment::CenterVertically),
                 {
-                    let depth_state = depth_state;
+                    let depth_state = depth_state.clone();
                     move || {
                         let depth = depth_state.get();
                         Button(
@@ -222,7 +223,7 @@ fn recursive_layout_example() {
                                 })
                                 .padding(10.0),
                             {
-                                let depth_state = depth_state;
+                                let depth_state = depth_state.clone();
                                 move || {
                                     let next = (depth_state.get() + 1).min(96);
                                     if next != depth_state.get() {
@@ -246,7 +247,7 @@ fn recursive_layout_example() {
                                 })
                                 .padding(10.0),
                             {
-                                let depth_state = depth_state;
+                                let depth_state = depth_state.clone();
                                 move || {
                                     let next = depth_state.get().saturating_sub(1).max(1);
                                     if next != depth_state.get() {
@@ -407,7 +408,7 @@ pub fn composition_local_example() {
                     })
                     .padding(12.0),
                 {
-                    let counter = counter;
+                    let counter = counter.clone();
                     move || {
                         let new_val = counter.get() + 1;
                         println!("Incrementing counter to {}", new_val);
@@ -486,15 +487,15 @@ fn async_runtime_example() {
     let reset_signal = compose_core::useState(|| 0u64);
 
     {
-        let animation_state = animation;
-        let stats_state = stats;
-        let running_state = is_running;
-        let reset_state = reset_signal;
+        let animation_state = animation.clone();
+        let stats_state = stats.clone();
+        let running_state = is_running.clone();
+        let reset_state = reset_signal.clone();
         LaunchedEffectAsync!((), move |scope| {
-            let animation = animation_state;
-            let stats = stats_state;
-            let running = running_state;
-            let reset = reset_state;
+            let animation = animation_state.clone();
+            let stats = stats_state.clone();
+            let running = running_state.clone();
+            let reset = reset_state.clone();
             Box::pin(async move {
                 let clock = scope.runtime().frame_clock();
                 let mut last_time: Option<u64> = None;
@@ -564,7 +565,7 @@ fn async_runtime_example() {
             .padding(20.0),
         ColumnSpec::default(),
         {
-            let is_running_state = is_running;
+            let is_running_state = is_running.clone();
             move || {
                 Text(
                     "Async Runtime Demo",
@@ -684,10 +685,10 @@ fn async_runtime_example() {
                         .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
                         .vertical_alignment(VerticalAlignment::CenterVertically),
                     {
-                        let toggle_state = is_running_state;
-                        let animation_state = animation;
-                        let stats_state = stats;
-                        let reset_state = reset_signal;
+                        let toggle_state = is_running_state.clone();
+                        let animation_state = animation.clone();
+                        let stats_state = stats.clone();
+                        let reset_state = reset_signal.clone();
                         move || {
                             let running = toggle_state.get();
                             let button_color = if running {
@@ -709,7 +710,7 @@ fn async_runtime_example() {
                                     })
                                     .padding(12.0),
                                 {
-                                    let toggle_state = toggle_state;
+                                    let toggle_state = toggle_state.clone();
                                     move || toggle_state.set(!toggle_state.get())
                                 },
                                 {
@@ -724,10 +725,10 @@ fn async_runtime_example() {
                                 },
                             );
 
-                            let reset_animation = animation_state;
-                            let reset_stats = stats_state;
-                            let reset_tick_state = reset_state;
-                            let toggle_state = toggle_state;
+                            let reset_animation = animation_state.clone();
+                            let reset_stats = stats_state.clone();
+                            let reset_tick_state = reset_state.clone();
+                            let toggle_state = toggle_state.clone();
                             Button(
                                 Modifier::empty()
                                     .rounded_corners(16.0)
@@ -776,12 +777,12 @@ fn counter_app() {
     let wave_state = animateFloatAsState(target_wave, "wave");
     let fetch_key = fetch_request.get();
     {
-        let async_message = async_message;
+        let async_message = async_message.clone();
         LaunchedEffect!(fetch_key, move |scope| {
             if fetch_key == 0 {
                 return;
             }
-            let message_for_ui = async_message;
+            let message_for_ui = async_message.clone();
             scope.launch_background(
                 move |token| {
                     use std::thread;
@@ -876,17 +877,17 @@ fn counter_app() {
                 .padding(20.0),
             ColumnSpec::default(),
             {
-                let counter_main = counter;
-                let pointer_position_main = pointer_position;
-                let pointer_down_main = pointer_down;
-                let wave_main = wave_state;
-                let async_message = async_message;
-                let fetch_request = fetch_request;
+                let counter_main = counter.clone();
+                let pointer_position_main = pointer_position.clone();
+                let pointer_down_main = pointer_down.clone();
+                let wave_main = wave_state.clone();
+                let async_message = async_message.clone();
+                let fetch_request = fetch_request.clone();
                 move || {
-                    let counter = counter_main;
-                    let pointer_position = pointer_position_main;
-                    let pointer_down = pointer_down_main;
-                    let wave = wave_main;
+                    let counter = counter_main.clone();
+                    let pointer_position = pointer_position_main.clone();
+                    let pointer_down = pointer_down_main.clone();
+                    let wave = wave_main.clone();
                     Text(
                         "Compose-RS Playground",
                         Modifier::empty()
@@ -915,7 +916,7 @@ fn counter_app() {
                             .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
                             .vertical_alignment(VerticalAlignment::CenterVertically),
                         {
-                            let counter_display = counter;
+                            let counter_display = counter.clone();
                             let wave_value = wave;
                             move || {
                                 let wave_value = wave_value.value();
@@ -954,8 +955,8 @@ fn counter_app() {
                         height: 16.0,
                     });
 
-                    let async_message_state = async_message;
-                    let fetch_request_state = fetch_request;
+                    let async_message_state = async_message.clone();
+                    let fetch_request_state = fetch_request.clone();
                     Column(
                         Modifier::empty()
                             .rounded_corners(20.0)
@@ -986,11 +987,11 @@ fn counter_app() {
                                 }
                             })
                             .pointer_input((), {
-                                let pointer_position = pointer_position;
-                                let pointer_down = pointer_down;
+                                let pointer_position = pointer_position.clone();
+                                let pointer_down = pointer_down.clone();
                                 move |scope: PointerInputScope| {
-                                    let pointer_position = pointer_position;
-                                    let pointer_down = pointer_down;
+                                    let pointer_position = pointer_position.clone();
+                                    let pointer_down = pointer_down.clone();
                                     async move {
                                         scope
                                             .await_pointer_event_scope(|await_scope| async move {
@@ -1027,8 +1028,8 @@ fn counter_app() {
                             .padding(16.0),
                         ColumnSpec::default(),
                         move || {
-                            let async_message_state = async_message_state;
-                            let fetch_request_state = fetch_request_state;
+                            let async_message_state = async_message_state.clone();
+                            let fetch_request_state = fetch_request_state.clone();
                             Text(
                                 format!("Pointer: ({:.1}, {:.1})", pointer.x, pointer.y),
                                 Modifier::empty()
@@ -1120,8 +1121,8 @@ fn counter_app() {
                                 height: 16.0,
                             });
 
-                            let counter_inc = counter;
-                            let counter_dec = counter;
+                            let counter_inc = counter.clone();
+                            let counter_dec = counter.clone();
                             Row(
                                 Modifier::empty().fill_max_width().padding(8.0),
                                 RowSpec::new()
@@ -1143,7 +1144,7 @@ fn counter_app() {
                                             })
                                             .padding(12.0),
                                         {
-                                            let counter = counter_inc;
+                                            let counter = counter_inc.clone();
                                             move || {
                                                 println!(
                                                     "Incrementing counter to {}",
@@ -1167,7 +1168,7 @@ fn counter_app() {
                                             })
                                             .padding(12.0),
                                         {
-                                            let counter = counter_dec;
+                                            let counter = counter_dec.clone();
                                             move || counter.set(counter.get() - 1)
                                         },
                                         || {
@@ -1182,7 +1183,7 @@ fn counter_app() {
                                 height: 20.0,
                             });
 
-                            let async_message_text = async_message_state;
+                            let async_message_text = async_message_state.clone();
                             Text(
                                 async_message_text.get(),
                                 Modifier::empty()
@@ -1196,8 +1197,8 @@ fn counter_app() {
                                 height: 12.0,
                             });
 
-                            let async_message_button = async_message_state;
-                            let fetch_request_button = fetch_request_state;
+                            let async_message_button = async_message_state.clone();
+                            let fetch_request_button = fetch_request_state.clone();
                             Button(
                                 Modifier::empty()
                                     .rounded_corners(16.0)
@@ -1284,7 +1285,7 @@ fn modifier_showcase_tab() {
                     .rounded_corners(20.0),
                 ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
                 {
-                    let showcase_state = selected_showcase;
+                    let showcase_state = selected_showcase.clone();
                     move || {
                         Text(
                             "Select Showcase",
@@ -1326,7 +1327,7 @@ fn modifier_showcase_tab() {
                                     })
                                     .padding(10.0),
                                 {
-                                    let showcase_state = showcase_state;
+                                    let showcase_state = showcase_state.clone();
                                     move || {
                                         if showcase_state.get() != showcase_type {
                                             showcase_state.set(showcase_type);
@@ -1355,7 +1356,7 @@ fn modifier_showcase_tab() {
                     .padding(16.0),
                 ColumnSpec::default(),
                 {
-                    let selected_showcase_inner = selected_showcase;
+                    let selected_showcase_inner = selected_showcase.clone();
                     move || {
                         let showcase_to_render = selected_showcase_inner.get();
                         compose_core::with_key(&showcase_to_render, || match showcase_to_render {
@@ -1815,7 +1816,7 @@ pub fn dynamic_modifiers_showcase() {
                 })
                 .padding(10.0),
             {
-                let frame_state = frame;
+                let frame_state = frame.clone();
                 move || {
                     frame_state.set(frame_state.get() + 1);
                 }
