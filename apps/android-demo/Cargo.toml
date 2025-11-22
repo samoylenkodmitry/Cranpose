@@ -17,7 +17,7 @@ compose-foundation = { path = "../../crates/compose-foundation" }
 compose-ui = { path = "../../crates/compose-ui" }
 compose-ui-graphics = { path = "../../crates/compose-ui-graphics" }
 compose-ui-layout = { path = "../../crates/compose-ui-layout" }
-desktop-app = { path = "../desktop-demo" }
+desktop-app = { path = "../desktop-demo", default-features = false }
 
 [package.metadata.android]
 apk_label = "Compose RS Demo"

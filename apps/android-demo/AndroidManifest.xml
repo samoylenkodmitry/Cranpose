@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     package="org.rs.compose.demo">
 
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
@@ -8,7 +9,8 @@
         <activity
             android:name="android.app.NativeActivity"
             android:exported="true"
-            android:label="Compose RS Demo">
+            android:label="Compose RS Demo"
+            tools:node="replace">
             <meta-data android:name="android.app.lib_name" android:value="android_app" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
