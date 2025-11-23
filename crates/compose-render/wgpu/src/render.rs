@@ -744,8 +744,8 @@ impl GpuRenderer {
 
                 // Log first few glyphs
                 for (glyph_idx, glyph) in first_run.glyphs.iter().take(3).enumerate() {
-                    log::info!("    Glyph {}: x={:.1} y={:.1} w={} cache_key_flags={:?}",
-                        glyph_idx, glyph.x, glyph.y, glyph.w, glyph.cache_key_flags);
+                    log::info!("    Glyph {}: x={:.1} y={:.1} w={} glyph_id={} font_id={}",
+                        glyph_idx, glyph.x, glyph.y, glyph.w, glyph.glyph_id, glyph.font_id);
                 }
             }
 
