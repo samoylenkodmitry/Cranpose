@@ -731,9 +731,23 @@ impl GpuRenderer {
         for (idx, (text_draw, key)) in text_data.iter().enumerate() {
             let cached = text_cache.get(key).expect("Text should be in cache");
 
-            // Log buffer state
+            // Log buffer state and detailed glyph information
             let (buf_w, buf_h) = cached.buffer.size();
-            let buf_runs = cached.buffer.layout_runs().count();
+            let layout_runs: Vec<_> = cached.buffer.layout_runs().collect();
+            let buf_runs = layout_runs.len();
+
+            // Log detailed glyph info for first run
+            if let Some(first_run) = layout_runs.first() {
+                log::info!("  Buffer '{}': line_w={:.1}, line_y={:.1}, glyphs={}",
+                    text_draw.text.chars().take(10).collect::<String>(),
+                    first_run.line_w, first_run.line_y, first_run.glyphs.len());
+
+                // Log first few glyphs
+                for (glyph_idx, glyph) in first_run.glyphs.iter().take(3).enumerate() {
+                    log::info!("    Glyph {}: x={:.1} y={:.1} w={} cache_key_flags={:?}",
+                        glyph_idx, glyph.x, glyph.y, glyph.w, glyph.cache_key_flags);
+                }
+            }
 
             let color = GlyphonColor::rgba(
                 (text_draw.color.r() * 255.0) as u8,
