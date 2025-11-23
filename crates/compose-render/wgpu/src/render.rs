@@ -752,6 +752,18 @@ impl GpuRenderer {
 
         // Prepare all text at once
         if !text_areas.is_empty() {
+            // One-time diagnostic log for first render
+            static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                log::warn!("=== TEXT RENDERING DIAGNOSTIC (one-time) ===");
+                log::warn!("Viewport: {}x{}, Text areas: {}", width, height, text_areas.len());
+                if let Some(first) = text_areas.first() {
+                    log::warn!("First area: left={}, top={}, scale={}", first.left, first.top, first.scale);
+                    log::warn!("First area color: {:?}", first.default_color);
+                    log::warn!("First area bounds: {:?}", first.bounds);
+                }
+            }
+
             self.text_renderer
                 .prepare(
                     &self.device,
