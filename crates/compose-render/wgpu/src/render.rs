@@ -676,6 +676,10 @@ impl GpuRenderer {
                 cached.ensure(&mut font_system, &text_draw.text, font_size, Attrs::new(), width as f32, height as f32);
             } else {
                 // Not in cache, create new buffer
+                log::info!("Creating NEW text buffer '{}' at {}x{}, font_size={}",
+                    text_draw.text.chars().take(10).collect::<String>(),
+                    width, height, font_size);
+
                 let mut buffer = glyphon::Buffer::new(
                     &mut font_system,
                     Metrics::new(font_size, font_size * 1.4),
@@ -690,6 +694,9 @@ impl GpuRenderer {
                     Shaping::Advanced,
                 );
                 buffer.shape_until_scroll(&mut font_system);
+
+                let runs = buffer.layout_runs().count();
+                log::info!("  New buffer shaped: runs={}", runs);
 
                 text_cache.insert(
                     key,
@@ -752,6 +759,8 @@ impl GpuRenderer {
 
         // Prepare all text at once
         if !text_areas.is_empty() {
+            log::info!("=== RENDERING {} text areas at viewport {}x{} ===", text_areas.len(), width, height);
+
             self.text_renderer
                 .prepare(
                     &self.device,

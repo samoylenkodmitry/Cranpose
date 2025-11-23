@@ -80,9 +80,15 @@ impl SharedTextBuffer {
         width: f32,
         height: f32,
     ) -> bool {
+        let (old_w, old_h) = self.buffer.size();
+
         // Always update buffer size to match rendering viewport
         // and force reshape to ensure glyphs are laid out correctly
         self.buffer.set_size(font_system, width, height);
+
+        log::info!("Text buffer '{}': resize {}x{} -> {}x{}, font_size={}",
+            &self.text.chars().take(10).collect::<String>(),
+            old_w, old_h, width, height, font_size);
 
         // Force reshape even if text/font_size unchanged to handle size changes
         let metrics = Metrics::new(font_size, font_size * 1.4);
@@ -90,6 +96,9 @@ impl SharedTextBuffer {
         self.buffer
             .set_text(font_system, text, attrs, Shaping::Advanced);
         self.buffer.shape_until_scroll(font_system);
+
+        let runs = self.buffer.layout_runs().count();
+        log::info!("  Reshaped: runs={}, metrics={:?}", runs, metrics);
 
         // Update cached values
         self.text.clear();
