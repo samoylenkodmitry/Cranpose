@@ -670,25 +670,28 @@ impl GpuRenderer {
             let key = TextCacheKey::new(&text_draw.text, BASE_FONT_SIZE * text_draw.scale);
             let font_size = BASE_FONT_SIZE * text_draw.scale;
 
+            // Use large but finite dimensions (f32::MAX causes GPU precision issues on Android)
+            const MAX_LAYOUT_SIZE: f32 = 4096.0;
+
             let mut text_cache = self.text_cache.lock().unwrap();
             if let Some(cached) = text_cache.get_mut(&key) {
                 // Already in cache - use ensure() to only reshape if needed
                 log::info!("Text '{}' found in cache, calling ensure()",
                     text_draw.text.chars().take(10).collect::<String>());
-                let reshaped = cached.ensure(&mut font_system, &text_draw.text, font_size, Attrs::new(), f32::MAX, f32::MAX);
+                let reshaped = cached.ensure(&mut font_system, &text_draw.text, font_size, Attrs::new(), MAX_LAYOUT_SIZE, MAX_LAYOUT_SIZE);
                 log::info!("  ensure() returned: reshaped={}", reshaped);
             } else {
                 // Not in cache, create new buffer
-                log::info!("Creating NEW text buffer '{}' with infinite layout, font_size={}",
+                log::info!("Creating NEW text buffer '{}' with layout size {}, font_size={}",
                     text_draw.text.chars().take(10).collect::<String>(),
-                    font_size);
+                    MAX_LAYOUT_SIZE, font_size);
 
                 let mut buffer = glyphon::Buffer::new(
                     &mut font_system,
                     Metrics::new(font_size, font_size * 1.4),
                 );
-                // Use infinite dimensions for text layout (prevents wrapping/clipping issues)
-                buffer.set_size(&mut font_system, f32::MAX, f32::MAX);
+                // Use large but finite dimensions (prevents GPU precision issues)
+                buffer.set_size(&mut font_system, MAX_LAYOUT_SIZE, MAX_LAYOUT_SIZE);
                 buffer.set_text(
                     &mut font_system,
                     &text_draw.text,
@@ -765,7 +768,9 @@ impl GpuRenderer {
                 buffer: &cached.buffer,
                 left: text_draw.rect.x,
                 top: text_draw.rect.y,
-                scale: text_draw.scale,
+                // Use scale 1.0 since font_size already incorporates text_draw.scale
+                // Double-scaling causes corruption/clipping on Android
+                scale: 1.0,
                 bounds,
                 default_color: color,
             });

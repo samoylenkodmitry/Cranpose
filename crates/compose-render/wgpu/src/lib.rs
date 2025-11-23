@@ -323,16 +323,17 @@ impl TextMeasurer for WgpuTextMeasurer {
         let mut text_cache = self.text_cache.lock().unwrap();
 
         // Get or create cached buffer and measure it
-        // Use infinite dimensions for text layout (prevents wrapping/clipping)
+        // Use large but finite dimensions (f32::MAX causes GPU precision issues on Android)
+        const MAX_LAYOUT_SIZE: f32 = 4096.0;
         let size = if let Some(cached) = text_cache.get_mut(&cache_key) {
             // Shared cache hit - use ensure() to only reshape if needed
-            cached.ensure(&mut font_system, text, font_size, Attrs::new(), f32::MAX, f32::MAX);
+            cached.ensure(&mut font_system, text, font_size, Attrs::new(), MAX_LAYOUT_SIZE, MAX_LAYOUT_SIZE);
             cached.size(font_size)
         } else {
             // Cache miss - create new buffer and add to shared cache
             let mut new_buffer =
                 Buffer::new(&mut font_system, Metrics::new(font_size, font_size * 1.4));
-            new_buffer.set_size(&mut font_system, f32::MAX, f32::MAX);
+            new_buffer.set_size(&mut font_system, MAX_LAYOUT_SIZE, MAX_LAYOUT_SIZE);
             new_buffer.set_text(&mut font_system, text, Attrs::new(), Shaping::Advanced);
             new_buffer.shape_until_scroll(&mut font_system);
 
