@@ -142,6 +142,51 @@ fn grid_example() {
     );
 }
 
+// Get display density from Android DisplayMetrics using JNI
+#[cfg(target_os = "android")]
+fn get_display_density(app: &android_activity::AndroidApp) -> f32 {
+    use jni::objects::JObject;
+
+    // Get the VM and context from ndk-context
+    let ctx = ndk_context::android_context();
+    let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }
+        .expect("Failed to create JavaVM");
+
+    let mut env = vm.attach_current_thread()
+        .expect("Failed to attach thread");
+
+    // Get the Activity context
+    let activity = unsafe { JObject::from_raw(ctx.context().cast()) };
+
+    // Call getResources()
+    let resources = env.call_method(
+        activity,
+        "getResources",
+        "()Landroid/content/res/Resources;",
+        &[]
+    ).expect("Failed to call getResources")
+        .l().expect("Failed to get Resources object");
+
+    // Call getDisplayMetrics()
+    let metrics = env.call_method(
+        resources,
+        "getDisplayMetrics",
+        "()Landroid/util/DisplayMetrics;",
+        &[]
+    ).expect("Failed to call getDisplayMetrics")
+        .l().expect("Failed to get DisplayMetrics object");
+
+    // Get density field (1.0 = mdpi, 1.5 = hdpi, 2.0 = xhdpi, 3.0 = xxhdpi, etc.)
+    let density = env.get_field(
+        metrics,
+        "density",
+        "F"
+    ).expect("Failed to get density field")
+        .f().expect("Failed to convert density to float");
+
+    density
+}
+
 // Android entry point using android-activity
 #[cfg(target_os = "android")]
 #[no_mangle]
@@ -307,7 +352,14 @@ fn android_main(app: android_activity::AndroidApp) {
                             });
 
                             app_shell.set_buffer_size(width, height);
-                            app_shell.set_viewport(width as f32, height as f32);
+
+                            // Get display density and scale viewport to DP
+                            let density = get_display_density(&app);
+                            let dp_width = width as f32 / density;
+                            let dp_height = height as f32 / density;
+                            app_shell.set_viewport(dp_width, dp_height);
+                            log::info!("Initial setup: {}x{} pixels (density: {:.2}x) -> {:.1}x{:.1} dp",
+                                width, height, density, dp_width, dp_height);
 
                             surface_state = Some((surface, device, queue, surface_config, app_shell));
 
@@ -324,7 +376,9 @@ fn android_main(app: android_activity::AndroidApp) {
                             let height = native_window.height() as u32;
                             window_size = (width, height);
 
-                            log::info!("Window resized to {}x{}", width, height);
+                            // Get density from Android DisplayMetrics via JNI
+                            let density = get_display_density(&app);
+                            log::info!("Window resized to {}x{} (density: {:.2}x)", width, height, density);
 
                             if let Some((surface, device, _, surface_config, app_shell)) =
                                 &mut surface_state
@@ -334,7 +388,12 @@ fn android_main(app: android_activity::AndroidApp) {
                                     surface_config.height = height;
                                     surface.configure(device, surface_config);
                                     app_shell.set_buffer_size(width, height);
-                                    app_shell.set_viewport(width as f32, height as f32);
+
+                                    // Scale viewport by density to convert pixels to DP
+                                    let dp_width = width as f32 / density;
+                                    let dp_height = height as f32 / density;
+                                    app_shell.set_viewport(dp_width, dp_height);
+                                    log::info!("  Viewport set to {:.1}x{:.1} dp", dp_width, dp_height);
                                 }
                             }
                         }
