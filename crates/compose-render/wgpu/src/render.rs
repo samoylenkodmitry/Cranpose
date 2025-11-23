@@ -804,7 +804,9 @@ impl GpuRenderer {
             // TODO: Investigate why continuous recreation is required
             #[cfg(target_os = "android")]
             {
+                log::info!("  ANDROID: Recreating text atlas this frame (emulator fix)");
                 self.text_atlas = TextAtlas::new(&self.device, &self.queue, self.surface_format);
+                log::info!("  Atlas recreated successfully");
             }
 
             // Create fresh SwashCache each frame to avoid stale rasterization data
