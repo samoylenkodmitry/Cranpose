@@ -10,7 +10,10 @@ use std::sync::OnceLock;
 static DENSITY_SCALE: OnceLock<f32> = OnceLock::new();
 
 fn dp(value: f32) -> f32 {
-    value * DENSITY_SCALE.get().copied().unwrap_or(1.0)
+    let scale = DENSITY_SCALE.get().copied().unwrap_or(1.0);
+    let result = value * scale;
+    log::info!("DP_SCALE: dp({:.1}) x {:.2} = {:.1}", value, scale, result);
+    result
 }
 
 #[composable]
