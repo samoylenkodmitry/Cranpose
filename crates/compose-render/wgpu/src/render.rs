@@ -651,13 +651,11 @@ impl GpuRenderer {
             .map(|text| TextCacheKey::new(&text.text, BASE_FONT_SIZE * text.scale))
             .collect();
 
-        // Remove cache entries for text no longer present (O(1) lookups via HashSet)
-        self.text_cache
-            .lock()
-            .unwrap()
-            .retain(|key, _| current_text_keys.contains(key));
+        // ANDROID TEST: Disable caching completely - always create fresh buffers
+        // Clear cache entirely each frame
+        self.text_cache.lock().unwrap().clear();
 
-        // Create or update cached text buffers (only reshape when needed)
+        // Always create fresh text buffers (no caching, no reuse)
         for text_draw in &sorted_texts {
             // Skip empty text or zero-sized rects
             if text_draw.text.is_empty()
@@ -673,46 +671,38 @@ impl GpuRenderer {
             // Use moderate size for Android compatibility (4096 causes atlas corruption)
             const MAX_LAYOUT_SIZE: f32 = 2048.0;
 
+            // ALWAYS create new buffer (never reuse from cache)
+            log::info!("Creating FRESH text buffer '{}' with layout size {}, font_size={}",
+                text_draw.text.chars().take(10).collect::<String>(),
+                MAX_LAYOUT_SIZE, font_size);
+
+            let mut buffer = glyphon::Buffer::new(
+                &mut font_system,
+                Metrics::new(font_size, font_size * 1.4),
+            );
+            // Use large but finite dimensions (prevents GPU precision issues)
+            buffer.set_size(&mut font_system, MAX_LAYOUT_SIZE, MAX_LAYOUT_SIZE);
+            buffer.set_text(
+                &mut font_system,
+                &text_draw.text,
+                Attrs::new(),
+                Shaping::Advanced,
+            );
+            buffer.shape_until_scroll(&mut font_system);
+
+            let runs = buffer.layout_runs().count();
+            log::info!("  Fresh buffer shaped: runs={}", runs);
+
             let mut text_cache = self.text_cache.lock().unwrap();
-            if let Some(cached) = text_cache.get_mut(&key) {
-                // Already in cache - use ensure() to only reshape if needed
-                log::info!("Text '{}' found in cache, calling ensure()",
-                    text_draw.text.chars().take(10).collect::<String>());
-                let reshaped = cached.ensure(&mut font_system, &text_draw.text, font_size, Attrs::new(), MAX_LAYOUT_SIZE, MAX_LAYOUT_SIZE);
-                log::info!("  ensure() returned: reshaped={}", reshaped);
-            } else {
-                // Not in cache, create new buffer
-                log::info!("Creating NEW text buffer '{}' with layout size {}, font_size={}",
-                    text_draw.text.chars().take(10).collect::<String>(),
-                    MAX_LAYOUT_SIZE, font_size);
-
-                let mut buffer = glyphon::Buffer::new(
-                    &mut font_system,
-                    Metrics::new(font_size, font_size * 1.4),
-                );
-                // Use large but finite dimensions (prevents GPU precision issues)
-                buffer.set_size(&mut font_system, MAX_LAYOUT_SIZE, MAX_LAYOUT_SIZE);
-                buffer.set_text(
-                    &mut font_system,
-                    &text_draw.text,
-                    Attrs::new(),
-                    Shaping::Advanced,
-                );
-                buffer.shape_until_scroll(&mut font_system);
-
-                let runs = buffer.layout_runs().count();
-                log::info!("  New buffer shaped: runs={}", runs);
-
-                text_cache.insert(
-                    key,
-                    SharedTextBuffer {
-                        buffer,
-                        text: text_draw.text.clone(),
-                        font_size,
-                        cached_size: None,
-                    },
-                );
-            }
+            text_cache.insert(
+                key,
+                SharedTextBuffer {
+                    buffer,
+                    text: text_draw.text.clone(),
+                    font_size,
+                    cached_size: None,
+                },
+            );
         }
 
         // Collect text data from cache

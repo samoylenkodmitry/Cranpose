@@ -320,36 +320,37 @@ impl TextMeasurer for WgpuTextMeasurer {
             }
         }
 
-        // Need to measure - check shared text cache
-        let cache_key = TextCacheKey::new(text, font_size);
+        // ANDROID TEST: Disable caching completely - always create fresh buffers
         let mut font_system = self.font_system.lock().unwrap();
-        let mut text_cache = self.text_cache.lock().unwrap();
 
-        // Get or create cached buffer and measure it
-        // Use moderate size for Android compatibility (4096 causes atlas corruption)
+        // Always create new buffer (no caching)
         const MAX_LAYOUT_SIZE: f32 = 2048.0;
-        let size = if let Some(cached) = text_cache.get_mut(&cache_key) {
-            // Shared cache hit - use ensure() to only reshape if needed
-            cached.ensure(&mut font_system, text, font_size, Attrs::new(), MAX_LAYOUT_SIZE, MAX_LAYOUT_SIZE);
-            cached.size(font_size)
-        } else {
-            // Cache miss - create new buffer and add to shared cache
-            let mut new_buffer =
-                Buffer::new(&mut font_system, Metrics::new(font_size, font_size * 1.4));
-            new_buffer.set_size(&mut font_system, MAX_LAYOUT_SIZE, MAX_LAYOUT_SIZE);
-            new_buffer.set_text(&mut font_system, text, Attrs::new(), Shaping::Advanced);
-            new_buffer.shape_until_scroll(&mut font_system);
+        let mut new_buffer =
+            Buffer::new(&mut font_system, Metrics::new(font_size, font_size * 1.4));
+        new_buffer.set_size(&mut font_system, MAX_LAYOUT_SIZE, MAX_LAYOUT_SIZE);
+        new_buffer.set_text(&mut font_system, text, Attrs::new(), Shaping::Advanced);
+        new_buffer.shape_until_scroll(&mut font_system);
 
-            let mut shared_buffer = SharedTextBuffer {
-                buffer: new_buffer,
-                text: text.to_string(),
-                font_size,
-                cached_size: None,
-            };
-            let size = shared_buffer.size(font_size);
-            text_cache.insert(cache_key, shared_buffer);
-            size
+        // Calculate size directly (no caching)
+        let mut max_width = 0.0f32;
+        for run in new_buffer.layout_runs() {
+            max_width = max_width.max(run.line_w);
+        }
+        let total_height = new_buffer.lines.len() as f32 * font_size * 1.4;
+        let size = Size {
+            width: max_width,
+            height: total_height,
         };
+
+        // Store in cache for renderer to pick up (but will create fresh during render)
+        let cache_key = TextCacheKey::new(text, font_size);
+        let mut text_cache = self.text_cache.lock().unwrap();
+        text_cache.insert(cache_key, SharedTextBuffer {
+            buffer: new_buffer,
+            text: text.to_string(),
+            font_size,
+            cached_size: Some(size),
+        });
 
         // Cache the size result
         let mut size_cache = self.size_cache.lock().unwrap();
