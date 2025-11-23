@@ -353,25 +353,28 @@ fn android_main(app: android_activity::AndroidApp) {
 
                             surface.configure(&device, &surface_config);
 
+                            // Get display density FIRST - before creating AppShell!
+                            // This must happen before composables run, or dp() will return 1.0
+                            let density = get_display_density(&app);
+                            DENSITY_SCALE.get_or_init(|| density);
+                            log::info!("Density initialized: {:.2}x (BEFORE AppShell creation)", density);
+
                             // Create renderer
                             let mut renderer = WgpuRenderer::new();
                             renderer.init_gpu(device.clone(), queue.clone(), surface_format);
 
                             // Create app shell with our combined_app
+                            // Composables will now use correct density via dp()
                             let mut app_shell = AppShell::new(renderer, default_root_key(), || {
                                 combined_app();
                             });
 
                             app_shell.set_buffer_size(width, height);
 
-                            // Get display density and set global scale for DP conversion
-                            let density = get_display_density(&app);
-                            DENSITY_SCALE.get_or_init(|| density);
-                            log::info!("Initial setup: {}x{} pixels at {:.2}x density",
-                                width, height, density);
-
                             // Keep viewport in pixels - density scaling happens via dp() helper
                             app_shell.set_viewport(width as f32, height as f32);
+                            log::info!("Initial setup complete: {}x{} pixels at {:.2}x density",
+                                width, height, density);
 
                             surface_state = Some((surface, device, queue, surface_config, app_shell));
 
