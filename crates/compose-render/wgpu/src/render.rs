@@ -246,6 +246,8 @@ pub struct GpuRenderer {
     shape_buffers: ShapeBatchBuffers,
     // Shared text cache used by both measurement and rendering
     text_cache: SharedTextCache,
+    // Flag to track if atlas has been recreated (for Android emulator fix)
+    atlas_recreated: bool,
 }
 
 impl GpuRenderer {
@@ -389,6 +391,7 @@ impl GpuRenderer {
             uniform_bind_group,
             shape_buffers,
             text_cache,
+            atlas_recreated: false,
         }
     }
 
@@ -797,13 +800,16 @@ impl GpuRenderer {
         if !text_areas.is_empty() {
             log::info!("=== Calling text_renderer.prepare() for {} text areas ===", text_areas.len());
 
-            // ANDROID EMULATOR FIX ATTEMPT: Try recreating atlas fresh each frame
-            // This eliminates any potential atlas state corruption issues
+            // ANDROID FIX: Recreate atlas on first render to fix emulator bug
+            // The initial atlas created during GPU initialization is corrupted on some
+            // GPU configurations (NVIDIA Vulkan passthrough emulator). Recreating it
+            // once on the first render when the surface is fully ready fixes the issue.
             #[cfg(target_os = "android")]
-            {
-                log::info!("  ANDROID: Recreating text atlas fresh this frame");
+            if !self.atlas_recreated {
+                log::info!("  ANDROID: Recreating text atlas (first render fix for emulator)");
                 self.text_atlas = TextAtlas::new(&self.device, &self.queue, self.surface_format);
-                log::info!("  Fresh atlas recreated");
+                self.atlas_recreated = true;
+                log::info!("  Fresh atlas created - subsequent frames will reuse this atlas");
             }
 
             // Create fresh SwashCache each frame to avoid stale rasterization data
