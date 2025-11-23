@@ -10,7 +10,8 @@
             android:name="android.app.NativeActivity"
             android:exported="true"
             android:label="Compose RS Demo"
-            tools:node="replace">
+            tools:node="replace"
+            tools:replace="android:exported">
             <meta-data android:name="android.app.lib_name" android:value="android_app" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
