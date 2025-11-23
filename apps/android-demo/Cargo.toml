@@ -23,7 +23,7 @@ desktop-app = { path = "../desktop-demo", default-features = false }
 apk_label = "Compose RS Demo"
 target_sdk_version = 34
 min_sdk_version = 24
-manifest = "apps/android-demo/AndroidManifest.xml"
+manifest = "AndroidManifest.xml"
 
 [package.metadata.android.activity_attributes]
 "android:exported" = "true"
