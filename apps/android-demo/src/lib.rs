@@ -168,8 +168,18 @@ fn android_main(app: android_activity::AndroidApp) {
     log::info!("Starting Compose-RS Android Demo");
 
     // Initialize wgpu instance
+    // ANDROID EMULATOR FIX ATTEMPT: Try GLES backend instead of Vulkan
+    // Emulators often have issues with Vulkan passthrough, but GLES works better
+    #[cfg(target_os = "android")]
+    let backends = {
+        log::info!("Android detected - trying GL backend first for emulator compatibility");
+        wgpu::Backends::GL | wgpu::Backends::VULKAN
+    };
+    #[cfg(not(target_os = "android"))]
+    let backends = wgpu::Backends::all();
+
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::all(),
+        backends,
         ..Default::default()
     });
 
@@ -232,7 +242,12 @@ fn android_main(app: android_activity::AndroidApp) {
                             ))
                             .expect("Failed to find suitable adapter");
 
-                            log::info!("Found adapter: {:?}", adapter.get_info());
+                            let adapter_info = adapter.get_info();
+                            log::info!("Found adapter: {:?}", adapter_info);
+                            log::info!("  Backend: {:?}", adapter_info.backend);
+                            log::info!("  Device: {}", adapter_info.device);
+                            log::info!("  Vendor: {}", adapter_info.vendor);
+                            log::info!("  Driver: {} ({})", adapter_info.driver, adapter_info.driver_info);
 
                             // Request device and queue
                             let (device, queue) = pollster::block_on(adapter.request_device(

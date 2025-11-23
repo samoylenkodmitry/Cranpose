@@ -341,12 +341,20 @@ impl GpuRenderer {
 
         let swash_cache = SwashCache::new();
         let mut text_atlas = TextAtlas::new(&device, &queue, surface_format);
+
+        log::info!("=== Text Atlas Created ===");
+        log::info!("  Format: {:?}", surface_format);
+        log::info!("  Atlas kind: {:?}", text_atlas.kind());
+        log::info!("  Atlas size: {}x{}", text_atlas.width(), text_atlas.height());
+
         let text_renderer = TextRenderer::new(
             &mut text_atlas,
             &device,
             wgpu::MultisampleState::default(),
             None,
         );
+
+        log::info!("  TextRenderer created successfully");
 
         // Create persistent uniform buffer
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -789,6 +797,10 @@ impl GpuRenderer {
         if !text_areas.is_empty() {
             log::info!("=== Calling text_renderer.prepare() for {} text areas ===", text_areas.len());
 
+            // Log atlas state BEFORE prepare
+            log::info!("  Atlas BEFORE prepare: {}x{}, kind={:?}",
+                self.text_atlas.width(), self.text_atlas.height(), self.text_atlas.kind());
+
             // Create fresh SwashCache each frame to avoid stale rasterization data
             // This fixes flickering and ensures clean glyph rendering on Android
             let mut fresh_swash_cache = SwashCache::new();
@@ -807,6 +819,8 @@ impl GpuRenderer {
             match prepare_result {
                 Ok(_) => {
                     log::info!("  Text prepare SUCCESS - glyphs uploaded to GPU atlas");
+                    log::info!("  Atlas AFTER prepare: {}x{}, kind={:?}",
+                        self.text_atlas.width(), self.text_atlas.height(), self.text_atlas.kind());
                 }
                 Err(ref e) => {
                     log::error!("  Text prepare FAILED: {:?}", e);
@@ -841,6 +855,9 @@ impl GpuRenderer {
             });
 
             log::info!("=== Calling text_renderer.render() ===");
+            log::info!("  Viewport: {}x{}", width, height);
+            log::info!("  Atlas for render: {}x{}", self.text_atlas.width(), self.text_atlas.height());
+
             let render_result = self.text_renderer
                 .render(&self.text_atlas, &mut text_pass);
 
