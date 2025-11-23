@@ -328,12 +328,18 @@ fn android_main(app: android_activity::AndroidApp) {
                 // Android requires us to consume input events or they queue up and timeout
                 _ => {
                     // Process and consume all pending input events
-                    app.input_events(|event| {
-                        // For now, just consume the event to prevent ANR
-                        // TODO: Actually handle touch events and trigger redraws
-                        needs_redraw = true;
-                        InputStatus::Handled
-                    });
+                    if let Ok(mut iter) = app.input_events_iter() {
+                        loop {
+                            if iter.next(|_event| {
+                                // For now, just consume the event to prevent ANR
+                                // TODO: Actually handle touch events and trigger redraws
+                                needs_redraw = true;
+                                InputStatus::Handled
+                            }).is_none() {
+                                break;
+                            }
+                        }
+                    }
                 }
             }
         });
