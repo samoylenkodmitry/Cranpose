@@ -345,8 +345,6 @@ impl GpuRenderer {
 
         log::info!("=== Text Atlas Created ===");
         log::info!("  Format: {:?}", surface_format);
-        log::info!("  Atlas kind: {:?}", text_atlas.kind());
-        log::info!("  Atlas size: {}x{}", text_atlas.width(), text_atlas.height());
 
         let text_renderer = TextRenderer::new(
             &mut text_atlas,
@@ -805,13 +803,8 @@ impl GpuRenderer {
             {
                 log::info!("  ANDROID: Recreating text atlas fresh this frame");
                 self.text_atlas = TextAtlas::new(&self.device, &self.queue, self.surface_format);
-                log::info!("  Fresh atlas created: {}x{}, kind={:?}",
-                    self.text_atlas.width(), self.text_atlas.height(), self.text_atlas.kind());
+                log::info!("  Fresh atlas recreated");
             }
-
-            // Log atlas state BEFORE prepare
-            log::info!("  Atlas BEFORE prepare: {}x{}, kind={:?}",
-                self.text_atlas.width(), self.text_atlas.height(), self.text_atlas.kind());
 
             // Create fresh SwashCache each frame to avoid stale rasterization data
             // This fixes flickering and ensures clean glyph rendering on Android
@@ -831,8 +824,6 @@ impl GpuRenderer {
             match prepare_result {
                 Ok(_) => {
                     log::info!("  Text prepare SUCCESS - glyphs uploaded to GPU atlas");
-                    log::info!("  Atlas AFTER prepare: {}x{}, kind={:?}",
-                        self.text_atlas.width(), self.text_atlas.height(), self.text_atlas.kind());
                 }
                 Err(ref e) => {
                     log::error!("  Text prepare FAILED: {:?}", e);
@@ -868,7 +859,6 @@ impl GpuRenderer {
 
             log::info!("=== Calling text_renderer.render() ===");
             log::info!("  Viewport: {}x{}", width, height);
-            log::info!("  Atlas for render: {}x{}", self.text_atlas.width(), self.text_atlas.height());
 
             // EMULATOR FIX ATTEMPT: Explicitly set viewport and scissor rect
             // Sometimes emulators have incorrect default viewport/scissor settings
