@@ -772,10 +772,15 @@ impl GpuRenderer {
             });
         }
 
+        // Trim old glyphs BEFORE preparing new ones
+        // This ensures we don't clear glyphs that were just uploaded
+        log::info!("=== Calling text_atlas.trim() BEFORE prepare ===");
+        self.text_atlas.trim();
+        log::info!("  Atlas trimmed (old unused glyphs removed)");
+
         // Prepare all text at once
         if !text_areas.is_empty() {
             log::info!("=== Calling text_renderer.prepare() for {} text areas ===", text_areas.len());
-            log::info!("  Atlas state BEFORE prepare - (glyphon doesn't expose metrics)");
 
             let prepare_result = self.text_renderer
                 .prepare(
@@ -790,8 +795,7 @@ impl GpuRenderer {
 
             match prepare_result {
                 Ok(_) => {
-                    log::info!("  Text prepare SUCCESS");
-                    log::info!("  Atlas state AFTER prepare - glyphs uploaded to GPU");
+                    log::info!("  Text prepare SUCCESS - glyphs uploaded to GPU atlas");
                 }
                 Err(ref e) => {
                     log::error!("  Text prepare FAILED: {:?}", e);
@@ -799,13 +803,6 @@ impl GpuRenderer {
                 }
             }
         }
-
-        // Trim the atlas after preparing
-        // NOTE: trim() removes unused glyphs to save memory
-        // This might be causing issues if glyphs are incorrectly marked as unused
-        log::info!("=== Calling text_atlas.trim() ===");
-        self.text_atlas.trim();
-        log::info!("  Atlas trimmed (unused glyphs removed)");
 
         drop(font_system);
 
