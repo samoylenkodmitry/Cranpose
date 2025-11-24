@@ -46,10 +46,10 @@ dependencies {
 
 // Task to build Rust library for Android
 tasks.register<Exec>("buildRustAndroid") {
-    workingDir = file("../../")
+    workingDir = file("../../../")
 
     commandLine("sh", "-c", """
-        cargo ndk -o ../target/android -t arm64-v8a -t armeabi-v7a -t x86 -t x86_64 build --release
+        cargo ndk -o target/android -t arm64-v8a -t armeabi-v7a -t x86 -t x86_64 build -p desktop-app --lib --release --features android,renderer-wgpu --no-default-features
     """)
 }
 

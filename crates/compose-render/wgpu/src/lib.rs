@@ -27,6 +27,30 @@ pub enum WgpuRendererError {
     Wgpu(String),
 }
 
+/// Configuration for renderer-specific quirks and settings
+#[derive(Clone, Debug)]
+pub struct RendererConfig {
+    /// Force recreation of the text atlas every frame.
+    /// Use case: Android emulators sometimes corrupt the text atlas
+    pub force_atlas_recreation: bool,
+
+    /// Base font scaling factor applied to all text
+    pub base_scale_factor: f32,
+
+    /// Enable verbose logging for text rendering operations
+    pub debug_text_logging: bool,
+}
+
+impl Default for RendererConfig {
+    fn default() -> Self {
+        Self {
+            force_atlas_recreation: false,
+            base_scale_factor: 1.0,
+            debug_text_logging: false,
+        }
+    }
+}
+
 /// Unified hash key for text caching - shared between measurement and rendering
 /// Only content + scale matter, not position
 #[derive(Clone)]
@@ -60,6 +84,7 @@ impl PartialEq for TextCacheKey {
 impl Eq for TextCacheKey {}
 
 /// Cached text buffer shared between measurement and rendering
+#[allow(dead_code)]
 pub(crate) struct SharedTextBuffer {
     pub(crate) buffer: Buffer,
     text: String,
@@ -68,6 +93,7 @@ pub(crate) struct SharedTextBuffer {
     cached_size: Option<Size>,
 }
 
+#[allow(dead_code)]
 impl SharedTextBuffer {
     /// Ensure the buffer has the correct text, font_size, and size, only reshaping if needed
     /// Returns true if reshaping occurred
@@ -167,6 +193,12 @@ impl WgpuRenderer {
     /// Create a new WGPU renderer without GPU resources.
     /// Call `init_gpu` before rendering.
     pub fn new() -> Self {
+        Self::with_config(RendererConfig::default())
+    }
+
+    /// Create a new WGPU renderer with custom configuration.
+    /// Call `init_gpu` before rendering.
+    pub fn with_config(_config: RendererConfig) -> Self {
         let mut font_system = FontSystem::new();
 
         // On Android, DO NOT load system fonts

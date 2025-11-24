@@ -19,7 +19,6 @@ members = [
     "crates/compose-render/wgpu",
     "apps/desktop-demo",
     "apps/minimal-single-file",
-    "apps/android-demo",
 ]
 resolver = "2"
 

@@ -9,7 +9,6 @@ use glyphon::{
     Attrs, Color as GlyphonColor, FontSystem, Metrics, Resolution, Shaping, SwashCache, TextArea,
     TextAtlas, TextBounds, TextRenderer,
 };
-use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 // Chunked rendering constants for robustness with large scenes
@@ -230,6 +229,7 @@ impl ShapeBatchBuffers {
 
 // TextCacheKey is now defined in lib.rs and shared between measurement and rendering
 
+#[allow(dead_code)]
 pub struct GpuRenderer {
     pub(crate) device: Arc<wgpu::Device>,
     pub(crate) queue: Arc<wgpu::Queue>,
@@ -650,14 +650,8 @@ impl GpuRenderer {
         // Prepare text rendering - create buffers and text areas (with caching)
         let mut font_system = self.font_system.lock().unwrap();
 
-        // Collect keys for current frame text using HashSet for O(1) lookups
         // Using 24.0 base font size as a compromise between desktop and Android visibility
         const BASE_FONT_SIZE: f32 = 24.0;
-        let current_text_keys: HashSet<TextCacheKey> = sorted_texts
-            .iter()
-            .filter(|t| !t.text.is_empty() && t.rect.width > 0.0 && t.rect.height > 0.0)
-            .map(|text| TextCacheKey::new(&text.text, BASE_FONT_SIZE * text.scale))
-            .collect();
 
         // ANDROID TEST: Disable caching completely - always create fresh buffers
         // Clear cache entirely each frame

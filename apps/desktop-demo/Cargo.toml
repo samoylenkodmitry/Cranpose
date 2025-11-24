@@ -3,23 +3,36 @@ name = "desktop-app"
 version = "0.1.0"
 edition = "2021"
 
+# Support both binary (desktop) and cdylib (Android)
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[[bin]]
+name = "desktop-app"
+path = "src/main.rs"
+required-features = ["desktop"]
+
 [features]
 default = ["renderer-wgpu", "desktop"]
 renderer-pixels = ["compose-app/renderer-pixels"]
 renderer-wgpu = ["compose-app/renderer-wgpu"]
 desktop = ["compose-app/desktop"]
+android = ["compose-app/android"]
 
 [dependencies]
 compose-app = { path = "../../crates/compose-app", default-features = false }
 compose-animation = { path = "../../crates/compose-animation" }
 compose-core = { path = "../../crates/compose-core" }
-compose-foundation = { path = "../../crates/compose-foundation" }
 compose-ui = { path = "../../crates/compose-ui" }
-compose-ui-graphics = { path = "../../crates/compose-ui-graphics" }
-compose-ui-layout = { path = "../../crates/compose-ui-layout" }
+compose-foundation = { path = "../../crates/compose-foundation" }
 env_logger = "0.10"
 anyhow = "1.0"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+
+# Android-specific dependencies (only when building for Android)
+[target.'cfg(target_os = "android")'.dependencies]
+android-activity = { workspace = true }
 
 [dev-dependencies]
 compose-macros = { path = "../../crates/compose-macros" }
