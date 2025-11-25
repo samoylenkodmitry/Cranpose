@@ -15,6 +15,12 @@
             android:configChanges="orientation|keyboardHidden"
             android:screenOrientation="portrait">
 
+            <!--
+                IMPORTANT: android.app.lib_name MUST match the cdylib name produced by cargo.
+                For package name "desktop-app", cargo creates libdesktop_app.so (hyphens → underscores).
+                Android converts this lib_name value to lib{value}.so, so use "desktop_app" here.
+                If you rename the Rust crate, you MUST update this value to match.
+            -->
             <meta-data
                 android:name="android.app.lib_name"
                 android:value="desktop_app" />

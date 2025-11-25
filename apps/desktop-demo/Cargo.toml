@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 # Support both binary (desktop) and cdylib (Android)
+# IMPORTANT: The cdylib name (libdesktop_app.so) must match the android.app.lib_name
+# in apps/android-demo/android/app/src/main/AndroidManifest.xml.
+# Cargo converts hyphens to underscores: "desktop-app" → "libdesktop_app.so"
 [lib]
 crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"

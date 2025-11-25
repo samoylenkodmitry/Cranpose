@@ -27,29 +27,6 @@ pub enum WgpuRendererError {
     Wgpu(String),
 }
 
-/// Configuration for renderer-specific quirks and settings
-#[derive(Clone, Debug)]
-pub struct RendererConfig {
-    /// Force recreation of the text atlas every frame.
-    /// Use case: Android emulators sometimes corrupt the text atlas
-    pub force_atlas_recreation: bool,
-
-    /// Base font scaling factor applied to all text
-    pub base_scale_factor: f32,
-
-    /// Enable verbose logging for text rendering operations
-    pub debug_text_logging: bool,
-}
-
-impl Default for RendererConfig {
-    fn default() -> Self {
-        Self {
-            force_atlas_recreation: false,
-            base_scale_factor: 1.0,
-            debug_text_logging: false,
-        }
-    }
-}
 
 /// Unified hash key for text caching - shared between measurement and rendering
 /// Only content + scale matter, not position
@@ -84,7 +61,6 @@ impl PartialEq for TextCacheKey {
 impl Eq for TextCacheKey {}
 
 /// Cached text buffer shared between measurement and rendering
-#[allow(dead_code)]
 pub(crate) struct SharedTextBuffer {
     pub(crate) buffer: Buffer,
     text: String,
@@ -93,56 +69,38 @@ pub(crate) struct SharedTextBuffer {
     cached_size: Option<Size>,
 }
 
-#[allow(dead_code)]
 impl SharedTextBuffer {
-    /// Ensure the buffer has the correct text, font_size, and size, only reshaping if needed
-    /// Returns true if reshaping occurred
+    /// Ensure the buffer has the correct text and font_size, only reshaping if needed
     pub(crate) fn ensure(
         &mut self,
         font_system: &mut FontSystem,
         text: &str,
         font_size: f32,
         attrs: Attrs,
-        width: f32,
-        height: f32,
-    ) -> bool {
-        let (old_w, old_h) = self.buffer.size();
-        let size_changed = (old_w - width).abs() > 0.1 || (old_h - height).abs() > 0.1;
+    ) {
         let text_changed = self.text != text;
         let font_changed = (self.font_size - font_size).abs() > 0.1;
 
         // Only reshape if something actually changed
-        if !size_changed && !text_changed && !font_changed {
-            return false; // Nothing changed, skip reshape
+        if !text_changed && !font_changed {
+            return; // Nothing changed, skip reshape
         }
 
-        log::info!("Text buffer '{}': size_changed={}, text_changed={}, font_changed={}",
-            &text.chars().take(10).collect::<String>(),
-            size_changed, text_changed, font_changed);
-
-        // Update buffer size if needed
-        if size_changed {
-            self.buffer.set_size(font_system, width, height);
-            log::info!("  Resized: {}x{} -> {}x{}", old_w, old_h, width, height);
-        }
-
-        // Reshape the text
+        // Set metrics and size for unlimited layout
         let metrics = Metrics::new(font_size, font_size * 1.4);
         self.buffer.set_metrics(font_system, metrics);
+        self.buffer.set_size(font_system, f32::MAX, f32::MAX);
+
+        // Set text and shape
         self.buffer
             .set_text(font_system, text, attrs, Shaping::Advanced);
         self.buffer.shape_until_scroll(font_system);
-
-        let runs = self.buffer.layout_runs().count();
-        log::info!("  Reshaped: runs={}, font_size={}", runs, font_size);
 
         // Update cached values
         self.text.clear();
         self.text.push_str(text);
         self.font_size = font_size;
         self.cached_size = None; // Invalidate size cache
-
-        true
     }
 
     /// Get or calculate the size of the shaped text
@@ -193,12 +151,6 @@ impl WgpuRenderer {
     /// Create a new WGPU renderer without GPU resources.
     /// Call `init_gpu` before rendering.
     pub fn new() -> Self {
-        Self::with_config(RendererConfig::default())
-    }
-
-    /// Create a new WGPU renderer with custom configuration.
-    /// Call `init_gpu` before rendering.
-    pub fn with_config(_config: RendererConfig) -> Self {
         let mut font_system = FontSystem::new();
 
         // On Android, DO NOT load system fonts
@@ -343,17 +295,17 @@ impl WgpuTextMeasurer {
     }
 }
 
+// Base font size in logical units (dp) - shared between measurement and rendering
+pub(crate) const BASE_FONT_SIZE: f32 = 14.0;
+
 impl TextMeasurer for WgpuTextMeasurer {
     fn measure(&self, text: &str) -> compose_ui::TextMetrics {
-        // Must match BASE_FONT_SIZE in render.rs to prevent text overflow
-        let font_size = 24.0;
-        let size_key = (text.to_string(), (font_size * 100.0) as i32);
+        let size_key = (text.to_string(), (BASE_FONT_SIZE * 100.0) as i32);
 
         // Check size cache first (fastest path)
         {
             let mut cache = self.size_cache.lock().unwrap();
             if let Some(size) = cache.get(&size_key) {
-                // Size cache HIT - fastest path!
                 return compose_ui::TextMetrics {
                     width: size.width,
                     height: size.height,
@@ -361,64 +313,29 @@ impl TextMeasurer for WgpuTextMeasurer {
             }
         }
 
-        // Check text buffer cache
-        let cache_key = TextCacheKey::new(text, font_size);
-        {
-            let text_cache = self.text_cache.lock().unwrap();
-            if let Some(cached_buffer) = text_cache.get(&cache_key) {
-                // Buffer cache HIT - use cached size
-                let size = cached_buffer.cached_size.unwrap_or_else(|| {
-                    let mut max_width = 0.0f32;
-                    for run in cached_buffer.buffer.layout_runs() {
-                        max_width = max_width.max(run.line_w);
-                    }
-                    let total_height = cached_buffer.buffer.lines.len() as f32 * font_size * 1.4;
-                    Size {
-                        width: max_width,
-                        height: total_height,
-                    }
-                });
-
-                // Cache the size result
-                let mut size_cache = self.size_cache.lock().unwrap();
-                size_cache.put(size_key, size);
-
-                return compose_ui::TextMetrics {
-                    width: size.width,
-                    height: size.height,
-                };
-            }
-        }
-
-        // Buffer cache MISS - create new buffer
+        // Get or create text buffer
+        let cache_key = TextCacheKey::new(text, BASE_FONT_SIZE);
         let mut font_system = self.font_system.lock().unwrap();
-
-        const MAX_LAYOUT_SIZE: f32 = 2048.0;
-        let mut new_buffer =
-            Buffer::new(&mut font_system, Metrics::new(font_size, font_size * 1.4));
-        new_buffer.set_size(&mut font_system, MAX_LAYOUT_SIZE, MAX_LAYOUT_SIZE);
-        new_buffer.set_text(&mut font_system, text, Attrs::new(), Shaping::Advanced);
-        new_buffer.shape_until_scroll(&mut font_system);
-
-        // Calculate size
-        let mut max_width = 0.0f32;
-        for run in new_buffer.layout_runs() {
-            max_width = max_width.max(run.line_w);
-        }
-        let total_height = new_buffer.lines.len() as f32 * font_size * 1.4;
-        let size = Size {
-            width: max_width,
-            height: total_height,
-        };
-
-        // Store in text cache
         let mut text_cache = self.text_cache.lock().unwrap();
-        text_cache.insert(cache_key, SharedTextBuffer {
-            buffer: new_buffer,
-            text: text.to_string(),
-            font_size,
-            cached_size: Some(size),
+
+        let buffer = text_cache.entry(cache_key).or_insert_with(|| {
+            let buffer = Buffer::new(&mut font_system, Metrics::new(BASE_FONT_SIZE, BASE_FONT_SIZE * 1.4));
+            SharedTextBuffer {
+                buffer,
+                text: String::new(),
+                font_size: 0.0,
+                cached_size: None,
+            }
         });
+
+        // Ensure buffer has the correct text
+        buffer.ensure(&mut font_system, text, BASE_FONT_SIZE, Attrs::new());
+
+        // Calculate size if not cached
+        let size = buffer.size(BASE_FONT_SIZE);
+
+        drop(font_system);
+        drop(text_cache);
 
         // Cache the size result
         let mut size_cache = self.size_cache.lock().unwrap();

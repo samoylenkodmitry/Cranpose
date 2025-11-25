@@ -5,7 +5,7 @@
 use crate::launcher::AppSettings;
 use compose_app_shell::{default_root_key, AppShell};
 use compose_platform_desktop_winit::DesktopWinitPlatform;
-use compose_render_wgpu::{RendererConfig, WgpuRenderer};
+use compose_render_wgpu::WgpuRenderer;
 use std::sync::Arc;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, Event, MouseButton, WindowEvent};
@@ -87,12 +87,15 @@ pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
 
     surface.configure(&device, &surface_config);
 
-    // Create renderer with default config (no platform quirks needed on desktop)
-    let mut renderer = WgpuRenderer::with_config(RendererConfig::default());
+    // Create renderer and set initial scale
+    let mut renderer = WgpuRenderer::new();
     renderer.init_gpu(Arc::new(device), Arc::new(queue), surface_format);
+    let initial_scale = window.scale_factor();
+    renderer.set_root_scale(initial_scale as f32);
 
     let mut app = AppShell::new(renderer, default_root_key(), content);
     let mut platform = DesktopWinitPlatform::default();
+    platform.set_scale_factor(initial_scale);
 
     app.set_frame_waker({
         let proxy = frame_proxy.clone();
@@ -101,8 +104,11 @@ pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
         }
     });
 
-    app.set_buffer_size(initial_width, initial_height);
-    app.set_viewport(size.width as f32, size.height as f32);
+    // Set buffer_size to physical pixels and viewport to logical dp
+    app.set_buffer_size(size.width, size.height);
+    let logical_width = size.width as f32 / initial_scale as f32;
+    let logical_height = size.height as f32 / initial_scale as f32;
+    app.set_viewport(logical_width, logical_height);
 
     let _ = event_loop.run(move |event, elwt| {
         elwt.set_control_flow(ControlFlow::Wait);
@@ -117,20 +123,31 @@ pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
                         surface_config.height = new_size.height;
                         let device = app.renderer().device();
                         surface.configure(device, &surface_config);
+
+                        let scale_factor = window.scale_factor();
+                        let logical_width = new_size.width as f32 / scale_factor as f32;
+                        let logical_height = new_size.height as f32 / scale_factor as f32;
+
                         app.set_buffer_size(new_size.width, new_size.height);
-                        app.set_viewport(new_size.width as f32, new_size.height as f32);
+                        app.set_viewport(logical_width, logical_height);
                     }
                 }
                 WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                     platform.set_scale_factor(scale_factor);
+                    app.renderer().set_root_scale(scale_factor as f32);
+
                     let new_size = window.inner_size();
                     if new_size.width > 0 && new_size.height > 0 {
                         surface_config.width = new_size.width;
                         surface_config.height = new_size.height;
                         let device = app.renderer().device();
                         surface.configure(device, &surface_config);
+
+                        let logical_width = new_size.width as f32 / scale_factor as f32;
+                        let logical_height = new_size.height as f32 / scale_factor as f32;
+
                         app.set_buffer_size(new_size.width, new_size.height);
-                        app.set_viewport(new_size.width as f32, new_size.height as f32);
+                        app.set_viewport(logical_width, logical_height);
                     }
                 }
                 WindowEvent::CursorMoved { position, .. } => {
