@@ -40,7 +40,7 @@ impl Default for AppSettings {
 ///     AppLauncher::new()
 ///         .with_title("My App")
 ///         .with_size(1024, 768)
-///         .run_desktop(|| {
+///         .run(|| {
 ///             // Your composable UI here
 ///         });
 /// }
@@ -51,7 +51,7 @@ impl Default for AppSettings {
 /// fn android_main(app: android_activity::AndroidApp) {
 ///     AppLauncher::new()
 ///         .with_title("My App")
-///         .run_android(app, || {
+///         .run(app, || {
 ///             // Your composable UI here
 ///         });
 /// }
@@ -82,13 +82,13 @@ impl AppLauncher {
     }
 
     /// Run the application (desktop platform).
-    #[cfg(feature = "desktop")]
+    #[cfg(all(feature = "desktop", not(target_os = "android")))]
     pub fn run(self, content: impl FnMut() + 'static) -> ! {
         crate::desktop::run(self.settings, content)
     }
 
     /// Run the application (Android platform).
-    #[cfg(feature = "android")]
+    #[cfg(all(feature = "android", target_os = "android"))]
     pub fn run(self, app: android_activity::AndroidApp, content: impl FnMut() + 'static) {
         crate::android::run(app, self.settings, content)
     }

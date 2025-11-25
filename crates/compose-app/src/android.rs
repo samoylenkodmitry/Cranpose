@@ -7,7 +7,10 @@ use crate::launcher::AppSettings;
 use compose_app_shell::{default_root_key, AppShell};
 use compose_platform_android::AndroidPlatform;
 use compose_render_wgpu::{RendererConfig, WgpuRenderer};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 /// Surface state tuple containing all wgpu resources and the app shell.
 type SurfaceState = (
@@ -18,54 +21,13 @@ type SurfaceState = (
     AppShell<WgpuRenderer>,
 );
 
-/// Get display density from Android DisplayMetrics using JNI.
-fn get_display_density(_app: &android_activity::AndroidApp) -> f32 {
-    use jni::objects::JObject;
-
-    // Get the VM and context from ndk-context
-    let ctx = ndk_context::android_context();
-    let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }
-        .expect("Failed to create JavaVM");
-
-    let mut env = vm
-        .attach_current_thread()
-        .expect("Failed to attach thread");
-
-    // Get the Activity context
-    let activity = unsafe { JObject::from_raw(ctx.context().cast()) };
-
-    // Call getResources()
-    let resources = env
-        .call_method(
-            activity,
-            "getResources",
-            "()Landroid/content/res/Resources;",
-            &[],
-        )
-        .expect("Failed to call getResources")
-        .l()
-        .expect("Failed to get Resources object");
-
-    // Call getDisplayMetrics()
-    let metrics = env
-        .call_method(
-            resources,
-            "getDisplayMetrics",
-            "()Landroid/util/DisplayMetrics;",
-            &[],
-        )
-        .expect("Failed to call getDisplayMetrics")
-        .l()
-        .expect("Failed to get DisplayMetrics object");
-
-    // Get density field (1.0 = mdpi, 1.5 = hdpi, 2.0 = xhdpi, 3.0 = xxhdpi, etc.)
-    let density = env
-        .get_field(metrics, "density", "F")
-        .expect("Failed to get density field")
-        .f()
-        .expect("Failed to convert density to float");
-
-    density
+/// Get display density placeholder.
+/// TODO: Wire proper density from Java/Kotlin side via extern "C" function.
+fn get_display_density() -> f32 {
+    // For now treat everything as 1.0 scale on Android.
+    // When we wire a proper Java → Rust bridge for DisplayMetrics,
+    // we can replace this.
+    1.0
 }
 
 /// Runs an Android Compose application with wgpu rendering.
@@ -101,10 +63,12 @@ pub fn run(
 
     log::info!("Starting Compose Android Application");
 
+    // Frame wake flag for event-driven rendering
+    let need_frame = Arc::new(AtomicBool::new(false));
+
     // Configure renderer for Android quirks
-    // Note: force_atlas_recreation works around emulator text corruption
     let renderer_config = RendererConfig {
-        force_atlas_recreation: cfg!(target_os = "android"), // Enable for Android
+        force_atlas_recreation: false,
         base_scale_factor: 1.0,
         debug_text_logging: false,
     };
@@ -126,10 +90,6 @@ pub fn run(
 
     let mut window_size = (0u32, 0u32);
     let mut needs_redraw = false;
-
-    // Warmup frames to stabilize text rendering on emulator
-    let mut frame_count = 0u32;
-    const WARMUP_FRAMES: u32 = 30;
 
     // Track if we just did a recomposition in WindowResized to avoid duplicate update()
     let mut skip_next_update = false;
@@ -225,7 +185,7 @@ pub fn run(
                             surface.configure(&device, &surface_config);
 
                             // Get display density and update platform
-                            let density = get_display_density(&app);
+                            let density = get_display_density();
                             android_platform.set_scale_factor(density as f64);
                             log::info!("Display density: {:.2}x", density);
 
@@ -240,6 +200,14 @@ pub fn run(
                                 default_root_key(),
                                 content.take().expect("content already used"),
                             );
+
+                            // Wire frame waker for event-driven rendering
+                            {
+                                let need_frame = need_frame.clone();
+                                app_shell.set_frame_waker(move || {
+                                    need_frame.store(true, Ordering::Relaxed);
+                                });
+                            }
 
                             app_shell.set_buffer_size(width, height);
 
@@ -267,7 +235,7 @@ pub fn run(
                             let height = native_window.height() as u32;
                             window_size = (width, height);
 
-                            let density = get_display_density(&app);
+                            let density = get_display_density();
                             android_platform.set_scale_factor(density as f64);
                             log::info!(
                                 "Window resized to {}x{} at {:.2}x density",
@@ -367,23 +335,13 @@ pub fn run(
             }
         });
 
-        // Force redraws during warmup period
-        let in_warmup = frame_count < WARMUP_FRAMES;
-        if in_warmup {
+        // Check if app side requested a frame (animations, state changes)
+        if need_frame.swap(false, Ordering::Relaxed) {
             needs_redraw = true;
         }
 
         // Render outside event callback
         if needs_redraw && surface_state.is_some() {
-            let prev_frame = frame_count;
-            frame_count += 1;
-
-            if prev_frame == 0 && surface_state.is_some() {
-                log::info!("Starting {} warmup frames", WARMUP_FRAMES);
-            } else if prev_frame == WARMUP_FRAMES - 1 {
-                log::info!("Warmup complete");
-            }
-
             if let Some((surface, _, _, _, app_shell)) = &mut surface_state {
                 // Skip update if we just did it in WindowResized
                 if skip_next_update {
@@ -420,8 +378,5 @@ pub fn run(
             }
             needs_redraw = false;
         }
-
-        // Small sleep to avoid busy loop
-        std::thread::sleep(std::time::Duration::from_millis(8));
     }
 }

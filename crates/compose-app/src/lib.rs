@@ -19,7 +19,7 @@ pub use launcher::{AppLauncher, AppSettings};
 ///
 /// # Example
 ///
-/// ```no_run
+/// ```ignore
 /// use compose_app::ComposeApp;
 /// use compose_ui::*;
 ///

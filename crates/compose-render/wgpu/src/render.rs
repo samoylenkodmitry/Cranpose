@@ -653,11 +653,7 @@ impl GpuRenderer {
         // Using 24.0 base font size as a compromise between desktop and Android visibility
         const BASE_FONT_SIZE: f32 = 24.0;
 
-        // ANDROID TEST: Disable caching completely - always create fresh buffers
-        // Clear cache entirely each frame
-        self.text_cache.lock().unwrap().clear();
-
-        // Always create fresh text buffers (no caching, no reuse)
+        // Prepare text buffers (with caching for performance)
         for text_draw in &sorted_texts {
             // Skip empty text or zero-sized rects
             if text_draw.text.is_empty()
@@ -670,41 +666,32 @@ impl GpuRenderer {
             let key = TextCacheKey::new(&text_draw.text, BASE_FONT_SIZE * text_draw.scale);
             let font_size = BASE_FONT_SIZE * text_draw.scale;
 
-            // Use moderate size for Android compatibility (4096 causes atlas corruption)
+            // Use moderate size for Android compatibility
             const MAX_LAYOUT_SIZE: f32 = 2048.0;
 
-            // ALWAYS create new buffer (never reuse from cache)
-            log::info!("Creating FRESH text buffer '{}' with layout size {}, font_size={}",
-                text_draw.text.chars().take(10).collect::<String>(),
-                MAX_LAYOUT_SIZE, font_size);
-
-            let mut buffer = glyphon::Buffer::new(
-                &mut font_system,
-                Metrics::new(font_size, font_size * 1.4),
-            );
-            // Use large but finite dimensions (prevents GPU precision issues)
-            buffer.set_size(&mut font_system, MAX_LAYOUT_SIZE, MAX_LAYOUT_SIZE);
-            buffer.set_text(
-                &mut font_system,
-                &text_draw.text,
-                Attrs::new(),
-                Shaping::Advanced,
-            );
-            buffer.shape_until_scroll(&mut font_system);
-
-            let runs = buffer.layout_runs().count();
-            log::info!("  Fresh buffer shaped: runs={}", runs);
-
+            // Create buffer only if not in cache (using entry API)
             let mut text_cache = self.text_cache.lock().unwrap();
-            text_cache.insert(
-                key,
+            text_cache.entry(key).or_insert_with(|| {
+                let mut buffer = glyphon::Buffer::new(
+                    &mut font_system,
+                    Metrics::new(font_size, font_size * 1.4),
+                );
+                buffer.set_size(&mut font_system, MAX_LAYOUT_SIZE, MAX_LAYOUT_SIZE);
+                buffer.set_text(
+                    &mut font_system,
+                    &text_draw.text,
+                    Attrs::new(),
+                    Shaping::Advanced,
+                );
+                buffer.shape_until_scroll(&mut font_system);
+
                 SharedTextBuffer {
                     buffer,
                     text: text_draw.text.clone(),
                     font_size,
                     cached_size: None,
-                },
-            );
+                }
+            });
         }
 
         // Collect text data from cache
@@ -791,22 +778,6 @@ impl GpuRenderer {
         if !text_areas.is_empty() {
             log::info!("=== Calling text_renderer.prepare() for {} text areas ===", text_areas.len());
 
-            // ANDROID FIX: Recreate atlas EVERY frame for emulator
-            // Single recreation is not enough - continuous recreation required for text to work
-            // Root cause: Unknown glyphon + Vulkan + emulator incompatibility
-            // Performance: ~1-2ms per frame on emulator (acceptable for development)
-            // TODO: Investigate why continuous recreation is required
-            #[cfg(target_os = "android")]
-            {
-                log::info!("  ANDROID: Recreating text atlas this frame (emulator fix)");
-                self.text_atlas = TextAtlas::new(&self.device, &self.queue, self.surface_format);
-                log::info!("  Atlas recreated successfully");
-            }
-
-            // Create fresh SwashCache each frame to avoid stale rasterization data
-            // This fixes flickering and ensures clean glyph rendering on Android
-            let mut fresh_swash_cache = SwashCache::new();
-
             let prepare_result = self.text_renderer
                 .prepare(
                     &self.device,
@@ -815,7 +786,7 @@ impl GpuRenderer {
                     &mut self.text_atlas,
                     Resolution { width, height },
                     text_areas.iter().cloned(),
-                    &mut fresh_swash_cache,
+                    &mut self.swash_cache,
                 );
 
             match prepare_result {

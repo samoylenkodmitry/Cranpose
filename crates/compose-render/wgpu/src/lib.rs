@@ -361,10 +361,38 @@ impl TextMeasurer for WgpuTextMeasurer {
             }
         }
 
-        // ANDROID TEST: Disable caching completely - always create fresh buffers
+        // Check text buffer cache
+        let cache_key = TextCacheKey::new(text, font_size);
+        {
+            let text_cache = self.text_cache.lock().unwrap();
+            if let Some(cached_buffer) = text_cache.get(&cache_key) {
+                // Buffer cache HIT - use cached size
+                let size = cached_buffer.cached_size.unwrap_or_else(|| {
+                    let mut max_width = 0.0f32;
+                    for run in cached_buffer.buffer.layout_runs() {
+                        max_width = max_width.max(run.line_w);
+                    }
+                    let total_height = cached_buffer.buffer.lines.len() as f32 * font_size * 1.4;
+                    Size {
+                        width: max_width,
+                        height: total_height,
+                    }
+                });
+
+                // Cache the size result
+                let mut size_cache = self.size_cache.lock().unwrap();
+                size_cache.put(size_key, size);
+
+                return compose_ui::TextMetrics {
+                    width: size.width,
+                    height: size.height,
+                };
+            }
+        }
+
+        // Buffer cache MISS - create new buffer
         let mut font_system = self.font_system.lock().unwrap();
 
-        // Always create new buffer (no caching)
         const MAX_LAYOUT_SIZE: f32 = 2048.0;
         let mut new_buffer =
             Buffer::new(&mut font_system, Metrics::new(font_size, font_size * 1.4));
@@ -372,7 +400,7 @@ impl TextMeasurer for WgpuTextMeasurer {
         new_buffer.set_text(&mut font_system, text, Attrs::new(), Shaping::Advanced);
         new_buffer.shape_until_scroll(&mut font_system);
 
-        // Calculate size directly (no caching)
+        // Calculate size
         let mut max_width = 0.0f32;
         for run in new_buffer.layout_runs() {
             max_width = max_width.max(run.line_w);
@@ -383,8 +411,7 @@ impl TextMeasurer for WgpuTextMeasurer {
             height: total_height,
         };
 
-        // Store in cache for renderer to pick up (but will create fresh during render)
-        let cache_key = TextCacheKey::new(text, font_size);
+        // Store in text cache
         let mut text_cache = self.text_cache.lock().unwrap();
         text_cache.insert(cache_key, SharedTextBuffer {
             buffer: new_buffer,
