@@ -2,11 +2,11 @@
 
 use crate::scene::{DrawShape, TextDraw};
 use crate::shaders;
-use crate::{SharedTextBuffer, SharedTextCache, TextCacheKey};
+use crate::{SharedTextBuffer, SharedTextCache, TextCacheKey, BASE_FONT_SIZE_DP};
 use bytemuck::{Pod, Zeroable};
 use compose_ui_graphics::{Brush, Color};
 use glyphon::{
-    Attrs, Color as GlyphonColor, FontSystem, Metrics, Resolution, Shaping, SwashCache, TextArea,
+    Attrs, Buffer, Color as GlyphonColor, FontSystem, Metrics, Resolution, SwashCache, TextArea,
     TextAtlas, TextBounds, TextRenderer,
 };
 use std::sync::{Arc, Mutex};
@@ -227,13 +227,9 @@ impl ShapeBatchBuffers {
     }
 }
 
-// TextCacheKey is now defined in lib.rs and shared between measurement and rendering
-
-#[allow(dead_code)]
 pub struct GpuRenderer {
     pub(crate) device: Arc<wgpu::Device>,
     pub(crate) queue: Arc<wgpu::Queue>,
-    surface_format: wgpu::TextureFormat,
     pipeline: wgpu::RenderPipeline,
     shape_bind_group_layout: wgpu::BindGroupLayout,
     font_system: Arc<Mutex<FontSystem>>,
@@ -343,8 +339,10 @@ impl GpuRenderer {
         let swash_cache = SwashCache::new();
         let mut text_atlas = TextAtlas::new(&device, &queue, surface_format);
 
-        log::info!("=== Text Atlas Created ===");
-        log::info!("  Format: {:?}", surface_format);
+        log::info!(
+            "Initialized text renderer (surface format: {:?})",
+            surface_format
+        );
 
         let text_renderer = TextRenderer::new(
             &mut text_atlas,
@@ -352,8 +350,6 @@ impl GpuRenderer {
             wgpu::MultisampleState::default(),
             None,
         );
-
-        log::info!("  TextRenderer created successfully");
 
         // Create persistent uniform buffer
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -378,7 +374,6 @@ impl GpuRenderer {
         Self {
             device,
             queue,
-            surface_format,
             pipeline,
             shape_bind_group_layout,
             font_system,
@@ -399,6 +394,7 @@ impl GpuRenderer {
         texts: &[TextDraw],
         width: u32,
         height: u32,
+        root_scale: f32,
     ) -> Result<(), String> {
         // Sort by z-index
         let mut sorted_shapes = shapes.to_vec();
@@ -433,6 +429,12 @@ impl GpuRenderer {
 
         for shape in &sorted_shapes {
             let rect = shape.rect;
+            let scaled_rect = compose_ui_graphics::Rect {
+                x: rect.x * root_scale,
+                y: rect.y * root_scale,
+                width: rect.width * root_scale,
+                height: rect.height * root_scale,
+            };
 
             // Determine gradient parameters and collect stops
             let mut gradient_params = [0.0f32; 4];
@@ -460,9 +462,9 @@ impl GpuRenderer {
                     }
                     // Store radial gradient parameters (center is relative to rect)
                     gradient_params = [
-                        rect.x + center.x,
-                        rect.y + center.y,
-                        radius.max(f32::EPSILON),
+                        (rect.x + center.x) * root_scale,
+                        (rect.y + center.y) * root_scale,
+                        (radius * root_scale).max(f32::EPSILON),
                         0.0,
                     ];
                     (2u32, start, colors.len() as u32)
@@ -473,17 +475,22 @@ impl GpuRenderer {
             let radii = if let Some(rounded) = shape.shape {
                 let resolved = rounded.resolve(rect.width, rect.height);
                 [
-                    resolved.top_left,
-                    resolved.top_right,
-                    resolved.bottom_left,
-                    resolved.bottom_right,
+                    resolved.top_left * root_scale,
+                    resolved.top_right * root_scale,
+                    resolved.bottom_left * root_scale,
+                    resolved.bottom_right * root_scale,
                 ]
             } else {
                 [0.0, 0.0, 0.0, 0.0]
             };
 
             all_shape_data.push(ShapeData {
-                rect: [rect.x, rect.y, rect.width, rect.height],
+                rect: [
+                    scaled_rect.x,
+                    scaled_rect.y,
+                    scaled_rect.width,
+                    scaled_rect.height,
+                ],
                 radii,
                 gradient_params,
                 brush_type,
@@ -524,6 +531,12 @@ impl GpuRenderer {
             // Build vertices and indices for this chunk
             for (shape_idx, shape) in chunk.iter().enumerate() {
                 let rect = shape.rect;
+                let scaled_rect = compose_ui_graphics::Rect {
+                    x: rect.x * root_scale,
+                    y: rect.y * root_scale,
+                    width: rect.width * root_scale,
+                    height: rect.height * root_scale,
+                };
                 let base_vertex = (shape_idx * 4) as u32;
 
                 // Get color from brush for vertex data
@@ -542,22 +555,25 @@ impl GpuRenderer {
                 // Vertices for quad
                 vertices.extend_from_slice(&[
                     Vertex {
-                        position: [rect.x, rect.y],
+                        position: [scaled_rect.x, scaled_rect.y],
                         color,
                         uv: [0.0, 0.0],
                     },
                     Vertex {
-                        position: [rect.x + rect.width, rect.y],
+                        position: [scaled_rect.x + scaled_rect.width, scaled_rect.y],
                         color,
                         uv: [1.0, 0.0],
                     },
                     Vertex {
-                        position: [rect.x, rect.y + rect.height],
+                        position: [scaled_rect.x, scaled_rect.y + scaled_rect.height],
                         color,
                         uv: [0.0, 1.0],
                     },
                     Vertex {
-                        position: [rect.x + rect.width, rect.y + rect.height],
+                        position: [
+                            scaled_rect.x + scaled_rect.width,
+                            scaled_rect.y + scaled_rect.height,
+                        ],
                         color,
                         uv: [1.0, 1.0],
                     },
@@ -647,15 +663,11 @@ impl GpuRenderer {
             }
         }
 
-        // Prepare text rendering - create buffers and text areas (with caching)
         let mut font_system = self.font_system.lock().unwrap();
+        let mut text_cache = self.text_cache.lock().unwrap();
+        let mut text_data = Vec::new();
 
-        // Using 24.0 base font size as a compromise between desktop and Android visibility
-        const BASE_FONT_SIZE: f32 = 24.0;
-
-        // Prepare text buffers (with caching for performance)
         for text_draw in &sorted_texts {
-            // Skip empty text or zero-sized rects
             if text_draw.text.is_empty()
                 || text_draw.rect.width <= 0.0
                 || text_draw.rect.height <= 0.0
@@ -663,70 +675,39 @@ impl GpuRenderer {
                 continue;
             }
 
-            let key = TextCacheKey::new(&text_draw.text, BASE_FONT_SIZE * text_draw.scale);
-            let font_size = BASE_FONT_SIZE * text_draw.scale;
+            let font_size_px = BASE_FONT_SIZE_DP * text_draw.scale * root_scale;
+            let key = TextCacheKey::new(&text_draw.text, font_size_px);
 
-            // Use moderate size for Android compatibility
-            const MAX_LAYOUT_SIZE: f32 = 2048.0;
-
-            // Create buffer only if not in cache (using entry API)
-            let mut text_cache = self.text_cache.lock().unwrap();
-            text_cache.entry(key).or_insert_with(|| {
-                let mut buffer = glyphon::Buffer::new(
-                    &mut font_system,
-                    Metrics::new(font_size, font_size * 1.4),
-                );
-                buffer.set_size(&mut font_system, MAX_LAYOUT_SIZE, MAX_LAYOUT_SIZE);
-                buffer.set_text(
-                    &mut font_system,
-                    &text_draw.text,
-                    Attrs::new(),
-                    Shaping::Advanced,
-                );
-                buffer.shape_until_scroll(&mut font_system);
-
-                SharedTextBuffer {
-                    buffer,
-                    text: text_draw.text.clone(),
-                    font_size,
+            let cached = text_cache
+                .entry(key.clone())
+                .or_insert_with(|| SharedTextBuffer {
+                    buffer: Buffer::new(
+                        &mut font_system,
+                        Metrics::new(font_size_px, font_size_px * 1.4),
+                    ),
+                    text: String::new(),
+                    font_size: 0.0,
                     cached_size: None,
-                }
-            });
+                });
+
+            cached.ensure(
+                &mut font_system,
+                &text_draw.text,
+                font_size_px,
+                Attrs::new(),
+            );
+            text_data.push((text_draw, key));
         }
 
-        // Collect text data from cache
-        let text_data: Vec<(&TextDraw, TextCacheKey)> = sorted_texts
-            .iter()
-            .filter(|t| !t.text.is_empty() && t.rect.width > 0.0 && t.rect.height > 0.0)
-            .map(|text| (text, TextCacheKey::new(&text.text, BASE_FONT_SIZE * text.scale)))
-            .collect();
+        drop(text_cache);
 
-        // Create text areas using cached buffers
-        let mut text_areas = Vec::new();
         let text_cache = self.text_cache.lock().unwrap();
+        let mut text_areas = Vec::new();
 
-        log::info!("=== Creating {} text areas ===", text_data.len());
-
-        for (idx, (text_draw, key)) in text_data.iter().enumerate() {
-            let cached = text_cache.get(key).expect("Text should be in cache");
-
-            // Log buffer state and detailed glyph information
-            let (buf_w, buf_h) = cached.buffer.size();
-            let layout_runs: Vec<_> = cached.buffer.layout_runs().collect();
-            let buf_runs = layout_runs.len();
-
-            // Log detailed glyph info for first run
-            if let Some(first_run) = layout_runs.first() {
-                log::info!("  Buffer '{}': line_w={:.1}, line_y={:.1}, glyphs={}",
-                    text_draw.text.chars().take(10).collect::<String>(),
-                    first_run.line_w, first_run.line_y, first_run.glyphs.len());
-
-                // Log first few glyphs
-                for (glyph_idx, glyph) in first_run.glyphs.iter().take(3).enumerate() {
-                    log::info!("    Glyph {}: x={:.1} y={:.1} w={} glyph_id={} font_id={}",
-                        glyph_idx, glyph.x, glyph.y, glyph.w, glyph.glyph_id, glyph.font_id);
-                }
-            }
+        for (text_draw, key) in &text_data {
+            let Some(cached) = text_cache.get(key) else {
+                continue;
+            };
 
             let color = GlyphonColor::rgba(
                 (text_draw.color.r() * 255.0) as u8,
@@ -735,68 +716,47 @@ impl GpuRenderer {
                 (text_draw.color.a() * 255.0) as u8,
             );
 
-            let bounds = TextBounds {
-                left: text_draw.clip.map(|c| c.x as i32).unwrap_or(0),
-                top: text_draw.clip.map(|c| c.y as i32).unwrap_or(0),
-                right: text_draw
-                    .clip
-                    .map(|c| (c.x + c.width) as i32)
-                    .unwrap_or(width as i32),
-                bottom: text_draw
-                    .clip
-                    .map(|c| (c.y + c.height) as i32)
-                    .unwrap_or(height as i32),
-            };
+            let bounds = text_draw.clip.map(|c| TextBounds {
+                left: (c.x * root_scale) as i32,
+                top: (c.y * root_scale) as i32,
+                right: ((c.x + c.width) * root_scale) as i32,
+                bottom: ((c.y + c.height) * root_scale) as i32,
+            });
 
-            log::info!("  Text {}: '{}' pos=({:.1}, {:.1}) scale={:.2} color=({}, {}, {}, {}) bounds=({}, {}, {}, {}) buffer={:.0}x{:.0} runs={}",
-                idx,
-                text_draw.text.chars().take(10).collect::<String>(),
-                text_draw.rect.x, text_draw.rect.y,
-                text_draw.scale,
-                color.r(), color.g(), color.b(), color.a(),
-                bounds.left, bounds.top, bounds.right, bounds.bottom,
-                buf_w, buf_h, buf_runs);
+            let resolved_bounds = bounds.unwrap_or(TextBounds {
+                left: 0,
+                top: 0,
+                right: width as i32,
+                bottom: height as i32,
+            });
 
             text_areas.push(TextArea {
                 buffer: &cached.buffer,
-                left: text_draw.rect.x,
-                top: text_draw.rect.y,
-                // Use scale 1.0 since font_size already incorporates text_draw.scale
-                // Double-scaling causes corruption/clipping on Android
+                left: text_draw.rect.x * root_scale,
+                top: text_draw.rect.y * root_scale,
                 scale: 1.0,
-                bounds,
+                bounds: resolved_bounds,
                 default_color: color,
             });
         }
 
-        // NOTE: Do NOT call text_atlas.trim() here!
-        // Calling trim() every frame causes race conditions where the GPU tries to read
-        // glyphs that have been cleared by the CPU, resulting in corrupted/missing text.
-        // The atlas will auto-grow as needed and glyphon handles memory internally.
+        // NOTE: Do NOT call text_atlas.trim() here.
+        // TODO: Re-evaluate atlas trimming once DPI scaling is stable.
 
-        // Prepare all text at once
         if !text_areas.is_empty() {
-            log::info!("=== Calling text_renderer.prepare() for {} text areas ===", text_areas.len());
+            let prepare_result = self.text_renderer.prepare(
+                &self.device,
+                &self.queue,
+                &mut font_system,
+                &mut self.text_atlas,
+                Resolution { width, height },
+                text_areas.iter().cloned(),
+                &mut self.swash_cache,
+            );
 
-            let prepare_result = self.text_renderer
-                .prepare(
-                    &self.device,
-                    &self.queue,
-                    &mut font_system,
-                    &mut self.text_atlas,
-                    Resolution { width, height },
-                    text_areas.iter().cloned(),
-                    &mut self.swash_cache,
-                );
-
-            match prepare_result {
-                Ok(_) => {
-                    log::info!("  Text prepare SUCCESS - glyphs uploaded to GPU atlas");
-                }
-                Err(ref e) => {
-                    log::error!("  Text prepare FAILED: {:?}", e);
-                    return Err(format!("Text prepare error: {:?}", e));
-                }
+            if let Err(ref e) = prepare_result {
+                log::error!("Text prepare error: {:?}", e);
+                return Err(format!("Text prepare error: {:?}", e));
             }
         }
 
@@ -825,28 +785,13 @@ impl GpuRenderer {
                 occlusion_query_set: None,
             });
 
-            log::info!("=== Calling text_renderer.render() ===");
-            log::info!("  Viewport: {}x{}", width, height);
+            let render_result = self.text_renderer.render(&self.text_atlas, &mut text_pass);
 
-            // EMULATOR FIX ATTEMPT: Explicitly set viewport and scissor rect
-            // Sometimes emulators have incorrect default viewport/scissor settings
-            text_pass.set_viewport(0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
-            text_pass.set_scissor_rect(0, 0, width, height);
-            log::info!("  Explicitly set viewport and scissor rect");
-
-            let render_result = self.text_renderer
-                .render(&self.text_atlas, &mut text_pass);
-
-            match render_result {
-                Ok(_) => log::info!("  Text render SUCCESS"),
-                Err(ref e) => {
-                    log::error!("  Text render FAILED: {:?}", e);
-                    return Err(format!("Text render error: {:?}", e));
-                }
+            if let Err(ref e) = render_result {
+                log::error!("Text render error: {:?}", e);
+                return Err(format!("Text render error: {:?}", e));
             }
         }
-
-        log::info!("=== Submitting text encoder ===");
         self.queue.submit(std::iter::once(text_encoder.finish()));
 
         Ok(())

@@ -5,6 +5,7 @@ edition = "2021"
 
 # Support both binary (desktop) and cdylib (Android)
 [lib]
+name = "desktop_app"
 crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
 

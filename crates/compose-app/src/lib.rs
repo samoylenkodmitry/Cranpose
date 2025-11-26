@@ -3,10 +3,10 @@
 //! High level utilities for running Compose applications with minimal boilerplate.
 
 #[cfg(not(any(feature = "desktop", feature = "android")))]
-compile_error!("compose-app must be built with either the `desktop` or `android` feature enabled.");
+compile_error!("compose-app must be built with at least one of `desktop` or `android` features.");
 
 #[cfg(not(any(feature = "renderer-pixels", feature = "renderer-wgpu")))]
-compile_error!("compose-app requires either the `renderer-pixels` or `renderer-wgpu` feature.");
+compile_error!("compose-app requires either `renderer-pixels` or `renderer-wgpu` feature.");
 
 // New unified launcher API
 mod launcher;

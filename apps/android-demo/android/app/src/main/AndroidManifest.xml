@@ -15,6 +15,7 @@
             android:configChanges="orientation|keyboardHidden"
             android:screenOrientation="portrait">
 
+            <!-- Must match the cdylib name emitted by Cargo ([lib] name in Cargo.toml). -->
             <meta-data
                 android:name="android.app.lib_name"
                 android:value="desktop_app" />

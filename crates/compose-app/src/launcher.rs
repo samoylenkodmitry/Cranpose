@@ -82,13 +82,17 @@ impl AppLauncher {
     }
 
     /// Run the application (desktop platform).
-    #[cfg(all(feature = "desktop", not(target_os = "android")))]
+    #[cfg(all(
+        feature = "desktop",
+        feature = "renderer-wgpu",
+        not(target_os = "android")
+    ))]
     pub fn run(self, content: impl FnMut() + 'static) -> ! {
         crate::desktop::run(self.settings, content)
     }
 
     /// Run the application (Android platform).
-    #[cfg(all(feature = "android", target_os = "android"))]
+    #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
     pub fn run(self, app: android_activity::AndroidApp, content: impl FnMut() + 'static) {
         crate::android::run(app, self.settings, content)
     }

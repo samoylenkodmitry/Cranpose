@@ -6,7 +6,7 @@
 use crate::launcher::AppSettings;
 use compose_app_shell::{default_root_key, AppShell};
 use compose_platform_android::AndroidPlatform;
-use compose_render_wgpu::{RendererConfig, WgpuRenderer};
+use compose_render_wgpu::WgpuRenderer;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -65,13 +65,6 @@ pub fn run(
 
     // Frame wake flag for event-driven rendering
     let need_frame = Arc::new(AtomicBool::new(false));
-
-    // Configure renderer for Android quirks
-    let renderer_config = RendererConfig {
-        force_atlas_recreation: false,
-        base_scale_factor: 1.0,
-        debug_text_logging: false,
-    };
 
     // Initialize wgpu instance with GL and Vulkan backends
     // GL works better on emulators, but Vulkan is preferred on real devices
@@ -190,9 +183,9 @@ pub fn run(
                             log::info!("Display density: {:.2}x", density);
 
                             // Create renderer with Android configuration
-                            let mut renderer = WgpuRenderer::with_config(renderer_config.clone());
+                            let mut renderer = WgpuRenderer::new();
                             renderer.init_gpu(device.clone(), queue.clone(), surface_format);
-                            renderer.set_root_scale(1.0);
+                            renderer.set_root_scale(density);
 
                             // Create app shell with content (take from Option)
                             let mut app_shell = AppShell::new(
@@ -211,16 +204,20 @@ pub fn run(
 
                             app_shell.set_buffer_size(width, height);
 
-                            // Set viewport to physical pixels (matches desktop behavior)
-                            app_shell.set_viewport(width as f32, height as f32);
+                            let width_dp = width as f32 / density;
+                            let height_dp = height as f32 / density;
+                            app_shell.set_viewport(width_dp, height_dp);
                             log::info!(
-                                "Set viewport to {}x{} physical pixels at {:.2}x density",
+                                "Set viewport to {:.1}x{:.1} dp ({}x{} px) at {:.2}x density",
+                                width_dp,
+                                height_dp,
                                 width,
                                 height,
                                 density
                             );
 
-                            surface_state = Some((surface, device, queue, surface_config, app_shell));
+                            surface_state =
+                                Some((surface, device, queue, surface_config, app_shell));
 
                             log::info!("Rendering initialized successfully");
                         }
@@ -252,9 +249,11 @@ pub fn run(
                                     surface_config.height = height;
                                     surface.configure(device, surface_config);
                                     app_shell.set_buffer_size(width, height);
+                                    app_shell.renderer().set_root_scale(density);
 
-                                    // Set viewport to physical pixels (matches desktop behavior)
-                                    app_shell.set_viewport(width as f32, height as f32);
+                                    let width_dp = width as f32 / density;
+                                    let height_dp = height as f32 / density;
+                                    app_shell.set_viewport(width_dp, height_dp);
 
                                     // Force immediate recomposition after viewport change
                                     app_shell.update();
@@ -278,19 +277,18 @@ pub fn run(
                                     android_activity::input::InputEvent::MotionEvent(
                                         motion_event,
                                     ) => {
-                                        // Get pointer position in physical pixels (matches viewport coordinates)
+                                        // Get pointer position in logical coordinates
                                         let pointer = motion_event.pointer_at_index(0);
-                                        let x = pointer.x();
-                                        let y = pointer.y();
-
-                                        log::info!("MotionEvent: action={:?} pos=({:.1}, {:.1})", motion_event.action(), x, y);
+                                        let x_px = pointer.x() as f64;
+                                        let y_px = pointer.y() as f64;
+                                        let logical = android_platform.pointer_position(x_px, y_px);
 
                                         match motion_event.action() {
                                             MotionAction::Down | MotionAction::PointerDown => {
                                                 if let Some((_, _, _, _, app_shell)) =
                                                     &mut surface_state
                                                 {
-                                                    app_shell.set_cursor(x, y);
+                                                    app_shell.set_cursor(logical.x, logical.y);
                                                     app_shell.pointer_pressed();
                                                     needs_redraw = true;
                                                 }
@@ -299,7 +297,7 @@ pub fn run(
                                                 if let Some((_, _, _, _, app_shell)) =
                                                     &mut surface_state
                                                 {
-                                                    app_shell.set_cursor(x, y);
+                                                    app_shell.set_cursor(logical.x, logical.y);
                                                     app_shell.pointer_released();
                                                     needs_redraw = true;
                                                 }
@@ -308,7 +306,7 @@ pub fn run(
                                                 if let Some((_, _, _, _, app_shell)) =
                                                     &mut surface_state
                                                 {
-                                                    app_shell.set_cursor(x, y);
+                                                    app_shell.set_cursor(logical.x, logical.y);
                                                     if app_shell.should_render() {
                                                         needs_redraw = true;
                                                     }
@@ -352,10 +350,9 @@ pub fn run(
 
                 match surface.get_current_texture() {
                     Ok(frame) => {
-                        let view =
-                            frame
-                                .texture
-                                .create_view(&wgpu::TextureViewDescriptor::default());
+                        let view = frame
+                            .texture
+                            .create_view(&wgpu::TextureViewDescriptor::default());
                         let (width, height) = app_shell.buffer_size();
 
                         if let Err(e) = app_shell.renderer().render(&view, width, height) {

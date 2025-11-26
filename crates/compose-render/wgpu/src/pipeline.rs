@@ -16,7 +16,6 @@ use style::{
     combine_layers, scale_corner_radii, DrawPlacement, NodeStyle,
 };
 
-#[allow(dead_code)]
 pub(crate) fn render_layout_tree(root: &LayoutBox, scene: &mut Scene) {
     render_layout_tree_with_scale(root, scene, 1.0);
 }
