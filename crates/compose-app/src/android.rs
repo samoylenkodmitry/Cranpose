@@ -21,20 +21,36 @@ type SurfaceState = (
     AppShell<WgpuRenderer>,
 );
 
-/// Get display density placeholder.
-/// TODO: Wire proper density from Java/Kotlin side via extern "C" function.
-fn get_display_density() -> f32 {
-    // For now treat everything as 1.0 scale on Android.
-    // When we wire a proper Java → Rust bridge for DisplayMetrics,
-    // we can replace this.
+/// Determine the device display density as a DPI scale factor.
+///
+/// Prefers the density reported by `android_activity` configuration (in DPI)
+/// and converts it to a logical scale (dpi / 160). Falls back to 1.0 when the
+/// value is unavailable or clearly invalid. A debug escape hatch
+/// `COMPOSE_RS_DISABLE_DENSITY=1` can force unity scaling for troubleshooting.
+fn get_display_density(app: &android_activity::AndroidApp) -> f32 {
     let disable_scaling = std::env::var("COMPOSE_RS_DISABLE_DENSITY")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
 
     if disable_scaling {
-        1.0
-    } else {
-        1.0
+        log::warn!("COMPOSE_RS_DISABLE_DENSITY set; forcing 1.0 scale");
+        return 1.0;
+    }
+
+    match app.config().density() {
+        Some(dpi) if dpi > 0 => {
+            let scale = (dpi as f32 / 160.0).max(0.1);
+            if scale.is_finite() {
+                scale
+            } else {
+                log::warn!("Non-finite density ({dpi}); defaulting to 1.0");
+                1.0
+            }
+        }
+        _ => {
+            log::warn!("Display density unavailable; defaulting to 1.0");
+            1.0
+        }
     }
 }
 
@@ -186,7 +202,7 @@ pub fn run(
                             surface.configure(&device, &surface_config);
 
                             // Get display density and update platform
-                            let density = get_display_density();
+                            let density = get_display_density(&app);
                             android_platform.set_scale_factor(density as f64);
                             log::info!("Display density: {:.2}x", density);
 
@@ -240,7 +256,7 @@ pub fn run(
                             let height = native_window.height() as u32;
                             window_size = (width, height);
 
-                            let density = get_display_density();
+                            let density = get_display_density(&app);
                             android_platform.set_scale_factor(density as f64);
                             log::info!(
                                 "Window resized to {}x{} at {:.2}x density",
