@@ -87,6 +87,7 @@ impl StateArena {
 }
 
 thread_local! {
+    #[allow(clippy::missing_const_for_thread_local)]
     static RUNTIME_HANDLES: RefCell<StdHashMap<RuntimeId, RuntimeHandle>> =
         RefCell::new(StdHashMap::new());
 }
@@ -833,7 +834,9 @@ impl futures_task::ArcWake for RuntimeTaskWaker {
 }
 
 thread_local! {
+    #[allow(clippy::missing_const_for_thread_local)]
     static ACTIVE_RUNTIMES: RefCell<Vec<RuntimeHandle>> = const { RefCell::new(Vec::new()) }; // FUTURE(no_std): move to bounded stack storage.
+    #[allow(clippy::missing_const_for_thread_local)]
     static LAST_RUNTIME: RefCell<Option<RuntimeHandle>> = const { RefCell::new(None) };
 }
 

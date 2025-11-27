@@ -1,5 +1,4 @@
 #![doc = r"Core runtime pieces for the Compose-RS experiment."]
-#![allow(clippy::missing_const_for_thread_local)]
 
 pub extern crate self as compose_core;
 

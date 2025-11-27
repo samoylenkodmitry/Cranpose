@@ -14,10 +14,8 @@ use crate::style::point_in_resolved_rounded_rect;
 
 const TEXT_SIZE: f32 = 24.0;
 static FONT: Lazy<Font<'static>> = Lazy::new(|| {
-    let f = Font::try_from_bytes(include_bytes!(
-        "../../../../apps/desktop-demo/assets/Roboto-Light.ttf"
-    ) as &[u8])
-    .expect("font");
+    let f = Font::try_from_bytes(include_bytes!("../../../../assets/Roboto-Light.ttf") as &[u8])
+        .expect("font");
     f
 });
 

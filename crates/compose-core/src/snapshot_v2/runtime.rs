@@ -35,6 +35,7 @@ static SNAPSHOT_RUNTIME: LazyLock<Mutex<SnapshotRuntime>> =
     LazyLock::new(|| Mutex::new(SnapshotRuntime::new()));
 
 thread_local! {
+    #[allow(clippy::missing_const_for_thread_local)]
     static RUNTIME_LOCK_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
 

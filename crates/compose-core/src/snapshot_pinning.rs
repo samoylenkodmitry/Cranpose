@@ -90,6 +90,7 @@ impl PinningTable {
 
 thread_local! {
     // Global pinning table protected by a mutex.
+    #[allow(clippy::missing_const_for_thread_local)]
     static PINNING_TABLE: RefCell<PinningTable> = RefCell::new(PinningTable::new());
 }
 

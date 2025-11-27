@@ -5,6 +5,7 @@ use crate::{Composer, ComposerCore};
 
 // Thread-local stack of Composer handles (safe, no raw pointers).
 thread_local! {
+    #[allow(clippy::missing_const_for_thread_local)]
     static COMPOSER_STACK: RefCell<Vec<Rc<ComposerCore>>> = const { RefCell::new(Vec::new()) };
 }
 

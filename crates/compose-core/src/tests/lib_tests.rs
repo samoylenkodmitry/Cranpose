@@ -28,26 +28,37 @@ fn runtime_handle() -> (RuntimeHandle, Runtime) {
 }
 
 thread_local! {
+    #[allow(clippy::missing_const_for_thread_local)]
     static INVOCATIONS: Cell<usize> = const { Cell::new(0) };
 }
 
 thread_local! {
+    #[allow(clippy::missing_const_for_thread_local)]
     static PARENT_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
+    #[allow(clippy::missing_const_for_thread_local)]
     static CHILD_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
+    #[allow(clippy::missing_const_for_thread_local)]
     static CAPTURED_PARENT_STATE: RefCell<Option<compose_core::MutableState<i32>>> =
         const { RefCell::new(None) };
+    #[allow(clippy::missing_const_for_thread_local)]
     static SIDE_EFFECT_LOG: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) }; // FUTURE(no_std): replace Vec with ring buffer for testing.
+    #[allow(clippy::missing_const_for_thread_local)]
     static DISPOSABLE_EFFECT_LOG: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) }; // FUTURE(no_std): replace Vec with ring buffer for testing.
+    #[allow(clippy::missing_const_for_thread_local)]
     static DISPOSABLE_STATE: RefCell<Option<compose_core::MutableState<i32>>> =
         const { RefCell::new(None) };
+    #[allow(clippy::missing_const_for_thread_local)]
     static SIDE_EFFECT_STATE: RefCell<Option<compose_core::MutableState<i32>>> =
         const { RefCell::new(None) };
 }
 
 thread_local! {
+    #[allow(clippy::missing_const_for_thread_local)]
     static DROP_REENTRY_STATE: RefCell<Option<compose_core::MutableState<ReentrantDropState>>> =
         const { RefCell::new(None) };
+    #[allow(clippy::missing_const_for_thread_local)]
     static DROP_REENTRY_ACTIVE: Cell<bool> = const { Cell::new(false) };
+    #[allow(clippy::missing_const_for_thread_local)]
     static DROP_REENTRY_LAST_VALUE: Cell<Option<usize>> = const { Cell::new(None) };
 }
 
@@ -1421,7 +1432,9 @@ fn state_update_schedules_render() {
 #[test]
 fn recompose_does_not_use_stale_indices_when_prior_scope_changes_length() {
     thread_local! {
+        #[allow(clippy::missing_const_for_thread_local)]
         static STABLE_RECOMPOSE_A: Cell<usize> = const { Cell::new(0) };
+        #[allow(clippy::missing_const_for_thread_local)]
         static STABLE_RECOMPOSE_B: Cell<usize> = const { Cell::new(0) };
     }
 
@@ -1491,6 +1504,7 @@ fn recompose_does_not_use_stale_indices_when_prior_scope_changes_length() {
 #[test]
 fn recompose_handles_removed_scopes_gracefully() {
     thread_local! {
+        #[allow(clippy::missing_const_for_thread_local)]
         static REMOVED_SCOPE_LOG: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
     }
 
@@ -1905,7 +1919,9 @@ fn composable_skips_when_inputs_unchanged() {
 #[test]
 fn composition_local_provider_scopes_values() {
     thread_local! {
+        #[allow(clippy::missing_const_for_thread_local)]
         static CHILD_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
+        #[allow(clippy::missing_const_for_thread_local)]
         static LAST_VALUE: Cell<i32> = const { Cell::new(0) };
     }
 
@@ -1947,6 +1963,7 @@ fn composition_local_provider_scopes_values() {
 #[test]
 fn composition_local_default_value_used_outside_provider() {
     thread_local! {
+        #[allow(clippy::missing_const_for_thread_local)]
         static READ_VALUE: Cell<i32> = const { Cell::new(0) };
     }
 
@@ -1970,7 +1987,9 @@ fn composition_local_default_value_used_outside_provider() {
 fn composition_local_simple_subscription_test() {
     // Simplified test to verify basic subscription behavior
     thread_local! {
+        #[allow(clippy::missing_const_for_thread_local)]
         static READER_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
+        #[allow(clippy::missing_const_for_thread_local)]
         static LAST_VALUE: Cell<i32> = const { Cell::new(-1) };
     }
 
@@ -2034,12 +2053,19 @@ fn composition_local_tracks_reads_and_recomposes_selectively() {
     // This test verifies that CompositionLocal establishes subscriptions
     // and ONLY recomposes composables that actually read .current()
     thread_local! {
+        #[allow(clippy::missing_const_for_thread_local)]
         static OUTSIDE_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
+        #[allow(clippy::missing_const_for_thread_local)]
         static NOT_CHANGING_TEXT_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
+        #[allow(clippy::missing_const_for_thread_local)]
         static INSIDE_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
+        #[allow(clippy::missing_const_for_thread_local)]
         static READING_TEXT_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
+        #[allow(clippy::missing_const_for_thread_local)]
         static NON_READING_TEXT_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
+        #[allow(clippy::missing_const_for_thread_local)]
         static INSIDE_INSIDE_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
+        #[allow(clippy::missing_const_for_thread_local)]
         static LAST_READ_VALUE: Cell<i32> = const { Cell::new(-999) };
     }
 
@@ -2160,6 +2186,7 @@ fn composition_local_tracks_reads_and_recomposes_selectively() {
 #[test]
 fn static_composition_local_provides_values() {
     thread_local! {
+        #[allow(clippy::missing_const_for_thread_local)]
         static READ_VALUE: Cell<i32> = const { Cell::new(0) };
     }
 
@@ -2187,6 +2214,7 @@ fn static_composition_local_provides_values() {
 #[test]
 fn static_composition_local_default_value_used_outside_provider() {
     thread_local! {
+        #[allow(clippy::missing_const_for_thread_local)]
         static READ_VALUE: Cell<i32> = const { Cell::new(0) };
     }
 
@@ -2209,6 +2237,7 @@ fn static_composition_local_default_value_used_outside_provider() {
 #[test]
 fn compose_with_reuse_skips_then_recomposes() {
     thread_local! {
+        #[allow(clippy::missing_const_for_thread_local)]
         static INVOCATIONS: Cell<usize> = const { Cell::new(0) };
     }
 
@@ -2258,6 +2287,7 @@ fn compose_with_reuse_skips_then_recomposes() {
 #[test]
 fn compose_with_reuse_forces_recomposition_when_requested() {
     thread_local! {
+        #[allow(clippy::missing_const_for_thread_local)]
         static INVOCATIONS: Cell<usize> = const { Cell::new(0) };
     }
 
@@ -2305,7 +2335,9 @@ fn compose_with_reuse_forces_recomposition_when_requested() {
 #[test]
 fn inactive_scopes_delay_invalidation_until_reactivated() {
     thread_local! {
+        #[allow(clippy::missing_const_for_thread_local)]
         static CAPTURED_SCOPE: RefCell<Option<RecomposeScope>> = const { RefCell::new(None) };
+        #[allow(clippy::missing_const_for_thread_local)]
         static INVOCATIONS: Cell<usize> = const { Cell::new(0) };
     }
 
@@ -2617,7 +2649,9 @@ fn slot_table_tab_switching_preserves_scopes() {
     let tab2_counter = MutableState::with_runtime(0i32, runtime.clone());
 
     thread_local! {
+        #[allow(clippy::missing_const_for_thread_local)]
         static TAB1_RENDERS: Cell<usize> = const { Cell::new(0) };
+        #[allow(clippy::missing_const_for_thread_local)]
         static TAB2_RENDERS: Cell<usize> = const { Cell::new(0) };
     }
 
@@ -2754,8 +2788,11 @@ fn slot_table_conditional_rendering_preserves_sibling_scopes() {
     let bottom_counter = MutableState::with_runtime(0i32, runtime.clone());
 
     thread_local! {
+        #[allow(clippy::missing_const_for_thread_local)]
         static TOP_RENDERS: Cell<usize> = const { Cell::new(0) };
+        #[allow(clippy::missing_const_for_thread_local)]
         static MIDDLE_RENDERS: Cell<usize> = const { Cell::new(0) };
+        #[allow(clippy::missing_const_for_thread_local)]
         static BOTTOM_RENDERS: Cell<usize> = const { Cell::new(0) };
     }
 
@@ -2905,8 +2942,11 @@ fn slot_table_gaps_work_with_nested_conditionals() {
     let after_counter = MutableState::with_runtime(0i32, runtime.clone());
 
     thread_local! {
+        #[allow(clippy::missing_const_for_thread_local)]
         static OUTER_RENDERS: Cell<usize> = const { Cell::new(0) };
+        #[allow(clippy::missing_const_for_thread_local)]
         static INNER_RENDERS: Cell<usize> = const { Cell::new(0) };
+        #[allow(clippy::missing_const_for_thread_local)]
         static AFTER_RENDERS: Cell<usize> = const { Cell::new(0) };
     }
 
@@ -3021,6 +3061,7 @@ fn slot_table_multiple_rapid_tab_switches() {
     let active_tab = MutableState::with_runtime(0i32, runtime.clone());
 
     thread_local! {
+        #[allow(clippy::missing_const_for_thread_local)]
         static RENDER_LOG: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     }
 
@@ -3112,7 +3153,9 @@ fn tab_switching_with_keyed_children() {
     let counter = MutableState::with_runtime(0i32, runtime.clone());
 
     thread_local! {
+        #[allow(clippy::missing_const_for_thread_local)]
         static TAB1_KEYED_RENDERS: Cell<usize> = const { Cell::new(0) };
+        #[allow(clippy::missing_const_for_thread_local)]
         static TAB2_KEYED_RENDERS: Cell<usize> = const { Cell::new(0) };
     }
 
@@ -3192,7 +3235,9 @@ fn tab_switching_with_different_node_types() {
     let active_tab = MutableState::with_runtime(0i32, runtime.clone());
 
     thread_local! {
+        #[allow(clippy::missing_const_for_thread_local)]
         static TEXT_NODE_COUNT: Cell<usize> = const { Cell::new(0) };
+        #[allow(clippy::missing_const_for_thread_local)]
         static DUMMY_NODE_COUNT: Cell<usize> = const { Cell::new(0) };
     }
 
@@ -3258,7 +3303,9 @@ fn tab_switching_with_dynamic_lists() {
     let list_size = MutableState::with_runtime(3usize, runtime.clone());
 
     thread_local! {
+        #[allow(clippy::missing_const_for_thread_local)]
         static LIST_TAB_CALLED: Cell<bool> = const { Cell::new(false) };
+        #[allow(clippy::missing_const_for_thread_local)]
         static LAST_ITEM_COUNT: Cell<usize> = const { Cell::new(0) };
     }
 
@@ -3356,7 +3403,9 @@ fn tab_switching_with_nested_components() {
     let inner_counter = MutableState::with_runtime(0i32, runtime.clone());
 
     thread_local! {
+        #[allow(clippy::missing_const_for_thread_local)]
         static OUTER_RENDERS: Cell<usize> = const { Cell::new(0) };
+        #[allow(clippy::missing_const_for_thread_local)]
         static INNER_RENDERS: Cell<usize> = const { Cell::new(0) };
     }
 
@@ -3494,7 +3543,9 @@ fn debug_nested_component_slot_table_state() {
     let inner_counter = MutableState::with_runtime(0i32, runtime.clone());
 
     thread_local! {
+        #[allow(clippy::missing_const_for_thread_local)]
         static OUTER_RENDERS: Cell<usize> = const { Cell::new(0) };
+        #[allow(clippy::missing_const_for_thread_local)]
         static INNER_RENDERS: Cell<usize> = const { Cell::new(0) };
     }
 
@@ -3640,7 +3691,9 @@ fn tab_switching_with_state_during_switch() {
     let shared_counter = MutableState::with_runtime(0i32, runtime.clone());
 
     thread_local! {
+        #[allow(clippy::missing_const_for_thread_local)]
         static TAB0_RENDERS: Cell<usize> = const { Cell::new(0) };
+        #[allow(clippy::missing_const_for_thread_local)]
         static TAB1_RENDERS: Cell<usize> = const { Cell::new(0) };
     }
 
@@ -3713,6 +3766,7 @@ fn tab_switching_with_empty_tab() {
     let counter = MutableState::with_runtime(0i32, runtime.clone());
 
     thread_local! {
+        #[allow(clippy::missing_const_for_thread_local)]
         static CONTENT_RENDERS: Cell<usize> = const { Cell::new(0) };
     }
 
@@ -3785,6 +3839,7 @@ fn tab_switching_preserves_node_order() {
     let active_tab = MutableState::with_runtime(0i32, runtime.clone());
 
     thread_local! {
+        #[allow(clippy::missing_const_for_thread_local)]
         static RENDER_ORDER: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     }
 

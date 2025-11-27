@@ -326,6 +326,7 @@ impl AnySnapshot {
 
 thread_local! {
     // Thread-local storage for the current snapshot.
+    #[allow(clippy::missing_const_for_thread_local)]
     static CURRENT_SNAPSHOT: RefCell<Option<AnySnapshot>> = const { RefCell::new(None) };
 }
 
@@ -408,6 +409,7 @@ static NEXT_OBSERVER_ID: AtomicUsize = AtomicUsize::new(1);
 
 thread_local! {
     // Global map of apply observers indexed by unique ID.
+    #[allow(clippy::missing_const_for_thread_local)]
     static APPLY_OBSERVERS: RefCell<HashMap<usize, ApplyObserver>> = RefCell::new(HashMap::default());
 }
 
@@ -419,12 +421,14 @@ thread_local! {
     // for Phase 2.1 before full record-chain merging is implemented.
     //
     // Thread-local ensures test isolation - each test thread has its own registry.
+    #[allow(clippy::missing_const_for_thread_local)]
     static LAST_WRITES: RefCell<HashMap<StateObjectId, SnapshotId>> = RefCell::new(HashMap::default());
 }
 
 thread_local! {
     // Thread-local weak set of state objects with multiple records for periodic garbage collection.
     // Mirrors Kotlin's `extraStateObjects` WeakSet.
+    #[allow(clippy::missing_const_for_thread_local)]
     static EXTRA_STATE_OBJECTS: RefCell<crate::snapshot_weak_set::SnapshotWeakSet> = RefCell::new(crate::snapshot_weak_set::SnapshotWeakSet::new());
 }
 

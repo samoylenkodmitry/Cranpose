@@ -678,6 +678,10 @@ impl GpuRenderer {
             let font_size_px = BASE_FONT_SIZE_DP * text_draw.scale * root_scale;
             let key = TextCacheKey::new(&text_draw.text, font_size_px);
 
+            if !text_cache.contains_key(&key) {
+                super::enforce_text_cache_limit(&mut text_cache);
+            }
+
             let cached = text_cache
                 .entry(key.clone())
                 .or_insert_with(|| SharedTextBuffer {

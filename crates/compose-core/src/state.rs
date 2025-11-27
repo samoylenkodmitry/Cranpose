@@ -694,7 +694,9 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
 }
 
 thread_local! {
+    #[allow(clippy::missing_const_for_thread_local)]
     static ACTIVE_UPDATES: RefCell<HashSet<ObjectId>> = RefCell::new(HashSet::default());
+    #[allow(clippy::missing_const_for_thread_local)]
     static PENDING_WRITES: RefCell<HashSet<ObjectId>> = RefCell::new(HashSet::default());
 }
 

@@ -22,6 +22,7 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
 pub(crate) const BASE_FONT_SIZE_DP: f32 = 14.0;
+const TEXT_CACHE_MAX_ENTRIES: usize = 256;
 
 #[derive(Debug)]
 pub enum WgpuRendererError {
@@ -102,6 +103,14 @@ impl SharedTextBuffer {
 
 /// Shared cache for text buffers used by both measurement and rendering
 pub(crate) type SharedTextCache = Arc<Mutex<HashMap<TextCacheKey, SharedTextBuffer>>>;
+
+fn enforce_text_cache_limit(cache: &mut HashMap<TextCacheKey, SharedTextBuffer>) {
+    if cache.len() >= TEXT_CACHE_MAX_ENTRIES {
+        if let Some(key) = cache.keys().next().cloned() {
+            cache.remove(&key);
+        }
+    }
+}
 
 /// WGPU-based renderer for GPU-accelerated 2D rendering.
 ///
@@ -323,6 +332,10 @@ impl TextMeasurer for WgpuTextMeasurer {
 
         let mut font_system = self.font_system.lock().unwrap();
         let mut text_cache = self.text_cache.lock().unwrap();
+
+        if !text_cache.contains_key(&cache_key) {
+            enforce_text_cache_limit(&mut text_cache);
+        }
 
         let cached = text_cache
             .entry(cache_key)

@@ -1,5 +1,4 @@
 #![allow(clippy::type_complexity)]
-#![allow(non_snake_case)]
 
 pub mod app;
 

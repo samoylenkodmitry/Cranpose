@@ -4,9 +4,18 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["desktop", "renderer-pixels"]
+default = ["desktop", "renderer-wgpu"]
 desktop = ["compose-platform-desktop-winit", "dep:winit"]
-android = ["compose-platform-android", "dep:ndk", "dep:ndk-context", "dep:android-activity", "dep:jni", "dep:android_logger", "dep:raw-window-handle"]
+android = [
+    "compose-platform-android",
+    "dep:ndk",
+    "dep:ndk-context",
+    "dep:android-activity",
+    "dep:jni",
+    "dep:android_logger",
+    "dep:raw-window-handle",
+    "renderer-wgpu",
+]
 renderer-pixels = ["compose-render-pixels", "dep:pixels"]
 renderer-wgpu = ["compose-render-wgpu", "dep:wgpu", "dep:pollster"]
 

@@ -27,7 +27,15 @@ fn get_display_density() -> f32 {
     // For now treat everything as 1.0 scale on Android.
     // When we wire a proper Java → Rust bridge for DisplayMetrics,
     // we can replace this.
-    1.0
+    let disable_scaling = std::env::var("COMPOSE_RS_DISABLE_DENSITY")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    if disable_scaling {
+        1.0
+    } else {
+        1.0
+    }
 }
 
 /// Runs an Android Compose application with wgpu rendering.
