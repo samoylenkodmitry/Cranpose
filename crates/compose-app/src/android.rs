@@ -34,14 +34,13 @@ type SurfaceState = (
 /// The factor is calculated as DPI / 160 per Android NDK documentation.
 fn get_display_density(app: &android_activity::AndroidApp) -> f32 {
     let config = app.config();
-    let density = config.density();
+    let density_dpi = config.density(); // Returns Option<u32> with raw DPI value
 
-    // Use approx_hidpi_factor which computes DPI / 160
-    // This matches DisplayMetrics.density from the framework
-    density
-        .approx_hidpi_factor()
-        .unwrap_or(2.0) // Fallback if density is Any/None/Default
-        as f32
+    // Convert DPI to scale factor (baseline is 160 dpi = 1.0x)
+    // e.g., 320 dpi / 160 = 2.0x (xhdpi)
+    density_dpi
+        .map(|dpi| dpi as f32 / 160.0)
+        .unwrap_or(2.0) // Fallback to xhdpi (2.0) if density unavailable
 }
 
 /// Runs an Android Compose application with wgpu rendering.
