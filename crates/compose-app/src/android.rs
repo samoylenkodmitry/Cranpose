@@ -138,6 +138,9 @@ pub fn run(
     // Frame wake flag for event-driven rendering
     let need_frame = Arc::new(AtomicBool::new(false));
 
+    // Exit flag for Destroy event (can't break from inside poll_events closure)
+    let should_exit = Arc::new(AtomicBool::new(false));
+
     // Initialize wgpu instance with GL and Vulkan backends
     // GL works better on emulators, but Vulkan is preferred on real devices
     let backends = wgpu::Backends::GL | wgpu::Backends::VULKAN;
@@ -182,10 +185,14 @@ pub fn run(
                             let width = native_window.width() as u32;
                             let height = native_window.height() as u32;
 
-                            // Create surface using standard wgpu integration with AndroidApp
-                            let surface = instance
-                                .create_surface(&app)
-                                .expect("Failed to create WGPU surface from AndroidApp");
+                            // Create surface using wgpu's Android-specific surface creation
+                            let surface = unsafe {
+                                let target = wgpu::SurfaceTargetUnsafe::from_window(&native_window)
+                                    .expect("Failed to create surface target from native window");
+                                instance
+                                    .create_surface_unsafe(target)
+                                    .expect("Failed to create WGPU surface")
+                            };
 
                             // Request adapter
                             let adapter = pollster::block_on(instance.request_adapter(
@@ -375,8 +382,8 @@ pub fn run(
                         log::info!("Save state requested (hook for future serialization)");
                     }
                     MainEvent::Destroy => {
-                        log::info!("App destroy requested, exiting cleanly");
-                        break;
+                        log::info!("App destroy requested, will exit after this event");
+                        should_exit.store(true, Ordering::Relaxed);
                     }
                     _ => {}
                 },
@@ -439,6 +446,12 @@ pub fn run(
             if let Some(shell) = &mut app_shell {
                 shell.mark_dirty();
             }
+        }
+
+        // Check if Destroy event requested exit
+        if should_exit.load(Ordering::Relaxed) {
+            log::info!("Exiting cleanly after Destroy event");
+            break;
         }
 
         // Render outside event callback if needed

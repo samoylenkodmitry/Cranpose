@@ -2,10 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application
         android:allowBackup="true"
-        android:icon="@mipmap/ic_launcher"
-        android:label="@string/app_name"
-        android:supportsRtl="true"
-        android:theme="@style/Theme.AndroidDemo">
+        android:label="Compose Demo"
+        android:supportsRtl="true">
         <!--
             NativeActivity: The main activity using android_activity with native-activity feature.
             The lib_name must match the cdylib name in Cargo.toml exactly.
