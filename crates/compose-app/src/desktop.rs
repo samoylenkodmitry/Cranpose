@@ -87,12 +87,12 @@ pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
 
     surface.configure(&device, &surface_config);
 
-    // Load bundled fonts
-    let font_light = include_bytes!("../../../assets/Roboto-Light.ttf");
-    let font_regular = include_bytes!("../../../assets/Roboto-Regular.ttf");
-
-    // Create renderer with fonts and set initial scale
-    let mut renderer = WgpuRenderer::new_with_fonts(&[font_light, font_regular]);
+    // Create renderer with fonts from settings
+    let mut renderer = if let Some(fonts) = settings.fonts {
+        WgpuRenderer::new_with_fonts(fonts)
+    } else {
+        WgpuRenderer::new()
+    };
     renderer.init_gpu(Arc::new(device), Arc::new(queue), surface_format);
     let initial_scale = window.scale_factor();
     renderer.set_root_scale(initial_scale as f32);
@@ -201,10 +201,6 @@ pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
                         }
                         Err(wgpu::SurfaceError::Timeout) => {
                             log::debug!("Surface timeout, skipping frame");
-                            return;
-                        }
-                        Err(err) => {
-                            log::error!("Failed to get surface texture: {err}");
                             return;
                         }
                     };

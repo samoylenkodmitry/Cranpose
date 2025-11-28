@@ -27,7 +27,6 @@ pub enum WgpuRendererError {
     Wgpu(String),
 }
 
-
 /// Unified hash key for text caching - shared between measurement and rendering
 /// Only content + scale matter, not position
 #[derive(Clone)]
@@ -138,17 +137,17 @@ fn trim_text_cache(cache: &mut HashMap<TextCacheKey, SharedTextBuffer>) {
         let to_remove = cache.len() - target_size;
 
         // Remove oldest entries (arbitrary keys from the front)
-        let keys_to_remove: Vec<TextCacheKey> = cache
-            .keys()
-            .take(to_remove)
-            .cloned()
-            .collect();
+        let keys_to_remove: Vec<TextCacheKey> = cache.keys().take(to_remove).cloned().collect();
 
         for key in keys_to_remove {
             cache.remove(&key);
         }
 
-        log::debug!("Trimmed text cache from {} to {} entries", cache.len() + to_remove, cache.len());
+        log::debug!(
+            "Trimmed text cache from {} to {} entries",
+            cache.len() + to_remove,
+            cache.len()
+        );
     }
 }
 
@@ -279,7 +278,14 @@ impl WgpuRenderer {
     ) -> Result<(), WgpuRendererError> {
         if let Some(gpu_renderer) = &mut self.gpu_renderer {
             gpu_renderer
-                .render(view, &self.scene.shapes, &self.scene.texts, width, height, self.root_scale)
+                .render(
+                    view,
+                    &self.scene.shapes,
+                    &self.scene.texts,
+                    width,
+                    height,
+                    self.root_scale,
+                )
                 .map_err(WgpuRendererError::Wgpu)
         } else {
             Err(WgpuRendererError::Wgpu(
@@ -374,7 +380,10 @@ impl TextMeasurer for WgpuTextMeasurer {
         // Get or create buffer and calculate size
         let size = {
             let buffer = text_cache.entry(cache_key).or_insert_with(|| {
-                let buffer = Buffer::new(&mut font_system, Metrics::new(BASE_FONT_SIZE, BASE_FONT_SIZE * 1.4));
+                let buffer = Buffer::new(
+                    &mut font_system,
+                    Metrics::new(BASE_FONT_SIZE, BASE_FONT_SIZE * 1.4),
+                );
                 SharedTextBuffer {
                     buffer,
                     text: String::new(),

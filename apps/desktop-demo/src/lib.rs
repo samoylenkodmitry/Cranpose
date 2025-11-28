@@ -1,11 +1,14 @@
 pub mod app;
+pub mod fonts;
 
+use crate::fonts::DEMO_FONTS;
 use compose_app::AppLauncher;
 
 fn create_app() -> AppLauncher {
     AppLauncher::new()
         .with_title("Compose Demo")
         .with_size(800, 600)
+        .with_fonts(&DEMO_FONTS)
 }
 
 /// Shared entry point for desktop

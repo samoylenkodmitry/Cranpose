@@ -12,6 +12,10 @@ pub struct AppSettings {
     pub initial_width: u32,
     /// Initial window height in logical pixels (desktop only)
     pub initial_height: u32,
+    /// Optional embedded fonts to use for text rendering
+    pub fonts: Option<&'static [&'static [u8]]>,
+    /// Whether to load system fonts on Android (default: false)
+    pub android_use_system_fonts: bool,
 }
 
 impl Default for AppSettings {
@@ -20,6 +24,8 @@ impl Default for AppSettings {
             window_title: "Compose App".into(),
             initial_width: 800,
             initial_height: 600,
+            fonts: None,
+            android_use_system_fonts: false,
         }
     }
 }
@@ -81,8 +87,33 @@ impl AppLauncher {
         self
     }
 
+    /// Set fonts to use for text rendering.
+    ///
+    /// If not set, the renderer will use an empty FontSystem (text will fail to render).
+    /// Applications should provide fonts explicitly for consistent cross-platform rendering.
+    pub fn with_fonts(mut self, fonts: &'static [&'static [u8]]) -> Self {
+        self.settings.fonts = Some(fonts);
+        self
+    }
+
+    /// Enable system font loading on Android (default: false).
+    ///
+    /// When false (recommended), only fonts provided via `with_fonts()` are used.
+    /// When true, Android system fonts are loaded in addition to provided fonts.
+    ///
+    /// Note: Modern Android uses variable fonts which can cause rendering issues.
+    /// Use static fonts via `with_fonts()` for reliable rendering.
+    pub fn with_android_use_system_fonts(mut self, use_system_fonts: bool) -> Self {
+        self.settings.android_use_system_fonts = use_system_fonts;
+        self
+    }
+
     /// Run the application (desktop platform).
-    #[cfg(all(feature = "desktop", feature = "renderer-wgpu", not(target_os = "android")))]
+    #[cfg(all(
+        feature = "desktop",
+        feature = "renderer-wgpu",
+        not(target_os = "android")
+    ))]
     pub fn run(self, content: impl FnMut() + 'static) -> ! {
         crate::desktop::run(self.settings, content)
     }

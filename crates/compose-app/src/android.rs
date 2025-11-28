@@ -37,9 +37,7 @@ fn get_display_density(app: &android_activity::AndroidApp) -> f32 {
 
     // Convert DPI to scale factor (baseline is 160 dpi = 1.0x)
     // e.g., 320 dpi / 160 = 2.0x (xhdpi)
-    density_dpi
-        .map(|dpi| dpi as f32 / 160.0)
-        .unwrap_or(2.0) // Fallback to xhdpi (2.0) if density unavailable
+    density_dpi.map(|dpi| dpi as f32 / 160.0).unwrap_or(2.0) // Fallback to xhdpi (2.0) if density unavailable
 }
 
 /// Renders a single frame. Returns true if out of memory (should exit).
@@ -65,7 +63,9 @@ fn render_once(resources: &mut GpuResources, shell: &mut AppShell<WgpuRenderer>)
             let (width, height) = shell.buffer_size();
             resources.config.width = width;
             resources.config.height = height;
-            resources.surface.configure(&resources.device, &resources.config);
+            resources
+                .surface
+                .configure(&resources.device, &resources.config);
             false
         }
         Err(wgpu::SurfaceError::OutOfMemory) => {
@@ -87,16 +87,27 @@ fn render_once(resources: &mut GpuResources, shell: &mut AppShell<WgpuRenderer>)
 /// **Note:** Applications should use `AppLauncher` instead of calling this directly.
 pub fn run(
     app: android_activity::AndroidApp,
-    _settings: AppSettings,
+    settings: AppSettings,
     content: impl FnMut() + 'static,
 ) {
     use android_activity::{input::MotionAction, InputStatus, MainEvent, PollEvent};
 
     // Install panic hook for better crash logging in Logcat
     std::panic::set_hook(Box::new(|panic_info| {
-        let location = panic_info.location().map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column())).unwrap_or_else(|| "unknown location".to_string());
-        let message = panic_info.payload().downcast_ref::<&str>().map(|s| *s)
-            .or_else(|| panic_info.payload().downcast_ref::<String>().map(|s| s.as_str()))
+        let location = panic_info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "unknown location".to_string());
+        let message = panic_info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| *s)
+            .or_else(|| {
+                panic_info
+                    .payload()
+                    .downcast_ref::<String>()
+                    .map(|s| s.as_str())
+            })
             .unwrap_or("Box<dyn Any>");
         log::error!("PANIC at {}: {}", location, message);
     }));
@@ -231,24 +242,23 @@ pub fn run(
                             android_platform.set_scale_factor(density as f64);
                             log::info!("Display density: {:.2}x", density);
 
-                            // Load bundled fonts
-                            let font_light = include_bytes!("../../../assets/Roboto-Light.ttf");
-                            let font_regular = include_bytes!("../../../assets/Roboto-Regular.ttf");
-
                             // Create or reuse app shell
                             if app_shell.is_none() {
                                 // First initialization - create renderer and app shell
-                                let mut renderer = WgpuRenderer::new_with_fonts(&[font_light, font_regular]);
+                                let mut renderer = if let Some(fonts) = settings.fonts {
+                                    WgpuRenderer::new_with_fonts(fonts)
+                                } else {
+                                    WgpuRenderer::new()
+                                };
                                 renderer.init_gpu(device.clone(), queue.clone(), surface_format);
                                 renderer.set_root_scale(density);
 
                                 // Create app shell with content closure
                                 let content_clone = content.clone();
-                                let shell = AppShell::new(
-                                    renderer,
-                                    default_root_key(),
-                                    move || content_clone.borrow_mut()(),
-                                );
+                                let shell =
+                                    AppShell::new(renderer, default_root_key(), move || {
+                                        content_clone.borrow_mut()()
+                                    });
 
                                 app_shell = Some(shell);
 
@@ -264,7 +274,11 @@ pub fn run(
                             } else {
                                 // Window recreated - reinitialize GPU resources
                                 if let Some(shell) = &mut app_shell {
-                                    shell.renderer().init_gpu(device.clone(), queue.clone(), surface_format);
+                                    shell.renderer().init_gpu(
+                                        device.clone(),
+                                        queue.clone(),
+                                        surface_format,
+                                    );
                                     shell.renderer().set_root_scale(density);
                                     log::info!("Renderer reinitialized with new GPU resources");
                                 }
@@ -316,11 +330,15 @@ pub fn run(
                                 density
                             );
 
-                            if let (Some(resources), Some(shell)) = (&mut gpu_resources, &mut app_shell) {
+                            if let (Some(resources), Some(shell)) =
+                                (&mut gpu_resources, &mut app_shell)
+                            {
                                 if width > 0 && height > 0 {
                                     resources.config.width = width;
                                     resources.config.height = height;
-                                    resources.surface.configure(&resources.device, &resources.config);
+                                    resources
+                                        .surface
+                                        .configure(&resources.device, &resources.config);
 
                                     // Set buffer_size to physical pixels
                                     shell.set_buffer_size(width, height);

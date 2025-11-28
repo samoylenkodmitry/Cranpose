@@ -6,8 +6,8 @@ use crate::{SharedTextBuffer, SharedTextCache, TextCacheKey, BASE_FONT_SIZE};
 use bytemuck::{Pod, Zeroable};
 use compose_ui_graphics::{Brush, Color};
 use glyphon::{
-    Attrs, Color as GlyphonColor, FontSystem, Metrics, Resolution, SwashCache, TextArea,
-    TextAtlas, TextBounds, TextRenderer,
+    Attrs, Color as GlyphonColor, FontSystem, Metrics, Resolution, SwashCache, TextArea, TextAtlas,
+    TextBounds, TextRenderer,
 };
 use std::sync::{Arc, Mutex};
 
@@ -343,7 +343,10 @@ impl GpuRenderer {
         let swash_cache = SwashCache::new();
         let mut text_atlas = TextAtlas::new(&device, &queue, surface_format);
 
-        log::info!("Text renderer initialized with format: {:?}", surface_format);
+        log::info!(
+            "Text renderer initialized with format: {:?}",
+            surface_format
+        );
 
         let text_renderer = TextRenderer::new(
             &mut text_atlas,
@@ -691,7 +694,12 @@ impl GpuRenderer {
             });
 
             // Ensure buffer has the correct text
-            buffer.ensure(&mut font_system, &text_draw.text, font_size_px, Attrs::new());
+            buffer.ensure(
+                &mut font_system,
+                &text_draw.text,
+                font_size_px,
+                Attrs::new(),
+            );
         }
 
         // Collect text data from cache
@@ -722,8 +730,14 @@ impl GpuRenderer {
             let top_px = _text_draw.rect.y * root_scale;
 
             let bounds = TextBounds {
-                left: _text_draw.clip.map(|c| (c.x * root_scale) as i32).unwrap_or(0),
-                top: _text_draw.clip.map(|c| (c.y * root_scale) as i32).unwrap_or(0),
+                left: _text_draw
+                    .clip
+                    .map(|c| (c.x * root_scale) as i32)
+                    .unwrap_or(0),
+                top: _text_draw
+                    .clip
+                    .map(|c| (c.y * root_scale) as i32)
+                    .unwrap_or(0),
                 right: _text_draw
                     .clip
                     .map(|c| ((c.x + c.width) * root_scale) as i32)
