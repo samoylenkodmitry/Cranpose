@@ -51,8 +51,11 @@ pub async fn run(canvas_id: &str, settings: AppSettings, content: impl FnMut() +
     }
 
     // Initialize WGPU
+    // Use WebGL backend for maximum compatibility with Chrome stable.
+    // This avoids the wgpu 0.19 / Chrome WebGPU spec incompatibility
+    // (maxInterStageShaderComponents vs maxInterStageShaderVariables).
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::BROWSER_WEBGPU,
+        backends: wgpu::Backends::GL,
         ..Default::default()
     });
 

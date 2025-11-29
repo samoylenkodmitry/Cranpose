@@ -95,7 +95,7 @@
         <div id="error" class="error" style="display: none;"></div>
 
         <div class="info">
-            <p>Powered by Rust 🦀 + WebAssembly + WebGPU</p>
+            <p>Powered by Rust 🦀 + WebAssembly + WebGL</p>
             <p>Full demo with interactive examples, animations, and more!</p>
         </div>
 
@@ -108,19 +108,13 @@
     <script type="module">
         async function init() {
             try {
-                // Check WebGPU availability first
-                if (!navigator.gpu) {
-                    throw new Error('WebGPU is not supported in this browser. Please use Chrome 113+, Edge 113+, or Safari 18+ with WebGPU enabled.');
+                // Check for WebGL2 support (wgpu uses WebGL backend on web)
+                const canvas = document.createElement('canvas');
+                const gl = canvas.getContext('webgl2');
+                if (!gl) {
+                    throw new Error('WebGL2 is not supported in this browser. Please use a modern browser (Chrome, Firefox, Edge, or Safari).');
                 }
-
-                // Try to request an adapter to verify WebGPU works
-                const adapter = await navigator.gpu.requestAdapter();
-                if (!adapter) {
-                    throw new Error('Failed to get WebGPU adapter. WebGPU might not be enabled or your GPU might not be supported.\n\n' +
-                        'Try enabling WebGPU in chrome://flags/#enable-unsafe-webgpu');
-                }
-
-                console.log('WebGPU adapter found:', adapter);
+                console.log('WebGL2 support detected');
 
                 // Import the WASM module
                 const wasm = await import('./pkg/desktop_app.js');
@@ -141,34 +135,30 @@
 
                 let errorHtml = `<h3>Error Loading Application</h3><p>${err.message || err.toString()}</p>`;
 
-                if ((err.message || '').includes('maxInterStageShaderComponents') || (err.message || '').includes('not recognized')) {
+                if ((err.message || '').includes('WebGL')) {
                     errorHtml += `
                         <hr>
-                        <h4>⚠️ Chrome Stable Not Supported</h4>
-                        <p style="text-align: left;"><strong>This demo requires Chrome Canary/Dev with updated WebGPU support.</strong></p>
-                        <p style="text-align: left;">Chrome stable uses an older WebGPU specification that's incompatible with the latest graphics libraries.</p>
+                        <h4>WebGL2 Not Supported</h4>
+                        <p style="text-align: left;">This demo requires WebGL2 support, which is available in all modern browsers.</p>
                         <h5>Solutions:</h5>
                         <ol style="text-align: left;">
-                            <li>Download <a href="https://www.google.com/chrome/canary/" target="_blank"><strong>Chrome Canary</strong></a> (recommended)</li>
-                            <li>Or use <a href="https://www.google.com/chrome/dev/" target="_blank">Chrome Dev</a></li>
-                            <li>Enable WebGPU in <code>chrome://flags/#enable-unsafe-webgpu</code></li>
-                            <li>Restart the browser and reload this page</li>
-                        </ol>
-                        <p style="text-align: left;"><em>See WEB_REQUIREMENTS.md for technical details.</em></p>
-                    `;
-                } else if ((err.message || '').includes('adapter') || (err.message || '').includes('WebGPU')) {
-                    errorHtml += `
-                        <hr>
-                        <h4>WebGPU Troubleshooting:</h4>
-                        <ol style="text-align: left;">
-                            <li>Enable WebGPU in <a href="chrome://flags/#enable-unsafe-webgpu" target="_blank">chrome://flags</a></li>
-                            <li>Restart your browser</li>
-                            <li>Check support at <a href="https://webgpureport.org/" target="_blank">webgpureport.org</a></li>
+                            <li>Update your browser to the latest version</li>
+                            <li>Enable WebGL in your browser settings</li>
                             <li>Update your graphics drivers</li>
+                            <li>Try a different browser (Chrome, Firefox, Edge, or Safari)</li>
                         </ol>
                     `;
                 } else {
-                    errorHtml += `<p><strong>Note:</strong> This demo requires WebGPU support.</p>`;
+                    errorHtml += `
+                        <hr>
+                        <h4>Troubleshooting:</h4>
+                        <ol style="text-align: left;">
+                            <li>Check the browser console for detailed errors</li>
+                            <li>Ensure you're serving over HTTP (not file://)</li>
+                            <li>Try refreshing the page</li>
+                            <li>Update your browser to the latest version</li>
+                        </ol>
+                    `;
                 }
 
                 errorDiv.innerHTML = errorHtml;

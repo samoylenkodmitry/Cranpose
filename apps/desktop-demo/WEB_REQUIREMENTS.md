@@ -1,48 +1,28 @@
-# Web Build Requirements
+# Web Build Technical Details
 
-## Browser Compatibility
+## Rendering Backend
 
-The RS-Compose web demo currently requires a browser with **updated WebGPU support** due to a field name incompatibility between wgpu 0.19 and Chrome stable.
+The RS-Compose web demo uses **WebGL2** as the rendering backend via wgpu's GL backend. This provides excellent compatibility with all modern browsers while maintaining the same rendering code used on desktop platforms.
 
-### Issue
+## Why WebGL Instead of WebGPU?
 
-wgpu 0.19 uses the newer WebGPU specification field name `maxInterStageShaderComponents`, while Chrome stable (as of version 113-131) still uses the older field name `maxInterStageShaderVariables`. This causes device creation to fail with:
+While WebGPU is the future of web graphics, we use WebGL2 for the following reasons:
 
-```
-OperationError: Failed to execute 'requestDevice' on 'GPUAdapter':
-The limit "maxInterStageShaderComponents" with a non-undefined value is not recognized.
-```
+1. **Universal Browser Support**: WebGL2 is supported by all modern browsers (Chrome, Firefox, Edge, Safari) without requiring experimental flags.
 
-### Solution
+2. **Avoiding Spec Incompatibilities**: wgpu 0.19 uses newer WebGPU specification field names (e.g., `maxInterStageShaderComponents`) that Chrome stable doesn't recognize yet (it expects `maxInterStageShaderVariables`). This would require users to install Chrome Canary/Dev.
 
-Use one of the following browsers with updated WebGPU support:
+3. **Same Codebase**: wgpu provides a unified API that works identically on both WebGL and WebGPU backends, so the same Rust rendering code works everywhere.
 
-1. **Chrome Canary** (recommended)
-   - Download from: https://www.google.com/chrome/canary/
-   - Enable WebGPU in `chrome://flags/#enable-unsafe-webgpu`
-   - Restart browser
+4. **Good Performance**: WebGL2 is hardware-accelerated and provides good performance for UI rendering.
 
-2. **Chrome Dev**
-   - Download from: https://www.google.com/chrome/dev/
-   - Enable WebGPU in `chrome://flags/#enable-unsafe-webgpu`
-   - Restart browser
+## Browser Requirements
 
-3. **Microsoft Edge Canary/Dev**
-   - Similar process to Chrome
+- **Chrome/Edge**: Version 56+ (released 2017)
+- **Firefox**: Version 51+ (released 2017)
+- **Safari**: Version 15+ (released 2021)
 
-4. **Safari Technology Preview** (macOS only)
-   - Download from: https://developer.apple.com/safari/technology-preview/
-   - WebGPU enabled by default
-
-### Why Can't We Downgrade wgpu?
-
-The project uses `glyphon 0.5` for text rendering, which requires `wgpu 0.19`. Downgrading to wgpu 0.17 or earlier would break text rendering and require finding compatible versions of all graphics dependencies.
-
-### Future
-
-This issue will be resolved when:
-- Chrome stable updates to support the newer WebGPU specification field names, OR
-- wgpu adds compatibility shims for older browsers
+Essentially any browser from the last few years works out of the box.
 
 ## Building for Web
 
@@ -53,19 +33,35 @@ cd apps/desktop-demo
 # Start a local server
 python3 -m http.server 8080
 
-# Open in Chrome Canary/Dev
+# Open in any modern browser
 # http://localhost:8080
 ```
 
-## Verification
+## Technical Implementation
 
-To verify your browser has proper WebGPU support:
-1. Visit https://webgpureport.org/
-2. Check that "maxInterStageShaderComponents" is listed in the limits
-3. If you only see "maxInterStageShaderVariables", your browser is too old
+In `crates/compose-app/src/web.rs`, we initialize wgpu with the GL backend:
 
-## Technical Details
+```rust
+let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+    backends: wgpu::Backends::GL,  // Use WebGL backend
+    ..Default::default()
+});
+```
 
-The incompatibility occurs during `adapter.requestDevice()` when wgpu serializes the `Limits` struct to JavaScript. Regardless of which limits we specify in Rust (default, downlevel_webgl2_defaults, adapter.limits(), etc.), wgpu 0.19 always serializes using its struct field names, which include `max_inter_stage_shader_components` → JavaScript `maxInterStageShaderComponents`.
+The `webgl` feature is enabled in `crates/compose-render/wgpu/Cargo.toml`:
 
-Chrome's WebGPU implementation rejects any limit name it doesn't recognize, even if the value would be acceptable.
+```toml
+wgpu = { version = "0.19", features = ["webgl"] }
+```
+
+This tells wgpu to use the `glow` library (OpenGL/WebGL wrapper) instead of the browser's `navigator.gpu` WebGPU API.
+
+## Future: Switching to WebGPU
+
+When WebGPU support stabilizes across browsers, we can:
+
+1. **Runtime Detection**: Try WebGPU first, fall back to WebGL if it fails
+2. **Build-time Flag**: Allow users to choose which backend at build time
+3. **Automatic Selection**: Use WebGPU when available, WebGL otherwise
+
+The benefit of using wgpu is that switching between backends requires minimal code changes - just changing the `backends` parameter.

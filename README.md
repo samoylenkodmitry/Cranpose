@@ -41,9 +41,7 @@ For detailed Android build instructions, see [`apps/android-demo/README.md`](app
 
 ### Web
 
-Build and run the demo in your browser:
-
-⚠️ **Note:** Requires Chrome Canary/Dev or Safari Technology Preview due to WebGPU spec compatibility.
+Build and run the demo in your browser using WebGL2:
 
 1. Install prerequisites:
    ```bash
@@ -58,11 +56,9 @@ Build and run the demo in your browser:
    python3 -m http.server 8080
    ```
 
-3. Open http://localhost:8080 in Chrome Canary/Dev (download from https://www.google.com/chrome/canary/)
+3. Open http://localhost:8080 in any modern browser (Chrome, Firefox, Edge, Safari)
 
-For detailed web build instructions and troubleshooting, see:
-- [`apps/desktop-demo/README.md`](apps/desktop-demo/README.md)
-- [`apps/desktop-demo/WEB_REQUIREMENTS.md`](apps/desktop-demo/WEB_REQUIREMENTS.md)
+For detailed web build instructions, see [`apps/desktop-demo/README.md`](apps/desktop-demo/README.md).
 
 ## Quick Start
 
