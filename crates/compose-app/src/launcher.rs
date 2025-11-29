@@ -3,8 +3,9 @@
 //! This module provides the `AppLauncher` API that allows apps to configure
 //! and launch on multiple platforms without knowing platform-specific details.
 
+use crate::robot::Robot;
+
 /// Configuration for application settings.
-#[derive(Clone, Debug)]
 pub struct AppSettings {
     /// Window title (desktop) / app name (mobile)
     pub window_title: String,
@@ -16,6 +17,8 @@ pub struct AppSettings {
     pub fonts: Option<&'static [&'static [u8]]>,
     /// Whether to load system fonts on Android (default: false)
     pub android_use_system_fonts: bool,
+    /// Optional test driver to control the application
+    pub test_driver: Option<Box<dyn FnOnce(Robot) + Send + 'static>>,
 }
 
 impl Default for AppSettings {
@@ -26,7 +29,21 @@ impl Default for AppSettings {
             initial_height: 600,
             fonts: None,
             android_use_system_fonts: false,
+            test_driver: None,
         }
+    }
+}
+
+impl std::fmt::Debug for AppSettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppSettings")
+            .field("window_title", &self.window_title)
+            .field("initial_width", &self.initial_width)
+            .field("initial_height", &self.initial_height)
+            .field("fonts", &self.fonts.map(|_| "Some(...)"))
+            .field("android_use_system_fonts", &self.android_use_system_fonts)
+            .field("test_driver", &self.test_driver.as_ref().map(|_| "Some(...)"))
+            .finish()
     }
 }
 
@@ -105,6 +122,14 @@ impl AppLauncher {
     /// Use static fonts via `with_fonts()` for reliable rendering.
     pub fn with_android_use_system_fonts(mut self, use_system_fonts: bool) -> Self {
         self.settings.android_use_system_fonts = use_system_fonts;
+        self
+    }
+
+    /// Set a test driver to control the application.
+    ///
+    /// The driver closure will be executed in a separate thread and receive a `Robot` instance.
+    pub fn with_test_driver(mut self, driver: impl FnOnce(Robot) + Send + 'static) -> Self {
+        self.settings.test_driver = Some(Box::new(driver));
         self
     }
 

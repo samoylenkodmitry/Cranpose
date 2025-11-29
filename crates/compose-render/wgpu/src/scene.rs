@@ -212,12 +212,15 @@ impl RenderScene for Scene {
         self.next_z = 0;
     }
 
-    fn hit_test(&self, x: f32, y: f32) -> Option<Self::HitTarget> {
-        self.hits
+    fn hit_test(&self, x: f32, y: f32) -> Vec<Self::HitTarget> {
+        let mut hits: Vec<_> = self.hits
             .iter()
             .filter(|hit| hit.contains(x, y))
-            .max_by(|a, b| a.z_index.cmp(&b.z_index))
             .cloned()
+            .collect();
+        // Sort by Z-index descending (top-most first)
+        hits.sort_by(|a, b| b.z_index.cmp(&a.z_index));
+        hits
     }
 }
 

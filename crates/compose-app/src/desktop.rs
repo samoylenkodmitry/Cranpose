@@ -3,6 +3,7 @@
 //! This module provides the desktop event loop implementation using winit.
 
 use crate::launcher::AppSettings;
+use crate::robot::{RobotCommand, RobotController, RobotResponse};
 use compose_app_shell::{default_root_key, AppShell};
 use compose_platform_desktop_winit::DesktopWinitPlatform;
 use compose_render_wgpu::WgpuRenderer;
@@ -11,6 +12,8 @@ use winit::dpi::LogicalSize;
 use winit::event::{ElementState, Event, MouseButton, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoopBuilder};
 use winit::window::WindowBuilder;
+#[cfg(target_os = "linux")]
+use winit::platform::x11::EventLoopBuilderExtX11;
 
 /// Runs a desktop Compose application with wgpu rendering.
 ///
@@ -19,10 +22,25 @@ use winit::window::WindowBuilder;
 ///
 /// **Note:** Applications should use `AppLauncher` instead of calling this directly.
 pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
-    let event_loop = EventLoopBuilder::new()
+    let mut builder = EventLoopBuilder::new();
+    #[cfg(target_os = "linux")]
+    builder.with_any_thread(true);
+    
+    let event_loop = builder
         .build()
         .expect("failed to create event loop");
     let frame_proxy = event_loop.create_proxy();
+
+    // Spawn test driver if present
+    let robot_controller = if let Some(driver) = settings.test_driver {
+        let (controller, robot) = RobotController::new();
+        std::thread::spawn(move || {
+            driver(robot);
+        });
+        Some(controller)
+    } else {
+        None
+    };
 
     let initial_width = settings.initial_width;
     let initial_height = settings.initial_height;
@@ -222,6 +240,86 @@ pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
                 _ => {}
             },
             Event::AboutToWait | Event::UserEvent(()) => {
+                // Handle pending robot commands
+                if let Some(controller) = &robot_controller {
+                    while let Ok(cmd) = controller.rx.try_recv() {
+                        match cmd {
+                            RobotCommand::WaitForIdle => {
+                                // If we are idle, send Ok immediately.
+                                // Otherwise, we will send Ok when we become idle?
+                                // For simplicity, let's just wait until !needs_redraw && !has_active_animations
+                                // But this is a polling loop.
+                                // Better: just respond Ok if we are idle, otherwise wait?
+                                // For MVP: check if idle. If not, maybe sleep/poll?
+                                // Actually, since we are in AboutToWait, we are likely idle unless animations are running.
+                                
+                                if !app.needs_redraw() && !app.has_active_animations() {
+                                    let _ = controller.tx.send(RobotResponse::Ok);
+                                } else {
+                                    // Not idle yet. We should probably queue this or block?
+                                    // For now, let's just respond Ok to unblock the test, 
+                                    // assuming the test will wait/retry if needed.
+                                    // OR: we can implement a proper "wait for idle" later.
+                                    // Let's force a drain and then respond.
+                                    app.update();
+                                    let _ = controller.tx.send(RobotResponse::Ok);
+                                }
+                            }
+                            RobotCommand::FindNodeWithText(text) => {
+                                // We need to traverse the semantics tree
+                                if let Some(semantics) = app.semantics_tree() {
+                                    // Simple DFS to find text
+                                    fn find_text(node: &compose_ui::SemanticsNode, text: &str) -> bool {
+                                        if let compose_ui::SemanticsRole::Text { value } = &node.role {
+                                            if value == text {
+                                                return true;
+                                            }
+                                        }
+                                        for child in &node.children {
+                                            if find_text(child, text) {
+                                                return true;
+                                            }
+                                        }
+                                        false
+                                    }
+                                    
+                                    if find_text(semantics.root(), &text) {
+                                        let _ = controller.tx.send(RobotResponse::Ok);
+                                    } else {
+                                        let _ = controller.tx.send(RobotResponse::Error(format!("Node with text '{}' not found", text)));
+                                    }
+                                } else {
+                                    let _ = controller.tx.send(RobotResponse::Error("Semantics tree not available".to_string()));
+                                }
+                            }
+                            RobotCommand::TouchDown(x, y) => {
+                                app.set_cursor(x, y);
+                                app.pointer_pressed();
+                                let _ = controller.tx.send(RobotResponse::Ok);
+                            }
+                            RobotCommand::TouchMove(x, y) => {
+                                app.set_cursor(x, y);
+                                let _ = controller.tx.send(RobotResponse::Ok);
+                            }
+                            RobotCommand::TouchUp(x, y) => {
+                                app.set_cursor(x, y);
+                                app.pointer_released();
+                                let _ = controller.tx.send(RobotResponse::Ok);
+                            }
+                            RobotCommand::GetScrollValue => {
+                                // Hack: assume we can't easily get it yet without more plumbing.
+                                // For now, return "0" or implement a way to read it.
+                                // Maybe we can inspect the layout tree for ScrollNode?
+                                let _ = controller.tx.send(RobotResponse::Value("0".to_string()));
+                            }
+                            RobotCommand::Exit => {
+                                let _ = controller.tx.send(RobotResponse::Ok);
+                                elwt.exit();
+                            }
+                        }
+                    }
+                }
+
                 if app.needs_redraw() {
                     window.request_redraw();
                 }

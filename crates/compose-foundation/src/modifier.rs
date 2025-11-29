@@ -511,6 +511,7 @@ pub trait PointerInputNode: ModifierNode {
         &mut self,
         _context: &mut dyn ModifierNodeContext,
         _event: &PointerEvent,
+        _pass: crate::nodes::input::types::PointerEventPass,
     ) -> bool {
         false
     }

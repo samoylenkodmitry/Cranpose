@@ -1005,6 +1005,8 @@ pub trait Applier: Any {
     {
         self
     }
+
+    fn set_runtime_handle(&mut self, _handle: RuntimeHandle) {}
 }
 
 pub(crate) type Command = Box<dyn FnMut(&mut dyn Applier) -> Result<(), NodeError> + 'static>;
@@ -1013,6 +1015,7 @@ pub(crate) type Command = Box<dyn FnMut(&mut dyn Applier) -> Result<(), NodeErro
 pub struct MemoryApplier {
     nodes: Vec<Option<Box<dyn Node>>>, // FUTURE(no_std): migrate to arena-backed node storage.
     layout_runtime: Option<RuntimeHandle>,
+    observer: RefCell<Option<SnapshotStateObserver>>,
 }
 
 impl MemoryApplier {
@@ -1020,6 +1023,7 @@ impl MemoryApplier {
         Self {
             nodes: Vec::new(),
             layout_runtime: None,
+            observer: RefCell::new(None),
         }
     }
 
@@ -1053,15 +1057,30 @@ impl MemoryApplier {
     }
 
     pub fn set_runtime_handle(&mut self, handle: RuntimeHandle) {
+        let runtime = handle.clone();
+        let observer = crate::snapshot_state_observer::SnapshotStateObserver::new(move |task| {
+            runtime.enqueue_ui_task(task);
+        });
+        observer.start();
+        *self.observer.borrow_mut() = Some(observer);
         self.layout_runtime = Some(handle);
     }
 
+
+
     pub fn clear_runtime_handle(&mut self) {
+        if let Some(observer) = self.observer.borrow_mut().take() {
+            observer.stop();
+        }
         self.layout_runtime = None;
     }
 
     pub fn runtime_handle(&self) -> Option<RuntimeHandle> {
         self.layout_runtime.clone()
+    }
+
+    pub fn observer(&self) -> Option<crate::snapshot_state_observer::SnapshotStateObserver> {
+        self.observer.borrow().clone()
     }
 
     pub fn dump_tree(&self, root: Option<NodeId>) -> String {
@@ -1128,6 +1147,10 @@ impl Applier for MemoryApplier {
         let slot = self.nodes.get_mut(id).ok_or(NodeError::Missing { id })?;
         slot.take();
         Ok(())
+    }
+
+    fn set_runtime_handle(&mut self, handle: RuntimeHandle) {
+        self.set_runtime_handle(handle);
     }
 }
 
@@ -2696,6 +2719,8 @@ impl<A: Applier + 'static> Composition<A> {
     pub fn with_backend(applier: A, runtime: Runtime, backend_kind: SlotBackendKind) -> Self {
         let storage = make_backend(backend_kind);
         let slots = Rc::new(SlotsHost::new(storage));
+        let mut applier = applier;
+        applier.set_runtime_handle(runtime.handle());
         let applier = Rc::new(ConcreteApplierHost::new(applier));
         let observer_handle = runtime.handle();
         let observer = SnapshotStateObserver::new(move |callback| {

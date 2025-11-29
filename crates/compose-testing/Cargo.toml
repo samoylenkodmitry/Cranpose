@@ -9,6 +9,9 @@ description = "Testing utilities and harness for Compose-RS"
 compose-core = { path = "../compose-core" }
 compose-foundation = { path = "../compose-foundation" }
 compose-ui = { path = "../compose-ui" }
+compose-app-shell = { path = "../compose-app-shell" }
+compose-render-common = { path = "../compose-render/common" }
+compose-ui-graphics = { path = "../compose-ui-graphics" }
 
 [dev-dependencies]
 compose-macros = { path = "../compose-macros" }

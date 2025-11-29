@@ -12,7 +12,8 @@ use compose_ui::{
     log_render_scene, log_screen_summary, peek_focus_invalidation, peek_pointer_invalidation,
     peek_render_invalidation, process_focus_invalidations, process_pointer_repasses,
     request_render_invalidation, take_focus_invalidation, take_pointer_invalidation,
-    take_render_invalidation, HeadlessRenderer, LayoutEngine, LayoutNode, LayoutTree,
+    take_render_invalidation, HeadlessRenderer, LayoutMeasurements, LayoutNode, MeasuredNode,
+    LayoutTree, SemanticsTree,
 };
 use compose_ui_graphics::Size;
 
@@ -27,7 +28,7 @@ where
     viewport: (f32, f32),
     buffer_size: (u32, u32),
     start_time: Instant,
-    layout_tree: Option<LayoutTree>,
+    layout_measurements: Option<LayoutMeasurements>,
     layout_dirty: bool,
     scene_dirty: bool,
     is_dirty: bool,
@@ -54,7 +55,7 @@ where
             viewport: (800.0, 600.0),
             buffer_size: (800, 600),
             start_time: Instant::now(),
-            layout_tree: None,
+            layout_measurements: None,
             layout_dirty: true,
             scene_dirty: true,
             is_dirty: true,
@@ -84,6 +85,14 @@ where
 
     pub fn renderer(&mut self) -> &mut R {
         &mut self.renderer
+    }
+
+    pub fn layout_tree(&self) -> Option<&LayoutTree> {
+        self.layout_measurements.as_ref().map(|m| &m.layout_tree)
+    }
+
+    pub fn semantics_tree(&self) -> Option<&SemanticsTree> {
+        self.layout_measurements.as_ref().map(|m| &m.semantics)
     }
 
     pub fn set_frame_waker(&mut self, waker: impl Fn() + Send + Sync + 'static) {
@@ -158,8 +167,11 @@ where
 
     pub fn set_cursor(&mut self, x: f32, y: f32) -> bool {
         self.cursor = (x, y);
-        if let Some(hit) = self.renderer.scene().hit_test(x, y) {
-            hit.dispatch(PointerEventKind::Move, x, y);
+        let hits = self.renderer.scene().hit_test(x, y);
+        if !hits.is_empty() {
+            for hit in hits {
+                hit.dispatch(PointerEventKind::Move, x, y);
+            }
             self.mark_dirty();
             true
         } else {
@@ -168,8 +180,11 @@ where
     }
 
     pub fn pointer_pressed(&mut self) -> bool {
-        if let Some(hit) = self.renderer.scene().hit_test(self.cursor.0, self.cursor.1) {
-            hit.dispatch(PointerEventKind::Down, self.cursor.0, self.cursor.1);
+        let hits = self.renderer.scene().hit_test(self.cursor.0, self.cursor.1);
+        if !hits.is_empty() {
+            for hit in hits {
+                hit.dispatch(PointerEventKind::Down, self.cursor.0, self.cursor.1);
+            }
             self.mark_dirty();
             true
         } else {
@@ -178,8 +193,11 @@ where
     }
 
     pub fn pointer_released(&mut self) -> bool {
-        if let Some(hit) = self.renderer.scene().hit_test(self.cursor.0, self.cursor.1) {
-            hit.dispatch(PointerEventKind::Up, self.cursor.0, self.cursor.1);
+        let hits = self.renderer.scene().hit_test(self.cursor.0, self.cursor.1);
+        if !hits.is_empty() {
+            for hit in hits {
+                hit.dispatch(PointerEventKind::Up, self.cursor.0, self.cursor.1);
+            }
             self.mark_dirty();
             true
         } else {
@@ -193,7 +211,8 @@ where
         println!("           DEBUG: CURRENT SCREEN STATE");
         println!("════════════════════════════════════════════════════════");
 
-        if let Some(ref layout_tree) = self.layout_tree {
+        if let Some(ref measurements) = self.layout_measurements {
+            let layout_tree = &measurements.layout_tree;
             log_layout_tree(layout_tree);
             let renderer = HeadlessRenderer::new();
             let render_scene = renderer.render(layout_tree);
@@ -249,20 +268,20 @@ where
 
             // Tree needs layout - compute it
             self.layout_dirty = false;
-            match applier.compute_layout(root, viewport_size) {
-                Ok(layout_tree) => {
-                    self.layout_tree = Some(layout_tree);
+            match compose_ui::measure_layout(&mut *applier, root, viewport_size) {
+                Ok(measurements) => {
+                    self.layout_measurements = Some(measurements);
                     self.scene_dirty = true;
                 }
                 Err(err) => {
                     log::error!("failed to compute layout: {err}");
-                    self.layout_tree = None;
+                    self.layout_measurements = None;
                     self.scene_dirty = true;
                 }
             }
             applier.clear_runtime_handle();
         } else {
-            self.layout_tree = None;
+            self.layout_measurements = None;
             self.scene_dirty = true;
             self.layout_dirty = false;
         }
@@ -327,12 +346,13 @@ where
             return;
         }
         self.scene_dirty = false;
-        if let Some(layout_tree) = self.layout_tree.as_ref() {
+        self.scene_dirty = false;
+        if let Some(measurements) = self.layout_measurements.as_ref() {
             let viewport_size = Size {
                 width: self.viewport.0,
                 height: self.viewport.1,
             };
-            if let Err(err) = self.renderer.rebuild_scene(layout_tree, viewport_size) {
+            if let Err(err) = self.renderer.rebuild_scene(&measurements.layout_tree, viewport_size) {
                 log::error!("renderer rebuild failed: {err:?}");
             }
         } else {

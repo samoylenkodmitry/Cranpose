@@ -116,8 +116,15 @@ pub fn combined_app() {
         move || {
             let tab_state_for_row = active_tab;
             let tab_state_for_content = active_tab;
+            
+            // Create scroll state for the tab row
+            let tab_scroll_state = compose_core::useState(|| compose_ui::ScrollState::new(0));
+            
             Row(
-                Modifier::empty().fill_max_width().padding(8.0),
+                Modifier::empty()
+                    .fill_max_width()
+                    .horizontal_scroll(tab_scroll_state.get())  // Enable horizontal scrolling
+                    .padding(8.0),
                 RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
                 move || {
                     let render_tab_button = {

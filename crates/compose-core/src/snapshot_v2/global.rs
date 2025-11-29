@@ -134,6 +134,18 @@ impl GlobalSnapshot {
         SnapshotApplyResult::Success
     }
 
+    pub fn send_apply_notifications(&self) {
+        let modified = self.state.modified.borrow();
+        if !modified.is_empty() {
+            let modified_list: Vec<_> = modified.values().map(|(state, _)| state.clone()).collect();
+            drop(modified);
+            
+            super::notify_apply_observers(&modified_list, self.snapshot_id());
+            
+            self.state.modified.borrow_mut().clear();
+        }
+    }
+
     pub fn take_nested_mutable_snapshot(
         &self,
         read_observer: Option<ReadObserver>,

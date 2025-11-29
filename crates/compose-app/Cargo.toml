@@ -12,6 +12,7 @@ renderer-wgpu = ["compose-render-wgpu", "dep:wgpu", "dep:pollster"]
 
 [dependencies]
 compose-app-shell = { path = "../compose-app-shell" }
+compose-ui = { path = "../compose-ui" }
 compose-platform-desktop-winit = { path = "../compose-platform/desktop-winit", optional = true }
 compose-platform-android = { path = "../compose-platform/android", optional = true }
 compose-render-pixels = { path = "../compose-render/pixels", optional = true }

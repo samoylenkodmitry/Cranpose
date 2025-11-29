@@ -435,6 +435,7 @@ dependencies = [
  "compose-platform-desktop-winit",
  "compose-render-pixels",
  "compose-render-wgpu",
+ "compose-ui",
  "log",
  "pixels",
  "pollster",
@@ -561,10 +562,13 @@ dependencies = [
 name = "compose-testing"
 version = "0.1.0"
 dependencies = [
+ "compose-app-shell",
  "compose-core",
  "compose-foundation",
  "compose-macros",
+ "compose-render-common",
  "compose-ui",
+ "compose-ui-graphics",
 ]
 
 [[package]]

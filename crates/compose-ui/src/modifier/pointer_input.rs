@@ -191,6 +191,12 @@ struct NextPointerEvent {
     state: Rc<PointerInputScopeState>,
 }
 
+// Use a dummy event for initialization
+fn empty_pointer_event() -> PointerEvent {
+    use compose_foundation::nodes::input::types::{PointerEventKind, Point};
+    PointerEvent::new(PointerEventKind::Up, Point::new(0.0, 0.0), Point::new(0.0, 0.0))
+}
+
 impl Future for NextPointerEvent {
     type Output = PointerEvent;
 
@@ -253,6 +259,10 @@ impl PointerEventDispatcher {
             }
         });
         Self { state, handler }
+    }
+
+    fn dispatch(&self, event: PointerEvent) {
+        (self.handler)(event);
     }
 
     fn handler(&self) -> Rc<dyn Fn(PointerEvent)> {
@@ -455,6 +465,24 @@ impl DelegatableNode for SuspendingPointerInputNode {
 }
 
 impl PointerInputNode for SuspendingPointerInputNode {
+    fn on_pointer_event(
+        &mut self,
+        _context: &mut dyn ModifierNodeContext,
+        event: &PointerEvent,
+        _pass: compose_foundation::nodes::input::types::PointerEventPass,
+    ) -> bool {
+        // TODO: Handle passes correctly. For now, we just dispatch everything.
+        // In the future, we should probably filter by pass or update the dispatcher to handle passes.
+        // Since the current dispatcher just pushes to a queue, we might be pushing 3x events.
+        // Let's only dispatch on Main pass for now to avoid duplication until we implement full pass support in SuspendingPointerInputNode.
+        
+        if _pass == compose_foundation::nodes::input::types::PointerEventPass::Main {
+             self.dispatcher.dispatch(event.clone());
+        }
+        
+        false
+    }
+
     fn pointer_input_handler(&self) -> Option<Rc<dyn Fn(PointerEvent)>> {
         Some(self.dispatcher.handler())
     }

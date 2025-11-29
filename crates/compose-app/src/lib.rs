@@ -11,6 +11,8 @@ compile_error!("compose-app requires either `renderer-pixels` or `renderer-wgpu`
 mod launcher;
 pub use launcher::{AppLauncher, AppSettings};
 
+pub mod robot;
+
 // Platform-specific runtime modules
 #[cfg(all(feature = "android", feature = "renderer-wgpu"))]
 pub mod android;

@@ -22,6 +22,7 @@ mod local;
 mod offset;
 mod padding;
 mod pointer_input;
+mod scroll;
 mod semantics;
 mod size;
 mod slices;

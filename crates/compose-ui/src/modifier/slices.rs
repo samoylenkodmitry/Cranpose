@@ -104,11 +104,10 @@ pub fn collect_modifier_slices(chain: &ModifierNodeChain) -> ModifierNodeSlices 
         }
 
         // Collect general pointer input handlers (non-clickable)
-        if let Some(handler) = node
-            .as_pointer_input_node()
-            .and_then(|n| n.pointer_input_handler())
-        {
-            slices.pointer_inputs.push(handler);
+        if let Some(input_node) = node.as_pointer_input_node() {
+            if let Some(handler) = input_node.pointer_input_handler() {
+                slices.pointer_inputs.push(handler);
+            }
         }
     });
 

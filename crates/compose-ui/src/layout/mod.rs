@@ -322,9 +322,9 @@ impl LayoutEngine for MemoryApplier {
 /// Result of running the measure pass for a Compose layout tree.
 #[derive(Debug, Clone)]
 pub struct LayoutMeasurements {
-    root: Rc<MeasuredNode>,
-    semantics: SemanticsTree,
-    layout_tree: LayoutTree,
+    pub root: Rc<MeasuredNode>,
+    pub semantics: SemanticsTree,
+    pub layout_tree: LayoutTree,
 }
 
 impl LayoutMeasurements {
@@ -943,29 +943,60 @@ impl LayoutBuilderState {
             },
         };
 
-        let mut modifier_chain_result = Self::measure_through_modifier_chain(
-            &state_rc,
-            node_id,
-            measurables.as_slice(),
-            &measure_policy,
-            chain_constraints,
-        );
-
-        if (chain_constraints.max_width != constraints.max_width
-            || chain_constraints.max_height != constraints.max_height)
-            && ((constraints.max_width.is_finite()
-                && modifier_chain_result.result.size.width > constraints.max_width)
-                || (constraints.max_height.is_finite()
-                    && modifier_chain_result.result.size.height > constraints.max_height))
-        {
-            modifier_chain_result = Self::measure_through_modifier_chain(
+        // Create a measurement closure to avoid duplication
+        let measure_block = || {
+            let mut result = Self::measure_through_modifier_chain(
                 &state_rc,
                 node_id,
                 measurables.as_slice(),
                 &measure_policy,
-                constraints,
+                chain_constraints,
             );
-        }
+
+            if (chain_constraints.max_width != constraints.max_width
+                || chain_constraints.max_height != constraints.max_height)
+                && ((constraints.max_width.is_finite()
+                    && result.result.size.width > constraints.max_width)
+                    || (constraints.max_height.is_finite()
+                        && result.result.size.height > constraints.max_height))
+            {
+                result = Self::measure_through_modifier_chain(
+                    &state_rc,
+                    node_id,
+                    measurables.as_slice(),
+                    &measure_policy,
+                    constraints,
+                );
+            }
+            result
+        };
+
+        // Get observer from applier and wrap measurement
+        // Get observer from applier and wrap measurement
+        let observer = {
+            let applier = applier_host.borrow_typed();
+            applier.observer()
+        };
+
+        let mut modifier_chain_result = if let (Some(observer), Some(runtime)) = (observer, runtime_handle.clone()) {
+            let on_changed = {
+                let runtime = runtime.clone();
+                // We need to clone the runtime handle to move it into the callback
+                move |node: &NodeId| {
+                    let id = *node;
+                    runtime.enqueue_node_update(Box::new(move |applier| {
+                        if let Some(node) = applier.get_mut(id)?.as_any_mut().downcast_mut::<LayoutNode>() {
+                            node.mark_needs_measure();
+                        }
+                        Ok(())
+                    }));
+                }
+            };
+
+            observer.observe_reads(node_id, on_changed, measure_block)
+        } else {
+            measure_block()
+        };
 
         // Modifier chain always succeeds - use the node-driven measurement.
         let (width, height, policy_result, padding, offset) = {
@@ -1169,8 +1200,8 @@ impl LayoutMeasureHandle {
     }
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct MeasuredNode {
+#[derive(Debug)]
+pub struct MeasuredNode {
     node_id: NodeId,
     size: Size,
     offset: Point,

@@ -14,6 +14,7 @@ mod pointer_dispatch;
 mod primitives;
 mod render_state;
 mod renderer;
+mod scroll_modifier_node;
 mod subcompose_layout;
 mod text;
 mod text_modifier_node;
@@ -34,7 +35,7 @@ pub use layout::{
         VerticalAlignment,
     },
     measure_layout, tree_needs_layout, LayoutBox, LayoutEngine, LayoutMeasurements, LayoutNodeData,
-    LayoutNodeKind, LayoutTree, SemanticsAction, SemanticsCallback, SemanticsNode, SemanticsRole,
+    LayoutNodeKind, LayoutTree, MeasuredNode, SemanticsAction, SemanticsCallback, SemanticsNode, SemanticsRole,
     SemanticsTree,
 };
 pub use modifier::{
@@ -42,11 +43,15 @@ pub use modifier::{
     GraphicsLayer, Modifier, ModifierNodeSlices, Point, PointerEvent, PointerEventKind,
     PointerInputScope, Rect, ResolvedBackground, ResolvedModifiers, RoundedCornerShape, Size,
 };
-pub use modifier_nodes::{
+pub use modifier_nodes::{ 
     AlphaElement, AlphaNode, BackgroundElement, BackgroundNode, ClickableElement, ClickableNode,
     CornerShapeElement, CornerShapeNode, FillDirection, FillElement, FillNode, OffsetElement,
     OffsetNode, PaddingElement, PaddingNode, SizeElement, SizeNode,
 };
+// Re-export scroll types from compose-foundation
+pub use compose_foundation::scroll::*;
+pub use compose_foundation::scrollable::*;
+pub use scroll_modifier_node::{ScrollNode, ScrollNodeElement};
 pub use pointer_dispatch::{
     clear_pointer_repasses, has_pending_pointer_repasses, process_pointer_repasses,
     schedule_pointer_repass,
@@ -101,3 +106,4 @@ mod async_runtime_full_layout_test;
 #[cfg(test)]
 #[path = "tests/tab_switching_tests.rs"]
 mod tab_switching_tests;
+

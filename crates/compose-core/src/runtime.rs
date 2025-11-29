@@ -15,6 +15,7 @@ use std::thread_local;
 
 use crate::frame_clock::FrameClock;
 use crate::platform::RuntimeScheduler;
+use crate::snapshot_v2::GlobalSnapshot;
 use crate::{Applier, Command, FrameCallbackId, NodeError, RecomposeScopeInner, ScopeId};
 
 enum UiMessage {
@@ -391,6 +392,9 @@ impl RuntimeInner {
                 executed = true;
             }
 
+            // Notify observers of any global state changes that happened during UI tasks
+            GlobalSnapshot::get_or_create().send_apply_notifications();
+
             if !executed {
                 break;
             }
@@ -507,6 +511,10 @@ impl RuntimeInner {
         for callback in pending {
             callback(frame_time_nanos);
         }
+        
+        // Notify observers of any global state changes that happened during frame callbacks
+        GlobalSnapshot::get_or_create().send_apply_notifications();
+
         if !self.has_invalid_scopes()
             && !self.has_updates()
             && !self.has_frame_callbacks()

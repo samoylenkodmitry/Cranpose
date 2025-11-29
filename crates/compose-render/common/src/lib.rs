@@ -17,7 +17,7 @@ pub trait RenderScene {
     type HitTarget: HitTestTarget;
 
     fn clear(&mut self);
-    fn hit_test(&self, x: f32, y: f32) -> Option<Self::HitTarget>;
+    fn hit_test(&self, x: f32, y: f32) -> Vec<Self::HitTarget>;
 }
 
 /// Abstraction implemented by concrete renderer backends.
