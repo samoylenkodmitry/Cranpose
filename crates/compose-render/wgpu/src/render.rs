@@ -406,6 +406,8 @@ impl GpuRenderer {
         height: u32,
         root_scale: f32,
     ) -> Result<(), String> {
+        log::info!("🎨 Rendering: {} shapes, {} texts (size: {}x{})", shapes.len(), texts.len(), width, height);
+
         // Sort by z-index
         let mut sorted_shapes = shapes.to_vec();
         sorted_shapes.sort_by_key(|s| s.z_index);
