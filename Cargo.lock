@@ -433,12 +433,17 @@ dependencies = [
  "compose-app-shell",
  "compose-platform-android",
  "compose-platform-desktop-winit",
+ "compose-platform-web",
  "compose-render-pixels",
  "compose-render-wgpu",
+ "console_error_panic_hook",
  "log",
  "pixels",
  "pollster",
  "raw-window-handle",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
  "wgpu",
  "winit",
 ]
@@ -508,6 +513,16 @@ dependencies = [
  "compose-foundation",
  "compose-ui-graphics",
  "winit",
+]
+
+[[package]]
+name = "compose-platform-web"
+version = "0.1.0"
+dependencies = [
+ "compose-foundation",
+ "compose-ui-graphics",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -603,6 +618,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ca0197aee26d1ae37445ee532fefce43251d24cc7c166799f4d46817f1d3973"
 dependencies = [
  "crossbeam-utils",
+]
+
+[[package]]
+name = "console_error_panic_hook"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a06aeb73f470f66dcdbf7223caeebb85984942f22f1adb2a088cf9668146bbbc"
+dependencies = [
+ "cfg-if",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -2080,7 +2105,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3150,6 +3175,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm-logger"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "074649a66bb306c8f2068c9016395fa65d8e08d2affcbf95acf3c24c3ab19718"
+dependencies = [
+ "log",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "wayland-backend"
 version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3256,6 +3292,24 @@ dependencies = [
  "log",
  "once_cell",
  "pkg-config",
+]
+
+[[package]]
+name = "web-demo"
+version = "0.1.0"
+dependencies = [
+ "compose-animation",
+ "compose-app",
+ "compose-core",
+ "compose-foundation",
+ "compose-macros",
+ "compose-ui",
+ "console_error_panic_hook",
+ "getrandom 0.3.3",
+ "log",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-logger",
 ]
 
 [[package]]

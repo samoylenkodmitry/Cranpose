@@ -123,6 +123,15 @@ impl AppLauncher {
     pub fn run(self, app: android_activity::AndroidApp, content: impl FnMut() + 'static) {
         crate::android::run(app, self.settings, content)
     }
+
+    /// Run the application (Web platform).
+    ///
+    /// Launches the app asynchronously targeting the canvas with the given ID.
+    /// Returns a Promise that resolves when the app is initialized.
+    #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
+    pub async fn run_web(self, canvas_id: &str, content: impl FnMut() + 'static) -> Result<(), wasm_bindgen::JsValue> {
+        crate::web::run(canvas_id, self.settings, content).await
+    }
 }
 
 impl Default for AppLauncher {

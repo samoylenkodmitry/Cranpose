@@ -39,6 +39,31 @@ Build and run the Android demo app:
 
 For detailed Android build instructions, see [`apps/android-demo/README.md`](apps/android-demo/README.md).
 
+### Web
+
+Build and run the web demo:
+
+1. Install prerequisites:
+   ```bash
+   rustup target add wasm32-unknown-unknown
+   cargo install wasm-pack
+   ```
+
+2. Build the WASM module:
+   ```bash
+   cd apps/web-demo
+   ./build.sh
+   ```
+
+3. Start a local web server:
+   ```bash
+   python3 -m http.server 8080
+   ```
+
+4. Open http://localhost:8080 in a WebGPU-compatible browser (Chrome 113+, Edge 113+, or Safari 18+)
+
+For detailed web build instructions, see [`apps/web-demo/README.md`](apps/web-demo/README.md).
+
 ## Quick Start
 
 ### Desktop
@@ -71,6 +96,27 @@ fn android_main(app: android_activity::AndroidApp) {
     AppLauncher::new()
         .with_title("My Compose App")
         .run(app, my_app);
+}
+
+#[composable]
+fn my_app() {
+    Text("Hello, Compose!");
+}
+```
+
+### Web
+
+```rust
+use compose_app::AppLauncher;
+use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen]
+pub async fn run_app() -> Result<(), JsValue> {
+    AppLauncher::new()
+        .with_title("My Compose App")
+        .with_size(800, 600)
+        .run_web("canvas-id", my_app)
+        .await
 }
 
 #[composable]

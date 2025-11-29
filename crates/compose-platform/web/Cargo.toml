@@ -1,0 +1,25 @@
+[package]
+name = "compose-platform-web"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Web platform adapter for Compose-RS"
+
+[dependencies]
+compose-foundation = { path = "../../compose-foundation" }
+compose-ui-graphics = { path = "../../compose-ui-graphics" }
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Document",
+    "Element",
+    "HtmlElement",
+    "HtmlCanvasElement",
+    "MouseEvent",
+    "Touch",
+    "TouchList",
+    "TouchEvent",
+    "PointerEvent",
+    "WheelEvent",
+    "KeyboardEvent",
+] }
