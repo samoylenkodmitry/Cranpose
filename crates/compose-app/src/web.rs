@@ -68,15 +68,15 @@ pub async fn run(canvas_id: &str, settings: AppSettings, content: impl FnMut() +
         .await
         .ok_or("failed to find suitable adapter")?;
 
-    // For web, use the adapter's limits directly to avoid field name mismatches.
-    // wgpu 0.19 uses newer WebGPU spec field names that Chrome doesn't recognize,
-    // so we let the adapter tell us what it actually supports.
+    // For web, use downlevel defaults for maximum compatibility.
+    // wgpu 0.19 uses newer WebGPU spec field names, so we use the most
+    // conservative limits designed for WebGL2-level capabilities.
     let (device, queue) = adapter
         .request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("Main Device"),
                 required_features: wgpu::Features::empty(),
-                required_limits: adapter.limits(),
+                required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
             },
             None,
         )

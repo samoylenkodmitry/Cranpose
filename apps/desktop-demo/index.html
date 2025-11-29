@@ -141,7 +141,22 @@
 
                 let errorHtml = `<h3>Error Loading Application</h3><p>${err.message || err.toString()}</p>`;
 
-                if ((err.message || '').includes('adapter') || (err.message || '').includes('WebGPU')) {
+                if ((err.message || '').includes('maxInterStageShaderComponents') || (err.message || '').includes('not recognized')) {
+                    errorHtml += `
+                        <hr>
+                        <h4>⚠️ Chrome Stable Not Supported</h4>
+                        <p style="text-align: left;"><strong>This demo requires Chrome Canary/Dev with updated WebGPU support.</strong></p>
+                        <p style="text-align: left;">Chrome stable uses an older WebGPU specification that's incompatible with the latest graphics libraries.</p>
+                        <h5>Solutions:</h5>
+                        <ol style="text-align: left;">
+                            <li>Download <a href="https://www.google.com/chrome/canary/" target="_blank"><strong>Chrome Canary</strong></a> (recommended)</li>
+                            <li>Or use <a href="https://www.google.com/chrome/dev/" target="_blank">Chrome Dev</a></li>
+                            <li>Enable WebGPU in <code>chrome://flags/#enable-unsafe-webgpu</code></li>
+                            <li>Restart the browser and reload this page</li>
+                        </ol>
+                        <p style="text-align: left;"><em>See WEB_REQUIREMENTS.md for technical details.</em></p>
+                    `;
+                } else if ((err.message || '').includes('adapter') || (err.message || '').includes('WebGPU')) {
                     errorHtml += `
                         <hr>
                         <h4>WebGPU Troubleshooting:</h4>

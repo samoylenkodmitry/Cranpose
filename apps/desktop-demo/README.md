@@ -35,18 +35,25 @@ This app is used by the Android demo. See [`apps/android-demo/README.md`](../and
 
 ### Web
 
+⚠️ **IMPORTANT:** Requires **Chrome Canary/Dev** or **Safari Technology Preview** due to WebGPU spec compatibility. Chrome stable is not currently supported. See [WEB_REQUIREMENTS.md](WEB_REQUIREMENTS.md) for details.
+
 1. **Prerequisites:**
    ```bash
    rustup target add wasm32-unknown-unknown
    cargo install wasm-pack
    ```
 
-2. **Build:**
+2. **Install Chrome Canary:**
+   - Download from https://www.google.com/chrome/canary/
+   - Enable WebGPU in `chrome://flags/#enable-unsafe-webgpu`
+   - Restart browser
+
+3. **Build:**
    ```bash
    ./build-web.sh
    ```
 
-3. **Run:**
+4. **Run:**
    ```bash
    # Using Python
    python3 -m http.server 8080
@@ -59,7 +66,7 @@ This app is used by the Android demo. See [`apps/android-demo/README.md`](../and
    basic-http-server .
    ```
 
-4. **Open** http://localhost:8080 in a WebGPU-compatible browser (Chrome 113+, Edge 113+, or Safari 18+)
+5. **Open** http://localhost:8080 in Chrome Canary/Dev
 
 ## Architecture
 
@@ -95,10 +102,15 @@ If you encounter rendering issues:
 
 ### Web
 
+**"maxInterStageShaderComponents" error:**
+- This means you're using Chrome stable, which is not supported
+- Install Chrome Canary/Dev (see Web build instructions above)
+- See [WEB_REQUIREMENTS.md](WEB_REQUIREMENTS.md) for technical details
+
 **WebGPU not supported:**
-- Ensure you're using a compatible browser (see prerequisites)
-- Check if WebGPU is enabled in browser settings
-- Try Chrome Canary or Edge Dev for latest WebGPU implementation
+- Ensure you're using Chrome Canary/Dev or Safari Technology Preview
+- Enable WebGPU in `chrome://flags/#enable-unsafe-webgpu`
+- Verify at https://webgpureport.org/
 
 **WASM module fails to load:**
 - Serve files over HTTP (not file://)
