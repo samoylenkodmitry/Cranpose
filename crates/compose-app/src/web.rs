@@ -132,7 +132,10 @@ pub async fn run(canvas_id: &str, settings: AppSettings, content: impl FnMut() +
             let x = event.offset_x() as f64;
             let y = event.offset_y() as f64;
             let logical = platform.borrow().pointer_position(x, y);
-            app.borrow_mut().set_cursor(logical.x, logical.y);
+            // Use try_borrow_mut to avoid panic if render loop is active
+            if let Ok(mut app_mut) = app.try_borrow_mut() {
+                app_mut.set_cursor(logical.x, logical.y);
+            }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("mousemove", closure.as_ref().unchecked_ref())?;
         closure.forget();
@@ -141,7 +144,9 @@ pub async fn run(canvas_id: &str, settings: AppSettings, content: impl FnMut() +
     {
         let app = app.clone();
         let closure = Closure::wrap(Box::new(move |_event: MouseEvent| {
-            app.borrow_mut().pointer_pressed();
+            if let Ok(mut app_mut) = app.try_borrow_mut() {
+                app_mut.pointer_pressed();
+            }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("mousedown", closure.as_ref().unchecked_ref())?;
         closure.forget();
@@ -150,7 +155,9 @@ pub async fn run(canvas_id: &str, settings: AppSettings, content: impl FnMut() +
     {
         let app = app.clone();
         let closure = Closure::wrap(Box::new(move |_event: MouseEvent| {
-            app.borrow_mut().pointer_released();
+            if let Ok(mut app_mut) = app.try_borrow_mut() {
+                app_mut.pointer_released();
+            }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("mouseup", closure.as_ref().unchecked_ref())?;
         closure.forget();
@@ -165,7 +172,9 @@ pub async fn run(canvas_id: &str, settings: AppSettings, content: impl FnMut() +
             let x = event.offset_x() as f64;
             let y = event.offset_y() as f64;
             let logical = platform.borrow().pointer_position(x, y);
-            app.borrow_mut().set_cursor(logical.x, logical.y);
+            if let Ok(mut app_mut) = app.try_borrow_mut() {
+                app_mut.set_cursor(logical.x, logical.y);
+            }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("pointermove", closure.as_ref().unchecked_ref())?;
         closure.forget();
@@ -175,7 +184,9 @@ pub async fn run(canvas_id: &str, settings: AppSettings, content: impl FnMut() +
         let app = app.clone();
         let closure = Closure::wrap(Box::new(move |event: PointerEvent| {
             event.prevent_default();
-            app.borrow_mut().pointer_pressed();
+            if let Ok(mut app_mut) = app.try_borrow_mut() {
+                app_mut.pointer_pressed();
+            }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("pointerdown", closure.as_ref().unchecked_ref())?;
         closure.forget();
@@ -185,7 +196,9 @@ pub async fn run(canvas_id: &str, settings: AppSettings, content: impl FnMut() +
         let app = app.clone();
         let closure = Closure::wrap(Box::new(move |event: PointerEvent| {
             event.prevent_default();
-            app.borrow_mut().pointer_released();
+            if let Ok(mut app_mut) = app.try_borrow_mut() {
+                app_mut.pointer_released();
+            }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("pointerup", closure.as_ref().unchecked_ref())?;
         closure.forget();
