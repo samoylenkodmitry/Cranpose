@@ -139,9 +139,9 @@
                 const errorDiv = document.getElementById('error');
                 errorDiv.style.display = 'block';
 
-                let errorHtml = `<h3>Error Loading Application</h3><p>${err.message}</p>`;
+                let errorHtml = `<h3>Error Loading Application</h3><p>${err.message || err.toString()}</p>`;
 
-                if (err.message.includes('adapter') || err.message.includes('WebGPU')) {
+                if ((err.message || '').includes('adapter') || (err.message || '').includes('WebGPU')) {
                     errorHtml += `
                         <hr>
                         <h4>WebGPU Troubleshooting:</h4>
