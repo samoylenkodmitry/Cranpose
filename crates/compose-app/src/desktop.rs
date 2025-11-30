@@ -12,6 +12,286 @@ use winit::event::{ElementState, Event, MouseButton, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoopBuilder};
 use winit::window::WindowBuilder;
 
+#[cfg(feature = "robot")]
+use compose_ui::{LayoutBox, SemanticsAction, SemanticsNode, SemanticsRole};
+
+#[cfg(feature = "robot")]
+use std::sync::mpsc;
+
+/// Serializable semantic element combining semantics + geometry
+///
+/// This structure combines semantic information (role, text, actions) with
+/// geometric bounds from the layout tree, enabling robot scripts to find
+/// and interact with UI elements by their semantic properties.
+#[cfg(feature = "robot")]
+#[derive(Debug, Clone)]
+pub struct SemanticElement {
+    /// Semantic role (e.g., "Button", "Text", "Layout")
+    pub role: String,
+    /// Text content if available
+    pub text: Option<String>,
+    /// Geometric bounds in logical pixels
+    pub bounds: SemanticRect,
+    /// Whether this element has click actions
+    pub clickable: bool,
+    /// Child semantic elements
+    pub children: Vec<SemanticElement>,
+}
+
+/// Geometric bounds for a semantic element
+#[cfg(feature = "robot")]
+#[derive(Debug, Clone)]
+pub struct SemanticRect {
+    /// X coordinate in logical pixels
+    pub x: f32,
+    /// Y coordinate in logical pixels
+    pub y: f32,
+    /// Width in logical pixels
+    pub width: f32,
+    /// Height in logical pixels
+    pub height: f32,
+}
+
+/// Robot command for controlling the application
+#[cfg(feature = "robot")]
+#[derive(Debug)]
+#[allow(dead_code)] // TouchDown, TouchMove, TouchUp reserved for future use
+enum RobotCommand {
+    Click { x: f32, y: f32 },
+    MoveTo { x: f32, y: f32 },
+    TouchDown { x: f32, y: f32 },
+    TouchMove { x: f32, y: f32 },
+    TouchUp { x: f32, y: f32 },
+    WaitForIdle,
+    GetSemantics,
+    Exit,
+}
+
+/// Robot response
+#[cfg(feature = "robot")]
+#[derive(Debug)]
+enum RobotResponse {
+    Ok,
+    Semantics(Vec<SemanticElement>),
+    Error(String),
+}
+
+/// Robot controller for the event loop
+#[cfg(feature = "robot")]
+struct RobotController {
+    rx: mpsc::Receiver<RobotCommand>,
+    tx: mpsc::Sender<RobotResponse>,
+    waiting_for_idle: bool,
+    idle_iterations: u32,
+}
+
+#[cfg(feature = "robot")]
+impl RobotController {
+    fn new() -> (Self, Robot) {
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let (resp_tx, resp_rx) = mpsc::channel();
+
+        let controller = RobotController {
+            rx: cmd_rx,
+            tx: resp_tx,
+            waiting_for_idle: false,
+            idle_iterations: 0,
+        };
+
+        let robot = Robot {
+            tx: cmd_tx,
+            rx: resp_rx,
+        };
+
+        (controller, robot)
+    }
+}
+
+/// Robot handle for test drivers
+#[cfg(feature = "robot")]
+pub struct Robot {
+    tx: mpsc::Sender<RobotCommand>,
+    rx: mpsc::Receiver<RobotResponse>,
+}
+
+#[cfg(feature = "robot")]
+impl Robot {
+    /// Click at the specified coordinates (logical pixels)
+    pub fn click(&self, x: f32, y: f32) -> Result<(), String> {
+        self.tx.send(RobotCommand::Click { x, y })
+            .map_err(|e| format!("Failed to send click command: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::Ok) => Ok(()),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
+    }
+
+    /// Move cursor to the specified coordinates (logical pixels)
+    pub fn move_to(&self, x: f32, y: f32) -> Result<(), String> {
+        self.tx.send(RobotCommand::MoveTo { x, y })
+            .map_err(|e| format!("Failed to send move command: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::Ok) => Ok(()),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
+    }
+
+    /// Wait for the application to be idle (no redraws, no animations)
+    pub fn wait_for_idle(&self) -> Result<(), String> {
+        self.tx.send(RobotCommand::WaitForIdle)
+            .map_err(|e| format!("Failed to send wait command: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::Ok) => Ok(()),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
+    }
+
+    /// Exit the application
+    pub fn exit(&self) -> Result<(), String> {
+        self.tx.send(RobotCommand::Exit)
+            .map_err(|e| format!("Failed to send exit command: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::Ok) => Ok(()),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
+    }
+
+    /// Get semantic tree with geometric bounds
+    pub fn get_semantics(&self) -> Result<Vec<SemanticElement>, String> {
+        self.tx.send(RobotCommand::GetSemantics)
+            .map_err(|e| format!("Failed to send get_semantics: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::Semantics(elements)) => Ok(elements),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(e) => Err(format!("Failed to receive: {}", e)),
+        }
+    }
+
+    /// Find any element by text content (recursive search)
+    pub fn find_by_text<'a>(elements: &'a [SemanticElement], text: &str) -> Option<&'a SemanticElement> {
+        for elem in elements {
+            if let Some(elem_text) = &elem.text {
+                if elem_text.contains(text) {
+                    return Some(elem);
+                }
+            }
+            if let Some(found) = Self::find_by_text(&elem.children, text) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    /// Find clickable element by text content (recursive search)
+    ///
+    /// In Compose, buttons are often Layout elements with clickable actions
+    /// containing Text children. This searches for clickable elements where
+    /// either the element itself or its children contain the text.
+    pub fn find_button<'a>(elements: &'a [SemanticElement], text: &str) -> Option<&'a SemanticElement> {
+        for elem in elements {
+            if elem.clickable {
+                // Check if this clickable element or its children have the text
+                if Self::contains_text(elem, text) {
+                    return Some(elem);
+                }
+            }
+            // Recurse into children
+            if let Some(found) = Self::find_button(&elem.children, text) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    /// Helper: check if element or any descendants contain text
+    fn contains_text(elem: &SemanticElement, text: &str) -> bool {
+        // Check element itself
+        if let Some(elem_text) = &elem.text {
+            if elem_text.contains(text) {
+                return true;
+            }
+        }
+        // Check children recursively
+        for child in &elem.children {
+            if Self::contains_text(child, text) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Click element by finding it in semantic tree
+    ///
+    /// This is a convenience method that combines `get_semantics()`, `find_button()`,
+    /// and `click()` in one call. It finds a clickable element by text and clicks
+    /// its center point.
+    ///
+    /// # Example
+    /// ```ignore
+    /// robot.click_by_text("Increment")?;
+    /// ```
+    pub fn click_by_text(&self, text: &str) -> Result<(), String> {
+        let semantics = self.get_semantics()?;
+        let elem = Self::find_button(&semantics, text)
+            .ok_or_else(|| format!("Button '{}' not found in semantic tree", text))?;
+        
+        // Click center of bounds
+        let center_x = elem.bounds.x + elem.bounds.width / 2.0;
+        let center_y = elem.bounds.y + elem.bounds.height / 2.0;
+        
+        self.click(center_x, center_y)
+    }
+
+    /// Validate that content exists in semantic tree
+    ///
+    /// Returns Ok if the text is found anywhere in the semantic tree,
+    /// Err otherwise. Useful for assertions in tests.
+    ///
+    /// # Example
+    /// ```ignore
+    /// robot.validate_content("Expected Text")?;
+    /// ```
+    pub fn validate_content(&self, expected: &str) -> Result<(), String> {
+        let semantics = self.get_semantics()?;
+        if Self::find_by_text(&semantics, expected).is_some() {
+            Ok(())
+        } else {
+            Err(format!("Validation failed: '{}' not found", expected))
+        }
+    }
+
+    /// Print semantic tree structure for debugging
+    ///
+    /// Prints a hierarchical view of the semantic tree showing roles,
+    /// text content, and clickable elements.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let semantics = robot.get_semantics()?;
+    /// Robot::print_semantics(&semantics, 0);
+    /// ```
+    pub fn print_semantics(elements: &[SemanticElement], indent: usize) {
+        for elem in elements {
+            let prefix = "  ".repeat(indent);
+            let text_info = elem.text.as_ref()
+                .map(|t| format!(" text=\"{}\"", t))
+                .unwrap_or_default();
+            let clickable = if elem.clickable { " [CLICKABLE]" } else { "" };
+            println!("{}role={}{}{}", prefix, elem.role, text_info, clickable);
+            Self::print_semantics(&elem.children, indent + 1);
+        }
+    }
+}
+
 /// Runs a desktop Compose application with wgpu rendering.
 ///
 /// Called by `AppLauncher::run_desktop()`. This is the framework-level
@@ -19,10 +299,34 @@ use winit::window::WindowBuilder;
 ///
 /// **Note:** Applications should use `AppLauncher` instead of calling this directly.
 pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
-    let event_loop = EventLoopBuilder::new()
+    let mut builder = EventLoopBuilder::new();
+
+    // On Linux, allow creating event loop on any thread when robot driver is active
+    #[cfg(all(target_os = "linux", feature = "robot"))]
+    if settings.test_driver.is_some() {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        builder.with_any_thread(true);
+    }
+
+    let event_loop = builder
         .build()
         .expect("failed to create event loop");
     let frame_proxy = event_loop.create_proxy();
+
+    // Spawn test driver if present
+    #[cfg(feature = "robot")]
+    let mut robot_controller = if let Some(driver) = settings.test_driver {
+        let (controller, robot) = RobotController::new();
+        std::thread::spawn(move || {
+            driver(robot);
+        });
+        Some(controller)
+    } else {
+        None
+    };
+
+    #[cfg(not(feature = "robot"))]
+    let _robot_controller: Option<()> = None;
 
     let initial_width = settings.initial_width;
     let initial_height = settings.initial_height;
@@ -222,11 +526,99 @@ pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
                 _ => {}
             },
             Event::AboutToWait | Event::UserEvent(()) => {
+                // Handle pending robot commands
+                #[cfg(feature = "robot")]
+                if let Some(controller) = &mut robot_controller {
+                    // Process new commands
+                    while let Ok(cmd) = controller.rx.try_recv() {
+                        match cmd {
+                            RobotCommand::Click { x, y } => {
+                                app.set_cursor(x, y);
+                                app.pointer_pressed();
+                                app.pointer_released();
+                                window.request_redraw();
+                                let _ = controller.tx.send(RobotResponse::Ok);
+                            }
+                            RobotCommand::MoveTo { x, y } => {
+                                app.set_cursor(x, y);
+                                window.request_redraw();
+                                let _ = controller.tx.send(RobotResponse::Ok);
+                            }
+                            RobotCommand::TouchDown { x, y } => {
+                                app.set_cursor(x, y);
+                                app.pointer_pressed();
+                                let _ = controller.tx.send(RobotResponse::Ok);
+                            }
+                            RobotCommand::TouchMove { x, y } => {
+                                app.set_cursor(x, y);
+                                let _ = controller.tx.send(RobotResponse::Ok);
+                            }
+                            RobotCommand::TouchUp { x, y } => {
+                                app.set_cursor(x, y);
+                                app.pointer_released();
+                                let _ = controller.tx.send(RobotResponse::Ok);
+                            }
+                            RobotCommand::GetSemantics => {
+                                let semantics = extract_semantics(&app);
+                                let _ = controller.tx.send(RobotResponse::Semantics(semantics));
+                            }
+                            RobotCommand::WaitForIdle => {
+                                // Start waiting for idle
+                                controller.waiting_for_idle = true;
+                                controller.idle_iterations = 0;
+                            }
+                            RobotCommand::Exit => {
+                                let _ = controller.tx.send(RobotResponse::Ok);
+                                elwt.exit();
+                            }
+                        }
+                    }
+
+                    // Handle ongoing wait_for_idle
+                    if controller.waiting_for_idle {
+                        const MAX_IDLE_ITERATIONS: u32 = 200;
+
+                        if !app.needs_redraw() && !app.has_active_animations() {
+                            // App is idle - respond and stop waiting
+                            controller.waiting_for_idle = false;
+                            let _ = controller.tx.send(RobotResponse::Ok);
+                        } else {
+                            // Not idle yet - update and check iteration limit
+                            app.update();
+                            controller.idle_iterations += 1;
+
+                            // Periodic diagnostic logging
+                            if controller.idle_iterations % 50 == 0 {
+                                log::debug!(
+                                    "wait_for_idle iteration {}: needs_redraw={}, has_animations={}",
+                                    controller.idle_iterations,
+                                    app.needs_redraw(),
+                                    app.has_active_animations()
+                                );
+                            }
+
+                            if controller.idle_iterations >= MAX_IDLE_ITERATIONS {
+                                controller.waiting_for_idle = false;
+                                let _ = controller.tx.send(RobotResponse::Error(
+                                    "wait_for_idle: timed out after 200 iterations".to_string()
+                                ));
+                            }
+                        }
+                    }
+                }
+
                 if app.needs_redraw() {
                     window.request_redraw();
                 }
-                // Use Poll for animations, Wait for idle
-                if app.has_active_animations() {
+
+                // Smart ControlFlow: only Poll when necessary
+                #[cfg(feature = "robot")]
+                let robot_needs_poll = robot_controller.is_some();
+
+                #[cfg(not(feature = "robot"))]
+                let robot_needs_poll = false;
+
+                if app.has_active_animations() || robot_needs_poll {
                     elwt.set_control_flow(ControlFlow::Poll);
                 } else {
                     elwt.set_control_flow(ControlFlow::Wait);
@@ -237,4 +629,65 @@ pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
     });
 
     std::process::exit(0)
+}
+
+/// Extract semantic elements by combining semantic tree with layout tree
+#[cfg(feature = "robot")]
+fn extract_semantics(app: &AppShell<WgpuRenderer>) -> Vec<SemanticElement> {
+    match (app.semantics_tree(), app.layout_tree()) {
+        (Some(sem_tree), Some(layout_tree)) => {
+            vec![combine_trees(sem_tree.root(), layout_tree.root())]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Recursively combine SemanticsNode + LayoutBox into SemanticElement
+#[cfg(feature = "robot")]
+fn combine_trees(
+    sem_node: &SemanticsNode,
+    layout_box: &LayoutBox,
+) -> SemanticElement {
+    // Extract role as string
+    let role = match &sem_node.role {
+        SemanticsRole::Button => "Button",
+        SemanticsRole::Text { .. } => "Text", 
+        SemanticsRole::Layout => "Layout",
+        SemanticsRole::Subcompose => "Subcompose",
+        SemanticsRole::Spacer => "Spacer",
+        SemanticsRole::Unknown => "Unknown",
+    }.to_string();
+
+    // Extract text content
+    let text = match &sem_node.role {
+        SemanticsRole::Text { value } => Some(value.clone()),
+        _ => sem_node.description.clone(),
+    };
+
+    // Check if clickable
+    let clickable = sem_node.actions.iter().any(|action| matches!(action, SemanticsAction::Click { .. }));
+
+    // Get bounds from layout
+    let bounds = SemanticRect {
+        x: layout_box.rect.x,
+        y: layout_box.rect.y,
+        width: layout_box.rect.width,
+        height: layout_box.rect.height,
+    };
+
+    // Recursively process children
+    let children = sem_node
+        .children
+        .iter()
+        .zip(layout_box.children.iter())
+        .map(|(sem_child, layout_child)| combine_trees(sem_child, layout_child))
+        .collect();
+
+    SemanticElement {
+        role,
+        text,
+        bounds,
+        clickable,
+        children,
+    }
 }

@@ -1,6 +1,9 @@
 pub mod app;
 pub mod fonts;
 
+#[cfg(test)]
+mod tests;
+
 use crate::fonts::DEMO_FONTS;
 use compose_app::AppLauncher;
 

@@ -26,6 +26,8 @@ renderer-wgpu = ["compose-app/renderer-wgpu"]
 desktop = ["compose-app/desktop"]
 android = ["compose-app/android"]
 web = ["compose-app/web", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:wasm-logger"]
+# Enable real app robot testing
+robot-app = ["compose-testing/robot-app"]
 
 [dependencies]
 compose-app = { path = "../../crates/compose-app", default-features = false }
@@ -56,4 +58,15 @@ console_error_panic_hook = "0.1"
 
 [dev-dependencies]
 compose-macros = { path = "../../crates/compose-macros" }
-compose-testing = { path = "../../crates/compose-testing" }
+compose-testing = { path = "../../crates/compose-testing", features = ["robot-app"] }
+
+# Robot test runners
+[[example]]
+name = "robot_interactive"
+path = "robot-runners/robot_interactive.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_demo"
+path = "robot-runners/robot_demo.rs"
+required-features = ["robot-app"]

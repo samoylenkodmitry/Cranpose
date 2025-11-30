@@ -9,9 +9,18 @@ description = "Testing utilities and harness for Compose-RS"
 compose-core = { path = "../compose-core" }
 compose-foundation = { path = "../compose-foundation" }
 compose-ui = { path = "../compose-ui" }
+compose-app-shell = { path = "../compose-app-shell" }
+compose-render-common = { path = "../compose-render/common" }
+compose-ui-graphics = { path = "../compose-ui-graphics" }
+
+# Optional dependencies for real app testing
+compose-app = { path = "../compose-app", features = ["robot"], optional = true }
 
 [dev-dependencies]
 compose-macros = { path = "../compose-macros" }
 
 [features]
 default = []
+# Enable real app testing with actual rendering (requires display/window system)
+# This uses the REAL desktop app runner from compose-app
+robot-app = ["compose-app"]

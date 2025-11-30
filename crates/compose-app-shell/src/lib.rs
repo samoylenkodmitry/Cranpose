@@ -13,7 +13,7 @@ use compose_ui::{
     log_render_scene, log_screen_summary, peek_focus_invalidation, peek_pointer_invalidation,
     peek_render_invalidation, process_focus_invalidations, process_pointer_repasses,
     request_render_invalidation, take_focus_invalidation, take_pointer_invalidation,
-    take_render_invalidation, HeadlessRenderer, LayoutEngine, LayoutNode, LayoutTree,
+    take_render_invalidation, HeadlessRenderer, LayoutNode, LayoutTree, SemanticsTree,
 };
 use compose_ui_graphics::Size;
 
@@ -29,6 +29,7 @@ where
     buffer_size: (u32, u32),
     start_time: Instant,
     layout_tree: Option<LayoutTree>,
+    semantics_tree: Option<SemanticsTree>,
     layout_dirty: bool,
     scene_dirty: bool,
     is_dirty: bool,
@@ -56,6 +57,7 @@ where
             buffer_size: (800, 600),
             start_time: Instant::now(),
             layout_tree: None,
+            semantics_tree: None,
             layout_dirty: true,
             scene_dirty: true,
             is_dirty: true,
@@ -214,6 +216,16 @@ where
         println!("\n\n");
     }
 
+    /// Get the current layout tree (for robot/testing)
+    pub fn layout_tree(&self) -> Option<&LayoutTree> {
+        self.layout_tree.as_ref()
+    }
+
+    /// Get the current semantics tree (for robot/testing)
+    pub fn semantics_tree(&self) -> Option<&SemanticsTree> {
+        self.semantics_tree.as_ref()
+    }
+
     fn process_frame(&mut self) {
         self.run_layout_phase();
         self.run_dispatch_queues();
@@ -256,20 +268,23 @@ where
 
             // Tree needs layout - compute it
             self.layout_dirty = false;
-            match applier.compute_layout(root, viewport_size) {
-                Ok(layout_tree) => {
-                    self.layout_tree = Some(layout_tree);
+            match compose_ui::measure_layout(&mut applier, root, viewport_size) {
+                Ok(measurements) => {
+                    self.semantics_tree = Some(measurements.semantics_tree().clone());
+                    self.layout_tree = Some(measurements.into_layout_tree());
                     self.scene_dirty = true;
                 }
                 Err(err) => {
                     log::error!("failed to compute layout: {err}");
                     self.layout_tree = None;
+                    self.semantics_tree = None;
                     self.scene_dirty = true;
                 }
             }
             applier.clear_runtime_handle();
         } else {
             self.layout_tree = None;
+            self.semantics_tree = None;
             self.scene_dirty = true;
             self.layout_dirty = false;
         }

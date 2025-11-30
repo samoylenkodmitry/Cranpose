@@ -4,7 +4,6 @@
 //! and launch on multiple platforms without knowing platform-specific details.
 
 /// Configuration for application settings.
-#[derive(Clone, Debug)]
 pub struct AppSettings {
     /// Window title (desktop) / app name (mobile)
     pub window_title: String,
@@ -16,6 +15,9 @@ pub struct AppSettings {
     pub fonts: Option<&'static [&'static [u8]]>,
     /// Whether to load system fonts on Android (default: false)
     pub android_use_system_fonts: bool,
+    /// Optional test driver to control the application (robot testing)
+    #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
+    pub test_driver: Option<Box<dyn FnOnce(crate::desktop::Robot) + Send + 'static>>,
 }
 
 impl Default for AppSettings {
@@ -26,6 +28,8 @@ impl Default for AppSettings {
             initial_height: 600,
             fonts: None,
             android_use_system_fonts: false,
+            #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
+            test_driver: None,
         }
     }
 }
@@ -105,6 +109,34 @@ impl AppLauncher {
     /// Use static fonts via `with_fonts()` for reliable rendering.
     pub fn with_android_use_system_fonts(mut self, use_system_fonts: bool) -> Self {
         self.settings.android_use_system_fonts = use_system_fonts;
+        self
+    }
+
+    /// Set a test driver to control the application.
+    ///
+    /// The driver closure will be executed in a separate thread and receive a `Robot` instance
+    /// for controlling the application programmatically.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use compose_app::AppLauncher;
+    ///
+    /// AppLauncher::new()
+    ///     .with_title("Robot Test")
+    ///     .with_size(800, 600)
+    ///     .with_test_driver(|robot| {
+    ///         robot.wait_for_idle().unwrap();
+    ///         robot.click(100.0, 100.0).unwrap();
+    ///         robot.exit().unwrap();
+    ///     })
+    ///     .run(|| {
+    ///         // Your composable UI here
+    ///     });
+    /// ```
+    #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
+    pub fn with_test_driver(mut self, driver: impl FnOnce(crate::desktop::Robot) + Send + 'static) -> Self {
+        self.settings.test_driver = Some(Box::new(driver));
         self
     }
 
