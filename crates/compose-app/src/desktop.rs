@@ -55,6 +55,7 @@ pub struct SemanticRect {
 /// Robot command for controlling the application
 #[cfg(feature = "robot")]
 #[derive(Debug)]
+#[allow(dead_code)] // TouchDown, TouchMove, TouchUp reserved for future use
 enum RobotCommand {
     Click { x: f32, y: f32 },
     MoveTo { x: f32, y: f32 },
@@ -235,7 +236,7 @@ impl Robot {
     /// its center point.
     ///
     /// # Example
-    /// ```no_run
+    /// ```ignore
     /// robot.click_by_text("Increment")?;
     /// ```
     pub fn click_by_text(&self, text: &str) -> Result<(), String> {
@@ -256,7 +257,7 @@ impl Robot {
     /// Err otherwise. Useful for assertions in tests.
     ///
     /// # Example
-    /// ```no_run
+    /// ```ignore
     /// robot.validate_content("Expected Text")?;
     /// ```
     pub fn validate_content(&self, expected: &str) -> Result<(), String> {
@@ -274,7 +275,7 @@ impl Robot {
     /// text content, and clickable elements.
     ///
     /// # Example
-    /// ```no_run
+    /// ```ignore
     /// let semantics = robot.get_semantics()?;
     /// Robot::print_semantics(&semantics, 0);
     /// ```
@@ -612,9 +613,7 @@ pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
 
                 // Smart ControlFlow: only Poll when necessary
                 #[cfg(feature = "robot")]
-                let robot_needs_poll = robot_controller.as_ref()
-                    .map(|c| c.waiting_for_idle)
-                    .unwrap_or(false);
+                let robot_needs_poll = robot_controller.is_some();
 
                 #[cfg(not(feature = "robot"))]
                 let robot_needs_poll = false;

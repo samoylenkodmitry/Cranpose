@@ -182,7 +182,7 @@ where
 
         // Use HeadlessRenderer to extract text from the layout tree
         if let Some(layout_tree) = self.get_layout_tree() {
-            extract_text_from_layout(&layout_tree)
+            extract_text_from_layout(layout_tree)
         } else {
             Vec::new()
         }
@@ -195,7 +195,7 @@ where
         self.wait_for_idle();
 
         if let Some(layout_tree) = self.get_layout_tree() {
-            extract_rects_from_layout(&layout_tree)
+            extract_rects_from_layout(layout_tree)
         } else {
             Vec::new()
         }
@@ -278,7 +278,7 @@ where
                 let rects = self.robot.get_all_rects();
                 rects
                     .into_iter()
-                    .find(|(_, txt)| txt.as_ref().map_or(false, |t| t.contains(text)))
+                    .find(|(_, txt)| txt.as_ref().is_some_and(|t| t.contains(text)))
                     .map(|(rect, _)| rect)
             }
             FinderQuery::Position(_x, _y) => {
@@ -365,24 +365,20 @@ where
 
 /// Extract all text content from a layout tree.
 fn extract_text_from_layout(_layout: &LayoutTree) -> Vec<String> {
-    let texts = Vec::new();
-
     // Traverse the layout tree and collect text
     // This is a placeholder - actual implementation would traverse the tree
     // and extract text from TextLayoutNode instances
 
-    texts
+    Vec::new()
 }
 
 /// Extract all rectangles with optional text from a layout tree.
 fn extract_rects_from_layout(_layout: &LayoutTree) -> Vec<(Rect, Option<String>)> {
-    let rects = Vec::new();
-
     // Traverse the layout tree and collect bounds
     // This is a placeholder - actual implementation would traverse the tree
     // and extract bounds from all LayoutNode instances
 
-    rects
+    Vec::new()
 }
 
 /// A simple test renderer for robot tests.
