@@ -40,7 +40,8 @@ jobs:
       - name: Build WASM demo
         run: |
           set -e
-          wasm-pack build --target web --features web,renderer-wgpu --out-dir apps/desktop-demo/pkg apps/desktop-demo
+          cd apps/desktop-demo
+          wasm-pack build --target web --features web,renderer-wgpu --out-dir pkg .
 
       - name: Create deployment directory
         run: |
