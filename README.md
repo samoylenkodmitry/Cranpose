@@ -2,9 +2,15 @@
 [WIP.webm](https://github.com/user-attachments/assets/00533605-aa9c-4555-896c-c939195e3dce)
 
 
-# RS-Compose 
+# RS-Compose
 
 Compose-RS is a Jetpack Compose–inspired declarative UI framework. The repository accompanies the architectural proposal documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and provides crate scaffolding for the core runtime, procedural macros, UI primitives, and example applications.
+
+## 🌐 Live Demo
+
+**[Try it in your browser!](https://samoylenkodmitry.github.io/rs-compose/)**
+
+The demo showcases the full RS-Compose framework running in the browser via WebAssembly and WebGL2.
 
 ## Examples
 
