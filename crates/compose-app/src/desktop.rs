@@ -14,356 +14,107 @@ use winit::window::WindowBuilder;
 
 #[cfg(feature = "robot")]
 use std::sync::mpsc;
-#[cfg(feature = "robot")]
-use winit::event_loop::EventLoopProxy;
 
-/// Robot commands for programmatic control (only available with "robot" feature)
+/// Robot command for controlling the application
 #[cfg(feature = "robot")]
-#[derive(Debug, Clone)]
-pub enum RobotCommand {
-    /// Click at coordinates (physical pixels)
-    Click {
-        /// X coordinate in physical pixels
-        x: f32,
-        /// Y coordinate in physical pixels
-        y: f32
-    },
-    /// Move cursor to coordinates (physical pixels)
-    MoveTo {
-        /// X coordinate in physical pixels
-        x: f32,
-        /// Y coordinate in physical pixels
-        y: f32
-    },
-    /// Drag from one position to another
-    Drag {
-        /// Start X coordinate in physical pixels
-        from_x: f32,
-        /// Start Y coordinate in physical pixels
-        from_y: f32,
-        /// End X coordinate in physical pixels
-        to_x: f32,
-        /// End Y coordinate in physical pixels
-        to_y: f32
-    },
-    /// Take a screenshot and save to file
-    Screenshot {
-        /// File path to save screenshot
-        path: String
-    },
-    /// Shutdown the application
-    Shutdown,
+#[derive(Debug)]
+enum RobotCommand {
+    Click { x: f32, y: f32 },
+    MoveTo { x: f32, y: f32 },
+    TouchDown { x: f32, y: f32 },
+    TouchMove { x: f32, y: f32 },
+    TouchUp { x: f32, y: f32 },
+    WaitForIdle,
+    Exit,
 }
 
-/// Handle for controlling a robot-enabled app
+/// Robot response
 #[cfg(feature = "robot")]
-pub struct RobotAppHandle {
-    /// Channel for sending commands to the app thread
-    command_tx: mpsc::Sender<RobotCommand>,
-    /// Event loop proxy for waking the app
-    proxy: EventLoopProxy<RobotCommand>,
+#[derive(Debug)]
+enum RobotResponse {
+    Ok,
+    Error(String),
+}
+
+/// Robot controller for the event loop
+#[cfg(feature = "robot")]
+struct RobotController {
+    rx: mpsc::Receiver<RobotCommand>,
+    tx: mpsc::Sender<RobotResponse>,
 }
 
 #[cfg(feature = "robot")]
-impl RobotAppHandle {
-    /// Send a click command
+impl RobotController {
+    fn new() -> (Self, Robot) {
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let (resp_tx, resp_rx) = mpsc::channel();
+
+        let controller = RobotController {
+            rx: cmd_rx,
+            tx: resp_tx,
+        };
+
+        let robot = Robot {
+            tx: cmd_tx,
+            rx: resp_rx,
+        };
+
+        (controller, robot)
+    }
+}
+
+/// Robot handle for test drivers
+#[cfg(feature = "robot")]
+pub struct Robot {
+    tx: mpsc::Sender<RobotCommand>,
+    rx: mpsc::Receiver<RobotResponse>,
+}
+
+#[cfg(feature = "robot")]
+impl Robot {
+    /// Click at the specified coordinates (logical pixels)
     pub fn click(&self, x: f32, y: f32) -> Result<(), String> {
-        self.command_tx
-            .send(RobotCommand::Click { x, y })
-            .map_err(|e| format!("Failed to send click: {}", e))?;
-        self.proxy
-            .send_event(RobotCommand::Click { x, y })
-            .map_err(|e| format!("Failed to wake event loop: {}", e))
+        self.tx.send(RobotCommand::Click { x, y })
+            .map_err(|e| format!("Failed to send click command: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::Ok) => Ok(()),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
     }
 
-    /// Send a move command
+    /// Move cursor to the specified coordinates (logical pixels)
     pub fn move_to(&self, x: f32, y: f32) -> Result<(), String> {
-        self.command_tx
-            .send(RobotCommand::MoveTo { x, y })
-            .map_err(|e| format!("Failed to send move: {}", e))?;
-        self.proxy
-            .send_event(RobotCommand::MoveTo { x, y })
-            .map_err(|e| format!("Failed to wake event loop: {}", e))
+        self.tx.send(RobotCommand::MoveTo { x, y })
+            .map_err(|e| format!("Failed to send move command: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::Ok) => Ok(()),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
     }
 
-    /// Send a drag command
-    pub fn drag(&self, from_x: f32, from_y: f32, to_x: f32, to_y: f32) -> Result<(), String> {
-        self.command_tx
-            .send(RobotCommand::Drag { from_x, from_y, to_x, to_y })
-            .map_err(|e| format!("Failed to send drag: {}", e))?;
-        self.proxy
-            .send_event(RobotCommand::Drag { from_x, from_y, to_x, to_y })
-            .map_err(|e| format!("Failed to wake event loop: {}", e))
+    /// Wait for the application to be idle (no redraws, no animations)
+    pub fn wait_for_idle(&self) -> Result<(), String> {
+        self.tx.send(RobotCommand::WaitForIdle)
+            .map_err(|e| format!("Failed to send wait command: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::Ok) => Ok(()),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
     }
 
-    /// Send a screenshot command
-    ///
-    /// Note: Currently returns dummy dimensions (0, 0) as actual screenshot capture is not yet implemented
-    pub fn screenshot(&self, path: &str) -> Result<(u32, u32), String> {
-        self.command_tx
-            .send(RobotCommand::Screenshot { path: path.to_string() })
-            .map_err(|e| format!("Failed to send screenshot: {}", e))?;
-        self.proxy
-            .send_event(RobotCommand::Screenshot { path: path.to_string() })
-            .map_err(|e| format!("Failed to wake event loop: {}", e))?;
-
-        // TODO: Return actual dimensions when screenshot is implemented
-        Ok((0, 0))
+    /// Exit the application
+    pub fn exit(&self) -> Result<(), String> {
+        self.tx.send(RobotCommand::Exit)
+            .map_err(|e| format!("Failed to send exit command: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::Ok) => Ok(()),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
     }
-
-    /// Wait for a number of frames to be rendered
-    pub fn wait_frames(&self, _count: u32) -> Result<(), String> {
-        // Simple sleep-based implementation for now
-        std::thread::sleep(std::time::Duration::from_millis(16 * _count as u64));
-        Ok(())
-    }
-
-    /// Resize the window
-    pub fn resize(&self, _width: u32, _height: u32) -> Result<(), String> {
-        // TODO: Implement window resize command
-        log::warn!("Window resize not yet implemented");
-        Ok(())
-    }
-
-    /// Send a shutdown command
-    pub fn shutdown(&self) -> Result<(), String> {
-        self.command_tx
-            .send(RobotCommand::Shutdown)
-            .map_err(|e| format!("Failed to send shutdown: {}", e))?;
-        self.proxy
-            .send_event(RobotCommand::Shutdown)
-            .map_err(|e| format!("Failed to wake event loop: {}", e))
-    }
-}
-
-// Macro to generate the desktop app event loop
-// This ensures run() and run_with_robot() share the SAME implementation
-macro_rules! desktop_event_loop {
-    (
-        settings: $settings:expr,
-        content: $content:expr,
-        event_loop_type: $event_type:ty,
-        event_loop_builder: $event_loop_expr:expr,
-        frame_wake_event: $wake_event:expr,
-        user_event_handler: |$app:ident, $window:ident, $elwt:ident, $cmd:ident| $user_handler:block
-    ) => {{
-        let frame_proxy = $event_loop_expr.create_proxy();
-
-        let window = Arc::new(
-            WindowBuilder::new()
-                .with_title($settings.window_title)
-                .with_inner_size(LogicalSize::new(
-                    $settings.initial_width as f64,
-                    $settings.initial_height as f64,
-                ))
-                .build(&$event_loop_expr)
-                .expect("failed to create window"),
-        );
-
-        // Initialize WGPU
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
-            ..Default::default()
-        });
-
-        let surface = instance
-            .create_surface(window.clone())
-            .expect("failed to create surface");
-
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-        }))
-        .expect("failed to find suitable adapter");
-
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("Main Device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-            },
-            None,
-        ))
-        .expect("failed to create device");
-
-        let size = window.inner_size();
-        let surface_caps = surface.get_capabilities(&adapter);
-        let surface_format = surface_caps
-            .formats
-            .iter()
-            .copied()
-            .find(|f| f.is_srgb())
-            .unwrap_or(surface_caps.formats[0]);
-
-        let mut surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface_format,
-            width: size.width,
-            height: size.height,
-            present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: surface_caps.alpha_modes[0],
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        };
-
-        surface.configure(&device, &surface_config);
-
-        // Create renderer with fonts from settings
-        let mut renderer = if let Some(fonts) = $settings.fonts {
-            WgpuRenderer::new_with_fonts(fonts)
-        } else {
-            WgpuRenderer::new()
-        };
-        renderer.init_gpu(Arc::new(device), Arc::new(queue), surface_format);
-        let initial_scale = window.scale_factor();
-        renderer.set_root_scale(initial_scale as f32);
-
-        let mut $app = AppShell::new(renderer, default_root_key(), $content);
-        let mut platform = DesktopWinitPlatform::default();
-        platform.set_scale_factor(initial_scale);
-
-        $app.set_frame_waker({
-            let proxy = frame_proxy.clone();
-            move || {
-                let _ = proxy.send_event($wake_event);
-            }
-        });
-
-        // Set buffer_size to physical pixels and viewport to logical dp
-        $app.set_buffer_size(size.width, size.height);
-        let logical_width = size.width as f32 / initial_scale as f32;
-        let logical_height = size.height as f32 / initial_scale as f32;
-        $app.set_viewport(logical_width, logical_height);
-
-        let _ = $event_loop_expr.run(move |event, elwt| {
-            elwt.set_control_flow(ControlFlow::Wait);
-            match event {
-                Event::UserEvent($cmd) => {
-                    let $app = &mut $app;
-                    let $window = &window;
-                    let $elwt = elwt;
-                    $user_handler
-                },
-                Event::WindowEvent { window_id, event } if window_id == window.id() => match event {
-                    WindowEvent::CloseRequested => {
-                        elwt.exit();
-                    }
-                    WindowEvent::Resized(new_size) => {
-                        if new_size.width > 0 && new_size.height > 0 {
-                            surface_config.width = new_size.width;
-                            surface_config.height = new_size.height;
-                            let device = $app.renderer().device();
-                            surface.configure(device, &surface_config);
-
-                            let scale_factor = window.scale_factor();
-                            let logical_width = new_size.width as f32 / scale_factor as f32;
-                            let logical_height = new_size.height as f32 / scale_factor as f32;
-
-                            $app.set_buffer_size(new_size.width, new_size.height);
-                            $app.set_viewport(logical_width, logical_height);
-                        }
-                    }
-                    WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                        platform.set_scale_factor(scale_factor);
-                        $app.renderer().set_root_scale(scale_factor as f32);
-
-                        let new_size = window.inner_size();
-                        if new_size.width > 0 && new_size.height > 0 {
-                            surface_config.width = new_size.width;
-                            surface_config.height = new_size.height;
-                            let device = $app.renderer().device();
-                            surface.configure(device, &surface_config);
-
-                            let logical_width = new_size.width as f32 / scale_factor as f32;
-                            let logical_height = new_size.height as f32 / scale_factor as f32;
-
-                            $app.set_buffer_size(new_size.width, new_size.height);
-                            $app.set_viewport(logical_width, logical_height);
-                        }
-                    }
-                    WindowEvent::CursorMoved { position, .. } => {
-                        let logical = platform.pointer_position(position);
-                        $app.set_cursor(logical.x, logical.y);
-                    }
-                    WindowEvent::MouseInput {
-                        state,
-                        button: MouseButton::Left,
-                        ..
-                    } => match state {
-                        ElementState::Pressed => {
-                            $app.pointer_pressed();
-                        }
-                        ElementState::Released => {
-                            $app.pointer_released();
-                        }
-                    },
-                    WindowEvent::KeyboardInput { event, .. } => {
-                        use winit::keyboard::{KeyCode, PhysicalKey};
-                        if event.state == ElementState::Pressed {
-                            if let PhysicalKey::Code(KeyCode::KeyD) = event.physical_key {
-                                $app.log_debug_info();
-                            }
-                        }
-                    }
-                    WindowEvent::RedrawRequested => {
-                        $app.update();
-
-                        let output = match surface.get_current_texture() {
-                            Ok(output) => output,
-                            Err(wgpu::SurfaceError::Lost) | Err(wgpu::SurfaceError::Outdated) => {
-                                // Reconfigure surface with current window size
-                                let size = window.inner_size();
-                                if size.width > 0 && size.height > 0 {
-                                    surface_config.width = size.width;
-                                    surface_config.height = size.height;
-                                    let device = $app.renderer().device();
-                                    surface.configure(device, &surface_config);
-                                }
-                                return;
-                            }
-                            Err(wgpu::SurfaceError::OutOfMemory) => {
-                                log::error!("Out of memory, exiting");
-                                elwt.exit();
-                                return;
-                            }
-                            Err(wgpu::SurfaceError::Timeout) => {
-                                log::debug!("Surface timeout, skipping frame");
-                                return;
-                            }
-                        };
-
-                        let view = output
-                            .texture
-                            .create_view(&wgpu::TextureViewDescriptor::default());
-
-                        if let Err(err) =
-                            $app.renderer()
-                                .render(&view, surface_config.width, surface_config.height)
-                        {
-                            log::error!("render failed: {err:?}");
-                            return;
-                        }
-
-                        output.present();
-                    }
-                    _ => {}
-                },
-                Event::AboutToWait => {
-                    if $app.needs_redraw() {
-                        window.request_redraw();
-                    }
-                    // Use Poll for animations, Wait for idle
-                    if $app.has_active_animations() {
-                        elwt.set_control_flow(ControlFlow::Poll);
-                    } else {
-                        elwt.set_control_flow(ControlFlow::Wait);
-                    }
-                }
-                _ => {}
-            }
-        });
-    }};
 }
 
 /// Runs a desktop Compose application with wgpu rendering.
@@ -373,104 +124,295 @@ macro_rules! desktop_event_loop {
 ///
 /// **Note:** Applications should use `AppLauncher` instead of calling this directly.
 pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
-    let event_loop = EventLoopBuilder::new()
-        .build()
-        .expect("failed to create event loop");
+    let mut builder = EventLoopBuilder::new();
 
-    desktop_event_loop! {
-        settings: settings,
-        content: content,
-        event_loop_type: (),
-        event_loop_builder: event_loop,
-        frame_wake_event: (),
-        user_event_handler: |_app, _window, _elwt, _cmd| {
-            // No user event handling in normal mode
-        }
+    // On Linux, allow creating event loop on any thread
+    #[cfg(target_os = "linux")]
+    {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        builder.with_any_thread(true);
     }
 
-    std::process::exit(0)
-}
+    let event_loop = builder
+        .build()
+        .expect("failed to create event loop");
+    let frame_proxy = event_loop.create_proxy();
 
-/// Runs a desktop Compose application with robot control for testing.
-///
-/// This function runs THE SAME desktop app as `run()`, but adds robot command
-/// support for automated testing. The app runs in a background thread and
-/// returns a `RobotAppHandle` for programmatic control.
-///
-/// **Note:** Only available with the "robot" feature enabled.
-#[cfg(feature = "robot")]
-pub fn run_with_robot<F>(settings: AppSettings, content: F) -> RobotAppHandle
-where
-    F: FnMut() + 'static + Send,
-{
-    let (command_tx, _command_rx) = mpsc::channel::<RobotCommand>();
-    let (proxy_tx, proxy_rx) = mpsc::sync_channel::<EventLoopProxy<RobotCommand>>(1);
+    // Spawn test driver if present
+    #[cfg(feature = "robot")]
+    let robot_controller = if let Some(driver) = settings.test_driver {
+        let (controller, robot) = RobotController::new();
+        std::thread::spawn(move || {
+            driver(robot);
+        });
+        Some(controller)
+    } else {
+        None
+    };
 
-    // Spawn the app in a background thread
-    std::thread::spawn(move || {
-        let event_loop = winit::event_loop::EventLoopBuilder::<RobotCommand>::with_user_event()
-            .build()
-            .expect("failed to create event loop");
+    #[cfg(not(feature = "robot"))]
+    let robot_controller: Option<()> = None;
 
-        // Send the proxy back to the caller
-        let proxy = event_loop.create_proxy();
-        proxy_tx.send(proxy.clone()).expect("Failed to send proxy");
+    let initial_width = settings.initial_width;
+    let initial_height = settings.initial_height;
 
-        desktop_event_loop! {
-            settings: settings,
-            content: content,
-            event_loop_type: RobotCommand,
-            event_loop_builder: event_loop,
-            frame_wake_event: RobotCommand::Shutdown,
-            user_event_handler: |app, window, elwt, cmd| {
-                match cmd {
-                    RobotCommand::Click { x, y } => {
-                        let scale_factor = window.scale_factor();
-                        let logical_x = x / scale_factor as f32;
-                        let logical_y = y / scale_factor as f32;
+    let window = Arc::new(
+        WindowBuilder::new()
+            .with_title(settings.window_title)
+            .with_inner_size(LogicalSize::new(
+                initial_width as f64,
+                initial_height as f64,
+            ))
+            .build(&event_loop)
+            .expect("failed to create window"),
+    );
 
-                        app.set_cursor(logical_x, logical_y);
-                        app.pointer_pressed();
-                        app.pointer_released();
-                        window.request_redraw();
-                    }
-                    RobotCommand::MoveTo { x, y } => {
-                        let scale_factor = window.scale_factor();
-                        let logical_x = x / scale_factor as f32;
-                        let logical_y = y / scale_factor as f32;
+    // Initialize WGPU
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::all(),
+        ..Default::default()
+    });
 
-                        app.set_cursor(logical_x, logical_y);
-                        window.request_redraw();
-                    }
-                    RobotCommand::Drag { from_x, from_y, to_x, to_y } => {
-                        let scale_factor = window.scale_factor();
-                        let logical_from_x = from_x / scale_factor as f32;
-                        let logical_from_y = from_y / scale_factor as f32;
-                        let logical_to_x = to_x / scale_factor as f32;
-                        let logical_to_y = to_y / scale_factor as f32;
+    let surface = instance
+        .create_surface(window.clone())
+        .expect("failed to create surface");
 
-                        app.set_cursor(logical_from_x, logical_from_y);
-                        app.pointer_pressed();
-                        app.set_cursor(logical_to_x, logical_to_y);
-                        app.pointer_released();
-                        window.request_redraw();
-                    }
-                    RobotCommand::Screenshot { path } => {
-                        log::warn!("Screenshot to {} not yet implemented", path);
-                    }
-                    RobotCommand::Shutdown => {
-                        elwt.exit();
-                    }
-                }
-            }
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        compatible_surface: Some(&surface),
+        force_fallback_adapter: false,
+    }))
+    .expect("failed to find suitable adapter");
+
+    let (device, queue) = pollster::block_on(adapter.request_device(
+        &wgpu::DeviceDescriptor {
+            label: Some("Main Device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default(),
+        },
+        None,
+    ))
+    .expect("failed to create device");
+
+    let size = window.inner_size();
+    let surface_caps = surface.get_capabilities(&adapter);
+    let surface_format = surface_caps
+        .formats
+        .iter()
+        .copied()
+        .find(|f| f.is_srgb())
+        .unwrap_or(surface_caps.formats[0]);
+
+    let mut surface_config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format: surface_format,
+        width: size.width,
+        height: size.height,
+        present_mode: wgpu::PresentMode::Fifo,
+        alpha_mode: surface_caps.alpha_modes[0],
+        view_formats: vec![],
+        desired_maximum_frame_latency: 2,
+    };
+
+    surface.configure(&device, &surface_config);
+
+    // Create renderer with fonts from settings
+    let mut renderer = if let Some(fonts) = settings.fonts {
+        WgpuRenderer::new_with_fonts(fonts)
+    } else {
+        WgpuRenderer::new()
+    };
+    renderer.init_gpu(Arc::new(device), Arc::new(queue), surface_format);
+    let initial_scale = window.scale_factor();
+    renderer.set_root_scale(initial_scale as f32);
+
+    let mut app = AppShell::new(renderer, default_root_key(), content);
+    let mut platform = DesktopWinitPlatform::default();
+    platform.set_scale_factor(initial_scale);
+
+    app.set_frame_waker({
+        let proxy = frame_proxy.clone();
+        move || {
+            let _ = proxy.send_event(());
         }
     });
 
-    // Wait for the app to start and send us the proxy
-    let proxy = proxy_rx.recv().expect("Failed to receive proxy from app thread");
+    // Set buffer_size to physical pixels and viewport to logical dp
+    app.set_buffer_size(size.width, size.height);
+    let logical_width = size.width as f32 / initial_scale as f32;
+    let logical_height = size.height as f32 / initial_scale as f32;
+    app.set_viewport(logical_width, logical_height);
 
-    RobotAppHandle {
-        command_tx,
-        proxy,
-    }
+    let _ = event_loop.run(move |event, elwt| {
+        elwt.set_control_flow(ControlFlow::Wait);
+        match event {
+            Event::WindowEvent { window_id, event } if window_id == window.id() => match event {
+                WindowEvent::CloseRequested => {
+                    elwt.exit();
+                }
+                WindowEvent::Resized(new_size) => {
+                    if new_size.width > 0 && new_size.height > 0 {
+                        surface_config.width = new_size.width;
+                        surface_config.height = new_size.height;
+                        let device = app.renderer().device();
+                        surface.configure(device, &surface_config);
+
+                        let scale_factor = window.scale_factor();
+                        let logical_width = new_size.width as f32 / scale_factor as f32;
+                        let logical_height = new_size.height as f32 / scale_factor as f32;
+
+                        app.set_buffer_size(new_size.width, new_size.height);
+                        app.set_viewport(logical_width, logical_height);
+                    }
+                }
+                WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                    platform.set_scale_factor(scale_factor);
+                    app.renderer().set_root_scale(scale_factor as f32);
+
+                    let new_size = window.inner_size();
+                    if new_size.width > 0 && new_size.height > 0 {
+                        surface_config.width = new_size.width;
+                        surface_config.height = new_size.height;
+                        let device = app.renderer().device();
+                        surface.configure(device, &surface_config);
+
+                        let logical_width = new_size.width as f32 / scale_factor as f32;
+                        let logical_height = new_size.height as f32 / scale_factor as f32;
+
+                        app.set_buffer_size(new_size.width, new_size.height);
+                        app.set_viewport(logical_width, logical_height);
+                    }
+                }
+                WindowEvent::CursorMoved { position, .. } => {
+                    let logical = platform.pointer_position(position);
+                    app.set_cursor(logical.x, logical.y);
+                }
+                WindowEvent::MouseInput {
+                    state,
+                    button: MouseButton::Left,
+                    ..
+                } => match state {
+                    ElementState::Pressed => {
+                        app.pointer_pressed();
+                    }
+                    ElementState::Released => {
+                        app.pointer_released();
+                    }
+                },
+                WindowEvent::KeyboardInput { event, .. } => {
+                    use winit::keyboard::{KeyCode, PhysicalKey};
+                    if event.state == ElementState::Pressed {
+                        if let PhysicalKey::Code(KeyCode::KeyD) = event.physical_key {
+                            app.log_debug_info();
+                        }
+                    }
+                }
+                WindowEvent::RedrawRequested => {
+                    app.update();
+
+                    let output = match surface.get_current_texture() {
+                        Ok(output) => output,
+                        Err(wgpu::SurfaceError::Lost) | Err(wgpu::SurfaceError::Outdated) => {
+                            // Reconfigure surface with current window size
+                            let size = window.inner_size();
+                            if size.width > 0 && size.height > 0 {
+                                surface_config.width = size.width;
+                                surface_config.height = size.height;
+                                let device = app.renderer().device();
+                                surface.configure(device, &surface_config);
+                            }
+                            return;
+                        }
+                        Err(wgpu::SurfaceError::OutOfMemory) => {
+                            log::error!("Out of memory, exiting");
+                            elwt.exit();
+                            return;
+                        }
+                        Err(wgpu::SurfaceError::Timeout) => {
+                            log::debug!("Surface timeout, skipping frame");
+                            return;
+                        }
+                    };
+
+                    let view = output
+                        .texture
+                        .create_view(&wgpu::TextureViewDescriptor::default());
+
+                    if let Err(err) =
+                        app.renderer()
+                            .render(&view, surface_config.width, surface_config.height)
+                    {
+                        log::error!("render failed: {err:?}");
+                        return;
+                    }
+
+                    output.present();
+                }
+                _ => {}
+            },
+            Event::AboutToWait | Event::UserEvent(()) => {
+                // Handle pending robot commands
+                #[cfg(feature = "robot")]
+                if let Some(controller) = &robot_controller {
+                    while let Ok(cmd) = controller.rx.try_recv() {
+                        match cmd {
+                            RobotCommand::Click { x, y } => {
+                                app.set_cursor(x, y);
+                                app.pointer_pressed();
+                                app.pointer_released();
+                                window.request_redraw();
+                                let _ = controller.tx.send(RobotResponse::Ok);
+                            }
+                            RobotCommand::MoveTo { x, y } => {
+                                app.set_cursor(x, y);
+                                window.request_redraw();
+                                let _ = controller.tx.send(RobotResponse::Ok);
+                            }
+                            RobotCommand::TouchDown { x, y } => {
+                                app.set_cursor(x, y);
+                                app.pointer_pressed();
+                                let _ = controller.tx.send(RobotResponse::Ok);
+                            }
+                            RobotCommand::TouchMove { x, y } => {
+                                app.set_cursor(x, y);
+                                let _ = controller.tx.send(RobotResponse::Ok);
+                            }
+                            RobotCommand::TouchUp { x, y } => {
+                                app.set_cursor(x, y);
+                                app.pointer_released();
+                                let _ = controller.tx.send(RobotResponse::Ok);
+                            }
+                            RobotCommand::WaitForIdle => {
+                                // If idle, respond immediately
+                                if !app.needs_redraw() && !app.has_active_animations() {
+                                    let _ = controller.tx.send(RobotResponse::Ok);
+                                } else {
+                                    // Force update and respond
+                                    app.update();
+                                    let _ = controller.tx.send(RobotResponse::Ok);
+                                }
+                            }
+                            RobotCommand::Exit => {
+                                let _ = controller.tx.send(RobotResponse::Ok);
+                                elwt.exit();
+                            }
+                        }
+                    }
+                }
+
+                if app.needs_redraw() {
+                    window.request_redraw();
+                }
+                // Use Poll for animations or if robot is active, Wait for idle otherwise
+                if app.has_active_animations() || robot_controller.is_some() {
+                    elwt.set_control_flow(ControlFlow::Poll);
+                } else {
+                    elwt.set_control_flow(ControlFlow::Wait);
+                }
+            }
+            _ => {}
+        }
+    });
+
+    std::process::exit(0)
 }
