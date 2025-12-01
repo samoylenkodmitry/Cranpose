@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use compose_foundation::PointerEvent;
 use compose_render_common::Brush;
 use compose_ui::{measure_text, LayoutBox, LayoutNodeKind};
 use compose_ui_graphics::{Color, GraphicsLayer, Rect, RoundedCornerShape, Size};
@@ -12,7 +13,14 @@ use crate::style::{
 
 pub(crate) fn render_layout_tree(root: &LayoutBox, scene: &mut Scene) {
     eprintln!("DEBUG render_layout_tree called");
-    render_layout_node(root, GraphicsLayer::default(), scene, None, None);
+    render_layout_node(
+        root,
+        GraphicsLayer::default(),
+        scene,
+        None,
+        None,
+        Vec::new(),
+    );
 }
 
 fn render_layout_node(
@@ -21,6 +29,7 @@ fn render_layout_node(
     scene: &mut Scene,
     parent_visual_clip: Option<Rect>,
     parent_hit_clip: Option<Rect>,
+    inherited_pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
 ) {
     eprintln!(
         "DEBUG render_layout_node called for node_id={}",
@@ -34,6 +43,7 @@ fn render_layout_node(
                 parent_visual_clip,
                 parent_hit_clip,
                 scene,
+                inherited_pointer_inputs,
             );
         }
         LayoutNodeKind::Button { on_click } => {
@@ -44,6 +54,7 @@ fn render_layout_node(
                 parent_visual_clip,
                 parent_hit_clip,
                 scene,
+                inherited_pointer_inputs,
             );
         }
         LayoutNodeKind::Layout | LayoutNodeKind::Subcompose | LayoutNodeKind::Unknown => {
@@ -54,6 +65,7 @@ fn render_layout_node(
                 parent_hit_clip,
                 scene,
                 Vec::new(),
+                inherited_pointer_inputs,
             );
         }
     }
@@ -66,6 +78,7 @@ fn render_container(
     parent_hit_clip: Option<Rect>,
     scene: &mut Scene,
     mut extra_clicks: Vec<ClickAction>,
+    mut inherited_pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
 ) {
     let style = NodeStyle::from_layout_node(&layout.node_data);
     let node_layer = combine_layers(parent_layer, style.graphics_layer);
@@ -122,6 +135,8 @@ fn render_container(
         scene.push_shape(transformed_rect, brush, scaled_shape, visual_clip);
     }
 
+    inherited_pointer_inputs.extend(style.pointer_inputs.iter().cloned());
+
     // Render text content if present in modifier slices.
     // Text is now handled via TextModifierNode in the modifier chain.
     if let Some(value) = layout.node_data.modifier_slices().text_content() {
@@ -151,12 +166,19 @@ fn render_container(
         transformed_rect,
         scaled_shape,
         extra_clicks,
-        style.pointer_inputs.clone(),
+        inherited_pointer_inputs.clone(),
         hit_clip,
     );
 
     for child_layout in &layout.children {
-        render_layout_node(child_layout, node_layer, scene, visual_clip, hit_clip);
+        render_layout_node(
+            child_layout,
+            node_layer,
+            scene,
+            visual_clip,
+            hit_clip,
+            inherited_pointer_inputs.clone(),
+        );
     }
 
     apply_draw_commands(
@@ -177,6 +199,7 @@ fn render_spacer(
     parent_visual_clip: Option<Rect>,
     parent_hit_clip: Option<Rect>,
     scene: &mut Scene,
+    inherited_pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
 ) {
     render_container(
         layout,
@@ -185,6 +208,7 @@ fn render_spacer(
         parent_hit_clip,
         scene,
         Vec::new(),
+        inherited_pointer_inputs,
     );
 }
 
@@ -195,6 +219,7 @@ fn render_button(
     parent_visual_clip: Option<Rect>,
     parent_hit_clip: Option<Rect>,
     scene: &mut Scene,
+    inherited_pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
 ) {
     let clicks = vec![ClickAction::Simple(on_click)];
     render_container(
@@ -204,6 +229,7 @@ fn render_button(
         parent_hit_clip,
         scene,
         clicks,
+        inherited_pointer_inputs,
     );
 }
 
