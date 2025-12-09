@@ -54,7 +54,7 @@ pub async fn run(canvas_id: &str, settings: AppSettings, content: impl FnMut() +
     // Use WebGL backend for maximum compatibility with Chrome stable.
     // This avoids the wgpu 0.19 / Chrome WebGPU spec incompatibility
     // (maxInterStageShaderComponents vs maxInterStageShaderVariables).
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
         backends: wgpu::Backends::GL,
         ..Default::default()
     });
@@ -69,7 +69,7 @@ pub async fn run(canvas_id: &str, settings: AppSettings, content: impl FnMut() +
             force_fallback_adapter: false,
         })
         .await
-        .ok_or("failed to find suitable adapter")?;
+        .map_err(|e| format!("failed to find suitable adapter: {:?}", e))?;
 
     // For web, use downlevel defaults for maximum compatibility.
     // wgpu 0.19 uses newer WebGPU spec field names, so we use the most
@@ -80,8 +80,9 @@ pub async fn run(canvas_id: &str, settings: AppSettings, content: impl FnMut() +
                 label: Some("Main Device"),
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
+                memory_hints: wgpu::MemoryHints::default(),
+                trace: wgpu::Trace::Off,
             },
-            None,
         )
         .await
         .map_err(|e| format!("failed to create device: {:?}", e))?;
@@ -241,6 +242,9 @@ pub async fn run(canvas_id: &str, settings: AppSettings, content: impl FnMut() +
             }
             Err(wgpu::SurfaceError::Timeout) => {
                 log::debug!("Surface timeout, skipping frame");
+            }
+            Err(wgpu::SurfaceError::Other) => {
+                log::error!("Surface other error, skipping frame");
             }
         }
 

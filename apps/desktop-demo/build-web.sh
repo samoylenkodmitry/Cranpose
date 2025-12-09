@@ -1,5 +1,4 @@
 #!/bin/bash
-set -e
 
 echo "Building RS-Compose Demo for Web..."
 echo ""
@@ -38,7 +37,35 @@ fi
 # - codegen-units=1 for better optimization
 # - wasm-opt runs with -Oz for size optimization
 echo "Building WASM module (optimized for size)..."
+
+# Run wasm-pack build, don't exit on error so we can handle it
+set +e
 "$WASM_PACK" build --target web --out-dir pkg --features web,renderer-wgpu --no-default-features
+BUILD_RESULT=$?
+set -e
+
+if [ $BUILD_RESULT -ne 0 ]; then
+    echo ""
+    echo "wasm-pack build failed with exit code $BUILD_RESULT"
+    echo "This might be due to wasm-opt issues. Retrying without wasm-opt..."
+    echo ""
+    
+    # Create a temporary Cargo.toml patch to disable wasm-opt
+    cp Cargo.toml Cargo.toml.backup
+    sed -i 's/wasm-opt = \[.*\]/wasm-opt = false/' Cargo.toml
+    
+    # Retry the build
+    "$WASM_PACK" build --target web --out-dir pkg --features web,renderer-wgpu --no-default-features
+    BUILD_RESULT=$?
+    
+    # Restore original Cargo.toml
+    mv Cargo.toml.backup Cargo.toml
+    
+    if [ $BUILD_RESULT -ne 0 ]; then
+        echo "Build failed even without wasm-opt"
+        exit 1
+    fi
+fi
 
 # Show resulting binary size
 if [ -f "pkg/desktop_app_bg.wasm" ]; then

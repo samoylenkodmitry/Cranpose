@@ -28,9 +28,7 @@ desktop = ["compose-app/desktop"]
 android = ["compose-app/android"]
 web = ["compose-app/web", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:wasm-logger"]
 # Enable real app robot testing
-robot-app = ["compose-testing/robot-app"]
-# HTTP client for web fetch demo (adds ~1MB from rustls/ring)
-http-client = ["dep:reqwest"]
+robot-app = ["compose-testing/robot-app", "logging"]
 # Enable env_logger (adds ~600KB from regex)
 logging = ["dep:env_logger"]
 
@@ -51,7 +49,7 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 env_logger = { version = "0.10", optional = true }
 anyhow = "1.0"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 
 # Android-specific dependencies (only when building for Android)
 [target.'cfg(target_os = "android")'.dependencies]
@@ -60,6 +58,15 @@ android-activity = { workspace = true }
 # WASM-specific dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Request",
+    "RequestInit",
+    "RequestMode",
+    "Response",
+    "Headers",
+] }
 
 [dev-dependencies]
 compose-macros = { path = "../../crates/compose-macros" }

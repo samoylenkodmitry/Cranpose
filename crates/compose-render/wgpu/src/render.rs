@@ -6,8 +6,8 @@ use crate::{SharedTextBuffer, SharedTextCache, TextCacheKey, BASE_FONT_SIZE};
 use bytemuck::{Pod, Zeroable};
 use compose_ui_graphics::{Brush, Color};
 use glyphon::{
-    Attrs, Color as GlyphonColor, FontSystem, Metrics, Resolution, SwashCache, TextArea, TextAtlas,
-    TextBounds, TextRenderer,
+    Attrs, Cache, Color as GlyphonColor, FontSystem, Metrics, Resolution, SwashCache, TextArea,
+    TextAtlas, TextBounds, TextRenderer, Viewport,
 };
 use std::sync::{Arc, Mutex};
 
@@ -248,6 +248,7 @@ pub struct GpuRenderer {
     text_renderer: TextRenderer,
     text_atlas: TextAtlas,
     swash_cache: SwashCache,
+    glyphon_cache: Cache,
     // Persistent GPU buffers (reused across frames)
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
@@ -324,12 +325,14 @@ impl GpuRenderer {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
                 buffers: &[Vertex::desc()],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -348,10 +351,12 @@ impl GpuRenderer {
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
+            cache: None,
         });
 
         let swash_cache = SwashCache::new();
-        let mut text_atlas = TextAtlas::new(&device, &queue, surface_format);
+        let glyphon_cache = Cache::new(&device);
+        let mut text_atlas = TextAtlas::new(&device, &queue, &glyphon_cache, surface_format);
 
         log::info!(
             "Text renderer initialized with format: {:?}",
@@ -395,6 +400,7 @@ impl GpuRenderer {
             text_renderer,
             text_atlas,
             swash_cache,
+            glyphon_cache,
             uniform_buffer,
             uniform_bind_group,
             shape_buffers,
@@ -768,8 +774,13 @@ impl GpuRenderer {
                 scale: 1.0,
                 bounds,
                 default_color: color,
+                custom_glyphs: &[],
             });
         }
+
+        // Create viewport for text rendering
+        let mut viewport = Viewport::new(&self.device, &self.glyphon_cache);
+        viewport.update(&self.queue, Resolution { width, height });
 
         // Prepare all text at once
         if !text_areas.is_empty() {
@@ -779,7 +790,7 @@ impl GpuRenderer {
                     &self.queue,
                     &mut font_system,
                     &mut self.text_atlas,
-                    Resolution { width, height },
+                    &viewport,
                     text_areas.iter().cloned(),
                     &mut self.swash_cache,
                 )
@@ -814,8 +825,12 @@ impl GpuRenderer {
                 occlusion_query_set: None,
             });
 
+            // Create viewport for render
+            let mut viewport = Viewport::new(&self.device, &self.glyphon_cache);
+            viewport.update(&self.queue, Resolution { width, height });
+
             self.text_renderer
-                .render(&self.text_atlas, &mut text_pass)
+                .render(&self.text_atlas, &viewport, &mut text_pass)
                 .map_err(|e| format!("Text render error: {:?}", e))?;
         }
 
