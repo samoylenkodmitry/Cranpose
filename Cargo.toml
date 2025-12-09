@@ -26,3 +26,23 @@ resolver = "2"
 [workspace.dependencies]
 # Force android-activity to use native-activity feature across all workspace crates
 android-activity = { version = "0.5", features = ["native-activity"] }
+
+# Release profile optimizations for smaller binaries
+[profile.release]
+opt-level = "s"         # Optimize for size (use "z" only for WASM)
+lto = true              # Link-Time Optimization across crates
+codegen-units = 1       # Better optimization (single codegen unit)
+strip = true            # Strip symbols from binary
+panic = "abort"         # Smaller binaries (no unwinding)
+debug = 0               # No debug info
+
+# Maximum size optimization profile (slower builds, smaller binaries)
+[profile.release-small]
+inherits = "release"
+opt-level = "z"         # Optimize for size over speed
+lto = "fat"             # Full LTO for maximum optimization
+
+# WASM-specific profile for web builds
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"         # Aggressive size optimization for WASM

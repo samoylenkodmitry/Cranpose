@@ -1,0 +1,14 @@
+[build]
+# Remap source paths to shorter names in panic messages
+rustflags = [
+    "--remap-path-prefix", "/root/.cargo/registry/src/=",
+    "--remap-path-prefix", "/home/user/rs-compose/=",
+]
+
+[target.wasm32-unknown-unknown]
+rustflags = [
+    "--cfg", "web_sys_unstable_apis",
+    "--cfg", "getrandom_backend=\"wasm_js\"",
+    "--remap-path-prefix", "/root/.cargo/registry/src/=",
+    "--remap-path-prefix", "/home/user/rs-compose/=",
+]

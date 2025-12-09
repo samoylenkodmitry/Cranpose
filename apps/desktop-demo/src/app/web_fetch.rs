@@ -1,9 +1,12 @@
-use anyhow::{anyhow, Context};
-use compose_core::LaunchedEffect;
+#[cfg(target_arch = "wasm32")]
+use compose_core::LaunchedEffectAsync;
 use compose_ui::{
     composable, Brush, Button, Color, Column, ColumnSpec, CornerRadii, LinearArrangement, Modifier,
     Row, RowSpec, Size, Spacer, Text, VerticalAlignment,
 };
+
+#[cfg(not(target_arch = "wasm32"))]
+use compose_core::LaunchedEffect;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum FetchStatus {
@@ -13,11 +16,105 @@ enum FetchStatus {
     Error(String),
 }
 
+/// Performs HTTP fetch - native implementation using reqwest blocking client
+#[cfg(not(target_arch = "wasm32"))]
+fn do_fetch_blocking() -> Result<String, String> {
+    use reqwest::blocking::Client;
+    
+    let client = Client::builder()
+        .user_agent("compose-rs-desktop-demo/0.1")
+        .build()
+        .map_err(|e| format!("Failed to build client: {}", e))?;
+
+    // Use ipify.org - simple, reliable, CORS-friendly
+    let response = client
+        .get("https://api.ipify.org?format=json")
+        .send()
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    let status = response.status();
+    let body = response.text().map_err(|e| format!("Failed to read body: {}", e))?;
+
+    if status.is_success() {
+        // Parse JSON response to extract IP address
+        if let Some(start) = body.find("\"ip\"") {
+            if let Some(colon) = body[start..].find(':') {
+                let after_colon = &body[start + colon + 1..];
+                if let Some(quote_start) = after_colon.find('"') {
+                    if let Some(quote_end) = after_colon[quote_start + 1..].find('"') {
+                        let ip = &after_colon[quote_start + 1..quote_start + 1 + quote_end];
+                        return Ok(format!("Your public IP: {}", ip));
+                    }
+                }
+            }
+        }
+        Ok(body.trim().to_string())
+    } else {
+        Err(format!("Request failed with status {}: {}", status, body))
+    }
+}
+
+/// Performs HTTP fetch - WASM implementation using browser's fetch API
+#[cfg(target_arch = "wasm32")]
+async fn do_fetch_async() -> Result<String, String> {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen_futures::JsFuture;
+    use web_sys::{Request, RequestInit, RequestMode, Response};
+
+    let opts = RequestInit::new();
+    opts.set_method("GET");
+    opts.set_mode(RequestMode::Cors);
+
+    // Use ipify.org - simple, reliable, CORS-friendly
+    let request = Request::new_with_str_and_init("https://api.ipify.org?format=json", &opts)
+        .map_err(|e| format!("Failed to create request: {:?}", e))?;
+
+    let window = web_sys::window().ok_or("No window object")?;
+    let resp_value = JsFuture::from(window.fetch_with_request(&request))
+        .await
+        .map_err(|e| format!("Fetch failed: {:?}", e))?;
+
+    let resp: Response = resp_value
+        .dyn_into()
+        .map_err(|_| "Response is not a Response object")?;
+
+    if !resp.ok() {
+        return Err(format!("Request failed with status {}", resp.status()));
+    }
+
+    let text_promise = resp.text().map_err(|e| format!("Failed to get text: {:?}", e))?;
+    let text_value = JsFuture::from(text_promise)
+        .await
+        .map_err(|e| format!("Failed to read body: {:?}", e))?;
+
+    // Parse JSON response to extract IP address
+    let text = text_value
+        .as_string()
+        .ok_or_else(|| "Response body is not a string".to_string())?;
+    
+    // Extract IP from {"ip": "..."} response
+    if let Some(start) = text.find("\"ip\"") {
+        if let Some(colon) = text[start..].find(':') {
+            let after_colon = &text[start + colon + 1..];
+            if let Some(quote_start) = after_colon.find('"') {
+                if let Some(quote_end) = after_colon[quote_start + 1..].find('"') {
+                    let ip = &after_colon[quote_start + 1..quote_start + 1 + quote_end];
+                    return Ok(format!("Your public IP: {}", ip));
+                }
+            }
+        }
+    }
+    
+    Ok(text.trim().to_string())
+}
+
 #[composable]
 pub(crate) fn web_fetch_example() {
     let fetch_status = compose_core::useState(|| FetchStatus::Idle);
     let request_counter = compose_core::useState(|| 0u64);
 
+    // Native implementation using blocking worker
+    #[cfg(not(target_arch = "wasm32"))]
     {
         let status_state = fetch_status;
         let request_key = request_counter.get();
@@ -32,33 +129,45 @@ pub(crate) fn web_fetch_example() {
             scope.launch_background(
                 move |token| {
                     if token.is_cancelled() {
-                        return Err(anyhow!("request cancelled"));
+                        return Err("request cancelled".to_string());
                     }
-
-                    let client = reqwest::blocking::Client::builder()
-                        .user_agent("compose-rs-desktop-demo/0.1")
-                        .build()
-                        .context("building HTTP client")?;
-
-                    let response = client
-                        .get("https://api.github.com/zen")
-                        .send()
-                        .context("sending request")?;
-
-                    let status = response.status();
-                    let body = response.text().context("reading response body")?;
-
-                    if status.is_success() {
-                        Ok(body.trim().to_string())
-                    } else {
-                        Err(anyhow!("Request failed with status {}: {}", status, body))
-                    }
+                    do_fetch_blocking()
                 },
                 move |fetch_result| match fetch_result {
                     Ok(text) => status.set(FetchStatus::Success(text)),
-                    Err(error) => status.set(FetchStatus::Error(error.to_string())),
+                    Err(error) => status.set(FetchStatus::Error(error)),
                 },
             );
+        });
+    }
+
+    // WASM implementation using async fetch
+    #[cfg(target_arch = "wasm32")]
+    {
+        let status_state = fetch_status;
+        let request_key = request_counter.get();
+        LaunchedEffectAsync!(request_key, move |scope| {
+            let status = status_state;
+            Box::pin(async move {
+                if request_key == 0 {
+                    return;
+                }
+
+                status.set(FetchStatus::Loading);
+
+                match do_fetch_async().await {
+                    Ok(text) => {
+                        if scope.is_active() {
+                            status.set(FetchStatus::Success(text));
+                        }
+                    }
+                    Err(error) => {
+                        if scope.is_active() {
+                            status.set(FetchStatus::Error(error));
+                        }
+                    }
+                }
+            })
         });
     }
 
@@ -88,10 +197,9 @@ pub(crate) fn web_fetch_example() {
 
                 Text(
                     concat!(
-                        "This tab uses LaunchedEffect with a background worker to ",
-                        "request a short motto from api.github.com/zen. Each click ",
-                        "spawns a request and updates the UI when the response ",
-                        "arrives.",
+                        "This tab uses LaunchedEffect to fetch your public IP address from ",
+                        "api.ipify.org. Each click spawns an HTTP request and updates ",
+                        "the UI when the response arrives.",
                     ),
                     Modifier::empty()
                         .padding(12.0)

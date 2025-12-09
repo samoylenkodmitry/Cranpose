@@ -88,12 +88,12 @@ impl SharedTextBuffer {
         // Set metrics and size for unlimited layout
         let metrics = Metrics::new(font_size, font_size * 1.4);
         self.buffer.set_metrics(font_system, metrics);
-        self.buffer.set_size(font_system, f32::MAX, f32::MAX);
+        self.buffer.set_size(font_system, Some(f32::MAX), Some(f32::MAX));
 
         // Set text and shape
         self.buffer
-            .set_text(font_system, text, attrs, Shaping::Advanced);
-        self.buffer.shape_until_scroll(font_system);
+            .set_text(font_system, text, &attrs, Shaping::Advanced);
+        self.buffer.shape_until_scroll(font_system, false);
 
         // Update cached values
         self.text.clear();

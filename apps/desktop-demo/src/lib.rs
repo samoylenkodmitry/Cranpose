@@ -17,6 +17,7 @@ fn create_app() -> AppLauncher {
 /// Shared entry point for desktop
 #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 pub fn entry_point() {
+    #[cfg(feature = "logging")]
     let _ = env_logger::try_init();
     create_app().run(app::combined_app);
 }

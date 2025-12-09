@@ -34,14 +34,22 @@ jobs:
         with:
           cache-on-failure: true
 
+      - name: Install binaryen (wasm-opt) for size optimization
+        run: sudo apt-get install -y binaryen
+
       - name: Install wasm-pack
         run: cargo install wasm-pack --version 0.13.1
 
-      - name: Build WASM demo
+      - name: Build WASM demo (optimized for size)
         run: |
           set -e
           cd apps/desktop-demo
+          # wasm-pack uses release profile from Cargo.toml (LTO, strip, etc.)
+          # wasm-opt runs with -Oz for additional size optimization
           wasm-pack build --target web --features web,renderer-wgpu
+          # Report binary size
+          echo "WASM binary size:"
+          ls -lh pkg/desktop_app_bg.wasm
 
       - name: Create deployment directory
         run: |

@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = false
+# Enable wasm-opt with size optimization (can reduce WASM size by 20-40%)
+wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-mutable-globals", "--enable-nontrapping-float-to-int"]
 
 # Support both binary (desktop) and cdylib (Android)
 # IMPORTANT: The cdylib name (libdesktop_app.so) must match the android.app.lib_name
@@ -27,7 +28,9 @@ desktop = ["compose-app/desktop"]
 android = ["compose-app/android"]
 web = ["compose-app/web", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:wasm-logger"]
 # Enable real app robot testing
-robot-app = ["compose-testing/robot-app"]
+robot-app = ["compose-testing/robot-app", "logging"]
+# Enable env_logger (adds ~600KB from regex)
+logging = ["dep:env_logger"]
 
 [dependencies]
 compose-app = { path = "../../crates/compose-app", default-features = false }
@@ -44,7 +47,7 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 
 # Non-WASM dependencies
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-env_logger = "0.10"
+env_logger = { version = "0.10", optional = true }
 anyhow = "1.0"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 
@@ -55,6 +58,15 @@ android-activity = { workspace = true }
 # WASM-specific dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Request",
+    "RequestInit",
+    "RequestMode",
+    "Response",
+    "Headers",
+] }
 
 [dev-dependencies]
 compose-macros = { path = "../../crates/compose-macros" }
