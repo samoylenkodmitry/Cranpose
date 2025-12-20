@@ -12,18 +12,64 @@ use compose_foundation::NodeCapabilities;
 pub use compose_ui_layout::{Constraints, MeasureResult, Placement};
 
 /// Representation of a subcomposed child that can later be measured by the policy.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// In lazy layouts, this represents an item that has been composed but may or
+/// may not have been measured yet. Call `measure()` to get the actual size.
+#[derive(Clone, Debug)]
 pub struct SubcomposeChild {
     node_id: NodeId,
+    /// Measured size of the child (set after measurement).
+    /// Width in x, height in y.
+    measured_size: Option<Size>,
 }
 
 impl SubcomposeChild {
     pub fn new(node_id: NodeId) -> Self {
-        Self { node_id }
+        Self { 
+            node_id,
+            measured_size: None,
+        }
+    }
+
+    /// Creates a SubcomposeChild with a known size.
+    pub fn with_size(node_id: NodeId, size: Size) -> Self {
+        Self {
+            node_id,
+            measured_size: Some(size),
+        }
     }
 
     pub fn node_id(&self) -> NodeId {
         self.node_id
+    }
+
+    /// Returns the measured size of this child.
+    /// 
+    /// Returns a default size if the child hasn't been measured yet.
+    /// For lazy layouts using placeholder sizes, this returns the estimated size.
+    pub fn size(&self) -> Size {
+        self.measured_size.unwrap_or(Size { width: 0.0, height: 0.0 })
+    }
+
+    /// Returns the measured width.
+    pub fn width(&self) -> f32 {
+        self.size().width
+    }
+
+    /// Returns the measured height.
+    pub fn height(&self) -> f32 {
+        self.size().height
+    }
+
+    /// Sets the measured size for this child.
+    pub fn set_size(&mut self, size: Size) {
+        self.measured_size = Some(size);
+    }
+}
+
+impl PartialEq for SubcomposeChild {
+    fn eq(&self, other: &Self) -> bool {
+        self.node_id == other.node_id
     }
 }
 
@@ -84,6 +130,33 @@ impl<'a> SubcomposeMeasureScope for SubcomposeMeasureScopeImpl<'a> {
         nodes.into_iter().map(SubcomposeChild::new).collect()
     }
 }
+
+impl<'a> SubcomposeMeasureScopeImpl<'a> {
+    /// Subcomposes content and assigns estimated sizes to children.
+    ///
+    /// This is used by lazy layouts where true measurement happens later.
+    /// The `estimate_size` function provides size estimates based on index.
+    pub fn subcompose_with_size<Content, F>(
+        &mut self, 
+        slot_id: SlotId, 
+        content: Content,
+        estimate_size: F,
+    ) -> Vec<SubcomposeChild>
+    where
+        Content: FnOnce(),
+        F: Fn(usize) -> Size,
+    {
+        let (_, nodes) = self
+            .composer
+            .subcompose_measurement(self.state, slot_id, |_| content());
+        nodes
+            .into_iter()
+            .enumerate()
+            .map(|(i, node_id)| SubcomposeChild::with_size(node_id, estimate_size(i)))
+            .collect()
+    }
+}
+
 
 /// Trait object representing a reusable measure policy.
 pub type MeasurePolicy =

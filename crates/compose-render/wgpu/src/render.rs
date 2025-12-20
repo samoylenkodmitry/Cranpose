@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 // Chunked rendering constants for robustness with large scenes
 // Note: Limited to 256 for WebGL compatibility (uniform buffer size limit)
 // WebGL guarantees 16KB uniform buffers, ShapeData is 64 bytes = 256 max shapes
-const MAX_SHAPES_PER_DRAW: usize = 256;
+const MAX_SHAPES_PER_DRAW: usize = 200; // ShapeData is 80 bytes, 16KB uniform limit = ~200 shapes
 const HARD_MAX_BUFFER_MB: usize = 64; // Maximum 64MB per buffer
 
 #[repr(C)]
@@ -51,6 +51,7 @@ struct ShapeData {
     rect: [f32; 4],            // x, y, width, height
     radii: [f32; 4],           // top_left, top_right, bottom_left, bottom_right
     gradient_params: [f32; 4], // center.x, center.y, radius, unused
+    clip_rect: [f32; 4],       // clip_x, clip_y, clip_width, clip_height (0,0,0,0 = no clip)
     brush_type: u32,           // 0=solid, 1=linear_gradient, 2=radial_gradient
     gradient_start: u32,       // Starting index in gradient buffer
     gradient_count: u32,       // Number of gradient stops
@@ -81,9 +82,10 @@ struct ShapeBatchBuffers {
 
 impl ShapeBatchBuffers {
     fn new(device: &wgpu::Device, bind_group_layout: &wgpu::BindGroupLayout) -> Self {
-        // For WebGL uniform buffers, size MUST match shader declaration (256 shapes)
-        // Shader declares: var<uniform> shape_data: array<ShapeData, 256>
-        const WEBGL_UNIFORM_SHAPE_COUNT: usize = 256;
+        // For WebGL uniform buffers, size MUST match shader declaration (200 shapes)
+        // Shader declares: var<uniform> shape_data: array<ShapeData, 200>
+        // ShapeData is 80 bytes (with clip_rect), 16KB/80 = 200 shapes
+        const WEBGL_UNIFORM_SHAPE_COUNT: usize = 200;
         const WEBGL_UNIFORM_GRADIENT_COUNT: usize = 256;
 
         let initial_vertex_cap = WEBGL_UNIFORM_SHAPE_COUNT * 4; // 4 vertices per shape
@@ -447,8 +449,10 @@ impl GpuRenderer {
         }
 
         // First pass: collect all shape data and gradients across entire scene
+        // Also collect filtered shapes (ones that pass clip test) to stay in sync
         let mut all_gradients = Vec::new();
         let mut all_shape_data = Vec::new();
+        let mut filtered_shapes: Vec<&DrawShape> = Vec::new();
 
         for shape in &sorted_shapes {
             let rect = shape.rect;
@@ -458,6 +462,26 @@ impl GpuRenderer {
             let y = rect.y * root_scale;
             let w = rect.width * root_scale;
             let h = rect.height * root_scale;
+
+            // Calculate clip rect (scaled to physical pixels) and skip early if fully clipped
+            let clip_rect = if let Some(clip) = shape.clip {
+                let clip_right = (clip.x + clip.width) * root_scale;
+                let clip_bottom = (clip.y + clip.height) * root_scale;
+                let shape_right = x + w;
+                let shape_bottom = y + h;
+                
+                // Skip shapes that are entirely outside the clip rect
+                if shape_right <= clip.x * root_scale || 
+                   x >= clip_right ||
+                   shape_bottom <= clip.y * root_scale || 
+                   y >= clip_bottom {
+                    continue;
+                }
+                
+                [clip.x * root_scale, clip.y * root_scale, clip.width * root_scale, clip.height * root_scale]
+            } else {
+                [0.0, 0.0, 0.0, 0.0] // No clipping
+            };
 
             // Determine gradient parameters and collect stops
             let mut gradient_params = [0.0f32; 4];
@@ -511,11 +535,14 @@ impl GpuRenderer {
                 rect: [x, y, w, h],
                 radii,
                 gradient_params,
+                clip_rect,
                 brush_type,
                 gradient_start,
                 gradient_count,
                 _padding: 0,
             });
+            
+            filtered_shapes.push(shape);
         }
 
         // Ensure buffers can hold at least one chunk
@@ -539,7 +566,8 @@ impl GpuRenderer {
 
         // Second pass: render shapes in chunks with proper synchronization
         // Each chunk gets its own encoder+submit to ensure buffer writes complete before next chunk
-        for (chunk_idx, chunk) in sorted_shapes.chunks(MAX_SHAPES_PER_DRAW).enumerate() {
+        // Use filtered_shapes (after clip culling) to stay in sync with all_shape_data
+        for (chunk_idx, chunk) in filtered_shapes.chunks(MAX_SHAPES_PER_DRAW).enumerate() {
             let chunk_len = chunk.len();
             let chunk_start = chunk_idx * MAX_SHAPES_PER_DRAW;
 

@@ -171,3 +171,29 @@ required-features = ["robot-app"]
 name = "robot_multiline_click"
 path = "robot-runners/robot_multiline_click.rs"
 required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_list"
+path = "robot-runners/robot_lazy_list.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_subcompose_lazy"
+path = "robot-runners/robot_subcompose_lazy.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_perf"
+path = "robot-runners/robot_lazy_perf.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_max_demo"
+path = "robot-runners/robot_lazy_max_demo.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_tab_test"
+path = "robot-runners/robot_lazy_tab_test.rs"
+required-features = ["robot-app"]
+

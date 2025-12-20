@@ -72,35 +72,68 @@ fn calculate_incremental_delta(from: Point, to: Point, is_vertical: bool) -> f32
 }
 
 // ============================================================================
-// Scroll Gesture Detector
+// Scroll Gesture Detector (Generic Implementation)
 // ============================================================================
 
-/// Encapsulates scroll gesture detection and handling logic.
+/// Trait for scroll targets that can receive scroll deltas.
+/// 
+/// Implemented by both `ScrollState` (regular scroll) and `LazyListState` (lazy lists).
+trait ScrollTarget {
+    /// Apply a scroll delta. Returns the consumed amount.
+    fn apply_delta(&self, delta: f32) -> f32;
+    
+    /// Called after scroll to trigger any necessary invalidation.
+    fn invalidate(&self);
+}
+
+impl ScrollTarget for ScrollState {
+    fn apply_delta(&self, delta: f32) -> f32 {
+        // Regular scroll uses negative delta (natural scrolling)
+        self.dispatch_raw_delta(-delta)
+    }
+    
+    fn invalidate(&self) {
+        // ScrollState triggers invalidation internally
+    }
+}
+
+impl ScrollTarget for LazyListState {
+    fn apply_delta(&self, delta: f32) -> f32 {
+        // LazyListState uses positive delta directly
+        self.dispatch_scroll_delta(delta)
+    }
+    
+    fn invalidate(&self) {
+        crate::request_layout_invalidation();
+    }
+}
+
+/// Generic scroll gesture detector that works with any ScrollTarget.
 ///
 /// This struct provides a clean interface for processing pointer events
-/// and managing scroll interactions. It separates the gesture detection
-/// logic from the async event loop plumbing.
-struct ScrollGestureDetector {
+/// and managing scroll interactions. The generic parameter S determines
+/// how scroll deltas are applied.
+struct ScrollGestureDetector<S: ScrollTarget> {
     /// Shared gesture state (position tracking, drag status).
     gesture_state: Rc<RefCell<ScrollGestureState>>,
 
-    /// The scroll model to update when drag is detected.
-    scroll_state: ScrollState,
+    /// The scroll target to update when drag is detected.
+    scroll_target: S,
 
     /// Whether this is vertical or horizontal scroll.
     is_vertical: bool,
 }
 
-impl ScrollGestureDetector {
+impl<S: ScrollTarget> ScrollGestureDetector<S> {
     /// Creates a new detector for the given scroll configuration.
     fn new(
         gesture_state: Rc<RefCell<ScrollGestureState>>,
-        scroll_state: ScrollState,
+        scroll_target: S,
         is_vertical: bool,
     ) -> Self {
         Self {
             gesture_state,
-            scroll_state,
+            scroll_target,
             is_vertical,
         }
     }
@@ -132,12 +165,6 @@ impl ScrollGestureDetector {
     /// 3. If total movement exceeds `DRAG_THRESHOLD` (8px), start dragging.
     /// 4. While dragging, apply scroll delta and consume events.
     ///
-    /// # Why negative delta?
-    /// Natural scrolling: dragging finger down moves content down,
-    /// which means scroll offset increases (content shifts up under viewport).
-    /// The scroll model uses positive offset = content scrolled up,
-    /// so drag down = negative delta to scroll state.
-    ///
     /// Returns `true` if event should be consumed (we're actively dragging).
     fn on_move(&self, position: Point, buttons: PointerButtons) -> bool {
         let mut gs = self.gesture_state.borrow_mut();
@@ -150,7 +177,12 @@ impl ScrollGestureDetector {
             return false;
         }
 
-        let (Some(down_pos), Some(last_pos)) = (gs.drag_down_position, gs.last_position) else {
+        let Some(down_pos) = gs.drag_down_position else {
+            return false;
+        };
+        
+        let Some(last_pos) = gs.last_position else {
+            gs.last_position = Some(position);
             return false;
         };
 
@@ -158,8 +190,6 @@ impl ScrollGestureDetector {
         let incremental_delta = calculate_incremental_delta(last_pos, position, self.is_vertical);
 
         // Threshold check: start dragging only after moving 8px from down position.
-        // This matches the clickable modifier's threshold, ensuring consistent
-        // gesture disambiguation across scroll containers with clickable children.
         if !gs.is_dragging && total_delta.abs() > DRAG_THRESHOLD {
             gs.is_dragging = true;
         }
@@ -167,8 +197,9 @@ impl ScrollGestureDetector {
         gs.last_position = Some(position);
 
         if gs.is_dragging {
-            // Apply scroll: negative because natural scrolling (drag down = scroll up)
-            let _ = self.scroll_state.dispatch_raw_delta(-incremental_delta);
+            drop(gs); // Release borrow before calling scroll target
+            let _ = self.scroll_target.apply_delta(incremental_delta);
+            self.scroll_target.invalidate();
             true // Consume event while dragging
         } else {
             false
@@ -308,4 +339,72 @@ fn scroll_impl(state: ScrollState, is_vertical: bool, reverse_scrolling: bool) -
 
     // Combine: pointer input THEN layout modifier
     pointer_input.then(layout_modifier)
+}
+
+// ============================================================================
+// Lazy Scroll Support for LazyListState
+// ============================================================================
+
+use compose_foundation::lazy::LazyListState;
+
+impl Modifier {
+    /// Creates a vertically scrollable modifier for lazy lists.
+    ///
+    /// This connects pointer gestures to LazyListState for scroll handling.
+    /// Unlike regular vertical_scroll, no layout offset is applied here
+    /// since LazyListState manages item positioning internally.
+    pub fn lazy_vertical_scroll(self, state: LazyListState) -> Self {
+        self.then(lazy_scroll_impl(state, true))
+    }
+
+    /// Creates a horizontally scrollable modifier for lazy lists.
+    pub fn lazy_horizontal_scroll(self, state: LazyListState) -> Self {
+        self.then(lazy_scroll_impl(state, false))
+    }
+}
+
+/// Internal implementation for lazy scroll modifiers.
+fn lazy_scroll_impl(state: LazyListState, is_vertical: bool) -> Modifier {
+    let gesture_state = Rc::new(RefCell::new(ScrollGestureState::default()));
+    let list_state = state.clone();
+    
+    // Register invalidation callback so scroll_to_item() triggers layout
+    state.add_invalidate_callback(Box::new(|| {
+        crate::request_layout_invalidation();
+    }));
+    
+    // Use a unique key per LazyListState
+    let state_id = std::ptr::addr_of!(*state.inner_ptr()) as usize;
+    let key = (state_id, is_vertical);
+    
+    Modifier::empty().pointer_input(key, move |scope| {
+        // Use the same generic detector with LazyListState
+        let detector = ScrollGestureDetector::new(
+            gesture_state.clone(),
+            list_state.clone(),
+            is_vertical,
+        );
+
+        async move {
+            scope
+                .await_pointer_event_scope(|await_scope| async move {
+                    loop {
+                        let event = await_scope.await_pointer_event().await;
+
+                        // Delegate to detector's lifecycle methods
+                        let should_consume = match event.kind {
+                            PointerEventKind::Down => detector.on_down(event.position),
+                            PointerEventKind::Move => detector.on_move(event.position, event.buttons),
+                            PointerEventKind::Up => detector.on_up(),
+                            PointerEventKind::Cancel => detector.on_cancel(),
+                        };
+
+                        if should_consume {
+                            event.consume();
+                        }
+                    }
+                })
+                .await;
+        }
+    })
 }

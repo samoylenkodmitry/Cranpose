@@ -30,50 +30,8 @@
 ### Text Input System
 *Reference: `compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/`*
 
-**Completed ✅:**
-- [x] `BasicTextField` composable with basic editing
-- [x] `TextFieldState` with cursor position, selection range
-- [x] Cursor blinking animation (500ms on/off)
-- [x] Click-to-position cursor (text measurement based)
-- [x] Space key input handling
-- [x] Dynamic text field resizing
-- [x] Focus switching between fields
-- [x] Global focus tracking (thread-safe AtomicBool)
-
-**In Progress / Next Steps:**
-
-#### Text Selection *(high priority)*
-*Reference: `text/selection/TextFieldSelectionManager.kt`, `text/selection/SelectionHandles.kt`*
-- [x] Shift+Arrow selection extension (including Shift+Up/Down)
-- [x] Selection highlighting with `selectionBrush`
-- [x] `Ctrl+A` select all
-- [x] Click-and-drag to select text range
-- [x] Double-click to select word
-- [x] Triple-click to select line/all
-
-#### Cursor Navigation *(completed)*
-*Reference: `text/TextFieldKeyInput.kt`, `text/KeyMapping.kt`*
-- [x] Arrow keys (Left/Right move cursor)
-- [x] Arrow keys Up/Down for multiline navigation (with column preservation)
-- [x] `Ctrl+Left/Right` to skip words
-- [x] `Home/End` keys (line-based, Ctrl+Home/End for document)
-- [ ] `PageUp/PageDown` for multiline
-
-#### Clipboard Operations *(completed)*
-*Reference: `text/ClipboardEventsHandler.kt`*
-- [x] `Ctrl+C` copy selected text (desktop + web)
-- [x] `Ctrl+X` cut selected text (desktop + web)
-- [x] `Ctrl+V` paste from clipboard (desktop + web)
-- [x] Platform-specific clipboard integration
-  - Desktop: arboard with persistent Clipboard (Linux X11 fix)
-  - Web: browser native copy/paste/cut events
-  - Linux: PRIMARY selection (middle-click paste)
-
 #### Undo/Redo System *(completed)*
 *Reference: `text/input/TextUndoManager.kt`, `text/input/UndoState.kt`*
-- [x] `Ctrl+Z` undo last edit
-- [x] `Ctrl+Y` / `Ctrl+Shift+Z` redo
-- [x] Edit history with configurable capacity (100 states)
 - [ ] `TextUndoManager` with staging area for merging edits
 - [ ] Smart merging of consecutive character insertions
 
@@ -88,8 +46,6 @@
 - [ ] Context menu (right-click/long-press)
 - [ ] `InputTransformation` for input filtering
 - [ ] `OutputTransformation` for display formatting
-- [x] Multiline support with vertical scrolling
-- [x] Web keyboard event handling (keydown/keyup)
 
 ### Lazy Layout System
 *Reference: `compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/`*
@@ -139,39 +95,6 @@
 - [ ] `SubcomposeLayout` for measurement-time composition
 - [ ] `SubcomposeLayoutState`
 - [ ] Slot reuse tracking
-
----
-
-## 🟢 P2: Material Design Library
-
-### Material3 Crate (`compose-material3`)
-*Reference: `compose/material3/material3/`*
-- [ ] Theme system (ColorScheme, Typography, Shapes)
-- [ ] `MaterialTheme` composable
-- [ ] Surface, Card
-- [ ] Button variants (Filled, Outlined, Text, Icon)
-- [ ] TextField with Material styling
-- [ ] TopAppBar, Scaffold
-- [ ] Dialog, BottomSheet
-- [ ] Snackbar, Toast
-- [ ] Checkbox, RadioButton, Switch
-- [ ] Slider, ProgressIndicator
-
----
-
-## ✅ Recently Completed
-
-- [x] LayoutNode + NodeCoordinator architecture
-- [x] NodeChain with O(n) modifier diffing
-- [x] ModifierNodeElement trait (1:1 with Compose)
-- [x] PointerInputModifierNode + HitPathTracker
-- [x] DrawModifierNode, LayoutModifierNode
-- [x] SemanticsModifierNode (basic)
-- [x] Scroll gesture handling
-- [x] Layout invalidation (scoped repasses)
-- [x] Web platform (WASM + WebGL2)
-- [x] Android platform support
-- [x] Robot testing framework
 
 ---
 

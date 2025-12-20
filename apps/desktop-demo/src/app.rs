@@ -14,8 +14,10 @@ use std::cell::RefCell;
 
 mod mineswapper2;
 mod web_fetch;
+pub mod lazy_list;
 
 use web_fetch::web_fetch_example;
+use lazy_list::lazy_list_example;
 
 thread_local! {
     pub static TEST_COMPOSITION_LOCAL_COUNTER: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
@@ -31,6 +33,7 @@ pub enum DemoTab {
     TextInput,
     Layout,
     ModifierShowcase,
+    LazyList,
     Mineswapper2,
 }
 
@@ -44,6 +47,7 @@ impl DemoTab {
             DemoTab::TextInput => "Text Input",
             DemoTab::Layout => "Recursive Layout",
             DemoTab::ModifierShowcase => "Modifiers Showcase",
+            DemoTab::LazyList => "Lazy List",
             DemoTab::Mineswapper2 => "Mineswapper2",
         }
     }
@@ -192,6 +196,7 @@ pub fn combined_app() {
                     render_tab_button(DemoTab::TextInput);
                     render_tab_button(DemoTab::Layout);
                     render_tab_button(DemoTab::ModifierShowcase);
+                    render_tab_button(DemoTab::LazyList);
                     render_tab_button(DemoTab::Mineswapper2);
                 },
             );
@@ -215,6 +220,7 @@ pub fn combined_app() {
                 DemoTab::TextInput => text_input_example(),
                 DemoTab::Layout => recursive_layout_example(),
                 DemoTab::ModifierShowcase => modifier_showcase_tab(),
+                DemoTab::LazyList => lazy_list_example(),
                 DemoTab::Mineswapper2 => mineswapper2::mineswapper2_tab(),
             });
         },

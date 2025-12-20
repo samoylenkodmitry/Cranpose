@@ -70,6 +70,9 @@ pub use primitives::{
     BoxWithConstraintsScope, BoxWithConstraintsScopeImpl, Button, Column, ColumnSpec, ForEach,
     Layout, LayoutNode, Row, RowSpec, Spacer, SubcomposeLayout, Text,
 };
+// Lazy list exports - single source from compose-foundation
+pub use compose_foundation::lazy::{LazyListItemInfo, LazyListLayoutInfo, LazyListState};
+pub use widgets::lazy_list::{LazyColumn, LazyColumnSpec, LazyRow, LazyRowSpec};
 pub use render_state::{
     peek_focus_invalidation, peek_pointer_invalidation, peek_render_invalidation, peek_layout_invalidation,
     request_focus_invalidation, request_pointer_invalidation, request_render_invalidation, request_layout_invalidation,

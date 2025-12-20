@@ -1958,18 +1958,28 @@ impl Composer {
     }
 
     fn attach_to_parent(&self, id: NodeId) {
+        // IMPORTANT: Check parent_stack FIRST.
+        // During subcomposition, if there's an active parent (e.g., Row), 
+        // child nodes (e.g., Text) should attach to that parent, NOT to the
+        // subcompose frame. Only ROOT nodes (nodes with no active parent)
+        // should be added to the subcompose frame.
+        let mut parent_stack = self.parent_stack();
+        if let Some(frame) = parent_stack.last_mut() {
+            frame.new_children.push(id);
+            return;
+        }
+        drop(parent_stack);
+
+        // No active parent - check if we're in subcompose 
         let mut subcompose_stack = self.subcompose_stack();
         if let Some(frame) = subcompose_stack.last_mut() {
             frame.nodes.push(id);
             return;
         }
         drop(subcompose_stack);
-        let mut parent_stack = self.parent_stack();
-        if let Some(frame) = parent_stack.last_mut() {
-            frame.new_children.push(id);
-        } else {
-            self.set_root(Some(id));
-        }
+        
+        // Neither parent nor subcompose - must be root
+        self.set_root(Some(id));
     }
 
     pub fn with_node_mut<N: Node + 'static, R>(
