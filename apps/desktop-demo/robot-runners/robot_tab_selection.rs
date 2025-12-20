@@ -15,7 +15,7 @@
 
 use desktop_app::app;
 use compose_app::AppLauncher;
-use compose_testing::{find_text_in_semantics, find_by_text_recursive, find_button_in_semantics};
+use compose_testing::{find_text_in_semantics, find_button_in_semantics};
 use std::time::Duration;
 
 fn main() {

@@ -49,7 +49,7 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(500));
             } else {
                 println!("✗ Failed to find Async Runtime tab");
-                std::process::exit(1);
+                let _ = robot.exit();
             }
 
             // Verify we are on Async Runtime tab
@@ -62,7 +62,7 @@ fn main() {
                 println!("✓ Verified we are on Async Runtime tab");
             } else {
                 println!("✗ Failed to verify Async Runtime tab content");
-                std::process::exit(1);
+                let _ = robot.exit();
             }
 
             // 2. Click the pause button
@@ -90,7 +90,7 @@ fn main() {
                 for root in semantics.iter() {
                     print_all_texts(root, 0);
                 }
-                std::process::exit(1);
+                let _ = robot.exit();
             }
 
             // 3. Verify the button text changed
@@ -105,7 +105,7 @@ fn main() {
                 println!("✓ Button text changed to 'Resume animation'");
                 println!("\n=== Test Summary ===");
                 println!("✓ ALL TESTS PASSED");
-                std::process::exit(0);
+                let _ = robot.exit();
             } else {
                 // Check if pause button still shows "Pause Animation"
                 let still_pause = semantics.iter().any(|root| 
@@ -122,7 +122,7 @@ fn main() {
                         print_all_texts(root, 0);
                     }
                 }
-                std::process::exit(1);
+                let _ = robot.exit();
             }
         })
         .run(app::combined_app);

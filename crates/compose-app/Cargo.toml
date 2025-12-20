@@ -10,10 +10,11 @@ android = ["compose-platform-android", "dep:android-activity", "dep:android_logg
 web = ["compose-platform-web", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys"]
 renderer-pixels = ["compose-render-pixels", "dep:pixels"]
 renderer-wgpu = ["compose-render-wgpu", "dep:wgpu", "dep:pollster"]
-robot = ["dep:compose-ui"] # Enable robot testing support
+robot = [] # Enable robot testing support (compose-ui now always included)
 
 [dependencies]
 compose-app-shell = { path = "../compose-app-shell" }
+compose-ui = { path = "../compose-ui" }
 compose-platform-desktop-winit = { path = "../compose-platform/desktop-winit", optional = true }
 compose-platform-android = { path = "../compose-platform/android", optional = true }
 compose-platform-web = { path = "../compose-platform/web", optional = true }
@@ -44,9 +45,13 @@ web-sys = { version = "0.3", optional = true, features = [
     "WheelEvent",
     "KeyboardEvent",
     "CssStyleDeclaration",
+    # Clipboard support
+    "Navigator",
+    "Clipboard",
+    "ClipboardEvent",
+    "DataTransfer",
 ] }
 log = "0.4"
-compose-ui = { path = "../compose-ui", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"

@@ -55,10 +55,8 @@ impl Renderer for PixelsRenderer {
         layout_tree: &LayoutTree,
         _viewport: Size,
     ) -> Result<(), Self::Error> {
-        eprintln!("DEBUG rebuild_scene called");
         self.scene.clear();
         pipeline::render_layout_tree(layout_tree.root(), &mut self.scene);
-        eprintln!("DEBUG rebuild_scene completed");
         Ok(())
     }
 }

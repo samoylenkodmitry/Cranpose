@@ -29,12 +29,67 @@
 
 ### Text Input System
 *Reference: `compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/`*
-- [ ] `BasicTextField` composable
-- [ ] `TextFieldState` with cursor, selection, IME
-- [ ] Selection handles and magnifier
-- [ ] `KeyboardOptions` / `KeyboardActions`
-- [ ] Clipboard operations
-- [ ] `UndoManager` for edit history
+
+**Completed ✅:**
+- [x] `BasicTextField` composable with basic editing
+- [x] `TextFieldState` with cursor position, selection range
+- [x] Cursor blinking animation (500ms on/off)
+- [x] Click-to-position cursor (text measurement based)
+- [x] Space key input handling
+- [x] Dynamic text field resizing
+- [x] Focus switching between fields
+- [x] Global focus tracking (thread-safe AtomicBool)
+
+**In Progress / Next Steps:**
+
+#### Text Selection *(high priority)*
+*Reference: `text/selection/TextFieldSelectionManager.kt`, `text/selection/SelectionHandles.kt`*
+- [x] Shift+Arrow selection extension (including Shift+Up/Down)
+- [x] Selection highlighting with `selectionBrush`
+- [x] `Ctrl+A` select all
+- [x] Click-and-drag to select text range
+- [x] Double-click to select word
+- [x] Triple-click to select line/all
+
+#### Cursor Navigation *(completed)*
+*Reference: `text/TextFieldKeyInput.kt`, `text/KeyMapping.kt`*
+- [x] Arrow keys (Left/Right move cursor)
+- [x] Arrow keys Up/Down for multiline navigation (with column preservation)
+- [x] `Ctrl+Left/Right` to skip words
+- [x] `Home/End` keys (line-based, Ctrl+Home/End for document)
+- [ ] `PageUp/PageDown` for multiline
+
+#### Clipboard Operations *(completed)*
+*Reference: `text/ClipboardEventsHandler.kt`*
+- [x] `Ctrl+C` copy selected text (desktop + web)
+- [x] `Ctrl+X` cut selected text (desktop + web)
+- [x] `Ctrl+V` paste from clipboard (desktop + web)
+- [x] Platform-specific clipboard integration
+  - Desktop: arboard with persistent Clipboard (Linux X11 fix)
+  - Web: browser native copy/paste/cut events
+  - Linux: PRIMARY selection (middle-click paste)
+
+#### Undo/Redo System *(completed)*
+*Reference: `text/input/TextUndoManager.kt`, `text/input/UndoState.kt`*
+- [x] `Ctrl+Z` undo last edit
+- [x] `Ctrl+Y` / `Ctrl+Shift+Z` redo
+- [x] Edit history with configurable capacity (100 states)
+- [ ] `TextUndoManager` with staging area for merging edits
+- [ ] Smart merging of consecutive character insertions
+
+#### Keyboard Options *(lower priority)*
+*Reference: `text/KeyboardOptions.kt`, `text/KeyboardActions.kt`*
+- [ ] `KeyboardOptions` (capitalization, autoCorrect, keyboardType)
+- [ ] `KeyboardActions` (onDone, onNext, onSearch, etc.)
+- [ ] IME action handling
+
+#### Advanced Features *(future)*
+- [ ] Selection handles and magnifier (mobile)
+- [ ] Context menu (right-click/long-press)
+- [ ] `InputTransformation` for input filtering
+- [ ] `OutputTransformation` for display formatting
+- [x] Multiline support with vertical scrolling
+- [x] Web keyboard event handling (keydown/keyup)
 
 ### Lazy Layout System
 *Reference: `compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/`*
@@ -133,4 +188,15 @@ When implementing, refer to these key Compose source files:
 | HitPathTracker | `ui/ui/src/commonMain/kotlin/androidx/compose/ui/input/pointer/HitPathTracker.kt` |
 | LazyList | `foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/LazyList.kt` |
 | BasicTextField | `foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/BasicTextField.kt` |
+| TextFieldState | `foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/input/TextFieldState.kt` |
+| TextUndoManager | `foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/input/TextUndoManager.kt` |
+| TextFieldSelectionManager | `foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/selection/TextFieldSelectionManager.kt` |
+| TextFieldKeyInput | `foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/TextFieldKeyInput.kt` |
+| ClipboardEventsHandler | `foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/ClipboardEventsHandler.kt` |
 | AnimatedVisibility | `animation/animation/src/commonMain/kotlin/androidx/compose/animation/AnimatedVisibility.kt` |
+
+## Cleanup
+cargo clippy
+cargo test
+cargo tree --duplicates
+(+robot tests)

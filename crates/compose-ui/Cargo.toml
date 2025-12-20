@@ -15,6 +15,8 @@ compose-ui-graphics = { path = "../compose-ui-graphics" }
 indexmap = "2"
 smallvec = "1.13"
 futures-task = "0.3"
+# WASM-compatible time (uses performance.now on web)
+instant = { version = "0.1", features = ["wasm-bindgen"] }
 
 [features]
 default = []

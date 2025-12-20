@@ -155,32 +155,190 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
             .expect("text metrics cache poisoned")
             .get_or_measure(text, measure_text_impl)
     }
+    
+    fn get_offset_for_position(&self, text: &str, x: f32, _y: f32) -> usize {
+        if text.is_empty() {
+            return 0;
+        }
+        
+        let scale = Scale::uniform(TEXT_SIZE);
+        let font = &*FONT;
+        let v_metrics = font.v_metrics(scale);
+        let origin = point(0.0, v_metrics.ascent);
+        
+        // Find the glyph whose center is closest to x
+        let mut best_offset = 0;
+        let mut best_distance = f32::INFINITY;
+        let mut current_byte_offset = 0;
+        
+        for c in text.chars() {
+            // Get glyph position for this character
+            let prefix = &text[..current_byte_offset];
+            let mut glyph_x = 0.0f32;
+            
+            // Measure prefix width to get glyph start position
+            for glyph in font.layout(prefix, scale, origin) {
+                if let Some(bb) = glyph.pixel_bounding_box() {
+                    glyph_x = bb.max.x as f32;
+                }
+            }
+            
+            // Get width of current character to find center
+            let char_str = &text[current_byte_offset..current_byte_offset + c.len_utf8()];
+            let char_width = {
+                let mut w = 0.0f32;
+                for glyph in font.layout(char_str, scale, origin) {
+                    if let Some(bb) = glyph.pixel_bounding_box() {
+                        w = (bb.max.x - bb.min.x) as f32;
+                    }
+                }
+                w.max(TEXT_SIZE * 0.5) // Minimum width for whitespace
+            };
+            
+            // Check distance to left edge of character
+            let left_dist = (x - glyph_x).abs();
+            if left_dist < best_distance {
+                best_distance = left_dist;
+                best_offset = current_byte_offset;
+            }
+            
+            // Check distance to right edge (= after this character)
+            let right_x = glyph_x + char_width;
+            let right_dist = (x - right_x).abs();
+            if right_dist < best_distance {
+                best_distance = right_dist;
+                best_offset = current_byte_offset + c.len_utf8();
+            }
+            
+            current_byte_offset += c.len_utf8();
+        }
+        
+        // Also check end of text
+        let total_width = measure_text_impl(text).width;
+        let end_dist = (x - total_width).abs();
+        if end_dist < best_distance {
+            best_offset = text.len();
+        }
+        
+        best_offset
+    }
+    
+    fn get_cursor_x_for_offset(&self, text: &str, offset: usize) -> f32 {
+        let clamped_offset = offset.min(text.len());
+        if clamped_offset == 0 {
+            return 0.0;
+        }
+        
+        // Measure text up to offset
+        let prefix = &text[..clamped_offset];
+        measure_text_impl(prefix).width
+    }
+    
+    fn layout(&self, text: &str) -> compose_ui::text_layout_result::TextLayoutResult {
+        use compose_ui::text_layout_result::{TextLayoutResult, LineLayout};
+        
+        let scale = Scale::uniform(TEXT_SIZE);
+        let font = &*FONT;
+        let v_metrics = font.v_metrics(scale);
+        let line_height = (v_metrics.ascent - v_metrics.descent).ceil();
+        let _origin = point(0.0, v_metrics.ascent);
+        
+        let mut glyph_x_positions = Vec::new();
+        let mut char_to_byte = Vec::new();
+        let mut lines = Vec::new();
+        let mut current_x = 0.0f32;
+        let mut line_start = 0;
+        let mut y = 0.0f32;
+        
+        // Build glyph positions
+        for (byte_offset, c) in text.char_indices() {
+            glyph_x_positions.push(current_x);
+            char_to_byte.push(byte_offset);
+            
+            if c == '\n' {
+                lines.push(LineLayout {
+                    start_offset: line_start,
+                    end_offset: byte_offset,
+                    y,
+                    height: line_height,
+                });
+                line_start = byte_offset + 1;
+                y += line_height;
+                current_x = 0.0;
+            } else {
+                // Get glyph advance
+                let glyph = font.glyph(c).scaled(scale);
+                current_x += glyph.h_metrics().advance_width;
+            }
+        }
+        
+        // Add end position
+        glyph_x_positions.push(current_x);
+        char_to_byte.push(text.len());
+        
+        // Add final line
+        lines.push(LineLayout {
+            start_offset: line_start,
+            end_offset: text.len(),
+            y,
+            height: line_height,
+        });
+        
+        let metrics = measure_text_impl(text);
+        TextLayoutResult::new(
+            metrics.width,
+            metrics.height,
+            line_height,
+            glyph_x_positions,
+            char_to_byte,
+            lines,
+            text,
+        )
+    }
 }
 
 fn measure_text_impl(text: &str) -> TextMetrics {
     let scale = Scale::uniform(TEXT_SIZE);
     let font = &*FONT;
     let v_metrics = font.v_metrics(scale);
-    let origin = point(0.0, v_metrics.ascent);
-    let mut glyph_count = 0_u32;
-    let mut min_x: f32 = f32::INFINITY;
-    let mut max_x: f32 = 0.0;
-    for glyph in font.layout(text, scale, origin) {
-        glyph_count += 1;
-        if let Some(bb) = glyph.pixel_bounding_box() {
-            min_x = min_x.min(bb.min.x as f32);
-            max_x = max_x.max(bb.max.x as f32);
+    let line_height = (v_metrics.ascent - v_metrics.descent).ceil();
+    
+    // Split by newlines for multiline support
+    let lines: Vec<&str> = text.split('\n').collect();
+    let line_count = lines.len().max(1);
+    
+    // Measure max width across all lines
+    let mut max_width: f32 = 0.0;
+    for line in &lines {
+        let origin = point(0.0, v_metrics.ascent);
+        let mut min_x: f32 = f32::INFINITY;
+        let mut line_max_x: f32 = 0.0;
+        let mut glyph_count = 0_u32;
+        
+        for glyph in font.layout(line, scale, origin) {
+            glyph_count += 1;
+            if let Some(bb) = glyph.pixel_bounding_box() {
+                min_x = min_x.min(bb.min.x as f32);
+                line_max_x = line_max_x.max(bb.max.x as f32);
+            }
         }
+        
+        let line_width = if glyph_count == 0 {
+            0.0
+        } else if min_x.is_infinite() {
+            line_max_x
+        } else {
+            (line_max_x - min_x).max(0.0)
+        };
+        max_width = max_width.max(line_width);
     }
-    let width = if glyph_count == 0 {
-        0.0
-    } else if min_x.is_infinite() {
-        max_x
-    } else {
-        (max_x - min_x).max(0.0)
-    };
-    let height = (v_metrics.ascent - v_metrics.descent).ceil();
-    TextMetrics { width, height }
+    
+    TextMetrics { 
+        width: max_width, 
+        height: line_count as f32 * line_height,
+        line_height,
+        line_count,
+    }
 }
 
 pub fn draw_scene(frame: &mut [u8], width: u32, height: u32, scene: &Scene) {

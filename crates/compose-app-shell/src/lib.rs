@@ -6,7 +6,7 @@ use std::fmt::Debug;
 // Use instant crate for cross-platform time support (native + WASM)
 use instant::Instant;
 
-use compose_core::{location_key, Applier, Composition, Key, MemoryApplier, NodeError};
+use compose_core::{enter_event_handler, exit_event_handler, location_key, run_in_mutable_snapshot, Applier, Composition, Key, MemoryApplier, NodeError};
 use compose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEventKind};
 use compose_render_common::{HitTestTarget, RenderScene, Renderer};
 use compose_runtime_std::StdRuntime;
@@ -19,6 +19,9 @@ use compose_ui::{
 };
 use compose_ui_graphics::{Point, Size};
 use hit_path_tracker::{HitPathTracker, PointerId};
+
+// Re-export key event types for use by compose-app
+pub use compose_ui::{KeyCode, KeyEvent, KeyEventType, Modifiers};
 
 pub struct AppShell<R>
 where
@@ -45,7 +48,9 @@ where
     /// - On Move/Up/Cancel: resolve fresh HitTargets from current scene
     /// - Handler closures are preserved (same Rc), so internal state survives
     hit_path_tracker: HitPathTracker,
-
+    /// Persistent clipboard for desktop (Linux X11 requires clipboard to stay alive)
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
+    clipboard: Option<arboard::Clipboard>,
 }
 
 impl<R> AppShell<R>
@@ -76,7 +81,8 @@ where
             is_dirty: true,
             buttons_pressed: PointerButtons::NONE,
             hit_path_tracker: HitPathTracker::new(),
-
+            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
+            clipboard: arboard::Clipboard::new().ok(),
         };
         shell.process_frame();
         shell
@@ -132,9 +138,12 @@ where
         self.runtime.take_frame_request() || self.composition.should_render()
     }
 
-    /// Returns true if the shell needs to redraw (dirty flag or active animations).
+    /// Returns true if the shell needs to redraw (dirty flag, layout dirty, active animations).
+    /// Note: Cursor blink is now timer-based and uses WaitUntil scheduling, not continuous redraw.
     pub fn needs_redraw(&self) -> bool {
-        self.is_dirty || self.has_active_animations()
+        self.is_dirty 
+            || self.layout_dirty 
+            || self.has_active_animations()
     }
 
     /// Marks the shell as dirty, indicating a redraw is needed.
@@ -145,6 +154,12 @@ where
     /// Returns true if there are active animations or pending recompositions.
     pub fn has_active_animations(&self) -> bool {
         self.runtime.take_frame_request() || self.composition.should_render()
+    }
+
+    /// Returns the next scheduled event time for cursor blink.
+    /// Use this for `ControlFlow::WaitUntil` scheduling.
+    pub fn next_event_time(&self) -> Option<instant::Instant> {
+        compose_ui::next_cursor_blink_time()
     }
 
     /// Resolves cached NodeIds to fresh HitTargets from the current scene.
@@ -261,6 +276,13 @@ where
     }
 
     pub fn pointer_pressed(&mut self) -> bool {
+        enter_event_handler();
+        let result = self.pointer_pressed_inner();
+        exit_event_handler();
+        result
+    }
+    
+    fn pointer_pressed_inner(&mut self) -> bool {
         // Track button state
         self.buttons_pressed.insert(PointerButton::Primary);
         
@@ -299,6 +321,13 @@ where
     }
 
     pub fn pointer_released(&mut self) -> bool {
+        enter_event_handler();
+        let result = self.pointer_released_inner();
+        exit_event_handler();
+        result
+    }
+    
+    fn pointer_released_inner(&mut self) -> bool {
         // UP events report buttons as "currently pressed" (after release),
         // matching typical platform semantics where primary is already gone.
         self.buttons_pressed.remove(PointerButton::Primary);
@@ -355,6 +384,194 @@ where
             }
             self.mark_dirty();
         }
+    }
+    /// Routes a keyboard event to the focused text field, if any.
+    ///
+    /// Returns `true` if the event was consumed by a text field.
+    ///
+    /// On desktop, Ctrl+C/X/V are handled here with system clipboard (arboard).
+    /// On web, these keys are NOT handled here - they bubble to browser for native copy/paste events.
+    pub fn on_key_event(&mut self, event: &KeyEvent) -> bool {
+        enter_event_handler();
+        let result = self.on_key_event_inner(event);
+        exit_event_handler();
+        result
+    }
+    
+    /// Internal keyboard event handler wrapped by on_key_event.
+    fn on_key_event_inner(&mut self, event: &KeyEvent) -> bool {
+        use KeyEventType::KeyDown;
+        
+        // Only process KeyDown events for clipboard shortcuts
+        if event.event_type == KeyDown && event.modifiers.command_or_ctrl() {
+            // Desktop-only clipboard handling via arboard
+            // Use persistent self.clipboard to keep content alive on Linux X11
+            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
+            {
+                match event.key_code {
+                    // Ctrl+C - Copy
+                    KeyCode::C => {
+                        // Get text first, then access clipboard to avoid borrow conflict
+                        let text = self.on_copy();
+                        if let (Some(text), Some(clipboard)) = (text, self.clipboard.as_mut()) {
+                            let _ = clipboard.set_text(&text);
+                            return true;
+                        }
+                    }
+                    // Ctrl+X - Cut
+                    KeyCode::X => {
+                        // Get text first (this also deletes it), then access clipboard
+                        let text = self.on_cut();
+                        if let (Some(text), Some(clipboard)) = (text, self.clipboard.as_mut()) {
+                            let _ = clipboard.set_text(&text);
+                            self.mark_dirty();
+                            self.layout_dirty = true;
+                            return true;
+                        }
+                    }
+                    // Ctrl+V - Paste
+                    KeyCode::V => {
+                        // Get text from clipboard first, then paste
+                        let text = self.clipboard.as_mut().and_then(|cb| cb.get_text().ok());
+                        if let Some(text) = text {
+                            if self.on_paste(&text) {
+                                return true;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        
+        // Pure O(1) dispatch - no tree walking needed
+        if !compose_ui::text_field_focus::has_focused_field() {
+            return false;
+        }
+        
+        // Wrap key event handling in a mutable snapshot so changes are atomically applied.
+        // This ensures keyboard input modifications are visible to subsequent snapshot contexts
+        // (like button click handlers that run in their own mutable snapshots).
+        let handled = run_in_mutable_snapshot(|| {
+            // O(1) dispatch via stored handler - handles ALL text input key events
+            // No fallback needed since handler now handles arrows, Home/End, word nav
+            compose_ui::text_field_focus::dispatch_key_event(event)
+        }).unwrap_or(false);
+        
+        if handled {
+            // Mark both dirty (for redraw) and layout_dirty (to rebuild semantics tree)
+            self.mark_dirty();
+            self.layout_dirty = true;
+        }
+        
+        handled
+    }
+    
+    /// Handles paste event from platform clipboard.
+    /// Returns `true` if the paste was consumed by a focused text field.
+    /// O(1) operation using stored handler.
+    pub fn on_paste(&mut self, text: &str) -> bool {
+        // Wrap paste in a mutable snapshot so changes are atomically applied.
+        // This ensures paste modifications are visible to subsequent snapshot contexts
+        // (like button click handlers that run in their own mutable snapshots).
+        let handled = run_in_mutable_snapshot(|| {
+            compose_ui::text_field_focus::dispatch_paste(text)
+        }).unwrap_or(false);
+        
+        if handled {
+            self.mark_dirty();
+            self.layout_dirty = true;
+        }
+        
+        handled
+    }
+    
+    /// Handles copy request from platform.
+    /// Returns the selected text from focused text field, or None.
+    /// O(1) operation using stored handler.
+    pub fn on_copy(&mut self) -> Option<String> {
+        // Use O(1) dispatch instead of tree scan
+        compose_ui::text_field_focus::dispatch_copy()
+    }
+    
+    /// Handles cut request from platform.
+    /// Returns the cut text from focused text field, or None.
+    /// O(1) operation using stored handler.
+    pub fn on_cut(&mut self) -> Option<String> {
+        // Use O(1) dispatch instead of tree scan
+        let text = compose_ui::text_field_focus::dispatch_cut();
+        
+        if text.is_some() {
+            self.mark_dirty();
+            self.layout_dirty = true;
+        }
+        
+        text
+    }
+    
+    /// Sets the Linux primary selection (for middle-click paste).
+    /// This is called when text is selected in a text field.
+    /// On non-Linux platforms, this is a no-op.
+    #[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+    pub fn set_primary_selection(&mut self, text: &str) {
+        use arboard::{SetExtLinux, LinuxClipboardKind};
+        if let Some(ref mut clipboard) = self.clipboard {
+            let result = clipboard.set()
+                .clipboard(LinuxClipboardKind::Primary)
+                .text(text.to_string());
+            if let Err(e) = result {
+                // Primary selection may not be available on all systems
+                log::debug!("Primary selection set failed: {:?}", e);
+            }
+        }
+    }
+    
+    /// Gets text from the Linux primary selection (for middle-click paste).
+    /// On non-Linux platforms, returns None.
+    #[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+    pub fn get_primary_selection(&mut self) -> Option<String> {
+        use arboard::{GetExtLinux, LinuxClipboardKind};
+        if let Some(ref mut clipboard) = self.clipboard {
+            clipboard.get()
+                .clipboard(LinuxClipboardKind::Primary)
+                .text()
+                .ok()
+        } else {
+            None
+        }
+    }
+    
+    /// Syncs the current text field selection to PRIMARY (Linux X11).
+    /// Call this when selection changes in a text field.
+    pub fn sync_selection_to_primary(&mut self) {
+        #[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+        {
+            if let Some(text) = self.on_copy() {
+                self.set_primary_selection(&text);
+            }
+        }
+    }
+    
+    /// Handles IME preedit (composition) events.
+    /// Called when the input method is composing text (e.g., typing CJK characters).
+    ///
+    /// - `text`: The current preedit text (empty to clear composition state)
+    /// - `cursor`: Optional cursor position within the preedit text (start, end)
+    ///
+    /// Returns `true` if a text field consumed the event.
+    pub fn on_ime_preedit(&mut self, text: &str, cursor: Option<(usize, usize)>) -> bool {
+        // Wrap in mutable snapshot for atomic changes
+        let handled = run_in_mutable_snapshot(|| {
+            compose_ui::text_field_focus::dispatch_ime_preedit(text, cursor)
+        }).unwrap_or(false);
+        
+        if handled {
+            self.mark_dirty();
+            // IME composition changes the visible text, needs layout update
+            self.layout_dirty = true;
+        }
+        
+        handled
     }
 
     pub fn log_debug_info(&mut self) {
@@ -428,19 +645,23 @@ where
         // If you see this firing frequently during normal interactions,
         // someone is abusing request_layout_invalidation() - investigate!
         let invalidation_requested = take_layout_invalidation();
-        let did_scoped_repass = self.layout_dirty; // True if we just processed repass_nodes above
         
-        if invalidation_requested && !did_scoped_repass {
+        // If invalidation was requested (e.g., text field content changed),
+        // we must invalidate caches AND mark for remeasure so intrinsic sizes are recalculated.
+        // This happens regardless of whether layout_dirty was already set from keyboard handling.
+        if invalidation_requested {
 
             // Invalidate all caches (O(app size) - expensive!)
             // This is internal-only API, only accessible via the internal path
             compose_ui::layout::invalidate_all_layout_caches();
             
-            // Mark root as needing layout so tree_needs_layout() returns true
+            // Mark root as needing layout AND measure so tree_needs_layout() returns true
+            // and intrinsic sizes are recalculated (e.g., text field resizing on content change)
             if let Some(root) = self.composition.root() {
                 let mut applier = self.composition.applier_mut();
                 if let Ok(node) = applier.get_mut(root) {
                     if let Some(layout_node) = node.as_any_mut().downcast_mut::<compose_ui::LayoutNode>() {
+                        layout_node.mark_needs_measure();
                         layout_node.mark_needs_layout();
                     }
                 }
@@ -465,7 +686,8 @@ where
             applier.set_runtime_handle(handle);
 
             // Selective measure optimization: skip layout if tree is clean (O(1) check)
-            let needs_layout =
+            // UNLESS layout_dirty was explicitly set (e.g., from keyboard input)
+            let tree_needs_layout_check =
                 compose_ui::tree_needs_layout(&mut *applier, root).unwrap_or_else(|err| {
                     log::warn!(
                         "Cannot check layout dirty status for root #{}: {}",
@@ -474,9 +696,14 @@ where
                     );
                     true // Assume dirty on error
                 });
+            
+            // Force layout if either:
+            // 1. Tree nodes are marked dirty (tree_needs_layout_check = true)
+            // 2. layout_dirty was explicitly set (e.g., from keyboard/external events)
+            let needs_layout = tree_needs_layout_check || self.layout_dirty;
 
             if !needs_layout {
-                // Tree is clean - skip layout computation and keep cached layout
+                // Tree is clean and no external dirtying - skip layout computation
                 log::trace!("Skipping layout: tree is clean");
                 self.layout_dirty = false;
                 applier.clear_runtime_handle();
@@ -561,7 +788,9 @@ where
         let render_dirty = take_render_invalidation();
         let pointer_dirty = take_pointer_invalidation();
         let focus_dirty = take_focus_invalidation();
-        if render_dirty || pointer_dirty || focus_dirty {
+        // Tick cursor blink timer - only marks dirty when visibility state changes
+        let cursor_blink_dirty = compose_ui::tick_cursor_blink();
+        if render_dirty || pointer_dirty || focus_dirty || cursor_blink_dirty {
             self.scene_dirty = true;
         }
         if !self.scene_dirty {

@@ -5,7 +5,7 @@ edition = "2021"
 
 [package.metadata.wasm-pack.profile.release]
 # Enable wasm-opt with size optimization (can reduce WASM size by 20-40%)
-wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-mutable-globals", "--enable-nontrapping-float-to-int", "--enable-sign-ext"]
+wasm-opt = ["-Oz"]
 
 # Support both binary (desktop) and cdylib (Android)
 # IMPORTANT: The cdylib name (libdesktop_app.so) must match the android.app.lib_name
@@ -83,10 +83,7 @@ name = "robot_demo"
 path = "robot-runners/robot_demo.rs"
 required-features = ["robot-app"]
 
-[[example]]
-name = "robot_scroll_drag"
-path = "robot-runners/robot_scroll_drag.rs"
-required-features = ["robot-app"]
+
 
 [[example]]
 name = "robot_tabs_scroll"
@@ -136,4 +133,39 @@ required-features = ["robot-app"]
 [[example]]
 name = "robot_async_pause"
 path = "robot-runners/robot_async_pause.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_text_input"
+path = "robot-runners/robot_text_input.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_reactive_state"
+path = "robot-runners/robot_reactive_state.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_drag_selection"
+path = "robot-runners/robot_drag_selection.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_double_click"
+path = "robot-runners/robot_double_click.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_multiline_nav"
+path = "robot-runners/robot_multiline_nav.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_copy_paste"
+path = "robot-runners/robot_copy_paste.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_multiline_click"
+path = "robot-runners/robot_multiline_click.rs"
 required-features = ["robot-app"]

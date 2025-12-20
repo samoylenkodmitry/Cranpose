@@ -14,7 +14,7 @@
 //!
 //! # Example Usage
 //!
-//! ```rust,ignore
+//! ```text
 //! use compose_foundation::{modifier_element, ModifierNodeChain, BasicModifierNodeContext};
 //! use compose_ui::{PaddingElement, EdgeInsets};
 //!
@@ -395,7 +395,7 @@ impl ModifierNode for BackgroundNode {
 }
 
 impl DrawModifierNode for BackgroundNode {
-    fn draw(&mut self, _context: &mut dyn ModifierNodeContext, _draw_scope: &mut dyn DrawScope) {
+    fn draw(&self, _draw_scope: &mut dyn DrawScope) {
         // Background rendering is now handled via draw commands collected in modifier slices.
         // This node exists primarily for capability tracking and future draw scope integration.
     }
@@ -486,7 +486,7 @@ impl ModifierNode for CornerShapeNode {
 }
 
 impl DrawModifierNode for CornerShapeNode {
-    fn draw(&mut self, _context: &mut dyn ModifierNodeContext, _draw_scope: &mut dyn DrawScope) {}
+    fn draw(&self, _draw_scope: &mut dyn DrawScope) {}
 }
 
 /// Element that creates and updates corner shape nodes.
@@ -1569,7 +1569,7 @@ impl ModifierNode for AlphaNode {
 }
 
 impl DrawModifierNode for AlphaNode {
-    fn draw(&mut self, _context: &mut dyn ModifierNodeContext, _draw_scope: &mut dyn DrawScope) {
+    fn draw(&self, _draw_scope: &mut dyn DrawScope) {
         // In a full implementation, this would:
         // 1. Save the current alpha/layer state
         // 2. Apply the alpha value to the graphics context
@@ -1659,7 +1659,7 @@ impl ModifierNode for ClipToBoundsNode {
 }
 
 impl DrawModifierNode for ClipToBoundsNode {
-    fn draw(&mut self, _context: &mut dyn ModifierNodeContext, _draw_scope: &mut dyn DrawScope) {}
+    fn draw(&self, _draw_scope: &mut dyn DrawScope) {}
 }
 
 /// Element that creates clip-to-bounds nodes.
@@ -1730,7 +1730,7 @@ impl ModifierNode for DrawCommandNode {
 }
 
 impl DrawModifierNode for DrawCommandNode {
-    fn draw(&mut self, _context: &mut dyn ModifierNodeContext, _draw_scope: &mut dyn DrawScope) {}
+    fn draw(&self, _draw_scope: &mut dyn DrawScope) {}
 }
 
 fn draw_command_tag(cmd: &DrawCommand) -> u8 {

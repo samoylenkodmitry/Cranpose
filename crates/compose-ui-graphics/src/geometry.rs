@@ -248,6 +248,8 @@ pub trait DrawScope {
     fn size(&self) -> Size;
     fn draw_content(&self);
     fn draw_rect(&mut self, brush: Brush);
+    /// Draws a rectangle at the specified position and size.
+    fn draw_rect_at(&mut self, rect: Rect, brush: Brush);
     fn draw_round_rect(&mut self, brush: Brush, radii: CornerRadii);
     fn into_primitives(self) -> Vec<DrawPrimitive>;
 }
@@ -279,6 +281,10 @@ impl DrawScope for DrawScopeDefault {
             rect: Rect::from_size(self.size),
             brush,
         });
+    }
+
+    fn draw_rect_at(&mut self, rect: Rect, brush: Brush) {
+        self.primitives.push(DrawPrimitive::Rect { rect, brush });
     }
 
     fn draw_round_rect(&mut self, brush: Brush, radii: CornerRadii) {

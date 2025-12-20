@@ -33,13 +33,76 @@ pub use snapshot_state_observer::SnapshotStateObserver;
 ///
 /// UI event handlers should wrap state mutations in this helper so that
 /// recomposition observes the updates atomically once the snapshot applies.
+///
+/// # Important
+/// ALL UI event handlers (keyboard, mouse, touch, animations, custom modifier nodes)
+/// that modify `MutableState` MUST use this function or [`dispatch_ui_event`].
+/// Without it, state changes may not be visible to other snapshot contexts.
 pub fn run_in_mutable_snapshot<T>(block: impl FnOnce() -> T) -> Result<T, &'static str> {
     let snapshot = snapshot_v2::take_mutable_snapshot(None, None);
+    
+    // Mark that we're in an applied snapshot context
+    IN_APPLIED_SNAPSHOT.with(|c| c.set(true));
     let value = snapshot.enter(block);
+    IN_APPLIED_SNAPSHOT.with(|c| c.set(false));
+    
     match snapshot.apply() {
         snapshot_v2::SnapshotApplyResult::Success => Ok(value),
         snapshot_v2::SnapshotApplyResult::Failure => Err("Snapshot apply failed"),
     }
+}
+
+/// Dispatches a UI event in a proper snapshot context.
+///
+/// This is a convenience wrapper around [`run_in_mutable_snapshot`] that returns
+/// `Option<T>` instead of `Result<T, &str>`.
+///
+/// # Example
+/// ```ignore
+/// // In a keyboard event handler:
+/// dispatch_ui_event(|| {
+///     text_field_state.edit(|buffer| {
+///         buffer.insert("a");
+///     });
+/// });
+/// ```
+pub fn dispatch_ui_event<T>(block: impl FnOnce() -> T) -> Option<T> {
+    run_in_mutable_snapshot(block).ok()
+}
+
+// ─── Event Handler Context Tracking ─────────────────────────────────────────
+//
+// These thread-locals track whether code is running in an event handler context
+// and whether it's properly wrapped in run_in_mutable_snapshot. This allows
+// debug-mode warnings when state is modified without proper snapshot handling.
+
+thread_local! {
+    /// Tracks if we're in a UI event handler context (keyboard, mouse, etc.)
+    pub(crate) static IN_EVENT_HANDLER: Cell<bool> = const { Cell::new(false) };
+    /// Tracks if we're in a properly-applied mutable snapshot
+    pub(crate) static IN_APPLIED_SNAPSHOT: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Marks the start of an event handler context.
+/// Call this at the start of keyboard/mouse/touch event handling.
+/// Use `run_in_mutable_snapshot` or `dispatch_ui_event` inside to ensure proper snapshot handling.
+pub fn enter_event_handler() {
+    IN_EVENT_HANDLER.with(|c| c.set(true));
+}
+
+/// Marks the end of an event handler context.
+pub fn exit_event_handler() {
+    IN_EVENT_HANDLER.with(|c| c.set(false));
+}
+
+/// Returns true if currently in an event handler context.
+pub fn in_event_handler() -> bool {
+    IN_EVENT_HANDLER.with(|c| c.get())
+}
+
+/// Returns true if currently in an applied snapshot context.
+pub fn in_applied_snapshot() -> bool {
+    IN_APPLIED_SNAPSHOT.with(|c| c.get())
 }
 
 #[cfg(test)]
@@ -352,7 +415,14 @@ pub fn withFrameMillis(callback: impl FnOnce(u64) + 'static) -> FrameCallbackReg
 
 #[allow(non_snake_case)]
 pub fn mutableStateOf<T: Clone + 'static>(initial: T) -> MutableState<T> {
-    with_current_composer(|composer| composer.mutable_state_of(initial))
+    // Get runtime handle from current composer if available, otherwise from global registry.
+    // IMPORTANT: We always use with_runtime() (not composer.mutable_state_of) because
+    // slot-based storage doesn't work for state objects that are cloned and shared
+    // across different composition contexts (like TextFieldState).
+    let runtime = with_current_composer_opt(|composer| composer.runtime_handle())
+        .or_else(runtime::current_runtime_handle)
+        .expect("mutableStateOf requires an active runtime. Create state inside a composition or after a Runtime is created.");
+    MutableState::with_runtime(initial, runtime)
 }
 
 #[allow(non_snake_case)]

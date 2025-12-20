@@ -217,7 +217,7 @@ impl Modifier {
     ///   drag right = scroll left (content moves right under finger).
     ///
     /// # Example
-    /// ```ignore
+    /// ```text
     /// let scroll_state = ScrollState::new(0.0);
     /// Row(
     ///     Modifier::empty().horizontal_scroll(scroll_state, false),

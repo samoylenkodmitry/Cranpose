@@ -58,7 +58,7 @@ fn main() {
                 println!("  Found 'Web Fetch' tab at center ({:.1}, {:.1})", cx, cy);
                 
                 // Click the tab (down + up quickly)
-                robot.mouse_move(cx, cy);
+                let _ = robot.mouse_move(cx, cy);
                 std::thread::sleep(Duration::from_millis(50));
                 let _ = robot.mouse_down();
                 std::thread::sleep(Duration::from_millis(50));
@@ -71,7 +71,7 @@ fn main() {
                 // Now move cursor to the RIGHT (without pressing any button)
                 println!("  Moving cursor 150px right (no button pressed)...");
                 for i in 0..15 {
-                    robot.mouse_move(cx + (i as f32 * 10.0), cy);
+                    let _ = robot.mouse_move(cx + (i as f32 * 10.0), cy);
                     std::thread::sleep(Duration::from_millis(30));
                 }
                 let _ = robot.wait_for_idle();
@@ -101,7 +101,7 @@ fn main() {
                     let cy = y + h/2.0;
                     println!("  Found 'Counter App' tab at center ({:.1}, {:.1})", cx, cy);
                     
-                    robot.mouse_move(cx, cy);
+                    let _ = robot.mouse_move(cx, cy);
                     std::thread::sleep(Duration::from_millis(50));
                     let _ = robot.mouse_down();
                     std::thread::sleep(Duration::from_millis(50));
@@ -113,7 +113,7 @@ fn main() {
                     
                     println!("  Moving cursor 150px right (no button pressed)...");
                     for i in 0..15 {
-                        robot.mouse_move(cx + (i as f32 * 10.0), cy);
+                        let _ = robot.mouse_move(cx + (i as f32 * 10.0), cy);
                         std::thread::sleep(Duration::from_millis(30));
                     }
                     let _ = robot.wait_for_idle();
@@ -140,10 +140,10 @@ fn main() {
             println!("\n\n=== Test Summary ===");
             if all_passed {
                 println!("✓ ALL TESTS PASSED");
-                std::process::exit(0);
+                let _ = robot.exit();
             } else {
                 println!("✗ SOME TESTS FAILED");
-                std::process::exit(1);
+                let _ = robot.exit();
             }
         })
         .run(|| {

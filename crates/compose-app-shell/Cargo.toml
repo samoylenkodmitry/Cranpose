@@ -18,3 +18,7 @@ instant = { version = "0.1", features = ["wasm-bindgen"] }
 
 [dev-dependencies]
 compose-macros = { path = "../compose-macros" }
+
+# Clipboard support (desktop only - not available on WASM or Android)
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+arboard = { version = "3.4", default-features = false }

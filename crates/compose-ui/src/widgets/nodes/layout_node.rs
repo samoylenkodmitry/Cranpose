@@ -495,6 +495,17 @@ impl LayoutNode {
     pub(crate) fn modifier_chain(&self) -> &ModifierChainHandle {
         &self.modifier_chain
     }
+
+    /// Access the text field modifier node (if present) with a mutable callback.
+    ///
+    /// This is used for keyboard event dispatch to text fields.
+    /// Returns `None` if no text field modifier is found in the chain.
+    pub fn with_text_field_modifier_mut<R>(
+        &mut self,
+        f: impl FnMut(&mut crate::TextFieldModifierNode) -> R,
+    ) -> Option<R> {
+        self.modifier_chain.with_text_field_modifier_mut(f)
+    }
 }
 impl Clone for LayoutNode {
     fn clone(&self) -> Self {

@@ -323,7 +323,7 @@ impl Modifier {
     /// how the modifier chain is structured at runtime.
     ///
     /// Example:
-    /// ```ignore
+    /// ```text
     /// Modifier::empty()
     ///     .padding(8.0)
     ///     .background(Color(1.0, 0.0, 0.0, 1.0))

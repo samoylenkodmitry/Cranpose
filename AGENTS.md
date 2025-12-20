@@ -15,3 +15,14 @@
 - Use `Option<T>` for values that can be absent.
 - Use `async`/`await` for asynchronous code; prefer `tokio` as the async runtime.
 - Document any architectural decisions in a `DECISIONS.md` file if applicable.
+- do proper review mitigation; don't short-cut and do a honest professional work; be very strict to your code & architecture decisions; keep repo clean and don't put unfinished parts here; fix everything
+- do not create a half-migrated state of the repo; don't "deprecate"; always changes the existing code
+- cargo clippy
+- cargo test
+- cargo tree --duplicates
+- (+robot tests)
+- instead of accepting the shortcut always choose to fix the underlying architecture issue
+- do not avoid and do not defer the big architecture refactoring when necessary
+- do a code review; look for any shortcuts, lazyness, taking the easy path instead of doing the hard necessary work, poor architectural choices, everything that will shoot in the foot, poorly written code like it was a deadline 1 minute before end of the work day; but not invent the problems if there arent any- don't fear the significant arch change; everything is still pre-alpha; this is the right time for a big change
+- do not ever git reset, always stash if needed
+- do not ever rm -rf, prefer mv to some _old name

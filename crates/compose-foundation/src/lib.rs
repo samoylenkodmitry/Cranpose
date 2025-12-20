@@ -7,6 +7,7 @@ pub mod measurement_proxy;
 pub mod modifier;
 pub mod modifier_helpers;
 pub mod nodes;
+pub mod text;
 
 // Re-export gesture constants at crate root for convenience
 pub use gesture_constants::DRAG_THRESHOLD;

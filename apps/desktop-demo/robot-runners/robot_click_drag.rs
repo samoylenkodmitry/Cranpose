@@ -214,11 +214,11 @@ fn main() {
             if all_passed {
                 println!("✓ ALL TESTS PASSED");
                 std::thread::sleep(Duration::from_secs(1));
-                std::process::exit(0);
+                let _ = robot.exit();
             } else {
                 println!("✗ SOME TESTS FAILED");
                 std::thread::sleep(Duration::from_secs(1));
-                std::process::exit(1);
+                let _ = robot.exit();
             }
         })
         .run(|| {

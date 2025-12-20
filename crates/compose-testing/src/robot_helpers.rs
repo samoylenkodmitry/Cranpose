@@ -55,6 +55,26 @@ pub fn find_text(elem: &SemanticElement, text: &str) -> Option<(f32, f32, f32, f
     None
 }
 
+/// Find an element by exact text content, returning bounds (x, y, width, height).
+pub fn find_text_exact(elem: &SemanticElement, text: &str) -> Option<(f32, f32, f32, f32)> {
+    if let Some(ref t) = elem.text {
+        if t == text {
+            return Some((
+                elem.bounds.x,
+                elem.bounds.y,
+                elem.bounds.width,
+                elem.bounds.height,
+            ));
+        }
+    }
+    for child in &elem.children {
+        if let Some(pos) = find_text_exact(child, text) {
+            return Some(pos);
+        }
+    }
+    None
+}
+
 /// Find an element by text content, returning center coordinates (x, y).
 pub fn find_text_center(elem: &SemanticElement, text: &str) -> Option<(f32, f32)> {
     find_text(elem, text).map(|(x, y, w, h)| (x + w / 2.0, y + h / 2.0))

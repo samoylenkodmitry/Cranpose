@@ -205,6 +205,195 @@ pub async fn run(canvas_id: &str, settings: AppSettings, content: impl FnMut() +
         closure.forget();
     }
 
+    // Set up keyboard event handlers
+    // Note: We need to listen on document (not canvas) for keyboard events
+    // unless the canvas has tabindex set and is focused
+    {
+        let app = app.clone();
+        let closure = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
+            use compose_app_shell::{KeyCode, KeyEvent, KeyEventType, Modifiers};
+            
+            // Convert web key code to our KeyCode
+            let key_code = match event.code().as_str() {
+                // Letters
+                "KeyA" => KeyCode::A, "KeyB" => KeyCode::B, "KeyC" => KeyCode::C,
+                "KeyD" => KeyCode::D, "KeyE" => KeyCode::E, "KeyF" => KeyCode::F,
+                "KeyG" => KeyCode::G, "KeyH" => KeyCode::H, "KeyI" => KeyCode::I,
+                "KeyJ" => KeyCode::J, "KeyK" => KeyCode::K, "KeyL" => KeyCode::L,
+                "KeyM" => KeyCode::M, "KeyN" => KeyCode::N, "KeyO" => KeyCode::O,
+                "KeyP" => KeyCode::P, "KeyQ" => KeyCode::Q, "KeyR" => KeyCode::R,
+                "KeyS" => KeyCode::S, "KeyT" => KeyCode::T, "KeyU" => KeyCode::U,
+                "KeyV" => KeyCode::V, "KeyW" => KeyCode::W, "KeyX" => KeyCode::X,
+                "KeyY" => KeyCode::Y, "KeyZ" => KeyCode::Z,
+                // Numbers
+                "Digit0" => KeyCode::Digit0, "Digit1" => KeyCode::Digit1,
+                "Digit2" => KeyCode::Digit2, "Digit3" => KeyCode::Digit3,
+                "Digit4" => KeyCode::Digit4, "Digit5" => KeyCode::Digit5,
+                "Digit6" => KeyCode::Digit6, "Digit7" => KeyCode::Digit7,
+                "Digit8" => KeyCode::Digit8, "Digit9" => KeyCode::Digit9,
+                // Navigation
+                "ArrowUp" => KeyCode::ArrowUp, "ArrowDown" => KeyCode::ArrowDown,
+                "ArrowLeft" => KeyCode::ArrowLeft, "ArrowRight" => KeyCode::ArrowRight,
+                "Home" => KeyCode::Home, "End" => KeyCode::End,
+                "PageUp" => KeyCode::PageUp, "PageDown" => KeyCode::PageDown,
+                // Editing
+                "Backspace" => KeyCode::Backspace, "Delete" => KeyCode::Delete,
+                "Enter" | "NumpadEnter" => KeyCode::Enter,
+                "Tab" => KeyCode::Tab, "Space" => KeyCode::Space,
+                "Escape" => KeyCode::Escape,
+                // Punctuation
+                "Minus" => KeyCode::Minus, "Equal" => KeyCode::Equal,
+                "BracketLeft" => KeyCode::BracketLeft, "BracketRight" => KeyCode::BracketRight,
+                "Backslash" => KeyCode::Backslash, "Semicolon" => KeyCode::Semicolon,
+                "Quote" => KeyCode::Quote, "Comma" => KeyCode::Comma,
+                "Period" => KeyCode::Period, "Slash" => KeyCode::Slash,
+                "Backquote" => KeyCode::Backquote,
+                _ => KeyCode::Unknown,
+            };
+            
+            let modifiers = Modifiers {
+                shift: event.shift_key(),
+                ctrl: event.ctrl_key(),
+                alt: event.alt_key(),
+                meta: event.meta_key(),
+            };
+            
+            // Get the text produced by this key (from event.key)
+            // Filter out long key names like "Shift", "Control", etc.
+            let text = {
+                let key = event.key();
+                if key.len() == 1 {
+                    key
+                } else {
+                    String::new()
+                }
+            };
+            
+            let key_event = KeyEvent {
+                key_code,
+                text,
+                modifiers,
+                event_type: KeyEventType::KeyDown,
+            };
+            
+            if let Ok(mut app_mut) = app.try_borrow_mut() {
+                if app_mut.on_key_event(&key_event) {
+                    event.prevent_default();
+                }
+            }
+        }) as Box<dyn FnMut(_)>);
+        document.add_event_listener_with_callback("keydown", closure.as_ref().unchecked_ref())?;
+        closure.forget();
+    }
+
+    {
+        let app = app.clone();
+        let closure = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
+            use compose_app_shell::{KeyCode, KeyEvent, KeyEventType, Modifiers};
+            
+            // Similar conversion for keyup
+            let key_code = match event.code().as_str() {
+                "KeyA" => KeyCode::A, "KeyB" => KeyCode::B, "KeyC" => KeyCode::C,
+                "KeyD" => KeyCode::D, "KeyE" => KeyCode::E, "KeyF" => KeyCode::F,
+                "KeyG" => KeyCode::G, "KeyH" => KeyCode::H, "KeyI" => KeyCode::I,
+                "KeyJ" => KeyCode::J, "KeyK" => KeyCode::K, "KeyL" => KeyCode::L,
+                "KeyM" => KeyCode::M, "KeyN" => KeyCode::N, "KeyO" => KeyCode::O,
+                "KeyP" => KeyCode::P, "KeyQ" => KeyCode::Q, "KeyR" => KeyCode::R,
+                "KeyS" => KeyCode::S, "KeyT" => KeyCode::T, "KeyU" => KeyCode::U,
+                "KeyV" => KeyCode::V, "KeyW" => KeyCode::W, "KeyX" => KeyCode::X,
+                "KeyY" => KeyCode::Y, "KeyZ" => KeyCode::Z,
+                "Digit0" => KeyCode::Digit0, "Digit1" => KeyCode::Digit1,
+                "Digit2" => KeyCode::Digit2, "Digit3" => KeyCode::Digit3,
+                "Digit4" => KeyCode::Digit4, "Digit5" => KeyCode::Digit5,
+                "Digit6" => KeyCode::Digit6, "Digit7" => KeyCode::Digit7,
+                "Digit8" => KeyCode::Digit8, "Digit9" => KeyCode::Digit9,
+                "ArrowUp" => KeyCode::ArrowUp, "ArrowDown" => KeyCode::ArrowDown,
+                "ArrowLeft" => KeyCode::ArrowLeft, "ArrowRight" => KeyCode::ArrowRight,
+                "Backspace" => KeyCode::Backspace, "Delete" => KeyCode::Delete,
+                "Enter" | "NumpadEnter" => KeyCode::Enter,
+                "Tab" => KeyCode::Tab, "Space" => KeyCode::Space,
+                _ => KeyCode::Unknown,
+            };
+            
+            let modifiers = Modifiers {
+                shift: event.shift_key(),
+                ctrl: event.ctrl_key(),
+                alt: event.alt_key(),
+                meta: event.meta_key(),
+            };
+            
+            let key_event = KeyEvent {
+                key_code,
+                text: String::new(), // KeyUp doesn't produce text
+                modifiers,
+                event_type: KeyEventType::KeyUp,
+            };
+            
+            if let Ok(mut app_mut) = app.try_borrow_mut() {
+                app_mut.on_key_event(&key_event);
+            }
+        }) as Box<dyn FnMut(_)>);
+        document.add_event_listener_with_callback("keyup", closure.as_ref().unchecked_ref())?;
+        closure.forget();
+    }
+    
+    // Set up paste event handler for clipboard paste
+    {
+        let app = app.clone();
+        let closure = Closure::wrap(Box::new(move |event: web_sys::ClipboardEvent| {
+            // Get pasted text from clipboardData (synchronous!)
+            if let Some(data) = event.clipboard_data() {
+                if let Ok(text) = data.get_data("text/plain") {
+                    if !text.is_empty() {
+                        if let Ok(mut app_mut) = app.try_borrow_mut() {
+                            if app_mut.on_paste(&text) {
+                                event.prevent_default();
+                            }
+                        }
+                    }
+                }
+            }
+        }) as Box<dyn FnMut(_)>);
+        document.add_event_listener_with_callback("paste", closure.as_ref().unchecked_ref())?;
+        closure.forget();
+    }
+    
+    // Set up copy event handler for clipboard copy
+    {
+        let app = app.clone();
+        let closure = Closure::wrap(Box::new(move |event: web_sys::ClipboardEvent| {
+            if let Ok(mut app_mut) = app.try_borrow_mut() {
+                if let Some(text) = app_mut.on_copy() {
+                    // Put copied text into the clipboard via the event
+                    if let Some(data) = event.clipboard_data() {
+                        let _ = data.set_data("text/plain", &text);
+                        event.prevent_default();
+                    }
+                }
+            }
+        }) as Box<dyn FnMut(_)>);
+        document.add_event_listener_with_callback("copy", closure.as_ref().unchecked_ref())?;
+        closure.forget();
+    }
+    
+    // Set up cut event handler for clipboard cut
+    {
+        let app = app.clone();
+        let closure = Closure::wrap(Box::new(move |event: web_sys::ClipboardEvent| {
+            if let Ok(mut app_mut) = app.try_borrow_mut() {
+                if let Some(text) = app_mut.on_cut() {
+                    // Put cut text into the clipboard via the event
+                    if let Some(data) = event.clipboard_data() {
+                        let _ = data.set_data("text/plain", &text);
+                        event.prevent_default();
+                    }
+                }
+            }
+        }) as Box<dyn FnMut(_)>);
+        document.add_event_listener_with_callback("cut", closure.as_ref().unchecked_ref())?;
+        closure.forget();
+    }
+
     // Render loop
     let render_loop = Rc::new(RefCell::new(None));
     let render_loop_clone = render_loop.clone();

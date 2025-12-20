@@ -96,6 +96,9 @@ fn register_runtime_handle(handle: &RuntimeHandle) {
     RUNTIME_HANDLES.with(|registry| {
         registry.borrow_mut().insert(handle.id, handle.clone());
     });
+    // Also set as LAST_RUNTIME so that mutableStateOf() can find it
+    // when called outside of a composition context.
+    LAST_RUNTIME.with(|slot| *slot.borrow_mut() = Some(handle.clone()));
 }
 
 pub(crate) fn runtime_handle_for(id: RuntimeId) -> Option<RuntimeHandle> {
@@ -840,7 +843,7 @@ thread_local! {
     static LAST_RUNTIME: RefCell<Option<RuntimeHandle>> = const { RefCell::new(None) };
 }
 
-fn current_runtime_handle() -> Option<RuntimeHandle> {
+pub(crate) fn current_runtime_handle() -> Option<RuntimeHandle> {
     if let Some(handle) = ACTIVE_RUNTIMES.with(|stack| stack.borrow().last().cloned()) {
         return Some(handle);
     }

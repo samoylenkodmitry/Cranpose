@@ -691,7 +691,7 @@ impl ModifierNode for TestDrawNode {
 }
 
 impl DrawModifierNode for TestDrawNode {
-    fn draw(&mut self, _context: &mut dyn ModifierNodeContext, _draw_scope: &mut dyn DrawScope) {
+    fn draw(&self, _draw_scope: &mut dyn DrawScope) {
         self.draw_count.set(self.draw_count.get() + 1);
     }
 }

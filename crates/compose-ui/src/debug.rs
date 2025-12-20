@@ -5,7 +5,7 @@
 //!
 //! # Usage
 //!
-//! ```rust,ignore
+//! ```text
 //! use compose_ui::{log_layout_tree, log_render_scene, log_screen_summary};
 //!
 //! // After computing layout

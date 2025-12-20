@@ -309,7 +309,7 @@ pub trait DelegatableNode {
 ///
 /// ### Example: Draw Node
 ///
-/// ```ignore
+/// ```text
 /// use compose_foundation::*;
 ///
 /// struct MyDrawNode {
@@ -337,7 +337,7 @@ pub trait DelegatableNode {
 ///
 /// ### Example: Multi-Capability Node
 ///
-/// ```ignore
+/// ```text
 /// impl ModifierNode for MyComplexNode {
 ///     // This node participates in draw, pointer input, and semantics
 ///     impl_modifier_node!(draw, pointer_input, semantics);
@@ -488,7 +488,7 @@ pub trait LayoutModifierNode: ModifierNode {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```text
     /// impl LayoutModifierNode for MyCustomLayoutNode {
     ///     fn create_measurement_proxy(&self) -> Option<Box<dyn MeasurementProxy>> {
     ///         Some(Box::new(MyCustomLayoutProxy {
@@ -509,11 +509,34 @@ pub trait LayoutModifierNode: ModifierNode {
 ///
 /// Draw nodes participate in the draw pass of the render pipeline. They can
 /// intercept and modify the drawing operations of their wrapped content.
+/// 
+/// Following Jetpack Compose's design, `draw()` is called during the actual
+/// render pass with a live DrawScope, not during layout/slice collection.
 pub trait DrawModifierNode: ModifierNode {
-    /// Draws this modifier node. The node can draw before and/or after
-    /// calling `draw_content` to draw the wrapped content.
-    fn draw(&mut self, _context: &mut dyn ModifierNodeContext, _draw_scope: &mut dyn DrawScope) {
-        // Default: draw wrapped content without modification
+    /// Draws this modifier node into the provided DrawScope.
+    /// 
+    /// This is called during the render pass for each node with DRAW capability.
+    /// The node should draw directly into the scope using methods like
+    /// `draw_scope.draw_rect_at()`.
+    /// 
+    /// Takes `&self` to work with immutable chain iteration - use interior
+    /// mutability (RefCell) for any state that needs mutation during draw.
+    fn draw(&self, _draw_scope: &mut dyn DrawScope) {
+        // Default: no custom drawing
+    }
+    
+    /// Creates a closure for deferred drawing that will be evaluated at render time.
+    /// 
+    /// This is the preferred method for nodes with dynamic content like:
+    /// - Blinking cursors (visibility changes over time)
+    /// - Live selection during drag (selection changes during mouse move)
+    /// 
+    /// The returned closure captures the node's internal state (via Rc) and
+    /// evaluates at render time, not at slice collection time.
+    /// 
+    /// Returns None by default. Override for nodes needing deferred draw.
+    fn create_draw_closure(&self) -> Option<Rc<dyn Fn(Size) -> Vec<compose_ui_graphics::DrawPrimitive>>> {
+        None
     }
 }
 

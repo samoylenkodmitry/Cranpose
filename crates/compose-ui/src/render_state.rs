@@ -147,7 +147,7 @@ static LAYOUT_INVALIDATED: AtomicBool = AtomicBool::new(false);
 /// **If you're invalidating layout for scroll, a single widget update, or any local change,
 /// you MUST use the scoped repass mechanism instead:**
 ///
-/// ```rust,ignore
+/// ```text
 /// compose_ui::schedule_layout_repass(node_id);
 /// ```
 ///

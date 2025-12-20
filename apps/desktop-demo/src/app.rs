@@ -3,11 +3,12 @@ use compose_core::{
     self, compositionLocalOf, CompositionLocal, CompositionLocalProvider, DisposableEffect,
     DisposableEffectResult, LaunchedEffect, LaunchedEffectAsync, MutableState,
 };
+use compose_foundation::text::TextFieldState;
 use compose_foundation::PointerEventKind;
 use compose_ui::{
-    composable, BoxSpec, Brush, Button, Color, Column, ColumnSpec, CornerRadii, GraphicsLayer,
-    IntrinsicSize, LinearArrangement, Modifier, Point, PointerInputScope, RoundedCornerShape, Row,
-    RowSpec, Size, Spacer, Text, VerticalAlignment,
+    composable, BasicTextField, BoxSpec, Brush, Button, Color, Column, ColumnSpec, CornerRadii,
+    GraphicsLayer, IntrinsicSize, LinearArrangement, Modifier, Point, PointerInputScope,
+    RoundedCornerShape, Row, RowSpec, Size, Spacer, Text, VerticalAlignment,
 };
 use std::cell::RefCell;
 
@@ -27,6 +28,7 @@ pub enum DemoTab {
     CompositionLocal,
     Async,
     WebFetch,
+    TextInput,
     Layout,
     ModifierShowcase,
     Mineswapper2,
@@ -39,6 +41,7 @@ impl DemoTab {
             DemoTab::CompositionLocal => "CompositionLocal Test",
             DemoTab::Async => "Async Runtime",
             DemoTab::WebFetch => "Web Fetch",
+            DemoTab::TextInput => "Text Input",
             DemoTab::Layout => "Recursive Layout",
             DemoTab::ModifierShowcase => "Modifiers Showcase",
             DemoTab::Mineswapper2 => "Mineswapper2",
@@ -186,6 +189,7 @@ pub fn combined_app() {
                     render_tab_button(DemoTab::CompositionLocal);
                     render_tab_button(DemoTab::Async);
                     render_tab_button(DemoTab::WebFetch);
+                    render_tab_button(DemoTab::TextInput);
                     render_tab_button(DemoTab::Layout);
                     render_tab_button(DemoTab::ModifierShowcase);
                     render_tab_button(DemoTab::Mineswapper2);
@@ -208,10 +212,213 @@ pub fn combined_app() {
                 DemoTab::CompositionLocal => composition_local_example(),
                 DemoTab::Async => async_runtime_example(),
                 DemoTab::WebFetch => web_fetch_example(),
+                DemoTab::TextInput => text_input_example(),
                 DemoTab::Layout => recursive_layout_example(),
                 DemoTab::ModifierShowcase => modifier_showcase_tab(),
                 DemoTab::Mineswapper2 => mineswapper2::mineswapper2_tab(),
             });
+        },
+    );
+}
+
+/// Text Input Demo Tab - showcases BasicTextField functionality
+#[composable]
+fn text_input_example() {
+    // Create text field states using compose_core::remember
+    let text_state1 = compose_core::remember(|| TextFieldState::new("Type here..."))
+        .with(|state| state.clone());
+    let text_state2 = compose_core::remember(|| TextFieldState::new(""))
+        .with(|state| state.clone());
+
+    Column(
+        Modifier::empty()
+            .padding(32.0)
+            .background(Color(0.08, 0.10, 0.18, 1.0))
+            .rounded_corners(24.0)
+            .padding(20.0),
+        ColumnSpec::default(),
+        move || {
+            Text(
+                "Text Input Demo",
+                Modifier::empty()
+                    .padding(12.0)
+                    .background(Color(1.0, 1.0, 1.0, 0.08))
+                    .rounded_corners(16.0),
+            );
+
+            Spacer(Size {
+                width: 0.0,
+                height: 24.0,
+            });
+
+            // First text field with label
+            Text(
+                "Basic Text Field:",
+                Modifier::empty().padding(4.0),
+            );
+
+            Spacer(Size {
+                width: 0.0,
+                height: 8.0,
+            });
+
+            // Text field with background styling
+            {
+                let state = text_state1.clone();
+                BasicTextField(
+                    state,
+                    Modifier::empty()
+                        .fill_max_width()
+                        .padding(12.0)
+                        .background(Color(0.15, 0.18, 0.25, 1.0))
+                        .rounded_corners(8.0),
+                );
+            }
+
+            Spacer(Size {
+                width: 0.0,
+                height: 16.0,
+            });
+
+            // Show current text value - this now updates when version changes
+            {
+                // Reading text() creates composition dependency - scope recomposes when text changes
+                let current_text = text_state1.text();
+                Text(
+                    format!("Current value: \"{}\"", current_text),
+                    Modifier::empty()
+                        .padding(8.0)
+                        .background(Color(0.12, 0.16, 0.28, 0.8))
+                        .rounded_corners(8.0),
+                );
+            }
+
+            Spacer(Size {
+                width: 0.0,
+                height: 24.0,
+            });
+
+            // Second text field
+            Text(
+                "Empty Text Field:",
+                Modifier::empty().padding(4.0),
+            );
+
+            Spacer(Size {
+                width: 0.0,
+                height: 8.0,
+            });
+
+            {
+                let state = text_state2.clone();
+                BasicTextField(
+                    state,
+                    Modifier::empty()
+                        .fill_max_width()
+                        .padding(12.0)
+                        .background(Color(0.18, 0.15, 0.22, 1.0))
+                        .rounded_corners(8.0),
+                );
+            }
+
+            Spacer(Size {
+                width: 0.0,
+                height: 16.0,
+            });
+
+            // Buttons to manipulate text programmatically
+            Text(
+                "Programmatic Actions:",
+                Modifier::empty().padding(4.0),
+            );
+
+            Spacer(Size {
+                width: 0.0,
+                height: 8.0,
+            });
+
+            Row(
+                Modifier::empty().fill_max_width(),
+                RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
+                {
+                    let state1 = text_state1.clone();
+                    let state2 = text_state2.clone();
+                    move || {
+                        // Clear button
+                        {
+                            let state = state1.clone();
+                            Button(
+                                Modifier::empty()
+                                    .rounded_corners(8.0)
+                                    .draw_behind(|scope| {
+                                        scope.draw_round_rect(
+                                            Brush::solid(Color(0.6, 0.2, 0.2, 1.0)),
+                                            CornerRadii::uniform(8.0),
+                                        );
+                                    })
+                                    .padding(10.0),
+                                move || {
+                                    state.set_text("");
+                                },
+                                || {
+                                    Text("Clear", Modifier::empty().padding(4.0));
+                                },
+                            );
+                        }
+
+                        // Add text button
+                        {
+                            let state = state1.clone();
+                            Button(
+                                Modifier::empty()
+                                    .rounded_corners(8.0)
+                                    .draw_behind(|scope| {
+                                        scope.draw_round_rect(
+                                            Brush::solid(Color(0.2, 0.5, 0.3, 1.0)),
+                                            CornerRadii::uniform(8.0),
+                                        );
+                                    })
+                                    .padding(10.0),
+                                move || {
+                                    state.edit(|buffer| {
+                                        buffer.place_cursor_at_end();
+                                        buffer.insert("!");
+                                    });
+                                    // No version.set() needed - TextFieldState triggers recomposition
+                                },
+                                || {
+                                    Text("Add !", Modifier::empty().padding(4.0));
+                                },
+                            );
+                        }
+
+                        // Copy to second field
+                        {
+                            let from = state1.clone();
+                            let to = state2.clone();
+                            Button(
+                                Modifier::empty()
+                                    .rounded_corners(8.0)
+                                    .draw_behind(|scope| {
+                                        scope.draw_round_rect(
+                                            Brush::solid(Color(0.2, 0.4, 0.6, 1.0)),
+                                            CornerRadii::uniform(8.0),
+                                        );
+                                    })
+                                    .padding(10.0),
+                                move || {
+                                    let text = from.text();
+                                    to.set_text(text);
+                                    // No version.set() needed - TextFieldState triggers recomposition
+                                },
+                                || {
+                                    Text("Copy ↓", Modifier::empty().padding(4.0));
+                                },
+                            );
+                        }
+                    }
+                },
+            );
         },
     );
 }

@@ -300,6 +300,28 @@ impl ModifierChainHandle {
         });
         snapshot
     }
+
+    /// Access a text field modifier node in the chain with a mutable callback.
+    ///
+    /// Searches for `TextFieldModifierNode` and calls the callback if found.
+    /// Returns `None` if no text field modifier is in the chain.
+    pub fn with_text_field_modifier_mut<R>(
+        &mut self,
+        mut f: impl FnMut(&mut crate::TextFieldModifierNode) -> R,
+    ) -> Option<R> {
+        let mut result = None;
+        self.chain.visit_nodes_mut(|node, capabilities| {
+            if capabilities.contains(NodeCapabilities::LAYOUT) {
+                let any = node.as_any_mut();
+                if let Some(text_field) = any.downcast_mut::<crate::TextFieldModifierNode>() {
+                    if result.is_none() {
+                        result = Some(f(text_field));
+                    }
+                }
+            }
+        });
+        result
+    }
 }
 
 fn apply_size_node(layout: &mut LayoutProperties, node: &SizeNode) {

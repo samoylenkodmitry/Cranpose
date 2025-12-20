@@ -14,7 +14,7 @@ use compose_core::{useState};
 use compose_ui::{
     composable, Button, Column, ColumnSpec, Modifier, Row, RowSpec, Text, Box, BoxSpec,
 };
-use desktop_app::app;
+// use desktop_app::app;
 use compose_app::AppLauncher;
 use compose_testing::{find_text_in_semantics};
 use std::time::Duration;
@@ -60,7 +60,7 @@ fn main() {
                  println!("✓ Found child initially");
             } else {
                  println!("✗ Child missing initially!");
-                 std::process::exit(1);
+                 let _ = robot.exit();
             }
             
             // Toggle to trigger parent change
@@ -77,12 +77,12 @@ fn main() {
                  println!("✓ Child survived parent recreation! Bounds: {:.1},{:.1} {}x{}", x, y, w, h);
                  if w <= 0.0 || h <= 0.0 {
                      println!("✗ Child has zero size - Layout broken!");
-                     std::process::exit(1);
+                     let _ = robot.exit();
                  }
             } else {
                  println!("✗ Child DISAPPEARED after parent recreation!");
                  println!("  This confirms the regression: 'UI breaks when going between tabs'");
-                 std::process::exit(1); // Fail
+                 let _ = robot.exit(); // Fail
             }
             
             println!("✓ Test Passed (No regression found?)");

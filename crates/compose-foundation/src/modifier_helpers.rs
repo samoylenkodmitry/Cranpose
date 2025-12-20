@@ -8,7 +8,7 @@
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```text
 /// impl ModifierNode for MyNode {
 ///     impl_draw_node!();
 /// }
@@ -30,7 +30,7 @@ macro_rules! impl_draw_node {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```text
 /// impl ModifierNode for MyNode {
 ///     impl_pointer_input_node!();
 /// }
@@ -52,7 +52,7 @@ macro_rules! impl_pointer_input_node {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```text
 /// impl ModifierNode for MyNode {
 ///     impl_semantics_node!();
 /// }
@@ -74,7 +74,7 @@ macro_rules! impl_semantics_node {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```text
 /// impl ModifierNode for MyNode {
 ///     impl_focus_node!();
 /// }
@@ -100,7 +100,7 @@ macro_rules! impl_focus_node {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```text
 /// impl ModifierNode for MyDrawNode {
 ///     impl_modifier_node!(draw);
 /// }

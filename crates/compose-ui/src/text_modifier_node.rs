@@ -209,7 +209,7 @@ impl MeasurementProxy for TextMeasurementProxy {
 }
 
 impl DrawModifierNode for TextModifierNode {
-    fn draw(&mut self, _context: &mut dyn ModifierNodeContext, _draw_scope: &mut dyn DrawScope) {
+    fn draw(&self, _draw_scope: &mut dyn DrawScope) {
         // In a full implementation, this would:
         // 1. Get the text paragraph layout cache
         // 2. Paint the text using draw_scope canvas

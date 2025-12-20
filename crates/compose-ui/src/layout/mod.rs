@@ -96,7 +96,7 @@ static NEXT_CACHE_EPOCH: AtomicU64 = AtomicU64::new(1);
 ///
 /// **Do NOT use this for scroll, single-node mutations, or any local layout change.**
 /// Instead, use the scoped repass mechanism:
-/// ```rust,ignore
+/// ```text
 /// compose_ui::schedule_layout_repass(node_id);
 /// ```
 ///

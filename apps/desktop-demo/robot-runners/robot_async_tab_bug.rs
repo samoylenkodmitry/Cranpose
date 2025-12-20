@@ -46,7 +46,7 @@ fn main() {
                 std::thread::sleep(Duration::from_secs(1));
             } else {
                 println!("✗ Failed to find Async Runtime tab");
-                std::process::exit(1);
+                let _ = robot.exit();
             }
 
             // Verify we are on Async Runtime tab
@@ -55,7 +55,7 @@ fn main() {
                 println!("✓ Verified we are on Async Runtime tab");
             } else {
                 println!("✗ Failed to verify Async Runtime tab content");
-                std::process::exit(1);
+                let _ = robot.exit();
             }
 
             // 2. Switch back to Counter App tab
@@ -84,7 +84,7 @@ fn main() {
                  std::thread::sleep(Duration::from_secs(1));
             } else {
                 println!("✗ Failed to find Counter App tab");
-                std::process::exit(1);
+                let _ = robot.exit();
             }
 
             // Verify we are on Counter App tab
@@ -93,11 +93,11 @@ fn main() {
                  println!("✓ PASS: Successfully switched back to Counter App tab");
                  println!("=== Test Summary ===");
                  println!("✓ ALL TESTS PASSED");
-                 std::process::exit(0);
+                 let _ = robot.exit();
             } else {
                 println!("✗ Failed to verify Counter App tab content");
                 println!("BUG REPRODUCED: Could not switch back to Counter App!");
-                std::process::exit(1);
+                let _ = robot.exit();
             }
         })
         .run(app::combined_app);

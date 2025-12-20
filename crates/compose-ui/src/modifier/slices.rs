@@ -8,9 +8,11 @@ use crate::draw::DrawCommand;
 use crate::modifier::Modifier;
 use crate::modifier_nodes::{
     BackgroundNode, ClipToBoundsNode, CornerShapeNode, DrawCommandNode,
-    GraphicsLayerNode,
+    GraphicsLayerNode, PaddingNode,
 };
+use compose_ui_graphics::EdgeInsets;
 use crate::text_modifier_node::TextModifierNode;
+use crate::text_field_modifier_node::TextFieldModifierNode;
 use std::cell::RefCell;
 
 use super::{ModifierChainHandle, Point};
@@ -136,6 +138,26 @@ pub fn collect_modifier_slices(chain: &ModifierNodeChain) -> ModifierNodeSlices 
                 .draw_commands
                 .extend(commands.commands().iter().cloned());
         }
+        
+        // Use create_draw_closure() for nodes with dynamic content (cursor blink, selection)
+        // This defers evaluation to render time, enabling live updates.
+        // Fallback to draw() for nodes with static content.
+        if let Some(draw_node) = node.as_draw_node() {
+            if let Some(closure) = draw_node.create_draw_closure() {
+                // Deferred closure - evaluates at render time
+                slices.draw_commands.push(DrawCommand::Overlay(closure));
+            } else {
+                // Static draw - evaluate now
+                use compose_ui_graphics::{DrawScope as _, DrawScopeDefault};
+                let mut scope = DrawScopeDefault::new(crate::modifier::Size { width: 0.0, height: 0.0 });
+                draw_node.draw(&mut scope);
+                let primitives = scope.into_primitives();
+                if !primitives.is_empty() {
+                    let draw_cmd = Rc::new(move |_size: crate::modifier::Size| primitives.clone());
+                    slices.draw_commands.push(DrawCommand::Overlay(draw_cmd));
+                }
+            }
+        }
 
         // Collect graphics layer from GraphicsLayerNode
         if let Some(layer_node) = any.downcast_ref::<GraphicsLayerNode>() {
@@ -147,12 +169,37 @@ pub fn collect_modifier_slices(chain: &ModifierNodeChain) -> ModifierNodeSlices 
         }
     });
 
-    // Collect text content from TextModifierNode (LAYOUT capability, not DRAW)
+    // Collect padding from modifier chain for cursor positioning
+    let mut padding = EdgeInsets::default();
+    chain.for_each_node_with_capability(NodeCapabilities::LAYOUT, |_ref, node| {
+        let any = node.as_any();
+        if let Some(padding_node) = any.downcast_ref::<PaddingNode>() {
+            let p = padding_node.padding();
+            padding.left += p.left;
+            padding.top += p.top;
+            padding.right += p.right;
+            padding.bottom += p.bottom;
+        }
+    });
+
+    // Collect text content from TextModifierNode or TextFieldModifierNode (LAYOUT capability)
     chain.for_each_node_with_capability(NodeCapabilities::LAYOUT, |_ref, node| {
         let any = node.as_any();
         if let Some(text_node) = any.downcast_ref::<TextModifierNode>() {
             // Rightmost text modifier wins
             slices.text_content = Some(text_node.text().to_string());
+        }
+        // Also check for TextFieldModifierNode (editable text fields)
+        if let Some(text_field_node) = any.downcast_ref::<TextFieldModifierNode>() {
+            let text = text_field_node.text();
+            slices.text_content = Some(text.clone());
+            
+            // Update content offsets for cursor positioning in collect_draw_primitives()
+            text_field_node.set_content_offset(padding.left);
+            text_field_node.set_content_y_offset(padding.top);
+            
+            // Cursor/selection rendering is now handled via DrawModifierNode::collect_draw_primitives()
+            // in the DRAW capability loop above
         }
     });
 

@@ -620,6 +620,22 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
     }
 
     pub(crate) fn set(&self, new_value: T) {
+        // Debug-only check: warn if modifying state in event handler without proper snapshot
+        #[cfg(debug_assertions)]
+        {
+            let in_handler = crate::in_event_handler();
+            let in_snapshot = crate::in_applied_snapshot();
+            if in_handler && !in_snapshot {
+                eprintln!(
+                    "⚠️  WARNING: State modified in event handler without run_in_mutable_snapshot!\n\
+                     This can cause state updates to be invisible to other contexts.\n\
+                     Wrap your handler in run_in_mutable_snapshot() or dispatch_ui_event().\n\
+                     State: {:?}",
+                    self.id
+                );
+            }
+        }
+        
         let snapshot = active_snapshot();
         if let Some(state) = self
             .weak_self
