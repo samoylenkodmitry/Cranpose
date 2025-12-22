@@ -11,15 +11,15 @@ use std::rc::Rc;
 use crate::modifier::Modifier;
 use crate::subcompose_layout::{
     Placement, SubcomposeLayoutNode, SubcomposeLayoutScope,
-    SubcomposeMeasureScopeImpl,
+    SubcomposeMeasureScopeImpl, SubcomposeMeasureScope,
 };
 use crate::widgets::nodes::compose_node;
 use compose_core::{NodeId, SlotId};
 use compose_foundation::lazy::{
     measure_lazy_list, LazyListIntervalContent, LazyListMeasureConfig, 
-    LazyListMeasuredItem, LazyListState,
+    LazyListMeasuredItem, LazyListState, DEFAULT_ITEM_SIZE_ESTIMATE,
 };
-use compose_ui_layout::{Constraints, LinearArrangement, MeasureResult};
+use compose_ui_layout::{Constraints, LinearArrangement, MeasureResult, Placeable};
 
 // Re-export from foundation - single source of truth
 pub use compose_foundation::lazy::{
@@ -169,35 +169,42 @@ fn measure_lazy_list_internal(
         let key = content.get_key(index);
         let content_type = content.get_content_type(index);
 
-        // Subcompose the item content with size estimation
+        // Subcompose the item content
         let slot_id = SlotId(key);
         
-        // Default estimate: 48px main axis (common list item height), full cross axis
-        let default_main_size = 48.0;
-        let children = scope.subcompose_with_size(
+        let children = scope.subcompose(
             slot_id, 
-            || { content.invoke_content(index); },
-            |_child_idx| {
-                if is_vertical {
-                    crate::modifier::Size { width: cross_axis_size, height: default_main_size }
-                } else {
-                    crate::modifier::Size { width: default_main_size, height: cross_axis_size }
-                }
-            }
+            || { content.invoke_content(index); }
         );
 
-        // Subcompose returns the ROOT node(s) that were composed.
-        // The first child is typically the root container (e.g., Row) that
-        // handles layout of its own children. We only need to place the root.
-        let (root_main_size, root_cross_size) = if let Some(root) = children.first() {
-            let size = root.size();
-            if is_vertical {
-                (size.height, size.width)
-            } else {
-                (size.width, size.height)
+        // Measure the children using constraints
+        // For LazyColumn (vertical): width is constrained (max = cross_axis_size), height is unbounded (INFINITY)
+        // For LazyRow (horizontal): height is constrained, width is unbounded
+        let child_constraints = if is_vertical {
+            Constraints {
+                min_width: 0.0,
+                max_width: cross_axis_size,
+                min_height: 0.0,
+                max_height: f32::INFINITY,
             }
         } else {
-            (default_main_size, cross_axis_size)
+            Constraints {
+                min_width: 0.0,
+                max_width: f32::INFINITY,
+                min_height: 0.0,
+                max_height: cross_axis_size,
+            }
+        };
+
+        let (root_main_size, root_cross_size) = if let Some(first_child) = children.first().cloned() {
+            let placeable = scope.measure(first_child, child_constraints);
+            if is_vertical {
+                (placeable.height(), placeable.width())
+            } else {
+                (placeable.width(), placeable.height())
+            }
+        } else {
+            (0.0, 0.0)
         };
 
         let mut item = LazyListMeasuredItem::new(
@@ -294,7 +301,7 @@ fn measure_lazy_list_internal(
                         || { content.invoke_content(idx); },
                         |_| crate::modifier::Size { 
                             width: cross_axis_size, 
-                            height: config.spacing + 48.0 
+                            height: config.spacing + DEFAULT_ITEM_SIZE_ESTIMATE
                         }
                     );
                     // Mark as prefetched in pool

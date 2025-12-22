@@ -565,6 +565,7 @@ dependencies = [
  "compose-core",
  "compose-ui-graphics",
  "compose-ui-layout",
+ "log",
  "web-time",
 ]
 

@@ -198,9 +198,13 @@ pub fn lazy_list_example() {
                         Color(0.12, 0.15, 0.22, 1.0)
                     };
                     
+                    // Variable height based on index % 5 (48, 56, 64, 72, 80 pixels)
+                    let item_height = 48.0 + (i % 5) as f32 * 8.0;
+                    
                     Row(
                         Modifier::empty()
                             .fill_max_width()
+                            .height(item_height)
                             .padding(12.0)
                             .background(bg_color)
                             .rounded_corners(8.0),
@@ -213,7 +217,7 @@ pub fn lazy_list_example() {
                                 Modifier::empty().padding(4.0),
                             );
                             Text(
-                                format!("Value: {}", i),
+                                format!("h: {:.0}px", item_height),
                                 Modifier::empty()
                                     .padding(6.0)
                                     .background(Color(0.3, 0.3, 0.5, 0.5))

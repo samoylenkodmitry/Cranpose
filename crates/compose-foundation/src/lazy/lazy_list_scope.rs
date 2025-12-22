@@ -171,6 +171,12 @@ impl LazyListIntervalContent {
     /// This is used for scroll position stability - when items are added/removed,
     /// the scroll position can be maintained by finding the new index of the
     /// item that was previously at the scroll position (identified by key).
+    ///
+    /// # Warning: Large Lists
+    /// For lists with more than 1000 items, this returns `None` to avoid O(n)
+    /// search. Use [`get_index_by_key_in_range`] with a [`NearestRangeState`]
+    /// for efficient key lookup in large lists.
+    #[must_use]
     pub fn get_index_by_key(&self, key: u64) -> Option<usize> {
         // For small lists, do full O(n) search
         const SMALL_LIST_THRESHOLD: usize = 1000;
@@ -180,6 +186,7 @@ impl LazyListIntervalContent {
         
         // For large lists, return None - caller should use get_index_by_key_in_range
         // with a NearestRangeState to limit the search
+        log::debug!("get_index_by_key: skipping O(n) search for large list ({} items)", self.total_count);
         None
     }
 

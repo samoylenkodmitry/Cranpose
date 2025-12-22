@@ -197,3 +197,27 @@ name = "robot_lazy_tab_test"
 path = "robot-runners/robot_lazy_tab_test.rs"
 required-features = ["robot-app"]
 
+[[example]]
+name = "robot_lazy_fixes"
+path = "robot-runners/robot_lazy_fixes.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_variable_height"
+path = "robot-runners/robot_lazy_variable_height.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_complex_scroll"
+path = "robot-runners/robot_lazy_complex_scroll.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_infinite_scroll"
+path = "robot-runners/robot_lazy_infinite_scroll.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_max_jump"
+path = "robot-runners/robot_lazy_max_jump.rs"
+required-features = ["robot-app"]

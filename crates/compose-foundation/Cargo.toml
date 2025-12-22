@@ -10,6 +10,7 @@ compose-core = { path = "../compose-core" }
 compose-ui-graphics = { path = "../compose-ui-graphics" }
 compose-ui-layout = { path = "../compose-ui-layout" }
 web-time = "1.1"
+log = "0.4"
 
 [features]
 default = []

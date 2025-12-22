@@ -15,7 +15,7 @@ pub use compose_ui_layout::{Constraints, MeasureResult, Placement};
 ///
 /// In lazy layouts, this represents an item that has been composed but may or
 /// may not have been measured yet. Call `measure()` to get the actual size.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct SubcomposeChild {
     node_id: NodeId,
     /// Measured size of the child (set after measurement).
@@ -73,6 +73,37 @@ impl PartialEq for SubcomposeChild {
     }
 }
 
+/// A measured child that is ready to be placed.
+#[derive(Clone, Copy, Debug)]
+pub struct SubcomposePlaceable {
+    node_id: NodeId,
+    size: Size,
+}
+
+impl SubcomposePlaceable {
+    pub fn new(node_id: NodeId, size: Size) -> Self {
+        Self { node_id, size }
+    }
+}
+
+impl compose_ui_layout::Placeable for SubcomposePlaceable {
+    fn place(&self, _x: f32, _y: f32) {
+        // No-op: in SubcomposeLayout, placement is handled by returning a list of Placements
+    }
+
+    fn width(&self) -> f32 {
+        self.size.width
+    }
+
+    fn height(&self) -> f32 {
+        self.size.height
+    }
+
+    fn node_id(&self) -> NodeId {
+        self.node_id
+    }
+}
+
 /// Base trait for measurement scopes.
 pub trait SubcomposeLayoutScope {
     fn constraints(&self) -> Constraints;
@@ -90,6 +121,9 @@ pub trait SubcomposeMeasureScope: SubcomposeLayoutScope {
     fn subcompose<Content>(&mut self, slot_id: SlotId, content: Content) -> Vec<SubcomposeChild>
     where
         Content: FnOnce();
+
+    /// Measures a subcomposed child with the given constraints.
+    fn measure(&mut self, child: SubcomposeChild, constraints: Constraints) -> SubcomposePlaceable;
 }
 
 /// Concrete implementation of [`SubcomposeMeasureScope`].
@@ -97,6 +131,7 @@ pub struct SubcomposeMeasureScopeImpl<'a> {
     composer: Composer,
     state: &'a mut SubcomposeState,
     constraints: Constraints,
+    measurer: Box<dyn FnMut(NodeId, Constraints) -> Size + 'a>,
 }
 
 impl<'a> SubcomposeMeasureScopeImpl<'a> {
@@ -104,11 +139,13 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
         composer: Composer,
         state: &'a mut SubcomposeState,
         constraints: Constraints,
+        measurer: Box<dyn FnMut(NodeId, Constraints) -> Size + 'a>,
     ) -> Self {
         Self {
             composer,
             state,
             constraints,
+            measurer,
         }
     }
 }
@@ -128,6 +165,11 @@ impl<'a> SubcomposeMeasureScope for SubcomposeMeasureScopeImpl<'a> {
             .composer
             .subcompose_measurement(self.state, slot_id, |_| content());
         nodes.into_iter().map(SubcomposeChild::new).collect()
+    }
+
+    fn measure(&mut self, child: SubcomposeChild, constraints: Constraints) -> SubcomposePlaceable {
+        let size = (self.measurer)(child.node_id, constraints);
+        SubcomposePlaceable::new(child.node_id, size)
     }
 }
 
@@ -302,11 +344,12 @@ impl SubcomposeLayoutNodeHandle {
         self.inner.borrow_mut().set_debug_modifiers(enabled);
     }
 
-    pub fn measure(
+    pub fn measure<'a>(
         &self,
         composer: &Composer,
         node_id: NodeId,
         constraints: Constraints,
+        measurer: Box<dyn FnMut(NodeId, Constraints) -> Size + 'a>,
     ) -> Result<MeasureResult, NodeError> {
         let (policy, mut state, slots) = {
             let mut inner = self.inner.borrow_mut();
@@ -328,6 +371,7 @@ impl SubcomposeLayoutNodeHandle {
                 inner_composer.clone(),
                 &mut state,
                 constraints_copy,
+                measurer,
             );
             (policy)(&mut scope, constraints_copy)
         })?;

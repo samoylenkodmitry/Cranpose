@@ -7,6 +7,11 @@
 use super::lazy_list_measured_item::{LazyListMeasuredItem, LazyListMeasureResult};
 use super::lazy_list_state::{LazyListLayoutInfo, LazyListState};
 
+/// Default estimated item size for scroll calculations.
+/// Used when no measured sizes are cached.
+/// 48.0 is a common list item height (Material Design list tile).
+pub const DEFAULT_ITEM_SIZE_ESTIMATE: f32 = 48.0;
+
 /// Configuration for lazy list measurement.
 #[derive(Clone, Debug)]
 pub struct LazyListMeasureConfig {
@@ -108,7 +113,32 @@ where
     first_item_index = first_item_index.min(items_count.saturating_sub(1));
     first_item_scroll_offset = first_item_scroll_offset.max(0.0);
 
-    let _main_axis_available = viewport_size - config.before_content_padding - config.after_content_padding;
+
+    // Optimize huge forward scroll (handle scrolling past item boundaries)
+    // This complements the backward scroll logic above by estimating items to skip
+    if first_item_scroll_offset > 0.0 {
+        let average_size = state.average_item_size();
+        
+        if average_size > 0.0 {
+            // Check if we can skip items
+            // We keep a buffer of items to avoid over-skipping due to size variance
+            let buffer_pixels = viewport_size; 
+            if first_item_scroll_offset > buffer_pixels {
+                let pixels_to_skip = first_item_scroll_offset - buffer_pixels;
+                let items_to_skip = (pixels_to_skip / average_size).floor() as usize;
+                
+                if items_to_skip > 0 {
+                    let max_skip = items_count.saturating_sub(1).saturating_sub(first_item_index);
+                    let actual_skip = items_to_skip.min(max_skip);
+                    
+                    if actual_skip > 0 {
+                        first_item_index += actual_skip;
+                        first_item_scroll_offset -= actual_skip as f32 * average_size;
+                    }
+                }
+            }
+        }
+    }
 
     // Measure visible items
     let mut visible_items: Vec<LazyListMeasuredItem> = Vec::new();
@@ -118,6 +148,10 @@ where
     // Measure items going forward from first visible
     let mut current_index = first_item_index;
     while current_index < items_count && current_offset < viewport_end {
+        if visible_items.len() >= 1000 {
+            log::warn!("LazyList: visible items exceeded 1000, aborting measurement (likely infinite viewport)");
+            break;
+        }
         let mut item = measure_item(current_index);
         item.offset = current_offset;
         current_offset += item.main_axis_size + config.spacing;
@@ -303,6 +337,24 @@ impl LazyListMeasureContext {
     }
 }
 
+/// Parameters for lazy list measurement.
+/// 
+/// Bundles the non-closure arguments to avoid too-many-arguments clippy warning.
+#[derive(Clone)]
+pub struct MeasureParams<'a> {
+    /// Total number of items in the list.
+    pub items_count: usize,
+    /// Scroll state.
+    pub state: &'a LazyListState,
+    /// Viewport size in main axis.
+    pub viewport_size: f32,
+    /// Viewport size in cross axis.
+    pub cross_axis_size: f32,
+    /// Measurement configuration.
+    pub config: &'a LazyListMeasureConfig,
+}
+
+
 /// Measures a lazy list with prefetch and slot reuse optimizations.
 ///
 /// This is the optimized version of [`measure_lazy_list`] that:
@@ -311,20 +363,12 @@ impl LazyListMeasureContext {
 /// 3. Returns slots to pool when items leave visible area
 ///
 /// # Arguments
-/// * `items_count` - Total number of items
-/// * `state` - Scroll state
-/// * `viewport_size` - Viewport size in main axis
-/// * `cross_axis_size` - Viewport size in cross axis
-/// * `config` - Measurement configuration
+/// * `params` - Measurement parameters (items_count, state, viewport, config)
 /// * `context` - Optimization context (prefetch + slot reuse)
 /// * `measure_item` - Item measurement callback
 /// * `get_item_key` - Key lookup for slot matching
 pub fn measure_lazy_list_optimized<F, K>(
-    items_count: usize,
-    state: &LazyListState,
-    viewport_size: f32,
-    cross_axis_size: f32,
-    config: &LazyListMeasureConfig,
+    params: MeasureParams<'_>,
     context: &mut LazyListMeasureContext,
     mut measure_item: F,
     _get_item_key: K,
@@ -335,11 +379,11 @@ where
 {
     // Run base measurement
     let result = measure_lazy_list(
-        items_count,
-        state,
-        viewport_size,
-        cross_axis_size,
-        config,
+        params.items_count,
+        params.state,
+        params.viewport_size,
+        params.cross_axis_size,
+        params.config,
         &mut measure_item,
     );
 
@@ -375,7 +419,7 @@ where
     context.prefetch_scheduler.update(
         first_visible,
         last_visible,
-        items_count,
+        params.items_count,
         scroll_direction,
         &context.prefetch_strategy,
     );
@@ -388,7 +432,7 @@ where
     context.prefetch_scheduler.cleanup_distant_prefetches(
         first_visible,
         last_visible,
-        config.beyond_bounds_item_count + 2,
+        params.config.beyond_bounds_item_count + 2,
     );
 
     result
@@ -480,8 +524,15 @@ mod tests {
         let mut context = LazyListMeasureContext::new();
 
         // First measurement
+        let params = MeasureParams {
+            items_count: 100,
+            state: &state,
+            viewport_size: 200.0,
+            cross_axis_size: 300.0,
+            config: &config,
+        };
         let _ = measure_lazy_list_optimized(
-            100, &state, 200.0, 300.0, &config, &mut context,
+            params, &mut context,
             |i| create_test_item(i, 50.0),
             |i| i as u64,
         );
@@ -499,8 +550,15 @@ mod tests {
         let mut context = LazyListMeasureContext::new();
 
         // First measurement
+        let params = MeasureParams {
+            items_count: 100,
+            state: &state,
+            viewport_size: 200.0,
+            cross_axis_size: 300.0,
+            config: &config,
+        };
         let result = measure_lazy_list_optimized(
-            100, &state, 200.0, 300.0, &config, &mut context,
+            params, &mut context,
             |i| create_test_item(i, 50.0),
             |i| i as u64,
         );

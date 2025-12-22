@@ -1,8 +1,11 @@
-//! Slot reuse policy for lazy layouts.
+//! Slot tracking for lazy layouts.
 //!
-//! Manages a pool of composed items that can be recycled as the user scrolls,
-//! reducing composition overhead. Matches RecyclerView's approach of keeping
-//! a small cache of items for reuse.
+//! Tracks composed item slots for statistics and lifecycle management.
+//! 
+//! **Note**: Currently tracks metadata only. Actual slot reuse (recycling
+//! composed nodes via SubcomposeLayout) is not yet implemented. In Rust,
+//! item cleanup is handled by ownership when nodes go out of scope,
+//! unlike JC which needs explicit GC-aware recycling.
 
 use std::collections::HashMap;
 

@@ -122,7 +122,7 @@ impl LazyListState {
                 next_callback_id: 1,
                 stats: LazyLayoutStats::default(),
                 item_size_cache: std::collections::HashMap::new(),
-                average_item_size: 48.0, // Default estimate
+                average_item_size: super::DEFAULT_ITEM_SIZE_ESTIMATE,
                 total_measured_items: 0,
                 slot_pool: SlotReusePool::new(),
                 prefetch_scheduler: PrefetchScheduler::new(),
@@ -274,8 +274,16 @@ impl LazyListState {
         // Limit cache size to prevent memory issues with huge lists
         const MAX_CACHE_SIZE: usize = 100;
         if inner.item_size_cache.len() >= MAX_CACHE_SIZE {
-            // Remove a random item (first one found via drain)
-            if let Some(&key) = inner.item_size_cache.keys().next() {
+            // Evict item furthest from current scroll position
+            let current_index = inner.first_visible_item_index;
+            let furthest_key = inner.item_size_cache
+                .keys()
+                .copied()
+                .max_by_key(|&k| {
+                    // Distance from current scroll position
+                    (k as isize - current_index as isize).unsigned_abs()
+                });
+            if let Some(key) = furthest_key {
                 inner.item_size_cache.remove(&key);
             }
         }
@@ -286,6 +294,7 @@ impl LazyListState {
         let n = inner.total_measured_items as f32;
         inner.average_item_size = inner.average_item_size * ((n - 1.0) / n) + size / n;
     }
+
     
     /// Gets a cached item size if available.
     pub(crate) fn get_cached_size(&self, index: usize) -> Option<f32> {

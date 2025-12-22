@@ -798,7 +798,15 @@ impl LayoutBuilderState {
         );
         composer.enter_phase(Phase::Measure);
 
-        let measure_result = node_handle.measure(&composer, node_id, inner_constraints)?;
+        let state_rc_clone = Rc::clone(&state_rc);
+        let measurer = Box::new(move |child_id: NodeId, child_constraints: Constraints| -> Size {
+            match Self::measure_node(Rc::clone(&state_rc_clone), child_id, child_constraints) {
+                Ok(measured) => measured.size,
+                Err(_) => Size::default(),
+            }
+        });
+
+        let measure_result = node_handle.measure(&composer, node_id, inner_constraints, measurer)?;
 
         slots_guard.restore(slots_host.take());
 
