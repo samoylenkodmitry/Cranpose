@@ -20,7 +20,6 @@ pub use compose_ui_graphics::DrawScope;
 pub use compose_ui_graphics::Size;
 pub use compose_ui_layout::{Constraints, Measurable};
 
-
 use crate::nodes::input::types::PointerEvent;
 // use compose_core::NodeId;
 
@@ -509,33 +508,35 @@ pub trait LayoutModifierNode: ModifierNode {
 ///
 /// Draw nodes participate in the draw pass of the render pipeline. They can
 /// intercept and modify the drawing operations of their wrapped content.
-/// 
+///
 /// Following Jetpack Compose's design, `draw()` is called during the actual
 /// render pass with a live DrawScope, not during layout/slice collection.
 pub trait DrawModifierNode: ModifierNode {
     /// Draws this modifier node into the provided DrawScope.
-    /// 
+    ///
     /// This is called during the render pass for each node with DRAW capability.
     /// The node should draw directly into the scope using methods like
     /// `draw_scope.draw_rect_at()`.
-    /// 
+    ///
     /// Takes `&self` to work with immutable chain iteration - use interior
     /// mutability (RefCell) for any state that needs mutation during draw.
     fn draw(&self, _draw_scope: &mut dyn DrawScope) {
         // Default: no custom drawing
     }
-    
+
     /// Creates a closure for deferred drawing that will be evaluated at render time.
-    /// 
+    ///
     /// This is the preferred method for nodes with dynamic content like:
     /// - Blinking cursors (visibility changes over time)
     /// - Live selection during drag (selection changes during mouse move)
-    /// 
+    ///
     /// The returned closure captures the node's internal state (via Rc) and
     /// evaluates at render time, not at slice collection time.
-    /// 
+    ///
     /// Returns None by default. Override for nodes needing deferred draw.
-    fn create_draw_closure(&self) -> Option<Rc<dyn Fn(Size) -> Vec<compose_ui_graphics::DrawPrimitive>>> {
+    fn create_draw_closure(
+        &self,
+    ) -> Option<Rc<dyn Fn(Size) -> Vec<compose_ui_graphics::DrawPrimitive>>> {
         None
     }
 }

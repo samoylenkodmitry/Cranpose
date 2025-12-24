@@ -5,7 +5,6 @@ use compose_core::{Applier, ConcreteApplierHost, MemoryApplier, Node};
 use compose_ui_layout::{MeasurePolicy, MeasureResult, Placement};
 use std::{cell::RefCell, rc::Rc};
 
-
 use super::core::Measurable;
 
 fn measure_layout(
@@ -1205,4 +1204,3 @@ fn measure_layout_error_preserves_applier_and_slots() -> Result<(), NodeError> {
 
     Ok(())
 }
-

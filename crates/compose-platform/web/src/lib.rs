@@ -23,12 +23,7 @@ impl WebPlatform {
         }
     }
 
-    pub fn pointer_event(
-        &self,
-        kind: PointerEventKind,
-        x: f64,
-        y: f64,
-    ) -> PointerEvent {
+    pub fn pointer_event(&self, kind: PointerEventKind, x: f64, y: f64) -> PointerEvent {
         let logical = self.pointer_position(x, y);
         PointerEvent::new(kind, logical, logical)
     }

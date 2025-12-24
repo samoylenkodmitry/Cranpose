@@ -99,7 +99,7 @@ impl PointerEvent {
             consumed: Rc::new(Cell::new(false)),
         }
     }
-    
+
     /// Set the buttons state for this event
     pub fn with_buttons(mut self, buttons: PointerButtons) -> Self {
         self.buttons = buttons;

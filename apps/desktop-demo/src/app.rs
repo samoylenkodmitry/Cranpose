@@ -12,12 +12,12 @@ use compose_ui::{
 };
 use std::cell::RefCell;
 
+pub mod lazy_list;
 mod mineswapper2;
 mod web_fetch;
-pub mod lazy_list;
 
-use web_fetch::web_fetch_example;
 use lazy_list::lazy_list_example;
+use web_fetch::web_fetch_example;
 
 thread_local! {
     pub static TEST_COMPOSITION_LOCAL_COUNTER: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
@@ -134,13 +134,15 @@ pub fn combined_app() {
     });
 
     // Create scroll state for tabs row
-    let tabs_scroll_state = compose_core::remember(|| compose_ui::ScrollState::new(0.0))
-        .with(|state| state.clone());
-    let column_scroll_state = compose_core::remember(|| compose_ui::ScrollState::new(0.0))
-        .with(|state| state.clone());
+    let tabs_scroll_state =
+        compose_core::remember(|| compose_ui::ScrollState::new(0.0)).with(|state| state.clone());
+    let column_scroll_state =
+        compose_core::remember(|| compose_ui::ScrollState::new(0.0)).with(|state| state.clone());
 
     Column(
-        Modifier::empty().padding(20.0).vertical_scroll(column_scroll_state.clone(), false),
+        Modifier::empty()
+            .padding(20.0)
+            .vertical_scroll(column_scroll_state.clone(), false),
         ColumnSpec::default(),
         move || {
             let tab_state_for_row = active_tab;
@@ -231,10 +233,10 @@ pub fn combined_app() {
 #[composable]
 fn text_input_example() {
     // Create text field states using compose_core::remember
-    let text_state1 = compose_core::remember(|| TextFieldState::new("Type here..."))
-        .with(|state| state.clone());
-    let text_state2 = compose_core::remember(|| TextFieldState::new(""))
-        .with(|state| state.clone());
+    let text_state1 =
+        compose_core::remember(|| TextFieldState::new("Type here...")).with(|state| state.clone());
+    let text_state2 =
+        compose_core::remember(|| TextFieldState::new("")).with(|state| state.clone());
 
     Column(
         Modifier::empty()
@@ -258,10 +260,7 @@ fn text_input_example() {
             });
 
             // First text field with label
-            Text(
-                "Basic Text Field:",
-                Modifier::empty().padding(4.0),
-            );
+            Text("Basic Text Field:", Modifier::empty().padding(4.0));
 
             Spacer(Size {
                 width: 0.0,
@@ -305,10 +304,7 @@ fn text_input_example() {
             });
 
             // Second text field
-            Text(
-                "Empty Text Field:",
-                Modifier::empty().padding(4.0),
-            );
+            Text("Empty Text Field:", Modifier::empty().padding(4.0));
 
             Spacer(Size {
                 width: 0.0,
@@ -333,10 +329,7 @@ fn text_input_example() {
             });
 
             // Buttons to manipulate text programmatically
-            Text(
-                "Programmatic Actions:",
-                Modifier::empty().padding(4.0),
-            );
+            Text("Programmatic Actions:", Modifier::empty().padding(4.0));
 
             Spacer(Size {
                 width: 0.0,
@@ -1065,9 +1058,7 @@ fn counter_app() {
 
     Column(Modifier::empty(), ColumnSpec::default(), move || {
         compose_core::with_key(&is_even, move || {
-
             if is_even {
-
                 Text(
                     "if counter % 2 == 0",
                     Modifier::empty()
@@ -1085,7 +1076,6 @@ fn counter_app() {
                         }),
                 );
             } else {
-
                 Text(
                     "if counter % 2 != 0",
                     Modifier::empty()

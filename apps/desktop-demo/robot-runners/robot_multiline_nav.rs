@@ -98,29 +98,29 @@ fn main() {
             let _ = robot.send_key("Home");
             std::thread::sleep(Duration::from_millis(50));
             println!("  • Moved to Home (start of line 3)");
-            
+
             // Move right twice to column 2 (after "cc")
             let _ = robot.send_key("Right");
             let _ = robot.send_key("Right");
             std::thread::sleep(Duration::from_millis(100));
             println!("  • Moved Right twice to column 2 (after 'cc')");
-            
+
             // Press Up - should go to column 2 on line 2 (after "bb")
             let _ = robot.send_key("Up");
             std::thread::sleep(Duration::from_millis(100));
             println!("  • Pressed Up - should be at column 2 on line 2");
-            
+
             // Press Up again - should go to column 2 on line 1 (after "aa")
             let _ = robot.send_key("Up");
             std::thread::sleep(Duration::from_millis(100));
             println!("  • Pressed Up - should be at column 2 on line 1");
-            
+
             // Step 6: Test Down arrow
             println!("--- Step 6: Test Down arrow column preservation ---");
             let _ = robot.send_key("Down");
             std::thread::sleep(Duration::from_millis(100));
             println!("  • Pressed Down - should return to column 2 on line 2");
-            
+
             let _ = robot.send_key("Down");
             std::thread::sleep(Duration::from_millis(100));
             println!("  • Pressed Down - should return to column 2 on line 3");
@@ -129,7 +129,7 @@ fn main() {
             println!("--- Step 7: Insert marker to verify position ---");
             let _ = robot.send_key("x");
             std::thread::sleep(Duration::from_millis(200));
-            
+
             // Print all text found in semantics for debugging
             println!("  Scanning semantics for text content...");
             let found_text: std::cell::RefCell<Option<String>> = std::cell::RefCell::new(None);
@@ -152,7 +152,7 @@ fn main() {
                 }
                 None::<(f32, f32, f32, f32)>
             });
-            
+
             // Extract and verify
             let found = found_text.borrow().clone();
             if let Some(text) = found {
@@ -162,7 +162,10 @@ fn main() {
                     println!("=== ✓ ALL TESTS PASSED ===");
                     let _ = robot.exit();
                 } else {
-                    println!("✗ FAIL: Expected 'aaaa\\nbb\\nccxcc' but got '{}'", text.replace('\n', "\\n"));
+                    println!(
+                        "✗ FAIL: Expected 'aaaa\\nbb\\nccxcc' but got '{}'",
+                        text.replace('\n', "\\n")
+                    );
                     let _ = robot.exit();
                 }
             } else {

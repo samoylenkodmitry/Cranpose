@@ -235,7 +235,7 @@ fn clickable_node_handles_pointer_events() {
         Point { x: 10.0, y: 20.0 },
     );
     up_event.buttons = PointerButtons::new().with(PointerButton::Primary);
-    
+
     let consumed = node.on_pointer_event(&mut context, &up_event);
     assert!(consumed); // Up should be consumed
     assert!(clicked.get()); // Click should fire on Up
@@ -889,7 +889,7 @@ fn custom_layout_modifier_works_via_proxy() {
 #[test]
 fn draw_command_updates_on_closure_change() {
     use crate::draw::DrawCommand;
-    use compose_ui_graphics::{Size, DrawPrimitive};
+    use compose_ui_graphics::{DrawPrimitive, Size};
 
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
@@ -915,10 +915,9 @@ fn draw_command_updates_on_closure_change() {
 
     // Verify elements are "equal" (PartialEq ignores closures)
 
-
     // Initial update
     chain.update_from_slice(&vec![element_1], &mut context);
-    
+
     // Execute command from node
     {
         let node = chain.node::<DrawCommandNode>(0).unwrap();
@@ -938,8 +937,8 @@ fn draw_command_updates_on_closure_change() {
         func(Size::ZERO);
     }
     assert_eq!(
-        executed.get(), 
-        10, 
+        executed.get(),
+        10,
         "Node should have updated to the new closure"
     );
 }

@@ -20,7 +20,7 @@ enum FetchStatus {
 #[cfg(not(target_arch = "wasm32"))]
 fn do_fetch_blocking() -> Result<String, String> {
     use reqwest::blocking::Client;
-    
+
     let client = Client::builder()
         .user_agent("compose-rs-desktop-demo/0.1")
         .build()
@@ -33,7 +33,9 @@ fn do_fetch_blocking() -> Result<String, String> {
         .map_err(|e| format!("Request failed: {}", e))?;
 
     let status = response.status();
-    let body = response.text().map_err(|e| format!("Failed to read body: {}", e))?;
+    let body = response
+        .text()
+        .map_err(|e| format!("Failed to read body: {}", e))?;
 
     if status.is_success() {
         // Parse JSON response to extract IP address
@@ -82,7 +84,9 @@ async fn do_fetch_async() -> Result<String, String> {
         return Err(format!("Request failed with status {}", resp.status()));
     }
 
-    let text_promise = resp.text().map_err(|e| format!("Failed to get text: {:?}", e))?;
+    let text_promise = resp
+        .text()
+        .map_err(|e| format!("Failed to get text: {:?}", e))?;
     let text_value = JsFuture::from(text_promise)
         .await
         .map_err(|e| format!("Failed to read body: {:?}", e))?;
@@ -91,7 +95,7 @@ async fn do_fetch_async() -> Result<String, String> {
     let text = text_value
         .as_string()
         .ok_or_else(|| "Response body is not a string".to_string())?;
-    
+
     // Extract IP from {"ip": "..."} response
     if let Some(start) = text.find("\"ip\"") {
         if let Some(colon) = text[start..].find(':') {
@@ -104,7 +108,7 @@ async fn do_fetch_async() -> Result<String, String> {
             }
         }
     }
-    
+
     Ok(text.trim().to_string())
 }
 

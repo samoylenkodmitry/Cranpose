@@ -89,7 +89,10 @@ fn main() {
             {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!("  Found text field with 'Type here...' at ({:.1}, {:.1})", cx, cy);
+                println!(
+                    "  Found text field with 'Type here...' at ({:.1}, {:.1})",
+                    cx, cy
+                );
 
                 // Click to focus
                 let _ = robot.mouse_move(cx, cy);
@@ -98,18 +101,18 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(30));
                 let _ = robot.mouse_up();
                 std::thread::sleep(Duration::from_millis(200));
-                
+
                 // Select all text (Ctrl+A) and replace with our test content
                 let _ = robot.send_key_with_modifiers("a", false, true, false, false);
                 std::thread::sleep(Duration::from_millis(100));
-                
+
                 // Type initial text "abcdef" (replaces selection)
                 match robot.type_text("abcdef") {
                     Ok(_) => {
                         println!("  Typed 'abcdef' (replacing initial text)");
                         let _ = robot.wait_for_idle();
                         std::thread::sleep(Duration::from_millis(300));
-                        
+
                         // Verify text field has "abcdef"
                         if find_in_semantics(&robot, |elem| find_text(elem, "abcdef")).is_some() {
                             println!("  ✓ PASS: Text field focused and contains 'abcdef'\n");
@@ -220,7 +223,7 @@ fn main() {
 
             // After operations:
             // - Started with "abcdef" (cursor at end)
-            // - Selected last 3 chars: "def" 
+            // - Selected last 3 chars: "def"
             // - Copied "def"
             // - Moved cursor to end (after "def", so at position 6)
             // - Pasted "def" twice -> "abcdefdefdef"
@@ -231,19 +234,29 @@ fn main() {
                 println!("  ✓ PASS: Text field contains '{}'\n", expected_text);
             } else if find_in_semantics(&robot, |elem| {
                 find_text(elem, &format!("Current value: \"{}\"", expected_text))
-            }).is_some() {
+            })
+            .is_some()
+            {
                 println!("  ✓ PASS: Current value shows '{}'\n", expected_text);
             } else {
                 // Check what text we actually have
-                println!("  ✗ FAIL: Expected '{}' but got different text", expected_text);
+                println!(
+                    "  ✗ FAIL: Expected '{}' but got different text",
+                    expected_text
+                );
                 println!("  Looking for actual text in semantics...");
-                
+
                 // Try to find any text containing "abc"
                 if let Some((_, _, _, _)) = find_in_semantics(&robot, |elem| {
                     if let Some(ref text) = elem.text {
                         if text.contains("abc") {
                             println!("    Found text: '{}'", text);
-                            return Some((elem.bounds.x, elem.bounds.y, elem.bounds.width, elem.bounds.height));
+                            return Some((
+                                elem.bounds.x,
+                                elem.bounds.y,
+                                elem.bounds.width,
+                                elem.bounds.height,
+                            ));
                         }
                     }
                     None
@@ -259,8 +272,7 @@ fn main() {
             // =========================================================
             println!("--- Test 7: Press 'Add !' Button ---");
 
-            if let Some((x, y, w, h)) =
-                find_in_semantics(&robot, |elem| find_button(elem, "Add !"))
+            if let Some((x, y, w, h)) = find_in_semantics(&robot, |elem| find_button(elem, "Add !"))
             {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
@@ -292,7 +304,9 @@ fn main() {
                 println!("  ✓ PASS: Text field contains '{}'\n", final_text);
             } else if find_in_semantics(&robot, |elem| {
                 find_text(elem, &format!("Current value: \"{}\"", final_text))
-            }).is_some() {
+            })
+            .is_some()
+            {
                 println!("  ✓ PASS: Current value shows '{}'\n", final_text);
             } else {
                 println!("  ✗ FAIL: Expected final text '{}'", final_text);
@@ -300,7 +314,10 @@ fn main() {
                 println!("  Looking for actual text in semantics...");
                 let _ = find_in_semantics(&robot, |elem| {
                     if let Some(ref text) = elem.text {
-                        if text.contains("abc") || text.contains("!") || text.contains("Current value") {
+                        if text.contains("abc")
+                            || text.contains("!")
+                            || text.contains("Current value")
+                        {
                             println!("    Found: '{}'", text);
                         }
                     }

@@ -6,16 +6,20 @@ use std::fmt::Debug;
 // Use web_time for cross-platform time support (native + WASM) - compatible with winit
 use web_time::Instant;
 
-use compose_core::{enter_event_handler, exit_event_handler, location_key, run_in_mutable_snapshot, Applier, Composition, Key, MemoryApplier, NodeError};
+use compose_core::{
+    enter_event_handler, exit_event_handler, location_key, run_in_mutable_snapshot, Applier,
+    Composition, Key, MemoryApplier, NodeError,
+};
 use compose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEventKind};
 use compose_render_common::{HitTestTarget, RenderScene, Renderer};
 use compose_runtime_std::StdRuntime;
 use compose_ui::{
     has_pending_focus_invalidations, has_pending_pointer_repasses, log_layout_tree,
-    log_render_scene, log_screen_summary, peek_focus_invalidation, peek_pointer_invalidation,
-    peek_render_invalidation, peek_layout_invalidation, process_focus_invalidations, process_pointer_repasses,
-    request_render_invalidation, take_focus_invalidation, take_pointer_invalidation,
-    take_render_invalidation, take_layout_invalidation, HeadlessRenderer, LayoutNode, LayoutTree, SemanticsTree,
+    log_render_scene, log_screen_summary, peek_focus_invalidation, peek_layout_invalidation,
+    peek_pointer_invalidation, peek_render_invalidation, process_focus_invalidations,
+    process_pointer_repasses, request_render_invalidation, take_focus_invalidation,
+    take_layout_invalidation, take_pointer_invalidation, take_render_invalidation,
+    HeadlessRenderer, LayoutNode, LayoutTree, SemanticsTree,
 };
 use compose_ui_graphics::{Point, Size};
 use hit_path_tracker::{HitPathTracker, PointerId};
@@ -42,7 +46,7 @@ where
     /// Tracks which mouse buttons are currently pressed
     buttons_pressed: PointerButtons,
     /// Tracks which nodes were hit on PointerDown (by stable NodeId).
-    /// 
+    ///
     /// This follows Jetpack Compose's HitPathTracker pattern:
     /// - On Down: cache NodeIds, not geometry
     /// - On Move/Up/Cancel: resolve fresh HitTargets from current scene
@@ -141,9 +145,7 @@ where
     /// Returns true if the shell needs to redraw (dirty flag, layout dirty, active animations).
     /// Note: Cursor blink is now timer-based and uses WaitUntil scheduling, not continuous redraw.
     pub fn needs_redraw(&self) -> bool {
-        self.is_dirty 
-            || self.layout_dirty 
-            || self.has_active_animations()
+        self.is_dirty || self.layout_dirty || self.has_active_animations()
     }
 
     /// Marks the shell as dirty, indicating a redraw is needed.
@@ -168,11 +170,14 @@ where
     /// - We cache NodeIds on PointerDown (stable identity)
     /// - On Move/Up/Cancel, we call find_target() to get fresh geometry
     /// - Handler closures are preserved (same Rc), so gesture state survives
-    fn resolve_hit_path(&self, pointer: PointerId) -> Vec<<<R as Renderer>::Scene as RenderScene>::HitTarget> {
+    fn resolve_hit_path(
+        &self,
+        pointer: PointerId,
+    ) -> Vec<<<R as Renderer>::Scene as RenderScene>::HitTarget> {
         let Some(node_ids) = self.hit_path_tracker.get_path(pointer) else {
             return Vec::new();
         };
-        
+
         let scene = self.renderer.scene();
         node_ids
             .iter()
@@ -218,7 +223,7 @@ where
 
     pub fn set_cursor(&mut self, x: f32, y: f32) -> bool {
         self.cursor = (x, y);
-        
+
         // During a gesture (button pressed), ONLY dispatch to the tracked hit path.
         // Never fall back to hover hit-testing while buttons are down.
         // This maintains the invariant: the path that receives Down must receive Move and Up/Cancel.
@@ -226,14 +231,12 @@ where
             if self.hit_path_tracker.has_path(PointerId::PRIMARY) {
                 // Resolve fresh targets from current scene (not cached geometry!)
                 let targets = self.resolve_hit_path(PointerId::PRIMARY);
-                
+
                 if !targets.is_empty() {
-                    let event = PointerEvent::new(
-                        PointerEventKind::Move,
-                        Point { x, y },
-                        Point { x, y },
-                    ).with_buttons(self.buttons_pressed);
-                    
+                    let event =
+                        PointerEvent::new(PointerEventKind::Move, Point { x, y }, Point { x, y })
+                            .with_buttons(self.buttons_pressed);
+
                     for hit in targets {
                         hit.dispatch(event.clone());
                         if event.is_consumed() {
@@ -243,25 +246,22 @@ where
                     self.mark_dirty();
                     return true;
                 }
-                
+
                 // Gesture exists but we can't resolve any nodes (removed / no hit region).
                 // Do NOT switch to hover mode while buttons are pressed.
                 return false;
             }
-            
+
             // Button is down but we have no recorded path inside this app
             // (e.g. drag started outside). Do not dispatch anything.
             return false;
         }
-        
+
         // No gesture in progress: regular hover move using hit-test.
         let hits = self.renderer.scene().hit_test(x, y);
         if !hits.is_empty() {
-            let event = PointerEvent::new(
-                PointerEventKind::Move,
-                Point { x, y },
-                Point { x, y },
-            ).with_buttons(self.buttons_pressed); // usually NONE here
+            let event = PointerEvent::new(PointerEventKind::Move, Point { x, y }, Point { x, y })
+                .with_buttons(self.buttons_pressed); // usually NONE here
             for hit in hits {
                 hit.dispatch(event.clone());
                 if event.is_consumed() {
@@ -281,31 +281,39 @@ where
         exit_event_handler();
         result
     }
-    
+
     fn pointer_pressed_inner(&mut self) -> bool {
         // Track button state
         self.buttons_pressed.insert(PointerButton::Primary);
-        
+
         // Hit-test against the current (last rendered) scene.
         // Even if the app is dirty, this scene is what the user actually saw and clicked.
         // Frame N is rendered → user sees frame N and taps → we hit-test frame N's geometry.
         // The pointer event may mark dirty → next frame runs update() → renders N+1.
-        
+
         // Perform hit test and cache the NodeIds (not geometry!)
         // The key insight from Jetpack Compose: cache identity, resolve fresh geometry per dispatch
         let hits = self.renderer.scene().hit_test(self.cursor.0, self.cursor.1);
-        
+
         // Cache NodeIds for this pointer
         let node_ids: Vec<_> = hits.iter().map(|h| h.node_id()).collect();
-        self.hit_path_tracker.add_hit_path(PointerId::PRIMARY, node_ids);
-        
+        self.hit_path_tracker
+            .add_hit_path(PointerId::PRIMARY, node_ids);
+
         if !hits.is_empty() {
             let event = PointerEvent::new(
                 PointerEventKind::Down,
-                Point { x: self.cursor.0, y: self.cursor.1 },
-                Point { x: self.cursor.0, y: self.cursor.1 },
-            ).with_buttons(self.buttons_pressed);
-            
+                Point {
+                    x: self.cursor.0,
+                    y: self.cursor.1,
+                },
+                Point {
+                    x: self.cursor.0,
+                    y: self.cursor.1,
+                },
+            )
+            .with_buttons(self.buttons_pressed);
+
             // Dispatch to fresh hits (geometry is already current for Down event)
             for hit in hits {
                 hit.dispatch(event.clone());
@@ -326,26 +334,33 @@ where
         exit_event_handler();
         result
     }
-    
+
     fn pointer_released_inner(&mut self) -> bool {
         // UP events report buttons as "currently pressed" (after release),
         // matching typical platform semantics where primary is already gone.
         self.buttons_pressed.remove(PointerButton::Primary);
         let corrected_buttons = self.buttons_pressed;
-        
+
         // Resolve FRESH targets from cached NodeIds
         let targets = self.resolve_hit_path(PointerId::PRIMARY);
-        
+
         // Always remove the path, even if targets is empty (node may have been removed)
         self.hit_path_tracker.remove_path(PointerId::PRIMARY);
-        
+
         if !targets.is_empty() {
             let event = PointerEvent::new(
                 PointerEventKind::Up,
-                Point { x: self.cursor.0, y: self.cursor.1 },
-                Point { x: self.cursor.0, y: self.cursor.1 },
-            ).with_buttons(corrected_buttons);
-            
+                Point {
+                    x: self.cursor.0,
+                    y: self.cursor.1,
+                },
+                Point {
+                    x: self.cursor.0,
+                    y: self.cursor.1,
+                },
+            )
+            .with_buttons(corrected_buttons);
+
             for hit in targets {
                 hit.dispatch(event.clone());
                 if event.is_consumed() {
@@ -358,7 +373,7 @@ where
             false
         }
     }
-    
+
     /// Cancels any active gesture, dispatching Cancel events to cached targets.
     /// Call this when:
     /// - Window loses focus
@@ -367,18 +382,24 @@ where
     pub fn cancel_gesture(&mut self) {
         // Resolve FRESH targets from cached NodeIds
         let targets = self.resolve_hit_path(PointerId::PRIMARY);
-        
+
         // Clear tracker and button state
         self.hit_path_tracker.clear();
         self.buttons_pressed = PointerButtons::NONE;
-        
+
         if !targets.is_empty() {
             let event = PointerEvent::new(
                 PointerEventKind::Cancel,
-                Point { x: self.cursor.0, y: self.cursor.1 },
-                Point { x: self.cursor.0, y: self.cursor.1 },
+                Point {
+                    x: self.cursor.0,
+                    y: self.cursor.1,
+                },
+                Point {
+                    x: self.cursor.0,
+                    y: self.cursor.1,
+                },
             );
-            
+
             for hit in targets {
                 hit.dispatch(event.clone());
             }
@@ -397,11 +418,11 @@ where
         exit_event_handler();
         result
     }
-    
+
     /// Internal keyboard event handler wrapped by on_key_event.
     fn on_key_event_inner(&mut self, event: &KeyEvent) -> bool {
         use KeyEventType::KeyDown;
-        
+
         // Only process KeyDown events for clipboard shortcuts
         if event.event_type == KeyDown && event.modifiers.command_or_ctrl() {
             // Desktop-only clipboard handling via arboard
@@ -443,12 +464,12 @@ where
                 }
             }
         }
-        
+
         // Pure O(1) dispatch - no tree walking needed
         if !compose_ui::text_field_focus::has_focused_field() {
             return false;
         }
-        
+
         // Wrap key event handling in a mutable snapshot so changes are atomically applied.
         // This ensures keyboard input modifications are visible to subsequent snapshot contexts
         // (like button click handlers that run in their own mutable snapshots).
@@ -456,17 +477,18 @@ where
             // O(1) dispatch via stored handler - handles ALL text input key events
             // No fallback needed since handler now handles arrows, Home/End, word nav
             compose_ui::text_field_focus::dispatch_key_event(event)
-        }).unwrap_or(false);
-        
+        })
+        .unwrap_or(false);
+
         if handled {
             // Mark both dirty (for redraw) and layout_dirty (to rebuild semantics tree)
             self.mark_dirty();
             self.layout_dirty = true;
         }
-        
+
         handled
     }
-    
+
     /// Handles paste event from platform clipboard.
     /// Returns `true` if the paste was consumed by a focused text field.
     /// O(1) operation using stored handler.
@@ -474,18 +496,18 @@ where
         // Wrap paste in a mutable snapshot so changes are atomically applied.
         // This ensures paste modifications are visible to subsequent snapshot contexts
         // (like button click handlers that run in their own mutable snapshots).
-        let handled = run_in_mutable_snapshot(|| {
-            compose_ui::text_field_focus::dispatch_paste(text)
-        }).unwrap_or(false);
-        
+        let handled =
+            run_in_mutable_snapshot(|| compose_ui::text_field_focus::dispatch_paste(text))
+                .unwrap_or(false);
+
         if handled {
             self.mark_dirty();
             self.layout_dirty = true;
         }
-        
+
         handled
     }
-    
+
     /// Handles copy request from platform.
     /// Returns the selected text from focused text field, or None.
     /// O(1) operation using stored handler.
@@ -493,30 +515,31 @@ where
         // Use O(1) dispatch instead of tree scan
         compose_ui::text_field_focus::dispatch_copy()
     }
-    
+
     /// Handles cut request from platform.
     /// Returns the cut text from focused text field, or None.
     /// O(1) operation using stored handler.
     pub fn on_cut(&mut self) -> Option<String> {
         // Use O(1) dispatch instead of tree scan
         let text = compose_ui::text_field_focus::dispatch_cut();
-        
+
         if text.is_some() {
             self.mark_dirty();
             self.layout_dirty = true;
         }
-        
+
         text
     }
-    
+
     /// Sets the Linux primary selection (for middle-click paste).
     /// This is called when text is selected in a text field.
     /// On non-Linux platforms, this is a no-op.
     #[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
     pub fn set_primary_selection(&mut self, text: &str) {
-        use arboard::{SetExtLinux, LinuxClipboardKind};
+        use arboard::{LinuxClipboardKind, SetExtLinux};
         if let Some(ref mut clipboard) = self.clipboard {
-            let result = clipboard.set()
+            let result = clipboard
+                .set()
                 .clipboard(LinuxClipboardKind::Primary)
                 .text(text.to_string());
             if let Err(e) = result {
@@ -525,14 +548,15 @@ where
             }
         }
     }
-    
+
     /// Gets text from the Linux primary selection (for middle-click paste).
     /// On non-Linux platforms, returns None.
     #[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
     pub fn get_primary_selection(&mut self) -> Option<String> {
         use arboard::{GetExtLinux, LinuxClipboardKind};
         if let Some(ref mut clipboard) = self.clipboard {
-            clipboard.get()
+            clipboard
+                .get()
                 .clipboard(LinuxClipboardKind::Primary)
                 .text()
                 .ok()
@@ -540,7 +564,7 @@ where
             None
         }
     }
-    
+
     /// Syncs the current text field selection to PRIMARY (Linux X11).
     /// Call this when selection changes in a text field.
     pub fn sync_selection_to_primary(&mut self) {
@@ -551,7 +575,7 @@ where
             }
         }
     }
-    
+
     /// Handles IME preedit (composition) events.
     /// Called when the input method is composing text (e.g., typing CJK characters).
     ///
@@ -563,14 +587,15 @@ where
         // Wrap in mutable snapshot for atomic changes
         let handled = run_in_mutable_snapshot(|| {
             compose_ui::text_field_focus::dispatch_ime_preedit(text, cursor)
-        }).unwrap_or(false);
-        
+        })
+        .unwrap_or(false);
+
         if handled {
             self.mark_dirty();
             // IME composition changes the visible text, needs layout update
             self.layout_dirty = true;
         }
-        
+
         handled
     }
 
@@ -621,12 +646,15 @@ where
         if !repass_nodes.is_empty() {
             let mut applier = self.composition.applier_mut();
             for node_id in repass_nodes {
-                compose_core::bubble_layout_dirty(&mut *applier as &mut dyn compose_core::Applier, node_id);
+                compose_core::bubble_layout_dirty(
+                    &mut *applier as &mut dyn compose_core::Applier,
+                    node_id,
+                );
             }
             drop(applier);
             self.layout_dirty = true;
         }
-        
+
         // ═══════════════════════════════════════════════════════════════════════════════
         // GLOBAL LAYOUT INVALIDATION (rare fallback for true global events)
         // ═══════════════════════════════════════════════════════════════════════════════
@@ -645,22 +673,23 @@ where
         // If you see this firing frequently during normal interactions,
         // someone is abusing request_layout_invalidation() - investigate!
         let invalidation_requested = take_layout_invalidation();
-        
+
         // If invalidation was requested (e.g., text field content changed),
         // we must invalidate caches AND mark for remeasure so intrinsic sizes are recalculated.
         // This happens regardless of whether layout_dirty was already set from keyboard handling.
         if invalidation_requested {
-
             // Invalidate all caches (O(app size) - expensive!)
             // This is internal-only API, only accessible via the internal path
             compose_ui::layout::invalidate_all_layout_caches();
-            
+
             // Mark root as needing layout AND measure so tree_needs_layout() returns true
             // and intrinsic sizes are recalculated (e.g., text field resizing on content change)
             if let Some(root) = self.composition.root() {
                 let mut applier = self.composition.applier_mut();
                 if let Ok(node) = applier.get_mut(root) {
-                    if let Some(layout_node) = node.as_any_mut().downcast_mut::<compose_ui::LayoutNode>() {
+                    if let Some(layout_node) =
+                        node.as_any_mut().downcast_mut::<compose_ui::LayoutNode>()
+                    {
                         layout_node.mark_needs_measure();
                         layout_node.mark_needs_layout();
                     }
@@ -668,13 +697,11 @@ where
             }
             self.layout_dirty = true;
         }
-        
+
         // Early exit if layout is not needed (viewport didn't change, etc.)
         if !self.layout_dirty {
             return;
         }
-
-
 
         let viewport_size = Size {
             width: self.viewport.0,
@@ -687,8 +714,8 @@ where
 
             // Selective measure optimization: skip layout if tree is clean (O(1) check)
             // UNLESS layout_dirty was explicitly set (e.g., from keyboard input)
-            let tree_needs_layout_check =
-                compose_ui::tree_needs_layout(&mut *applier, root).unwrap_or_else(|err| {
+            let tree_needs_layout_check = compose_ui::tree_needs_layout(&mut *applier, root)
+                .unwrap_or_else(|err| {
                     log::warn!(
                         "Cannot check layout dirty status for root #{}: {}",
                         root,
@@ -696,7 +723,7 @@ where
                     );
                     true // Assume dirty on error
                 });
-            
+
             // Force layout if either:
             // 1. Tree nodes are marked dirty (tree_needs_layout_check = true)
             // 2. layout_dirty was explicitly set (e.g., from keyboard/external events)
@@ -712,7 +739,7 @@ where
 
             // Tree needs layout - compute it
             self.layout_dirty = false;
-            
+
             // Ensure slots exist and borrow mutably (handled inside measure_layout via MemoryApplier)
             match compose_ui::measure_layout(&mut applier, root, viewport_size) {
                 Ok(measurements) => {

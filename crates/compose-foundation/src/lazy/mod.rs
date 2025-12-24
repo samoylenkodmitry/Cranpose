@@ -30,7 +30,6 @@ mod lazy_list_scope;
 mod lazy_list_state;
 mod nearest_range;
 mod prefetch;
-mod slot_reuse;
 
 pub use item_provider::*;
 pub use lazy_list_measure::*;
@@ -39,5 +38,3 @@ pub use lazy_list_scope::*;
 pub use lazy_list_state::*;
 pub use nearest_range::*;
 pub use prefetch::*;
-pub use slot_reuse::*;
-

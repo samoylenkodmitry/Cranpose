@@ -230,7 +230,6 @@ impl LayoutNode {
         self.dispatch_modifier_invalidations(&invalidations);
         self.refresh_registry_state();
     }
-    
 
     fn dispatch_modifier_invalidations(&self, invalidations: &[ModifierInvalidation]) {
         for invalidation in invalidations {

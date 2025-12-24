@@ -88,7 +88,8 @@ impl SharedTextBuffer {
         // Set metrics and size for unlimited layout
         let metrics = Metrics::new(font_size, font_size * 1.4);
         self.buffer.set_metrics(font_system, metrics);
-        self.buffer.set_size(font_system, Some(f32::MAX), Some(f32::MAX));
+        self.buffer
+            .set_size(font_system, Some(f32::MAX), Some(f32::MAX));
 
         // Set text and shape
         self.buffer
@@ -415,7 +416,7 @@ impl TextMeasurer for WgpuTextMeasurer {
         // Calculate line info for multiline support
         let line_height = BASE_FONT_SIZE * 1.4;
         let line_count = text.split('\n').count().max(1);
-        
+
         compose_ui::TextMetrics {
             width: size.width,
             height: size.height,
@@ -423,37 +424,37 @@ impl TextMeasurer for WgpuTextMeasurer {
             line_count,
         }
     }
-    
+
     fn get_offset_for_position(&self, text: &str, x: f32, y: f32) -> usize {
         if text.is_empty() {
             return 0;
         }
-        
+
         let line_height = BASE_FONT_SIZE * 1.4;
-        
+
         // Calculate which line was clicked based on Y coordinate
         let line_index = (y / line_height).floor().max(0.0) as usize;
         let lines: Vec<&str> = text.split('\n').collect();
         let target_line = line_index.min(lines.len().saturating_sub(1));
-        
+
         // Calculate byte offset to start of target line
         let mut line_start_byte = 0;
         for line in lines.iter().take(target_line) {
             line_start_byte += line.len() + 1; // +1 for newline
         }
-        
+
         // Get the text of the target line for hit testing
         let line_text = lines.get(target_line).unwrap_or(&"");
-        
+
         if line_text.is_empty() {
             return line_start_byte;
         }
-        
+
         // Use glyphon's hit testing for the specific line
         let cache_key = TextCacheKey::new(line_text, BASE_FONT_SIZE);
         let mut font_system = self.font_system.lock().unwrap();
         let mut text_cache = self.text_cache.lock().unwrap();
-        
+
         let buffer = text_cache.entry(cache_key).or_insert_with(|| {
             let buffer = Buffer::new(
                 &mut font_system,
@@ -466,13 +467,13 @@ impl TextMeasurer for WgpuTextMeasurer {
                 cached_size: None,
             }
         });
-        
+
         buffer.ensure(&mut font_system, line_text, BASE_FONT_SIZE, Attrs::new());
-        
+
         // Find closest glyph position using layout runs
         let mut best_offset = 0;
         let mut best_distance = f32::INFINITY;
-        
+
         for run in buffer.buffer.layout_runs() {
             let mut glyph_x = 0.0f32;
             for glyph in run.glyphs.iter() {
@@ -483,10 +484,10 @@ impl TextMeasurer for WgpuTextMeasurer {
                     // glyph.start is byte index in line_text
                     best_offset = glyph.start;
                 }
-                
+
                 // Update x position for next glyph
                 glyph_x += glyph.w;
-                
+
                 // Check distance to right edge (after glyph)
                 let right_dist = (x - glyph_x).abs();
                 if right_dist < best_distance {
@@ -495,37 +496,34 @@ impl TextMeasurer for WgpuTextMeasurer {
                 }
             }
         }
-        
+
         // Return absolute byte offset (line start + offset within line)
         line_start_byte + best_offset.min(line_text.len())
     }
-    
+
     fn get_cursor_x_for_offset(&self, text: &str, offset: usize) -> f32 {
         let clamped_offset = offset.min(text.len());
         if clamped_offset == 0 {
             return 0.0;
         }
-        
+
         // Measure text up to offset
         let prefix = &text[..clamped_offset];
         self.measure(prefix).width
     }
-    
+
     fn layout(&self, text: &str) -> compose_ui::text_layout_result::TextLayoutResult {
-        use compose_ui::text_layout_result::{TextLayoutResult, LineLayout};
-        
+        use compose_ui::text_layout_result::{LineLayout, TextLayoutResult};
+
         let line_height = BASE_FONT_SIZE * 1.4;
-        
+
         // Get buffer to extract glyph positions
         let cache_key = TextCacheKey::new(text, BASE_FONT_SIZE);
         let mut font_system = self.font_system.lock().unwrap();
         let mut text_cache = self.text_cache.lock().unwrap();
-        
+
         let buffer = text_cache.entry(cache_key.clone()).or_insert_with(|| {
-            let buffer = Buffer::new(
-                &mut font_system,
-                Metrics::new(BASE_FONT_SIZE, line_height),
-            );
+            let buffer = Buffer::new(&mut font_system, Metrics::new(BASE_FONT_SIZE, line_height));
             SharedTextBuffer {
                 buffer,
                 text: String::new(),
@@ -534,19 +532,19 @@ impl TextMeasurer for WgpuTextMeasurer {
             }
         });
         buffer.ensure(&mut font_system, text, BASE_FONT_SIZE, Attrs::new());
-        
+
         // Extract glyph positions from layout runs
         let mut glyph_x_positions = Vec::new();
         let mut char_to_byte = Vec::new();
         let mut lines = Vec::new();
-        
+
         let mut current_line_y = 0.0f32;
         let mut line_start_offset = 0usize;
-        
+
         for run in buffer.buffer.layout_runs() {
             let line_idx = run.line_i;
             let line_y = line_idx as f32 * line_height;
-            
+
             // Track line boundaries
             if lines.is_empty() || line_y != current_line_y {
                 if !lines.is_empty() {
@@ -557,23 +555,23 @@ impl TextMeasurer for WgpuTextMeasurer {
                 }
                 current_line_y = line_y;
             }
-            
+
             for glyph in run.glyphs.iter() {
                 glyph_x_positions.push(glyph.x);
                 char_to_byte.push(glyph.start);
-                
+
                 // Track line end
                 if glyph.end > line_start_offset {
                     line_start_offset = glyph.end;
                 }
             }
         }
-        
+
         // Add end position
         let total_width = self.measure(text).width;
         glyph_x_positions.push(total_width);
         char_to_byte.push(text.len());
-        
+
         // Build lines from text newlines
         let mut y = 0.0f32;
         let mut line_start = 0usize;
@@ -583,18 +581,18 @@ impl TextMeasurer for WgpuTextMeasurer {
             } else {
                 line_start + line_text.len()
             };
-            
+
             lines.push(LineLayout {
                 start_offset: line_start,
                 end_offset: line_end,
                 y,
                 height: line_height,
             });
-            
+
             line_start = line_end + 1;
             y += line_height;
         }
-        
+
         if lines.is_empty() {
             lines.push(LineLayout {
                 start_offset: 0,
@@ -603,7 +601,7 @@ impl TextMeasurer for WgpuTextMeasurer {
                 height: line_height,
             });
         }
-        
+
         let metrics = self.measure(text);
         TextLayoutResult::new(
             metrics.width,

@@ -989,4 +989,3 @@ fn composable_view_b() {
         },
     );
 }
-

@@ -11,9 +11,9 @@
 //! cargo run --package desktop-app --example robot_lazy_tab_test --features robot-app
 //! ```
 
-use desktop_app::app;
 use compose_app::AppLauncher;
-use compose_testing::{find_text_in_semantics, find_button_in_semantics};
+use compose_testing::{find_button_in_semantics, find_text_in_semantics};
+use desktop_app::app;
 use std::time::Duration;
 
 fn main() {
@@ -31,24 +31,24 @@ fn main() {
             let click_button = |name: &str| -> bool {
                 if let Some((x, y, w, h)) = find_button_in_semantics(&robot, name) {
                     println!("  Found button '{}' at ({:.1}, {:.1})", name, x, y);
-                    robot.click(x + w/2.0, y + h/2.0).ok();
+                    robot.click(x + w / 2.0, y + h / 2.0).ok();
                     std::thread::sleep(Duration::from_millis(200));
                     return true;
                 } else if let Some((x, y, w, h)) = find_text_in_semantics(&robot, name) {
                     println!("  Found text/button '{}' at ({:.1}, {:.1})", name, x, y);
-                    robot.click(x + w/2.0, y + h/2.0).ok();
+                    robot.click(x + w / 2.0, y + h / 2.0).ok();
                     std::thread::sleep(Duration::from_millis(200));
                     return true;
                 }
                 println!("  ✗ Button '{}' not found!", name);
                 false
             };
-            
+
             // Helper to find text and return position
             let find_text = |text: &str| -> Option<(f32, f32, f32, f32)> {
                 find_text_in_semantics(&robot, text)
             };
-            
+
             // Find all visible items (Item #N pattern)
             let find_visible_items = || -> Vec<usize> {
                 let mut items = Vec::new();
@@ -69,7 +69,7 @@ fn main() {
                 }
                 items
             };
-            
+
             // Get count from "Virtualized list with X items" text
             let get_item_count_text = || -> Option<String> {
                 // Search for various patterns - be more specific to find the right text
@@ -90,7 +90,7 @@ fn main() {
                 }
                 None
             };
-            
+
             // === PHASE 0: Navigate to Lazy List tab ===
             println!("=== PHASE 0: Navigate to Lazy List Tab ===");
             if !click_button("Lazy List") {
@@ -99,30 +99,30 @@ fn main() {
                 return;
             }
             std::thread::sleep(Duration::from_millis(400));
-            
+
             // Verify we're on the right tab
             if find_text("Lazy List Demo").is_some() {
                 println!("  ✓ Lazy List Demo tab loaded");
             } else {
                 println!("  ✗ Lazy List Demo NOT loaded!");
             }
-            
+
             // === PHASE 1: Initial state validation ===
             println!("\n=== PHASE 1: Initial State ===");
-            
+
             if let Some(count_text) = get_item_count_text() {
                 println!("  Count text: {}", count_text);
             } else {
                 println!("  ✗ Count text not found");
             }
-            
+
             let initial_items = find_visible_items();
             println!("  Visible items: {:?}", initial_items);
             println!("  Total visible: {}", initial_items.len());
-            
+
             // === PHASE 2: Scroll list ===
             println!("\n=== PHASE 2: Scroll List ===");
-            
+
             // Find the LazyColumn area (below the buttons) and scroll
             if let Some((_, y, _, _)) = find_text("Item #0") {
                 // Do a drag scroll
@@ -132,23 +132,23 @@ fn main() {
                 robot.drag(400.0, start_y, 400.0, end_y).ok();
                 std::thread::sleep(Duration::from_millis(300));
             }
-            
+
             let after_scroll_items = find_visible_items();
             println!("  After scroll visible: {:?}", after_scroll_items);
-            
+
             if after_scroll_items != initial_items {
                 println!("  ✓ Scroll changed visible items");
             } else {
                 println!("  ⚠️ Scroll may not have worked");
             }
-            
+
             // === PHASE 3: Click "Set usize::MAX" ===
             println!("\n=== PHASE 3: Click 'Set usize::MAX' ===");
-            
+
             if click_button("Set usize::MAX") {
                 println!("  ✓ Clicked 'Set usize::MAX'");
                 std::thread::sleep(Duration::from_millis(500));
-                
+
                 // Verify app didn't crash
                 if find_text("Lazy List Demo").is_some() {
                     println!("  ✓ App still responsive!");
@@ -157,11 +157,11 @@ fn main() {
                     robot.exit().ok();
                     return;
                 }
-                
+
                 if let Some(count_text) = get_item_count_text() {
                     println!("  Count text after MAX: {}", count_text);
                 }
-                
+
                 let max_items = find_visible_items();
                 println!("  Visible items after MAX: {} items", max_items.len());
                 if !max_items.is_empty() {
@@ -170,14 +170,14 @@ fn main() {
             } else {
                 println!("  ✗ 'Set usize::MAX' button not found!");
             }
-            
+
             // === PHASE 4: Click "Jump to Middle" ===
             println!("\n=== PHASE 4: Click 'Jump to Middle' ===");
-            
+
             if click_button("Jump to Middle") {
                 println!("  ✓ Clicked 'Jump to Middle'");
                 std::thread::sleep(Duration::from_millis(500));
-                
+
                 // Verify app didn't crash
                 if find_text("Lazy List Demo").is_some() {
                     println!("  ✓ App still responsive!");
@@ -186,14 +186,14 @@ fn main() {
                     robot.exit().ok();
                     return;
                 }
-                
+
                 if let Some(count_text) = get_item_count_text() {
                     println!("  Count text after jump: {}", count_text);
                 }
-                
+
                 let middle_items = find_visible_items();
                 println!("  Visible items after jump: {} items", middle_items.len());
-                
+
                 // Check if we're seeing items near the middle
                 let mid = usize::MAX / 2;
                 let mut found_middle = false;
@@ -214,17 +214,17 @@ fn main() {
             } else {
                 println!("  ✗ 'Jump to Middle' button not found!");
             }
-            
+
             // === SUMMARY ===
             println!("\n=== SUMMARY ===");
             let success = find_text("Lazy List Demo").is_some();
-            
+
             if success {
                 println!("✓ LazyList tab test PASSED - app stable");
             } else {
                 println!("✗ Test FAILED - app crashed");
             }
-            
+
             println!("\n=== Test Complete ===");
             robot.exit().ok();
         })

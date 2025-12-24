@@ -261,23 +261,23 @@ impl TextFieldBuffer {
         }
         pos.min(self.text.len())
     }
-    
+
     // ========== Clipboard Operations ==========
     // Note: Actual system clipboard access is handled at the platform layer (AppShell).
     // These methods just provide the text content for clipboard operations.
-    
+
     /// Returns the selected text for copy operations.
     /// Returns None if no selection.
     pub fn copy_selection(&self) -> Option<String> {
         if !self.has_selection() {
             return None;
         }
-        
+
         let sel_start = self.selection.min();
         let sel_end = self.selection.max();
         Some(self.text[sel_start..sel_end].to_string())
     }
-    
+
     /// Cuts the selected text (returns it and deletes from buffer).
     /// Returns the cut text, or None if no selection.
     pub fn cut_selection(&mut self) -> Option<String> {

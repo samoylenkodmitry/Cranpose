@@ -188,13 +188,13 @@ pub fn run(
                             // Create surface using raw window handle from NativeWindow
                             let surface = unsafe {
                                 use raw_window_handle::{
-                                    AndroidNdkWindowHandle, RawWindowHandle, RawDisplayHandle,
-                                    AndroidDisplayHandle,
+                                    AndroidDisplayHandle, AndroidNdkWindowHandle, RawDisplayHandle,
+                                    RawWindowHandle,
                                 };
 
                                 let mut window_handle = AndroidNdkWindowHandle::new(
                                     std::ptr::NonNull::new(native_window.ptr().as_ptr() as *mut _)
-                                        .expect("NativeWindow pointer is null")
+                                        .expect("NativeWindow pointer is null"),
                                 );
                                 let raw_window_handle = RawWindowHandle::AndroidNdk(window_handle);
 

@@ -48,27 +48,27 @@ thread_local! {
 pub fn request_focus(is_focused: Rc<RefCell<bool>>, handler: Rc<dyn FocusedTextFieldHandler>) {
     FOCUSED_FIELD.with(|current| {
         let mut current = current.borrow_mut();
-        
+
         // Unfocus the previously focused field (if any and still alive)
         if let Some(ref weak) = *current {
             if let Some(old_focused) = weak.upgrade() {
                 *old_focused.borrow_mut() = false;
             }
         }
-        
+
         // Set the new field as focused
         *is_focused.borrow_mut() = true;
         *current = Some(Rc::downgrade(&is_focused));
     });
-    
+
     // Store handler for O(1) dispatch
     FOCUSED_HANDLER.with(|h| {
         *h.borrow_mut() = Some(handler);
     });
-    
+
     // Start cursor blink animation (timer-based, not continuous redraw)
     crate::cursor_animation::start_cursor_blink();
-    
+
     // Only render invalidation needed - cursor is drawn via create_draw_closure()
     // which checks focus at draw time. No layout change occurs on focus.
     crate::request_render_invalidation();
@@ -79,24 +79,24 @@ pub fn request_focus(is_focused: Rc<RefCell<bool>>, handler: Rc<dyn FocusedTextF
 pub fn clear_focus() {
     FOCUSED_FIELD.with(|current| {
         let mut current = current.borrow_mut();
-        
+
         if let Some(ref weak) = *current {
             if let Some(focused) = weak.upgrade() {
                 *focused.borrow_mut() = false;
             }
         }
-        
+
         *current = None;
     });
-    
+
     // Clear handler
     FOCUSED_HANDLER.with(|h| {
         *h.borrow_mut() = None;
     });
-    
+
     // Stop cursor blink animation
     crate::cursor_animation::stop_cursor_blink();
-    
+
     crate::request_render_invalidation();
 }
 
@@ -196,13 +196,19 @@ mod tests {
     // Mock handler for testing
     struct MockHandler;
     impl FocusedTextFieldHandler for MockHandler {
-        fn handle_key(&self, _: &KeyEvent) -> bool { false }
+        fn handle_key(&self, _: &KeyEvent) -> bool {
+            false
+        }
         fn insert_text(&self, _: &str) {}
-        fn copy_selection(&self) -> Option<String> { None }
-        fn cut_selection(&self) -> Option<String> { None }
+        fn copy_selection(&self) -> Option<String> {
+            None
+        }
+        fn cut_selection(&self) -> Option<String> {
+            None
+        }
         fn set_composition(&self, _: &str, _: Option<(usize, usize)>) {}
     }
-    
+
     fn mock_handler() -> Rc<dyn FocusedTextFieldHandler> {
         Rc::new(MockHandler)
     }
@@ -218,13 +224,13 @@ mod tests {
     fn request_focus_clears_previous() {
         let focus1 = Rc::new(RefCell::new(false));
         let focus2 = Rc::new(RefCell::new(false));
-        
+
         request_focus(focus1.clone(), mock_handler());
         assert!(*focus1.borrow());
-        
+
         request_focus(focus2.clone(), mock_handler());
         assert!(!*focus1.borrow()); // First should be unfocused
-        assert!(*focus2.borrow());  // Second should be focused
+        assert!(*focus2.borrow()); // Second should be focused
     }
 
     #[test]
@@ -232,7 +238,7 @@ mod tests {
         let focus = Rc::new(RefCell::new(false));
         request_focus(focus.clone(), mock_handler());
         assert!(*focus.borrow());
-        
+
         clear_focus();
         assert!(!*focus.borrow());
     }

@@ -6,22 +6,21 @@ use std::cell::RefCell;
 
 use super::nearest_range::NearestRangeState;
 use super::prefetch::{PrefetchScheduler, PrefetchStrategy};
-use super::slot_reuse::SlotReusePool;
 
 /// Statistics about lazy layout item lifecycle.
 ///
 /// Used for testing and debugging virtualization behavior.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct LazyLayoutStats {
     /// Number of items currently composed and visible.
     pub items_in_use: usize,
-    
+
     /// Number of items in the recycle pool (available for reuse).
     pub items_in_pool: usize,
-    
+
     /// Total number of items that have been composed.
     pub total_composed: usize,
-    
+
     /// Number of items that were reused instead of newly composed.
     pub reuse_count: usize,
 }
@@ -46,6 +45,9 @@ pub struct LazyLayoutStats {
 #[derive(Clone)]
 pub struct LazyListState {
     inner: std::rc::Rc<RefCell<LazyListStateInner>>,
+    /// Reactive stats state for triggering recomposition when stats change.
+    /// Lazily initialized on first read during composition.
+    stats_state: std::rc::Rc<RefCell<Option<compose_core::MutableState<LazyLayoutStats>>>>,
 }
 
 struct LazyListStateInner {
@@ -71,30 +73,32 @@ struct LazyListStateInner {
     /// Invalidation callbacks.
     invalidate_callbacks: Vec<(u64, Box<dyn Fn()>)>,
     next_callback_id: u64,
-    
+
     /// Item lifecycle statistics.
     stats: LazyLayoutStats,
-    
+
+    /// Flag indicating stats changed since last check (for deferred UI update)
+    stats_changed: bool,
+
     /// Cache of recently measured item sizes (index -> main_axis_size).
-    /// Limited capacity to avoid unbounded memory growth.
+    /// Limited capacity with LRU eviction for O(1) performance.
     item_size_cache: std::collections::HashMap<usize, f32>,
-    
+    /// LRU order tracking - front is oldest, back is newest.
+    item_size_lru: std::collections::VecDeque<usize>,
+
     /// Running average of measured item sizes for estimation.
     average_item_size: f32,
     total_measured_items: usize,
-    
-    /// Pool for recycling composed item slots.
-    slot_pool: SlotReusePool,
-    
+
     /// Prefetch scheduler for pre-composing items.
     prefetch_scheduler: PrefetchScheduler,
-    
+
     /// Prefetch strategy configuration.
     prefetch_strategy: PrefetchStrategy,
-    
+
     /// Last scroll delta direction for prefetch.
     last_scroll_direction: f32,
-    
+
     /// Sliding window range for optimized key lookups.
     nearest_range_state: NearestRangeState,
 }
@@ -121,15 +125,17 @@ impl LazyListState {
                 invalidate_callbacks: Vec::new(),
                 next_callback_id: 1,
                 stats: LazyLayoutStats::default(),
+                stats_changed: false,
                 item_size_cache: std::collections::HashMap::new(),
+                item_size_lru: std::collections::VecDeque::new(),
                 average_item_size: super::DEFAULT_ITEM_SIZE_ESTIMATE,
                 total_measured_items: 0,
-                slot_pool: SlotReusePool::new(),
                 prefetch_scheduler: PrefetchScheduler::new(),
                 prefetch_strategy: PrefetchStrategy::default(),
                 last_scroll_direction: 0.0,
                 nearest_range_state: NearestRangeState::new(initial_first_visible_item_index),
             })),
+            stats_state: std::rc::Rc::new(RefCell::new(None)),
         }
     }
 
@@ -157,17 +163,71 @@ impl LazyListState {
     }
 
     /// Returns the current item lifecycle statistics.
+    ///
+    /// When called during composition, this creates a reactive subscription
+    /// so that changes to stats will trigger recomposition.
     pub fn stats(&self) -> LazyLayoutStats {
+        // Try to use reactive state if available
+        let mut stats_state_ref = self.stats_state.borrow_mut();
+        if let Some(reactive_state) = stats_state_ref.as_ref() {
+            // Read from reactive state - this creates a subscription during composition
+            return reactive_state.get();
+        }
+
+        // Try to lazily initialize reactive state if runtime is available
+        if let Some(state) = self.try_init_stats_state() {
+            let value = state.get();
+            *stats_state_ref = Some(state);
+            return value;
+        }
+
+        // Fallback to non-reactive read (before runtime is initialized)
         self.inner.borrow().stats.clone()
+    }
+
+    /// Try to initialize the reactive stats state.
+    /// Returns Some if runtime is available, None otherwise.
+    fn try_init_stats_state(&self) -> Option<compose_core::MutableState<LazyLayoutStats>> {
+        // try_mutableStateOf returns None if no runtime is available yet
+        compose_core::try_mutableStateOf(self.inner.borrow().stats.clone())
     }
 
     /// Updates the item lifecycle statistics.
     ///
     /// Called by the layout measurement after updating slot pools.
+    /// Triggers recomposition if reactive state is initialized.
     pub fn update_stats(&self, items_in_use: usize, items_in_pool: usize) {
+        // Update the inner stats
+        let new_stats = {
+            let mut inner = self.inner.borrow_mut();
+            if inner.stats.items_in_use != items_in_use
+                || inner.stats.items_in_pool != items_in_pool
+            {
+                inner.stats.items_in_use = items_in_use;
+                inner.stats.items_in_pool = items_in_pool;
+                inner.stats_changed = true;
+                Some(inner.stats.clone())
+            } else {
+                None
+            }
+        };
+
+        // Update reactive state if initialized (triggers recomposition)
+        if let Some(new_stats) = new_stats {
+            if let Some(reactive_state) = self.stats_state.borrow().as_ref() {
+                reactive_state.set(new_stats);
+            }
+        }
+    }
+
+    /// Checks if stats changed since last check and clears the flag.
+    /// Returns true if stats changed, false otherwise.
+    /// Use this to trigger recomposition after measurement.
+    pub fn check_stats_changed(&self) -> bool {
         let mut inner = self.inner.borrow_mut();
-        inner.stats.items_in_use = items_in_use;
-        inner.stats.items_in_pool = items_in_pool;
+        let changed = inner.stats_changed;
+        inner.stats_changed = false;
+        changed
     }
 
     /// Records that an item was composed (either new or reused).
@@ -177,16 +237,8 @@ impl LazyListState {
         if was_reused {
             inner.stats.reuse_count += 1;
         }
-    }
-
-    /// Returns a reference to the slot reuse pool for item recycling.
-    pub fn slot_pool(&self) -> std::cell::Ref<'_, SlotReusePool> {
-        std::cell::Ref::map(self.inner.borrow(), |inner| &inner.slot_pool)
-    }
-
-    /// Returns a mutable reference to the slot reuse pool.
-    pub fn slot_pool_mut(&self) -> std::cell::RefMut<'_, SlotReusePool> {
-        std::cell::RefMut::map(self.inner.borrow_mut(), |inner| &mut inner.slot_pool)
+        // Note: We don't update reactive state here because total_composed
+        // and reuse_count are typically not displayed in the UI.
     }
 
     /// Records the scroll direction for prefetch calculations.
@@ -200,7 +252,7 @@ impl LazyListState {
     /// Updates the prefetch queue based on current visible items.
     /// Should be called after measurement to queue items for pre-composition.
     pub fn update_prefetch_queue(
-        &self, 
+        &self,
         first_visible_index: usize,
         last_visible_index: usize,
         total_items: usize,
@@ -236,6 +288,13 @@ impl LazyListState {
     pub fn scroll_to_item(&self, index: usize, scroll_offset: f32) {
         let mut inner = self.inner.borrow_mut();
         inner.pending_scroll_to_index = Some((index, scroll_offset));
+        // Also update the first visible index immediately so that if a second measure
+        // happens before the next frame, it uses the correct position
+        inner.first_visible_item_index = index;
+        inner.first_visible_item_scroll_offset = scroll_offset;
+        // Clear the last known key to prevent update_scroll_position_if_item_moved
+        // from resetting to the old position based on key lookup
+        inner.last_known_first_visible_key = None;
         drop(inner);
         self.invalidate();
     }
@@ -269,54 +328,66 @@ impl LazyListState {
     }
 
     /// Caches the measured size of an item for scroll estimation.
+    /// Uses LRU eviction for O(1) performance.
     pub fn cache_item_size(&self, index: usize, size: f32) {
+        use std::collections::hash_map::Entry;
         let mut inner = self.inner.borrow_mut();
-        // Limit cache size to prevent memory issues with huge lists
         const MAX_CACHE_SIZE: usize = 100;
-        if inner.item_size_cache.len() >= MAX_CACHE_SIZE {
-            // Evict item furthest from current scroll position
-            let current_index = inner.first_visible_item_index;
-            let furthest_key = inner.item_size_cache
-                .keys()
-                .copied()
-                .max_by_key(|&k| {
-                    // Distance from current scroll position
-                    (k as isize - current_index as isize).unsigned_abs()
-                });
-            if let Some(key) = furthest_key {
-                inner.item_size_cache.remove(&key);
+
+        // Check if already in cache (update existing)
+        if let Entry::Occupied(mut entry) = inner.item_size_cache.entry(index) {
+            // Update value and move to back of LRU
+            entry.insert(size);
+            // Remove old position from LRU (O(n) but rare - only on re-measurement)
+            if let Some(pos) = inner.item_size_lru.iter().position(|&k| k == index) {
+                inner.item_size_lru.remove(pos);
+            }
+            inner.item_size_lru.push_back(index);
+            return;
+        }
+
+        // Evict oldest entries until under limit - O(1) per eviction
+        while inner.item_size_cache.len() >= MAX_CACHE_SIZE {
+            if let Some(oldest) = inner.item_size_lru.pop_front() {
+                // Only remove if still in cache (may have been updated)
+                if inner.item_size_cache.remove(&oldest).is_some() {
+                    break; // Removed one entry, now under limit
+                }
+            } else {
+                break; // LRU empty, shouldn't happen
             }
         }
+
+        // Add new entry
         inner.item_size_cache.insert(index, size);
-        
+        inner.item_size_lru.push_back(index);
+
         // Update running average
         inner.total_measured_items += 1;
         let n = inner.total_measured_items as f32;
         inner.average_item_size = inner.average_item_size * ((n - 1.0) / n) + size / n;
     }
 
-    
     /// Gets a cached item size if available.
-    pub(crate) fn get_cached_size(&self, index: usize) -> Option<f32> {
+    pub fn get_cached_size(&self, index: usize) -> Option<f32> {
         self.inner.borrow().item_size_cache.get(&index).copied()
     }
-    
+
     /// Returns the running average of measured item sizes.
-    pub(crate) fn average_item_size(&self) -> f32 {
+    pub fn average_item_size(&self) -> f32 {
         self.inner.borrow().average_item_size
     }
-    
+
     /// Returns the current nearest range for optimized key lookup.
     pub fn nearest_range(&self) -> std::ops::Range<usize> {
         self.inner.borrow().nearest_range_state.range()
     }
-    
+
     /// Updates the nearest range state based on current scroll position.
     pub fn update_nearest_range(&self) {
         let idx = self.first_visible_item_index();
         self.inner.borrow_mut().nearest_range_state.update(idx);
     }
-
 
     /// Updates the scroll position from a layout pass.
     ///
@@ -347,11 +418,11 @@ impl LazyListState {
     }
 
     /// Adjusts scroll position if the first visible item was moved due to data changes.
-    /// 
+    ///
     /// Matches JC's `updateScrollPositionIfTheFirstItemWasMoved`.
     /// If items were inserted/removed before the current scroll position,
     /// this finds the item by its key and updates the index accordingly.
-    /// 
+    ///
     /// Returns the adjusted first visible item index.
     pub fn update_scroll_position_if_item_moved<F>(
         &self,
@@ -362,13 +433,15 @@ impl LazyListState {
         F: Fn(u64) -> Option<usize>,
     {
         let mut inner = self.inner.borrow_mut();
-        
+
         // If no key stored, just clamp index to valid range
         let Some(last_key) = inner.last_known_first_visible_key else {
-            inner.first_visible_item_index = inner.first_visible_item_index.min(new_item_count.saturating_sub(1));
+            inner.first_visible_item_index = inner
+                .first_visible_item_index
+                .min(new_item_count.saturating_sub(1));
             return inner.first_visible_item_index;
         };
-        
+
         // Try to find the item by key
         if let Some(new_index) = get_index_by_key(last_key) {
             if new_index != inner.first_visible_item_index {
@@ -377,9 +450,11 @@ impl LazyListState {
             }
         } else {
             // Item removed - clamp to valid range
-            inner.first_visible_item_index = inner.first_visible_item_index.min(new_item_count.saturating_sub(1));
+            inner.first_visible_item_index = inner
+                .first_visible_item_index
+                .min(new_item_count.saturating_sub(1));
         }
-        
+
         inner.first_visible_item_index
     }
 
@@ -392,12 +467,12 @@ impl LazyListState {
     pub fn can_scroll_forward(&self) -> bool {
         let inner = self.inner.borrow();
         let info = &inner.layout_info;
-        if info.visible_items_info.is_empty() {
-            return false;
+        if let Some(last_visible) = info.visible_items_info.last() {
+            last_visible.index < info.total_items_count.saturating_sub(1)
+                || (last_visible.offset + last_visible.size) > info.viewport_size
+        } else {
+            false
         }
-        let last_visible = info.visible_items_info.last().unwrap();
-        last_visible.index < info.total_items_count.saturating_sub(1)
-            || (last_visible.offset + last_visible.size) > info.viewport_size
     }
 
     /// Returns whether we can scroll backward (more items above/left).

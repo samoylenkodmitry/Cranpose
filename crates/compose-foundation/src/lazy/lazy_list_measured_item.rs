@@ -2,7 +2,15 @@
 //!
 //! Contains the result of measuring a single item during lazy layout.
 
+use smallvec::SmallVec;
+
 use super::lazy_list_state::LazyListItemInfo;
+
+/// Inline capacity for node_ids and child_offsets.
+/// Most lazy list items have 1-2 root nodes, so 4 avoids heap allocation
+/// in the common case while keeping stack size reasonable.
+pub type SmallNodeVec = SmallVec<[u64; 4]>;
+pub type SmallOffsetVec = SmallVec<[f32; 4]>;
 
 /// A measured item in a lazy list.
 ///
@@ -28,7 +36,13 @@ pub struct LazyListMeasuredItem {
     pub offset: f32,
 
     /// Node IDs of the composed item's children (for placing all subcomposed nodes).
-    pub node_ids: Vec<u64>,
+    /// Uses SmallVec to avoid heap allocation for typical items with 1-4 root nodes.
+    pub node_ids: SmallNodeVec,
+
+    /// Offset of each child within the item (for stacking multiple children).
+    /// Each entry corresponds to the same index in `node_ids`.
+    /// Uses SmallVec to avoid heap allocation for typical items with 1-4 root nodes.
+    pub child_offsets: SmallOffsetVec,
 }
 
 impl LazyListMeasuredItem {
@@ -47,7 +61,8 @@ impl LazyListMeasuredItem {
             main_axis_size,
             cross_axis_size,
             offset: 0.0,
-            node_ids: Vec::new(),
+            node_ids: SmallVec::new(),
+            child_offsets: SmallVec::new(),
         }
     }
 

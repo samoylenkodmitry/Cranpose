@@ -10,9 +10,9 @@
 //! cargo run --package desktop-app --example robot_tabs_scroll --features robot-app
 //! ```
 
-use desktop_app::app;
 use compose_app::AppLauncher;
 use compose_testing::find_clickables_in_range;
+use desktop_app::app;
 use std::time::Duration;
 
 fn main() {
@@ -37,7 +37,7 @@ fn main() {
             let tabs_y = 50.0; // Middle of tabs row
 
             println!("--- Test 1: Verify Tabs Row is Scrollable ---");
-            
+
             // Dump semantic tree to understand structure
             println!("\n--- Semantic Tree Dump ---");
             match robot.get_semantics() {
@@ -107,7 +107,7 @@ fn main() {
                     if (initial.1 - after.1).abs() > 0.1 {
                         tabs_moved = true;
                         let delta = after.1 - initial.1;
-                        println!("\n  ✓ Tab '{}' moved {:.1}px (x: {:.1} → {:.1})", 
+                        println!("\n  ✓ Tab '{}' moved {:.1}px (x: {:.1} → {:.1})",
                             initial.0, delta, initial.1, after.1);
                         break;
                     }
@@ -124,7 +124,7 @@ fn main() {
             println!("Looking for 'button clicked' messages in console...");
             println!("(This test relies on visual inspection of console output)");
             println!("Expected: NO click messages during drag");
-            
+
             // Drag back to original position
             std::thread::sleep(Duration::from_millis(300));
             println!("\nDragging back from (200, {}) to (500, {})", tabs_y, tabs_y);

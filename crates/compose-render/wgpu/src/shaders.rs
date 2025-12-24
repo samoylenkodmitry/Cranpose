@@ -168,4 +168,3 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(color.rgb, color.a * alpha);
 }
 "#;
-

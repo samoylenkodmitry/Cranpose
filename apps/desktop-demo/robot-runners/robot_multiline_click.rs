@@ -59,7 +59,10 @@ fn main() {
                 return;
             }
             let (fx, fy, fw, fh) = text_field.unwrap();
-            println!("✓ Found text field at ({}, {}, {}x{})\n", fx as i32, fy as i32, fw as i32, fh as i32);
+            println!(
+                "✓ Found text field at ({}, {}, {}x{})\n",
+                fx as i32, fy as i32, fw as i32, fh as i32
+            );
 
             // Step 3: Click to focus the text field
             println!("--- Step 3: Focus text field ---");
@@ -104,9 +107,11 @@ fn main() {
             const PADDING: f32 = 8.0;
             let line2_y = fy + PADDING + LINE_HEIGHT * 1.0 + LINE_HEIGHT / 2.0;
             let click_x = fx + 40.0; // Click in middle of line
-            
-            println!("  Field at ({}, {}), clicking at ({}, {}) for line 2", 
-                     fx as i32, fy as i32, click_x as i32, line2_y as i32);
+
+            println!(
+                "  Field at ({}, {}), clicking at ({}, {}) for line 2",
+                fx as i32, fy as i32, click_x as i32, line2_y as i32
+            );
             let _ = robot.mouse_move(click_x, line2_y);
             std::thread::sleep(Duration::from_millis(50));
             let _ = robot.mouse_down();
@@ -119,23 +124,25 @@ fn main() {
             println!("--- Step 7: Insert 'x' marker ---");
             let _ = robot.send_key("x");
             std::thread::sleep(Duration::from_millis(200));
-            
+
             // Print text after click
             println!("--- Step 8: Verify marker position ---");
             print_all_texts(&robot);
-            
+
             let text_result = find_multiline_text(&robot);
-            
+
             if let Some(text) = &text_result {
                 println!("  Found multiline text: '{}'", text.replace('\n', "\\n"));
                 let lines: Vec<&str> = text.split('\n').collect();
                 println!("  Lines: {:?}", lines);
-                
+
                 // Check if x is on line 2
                 if lines.len() >= 2 && lines[1].contains('x') {
                     println!("✓ PASS: Marker 'x' correctly placed on line 2\n");
-                } else if lines.len() >= 1 && lines[0].contains('x') {
-                    println!("✗ FAIL: Marker 'x' on line 1 instead of line 2 (Y-coordinate ignored!)\n");
+                } else if !lines.is_empty() && lines[0].contains('x') {
+                    println!(
+                        "✗ FAIL: Marker 'x' on line 1 instead of line 2 (Y-coordinate ignored!)\n"
+                    );
                     let _ = robot.exit();
                     return;
                 } else if lines.len() >= 3 && lines[2].contains('x') {
@@ -143,7 +150,10 @@ fn main() {
                     let _ = robot.exit();
                     return;
                 } else {
-                    println!("✗ FAIL: Marker 'x' not found where expected. Lines: {:?}", lines);
+                    println!(
+                        "✗ FAIL: Marker 'x' not found where expected. Lines: {:?}",
+                        lines
+                    );
                     let _ = robot.exit();
                     return;
                 }
@@ -158,27 +168,30 @@ fn main() {
             // First remove the X
             let _ = robot.send_key("BackSpace");
             std::thread::sleep(Duration::from_millis(100));
-            
+
             let line3_y = fy + PADDING + LINE_HEIGHT * 2.0 + LINE_HEIGHT / 2.0;
-            println!("  Clicking at ({}, {}) for line 3", click_x as i32, line3_y as i32);
+            println!(
+                "  Clicking at ({}, {}) for line 3",
+                click_x as i32, line3_y as i32
+            );
             let _ = robot.mouse_move(click_x, line3_y);
             std::thread::sleep(Duration::from_millis(50));
             let _ = robot.mouse_down();
             std::thread::sleep(Duration::from_millis(20));
             let _ = robot.mouse_up();
             std::thread::sleep(Duration::from_millis(200));
-            
+
             // Step 10: Type y marker
             let _ = robot.send_key("y");
             std::thread::sleep(Duration::from_millis(200));
-            
+
             println!("--- Step 10: Verify final position ---");
             let text_result2 = find_multiline_text(&robot);
-            
+
             if let Some(text) = &text_result2 {
                 println!("  Final text: '{}'", text.replace('\n', "\\n"));
                 let lines: Vec<&str> = text.split('\n').collect();
-                
+
                 if lines.len() >= 3 && lines[2].contains('y') {
                     println!("✓ PASS: Marker 'y' correctly placed on line 3\n");
                     println!("=== ✓ ALL TESTS PASSED ===");
@@ -217,7 +230,10 @@ fn print_all_texts(robot: &Robot) {
 fn find_multiline_text(robot: &Robot) -> Option<String> {
     let result: std::cell::RefCell<Option<String>> = std::cell::RefCell::new(None);
     find_in_semantics(robot, |elem| {
-        fn search(elem: &compose_app::SemanticElement, result: &std::cell::RefCell<Option<String>>) {
+        fn search(
+            elem: &compose_app::SemanticElement,
+            result: &std::cell::RefCell<Option<String>>,
+        ) {
             if let Some(ref t) = elem.text {
                 // Look for multiline text containing our test characters (lowercase)
                 if t.contains('\n') && (t.contains('a') || t.contains('b') || t.contains('c')) {

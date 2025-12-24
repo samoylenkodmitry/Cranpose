@@ -89,7 +89,7 @@ impl ShapeBatchBuffers {
         const WEBGL_UNIFORM_GRADIENT_COUNT: usize = 256;
 
         let initial_vertex_cap = WEBGL_UNIFORM_SHAPE_COUNT * 4; // 4 vertices per shape
-        let initial_index_cap = WEBGL_UNIFORM_SHAPE_COUNT * 6;  // 6 indices per shape
+        let initial_index_cap = WEBGL_UNIFORM_SHAPE_COUNT * 6; // 6 indices per shape
         let initial_shape_cap = WEBGL_UNIFORM_SHAPE_COUNT;
         let initial_gradient_cap = WEBGL_UNIFORM_GRADIENT_COUNT;
 
@@ -419,7 +419,13 @@ impl GpuRenderer {
         height: u32,
         root_scale: f32,
     ) -> Result<(), String> {
-        log::info!("🎨 Rendering: {} shapes, {} texts (size: {}x{})", shapes.len(), texts.len(), width, height);
+        log::info!(
+            "🎨 Rendering: {} shapes, {} texts (size: {}x{})",
+            shapes.len(),
+            texts.len(),
+            width,
+            height
+        );
 
         // Sort by z-index
         let mut sorted_shapes = shapes.to_vec();
@@ -469,16 +475,22 @@ impl GpuRenderer {
                 let clip_bottom = (clip.y + clip.height) * root_scale;
                 let shape_right = x + w;
                 let shape_bottom = y + h;
-                
+
                 // Skip shapes that are entirely outside the clip rect
-                if shape_right <= clip.x * root_scale || 
-                   x >= clip_right ||
-                   shape_bottom <= clip.y * root_scale || 
-                   y >= clip_bottom {
+                if shape_right <= clip.x * root_scale
+                    || x >= clip_right
+                    || shape_bottom <= clip.y * root_scale
+                    || y >= clip_bottom
+                {
                     continue;
                 }
-                
-                [clip.x * root_scale, clip.y * root_scale, clip.width * root_scale, clip.height * root_scale]
+
+                [
+                    clip.x * root_scale,
+                    clip.y * root_scale,
+                    clip.width * root_scale,
+                    clip.height * root_scale,
+                ]
             } else {
                 [0.0, 0.0, 0.0, 0.0] // No clipping
             };
@@ -541,7 +553,7 @@ impl GpuRenderer {
                 gradient_count,
                 _padding: 0,
             });
-            
+
             filtered_shapes.push(shape);
         }
 

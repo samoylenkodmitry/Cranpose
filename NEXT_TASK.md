@@ -68,6 +68,18 @@
 
 ## 🟠 P1: Important Subsystems
 
+### God Files Need Splitting
+*Identified in code review*
+- [ ] Split `compose-core/src/lib.rs` (3109 lines) → `composer.rs`, `effects.rs`, `composition_local.rs`, `mutable_state.rs`, `node.rs`, `bubbling.rs`
+- [ ] Split `compose-ui/src/modifier_nodes.rs` (2595 lines) → `nodes/padding.rs`, `nodes/background.rs`, `nodes/size.rs`, etc.
+- [ ] Split `compose-foundation/src/modifier.rs` (2169 lines) by capability
+
+### Memory: State Record Chain Cleanup
+*Identified in code review*
+- [ ] Add idle-time cleanup sweep for tombstoned state records
+- [ ] Use existing `overwrite_unused_records_locked` infrastructure
+- [ ] Similar to JC's `gc()` in `SnapshotStateObserver`
+
 ### Focus System
 *Reference: `compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/focus/`*
 - [ ] `FocusManager` implementation

@@ -27,8 +27,6 @@ pub trait NodeCoordinator: Measurable {
     fn total_content_offset(&self) -> Point;
 }
 
-
-
 /// Coordinator that wraps a single LayoutModifierNode from the reconciled chain.
 ///
 /// This is analogous to Jetpack Compose's LayoutModifierNodeCoordinator.
@@ -74,13 +72,11 @@ impl<'a> NodeCoordinator for LayoutModifierCoordinator<'a> {
     }
 }
 
-
-
 impl<'a> Measurable for LayoutModifierCoordinator<'a> {
     /// Measure through this coordinator
     fn measure(&self, constraints: Constraints) -> Box<dyn Placeable> {
         let node_borrow = self.node.borrow();
-        
+
         let result = {
             if let Some(layout_node) = node_borrow.as_layout_node() {
                 match self.context.try_borrow_mut() {
@@ -110,7 +106,10 @@ impl<'a> Measurable for LayoutModifierCoordinator<'a> {
                 let child_accumulated = self.wrapped.total_content_offset();
                 self.accumulated_offset.set(child_accumulated);
                 return Box::new(CoordinatorPlaceable {
-                    size: Size { width: placeable.width(), height: placeable.height() },
+                    size: Size {
+                        width: placeable.width(),
+                        height: placeable.height(),
+                    },
                     content_offset: child_accumulated,
                 });
             }
@@ -118,17 +117,17 @@ impl<'a> Measurable for LayoutModifierCoordinator<'a> {
 
         // Store size
         self.measured_size.set(result.size);
-        
+
         // Compute local offset from this coordinator
         let local_offset = Point {
             x: result.placement_offset_x,
             y: result.placement_offset_y,
         };
-        
+
         // Get wrapped's accumulated offset (O(1) - just reads its stored value)
         // Note: wrapped.measure() was called by layout_node.measure(), so its offset is already set
         let child_accumulated = self.wrapped.total_content_offset();
-        
+
         // Store OUR accumulated offset (local + child)
         let accumulated = Point {
             x: local_offset.x + child_accumulated.x,
@@ -141,7 +140,6 @@ impl<'a> Measurable for LayoutModifierCoordinator<'a> {
             content_offset: accumulated,
         })
     }
-
 
     fn min_intrinsic_width(&self, height: f32) -> f32 {
         let node_borrow = self.node.borrow();

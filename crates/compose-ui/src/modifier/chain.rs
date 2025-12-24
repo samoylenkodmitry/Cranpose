@@ -3,11 +3,11 @@
 #[allow(unused_imports)] // Used in tests
 use compose_foundation::InvalidationKind;
 
+use compose_core::NodeId;
 use compose_foundation::{
     BasicModifierNodeContext, ModifierInvalidation, ModifierNodeChain, ModifierNodeContext,
     NodeCapabilities,
 };
-use compose_core::NodeId;
 
 use super::{
     local::ModifierLocalManager, DimensionConstraint, EdgeInsets, LayoutProperties, Modifier,
@@ -117,9 +117,9 @@ impl ModifierChainHandle {
             // ID hasn't changed, nothing to do
             return;
         }
-        
+
         self.context.borrow_mut().set_node_id(id);
-        
+
         // When a valid ID is provided AND it changed, force a reset of the modifier chain's lifecycle.
         // This ensures that nodes can access the new ID via the context during `on_attach`.
         if id.is_some() {

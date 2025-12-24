@@ -10,7 +10,9 @@
 use compose_app::AppLauncher;
 use compose_foundation::lazy::{LazyListIntervalContent, LazyListScope, LazyListState};
 use compose_testing::{find_button_in_semantics, find_text_in_semantics};
-use compose_ui::widgets::{Box, BoxSpec, Button, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec, Text};
+use compose_ui::widgets::{
+    Box, BoxSpec, Button, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec, Text,
+};
 use compose_ui::{Alignment, Color, Modifier, Size};
 use std::time::Duration;
 
@@ -24,22 +26,22 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
 
             println!("=== Phase 1: Click 'Set MAX' ===");
-            let (bx, by, bw, bh) = find_button_in_semantics(&robot, "Set MAX")
-                .expect("Set MAX button missing");
+            let (bx, by, bw, bh) =
+                find_button_in_semantics(&robot, "Set MAX").expect("Set MAX button missing");
             robot.click(bx + bw / 2.0, by + bh / 2.0).ok();
             std::thread::sleep(Duration::from_millis(300));
 
             println!("=== Phase 2: Click 'Go Middle' ===");
-            let (bx, by, bw, bh) = find_button_in_semantics(&robot, "Go Middle")
-                .expect("Go Middle button missing");
+            let (bx, by, bw, bh) =
+                find_button_in_semantics(&robot, "Go Middle").expect("Go Middle button missing");
             robot.click(bx + bw / 2.0, by + bh / 2.0).ok();
             std::thread::sleep(Duration::from_millis(500));
 
             println!("=== Phase 3: Verify Visible Items ===");
-            
+
             // Middle of usize::MAX
             let middle: usize = usize::MAX / 2;
-            
+
             // The list starts at LazyColumn offset (buttons row is 50px high)
             // LazyColumn has 500px height available.
             //
@@ -56,7 +58,7 @@ fn main() {
             // middle+3 (% 5 = 0) -> h=48
             // middle+4 (% 5 = 1) -> h=56
             // middle+5 (% 5 = 2) -> h=64
-            
+
             // Calculate expected item indices at middle
             let expected_heights: [(usize, f32); 6] = [
                 (middle, 64.0),
@@ -66,7 +68,7 @@ fn main() {
                 (middle + 4, 56.0),
                 (middle + 5, 64.0),
             ];
-            
+
             // Cumulative Y offsets (relative to list top, below 50px button row)
             // Item 0 (middle): y = 50
             // Item 1 (middle+1): y = 50 + 64 = 114
@@ -74,10 +76,10 @@ fn main() {
             // etc.
             let list_top = 50.0; // Button row is 50px
             let mut expected_y = list_top;
-            
+
             for (idx, height) in expected_heights.iter().take(5) {
                 let label = format!("Item {}", idx);
-                
+
                 match find_text_in_semantics(&robot, &label) {
                     Some((_x, item_y, _w, _h)) => {
                         // The item's Box has the full height. Text is centered in it.
@@ -87,33 +89,35 @@ fn main() {
                         // Approximate text height = ~19.6
                         let text_h = 19.6;
                         let expected_text_y = expected_y + (height - text_h) / 2.0;
-                        
+
                         println!(
                             "{}: y={:.1}, expected~{:.1} (box starts at {:.1}, h={})",
                             label, item_y, expected_text_y, expected_y, height
                         );
-                        
+
                         // Allow 20px tolerance for centering/padding variations
                         assert!(
                             (item_y - expected_text_y).abs() < 20.0,
                             "{} position mismatch: got {:.1}, expected ~{:.1}",
-                            label, item_y, expected_text_y
+                            label,
+                            item_y,
+                            expected_text_y
                         );
                     }
                     None => {
                         println!("{}: NOT FOUND (may be scrolled out)", label);
                     }
                 }
-                
+
                 expected_y += height;
             }
-            
+
             // Verify Item 0 is NOT visible (virtualized out due to scroll)
             if find_text_in_semantics(&robot, "Item 0").is_some() {
                 panic!("Item 0 should be virtualized out at middle!");
             }
             println!("✓ Item 0 correctly virtualized out");
-            
+
             // Verify an item way before middle is not visible
             if find_text_in_semantics(&robot, "Item 100").is_some() {
                 panic!("Item 100 should be virtualized out!");
@@ -128,83 +132,92 @@ fn main() {
             let state_for_jump = state.clone();
             let item_count = compose_core::useState(|| 100usize);
 
-            Column(Modifier::default().fill_max_size(), ColumnSpec::default(), move || {
-                // Control buttons row
-                let count_state = item_count;
-                let jump_state = state_for_jump.clone();
-                
-                Row(
-                    Modifier::default().fill_max_width().height(50.0),
-                    RowSpec::default(),
-                    move || {
-                        // Set MAX button
-                        let count = count_state;
-                        Button(
-                            Modifier::default()
-                                .background(Color::rgb(0.6, 0.3, 0.6)),
-                            move || {
-                                count.set(usize::MAX);
-                            },
-                            || { Text("Set MAX", Modifier::default()); }
-                        );
-                        
-                        // Go Middle button
-                        let state = jump_state.clone();
-                        let count = count_state;
-                        Button(
-                            Modifier::default()
-                                .background(Color::rgb(0.3, 0.4, 0.6)),
-                            move || {
-                                let c = count.get();
-                                let middle = c / 2;
-                                state.scroll_to_item(middle, 0.0);
-                            },
-                            || { Text("Go Middle", Modifier::default()); }
-                        );
-                    }
-                );
+            Column(
+                Modifier::default().fill_max_size(),
+                ColumnSpec::default(),
+                move || {
+                    // Control buttons row
+                    let count_state = item_count;
+                    let jump_state = state_for_jump.clone();
 
-                // LazyColumn with variable height items
-                let state_for_box = state.clone();
-                Box(
-                    Modifier::default().fill_max_width().weight(1.0),
-                    BoxSpec::new().content_alignment(Alignment::TOP_START),
-                    move || {
-                        let count = item_count.get();
-                        let mut content = LazyListIntervalContent::new();
-                        content.items(
-                            count,
-                            None::<fn(usize) -> u64>,
-                            None::<fn(usize) -> u64>,
-                            move |index| {
-                                // Height: 48 + (index % 5) * 8 -> 48, 56, 64, 72, 80
-                                let height = 48.0 + (index % 5) as f32 * 8.0;
-                                let bg = if index % 2 == 0 {
-                                    Color::rgb(0.2, 0.3, 0.4)
-                                } else {
-                                    Color::rgb(0.3, 0.4, 0.5)
-                                };
-                                
-                                Box(
-                                    Modifier::default()
-                                        .size(Size { width: 400.0, height })
-                                        .background(bg),
-                                    BoxSpec::new().content_alignment(Alignment::CENTER),
-                                    move || {
-                                        Text(format!("Item {}", index), Modifier::default());
-                                    }
-                                );
-                            }
-                        );
-                        
-                        LazyColumn(
-                            Modifier::default().fill_max_size(),
-                            state_for_box.clone(),
-                            LazyColumnSpec::default(),
-                            content,
-                        );
-                    }
-                );
-            });
+                    Row(
+                        Modifier::default().fill_max_width().height(50.0),
+                        RowSpec::default(),
+                        move || {
+                            // Set MAX button
+                            let count = count_state;
+                            Button(
+                                Modifier::default().background(Color::rgb(0.6, 0.3, 0.6)),
+                                move || {
+                                    count.set(usize::MAX);
+                                },
+                                || {
+                                    Text("Set MAX", Modifier::default());
+                                },
+                            );
+
+                            // Go Middle button
+                            let state = jump_state.clone();
+                            let count = count_state;
+                            Button(
+                                Modifier::default().background(Color::rgb(0.3, 0.4, 0.6)),
+                                move || {
+                                    let c = count.get();
+                                    let middle = c / 2;
+                                    state.scroll_to_item(middle, 0.0);
+                                },
+                                || {
+                                    Text("Go Middle", Modifier::default());
+                                },
+                            );
+                        },
+                    );
+
+                    // LazyColumn with variable height items
+                    let state_for_box = state.clone();
+                    Box(
+                        Modifier::default().fill_max_width().weight(1.0),
+                        BoxSpec::new().content_alignment(Alignment::TOP_START),
+                        move || {
+                            let count = item_count.get();
+                            let mut content = LazyListIntervalContent::new();
+                            content.items(
+                                count,
+                                None::<fn(usize) -> u64>,
+                                None::<fn(usize) -> u64>,
+                                move |index| {
+                                    // Height: 48 + (index % 5) * 8 -> 48, 56, 64, 72, 80
+                                    let height = 48.0 + (index % 5) as f32 * 8.0;
+                                    let bg = if index % 2 == 0 {
+                                        Color::rgb(0.2, 0.3, 0.4)
+                                    } else {
+                                        Color::rgb(0.3, 0.4, 0.5)
+                                    };
+
+                                    Box(
+                                        Modifier::default()
+                                            .size(Size {
+                                                width: 400.0,
+                                                height,
+                                            })
+                                            .background(bg),
+                                        BoxSpec::new().content_alignment(Alignment::CENTER),
+                                        move || {
+                                            Text(format!("Item {}", index), Modifier::default());
+                                        },
+                                    );
+                                },
+                            );
+
+                            LazyColumn(
+                                Modifier::default().fill_max_size(),
+                                state_for_box.clone(),
+                                LazyColumnSpec::default(),
+                                content,
+                            );
+                        },
+                    );
+                },
+            );
         });
 }

@@ -44,7 +44,7 @@ const DEFAULT_LINE_HEIGHT: f32 = 20.0;
 const CURSOR_WIDTH: f32 = 2.0;
 
 /// Shared references for text field input handling.
-/// 
+///
 /// This struct bundles the shared state references passed to the pointer input handler,
 /// reducing the argument count for `create_handler` from 8 individual `Rc` parameters
 /// to a single struct (fixing clippy::too_many_arguments).
@@ -129,7 +129,7 @@ impl TextFieldModifierNode {
         let refs = TextFieldRefs::new();
         let line_limits = TextFieldLineLimits::default();
         let cached_handler = Self::create_handler(state.clone(), refs.clone(), line_limits);
-        
+
         Self {
             state,
             refs,
@@ -146,18 +146,18 @@ impl TextFieldModifierNode {
             cached_handler,
         }
     }
-    
+
     /// Creates a node with custom line limits.
     pub fn with_line_limits(mut self, line_limits: TextFieldLineLimits) -> Self {
         self.line_limits = line_limits;
         self
     }
-    
+
     /// Returns the current line limits configuration.
     pub fn line_limits(&self) -> TextFieldLineLimits {
         self.line_limits
     }
-    
+
     /// Creates the pointer input handler closure.
     fn create_handler(
         state: TextFieldState,
@@ -166,34 +166,35 @@ impl TextFieldModifierNode {
     ) -> Rc<dyn Fn(PointerEvent)> {
         // Use word_boundaries module for double-click word selection
         use crate::word_boundaries::find_word_boundaries;
-        
+
         Rc::new(move |event: PointerEvent| {
             // Account for content padding offsets
             let click_x = (event.position.x - refs.content_offset.get()).max(0.0);
             let click_y = (event.position.y - refs.content_y_offset.get()).max(0.0);
-            
+
             match event.kind {
                 PointerEventKind::Down => {
                     // Request focus with O(1) handler, passing node_id and line_limits for key handling
-                    let handler = TextFieldHandler::new(state.clone(), refs.node_id.get(), line_limits);
+                    let handler =
+                        TextFieldHandler::new(state.clone(), refs.node_id.get(), line_limits);
                     crate::text_field_focus::request_focus(refs.is_focused.clone(), handler);
-                    
+
                     let now = web_time::Instant::now();
                     let text = state.text();
                     let pos = crate::text::get_offset_for_position(&text, click_x, click_y);
-                    
+
                     // Detect double-click
                     let is_double_click = if let Some(last) = refs.last_click_time.get() {
                         now.duration_since(last).as_millis() < DOUBLE_CLICK_MS
                     } else {
                         false
                     };
-                    
+
                     if is_double_click {
                         // Increment click count for potential triple-click
                         let count = refs.click_count.get() + 1;
                         refs.click_count.set(count.min(3));
-                        
+
                         if count >= 3 {
                             // Triple-click: select all
                             state.edit(|buffer| {
@@ -218,7 +219,7 @@ impl TextFieldModifierNode {
                             buffer.place_cursor_before_char(pos);
                         });
                     }
-                    
+
                     refs.last_click_time.set(Some(now));
                     event.consume();
                 }
@@ -227,14 +228,15 @@ impl TextFieldModifierNode {
                     if let Some(anchor) = refs.drag_anchor.get() {
                         if *refs.is_focused.borrow() {
                             let text = state.text();
-                            let current_pos = crate::text::get_offset_for_position(&text, click_x, click_y);
-                            
+                            let current_pos =
+                                crate::text::get_offset_for_position(&text, click_x, click_y);
+
                             // Update selection directly (without undo stack push)
                             state.set_selection(TextRange::new(anchor, current_pos));
-                            
+
                             // Selection change only needs redraw, not layout
                             crate::request_render_invalidation();
-                            
+
                             event.consume();
                         }
                     }
@@ -266,17 +268,17 @@ impl TextFieldModifierNode {
     pub fn is_focused(&self) -> bool {
         *self.refs.is_focused.borrow()
     }
-    
+
     /// Returns the is_focused Rc for closure capture.
     pub fn is_focused_rc(&self) -> Rc<RefCell<bool>> {
         self.refs.is_focused.clone()
     }
-    
+
     /// Returns the content_offset Rc for closure capture.
     pub fn content_offset_rc(&self) -> Rc<Cell<f32>> {
         self.refs.content_offset.clone()
     }
-    
+
     /// Returns the content_y_offset Rc for closure capture.
     pub fn content_y_offset_rc(&self) -> Rc<Cell<f32>> {
         self.refs.content_y_offset.clone()
@@ -296,25 +298,25 @@ impl TextFieldModifierNode {
     pub fn cursor_brush(&self) -> Brush {
         self.cursor_brush.clone()
     }
-    
+
     /// Returns the selection brush for rendering selection highlight.
     pub fn selection_brush(&self) -> Brush {
         self.selection_brush.clone()
     }
-    
+
     /// Inserts text at the current cursor position (for paste operations).
     pub fn insert_text(&mut self, text: &str) {
         self.state.edit(|buffer| {
             buffer.insert(text);
         });
     }
-    
+
     /// Copies the selected text and returns it (for web copy operation).
     /// Returns None if no selection.
     pub fn copy_selection(&self) -> Option<String> {
         self.state.copy_selection()
     }
-    
+
     /// Cuts the selected text: copies and deletes it.
     /// Returns the cut text, or None if no selection.
     pub fn cut_selection(&mut self) -> Option<String> {
@@ -326,19 +328,19 @@ impl TextFieldModifierNode {
         }
         text
     }
-    
+
     /// Returns a clone of the text field state for use in draw closures.
     /// This allows reading selection at DRAW time rather than LAYOUT time.
     pub fn get_state(&self) -> compose_foundation::text::TextFieldState {
         self.state.clone()
     }
-    
+
     /// Updates the content offset (padding.left) for accurate click-to-position cursor placement.
     /// Called from slices collection where padding is known.
     pub fn set_content_offset(&self, offset: f32) {
         self.refs.content_offset.set(offset);
     }
-    
+
     /// Updates the content Y offset (padding.top) for cursor Y positioning.
     /// Called from slices collection where padding is known.
     pub fn set_content_y_offset(&self, offset: f32) {
@@ -405,7 +407,7 @@ impl ModifierNode for TextFieldModifierNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
         // Store node_id for scoped layout invalidation (avoids O(app) global invalidation)
         self.refs.node_id.set(context.node_id());
-        
+
         context.invalidate(InvalidationKind::Layout);
         context.invalidate(InvalidationKind::Draw);
         context.invalidate(InvalidationKind::Semantics);
@@ -495,14 +497,17 @@ impl LayoutModifierNode for TextFieldModifierNode {
 
 impl DrawModifierNode for TextFieldModifierNode {
     fn draw(&self, _draw_scope: &mut dyn DrawScope) {
-        // No-op: Cursor and selection are rendered via create_draw_closure() which 
+        // No-op: Cursor and selection are rendered via create_draw_closure() which
         // creates DrawPrimitive::Rect directly. This enables draw-time evaluation
         // of focus state and cursor blink timing.
     }
-    
-    fn create_draw_closure(&self) -> Option<Rc<dyn Fn(compose_foundation::Size) -> Vec<compose_ui_graphics::DrawPrimitive>>> {
+
+    fn create_draw_closure(
+        &self,
+    ) -> Option<Rc<dyn Fn(compose_foundation::Size) -> Vec<compose_ui_graphics::DrawPrimitive>>>
+    {
         use compose_ui_graphics::DrawPrimitive;
-        
+
         // Capture state via Rc clone (cheap) for draw-time evaluation
         let is_focused = self.refs.is_focused.clone();
         let state = self.state.clone();
@@ -510,41 +515,44 @@ impl DrawModifierNode for TextFieldModifierNode {
         let content_y_offset = self.refs.content_y_offset.clone();
         let cursor_brush = self.cursor_brush.clone();
         let selection_brush = self.selection_brush.clone();
-        
+
         Some(Rc::new(move |_size| {
             // Check focus at DRAW time
             if !*is_focused.borrow() {
                 return vec![];
             }
-            
+
             let mut primitives = Vec::new();
-            
+
             let text = state.text();
             let selection = state.selection();
             let padding_left = content_offset.get();
             let padding_top = content_y_offset.get();
             let line_height = crate::text::measure_text(&text).line_height;
-            
+
             // Draw selection highlight
             if !selection.collapsed() {
                 let sel_start = selection.min();
                 let sel_end = selection.max();
-                
+
                 let lines: Vec<&str> = text.split('\n').collect();
                 let mut byte_offset: usize = 0;
-                
+
                 for (line_idx, line) in lines.iter().enumerate() {
                     let line_start = byte_offset;
                     let line_end = byte_offset + line.len();
-                    
+
                     if sel_end > line_start && sel_start < line_end {
                         let sel_start_in_line = sel_start.saturating_sub(line_start);
                         let sel_end_in_line = (sel_end - line_start).min(line.len());
-                        
-                        let sel_start_x = crate::text::measure_text(&line[..sel_start_in_line]).width + padding_left;
-                        let sel_end_x = crate::text::measure_text(&line[..sel_end_in_line]).width + padding_left;
+
+                        let sel_start_x = crate::text::measure_text(&line[..sel_start_in_line])
+                            .width
+                            + padding_left;
+                        let sel_end_x = crate::text::measure_text(&line[..sel_end_in_line]).width
+                            + padding_left;
                         let sel_width = sel_end_x - sel_start_x;
-                        
+
                         if sel_width > 0.0 {
                             let sel_rect = compose_ui_graphics::Rect {
                                 x: sel_start_x,
@@ -552,38 +560,41 @@ impl DrawModifierNode for TextFieldModifierNode {
                                 width: sel_width,
                                 height: line_height,
                             };
-                            primitives.push(DrawPrimitive::Rect { rect: sel_rect, brush: selection_brush.clone() });
+                            primitives.push(DrawPrimitive::Rect {
+                                rect: sel_rect,
+                                brush: selection_brush.clone(),
+                            });
                         }
                     }
                     byte_offset = line_end + 1;
                 }
             }
-            
+
             // Draw composition (IME preedit) underline
             // This shows the user which text is being composed by the input method
             if let Some(comp_range) = state.composition() {
                 let comp_start = comp_range.min();
                 let comp_end = comp_range.max();
-                
+
                 if comp_start < comp_end && comp_end <= text.len() {
                     let lines: Vec<&str> = text.split('\n').collect();
                     let mut byte_offset: usize = 0;
-                    
+
                     // Underline color: slightly transparent white/gray
                     let underline_brush = compose_ui_graphics::Brush::solid(
-                        compose_ui_graphics::Color(0.8, 0.8, 0.8, 0.8)
+                        compose_ui_graphics::Color(0.8, 0.8, 0.8, 0.8),
                     );
                     let underline_height: f32 = 2.0;
-                    
+
                     for (line_idx, line) in lines.iter().enumerate() {
                         let line_start = byte_offset;
                         let line_end = byte_offset + line.len();
-                        
+
                         // Check if composition overlaps this line
                         if comp_end > line_start && comp_start < line_end {
                             let comp_start_in_line = comp_start.saturating_sub(line_start);
                             let comp_end_in_line = (comp_end - line_start).min(line.len());
-                            
+
                             // Clamp to valid UTF-8 boundaries
                             let comp_start_in_line = if line.is_char_boundary(comp_start_in_line) {
                                 comp_start_in_line
@@ -595,22 +606,27 @@ impl DrawModifierNode for TextFieldModifierNode {
                             } else {
                                 line.len()
                             };
-                            
-                            let comp_start_x = crate::text::measure_text(&line[..comp_start_in_line]).width + padding_left;
-                            let comp_end_x = crate::text::measure_text(&line[..comp_end_in_line]).width + padding_left;
+
+                            let comp_start_x =
+                                crate::text::measure_text(&line[..comp_start_in_line]).width
+                                    + padding_left;
+                            let comp_end_x = crate::text::measure_text(&line[..comp_end_in_line])
+                                .width
+                                + padding_left;
                             let comp_width = comp_end_x - comp_start_x;
-                            
+
                             if comp_width > 0.0 {
                                 // Draw underline at the bottom of the text line
                                 let underline_rect = compose_ui_graphics::Rect {
                                     x: comp_start_x,
-                                    y: padding_top + (line_idx as f32 + 1.0) * line_height - underline_height,
+                                    y: padding_top + (line_idx as f32 + 1.0) * line_height
+                                        - underline_height,
                                     width: comp_width,
                                     height: underline_height,
                                 };
-                                primitives.push(DrawPrimitive::Rect { 
-                                    rect: underline_rect, 
-                                    brush: underline_brush.clone() 
+                                primitives.push(DrawPrimitive::Rect {
+                                    rect: underline_rect,
+                                    brush: underline_brush.clone(),
                                 });
                             }
                         }
@@ -618,27 +634,30 @@ impl DrawModifierNode for TextFieldModifierNode {
                     }
                 }
             }
-            
+
             // Draw cursor - check visibility at DRAW time for blinking
             if crate::cursor_animation::is_cursor_visible() {
-                
                 let pos = selection.start.min(text.len());
                 let text_before = &text[..pos];
                 let line_index = text_before.matches('\n').count();
                 let line_start = text_before.rfind('\n').map(|i| i + 1).unwrap_or(0);
-                let cursor_x = crate::text::measure_text(&text_before[line_start..]).width + padding_left;
+                let cursor_x =
+                    crate::text::measure_text(&text_before[line_start..]).width + padding_left;
                 let cursor_y = padding_top + line_index as f32 * line_height;
-                
+
                 let cursor_rect = compose_ui_graphics::Rect {
                     x: cursor_x,
                     y: cursor_y,
                     width: CURSOR_WIDTH,
                     height: line_height,
                 };
-                
-                primitives.push(DrawPrimitive::Rect { rect: cursor_rect, brush: cursor_brush.clone() });
+
+                primitives.push(DrawPrimitive::Rect {
+                    rect: cursor_rect,
+                    brush: cursor_brush.clone(),
+                });
             }
-            
+
             primitives
         }))
     }
@@ -720,7 +739,7 @@ impl TextFieldElement {
         self.cursor_color = color;
         self
     }
-    
+
     /// Creates an element with custom line limits.
     pub fn with_line_limits(mut self, line_limits: TextFieldLineLimits) -> Self {
         self.line_limits = line_limits;
@@ -755,7 +774,7 @@ impl PartialEq for TextFieldElement {
         // Compare by state identity (same Rc), cursor color, and line limits
         // This ensures node reuse when same state is passed, while detecting
         // actual changes that require updates
-        self.state == other.state 
+        self.state == other.state
             && self.cursor_color == other.cursor_color
             && self.line_limits == other.line_limits
     }
@@ -777,7 +796,7 @@ impl ModifierNodeElement for TextFieldElement {
         node.state = self.state.clone();
         node.cursor_brush = Brush::solid(self.cursor_color);
         node.line_limits = self.line_limits;
-        
+
         // Recreate the cached handler with the new state but same refs
         node.cached_handler = TextFieldModifierNode::create_handler(
             node.state.clone(),
@@ -793,7 +812,10 @@ impl ModifierNodeElement for TextFieldElement {
     }
 
     fn capabilities(&self) -> NodeCapabilities {
-        NodeCapabilities::LAYOUT | NodeCapabilities::DRAW | NodeCapabilities::SEMANTICS | NodeCapabilities::POINTER_INPUT
+        NodeCapabilities::LAYOUT
+            | NodeCapabilities::DRAW
+            | NodeCapabilities::SEMANTICS
+            | NodeCapabilities::POINTER_INPUT
     }
 
     fn always_update(&self) -> bool {
@@ -855,10 +877,10 @@ mod tests {
         with_test_runtime(|| {
             let state1 = TextFieldState::new("Hello");
             let state2 = TextFieldState::new("Hello"); // Different Rc, same text
-            
+
             let elem1 = TextFieldElement::new(state1.clone());
             let elem2 = TextFieldElement::new(state1.clone()); // Same state (Rc identity)
-            let elem3 = TextFieldElement::new(state2);         // Different state
+            let elem3 = TextFieldElement::new(state2); // Different state
 
             // Elements are equal only when they share the same state Rc
             // This ensures proper Eq/Hash contract compliance
@@ -868,7 +890,7 @@ mod tests {
     }
 
     /// Test that cursor draw command position is calculated correctly.
-    /// 
+    ///
     /// This test verifies that when we measure text width for cursor position:
     /// 1. The cursor x position = width of text before cursor
     /// 2. For text at cursor end, x = full text width
@@ -876,60 +898,78 @@ mod tests {
     fn test_cursor_x_position_calculation() {
         with_test_runtime(|| {
             // Test that text measurement works correctly for cursor positioning
-            
+
             // Empty text - cursor should be at x=0
             let empty_width = crate::text::measure_text("").width;
-            assert!(empty_width.abs() < 0.1, "Empty text should have 0 width, got {}", empty_width);
-            
+            assert!(
+                empty_width.abs() < 0.1,
+                "Empty text should have 0 width, got {}",
+                empty_width
+            );
+
             // Non-empty text - cursor at end should be at text width
             let hi_width = crate::text::measure_text("Hi").width;
-            assert!(hi_width > 0.0, "Text 'Hi' should have positive width: {}", hi_width);
-            
+            assert!(
+                hi_width > 0.0,
+                "Text 'Hi' should have positive width: {}",
+                hi_width
+            );
+
             // Partial text - cursor after 'H' should be at width of 'H'
             let h_width = crate::text::measure_text("H").width;
             assert!(h_width > 0.0, "Text 'H' should have positive width");
-            assert!(h_width < hi_width, "'H' width {} should be less than 'Hi' width {}", h_width, hi_width);
-            
+            assert!(
+                h_width < hi_width,
+                "'H' width {} should be less than 'Hi' width {}",
+                h_width,
+                hi_width
+            );
+
             // Verify TextFieldState selection tracks cursor correctly
             let state = TextFieldState::new("Hi");
-            assert_eq!(state.selection().start, 2, "Cursor should be at position 2 (end of 'Hi')");
-            
+            assert_eq!(
+                state.selection().start,
+                2,
+                "Cursor should be at position 2 (end of 'Hi')"
+            );
+
             // The text before cursor at position 2 in "Hi" is "Hi" itself
             let text = state.text();
             let cursor_pos = state.selection().start;
             let text_before_cursor = &text[..cursor_pos.min(text.len())];
             assert_eq!(text_before_cursor, "Hi");
-            
+
             // So cursor x = width of "Hi"
             let cursor_x = crate::text::measure_text(text_before_cursor).width;
-            assert!((cursor_x - hi_width).abs() < 0.1, 
-                "Cursor x {} should equal 'Hi' width {}", cursor_x, hi_width);
+            assert!(
+                (cursor_x - hi_width).abs() < 0.1,
+                "Cursor x {} should equal 'Hi' width {}",
+                cursor_x,
+                hi_width
+            );
         });
     }
 
-
-
     /// Test cursor is created when focused node is in slices.
-    #[test]  
+    #[test]
     fn test_focused_node_creates_cursor() {
         with_test_runtime(|| {
             let state = TextFieldState::new("Test");
             let element = TextFieldElement::new(state.clone());
-            let mut node = element.create();
-            
+            let node = element.create();
+
             // Initially not focused
             assert!(!node.is_focused());
-            
+
             // Set focus
             *node.refs.is_focused.borrow_mut() = true;
             assert!(node.is_focused());
-            
+
             // Verify the node has correct text
             assert_eq!(node.text(), "Test");
-            
+
             // Verify selection is at end
             assert_eq!(node.selection().start, 4);
         });
     }
 }
-

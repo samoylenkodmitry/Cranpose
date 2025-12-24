@@ -635,7 +635,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
                 );
             }
         }
-        
+
         let snapshot = active_snapshot();
         if let Some(state) = self
             .weak_self

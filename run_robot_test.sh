@@ -1,10 +1,11 @@
 #!/bin/bash
 
 # Robot test runner with logging
-# Runs all robot tests, logs output, and summarizes results
+# Runs all robot tests in the robot-runners directory, logs output, and summarizes results
 
 LOG_FILE="robot_test.log"
 SUMMARY_FILE="robot_test_summary.txt"
+ROBOT_DIR="apps/desktop-demo/robot-runners"
 
 # Clean previous logs
 rm -f "$LOG_FILE" "$SUMMARY_FILE"
@@ -18,30 +19,29 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit 1
 fi
 
-# All robot test examples
-EXAMPLES=(
-    "robot_async_pause"
-    "robot_async_tab_bug"
-    "robot_click_drag"
-    "robot_copy_paste"
-    "robot_double_click"
-    "robot_drag_selection"
-    "robot_increment_bug"
-    "robot_multiline_nav"
-    "robot_offset_test"
-    "robot_reactive_state"
-    "robot_tab_navigation"
-    "robot_tab_scroll"
-    "robot_tab_selection"
-    "robot_tabs_scroll"
-    "robot_text_input"
-    "robot_ui_breakage"
-    "robot_demo"
-    "robot_interactive"
-)
+# Dynamically discover all robot tests from the robot-runners directory
+# Exclude utility modules (files that don't have a main function)
+EXAMPLES=()
+for file in "$ROBOT_DIR"/robot_*.rs; do
+    if [ -f "$file" ]; then
+        # Extract the example name (filename without .rs extension)
+        example=$(basename "$file" .rs)
+        # Skip utility modules (they don't have fn main)
+        if [ "$example" = "robot_test_utils" ]; then
+            continue
+        fi
+        EXAMPLES+=("$example")
+    fi
+done
+
+if [ ${#EXAMPLES[@]} -eq 0 ]; then
+    echo "No robot tests found in $ROBOT_DIR" | tee -a "$LOG_FILE"
+    exit 1
+fi
 
 echo "============================================" | tee -a "$LOG_FILE"
 echo "Running Robot Test Suite" | tee -a "$LOG_FILE"
+echo "Found ${#EXAMPLES[@]} robot tests" | tee -a "$LOG_FILE"
 echo "Log file: $LOG_FILE" | tee -a "$LOG_FILE"
 echo "============================================" | tee -a "$LOG_FILE"
 
@@ -53,25 +53,51 @@ for example in "${EXAMPLES[@]}"; do
     echo "--------------------------------------------------" >> "$LOG_FILE"
     echo "Running $example..." | tee -a "$LOG_FILE"
     echo "--------------------------------------------------" >> "$LOG_FILE"
-    
-    # Run with timeout, capture exit code
+
+    # Run with timeout, capture exit code and output
+    timeout_secs=60
+    if [ "$example" = "robot_text_input" ]; then
+        timeout_secs=120
+    fi
+
+    # Create temp file for this test's output
+    TEST_OUTPUT=$(mktemp)
+
     if command -v timeout >/dev/null 2>&1; then
-        timeout 60s cargo run --package desktop-app --example "$example" --features robot-app >> "$LOG_FILE" 2>&1
+        timeout "${timeout_secs}s" cargo run --package desktop-app --example "$example" --features robot-app > "$TEST_OUTPUT" 2>&1
         EXIT_CODE=$?
     else
-        cargo run --package desktop-app --example "$example" --features robot-app >> "$LOG_FILE" 2>&1
+        cargo run --package desktop-app --example "$example" --features robot-app > "$TEST_OUTPUT" 2>&1
         EXIT_CODE=$?
     fi
-    
-    if [ $EXIT_CODE -eq 0 ]; then
+
+    # Append output to main log
+    cat "$TEST_OUTPUT" >> "$LOG_FILE"
+
+    # Check for failure patterns in output (case insensitive)
+    # Look for FAIL, FATAL, or panicked, but exclude "0 failed" style messages
+    FAIL_IN_LOG=false
+    if grep -qiE '\bFAIL\b|\bFATAL\b|panicked' "$TEST_OUTPUT"; then
+        # Make sure it's not a false positive like "0 failed"
+        if grep -iE '\bFAIL\b|\bFATAL\b|panicked' "$TEST_OUTPUT" | grep -qvE '^[[:space:]]*0 failed|test result:.*0 failed'; then
+            FAIL_IN_LOG=true
+        fi
+    fi
+
+    rm -f "$TEST_OUTPUT"
+
+    if [ $EXIT_CODE -eq 0 ] && [ "$FAIL_IN_LOG" = false ]; then
         echo "  [PASS] $example" | tee -a "$LOG_FILE"
         ((PASSED++))
     else
-        echo "  [FAIL] $example (exit: $EXIT_CODE)" | tee -a "$LOG_FILE"
+        REASON=""
+        [ $EXIT_CODE -ne 0 ] && REASON="exit=$EXIT_CODE"
+        [ "$FAIL_IN_LOG" = true ] && REASON="${REASON:+$REASON, }fail_in_log"
+        echo "  [FAIL] $example ($REASON)" | tee -a "$LOG_FILE"
         ((FAILED++))
         FAILED_TESTS+=("$example")
     fi
-    
+
     sleep 0.5
 done
 

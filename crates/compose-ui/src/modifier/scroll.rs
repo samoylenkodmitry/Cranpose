@@ -76,12 +76,12 @@ fn calculate_incremental_delta(from: Point, to: Point, is_vertical: bool) -> f32
 // ============================================================================
 
 /// Trait for scroll targets that can receive scroll deltas.
-/// 
+///
 /// Implemented by both `ScrollState` (regular scroll) and `LazyListState` (lazy lists).
 trait ScrollTarget {
     /// Apply a scroll delta. Returns the consumed amount.
     fn apply_delta(&self, delta: f32) -> f32;
-    
+
     /// Called after scroll to trigger any necessary invalidation.
     fn invalidate(&self);
 }
@@ -91,7 +91,7 @@ impl ScrollTarget for ScrollState {
         // Regular scroll uses negative delta (natural scrolling)
         self.dispatch_raw_delta(-delta)
     }
-    
+
     fn invalidate(&self) {
         // ScrollState triggers invalidation internally
     }
@@ -102,7 +102,7 @@ impl ScrollTarget for LazyListState {
         // LazyListState uses positive delta directly
         self.dispatch_scroll_delta(delta)
     }
-    
+
     fn invalidate(&self) {
         crate::request_layout_invalidation();
     }
@@ -180,7 +180,7 @@ impl<S: ScrollTarget> ScrollGestureDetector<S> {
         let Some(down_pos) = gs.drag_down_position else {
             return false;
         };
-        
+
         let Some(last_pos) = gs.last_position else {
             gs.last_position = Some(position);
             return false;
@@ -289,11 +289,8 @@ fn scroll_impl(state: ScrollState, is_vertical: bool, reverse_scrolling: bool) -
     let key = (state.id(), is_vertical);
     let pointer_input = Modifier::empty().pointer_input(key, move |scope| {
         // Create detector inside the async closure to capture the cloned state
-        let detector = ScrollGestureDetector::new(
-            gesture_state.clone(),
-            scroll_state.clone(),
-            is_vertical,
-        );
+        let detector =
+            ScrollGestureDetector::new(gesture_state.clone(), scroll_state.clone(), is_vertical);
 
         async move {
             scope
@@ -323,8 +320,8 @@ fn scroll_impl(state: ScrollState, is_vertical: bool, reverse_scrolling: bool) -
 
     // Create layout modifier for applying scroll offset to content
     let element = ScrollElement::new(state.clone(), is_vertical, reverse_scrolling);
-    let layout_modifier = Modifier::with_element(element).with_inspector_metadata(
-        inspector_metadata(
+    let layout_modifier =
+        Modifier::with_element(element).with_inspector_metadata(inspector_metadata(
             if is_vertical {
                 "verticalScroll"
             } else {
@@ -334,8 +331,7 @@ fn scroll_impl(state: ScrollState, is_vertical: bool, reverse_scrolling: bool) -
                 info.add_property("isVertical", is_vertical.to_string());
                 info.add_property("reverseScrolling", reverse_scrolling.to_string());
             },
-        ),
-    );
+        ));
 
     // Combine: pointer input THEN layout modifier
     pointer_input.then(layout_modifier)
@@ -367,23 +363,20 @@ impl Modifier {
 fn lazy_scroll_impl(state: LazyListState, is_vertical: bool) -> Modifier {
     let gesture_state = Rc::new(RefCell::new(ScrollGestureState::default()));
     let list_state = state.clone();
-    
+
     // Register invalidation callback so scroll_to_item() triggers layout
     state.add_invalidate_callback(Box::new(|| {
         crate::request_layout_invalidation();
     }));
-    
+
     // Use a unique key per LazyListState
     let state_id = std::ptr::addr_of!(*state.inner_ptr()) as usize;
     let key = (state_id, is_vertical);
-    
+
     Modifier::empty().pointer_input(key, move |scope| {
         // Use the same generic detector with LazyListState
-        let detector = ScrollGestureDetector::new(
-            gesture_state.clone(),
-            list_state.clone(),
-            is_vertical,
-        );
+        let detector =
+            ScrollGestureDetector::new(gesture_state.clone(), list_state.clone(), is_vertical);
 
         async move {
             scope
@@ -394,7 +387,9 @@ fn lazy_scroll_impl(state: LazyListState, is_vertical: bool) -> Modifier {
                         // Delegate to detector's lifecycle methods
                         let should_consume = match event.kind {
                             PointerEventKind::Down => detector.on_down(event.position),
-                            PointerEventKind::Move => detector.on_move(event.position, event.buttons),
+                            PointerEventKind::Move => {
+                                detector.on_move(event.position, event.buttons)
+                            }
                             PointerEventKind::Up => detector.on_up(),
                             PointerEventKind::Cancel => detector.on_cancel(),
                         };

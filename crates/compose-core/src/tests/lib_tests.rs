@@ -22,6 +22,16 @@ struct TestDummyNode;
 
 impl Node for TestDummyNode {}
 
+struct MountTrackingNode {
+    mounted: Rc<Cell<usize>>,
+}
+
+impl Node for MountTrackingNode {
+    fn mount(&mut self) {
+        self.mounted.set(self.mounted.get() + 1);
+    }
+}
+
 fn runtime_handle() -> (RuntimeHandle, Runtime) {
     let runtime = Runtime::new(Arc::new(TestScheduler));
     (runtime.handle(), runtime)
@@ -194,6 +204,59 @@ fn subcompose_reuses_nodes_across_calls() {
         drop(composer);
         teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
     }
+}
+
+#[test]
+fn apply_pending_commands_makes_subcomposed_nodes_available() {
+    let (handle, _runtime) = runtime_handle();
+    let mut slots = SlotBackend::default();
+    let mut applier = MemoryApplier::new();
+    let mut state = SubcomposeState::default();
+    let mounted = Rc::new(Cell::new(0));
+
+    let (composer, slots_host, applier_host) =
+        setup_composer(&mut slots, &mut applier, handle, None);
+    composer.set_phase(Phase::Measure);
+
+    let (_, nodes) = composer.subcompose(&mut state, SlotId::new(1), |composer| {
+        let mounted = Rc::clone(&mounted);
+        composer.emit_node(|| MountTrackingNode { mounted })
+    });
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(mounted.get(), 0);
+
+    composer
+        .apply_pending_commands()
+        .expect("apply_pending_commands failed");
+
+    assert_eq!(mounted.get(), 1);
+
+    drop(composer);
+    teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
+}
+
+#[test]
+fn with_slot_value_reads_and_updates() {
+    let (handle, _runtime) = runtime_handle();
+    let mut slots = SlotBackend::default();
+    let mut applier = MemoryApplier::new();
+    let (composer, slots_host, applier_host) =
+        setup_composer(&mut slots, &mut applier, handle, None);
+    let key = location_key(file!(), line!(), column!());
+
+    composer.with_group(key, |composer| {
+        let slot_id = composer.use_value_slot(|| 10i32);
+        let initial = composer.with_slot_value::<i32, _>(slot_id, |value| *value);
+        assert_eq!(initial, 10);
+        composer.with_slot_value_mut::<i32, _>(slot_id, |value| {
+            *value = 42;
+        });
+        let updated = composer.with_slot_value::<i32, _>(slot_id, |value| *value);
+        assert_eq!(updated, 42);
+    });
+
+    drop(composer);
+    teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
 }
 
 #[test]
@@ -3945,23 +4008,23 @@ fn emit_node_rejects_reuse_when_parent_did_not_own_child() {
     let (handle, _runtime) = runtime_handle();
     let mut slots = SlotBackend::default();
     let mut applier = MemoryApplier::new();
-    
+
     // Create a parent and child node in the applier
     let parent_a = applier.create(Box::new(RecordingNode::default()));
     let parent_b = applier.create(Box::new(RecordingNode::default()));
-    
+
     // Setup the test: we'll push parent_b and try to reuse a child that was
     // previously under parent_a. The emit_node should reject the reuse.
     let (composer, slots_host, applier_host) =
         setup_composer(&mut slots, &mut applier, handle.clone(), Some(parent_a));
-    
+
     // First, emit a child under parent_a's context
     let child_id = composer.emit_node(|| TestDummyNode);
-    
+
     // Now push parent_b with last_node_reused=false (simulating new parent)
     composer.core.last_node_reused.set(Some(false));
     composer.push_parent(parent_b);
-    
+
     // The parent_b's previous children should be empty since it wasn't reused
     {
         let stack = composer.parent_stack();
@@ -3971,11 +4034,11 @@ fn emit_node_rejects_reuse_when_parent_did_not_own_child() {
             "New parent should have empty previous children"
         );
     }
-    
+
     composer.pop_parent();
     drop(composer);
     teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
-    
+
     // Verify child was created
     assert!(child_id > 0, "Child should have been created");
 }
@@ -3988,16 +4051,16 @@ fn push_parent_uses_empty_previous_when_not_reused() {
     let (handle, _runtime) = runtime_handle();
     let mut slots = SlotBackend::default();
     let mut applier = MemoryApplier::new();
-    
+
     let parent_id = applier.create(Box::new(RecordingNode::default()));
-    
+
     let (composer, slots_host, applier_host) =
         setup_composer(&mut slots, &mut applier, handle.clone(), Some(parent_id));
-    
+
     // Simulate: last node was NOT reused (new node created)
     composer.core.last_node_reused.set(Some(false));
     composer.push_parent(parent_id);
-    
+
     // Verify that previous is empty when node was not reused
     {
         let stack = composer.parent_stack();
@@ -4007,7 +4070,7 @@ fn push_parent_uses_empty_previous_when_not_reused() {
             "When parent was not reused, previous children should be empty"
         );
     }
-    
+
     composer.pop_parent();
     drop(composer);
     teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
@@ -4021,40 +4084,40 @@ fn push_parent_inherits_previous_when_reused() {
     let (handle, _runtime) = runtime_handle();
     let mut slots = SlotBackend::default();
     let mut applier = MemoryApplier::new();
-    
+
     let parent_id = applier.create(Box::new(RecordingNode::default()));
-    
+
     {
         let (composer, slots_host, applier_host) =
             setup_composer(&mut slots, &mut applier, handle.clone(), Some(parent_id));
-        
+
         // First pass: establish children
         composer.core.last_node_reused.set(Some(true)); // Pretend parent was reused
         composer.push_parent(parent_id);
-        
+
         // Simulate adding a child
         {
             let mut stack = composer.parent_stack();
             let frame = stack.last_mut().expect("parent frame should exist");
             frame.new_children.push(42); // Fake child ID
         }
-        
+
         composer.pop_parent();
         drop(composer);
         teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
     }
-    
+
     // Reset for second pass
     slots.reset();
-    
+
     {
         let (composer, slots_host, applier_host) =
             setup_composer(&mut slots, &mut applier, handle.clone(), Some(parent_id));
-        
+
         // Second pass: parent is reused, should inherit previous children
         composer.core.last_node_reused.set(Some(true));
         composer.push_parent(parent_id);
-        
+
         // Verify that previous contains the child from first pass
         {
             let stack = composer.parent_stack();
@@ -4065,7 +4128,7 @@ fn push_parent_inherits_previous_when_reused() {
                 "When parent was reused, previous children should be inherited"
             );
         }
-        
+
         composer.pop_parent();
         drop(composer);
         teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
@@ -4087,12 +4150,12 @@ fn emit_node_creates_nodes_when_parent_restored_after_conditional_removal() {
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let toggle = MutableState::with_runtime(true, runtime.clone());
-    
+
     let key = location_key(file!(), line!(), column!());
-    
+
     // Track child node IDs across renders
     let child_ids: Rc<RefCell<Vec<NodeId>>> = Rc::new(RefCell::new(Vec::new()));
-    
+
     // First render: parent visible with child
     println!("=== First render: parent visible ===");
     {
@@ -4105,24 +4168,24 @@ fn emit_node_creates_nodes_when_parent_restored_after_conditional_removal() {
                         let _parent = composer.emit_node(|| TestDummyNode);
                         composer.core.last_node_reused.set(Some(true));
                         composer.push_parent(_parent);
-                        
+
                         // Child node - track its ID
-                        let child = composer.emit_node(|| TestTextNode { 
-                            text: "Reusable Child".to_string() 
+                        let child = composer.emit_node(|| TestTextNode {
+                            text: "Reusable Child".to_string(),
                         });
                         child_ids.borrow_mut().push(child);
-                        
+
                         composer.pop_parent();
                     });
                 }
             })
             .expect("first render");
     }
-    
+
     let first_child_id = child_ids.borrow()[0];
     println!("First child ID: {}", first_child_id);
     assert!(first_child_id > 0, "First child should be created");
-    
+
     // Second render: parent removed (simulate tab switch away)
     println!("=== Second render: parent hidden ===");
     toggle.set_value(false);
@@ -4135,7 +4198,7 @@ fn emit_node_creates_nodes_when_parent_restored_after_conditional_removal() {
             })
             .expect("second render");
     }
-    
+
     // Third render: parent restored (simulate tab switch back)
     // This is where the regression occurred - emit_node was failing
     // when parent's previous children was empty
@@ -4152,26 +4215,26 @@ fn emit_node_creates_nodes_when_parent_restored_after_conditional_removal() {
                         let reused = composer.core.last_node_reused.get();
                         println!("Parent reused: {:?}", reused);
                         composer.push_parent(_parent);
-                        
+
                         // CRITICAL: Child node should be successfully created/reused
                         // even though parent's previous children list may be empty.
                         // This is what broke when we added the parent_contains check.
-                        let child = composer.emit_node(|| TestTextNode { 
-                            text: "Reusable Child".to_string() 
+                        let child = composer.emit_node(|| TestTextNode {
+                            text: "Reusable Child".to_string(),
                         });
                         child_ids.borrow_mut().push(child);
                         println!("Third render child ID: {}", child);
-                        
+
                         composer.pop_parent();
                     });
                 }
             })
             .expect("third render");
     }
-    
+
     let third_child_id = child_ids.borrow().last().copied().unwrap();
     println!("Third child ID: {}", third_child_id);
-    
+
     // CRITICAL: The child should be VALID (non-zero ID) after parent restoration.
     // The ID may or may not be the same as the first ID (depends on SlotTable behavior),
     // but the important thing is emit_node succeeded.
@@ -4180,10 +4243,11 @@ fn emit_node_creates_nodes_when_parent_restored_after_conditional_removal() {
         "Child node should be successfully created after parent restoration. \
          If this fails, emit_node is rejecting node creation when previous is empty."
     );
-    
+
     // Verify we got two child IDs (one from first render, one from third render)
     assert_eq!(
-        child_ids.borrow().len(), 2,
+        child_ids.borrow().len(),
+        2,
         "Should have recorded child IDs from both visible renders"
     );
 }
@@ -4196,37 +4260,40 @@ fn emit_node_works_with_new_parent_having_empty_previous() {
     let (handle, _runtime) = runtime_handle();
     let mut slots = SlotBackend::default();
     let mut applier = MemoryApplier::new();
-    
+
     let parent_id = applier.create(Box::new(RecordingNode::default()));
-    
+
     let (composer, slots_host, applier_host) =
         setup_composer(&mut slots, &mut applier, handle.clone(), Some(parent_id));
-    
+
     // Simulate a NEW parent (not reused) - this gives empty previous children
     composer.core.last_node_reused.set(Some(false));
     composer.push_parent(parent_id);
-    
+
     // Verify previous is empty (this is the push_parent conditional behavior)
     {
         let stack = composer.parent_stack();
         let frame = stack.last().expect("parent frame should exist");
-        assert!(frame.previous.is_empty(), "New parent should have empty previous");
+        assert!(
+            frame.previous.is_empty(),
+            "New parent should have empty previous"
+        );
     }
-    
+
     // Now emit a child - this should WORK even though previous is empty
     // The child should be created (or reused based on type, if one exists in slots)
     let child_id = composer.emit_node(|| TestDummyNode);
-    
-    // The child should have a valid ID  
+
+    // The child should have a valid ID
     assert!(child_id > 0, "Child should be emitted successfully");
-    
+
     // last_node_reused should be set (either true for reuse or false for new)
     let was_reused = composer.core.last_node_reused.get();
     assert!(
         was_reused.is_some(),
         "emit_node should set last_node_reused"
     );
-    
+
     composer.pop_parent();
     drop(composer);
     teardown_composer(&mut slots, &mut applier, slots_host, applier_host);

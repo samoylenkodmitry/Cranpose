@@ -30,7 +30,7 @@ fn test_app() {
         move || {
             // Header
             Text(
-                format!("LazyColumn Performance Test"),
+                "LazyColumn Performance Test".to_string(),
                 Modifier::empty().padding(8.0),
             );
 
@@ -123,7 +123,10 @@ fn format_large_number(n: usize) -> String {
 fn main() {
     env_logger::init();
     println!("=== LazyColumn Performance Test (usize::MAX items) ===\n");
-    println!("Testing virtualization with {} items...\n", format_large_number(ITEM_COUNT));
+    println!(
+        "Testing virtualization with {} items...\n",
+        format_large_number(ITEM_COUNT)
+    );
 
     AppLauncher::new()
         .with_title("LazyColumn Perf Test")
@@ -157,7 +160,10 @@ fn main() {
                 }
             }
 
-            println!("  Visible items: {} (at scroll position 0)", visible_items.len());
+            println!(
+                "  Visible items: {} (at scroll position 0)",
+                visible_items.len()
+            );
             if visible_items.len() >= 8 {
                 println!("  ✓ Expected number of items rendered");
             } else {
@@ -180,7 +186,7 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(300));
                 let jump_time = jump_start.elapsed();
                 println!("  ✓ Button clicked, jump time: {:?}", jump_time);
-                
+
                 if jump_time < Duration::from_millis(500) {
                     println!("  ✓ Jump < 500ms (O(1) scroll performance)");
                 }
@@ -188,9 +194,9 @@ fn main() {
                 println!("  ✗ Button not found!");
             }
 
-            // Check which items are visible after jump  
+            // Check which items are visible after jump
             std::thread::sleep(Duration::from_millis(200));
-            
+
             // Look for items around the middle
             let search_start = middle_index.saturating_sub(10);
             let mut found_middle_items = Vec::new();
@@ -201,7 +207,7 @@ fn main() {
                     found_middle_items.push(idx);
                 }
             }
-            
+
             if !found_middle_items.is_empty() {
                 println!("  ✓ Jumped to middle: found items {:?}", found_middle_items);
             } else {
@@ -215,11 +221,17 @@ fn main() {
                 }
                 let first_before = visible_items.first().map(|(i, _)| *i).unwrap_or(0);
                 let first_after = items_after.first().copied().unwrap_or(0);
-                
+
                 if first_after > first_before {
-                    println!("  ✓ Scroll worked: first item {} -> {}", first_before, first_after);
+                    println!(
+                        "  ✓ Scroll worked: first item {} -> {}",
+                        first_before, first_after
+                    );
                 } else {
-                    println!("  ⚠️ Items near middle not found, visible: {:?}", items_after);
+                    println!(
+                        "  ⚠️ Items near middle not found, visible: {:?}",
+                        items_after
+                    );
                 }
             }
 
@@ -229,14 +241,20 @@ fn main() {
             // Check that we're NOT composing millions of items
             let expected_max_visible = 20; // Generous estimate
             if visible_items.len() <= expected_max_visible {
-                println!("  ✓ Virtualization working: only {} items composed", visible_items.len());
+                println!(
+                    "  ✓ Virtualization working: only {} items composed",
+                    visible_items.len()
+                );
             } else {
                 println!("  ✗ Too many items composed: {}", visible_items.len());
             }
 
             // Timing checks
             if initial_render_time < Duration::from_secs(2) {
-                println!("  ✓ Initial render < 2s (actual: {:?})", initial_render_time);
+                println!(
+                    "  ✓ Initial render < 2s (actual: {:?})",
+                    initial_render_time
+                );
             } else {
                 println!("  ✗ Initial render too slow: {:?}", initial_render_time);
             }
@@ -249,7 +267,10 @@ fn main() {
             if success {
                 println!("✓ Performance test PASSED");
                 println!("  - {} items total", format_large_number(ITEM_COUNT));
-                println!("  - {} items visible (O(1) virtualization)", visible_items.len());
+                println!(
+                    "  - {} items visible (O(1) virtualization)",
+                    visible_items.len()
+                );
                 println!("  - Initial render: {:?}", initial_render_time);
             } else {
                 println!("✗ Performance test FAILED");

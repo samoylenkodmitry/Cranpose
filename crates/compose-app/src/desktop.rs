@@ -58,16 +58,37 @@ pub struct SemanticRect {
 #[derive(Debug)]
 #[allow(dead_code)] // TouchDown, TouchMove, TouchUp reserved for future use
 enum RobotCommand {
-    Click { x: f32, y: f32 },
-    MoveTo { x: f32, y: f32 },
+    Click {
+        x: f32,
+        y: f32,
+    },
+    MoveTo {
+        x: f32,
+        y: f32,
+    },
     MouseDown,
     MouseUp,
-    TouchDown { x: f32, y: f32 },
-    TouchMove { x: f32, y: f32 },
-    TouchUp { x: f32, y: f32 },
+    TouchDown {
+        x: f32,
+        y: f32,
+    },
+    TouchMove {
+        x: f32,
+        y: f32,
+    },
+    TouchUp {
+        x: f32,
+        y: f32,
+    },
     TypeText(String),
     SendKey(String), // Key code like "Up", "Down", "Home", "End", "Return", "a", etc.
-    SendKeyWithModifiers { key: String, shift: bool, ctrl: bool, alt: bool, meta: bool },
+    SendKeyWithModifiers {
+        key: String,
+        shift: bool,
+        ctrl: bool,
+        alt: bool,
+        meta: bool,
+    },
     WaitForIdle,
     GetSemantics,
     Exit,
@@ -124,7 +145,8 @@ pub struct Robot {
 impl Robot {
     /// Click at the specified coordinates (logical pixels)
     pub fn click(&self, x: f32, y: f32) -> Result<(), String> {
-        self.tx.send(RobotCommand::Click { x, y })
+        self.tx
+            .send(RobotCommand::Click { x, y })
             .map_err(|e| format!("Failed to send click command: {}", e))?;
         match self.rx.recv() {
             Ok(RobotResponse::Ok) => Ok(()),
@@ -136,7 +158,8 @@ impl Robot {
 
     /// Move cursor to the specified coordinates (logical pixels)
     pub fn move_to(&self, x: f32, y: f32) -> Result<(), String> {
-        self.tx.send(RobotCommand::MoveTo { x, y })
+        self.tx
+            .send(RobotCommand::MoveTo { x, y })
             .map_err(|e| format!("Failed to send move command: {}", e))?;
         match self.rx.recv() {
             Ok(RobotResponse::Ok) => Ok(()),
@@ -153,7 +176,8 @@ impl Robot {
 
     /// Press the left mouse button at the current cursor position
     pub fn mouse_down(&self) -> Result<(), String> {
-        self.tx.send(RobotCommand::MouseDown)
+        self.tx
+            .send(RobotCommand::MouseDown)
             .map_err(|e| format!("Failed to send mouse down command: {}", e))?;
         match self.rx.recv() {
             Ok(RobotResponse::Ok) => Ok(()),
@@ -165,7 +189,8 @@ impl Robot {
 
     /// Release the left mouse button at the current cursor position
     pub fn mouse_up(&self) -> Result<(), String> {
-        self.tx.send(RobotCommand::MouseUp)
+        self.tx
+            .send(RobotCommand::MouseUp)
             .map_err(|e| format!("Failed to send mouse up command: {}", e))?;
         match self.rx.recv() {
             Ok(RobotResponse::Ok) => Ok(()),
@@ -174,7 +199,6 @@ impl Robot {
             Err(e) => Err(format!("Failed to receive response: {}", e)),
         }
     }
-
 
     /// Perform a drag gesture from one point to another
     ///
@@ -194,10 +218,14 @@ impl Robot {
     /// ```
     pub fn drag(&self, from_x: f32, from_y: f32, to_x: f32, to_y: f32) -> Result<(), String> {
         // Touch down at start position
-        self.tx.send(RobotCommand::TouchDown { x: from_x, y: from_y })
+        self.tx
+            .send(RobotCommand::TouchDown {
+                x: from_x,
+                y: from_y,
+            })
             .map_err(|e| format!("Failed to send touch down: {}", e))?;
         match self.rx.recv() {
-            Ok(RobotResponse::Ok) => {},
+            Ok(RobotResponse::Ok) => {}
             Ok(RobotResponse::Error(e)) => return Err(e),
             Ok(_) => return Err("Unexpected response".to_string()),
             Err(e) => return Err(format!("Failed to receive response: {}", e)),
@@ -209,11 +237,12 @@ impl Robot {
             let t = i as f32 / steps as f32;
             let x = from_x + (to_x - from_x) * t;
             let y = from_y + (to_y - from_y) * t;
-            
-            self.tx.send(RobotCommand::TouchMove { x, y })
+
+            self.tx
+                .send(RobotCommand::TouchMove { x, y })
                 .map_err(|e| format!("Failed to send touch move: {}", e))?;
             match self.rx.recv() {
-                Ok(RobotResponse::Ok) => {},
+                Ok(RobotResponse::Ok) => {}
                 Ok(RobotResponse::Error(e)) => return Err(e),
                 Ok(_) => return Err("Unexpected response".to_string()),
                 Err(e) => return Err(format!("Failed to receive response: {}", e)),
@@ -221,7 +250,8 @@ impl Robot {
         }
 
         // Touch up at end position
-        self.tx.send(RobotCommand::TouchUp { x: to_x, y: to_y })
+        self.tx
+            .send(RobotCommand::TouchUp { x: to_x, y: to_y })
             .map_err(|e| format!("Failed to send touch up: {}", e))?;
         match self.rx.recv() {
             Ok(RobotResponse::Ok) => Ok(()),
@@ -233,7 +263,8 @@ impl Robot {
 
     /// Wait for the application to be idle (no redraws, no animations)
     pub fn wait_for_idle(&self) -> Result<(), String> {
-        self.tx.send(RobotCommand::WaitForIdle)
+        self.tx
+            .send(RobotCommand::WaitForIdle)
             .map_err(|e| format!("Failed to send wait command: {}", e))?;
         match self.rx.recv() {
             Ok(RobotResponse::Ok) => Ok(()),
@@ -254,7 +285,8 @@ impl Robot {
     /// robot.type_text("Hello World")?;
     /// ```
     pub fn type_text(&self, text: &str) -> Result<(), String> {
-        self.tx.send(RobotCommand::TypeText(text.to_string()))
+        self.tx
+            .send(RobotCommand::TypeText(text.to_string()))
             .map_err(|e| format!("Failed to send type_text command: {}", e))?;
         match self.rx.recv() {
             Ok(RobotResponse::Ok) => Ok(()),
@@ -277,7 +309,8 @@ impl Robot {
     /// robot.send_key("Up")?; // Press Up arrow
     /// ```
     pub fn send_key(&self, key: &str) -> Result<(), String> {
-        self.tx.send(RobotCommand::SendKey(key.to_string()))
+        self.tx
+            .send(RobotCommand::SendKey(key.to_string()))
             .map_err(|e| format!("Failed to send send_key command: {}", e))?;
         match self.rx.recv() {
             Ok(RobotResponse::Ok) => Ok(()),
@@ -306,13 +339,14 @@ impl Robot {
         alt: bool,
         meta: bool,
     ) -> Result<(), String> {
-        self.tx.send(RobotCommand::SendKeyWithModifiers {
-            key: key.to_string(),
-            shift,
-            ctrl,
-            alt,
-            meta,
-        })
+        self.tx
+            .send(RobotCommand::SendKeyWithModifiers {
+                key: key.to_string(),
+                shift,
+                ctrl,
+                alt,
+                meta,
+            })
             .map_err(|e| format!("Failed to send send_key_with_modifiers command: {}", e))?;
         match self.rx.recv() {
             Ok(RobotResponse::Ok) => Ok(()),
@@ -324,7 +358,8 @@ impl Robot {
 
     /// Exit the application
     pub fn exit(&self) -> Result<(), String> {
-        self.tx.send(RobotCommand::Exit)
+        self.tx
+            .send(RobotCommand::Exit)
             .map_err(|e| format!("Failed to send exit command: {}", e))?;
         match self.rx.recv() {
             Ok(RobotResponse::Ok) => Ok(()),
@@ -336,7 +371,8 @@ impl Robot {
 
     /// Get semantic tree with geometric bounds
     pub fn get_semantics(&self) -> Result<Vec<SemanticElement>, String> {
-        self.tx.send(RobotCommand::GetSemantics)
+        self.tx
+            .send(RobotCommand::GetSemantics)
             .map_err(|e| format!("Failed to send get_semantics: {}", e))?;
         match self.rx.recv() {
             Ok(RobotResponse::Semantics(elements)) => Ok(elements),
@@ -347,7 +383,10 @@ impl Robot {
     }
 
     /// Find any element by text content (recursive search)
-    pub fn find_by_text<'a>(elements: &'a [SemanticElement], text: &str) -> Option<&'a SemanticElement> {
+    pub fn find_by_text<'a>(
+        elements: &'a [SemanticElement],
+        text: &str,
+    ) -> Option<&'a SemanticElement> {
         for elem in elements {
             if let Some(elem_text) = &elem.text {
                 if elem_text.contains(text) {
@@ -366,7 +405,10 @@ impl Robot {
     /// In Compose, buttons are often Layout elements with clickable actions
     /// containing Text children. This searches for clickable elements where
     /// either the element itself or its children contain the text.
-    pub fn find_button<'a>(elements: &'a [SemanticElement], text: &str) -> Option<&'a SemanticElement> {
+    pub fn find_button<'a>(
+        elements: &'a [SemanticElement],
+        text: &str,
+    ) -> Option<&'a SemanticElement> {
         for elem in elements {
             if elem.clickable {
                 // Check if this clickable element or its children have the text
@@ -413,11 +455,11 @@ impl Robot {
         let semantics = self.get_semantics()?;
         let elem = Self::find_button(&semantics, text)
             .ok_or_else(|| format!("Button '{}' not found in semantic tree", text))?;
-        
+
         // Click center of bounds
         let center_x = elem.bounds.x + elem.bounds.width / 2.0;
         let center_y = elem.bounds.y + elem.bounds.height / 2.0;
-        
+
         self.click(center_x, center_y)
     }
 
@@ -452,7 +494,9 @@ impl Robot {
     pub fn print_semantics(elements: &[SemanticElement], indent: usize) {
         for elem in elements {
             let prefix = "  ".repeat(indent);
-            let text_info = elem.text.as_ref()
+            let text_info = elem
+                .text
+                .as_ref()
                 .map(|t| format!(" text=\"{}\"", t))
                 .unwrap_or_default();
             let clickable = if elem.clickable { " [CLICKABLE]" } else { "" };
@@ -540,46 +584,79 @@ impl ApplicationHandler for App {
             .create_surface(window.clone())
             .expect("failed to create surface");
 
-        let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-        })) {
-            Ok(adapter) => adapter,
-            Err(e) => {
-                // Provide helpful error message for GPU issues
-                eprintln!("\n╔══════════════════════════════════════════════════════════════════╗");
-                eprintln!("║                    GPU ADAPTER NOT FOUND                          ║");
-                eprintln!("╠══════════════════════════════════════════════════════════════════╣");
-                eprintln!("║ No suitable graphics adapter was found. This usually means:      ║");
-                eprintln!("║                                                                  ║");
-                eprintln!("║   • GPU drivers are not installed or not working                 ║");
-                eprintln!("║   • Vulkan/OpenGL support is missing or broken                   ║");
-                eprintln!("║   • A recent system update broke graphics drivers                ║");
-                eprintln!("║                                                                  ║");
-                eprintln!("║ To fix this on Linux:                                            ║");
-                eprintln!("║   1. Check Vulkan: vulkaninfo | head -20                         ║");
-                eprintln!("║   2. Reinstall drivers:                                          ║");
-                eprintln!("║      - Mesa: sudo pacman -S mesa vulkan-mesa-layers              ║");
-                eprintln!("║      - NVIDIA: sudo pacman -S nvidia-utils                       ║");
-                eprintln!("║   3. Reboot your system                                          ║");
-                eprintln!("║                                                                  ║");
-                eprintln!("║ Technical details: {:?}", e);
-                eprintln!("╚══════════════════════════════════════════════════════════════════╝\n");
-                event_loop.exit();
-                return;
-            }
-        };
+        let adapter =
+            match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+            })) {
+                Ok(adapter) => adapter,
+                Err(e) => {
+                    // Provide helpful error message for GPU issues
+                    eprintln!(
+                        "\n╔══════════════════════════════════════════════════════════════════╗"
+                    );
+                    eprintln!(
+                        "║                    GPU ADAPTER NOT FOUND                          ║"
+                    );
+                    eprintln!(
+                        "╠══════════════════════════════════════════════════════════════════╣"
+                    );
+                    eprintln!(
+                        "║ No suitable graphics adapter was found. This usually means:      ║"
+                    );
+                    eprintln!(
+                        "║                                                                  ║"
+                    );
+                    eprintln!(
+                        "║   • GPU drivers are not installed or not working                 ║"
+                    );
+                    eprintln!(
+                        "║   • Vulkan/OpenGL support is missing or broken                   ║"
+                    );
+                    eprintln!(
+                        "║   • A recent system update broke graphics drivers                ║"
+                    );
+                    eprintln!(
+                        "║                                                                  ║"
+                    );
+                    eprintln!(
+                        "║ To fix this on Linux:                                            ║"
+                    );
+                    eprintln!(
+                        "║   1. Check Vulkan: vulkaninfo | head -20                         ║"
+                    );
+                    eprintln!(
+                        "║   2. Reinstall drivers:                                          ║"
+                    );
+                    eprintln!(
+                        "║      - Mesa: sudo pacman -S mesa vulkan-mesa-layers              ║"
+                    );
+                    eprintln!(
+                        "║      - NVIDIA: sudo pacman -S nvidia-utils                       ║"
+                    );
+                    eprintln!(
+                        "║   3. Reboot your system                                          ║"
+                    );
+                    eprintln!(
+                        "║                                                                  ║"
+                    );
+                    eprintln!("║ Technical details: {:?}", e);
+                    eprintln!(
+                        "╚══════════════════════════════════════════════════════════════════╝\n"
+                    );
+                    event_loop.exit();
+                    return;
+                }
+            };
 
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("Main Device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-                memory_hints: wgpu::MemoryHints::default(),
-                trace: wgpu::Trace::Off,
-            },
-        ))
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("Main Device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default(),
+            memory_hints: wgpu::MemoryHints::default(),
+            trace: wgpu::Trace::Off,
+        }))
         .expect("failed to create device");
 
         let size = window.inner_size();
@@ -645,9 +722,13 @@ impl ApplicationHandler for App {
         }
 
         let Some(app) = &mut self.app else { return };
-        let Some(platform) = &mut self.platform else { return };
+        let Some(platform) = &mut self.platform else {
+            return;
+        };
         let Some(surface) = &self.surface else { return };
-        let Some(surface_config) = &mut self.surface_config else { return };
+        let Some(surface_config) = &mut self.surface_config else {
+            return;
+        };
 
         match event {
             WindowEvent::CloseRequested => {
@@ -713,31 +794,32 @@ impl ApplicationHandler for App {
                 state: ElementState::Pressed,
                 button: MouseButton::Middle,
                 ..
-            } => {
+            } =>
+            {
                 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
                 if let Some(text) = app.get_primary_selection() {
                     if app.on_paste(&text) {
                         window.request_redraw();
                     }
                 }
-            },
+            }
             WindowEvent::KeyboardInput { event, .. } => {
-                use winit::keyboard::{Key, PhysicalKey};
                 use compose_app_shell::{KeyCode, KeyEvent, KeyEventType, Modifiers};
-                
+                use winit::keyboard::{Key, PhysicalKey};
+
                 // Convert winit key event to compose-ui KeyEvent
                 let event_type = match event.state {
                     ElementState::Pressed => KeyEventType::KeyDown,
                     ElementState::Released => KeyEventType::KeyUp,
                 };
-                
+
                 // Get text from logical key
                 let text = match &event.logical_key {
                     Key::Character(s) => s.to_string(),
                     Key::Named(winit::keyboard::NamedKey::Space) => " ".to_string(),
                     _ => String::new(),
                 };
-                
+
                 // Convert physical key to KeyCode
                 let key_code = match event.physical_key {
                     PhysicalKey::Code(code) => match code {
@@ -793,7 +875,7 @@ impl ApplicationHandler for App {
                     },
                     _ => KeyCode::Unknown,
                 };
-                
+
                 // Convert winit modifier state to our Modifiers struct
                 let modifiers = Modifiers {
                     shift: self.current_modifiers.shift_key(),
@@ -801,14 +883,14 @@ impl ApplicationHandler for App {
                     alt: self.current_modifiers.alt_key(),
                     meta: self.current_modifiers.super_key(),
                 };
-                
+
                 let key_event = KeyEvent::new(key_code, text, modifiers, event_type);
-                
+
                 // Special: still handle D for debug info
                 if key_code == KeyCode::D && event_type == KeyEventType::KeyDown {
                     app.log_debug_info();
                 }
-                
+
                 // Dispatch to text fields
                 if app.on_key_event(&key_event) {
                     window.request_redraw();
@@ -952,7 +1034,7 @@ impl ApplicationHandler for App {
                     }
                     RobotCommand::TypeText(text) => {
                         use compose_app_shell::{KeyEvent, KeyEventType, Modifiers};
-                        
+
                         // Send key events for each character
                         for ch in text.chars() {
                             // Map character to key code (simplified)
@@ -972,7 +1054,7 @@ impl ApplicationHandler for App {
                     }
                     RobotCommand::SendKey(key) => {
                         use compose_app_shell::{KeyCode, KeyEvent, KeyEventType, Modifiers};
-                        
+
                         // Map key string to KeyCode and text
                         let (key_code, text) = match key.as_str() {
                             // Navigation keys
@@ -1017,21 +1099,23 @@ impl ApplicationHandler for App {
                             "z" => (KeyCode::Z, String::from("z")),
                             _ => (KeyCode::Unknown, String::new()),
                         };
-                        
-                        let key_event = KeyEvent::new(
-                            key_code,
-                            text,
-                            Modifiers::NONE,
-                            KeyEventType::KeyDown,
-                        );
+
+                        let key_event =
+                            KeyEvent::new(key_code, text, Modifiers::NONE, KeyEventType::KeyDown);
                         app.on_key_event(&key_event);
                         app.update();
                         window.request_redraw();
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
-                    RobotCommand::SendKeyWithModifiers { key, shift, ctrl, alt, meta } => {
+                    RobotCommand::SendKeyWithModifiers {
+                        key,
+                        shift,
+                        ctrl,
+                        alt,
+                        meta,
+                    } => {
                         use compose_app_shell::{KeyCode, KeyEvent, KeyEventType, Modifiers};
-                        
+
                         // Map key string to KeyCode and text (same as SendKey)
                         let (key_code, text) = match key.as_str() {
                             // Navigation keys
@@ -1076,14 +1160,15 @@ impl ApplicationHandler for App {
                             "z" => (KeyCode::Z, String::from("z")),
                             _ => (KeyCode::Unknown, String::new()),
                         };
-                        
-                        let modifiers = Modifiers { shift, ctrl, alt, meta };
-                        let key_event = KeyEvent::new(
-                            key_code,
-                            text,
-                            modifiers,
-                            KeyEventType::KeyDown,
-                        );
+
+                        let modifiers = Modifiers {
+                            shift,
+                            ctrl,
+                            alt,
+                            meta,
+                        };
+                        let key_event =
+                            KeyEvent::new(key_code, text, modifiers, KeyEventType::KeyDown);
                         app.on_key_event(&key_event);
                         app.update();
                         window.request_redraw();
@@ -1130,7 +1215,7 @@ impl ApplicationHandler for App {
                     if controller.idle_iterations >= MAX_IDLE_ITERATIONS {
                         controller.waiting_for_idle = false;
                         let _ = controller.tx.send(RobotResponse::Error(
-                            "wait_for_idle: timed out after 200 iterations".to_string()
+                            "wait_for_idle: timed out after 200 iterations".to_string(),
                         ));
                     }
                 }
@@ -1169,10 +1254,7 @@ impl ApplicationHandler for App {
 ///
 /// **Note:** Applications should use `AppLauncher` instead of calling this directly.
 #[allow(unused_mut)]
-pub fn run(
-    mut settings: AppSettings,
-    content: impl FnMut() + 'static,
-) -> ! {
+pub fn run(mut settings: AppSettings, content: impl FnMut() + 'static) -> ! {
     let event_loop = EventLoop::builder()
         .build()
         .expect("failed to create event loop");
@@ -1214,19 +1296,17 @@ fn extract_semantics(app: &AppShell<WgpuRenderer>) -> Vec<SemanticElement> {
 
 /// Recursively combine SemanticsNode + LayoutBox into SemanticElement
 #[cfg(feature = "robot")]
-fn combine_trees(
-    sem_node: &SemanticsNode,
-    layout_box: &LayoutBox,
-) -> SemanticElement {
+fn combine_trees(sem_node: &SemanticsNode, layout_box: &LayoutBox) -> SemanticElement {
     // Extract role as string
     let role = match &sem_node.role {
         SemanticsRole::Button => "Button",
-        SemanticsRole::Text { .. } => "Text", 
+        SemanticsRole::Text { .. } => "Text",
         SemanticsRole::Layout => "Layout",
         SemanticsRole::Subcompose => "Subcompose",
         SemanticsRole::Spacer => "Spacer",
         SemanticsRole::Unknown => "Unknown",
-    }.to_string();
+    }
+    .to_string();
 
     // Extract text content
     let text = match &sem_node.role {
@@ -1235,7 +1315,10 @@ fn combine_trees(
     };
 
     // Check if clickable
-    let clickable = sem_node.actions.iter().any(|action| matches!(action, SemanticsAction::Click { .. }));
+    let clickable = sem_node
+        .actions
+        .iter()
+        .any(|action| matches!(action, SemanticsAction::Click { .. }));
 
     // Get bounds from layout
     let bounds = SemanticRect {
@@ -1266,7 +1349,7 @@ fn combine_trees(
 #[cfg(feature = "robot")]
 fn char_to_key_code(ch: char) -> compose_app_shell::KeyCode {
     use compose_app_shell::KeyCode;
-    
+
     match ch.to_ascii_lowercase() {
         'a' => KeyCode::A,
         'b' => KeyCode::B,

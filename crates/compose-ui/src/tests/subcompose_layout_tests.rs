@@ -80,9 +80,16 @@ fn measure_once(
             .expect("subcompose layout node");
         typed.handle()
     };
+    let measurer =
+        Box::new(|_child_id: compose_core::NodeId, _constraints: Constraints| Size::default());
+    let error = Rc::new(RefCell::new(None));
     let result = node_handle
-        .measure(&composer, node_id, constraints)
+        .measure(&composer, node_id, constraints, measurer, Rc::clone(&error))
         .expect("measure result");
+    assert!(
+        error.borrow().is_none(),
+        "unexpected subcompose measure error"
+    );
     drop(composer);
     teardown_composer(slots, applier, slots_host, applier_host);
     result
@@ -125,7 +132,7 @@ fn measure_subcomposes_content() {
             .as_any_mut()
             .downcast_mut::<SubcomposeLayoutNode>()
             .expect("subcompose layout node");
-        assert!(!typed.state().reusable().is_empty());
+        assert!(typed.state().reusable().is_empty());
     }
     assert_eq!(recorded.borrow().len(), 1);
 }
@@ -177,7 +184,7 @@ fn subcompose_reuses_nodes_across_measures() {
             .as_any_mut()
             .downcast_mut::<SubcomposeLayoutNode>()
             .expect("subcompose layout node");
-        assert!(!typed.state().reusable().is_empty());
+        assert!(typed.state().reusable().is_empty());
     }
 }
 

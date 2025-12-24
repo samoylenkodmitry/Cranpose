@@ -11,7 +11,7 @@ pub struct PrefetchStrategy {
     /// Number of items to prefetch beyond the visible area.
     /// Default is 2, matching JC's default.
     pub prefetch_count: usize,
-    
+
     /// Whether prefetching is enabled.
     pub enabled: bool,
 }
@@ -51,7 +51,7 @@ impl PrefetchStrategy {
 pub struct PrefetchScheduler {
     /// Queue of indices to prefetch, ordered by priority.
     prefetch_queue: VecDeque<usize>,
-    
+
     /// Items that have been prefetched but not yet visible.
     /// Using HashSet for O(1) contains check.
     prefetched_items: HashSet<usize>,
@@ -85,7 +85,7 @@ impl PrefetchScheduler {
         }
 
         self.prefetch_queue.clear();
-        
+
         let prefetch_count = strategy.prefetch_count;
 
         if scroll_direction >= 0.0 {
@@ -150,9 +150,9 @@ mod tests {
     fn test_prefetch_forward_scroll() {
         let mut scheduler = PrefetchScheduler::new();
         let strategy = PrefetchStrategy::new(2);
-        
+
         scheduler.update(5, 10, 100, 1.0, &strategy);
-        
+
         assert_eq!(scheduler.next_prefetch(), Some(11));
         assert_eq!(scheduler.next_prefetch(), Some(12));
         assert_eq!(scheduler.next_prefetch(), None);
@@ -162,9 +162,9 @@ mod tests {
     fn test_prefetch_backward_scroll() {
         let mut scheduler = PrefetchScheduler::new();
         let strategy = PrefetchStrategy::new(2);
-        
+
         scheduler.update(5, 10, 100, -1.0, &strategy);
-        
+
         assert_eq!(scheduler.next_prefetch(), Some(4));
         assert_eq!(scheduler.next_prefetch(), Some(3));
         assert_eq!(scheduler.next_prefetch(), None);
@@ -174,10 +174,10 @@ mod tests {
     fn test_prefetch_at_end() {
         let mut scheduler = PrefetchScheduler::new();
         let strategy = PrefetchStrategy::new(2);
-        
+
         // At end of list
         scheduler.update(95, 99, 100, 1.0, &strategy);
-        
+
         // Should not prefetch beyond list bounds
         assert_eq!(scheduler.next_prefetch(), None);
     }
@@ -186,9 +186,9 @@ mod tests {
     fn test_prefetch_disabled() {
         let mut scheduler = PrefetchScheduler::new();
         let strategy = PrefetchStrategy::disabled();
-        
+
         scheduler.update(5, 10, 100, 1.0, &strategy);
-        
+
         assert_eq!(scheduler.next_prefetch(), None);
     }
 }

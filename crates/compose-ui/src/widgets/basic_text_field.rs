@@ -85,7 +85,7 @@ pub fn BasicTextFieldWithOptions(
     // TextFieldState now uses mutableStateOf internally, so this read
     // automatically creates composition dependency via the snapshot system.
     let _text = state.text();
-    
+
     // Build the text field element with line limits
     let text_field_element = TextFieldElement::new(state)
         .with_cursor_color(options.cursor_color)
@@ -108,7 +108,7 @@ pub fn BasicTextFieldWithOptions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use compose_core::{location_key, Composition, MemoryApplier, DefaultScheduler, Runtime};
+    use compose_core::{location_key, Composition, DefaultScheduler, MemoryApplier, Runtime};
     use std::sync::Arc;
 
     /// Sets up a test runtime and keeps it alive for the duration of the test.

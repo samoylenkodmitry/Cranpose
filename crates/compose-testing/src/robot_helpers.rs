@@ -3,8 +3,8 @@
 //! These helpers work with `compose_app::SemanticElement` to find and interact
 //! with UI elements during robot testing.
 
+use crate::robot_assertions::{Bounds, SemanticElementLike};
 use compose_app::SemanticElement;
-use crate::robot_assertions::{SemanticElementLike, Bounds};
 
 // Implement SemanticElementLike for compose_app::SemanticElement
 // This allows using the generic assertion helpers from robot_assertions
@@ -12,15 +12,15 @@ impl SemanticElementLike for SemanticElement {
     fn text(&self) -> Option<&str> {
         self.text.as_deref()
     }
-    
+
     fn role(&self) -> &str {
         &self.role
     }
-    
+
     fn clickable(&self) -> bool {
         self.clickable
     }
-    
+
     fn bounds(&self) -> Bounds {
         Bounds {
             x: self.bounds.x,
@@ -29,7 +29,7 @@ impl SemanticElementLike for SemanticElement {
             height: self.bounds.height,
         }
     }
-    
+
     fn children(&self) -> &[Self] {
         &self.children
     }
@@ -139,24 +139,76 @@ where
 
 /// Find element by text in semantics tree.
 /// Convenience wrapper around find_in_semantics + find_text.
-pub fn find_text_in_semantics(robot: &compose_app::Robot, text: &str) -> Option<(f32, f32, f32, f32)> {
+pub fn find_text_in_semantics(
+    robot: &compose_app::Robot,
+    text: &str,
+) -> Option<(f32, f32, f32, f32)> {
     let text = text.to_string();
     find_in_semantics(robot, |elem| find_text(elem, &text))
 }
 
+/// Find an element whose text starts with the given prefix.
+/// Returns bounds (x, y, width, height) and the full text.
+pub fn find_text_by_prefix(
+    elem: &SemanticElement,
+    prefix: &str,
+) -> Option<(f32, f32, f32, f32, String)> {
+    if let Some(ref t) = elem.text {
+        if t.starts_with(prefix) {
+            return Some((
+                elem.bounds.x,
+                elem.bounds.y,
+                elem.bounds.width,
+                elem.bounds.height,
+                t.clone(),
+            ));
+        }
+    }
+    for child in &elem.children {
+        if let Some(result) = find_text_by_prefix(child, prefix) {
+            return Some(result);
+        }
+    }
+    None
+}
+
+/// Find element by text prefix in semantics tree.
+/// Returns bounds (x, y, width, height) and the full text content.
+/// Useful for parsing dynamic text like "Stats: C=5 E=3 D=2".
+pub fn find_text_by_prefix_in_semantics(
+    robot: &compose_app::Robot,
+    prefix: &str,
+) -> Option<(f32, f32, f32, f32, String)> {
+    let prefix = prefix.to_string();
+    match robot.get_semantics() {
+        Ok(semantics) => {
+            for root in semantics.iter() {
+                if let Some(result) = find_text_by_prefix(root, &prefix) {
+                    return Some(result);
+                }
+            }
+            None
+        }
+        Err(e) => {
+            eprintln!("  ✗ Failed to get semantics: {}", e);
+            None
+        }
+    }
+}
+
 /// Find button by text in semantics tree.
 /// Convenience wrapper around find_in_semantics + find_button.
-pub fn find_button_in_semantics(robot: &compose_app::Robot, text: &str) -> Option<(f32, f32, f32, f32)> {
+pub fn find_button_in_semantics(
+    robot: &compose_app::Robot,
+    text: &str,
+) -> Option<(f32, f32, f32, f32)> {
     let text = text.to_string();
     find_in_semantics(robot, |elem| find_button(elem, &text))
 }
 
 /// Recursively search for text in semantic elements.
 /// Returns the element containing the text.
-pub fn find_by_text_recursive(
-    elements: &[SemanticElement],
-    text: &str,
-) -> Option<SemanticElement> {
+pub fn find_by_text_recursive(elements: &[SemanticElement], text: &str) -> Option<SemanticElement> {
     for elem in elements {
         if let Some(ref elem_text) = elem.text {
             if elem_text.contains(text) {
@@ -177,16 +229,8 @@ pub fn find_clickables_in_range(
     min_y: f32,
     max_y: f32,
 ) -> Vec<(String, f32, f32)> {
-    fn search(
-        elem: &SemanticElement,
-        tabs: &mut Vec<(String, f32, f32)>,
-        min_y: f32,
-        max_y: f32,
-    ) {
-        if elem.role == "Layout"
-            && elem.clickable
-            && elem.bounds.y > min_y
-            && elem.bounds.y < max_y
+    fn search(elem: &SemanticElement, tabs: &mut Vec<(String, f32, f32)>, min_y: f32, max_y: f32) {
+        if elem.role == "Layout" && elem.clickable && elem.bounds.y > min_y && elem.bounds.y < max_y
         {
             let label = elem
                 .children

@@ -73,14 +73,18 @@ impl TextLayoutResult {
     /// O(1) lookup from pre-computed positions.
     pub fn get_cursor_x(&self, byte_offset: usize) -> f32 {
         // Binary search for char index containing this byte offset
-        let char_idx = self.char_to_byte
+        let char_idx = self
+            .char_to_byte
             .iter()
             .position(|&b| b > byte_offset)
             .map(|i| i.saturating_sub(1))
             .unwrap_or(self.char_to_byte.len().saturating_sub(1));
-        
+
         // Return X position at that char boundary
-        self.glyph_x_positions.get(char_idx).copied().unwrap_or(self.width)
+        self.glyph_x_positions
+            .get(char_idx)
+            .copied()
+            .unwrap_or(self.width)
     }
 
     /// Returns byte offset for X position.
@@ -91,9 +95,10 @@ impl TextLayoutResult {
         }
 
         // Binary search for closest glyph boundary
-        let char_idx = match self.glyph_x_positions.binary_search_by(|pos| {
-            pos.partial_cmp(&x).unwrap_or(std::cmp::Ordering::Equal)
-        }) {
+        let char_idx = match self
+            .glyph_x_positions
+            .binary_search_by(|pos| pos.partial_cmp(&x).unwrap_or(std::cmp::Ordering::Equal))
+        {
             Ok(i) => i,
             Err(i) => {
                 // Between two positions - pick closest
@@ -104,7 +109,11 @@ impl TextLayoutResult {
                 } else {
                     let before = self.glyph_x_positions[i - 1];
                     let after = self.glyph_x_positions[i];
-                    if (x - before) < (after - x) { i - 1 } else { i }
+                    if (x - before) < (after - x) {
+                        i - 1
+                    } else {
+                        i
+                    }
                 }
             }
         };
@@ -146,25 +155,25 @@ impl TextLayoutResult {
         let mut line_start = 0;
         let mut y = 0.0;
         let mut max_width: f32 = 0.0;
-        
+
         for (i, line_text) in line_texts.iter().enumerate() {
             let line_end = if i == line_count - 1 {
                 text.len()
             } else {
                 line_start + line_text.len()
             };
-            
+
             // Track max width while iterating
             let line_width = line_text.chars().count() as f32 * char_width;
             max_width = max_width.max(line_width);
-            
+
             lines.push(LineLayout {
                 start_offset: line_start,
                 end_offset: line_end,
                 y,
                 height: line_height,
             });
-            
+
             line_start = line_end + 1; // +1 for newline
             y += line_height;
         }
@@ -198,7 +207,7 @@ mod tests {
     #[test]
     fn test_monospaced_layout() {
         let layout = TextLayoutResult::monospaced("Hello", 10.0, 20.0);
-        
+
         // Check positions
         assert_eq!(layout.get_cursor_x(0), 0.0); // Before 'H'
         assert_eq!(layout.get_cursor_x(5), 50.0); // After 'o'
@@ -207,7 +216,7 @@ mod tests {
     #[test]
     fn test_get_offset_for_x() {
         let layout = TextLayoutResult::monospaced("Hello", 10.0, 20.0);
-        
+
         // Click at x=25 should be closest to offset 2 or 3
         let offset = layout.get_offset_for_x(25.0);
         assert!(offset == 2 || offset == 3);
@@ -216,7 +225,7 @@ mod tests {
     #[test]
     fn test_multiline() {
         let layout = TextLayoutResult::monospaced("Hi\nWorld", 10.0, 20.0);
-        
+
         assert_eq!(layout.lines.len(), 2);
         assert_eq!(layout.lines[0].start_offset, 0);
         assert_eq!(layout.lines[1].start_offset, 3); // After "Hi\n"
@@ -225,7 +234,7 @@ mod tests {
     #[test]
     fn test_validity() {
         let layout = TextLayoutResult::monospaced("Hello", 10.0, 20.0);
-        
+
         assert!(layout.is_valid_for("Hello"));
         assert!(!layout.is_valid_for("World"));
     }

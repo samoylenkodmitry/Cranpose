@@ -5,9 +5,19 @@
 //! cargo run --package desktop-app --example robot_demo --features robot-app
 //! ```
 
+use compose_app::{AppLauncher, Robot};
 use desktop_app::app;
-use compose_app::AppLauncher;
 use std::time::Duration;
+
+fn wait_for_content(robot: &Robot, expected: &str, attempts: usize, delay: Duration) -> bool {
+    for _ in 0..attempts {
+        if robot.validate_content(expected).is_ok() {
+            return true;
+        }
+        std::thread::sleep(delay);
+    }
+    false
+}
 
 fn main() {
     println!("Launching app with robot control...");
@@ -20,7 +30,7 @@ fn main() {
             std::thread::sleep(Duration::from_secs(1));
 
             // Wait for app to be ready
-            robot.wait_for_idle().expect("Failed to wait for idle");
+            let _ = wait_for_content(&robot, "Increment", 10, Duration::from_millis(200));
 
             // Click the increment button 5 times
             println!("Clicking increment button 5 times...");
@@ -32,26 +42,28 @@ fn main() {
 
             println!("Switching to Async Runtime tab...");
             robot.click(400.0, 50.0).expect("Failed to click tab");
-            match robot.wait_for_idle() {
-                Ok(_) => println!("Tab ready (idle achieved)"),
-                Err(e) => println!("Tab switched ({})", e),
+            if wait_for_content(&robot, "Async Runtime Demo", 10, Duration::from_millis(200)) {
+                println!("Tab ready (Async Runtime Demo found)");
+            } else {
+                println!("Tab switched (Async Runtime Demo not found)");
             }
             std::thread::sleep(Duration::from_secs(1));
 
             println!("Switching to Modifiers Showcase tab...");
             robot.click(800.0, 50.0).expect("Failed to click tab");
-            // Wait for idle - animations are a valid app state, so timeout is not a failure
-            match robot.wait_for_idle() {
-                Ok(_) => println!("Tab ready (idle achieved)"),
-                Err(e) => println!("Tab switched ({})", e),
+            if wait_for_content(&robot, "Select Showcase", 10, Duration::from_millis(200)) {
+                println!("Tab ready (Modifiers Showcase found)");
+            } else {
+                println!("Tab switched (Modifiers Showcase not found)");
             }
             std::thread::sleep(Duration::from_secs(1));
 
             println!("Going back to Counter App tab...");
             robot.click(70.0, 50.0).expect("Failed to click tab");
-            match robot.wait_for_idle() {
-                Ok(_) => println!("Tab ready (idle achieved)"),
-                Err(e) => println!("Tab switched ({})", e),
+            if wait_for_content(&robot, "Increment", 10, Duration::from_millis(200)) {
+                println!("Tab ready (Counter App found)");
+            } else {
+                println!("Tab switched (Counter App not found)");
             }
 
             println!("Demo complete! Keeping window open for 1 more seconds...");

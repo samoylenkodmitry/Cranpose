@@ -58,7 +58,8 @@ impl NearestRangeState {
         sliding_window_size: usize,
         extra_item_count: usize,
     ) -> Self {
-        let value = Self::calculate_range(first_visible_item, sliding_window_size, extra_item_count);
+        let value =
+            Self::calculate_range(first_visible_item, sliding_window_size, extra_item_count);
         Self {
             value,
             last_first_visible_item: first_visible_item,
@@ -92,9 +93,12 @@ impl NearestRangeState {
         sliding_window_size: usize,
         extra_item_count: usize,
     ) -> Range<usize> {
-        let sliding_window_start = sliding_window_size * (first_visible_item / sliding_window_size);
+        let sliding_window_start =
+            sliding_window_size.saturating_mul(first_visible_item / sliding_window_size);
         let start = sliding_window_start.saturating_sub(extra_item_count);
-        let end = sliding_window_start + sliding_window_size + extra_item_count;
+        let end = sliding_window_start
+            .saturating_add(sliding_window_size)
+            .saturating_add(extra_item_count);
         start..end
     }
 }
