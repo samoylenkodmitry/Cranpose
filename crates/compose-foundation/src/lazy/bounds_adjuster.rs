@@ -109,8 +109,10 @@ mod tests {
 
     #[test]
     fn test_clamp_at_start_with_content_padding() {
-        let mut config = LazyListMeasureConfig::default();
-        config.before_content_padding = 20.0;
+        let config = LazyListMeasureConfig {
+            before_content_padding: 20.0,
+            ..Default::default()
+        };
         let adjuster = BoundsAdjuster::new(&config, 10, 500.0);
 
         let mut items = vec![

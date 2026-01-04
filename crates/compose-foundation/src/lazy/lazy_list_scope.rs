@@ -494,6 +494,7 @@ pub trait LazyListScopeExt: LazyListScope {
     /// | Alternative | When to Use |
     /// |-------------|-------------|
     /// | [`items_slice_rc`] | Data is already in `Rc<[T]>` - **zero copy** |
+    /// | [`items_vec`] | Data is in a `Vec<T>` you can give up ownership of - **efficient** |
     /// | [`items_with_provider`] | Need lazy on-demand access - **zero copy** |
     ///
     /// After the initial copy, the closure captures a reference-counted pointer,
@@ -527,38 +528,71 @@ pub trait LazyListScopeExt: LazyListScope {
         );
     }
 
-    /// Adds indexed items from a slice.
+    /// Adds items from a `Vec<T>`, taking ownership.
     ///
-    /// # ⚠️ Performance Warning
-    ///
-    /// **This method performs an O(n) allocation and copy of the entire slice upfront.**
-    ///
-    /// This copy is required to satisfy Rust's `'static` closure requirements for
-    /// the lazy list item factory. For small lists (< 1000 items) this is typically
-    /// acceptable, but for large datasets consider these alternatives:
-    ///
-    /// | Alternative | When to Use |
-    /// |-------------|-------------|
-    /// | [`items_indexed_rc`] | Data is already in `Rc<[T]>` - **zero copy** |
-    /// | [`items_indexed_with_provider`] | Need lazy on-demand access - **zero copy** |
+    /// **Efficient ownership transfer**: Uses `Rc::from(vec)` which avoids copying
+    /// elements if the allocation fits (or does a simple realloc).
+    /// Use this when you have a `Vec` and want to pass it to the list.
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// let data = vec!["Apple", "Banana", "Cherry"];
-    /// scope.items_indexed(&data, |index, item| {
-    ///     Text(format!("{}. {}", index + 1, item), Modifier::empty());
+    /// let data = vec!["Apple".to_string(), "Banana".to_string()];
+    /// scope.items_vec(data, |item| {
+    ///     Text(item.to_string(), Modifier::empty());
     /// });
     /// ```
-    fn items_indexed<T, F>(&mut self, items: &[T], item_content: F)
+    fn items_vec<T, F>(&mut self, items: Vec<T>, item_content: F)
     where
-        T: Clone + 'static,
+        T: 'static,
+        F: Fn(&T) + 'static,
+    {
+        let len = items.len();
+        let items_rc: Rc<[T]> = Rc::from(items);
+        self.items(
+            len,
+            None::<fn(usize) -> u64>,
+            None::<fn(usize) -> u64>,
+            move |index| {
+                if let Some(item) = items_rc.get(index) {
+                    item_content(item);
+                }
+            },
+        );
+    }
+
+    /// Adds indexed items from a collection (Slice, Vec, or Rc).
+    ///
+    /// This method is generic over the input type `L` which must be convertible to `Rc<[T]>`.
+    /// This allows for efficient ownership transfer (zero-copy for `Vec` and `Rc`) or
+    /// convenient usage with slices (which will perform a copy).
+    ///
+    /// # Performance Note
+    ///
+    /// - **`Vec<T>`**: Zero-copy (ownership transfer). Efficient.
+    /// - **`Rc<[T]>`**: Zero-copy (ownership transfer). Efficient.
+    /// - **`&[T]`**: **O(N) copy**. Convenient for small lists, but avoid for large datasets.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Efficient Vec usage (zero-copy)
+    /// let data = vec!["Apple".to_string(), "Banana".to_string()];
+    /// scope.items_indexed(data, |index, item| { ... });
+    ///
+    /// // Slice usage (performs copy)
+    /// let data_slice = &["Apple", "Banana"];
+    /// scope.items_indexed(data_slice, |index, item| { ... });
+    /// ```
+    fn items_indexed<T, L, F>(&mut self, items: L, item_content: F)
+    where
+        T: 'static,
+        L: Into<Rc<[T]>>,
         F: Fn(usize, &T) + 'static,
     {
-        // Note: to_vec() is O(n) allocation + copy. See items_indexed_rc for zero-copy.
-        let items_rc: Rc<[T]> = items.to_vec().into();
+        let items_rc: Rc<[T]> = items.into();
         self.items(
-            items.len(),
+            items_rc.len(),
             None::<fn(usize) -> u64>,
             None::<fn(usize) -> u64>,
             move |index| {
@@ -909,11 +943,42 @@ mod tests {
     #[test]
     fn test_items_indexed() {
         let mut content = LazyListIntervalContent::new();
+        // Use Vec -> Into<Rc<[T]>> directly (efficient)
+        let data = vec!["Apple".to_string(), "Banana".to_string(), "Cherry".to_string()];
+        let items_visited = Rc::new(RefCell::new(Vec::new()));
+        let items_clone = items_visited.clone();
+
+        content.items_indexed(data, move |index, item: &String| {
+            items_clone.borrow_mut().push((index, item.clone()));
+        });
+
+        assert_eq!(content.item_count(), 3);
+
+        for i in 0..3 {
+            content.invoke_content(i);
+        }
+
+        let visited = items_visited.borrow();
+        assert_eq!(
+            *visited,
+            vec![
+                (0, "Apple".to_string()),
+                (1, "Banana".to_string()),
+                (2, "Cherry".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn test_items_indexed_slice() {
+        let mut content = LazyListIntervalContent::new();
+        // Use Slice -> Into<Rc<[T]>> (performs copy)
         let data = vec!["Apple", "Banana", "Cherry"];
         let items_visited = Rc::new(RefCell::new(Vec::new()));
         let items_clone = items_visited.clone();
 
-        content.items_indexed(&data, move |index, item: &&str| {
+        // Note: passing slice explicitly (generic bound doesn't do deref coercion from &Vec)
+        content.items_indexed(data.as_slice(), move |index, item: &&str| {
             items_clone.borrow_mut().push((index, (*item).to_string()));
         });
 
@@ -982,7 +1047,7 @@ mod tests {
     #[test]
     fn test_items_with_provider() {
         let mut content = LazyListIntervalContent::new();
-        let data = vec!["Apple", "Banana", "Cherry"];
+        let data = ["Apple", "Banana", "Cherry"];
         let items_visited = Rc::new(RefCell::new(Vec::new()));
         let items_clone = items_visited.clone();
 
@@ -1007,7 +1072,7 @@ mod tests {
     #[test]
     fn test_items_indexed_with_provider() {
         let mut content = LazyListIntervalContent::new();
-        let data = vec!["Apple", "Banana", "Cherry"];
+        let data = ["Apple", "Banana", "Cherry"];
         let items_visited = Rc::new(RefCell::new(Vec::new()));
         let items_clone = items_visited.clone();
 
@@ -1065,4 +1130,5 @@ mod tests {
         let found_mid = content.get_index_by_slot_id(slot_id_mid);
         assert_eq!(found_mid, Some(10000));
     }
+
 }

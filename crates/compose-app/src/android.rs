@@ -228,16 +228,16 @@ pub fn run(
 
                             // Request device and queue
                             // Use downlevel limits for broad compatibility, with adapter's actual limits
-                            let (device, queue) = pollster::block_on(adapter.request_device(
-                                &wgpu::DeviceDescriptor {
+                            let (device, queue) = pollster::block_on(
+                                adapter.request_device(&wgpu::DeviceDescriptor {
                                     label: Some("Android Device"),
                                     required_features: wgpu::Features::empty(),
                                     required_limits: wgpu::Limits::downlevel_defaults()
                                         .using_resolution(adapter.limits()),
                                     memory_hints: wgpu::MemoryHints::default(),
                                     trace: wgpu::Trace::Off,
-                                },
-                            ))
+                                }),
+                            )
                             .expect("Failed to create device");
 
                             let device = Arc::new(device);
@@ -426,21 +426,30 @@ pub fn run(
 
                                         match motion_event.action() {
                                             MotionAction::Down | MotionAction::PointerDown => {
-                                                println!("[TOUCH] Down at ({:.1}, {:.1})", logical.x, logical.y);
+                                                println!(
+                                                    "[TOUCH] Down at ({:.1}, {:.1})",
+                                                    logical.x, logical.y
+                                                );
                                                 if let Some(shell) = &mut app_shell {
                                                     shell.set_cursor(logical.x, logical.y);
                                                     shell.pointer_pressed();
                                                 }
                                             }
                                             MotionAction::Up | MotionAction::PointerUp => {
-                                                println!("[TOUCH] Up at ({:.1}, {:.1})", logical.x, logical.y);
+                                                println!(
+                                                    "[TOUCH] Up at ({:.1}, {:.1})",
+                                                    logical.x, logical.y
+                                                );
                                                 if let Some(shell) = &mut app_shell {
                                                     shell.set_cursor(logical.x, logical.y);
                                                     shell.pointer_released();
                                                 }
                                             }
                                             MotionAction::Move => {
-                                                println!("[TOUCH] Move at ({:.1}, {:.1})", logical.x, logical.y);
+                                                println!(
+                                                    "[TOUCH] Move at ({:.1}, {:.1})",
+                                                    logical.x, logical.y
+                                                );
                                                 if let Some(shell) = &mut app_shell {
                                                     shell.set_cursor(logical.x, logical.y);
                                                 }

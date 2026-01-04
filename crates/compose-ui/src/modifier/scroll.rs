@@ -373,30 +373,18 @@ impl Modifier {
     /// This connects pointer gestures to LazyListState for scroll handling.
     /// Unlike regular vertical_scroll, no layout offset is applied here
     /// since LazyListState manages item positioning internally.
-    pub fn lazy_vertical_scroll(
-        self,
-        state: LazyListState,
-        reverse_scrolling: bool,
-    ) -> Self {
+    pub fn lazy_vertical_scroll(self, state: LazyListState, reverse_scrolling: bool) -> Self {
         self.then(lazy_scroll_impl(state, true, reverse_scrolling))
     }
 
     /// Creates a horizontally scrollable modifier for lazy lists.
-    pub fn lazy_horizontal_scroll(
-        self,
-        state: LazyListState,
-        reverse_scrolling: bool,
-    ) -> Self {
+    pub fn lazy_horizontal_scroll(self, state: LazyListState, reverse_scrolling: bool) -> Self {
         self.then(lazy_scroll_impl(state, false, reverse_scrolling))
     }
 }
 
 /// Internal implementation for lazy scroll modifiers.
-fn lazy_scroll_impl(
-    state: LazyListState,
-    is_vertical: bool,
-    reverse_scrolling: bool,
-) -> Modifier {
+fn lazy_scroll_impl(state: LazyListState, is_vertical: bool, reverse_scrolling: bool) -> Modifier {
     let gesture_state = Rc::new(RefCell::new(ScrollGestureState::default()));
     let list_state = state;
 

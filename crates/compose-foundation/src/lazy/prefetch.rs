@@ -3,7 +3,7 @@
 //! Pre-composes items before they become visible to reduce jank during scrolling.
 //! Inspired by Jetpack Compose's `LazyListPrefetchStrategy`.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 
 /// Strategy for prefetching items in a lazy list.
 #[derive(Clone, Debug)]
@@ -51,10 +51,6 @@ impl PrefetchStrategy {
 pub struct PrefetchScheduler {
     /// Queue of indices to prefetch, ordered by priority.
     prefetch_queue: VecDeque<usize>,
-
-    /// Items that have been prefetched but not yet visible.
-    /// Using HashSet for O(1) contains check.
-    prefetched_items: HashSet<usize>,
 }
 
 impl PrefetchScheduler {
@@ -115,30 +111,6 @@ impl PrefetchScheduler {
     /// Returns all pending prefetch indices.
     pub fn pending_prefetches(&self) -> &VecDeque<usize> {
         &self.prefetch_queue
-    }
-
-    /// Marks an item as prefetched.
-    pub fn mark_prefetched(&mut self, index: usize) {
-        self.prefetched_items.insert(index);
-    }
-
-    /// Checks if an item has been prefetched.
-    pub fn is_prefetched(&self, index: usize) -> bool {
-        self.prefetched_items.contains(&index)
-    }
-
-    /// Clears prefetched items that are no longer near the visible area.
-    pub fn cleanup_distant_prefetches(
-        &mut self,
-        first_visible_index: usize,
-        last_visible_index: usize,
-        keep_distance: usize,
-    ) {
-        self.prefetched_items.retain(|&index| {
-            let before_visible = first_visible_index.saturating_sub(keep_distance);
-            let after_visible = last_visible_index.saturating_add(keep_distance);
-            index >= before_visible && index <= after_visible
-        });
     }
 }
 

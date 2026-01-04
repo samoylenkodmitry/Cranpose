@@ -94,7 +94,10 @@ impl StateRecord {
     }
 
     pub(crate) fn clear_value(&self) {
-        self.value.write().expect("StateRecord lock poisoned").take();
+        self.value
+            .write()
+            .expect("StateRecord lock poisoned")
+            .take();
     }
 
     pub(crate) fn replace_value<T: Any>(&self, new_value: T) {
@@ -565,7 +568,10 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
     }
 
     fn notify_applied(&self) {
-        let observers = self.apply_observers.lock().expect("Observers lock poisoned");
+        let observers = self
+            .apply_observers
+            .lock()
+            .expect("Observers lock poisoned");
         for observer in observers.iter() {
             observer();
         }

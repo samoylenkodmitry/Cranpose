@@ -25,9 +25,8 @@ pub struct LazyListMeasureConfig {
 
     /// Whether layout is reversed (items laid out from bottom/right to top/left).
     ///
-    /// **Note:** This field is currently NOT implemented during measurement.
-    /// Setting this flag has no effect.
-    #[doc(hidden)]
+    /// The measurement logic operates in a "start-to-end" coordinate system.
+    /// This flag is used during placement to reverse the coordinates.
     pub reverse_layout: bool,
 
     /// Content padding before the first item.
@@ -382,8 +381,10 @@ mod tests {
     fn test_backward_scroll_with_spacing_preserves_offset_gap() {
         with_test_runtime(|| {
             let state = new_lazy_list_state_with_position(1, 0.0);
-            let mut config = LazyListMeasureConfig::default();
-            config.spacing = 4.0;
+            let config = LazyListMeasureConfig {
+                spacing: 4.0,
+                ..Default::default()
+            };
             state.dispatch_scroll_delta(2.0);
 
             let result = measure_lazy_list(2, &state, 40.0, 300.0, &config, |i| {

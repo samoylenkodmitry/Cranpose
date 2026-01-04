@@ -1771,7 +1771,7 @@ impl Composer {
         content: impl FnOnce(&Composer) -> R,
     ) -> (R, Vec<NodeId>) {
         let (result, nodes) = self.subcompose(state, slot_id, content);
-        
+
         // Filter to include only root nodes (those without a parent).
         // While record_node attempts to track only roots, checking the final
         // parent status ensures we only return true roots to the layout system.
@@ -1779,7 +1779,7 @@ impl Composer {
             .into_iter()
             .filter(|&id| self.node_has_no_parent(id))
             .collect();
-            
+
         (result, roots)
     }
 
@@ -1888,8 +1888,25 @@ impl Composer {
     pub fn skip_current_group(&self) {
         let nodes = self.with_slots(|slots| slots.nodes_in_current_group());
         self.with_slots_mut(|slots| slots.skip_current_group());
+        // Get the current parent from the stack (if any)
+        let current_parent = {
+            let stack = self.parent_stack();
+            stack.last().map(|frame| frame.id)
+        };
+
+        // Only attach nodes whose parent matches the current parent in the stack.
+        // This ensures we only attach direct children of the current parent,
+        // not nested nodes that belong to other nodes within the skipped group.
+        let mut applier = self.borrow_applier();
         for id in nodes {
-            self.attach_to_parent(id);
+            if let Ok(node) = applier.get_mut(id) {
+                let node_parent = node.parent();
+                if node_parent.is_none() || node_parent == current_parent {
+                    drop(applier);
+                    self.attach_to_parent(id);
+                    applier = self.borrow_applier();
+                }
+            }
         }
     }
 
@@ -2140,7 +2157,23 @@ impl Composer {
             return;
         }
 
-        // Neither parent nor subcompose - must be root
+        // Neither parent nor subcompose - check if this node already has a parent.
+        // During recomposition, reused nodes already have their correct parent from
+        // initial composition. We should NOT set them as root, as that would corrupt
+        // the tree structure and cause duplication.
+        let has_parent = {
+            let mut applier = self.borrow_applier();
+            applier
+                .get_mut(id)
+                .map(|node| node.parent().is_some())
+                .unwrap_or(false)
+        };
+        if has_parent {
+            // Node already has a parent, nothing to do
+            return;
+        }
+
+        // Node has no parent and is not in subcompose - must be root
         self.set_root(Some(id));
     }
 

@@ -62,6 +62,7 @@ fn LazyListStatsDisplay(list_state: compose_foundation::lazy::LazyListState) {
         Modifier::empty(),
         RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(16.0)),
         move || {
+            println!("Row content closure running, visible={visible}");
             Text(
                 format!("Visible: {}", visible),
                 Modifier::empty()

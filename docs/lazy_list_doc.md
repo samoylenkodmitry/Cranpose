@@ -1,6 +1,6 @@
 # LazyList Implementation
 
-Last Updated: 2025-12-28
+Last Updated: 2026-01-05
 
 Virtualized lazy layouts for Compose-RS with 1:1 API and architecture parity with Jetpack Compose (JC). This document tracks current alignment gaps, refactor tasks, and verification steps.
 
@@ -57,7 +57,6 @@ Virtualized lazy layouts for Compose-RS with 1:1 API and architecture parity wit
 
 1.  **Shortcuts & "Laziness" (Ease over Rigor)**:
     *   **RefCell Proliferation**: `LazyListState` heavily relies on `Rc<RefCell<Inner>>` for all state. While standard for Rust GUIs to handle interior mutability, it risks runtime panics if `borrow_mut()` usage isn't strictly controlled (e.g., during nested calls). This is the "easy path" compared to more robust, potentially lock-free or message-passing state architectures, but acceptable for single-threaded UI.
-    *   ~~**Eager Cloning in DSL**~~: **FIXED** - `items_slice` and `items_indexed` now use `Rc<[T]>` for O(1) closure capture instead of O(n) deep copy. The closure captures a reference-counted pointer, not a full copy.
     *   **Magic Numbers**:
         *   `MAX_VISIBLE_ITEMS = 500` in `measure_lazy_list` prevents infinite loops. This is a hardcoded limit that could bite users with massive screens or tiny items.
         *   `MAX_CACHE_SIZE = 100` in `LazyListState` is a fixed LRU size. Simple, but might thrash on large screens/lists.
@@ -116,4 +115,4 @@ cargo clippy --workspace
 cargo tree --duplicates
 ```
 
-Last verified: 2025-12-28 (Code review and Architecture validation performed)
+Last verified: 2026-01-05 (Code review and Architecture validation performed)

@@ -612,14 +612,6 @@ impl LazyListState {
         self.scroll_position.nearest_range()
     }
 
-    /// Updates the nearest range state based on current scroll position.
-    #[deprecated(
-        note = "Nearest range is automatically updated by scroll_position. This is now a no-op."
-    )]
-    pub fn update_nearest_range(&self) {
-        // No-op: nearest range is automatically updated by scroll_position when index changes
-    }
-
     /// Updates the scroll position from a layout pass.
     ///
     /// Called by the layout after measurement.

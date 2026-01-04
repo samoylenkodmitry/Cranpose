@@ -460,7 +460,7 @@ fn create_lazy_list_placements(
                     move |(&nid, &child_offset)| {
                         let node_id: NodeId = nid as NodeId;
                         let item_size = item.main_axis_size;
-                        
+
                         if is_vertical {
                             let y = if config.reverse_layout {
                                 viewport_size - (content_offset + pos) - item_size + child_offset

@@ -88,11 +88,8 @@ where
 
         // Measure beyond-bounds items before visible
         if first_item_index > 0 && !visible_items.is_empty() {
-            let before_items = self.measure_beyond_before(
-                first_item_index,
-                visible_items[0].offset,
-                start_time,
-            );
+            let before_items =
+                self.measure_beyond_before(first_item_index, visible_items[0].offset, start_time);
             if !before_items.is_empty() {
                 let mut combined = before_items;
                 combined.append(&mut visible_items);
@@ -279,8 +276,10 @@ mod tests {
 
     #[test]
     fn test_measure_with_spacing() {
-        let mut config = LazyListMeasureConfig::default();
-        config.spacing = 10.0;
+        let config = LazyListMeasureConfig {
+            spacing: 10.0,
+            ..Default::default()
+        };
         let mut measure = |i| create_test_item(i, 50.0);
         let mut measurer = ItemMeasurer::new(&mut measure, &config, 100, 200.0, VecDeque::new());
 
