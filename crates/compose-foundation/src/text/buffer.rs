@@ -175,6 +175,98 @@ impl TextFieldBuffer {
         }
     }
 
+    /// Deletes text surrounding the cursor or selection.
+    ///
+    /// `before_bytes` and `after_bytes` are byte counts in UTF-8.
+    /// The deletion respects character boundaries and preserves any IME composition range.
+    pub fn delete_surrounding(&mut self, before_bytes: usize, after_bytes: usize) {
+        if self.text.is_empty() || (before_bytes == 0 && after_bytes == 0) {
+            return;
+        }
+
+        let selection = self.selection;
+        let mut start = selection.min().saturating_sub(before_bytes);
+        let mut end = selection
+            .max()
+            .saturating_add(after_bytes)
+            .min(self.text.len());
+
+        start = self.clamp_prev_boundary(start);
+        end = self.clamp_next_boundary(end);
+
+        if start >= end {
+            return;
+        }
+
+        let mut ranges = Vec::new();
+        if let Some(comp) = self.composition {
+            let comp_start = comp.min();
+            let comp_end = comp.max();
+
+            if end <= comp_start || start >= comp_end {
+                ranges.push((start, end));
+            } else {
+                if start < comp_start {
+                    ranges.push((start, comp_start));
+                }
+                if end > comp_end {
+                    ranges.push((comp_end, end));
+                }
+            }
+        } else {
+            ranges.push((start, end));
+        }
+
+        if ranges.is_empty() {
+            return;
+        }
+
+        ranges.sort_by_key(|(range_start, _)| *range_start);
+        let total_removed: usize = ranges.iter().map(|(s, e)| e - s).sum();
+        if total_removed == 0 {
+            return;
+        }
+
+        let original_text = self.text.clone();
+        let mut new_text = String::with_capacity(original_text.len().saturating_sub(total_removed));
+        let mut last = 0usize;
+        for (range_start, range_end) in &ranges {
+            if last < *range_start {
+                new_text.push_str(&original_text[last..*range_start]);
+            }
+            last = *range_end;
+        }
+        new_text.push_str(&original_text[last..]);
+
+        let removed_before = |pos: usize| -> usize {
+            let mut removed = 0usize;
+            for (range_start, range_end) in &ranges {
+                if pos <= *range_start {
+                    break;
+                }
+                let clamped_end = pos.min(*range_end);
+                if clamped_end > *range_start {
+                    removed += clamped_end - *range_start;
+                }
+            }
+            removed
+        };
+
+        let cursor_pos = selection.min();
+        let new_cursor = cursor_pos
+            .saturating_sub(removed_before(cursor_pos))
+            .min(new_text.len());
+
+        self.text = new_text;
+        self.selection = TextRange::cursor(new_cursor);
+        self.composition = self.composition.map(|comp| {
+            let comp_start = comp.min().saturating_sub(removed_before(comp.min()));
+            let comp_end = comp.max().saturating_sub(removed_before(comp.max()));
+            TextRange::new(comp_start, comp_end).coerce_in(self.text.len())
+        });
+        self.has_changes = true;
+    }
+
     /// Clears all text.
     pub fn clear(&mut self) {
         self.text.clear();
@@ -261,23 +353,39 @@ impl TextFieldBuffer {
         }
         pos.min(self.text.len())
     }
-    
+
+    fn clamp_prev_boundary(&self, from: usize) -> usize {
+        if self.text.is_char_boundary(from) {
+            from
+        } else {
+            self.prev_char_boundary(from)
+        }
+    }
+
+    fn clamp_next_boundary(&self, from: usize) -> usize {
+        if self.text.is_char_boundary(from) {
+            from
+        } else {
+            self.next_char_boundary(from)
+        }
+    }
+
     // ========== Clipboard Operations ==========
     // Note: Actual system clipboard access is handled at the platform layer (AppShell).
     // These methods just provide the text content for clipboard operations.
-    
+
     /// Returns the selected text for copy operations.
     /// Returns None if no selection.
     pub fn copy_selection(&self) -> Option<String> {
         if !self.has_selection() {
             return None;
         }
-        
+
         let sel_start = self.selection.min();
         let sel_end = self.selection.max();
         Some(self.text[sel_start..sel_end].to_string())
     }
-    
+
     /// Cuts the selected text (returns it and deletes from buffer).
     /// Returns the cut text, or None if no selection.
     pub fn cut_selection(&mut self) -> Option<String> {
@@ -369,5 +477,25 @@ mod tests {
         buffer.place_cursor_at_end();
         buffer.delete_before_cursor();
         assert_eq!(buffer.text(), "Hello ");
+    }
+
+    #[test]
+    fn delete_surrounding_collapsed_cursor() {
+        let mut buffer = TextFieldBuffer::new("abcdef");
+        buffer.place_cursor_before_char(3); // cursor between c and d
+        buffer.delete_surrounding(2, 2); // remove b..e
+        assert_eq!(buffer.text(), "af");
+        assert_eq!(buffer.selection(), TextRange::cursor(1));
+    }
+
+    #[test]
+    fn delete_surrounding_preserves_composition() {
+        let mut buffer = TextFieldBuffer::new("abcdef");
+        buffer.place_cursor_before_char(3);
+        buffer.set_composition(Some(TextRange::new(2, 4))); // "cd"
+        buffer.delete_surrounding(3, 3);
+        assert_eq!(buffer.text(), "cd");
+        assert_eq!(buffer.selection(), TextRange::cursor(1));
+        assert_eq!(buffer.composition(), Some(TextRange::new(0, 2)));
     }
 }

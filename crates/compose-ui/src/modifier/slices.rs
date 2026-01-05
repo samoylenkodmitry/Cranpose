@@ -7,12 +7,12 @@ use compose_ui_graphics::GraphicsLayer;
 use crate::draw::DrawCommand;
 use crate::modifier::Modifier;
 use crate::modifier_nodes::{
-    BackgroundNode, ClipToBoundsNode, CornerShapeNode, DrawCommandNode,
-    GraphicsLayerNode, PaddingNode,
+    BackgroundNode, ClipToBoundsNode, CornerShapeNode, DrawCommandNode, GraphicsLayerNode,
+    PaddingNode,
 };
-use compose_ui_graphics::EdgeInsets;
-use crate::text_modifier_node::TextModifierNode;
 use crate::text_field_modifier_node::TextFieldModifierNode;
+use crate::text_modifier_node::TextModifierNode;
+use compose_ui_graphics::EdgeInsets;
 use std::cell::RefCell;
 
 use super::{ModifierChainHandle, Point};
@@ -138,7 +138,7 @@ pub fn collect_modifier_slices(chain: &ModifierNodeChain) -> ModifierNodeSlices 
                 .draw_commands
                 .extend(commands.commands().iter().cloned());
         }
-        
+
         // Use create_draw_closure() for nodes with dynamic content (cursor blink, selection)
         // This defers evaluation to render time, enabling live updates.
         // Fallback to draw() for nodes with static content.
@@ -149,7 +149,10 @@ pub fn collect_modifier_slices(chain: &ModifierNodeChain) -> ModifierNodeSlices 
             } else {
                 // Static draw - evaluate now
                 use compose_ui_graphics::{DrawScope as _, DrawScopeDefault};
-                let mut scope = DrawScopeDefault::new(crate::modifier::Size { width: 0.0, height: 0.0 });
+                let mut scope = DrawScopeDefault::new(crate::modifier::Size {
+                    width: 0.0,
+                    height: 0.0,
+                });
                 draw_node.draw(&mut scope);
                 let primitives = scope.into_primitives();
                 if !primitives.is_empty() {
@@ -193,11 +196,11 @@ pub fn collect_modifier_slices(chain: &ModifierNodeChain) -> ModifierNodeSlices 
         if let Some(text_field_node) = any.downcast_ref::<TextFieldModifierNode>() {
             let text = text_field_node.text();
             slices.text_content = Some(text.clone());
-            
+
             // Update content offsets for cursor positioning in collect_draw_primitives()
             text_field_node.set_content_offset(padding.left);
             text_field_node.set_content_y_offset(padding.top);
-            
+
             // Cursor/selection rendering is now handled via DrawModifierNode::collect_draw_primitives()
             // in the DRAW capability loop above
         }

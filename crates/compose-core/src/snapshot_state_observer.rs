@@ -354,7 +354,7 @@ impl SnapshotStateObserverInner {
             return;
         }
 
-        let mut modified_ids: SmallVec<usize, MAX_OBSERVED_STATES> = SmallVec::new();
+        let mut modified_ids: SmallVec<[usize; MAX_OBSERVED_STATES]> = SmallVec::new();
         for state in modified {
             modified_ids.push(state.object_id().as_usize());
         }
@@ -414,7 +414,7 @@ use compose_core::RecomposeScope;
 use smallvec::SmallVec;
 
 enum ObservedIds {
-    Small(SmallVec<StateObjectId, MAX_OBSERVED_STATES>),
+    Small(SmallVec<[StateObjectId; MAX_OBSERVED_STATES]>),
     Large(HashSet<StateObjectId>),
 }
 

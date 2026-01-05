@@ -20,7 +20,6 @@ pub use compose_ui_graphics::DrawScope;
 pub use compose_ui_graphics::Size;
 pub use compose_ui_layout::{Constraints, Measurable};
 
-
 use crate::nodes::input::types::PointerEvent;
 // use compose_core::NodeId;
 
@@ -509,33 +508,35 @@ pub trait LayoutModifierNode: ModifierNode {
 ///
 /// Draw nodes participate in the draw pass of the render pipeline. They can
 /// intercept and modify the drawing operations of their wrapped content.
-/// 
+///
 /// Following Jetpack Compose's design, `draw()` is called during the actual
 /// render pass with a live DrawScope, not during layout/slice collection.
 pub trait DrawModifierNode: ModifierNode {
     /// Draws this modifier node into the provided DrawScope.
-    /// 
+    ///
     /// This is called during the render pass for each node with DRAW capability.
     /// The node should draw directly into the scope using methods like
     /// `draw_scope.draw_rect_at()`.
-    /// 
+    ///
     /// Takes `&self` to work with immutable chain iteration - use interior
     /// mutability (RefCell) for any state that needs mutation during draw.
     fn draw(&self, _draw_scope: &mut dyn DrawScope) {
         // Default: no custom drawing
     }
-    
+
     /// Creates a closure for deferred drawing that will be evaluated at render time.
-    /// 
+    ///
     /// This is the preferred method for nodes with dynamic content like:
     /// - Blinking cursors (visibility changes over time)
     /// - Live selection during drag (selection changes during mouse move)
-    /// 
+    ///
     /// The returned closure captures the node's internal state (via Rc) and
     /// evaluates at render time, not at slice collection time.
-    /// 
+    ///
     /// Returns None by default. Override for nodes needing deferred draw.
-    fn create_draw_closure(&self) -> Option<Rc<dyn Fn(Size) -> Vec<compose_ui_graphics::DrawPrimitive>>> {
+    fn create_draw_closure(
+        &self,
+    ) -> Option<Rc<dyn Fn(Size) -> Vec<compose_ui_graphics::DrawPrimitive>>> {
         None
     }
 }
@@ -1290,16 +1291,30 @@ impl ModifierNodeChain {
     /// Reconcile the chain against the provided elements, attaching newly
     /// created nodes and detaching nodes that are no longer required.
     ///
-    /// This method achieves O(n) complexity by building an index structure
-    /// for O(1) lookups, avoiding the naive O(n²) double-loop approach.
+    /// This method delegates to `update_from_ref_iter` which handles the
+    /// actual reconciliation logic.
     pub fn update_from_slice(
         &mut self,
         elements: &[DynModifierElement],
         context: &mut dyn ModifierNodeContext,
     ) {
+        self.update_from_ref_iter(elements.iter(), context);
+    }
+
+    /// Reconcile the chain against the provided iterator of element references.
+    ///
+    /// This is the preferred method as it avoids requiring a collected slice,
+    /// enabling zero-allocation traversal of modifier trees.
+    pub fn update_from_ref_iter<'a, I>(
+        &mut self,
+        elements: I,
+        context: &mut dyn ModifierNodeContext,
+    ) where
+        I: Iterator<Item = &'a DynModifierElement>,
+    {
         let mut old_entries = std::mem::take(&mut self.entries);
         let mut old_used = vec![false; old_entries.len()];
-        let mut new_entries: Vec<ModifierNodeEntry> = Vec::with_capacity(elements.len());
+        let mut new_entries: Vec<ModifierNodeEntry> = Vec::new();
 
         // Build index for O(1) lookups - O(m) where m = old_entries.len()
         let index = EntryIndex::build(&old_entries);
@@ -1307,8 +1322,12 @@ impl ModifierNodeChain {
         // Track which old entry index maps to which position in new list
         let mut match_order: Vec<Option<usize>> = vec![None; old_entries.len()];
 
+        // Track element count as we iterate
+        let mut element_count = 0usize;
+
         // Process each new element, reusing old entries where possible - O(n)
-        for (new_pos, element) in elements.iter().enumerate() {
+        for (new_pos, element) in elements.enumerate() {
+            element_count = new_pos + 1;
             let element_type = element.element_type();
             let key = element.key();
             let hash_code = element.hash_code();
@@ -1334,28 +1353,23 @@ impl ModifierNodeChain {
                 let same_element = entry.element.as_ref().equals_element(element.as_ref());
 
                 // Re-attach node if it was detached during a previous update
-                // SAFETY: We explicitly drop the immutable borrow before calling attach_node_tree
-                // to avoid re-entrancy issues. The on_attach callback may trigger mutations
-                // (e.g., invalidations, state changes) that could attempt to borrow the node,
-                // causing a RefCell panic if we held the immutable borrow across the call.
                 {
                     let node_borrow = entry.node.borrow();
                     if !node_borrow.node_state().is_attached() {
-                        drop(node_borrow); // Release borrow before on_attach
+                        drop(node_borrow);
                         attach_node_tree(&mut **entry.node.borrow_mut(), context);
                     }
                 }
 
                 // Optimize updates: only call update_node if element changed OR
-                // if the element type explicitly requests forced updates (e.g. for closures).
-                // This restores performance for stable modifiers like Padding/Background.
+                // if the element type explicitly requests forced updates
                 if !same_element || element.requires_update() {
                     element.update_node(&mut **entry.node.borrow_mut());
                     entry.element = element.clone();
                     entry.hash_code = hash_code;
                 }
 
-                // Always update metadata (capabilities may change independently)
+                // Always update metadata
                 entry.key = key;
                 entry.element_type = element_type;
                 entry.capabilities = capabilities;
@@ -1365,7 +1379,7 @@ impl ModifierNodeChain {
                     .node_state()
                     .set_capabilities(capabilities);
             } else {
-                // Create new entry and insert at correct position
+                // Create new entry
                 let entry = ModifierNodeEntry::new(
                     element_type,
                     key,
@@ -1381,7 +1395,6 @@ impl ModifierNodeChain {
         }
 
         // Assemble final list in correct order
-        // First, create a temporary list of (position, entry) pairs for matched entries
         let mut matched_entries: Vec<(usize, ModifierNodeEntry)> = Vec::new();
         for (entry, (used, order)) in old_entries
             .into_iter()
@@ -1394,28 +1407,24 @@ impl ModifierNodeChain {
             }
         }
 
-        // Sort matched entries by their new position
         matched_entries.sort_by_key(|(pos, _)| *pos);
 
         // Merge matched entries with newly created entries
-        // new_entries currently only has newly created entries
-        let mut final_entries: Vec<ModifierNodeEntry> = Vec::with_capacity(elements.len());
+        let mut final_entries: Vec<ModifierNodeEntry> = Vec::with_capacity(element_count);
         let mut matched_iter = matched_entries.into_iter();
         let mut new_iter = new_entries.into_iter();
         let mut next_matched = matched_iter.next();
         let mut next_new = new_iter.next();
 
-        for pos in 0..elements.len() {
+        for pos in 0..element_count {
             if let Some((matched_pos, _)) = next_matched {
                 if matched_pos == pos {
-                    // This position gets a matched entry
                     final_entries.push(next_matched.take().unwrap().1);
                     next_matched = matched_iter.next();
                     continue;
                 }
             }
 
-            // This position gets a new entry
             if let Some(entry) = next_new.take() {
                 final_entries.push(entry);
                 next_new = new_iter.next();

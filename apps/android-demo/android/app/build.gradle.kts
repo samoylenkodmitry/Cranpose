@@ -46,10 +46,11 @@ android {
 
     sourceSets {
         getByName("debug") {
-            jniLibs.srcDirs("../../../target/android")
+            // Path relative to app/ directory. Cargo builds to android/target/android/
+            jniLibs.srcDirs("../target/android")
         }
         getByName("release") {
-            jniLibs.srcDirs("../../../target/android")
+            jniLibs.srcDirs("../target/android")
         }
     }
 }
@@ -81,6 +82,21 @@ fun checkCargoNdk() {
 tasks.register<Exec>("buildRustDebug") {
     description = "Build Rust library for Android (debug, single ABI)"
     group = "rust"
+
+    // Track Rust source files as inputs so Gradle rebuilds when code changes
+    inputs.files(fileTree("../../../../crates") {
+        include("**/*.rs")
+        include("**/Cargo.toml")
+    })
+    inputs.files(fileTree("../../../../apps/desktop-demo/src") {
+        include("**/*.rs")
+    })
+    inputs.file("../../../../Cargo.toml")
+    inputs.file("../../../../Cargo.lock")
+    
+    // Always run this task - let Cargo handle its own incremental builds
+    // This prevents Gradle/Cargo caching conflicts
+    outputs.upToDateWhen { false }
 
     // Check cargo-ndk availability
     doFirst {

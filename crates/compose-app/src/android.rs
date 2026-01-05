@@ -142,11 +142,13 @@ pub fn run(
     let should_exit = Arc::new(AtomicBool::new(false));
 
     // Initialize wgpu instance with GL and Vulkan backends
-    // GL works better on emulators, but Vulkan is preferred on real devices
+    // Use DISCARD_HAL_LABELS to prevent crash in emulator's Vulkan debug utils
+    // (vk_common_SetDebugUtilsObjectNameEXT crashes on null labels)
     let backends = wgpu::Backends::GL | wgpu::Backends::VULKAN;
 
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
         backends,
+        flags: wgpu::InstanceFlags::empty(), // No debug/validation - prevents label crash
         ..Default::default()
     });
 
@@ -188,13 +190,13 @@ pub fn run(
                             // Create surface using raw window handle from NativeWindow
                             let surface = unsafe {
                                 use raw_window_handle::{
-                                    AndroidNdkWindowHandle, RawWindowHandle, RawDisplayHandle,
-                                    AndroidDisplayHandle,
+                                    AndroidDisplayHandle, AndroidNdkWindowHandle, RawDisplayHandle,
+                                    RawWindowHandle,
                                 };
 
                                 let mut window_handle = AndroidNdkWindowHandle::new(
                                     std::ptr::NonNull::new(native_window.ptr().as_ptr() as *mut _)
-                                        .expect("NativeWindow pointer is null")
+                                        .expect("NativeWindow pointer is null"),
                                 );
                                 let raw_window_handle = RawWindowHandle::AndroidNdk(window_handle);
 
@@ -225,14 +227,17 @@ pub fn run(
                             log::info!("Found adapter: {:?}", adapter_info.backend);
 
                             // Request device and queue
-                            let (device, queue) = pollster::block_on(adapter.request_device(
-                                &wgpu::DeviceDescriptor {
+                            // Use downlevel limits for broad compatibility, with adapter's actual limits
+                            let (device, queue) = pollster::block_on(
+                                adapter.request_device(&wgpu::DeviceDescriptor {
                                     label: Some("Android Device"),
                                     required_features: wgpu::Features::empty(),
-                                    required_limits: wgpu::Limits::default(),
-                                },
-                                None,
-                            ))
+                                    required_limits: wgpu::Limits::downlevel_defaults()
+                                        .using_resolution(adapter.limits()),
+                                    memory_hints: wgpu::MemoryHints::default(),
+                                    trace: wgpu::Trace::Off,
+                                }),
+                            )
                             .expect("Failed to create device");
 
                             let device = Arc::new(device);
@@ -421,18 +426,30 @@ pub fn run(
 
                                         match motion_event.action() {
                                             MotionAction::Down | MotionAction::PointerDown => {
+                                                println!(
+                                                    "[TOUCH] Down at ({:.1}, {:.1})",
+                                                    logical.x, logical.y
+                                                );
                                                 if let Some(shell) = &mut app_shell {
                                                     shell.set_cursor(logical.x, logical.y);
                                                     shell.pointer_pressed();
                                                 }
                                             }
                                             MotionAction::Up | MotionAction::PointerUp => {
+                                                println!(
+                                                    "[TOUCH] Up at ({:.1}, {:.1})",
+                                                    logical.x, logical.y
+                                                );
                                                 if let Some(shell) = &mut app_shell {
                                                     shell.set_cursor(logical.x, logical.y);
                                                     shell.pointer_released();
                                                 }
                                             }
                                             MotionAction::Move => {
+                                                println!(
+                                                    "[TOUCH] Move at ({:.1}, {:.1})",
+                                                    logical.x, logical.y
+                                                );
                                                 if let Some(shell) = &mut app_shell {
                                                     shell.set_cursor(logical.x, logical.y);
                                                 }

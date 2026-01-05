@@ -6,6 +6,7 @@ pub mod button;
 pub mod column;
 pub mod foreach;
 pub mod layout;
+pub mod lazy_list;
 pub mod nodes;
 pub mod row;
 pub mod scopes;
@@ -18,9 +19,9 @@ pub use button::*;
 pub use column::*;
 pub use foreach::*;
 pub use layout::*;
+pub use lazy_list::*;
 pub use nodes::*;
 pub use row::*;
 pub use scopes::*;
 pub use spacer::*;
 pub use text::*;
-

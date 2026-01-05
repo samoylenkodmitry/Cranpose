@@ -265,11 +265,12 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     quote! {
                         let #slot_ident = __composer
                             .use_value_slot(|| compose_core::CallbackHolder::new());
-                        {
-                            let holder = __composer
-                                .read_slot_value::<compose_core::CallbackHolder>(#slot_ident);
-                            holder.update(#ident);
-                        }
+                        __composer.with_slot_value::<compose_core::CallbackHolder, _>(
+                            #slot_ident,
+                            |holder| {
+                                holder.update(#ident);
+                            },
+                        );
                         __changed = true;
                     }
                 } else {
@@ -278,9 +279,10 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     quote! {
                         let #slot_ident = __composer
                             .use_value_slot(|| compose_core::ParamState::<#ty>::default());
-                        if __composer
-                            .read_slot_value_mut::<compose_core::ParamState<#ty>>(#slot_ident)
-                            .update(&#ident)
+                        if __composer.with_slot_value_mut::<compose_core::ParamState<#ty>, _>(
+                            #slot_ident,
+                            |state| state.update(&#ident),
+                        )
                         {
                             __changed = true;
                         }
@@ -323,15 +325,19 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                         quote! {
                             #[allow(unused_mut)]
                             let mut #pat = __composer
-                                .read_slot_value::<compose_core::CallbackHolder>(#slot_ident)
-                                .clone_rc();
+                                .with_slot_value::<compose_core::CallbackHolder, _>(
+                                    #slot_ident,
+                                    |holder| holder.clone_rc(),
+                                );
                         }
                     } else {
                         quote! {
                             #[allow(unused_mut)]
                             let #pat = __composer
-                                .read_slot_value::<compose_core::CallbackHolder>(#slot_ident)
-                                .clone_rc();
+                                .with_slot_value::<compose_core::CallbackHolder, _>(
+                                    #slot_ident,
+                                    |holder| holder.clone_rc(),
+                                );
                         }
                     }
                 } else {
@@ -357,15 +363,19 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                         quote! {
                             #[allow(unused_mut)]
                             let mut #pat = __composer
-                                .read_slot_value::<compose_core::CallbackHolder>(#slot_ident)
-                                .clone_rc();
+                                .with_slot_value::<compose_core::CallbackHolder, _>(
+                                    #slot_ident,
+                                    |holder| holder.clone_rc(),
+                                );
                         }
                     } else {
                         quote! {
                             #[allow(unused_mut)]
                             let #pat = __composer
-                                .read_slot_value::<compose_core::CallbackHolder>(#slot_ident)
-                                .clone_rc();
+                                .with_slot_value::<compose_core::CallbackHolder, _>(
+                                    #slot_ident,
+                                    |holder| holder.clone_rc(),
+                                );
                         }
                     }
                 } else {
@@ -373,9 +383,14 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     let ty = &info.ty;
                     quote! {
                         let #pat = __composer
-                            .read_slot_value::<compose_core::ParamState<#ty>>(#slot_ident)
-                            .value()
-                            .expect("composable parameter missing for recomposition");
+                            .with_slot_value::<compose_core::ParamState<#ty>, _>(
+                                #slot_ident,
+                                |state| {
+                                    state
+                                        .value()
+                                        .expect("composable parameter missing for recomposition")
+                                },
+                            );
                     }
                 }
             })
@@ -407,28 +422,32 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             let __result_slot_index = __composer
                 .use_value_slot(|| compose_core::ReturnSlot::<#return_ty>::default());
             let __has_previous = __composer
-                .read_slot_value::<compose_core::ReturnSlot<#return_ty>>(__result_slot_index)
-                .get()
-                .is_some();
+                .with_slot_value::<compose_core::ReturnSlot<#return_ty>, _>(
+                    __result_slot_index,
+                    |slot| slot.get().is_some(),
+                );
             if !__changed && __has_previous {
                 __composer.skip_current_group();
                 let __result = __composer
-                    .read_slot_value::<compose_core::ReturnSlot<#return_ty>>(
+                    .with_slot_value::<compose_core::ReturnSlot<#return_ty>, _>(
                         __result_slot_index,
-                    )
-                    .get()
-                    .expect("composable return value missing during skip");
+                        |slot| {
+                            slot.get()
+                                .expect("composable return value missing during skip")
+                        },
+                    );
                 return __result;
             }
             let __value: #return_ty = {
                 #(#rebinds)*
                 #helper_block
             };
-            __composer
-                .read_slot_value_mut::<compose_core::ReturnSlot<#return_ty>>(
-                    __result_slot_index,
-                )
-                .store(__value.clone());
+            __composer.with_slot_value_mut::<compose_core::ReturnSlot<#return_ty>, _>(
+                __result_slot_index,
+                |slot| {
+                    slot.store(__value.clone());
+                },
+            );
             #recompose_setter
             __value
         };
@@ -441,11 +460,12 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             let __value: #return_ty = {
                 #recompose_block
             };
-            __composer
-                .read_slot_value_mut::<compose_core::ReturnSlot<#return_ty>>(
-                    __result_slot_index,
-                )
-                .store(__value.clone());
+            __composer.with_slot_value_mut::<compose_core::ReturnSlot<#return_ty>, _>(
+                __result_slot_index,
+                |slot| {
+                    slot.store(__value.clone());
+                },
+            );
             #recompose_setter
             __value
         };

@@ -99,13 +99,13 @@ mod robot_tests {
         robot.wait_for_idle();
 
         // Sequence of interactions
-        robot.click_at(100.0, 50.0);  // Click top-left area
+        robot.click_at(100.0, 50.0); // Click top-left area
         robot.wait_for_idle();
 
-        robot.move_to(400.0, 300.0);  // Move to center
+        robot.move_to(400.0, 300.0); // Move to center
         robot.wait_for_idle();
 
-        robot.click_at(700.0, 50.0);  // Click top-right area
+        robot.click_at(700.0, 50.0); // Click top-right area
         robot.wait_for_idle();
 
         println!("=== After Interaction Sequence ===");
@@ -142,11 +142,7 @@ mod robot_tests {
         robot.wait_for_idle();
 
         // Try to find element at various positions
-        let positions = vec![
-            (100.0, 50.0),
-            (400.0, 300.0),
-            (700.0, 500.0),
-        ];
+        let positions = vec![(100.0, 50.0), (400.0, 300.0), (700.0, 500.0)];
 
         for (x, y) in positions {
             let mut finder = robot.find_at_position(x, y);

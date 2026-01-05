@@ -86,7 +86,7 @@ impl ScrollState {
 
         if actual_delta.abs() > 0.001 {
             self.inner.value.set(new_value);
-            
+
             // Trigger layout invalidation callbacks
             for callback in self.inner.invalidate_callbacks.borrow().values() {
                 callback();
@@ -105,7 +105,7 @@ impl ScrollState {
     pub fn scroll_to(&self, position: f32) {
         let max = self.max_value();
         self.inner.value.set(position.clamp(0.0, max));
-        
+
         // Trigger layout invalidation callbacks
         for callback in self.inner.invalidate_callbacks.borrow().values() {
             callback();
@@ -114,9 +114,13 @@ impl ScrollState {
 
     /// Adds an invalidation callback and returns its ID
     pub(crate) fn add_invalidate_callback(&self, callback: Box<dyn Fn()>) -> u64 {
-        static NEXT_CALLBACK_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        static NEXT_CALLBACK_ID: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(1);
         let id = NEXT_CALLBACK_ID.fetch_add(1, Ordering::Relaxed);
-        self.inner.invalidate_callbacks.borrow_mut().insert(id, callback);
+        self.inner
+            .invalidate_callbacks
+            .borrow_mut()
+            .insert(id, callback);
         id
     }
 
@@ -229,7 +233,7 @@ impl ScrollNode {
             node_id: None,
         }
     }
-    
+
     /// Returns a reference to the ScrollState.
     pub fn state(&self) -> &ScrollState {
         &self.state
@@ -246,7 +250,7 @@ impl ModifierNode for ScrollNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
         // Set up the invalidation callback to trigger layout when scroll state changes.
         // We capture the node_id directly from the context, avoiding any global registry.
-        
+
         let node_id = context.node_id();
         self.node_id = node_id;
 
@@ -257,13 +261,13 @@ impl ModifierNode for ScrollNode {
             }));
             self.invalidation_callback_id = Some(callback_id);
         } else {
-             // If we don't have a node ID, we can't register a scoped callback.
-             // This suggests the modifier chain hasn't been properly initialized with an ID yet.
-             // However, on_attach usually happens after node_id is available in LayoutNode.
-             // We'll log a warning if debug logging is enabled, but for now we proceed safely.
-             // In future, we might want to panic here or handle it fundamentally.
+            // If we don't have a node ID, we can't register a scoped callback.
+            // This suggests the modifier chain hasn't been properly initialized with an ID yet.
+            // However, on_attach usually happens after node_id is available in LayoutNode.
+            // We'll log a warning if debug logging is enabled, but for now we proceed safely.
+            // In future, we might want to panic here or handle it fundamentally.
         }
-        
+
         // Initial invalidation
         context.invalidate(compose_foundation::InvalidationKind::Layout);
     }
@@ -274,7 +278,6 @@ impl ModifierNode for ScrollNode {
             self.state.remove_invalidate_callback(id);
         }
     }
-
 
     fn as_layout_node(&self) -> Option<&dyn LayoutModifierNode> {
         Some(self)
@@ -323,8 +326,9 @@ impl LayoutModifierNode for ScrollNode {
 
         // Step 5: Update state with max scroll value
         // Only update if the viewport is constrained (not infinite probe)
-        if (self.is_vertical && constraints.max_height.is_finite()) 
-            || (!self.is_vertical && constraints.max_width.is_finite()) {
+        if (self.is_vertical && constraints.max_height.is_finite())
+            || (!self.is_vertical && constraints.max_width.is_finite())
+        {
             self.state.set_max_value(max_scroll);
         }
 
@@ -370,7 +374,6 @@ impl LayoutModifierNode for ScrollNode {
         None
     }
 }
-
 
 /// Creates a remembered ScrollState.
 ///

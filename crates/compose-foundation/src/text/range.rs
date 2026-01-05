@@ -91,7 +91,7 @@ impl TextRange {
         if text.is_empty() {
             return "";
         }
-        
+
         let start = self.min().min(text.len());
         let end = self.max().min(text.len());
 
@@ -100,7 +100,10 @@ impl TextRange {
             start
         } else {
             // Find previous char boundary by scanning backward
-            (0..start).rev().find(|&i| text.is_char_boundary(i)).unwrap_or(0)
+            (0..start)
+                .rev()
+                .find(|&i| text.is_char_boundary(i))
+                .unwrap_or(0)
         };
 
         // Clamp end to valid char boundary (scan forward)
@@ -108,7 +111,9 @@ impl TextRange {
             end
         } else {
             // Find next char boundary by scanning forward
-            (end..=text.len()).find(|&i| text.is_char_boundary(i)).unwrap_or(text.len())
+            (end..=text.len())
+                .find(|&i| text.is_char_boundary(i))
+                .unwrap_or(text.len())
         };
 
         if start <= end {

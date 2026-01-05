@@ -50,12 +50,7 @@ where
     /// Create a new robot test rule with the given viewport size and app content.
     ///
     /// The app will be launched immediately with the provided dimensions.
-    pub fn new(
-        width: u32,
-        height: u32,
-        renderer: R,
-        content: impl FnMut() + 'static,
-    ) -> Self {
+    pub fn new(width: u32, height: u32, renderer: R, content: impl FnMut() + 'static) -> Self {
         let root_key = location_key(file!(), line!(), column!());
         let mut shell = AppShell::new(renderer, root_key, content);
         shell.set_viewport(width as f32, height as f32);
@@ -158,7 +153,6 @@ where
         self.shell.pointer_released();
         self.shell.update();
     }
-
 
     /// Find an element by text content.
     ///
@@ -275,9 +269,7 @@ where
                 let all_text = self.robot.get_all_text();
                 all_text.iter().any(|t| t.contains(text))
             }
-            FinderQuery::Position(x, y) => {
-                !self.robot.get_scene().hit_test(*x, *y).is_empty()
-            }
+            FinderQuery::Position(x, y) => !self.robot.get_scene().hit_test(*x, *y).is_empty(),
             FinderQuery::Clickable => {
                 // Check if there are any clickable elements
                 // This would require semantics traversal
@@ -361,11 +353,7 @@ where
     ///
     /// Panics if the element is not found.
     pub fn assert_exists(&mut self) {
-        assert!(
-            self.exists(),
-            "Element not found: {:?}",
-            self.query
-        );
+        assert!(self.exists(), "Element not found: {:?}", self.query);
     }
 
     /// Assert that this element does not exist.
@@ -398,12 +386,13 @@ fn extract_text_from_layout(layout: &LayoutTree) -> Vec<String> {
 
 /// Extract all rectangles with optional text from a layout tree.
 fn extract_rects_from_layout(layout: &LayoutTree) -> Vec<(Rect, Option<String>)> {
-    fn collect_rects(
-        node: &compose_ui::LayoutBox,
-        results: &mut Vec<(Rect, Option<String>)>,
-    ) {
+    fn collect_rects(node: &compose_ui::LayoutBox, results: &mut Vec<(Rect, Option<String>)>) {
         // Get the text content if present in modifier slices
-        let text = node.node_data.modifier_slices().text_content().map(|s| s.to_string());
+        let text = node
+            .node_data
+            .modifier_slices()
+            .text_content()
+            .map(|s| s.to_string());
 
         // Get the rect, including content_offset for proper positioning
         let rect = Rect {

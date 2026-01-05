@@ -12,11 +12,12 @@ compose-runtime-std = { path = "../compose-runtime-std" }
 compose-foundation = { path = "../compose-foundation" }
 compose-ui-layout = { path = "../compose-ui-layout" }
 compose-ui-graphics = { path = "../compose-ui-graphics" }
-indexmap = "2"
+indexmap = "=2.7.1"
 smallvec = "1.13"
 futures-task = "0.3"
 # WASM-compatible time - web-time is what winit uses internally
 web-time = "1.1"
+log = "0.4"
 
 [features]
 default = []

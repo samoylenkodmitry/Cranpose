@@ -14,10 +14,9 @@ use std::{
 };
 
 use compose_core::{
-    Applier, ApplierHost, Composer, ConcreteApplierHost, MemoryApplier, NodeError, NodeId,
-    Phase, RuntimeHandle, SlotBackend, SlotsHost, SnapshotStateObserver,
+    Applier, ApplierHost, Composer, ConcreteApplierHost, MemoryApplier, NodeError, NodeId, Phase,
+    RuntimeHandle, SlotBackend, SlotsHost, SnapshotStateObserver,
 };
-
 
 use self::coordinator::NodeCoordinator;
 use self::core::Measurable;
@@ -180,7 +179,6 @@ impl Drop for ApplierSlotGuard<'_> {
         // No Rc::try_unwrap in Drop → no "panic during panic" risk.
     }
 }
-
 
 /// Result of measuring through the modifier node chain.
 struct ModifierChainMeasurement {
@@ -548,11 +546,8 @@ pub fn measure_layout(
 
     // Give the builder the shared slots handle - both guard and builder
     // now share access to the same SlotBackend via Rc<RefCell<_>>.
-    let mut builder = LayoutBuilder::new_with_epoch(
-        Rc::clone(&applier_host),
-        epoch,
-        Rc::clone(&slots_handle),
-    );
+    let mut builder =
+        LayoutBuilder::new_with_epoch(Rc::clone(&applier_host), epoch, Rc::clone(&slots_handle));
 
     // ---- Measurement -------------------------------------------------------
     // If measurement fails, the guard will restore slots from the shared handle
@@ -585,7 +580,6 @@ pub fn measure_layout(
 
     Ok(LayoutMeasurements::new(measured, semantics, layout_tree))
 }
-
 
 struct LayoutBuilder {
     state: Rc<RefCell<LayoutBuilderState>>,
@@ -635,7 +629,7 @@ impl LayoutBuilderState {
         slots: Rc<RefCell<SlotBackend>>,
     ) -> Self {
         let runtime_handle = applier.borrow_typed().runtime_handle();
-        
+
         Self {
             applier,
             runtime_handle,
@@ -798,9 +792,37 @@ impl LayoutBuilderState {
         );
         composer.enter_phase(Phase::Measure);
 
-        let measure_result = node_handle.measure(&composer, node_id, inner_constraints)?;
+        let state_rc_clone = Rc::clone(&state_rc);
+        let measure_error: Rc<RefCell<Option<NodeError>>> = Rc::new(RefCell::new(None));
+        let error_for_measurer = Rc::clone(&measure_error);
+        let measurer = Box::new(
+            move |child_id: NodeId, child_constraints: Constraints| -> Size {
+                match Self::measure_node(Rc::clone(&state_rc_clone), child_id, child_constraints) {
+                    Ok(measured) => measured.size,
+                    Err(err) => {
+                        let mut slot = error_for_measurer.borrow_mut();
+                        if slot.is_none() {
+                            *slot = Some(err);
+                        }
+                        Size::default()
+                    }
+                }
+            },
+        );
+
+        let measure_result = node_handle.measure(
+            &composer,
+            node_id,
+            inner_constraints,
+            measurer,
+            Rc::clone(&measure_error),
+        )?;
 
         slots_guard.restore(slots_host.take());
+
+        if let Some(err) = measure_error.borrow_mut().take() {
+            return Err(err);
+        }
 
         let node_ids: Vec<NodeId> = measure_result
             .placements
@@ -903,7 +925,8 @@ impl LayoutBuilderState {
                             // but the node's offset affects where IT is positioned in the parent
                             node_ref.with_node(|node| {
                                 if let Some(offset_node) =
-                                    node.as_any().downcast_ref::<crate::modifier_nodes::OffsetNode>()
+                                    node.as_any()
+                                        .downcast_ref::<crate::modifier_nodes::OffsetNode>()
                                 {
                                     let delta = offset_node.offset();
                                     offset.x += delta.x;
@@ -967,7 +990,6 @@ impl LayoutBuilderState {
             x: all_placement_offset.x - offset.x,
             y: all_placement_offset.y - offset.y,
         };
-
 
         // offset was already extracted from OffsetNode above
 
@@ -1323,7 +1345,6 @@ impl Drop for SlotsGuard {
     }
 }
 
-
 #[derive(Clone)]
 struct LayoutMeasureHandle {
     state: Rc<RefCell<LayoutBuilderState>>,
@@ -1648,7 +1669,11 @@ fn measure_node_with_host(
         Some(handle) => Some(handle),
         None => applier.borrow_typed().runtime_handle(),
     };
-    let mut builder = LayoutBuilder::new_with_epoch(applier, epoch, Rc::new(RefCell::new(SlotBackend::default())));
+    let mut builder = LayoutBuilder::new_with_epoch(
+        applier,
+        epoch,
+        Rc::new(RefCell::new(SlotBackend::default())),
+    );
     builder.set_runtime_handle(runtime_handle);
     builder.measure_node(node_id, constraints)
 }
@@ -2049,4 +2074,3 @@ fn normalize_constraints(mut constraints: Constraints) -> Constraints {
 #[cfg(test)]
 #[path = "tests/layout_tests.rs"]
 mod tests;
-

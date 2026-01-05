@@ -4,9 +4,11 @@ use compose_core::{location_key, MemoryApplier};
 pub use compose_core::{Composition, Key};
 pub use compose_macros::composable;
 
+mod cursor_animation;
 mod debug;
 mod draw;
 mod focus_dispatch;
+mod key_event;
 pub mod layout;
 mod modifier;
 mod modifier_nodes;
@@ -17,21 +19,22 @@ mod renderer;
 pub mod scroll;
 mod subcompose_layout;
 mod text;
-mod text_modifier_node;
-mod text_field_modifier_node;
+pub mod text_field_focus;
 mod text_field_handler;
 mod text_field_input;
+mod text_field_modifier_node;
 pub mod text_layout_result;
-mod word_boundaries;
-pub mod text_field_focus;
-mod cursor_animation;
-mod key_event;
+mod text_modifier_node;
 pub mod widgets;
+mod word_boundaries;
 
 // Export for cursor blink animation - AppShell checks this to continuously redraw
 pub use text_field_focus::has_focused_field;
 // Export cursor blink timing for WaitUntil scheduling
-pub use cursor_animation::{next_cursor_blink_time, is_cursor_visible, tick_cursor_blink, start_cursor_blink, stop_cursor_blink, reset_cursor_blink};
+pub use cursor_animation::{
+    is_cursor_visible, next_cursor_blink_time, reset_cursor_blink, start_cursor_blink,
+    stop_cursor_blink, tick_cursor_blink,
+};
 
 pub use compose_ui_graphics::Dp;
 pub use compose_ui_layout::IntrinsicSize;
@@ -47,9 +50,9 @@ pub use layout::{
         Alignment, Arrangement, HorizontalAlignment, LinearArrangement, Measurable, Placeable,
         VerticalAlignment,
     },
-    measure_layout, tree_needs_layout, LayoutBox, LayoutEngine,
-    LayoutMeasurements, LayoutNodeData, LayoutNodeKind, LayoutTree, SemanticsAction,
-    SemanticsCallback, SemanticsNode, SemanticsRole, SemanticsTree,
+    measure_layout, tree_needs_layout, LayoutBox, LayoutEngine, LayoutMeasurements, LayoutNodeData,
+    LayoutNodeKind, LayoutTree, SemanticsAction, SemanticsCallback, SemanticsNode, SemanticsRole,
+    SemanticsTree,
 };
 pub use modifier::{
     collect_modifier_slices, collect_slices_from_modifier, Brush, Color, CornerRadii, EdgeInsets,
@@ -70,11 +73,15 @@ pub use primitives::{
     BoxWithConstraintsScope, BoxWithConstraintsScopeImpl, Button, Column, ColumnSpec, ForEach,
     Layout, LayoutNode, Row, RowSpec, Spacer, SubcomposeLayout, Text,
 };
+// Lazy list exports - single source from compose-foundation
+pub use compose_foundation::lazy::{LazyListItemInfo, LazyListLayoutInfo, LazyListState};
+pub use key_event::{KeyCode, KeyEvent, KeyEventType, Modifiers};
 pub use render_state::{
-    peek_focus_invalidation, peek_pointer_invalidation, peek_render_invalidation, peek_layout_invalidation,
-    request_focus_invalidation, request_pointer_invalidation, request_render_invalidation, request_layout_invalidation,
-    take_focus_invalidation, take_pointer_invalidation, take_render_invalidation, take_layout_invalidation,
-    schedule_layout_repass, has_pending_layout_repasses, take_layout_repass_nodes,
+    has_pending_layout_repasses, peek_focus_invalidation, peek_layout_invalidation,
+    peek_pointer_invalidation, peek_render_invalidation, request_focus_invalidation,
+    request_layout_invalidation, request_pointer_invalidation, request_render_invalidation,
+    schedule_layout_repass, take_focus_invalidation, take_layout_invalidation,
+    take_layout_repass_nodes, take_pointer_invalidation, take_render_invalidation,
 };
 pub use renderer::{HeadlessRenderer, PaintLayer, RecordedRenderScene, RenderOp};
 pub use scroll::{ScrollElement, ScrollNode, ScrollState};
@@ -82,10 +89,13 @@ pub use subcompose_layout::{
     Constraints, MeasureResult, Placement, SubcomposeLayoutNode, SubcomposeLayoutScope,
     SubcomposeMeasureScope, SubcomposeMeasureScopeImpl,
 };
-pub use text::{measure_text, set_text_measurer, TextMeasurer, TextMetrics, get_offset_for_position, get_cursor_x_for_offset, layout_text};
-pub use text_modifier_node::{TextModifierElement, TextModifierNode};
+pub use text::{
+    get_cursor_x_for_offset, get_offset_for_position, layout_text, measure_text, set_text_measurer,
+    TextMeasurer, TextMetrics,
+};
 pub use text_field_modifier_node::{TextFieldElement, TextFieldModifierNode};
-pub use key_event::{KeyCode, KeyEvent, KeyEventType, Modifiers};
+pub use text_modifier_node::{TextModifierElement, TextModifierNode};
+pub use widgets::lazy_list::{LazyColumn, LazyColumnSpec, LazyRow, LazyRowSpec};
 
 // Debug utilities
 pub use debug::{

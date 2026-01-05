@@ -46,7 +46,9 @@ fn main() {
             // Step 1: Navigate to Text Input Tab
             // =========================================================
             println!("--- Step 1: Navigate to Text Input Tab ---");
-            if let Some((x, y, w, h)) = find_in_semantics(&robot, |elem| find_text(elem, "Text Input")) {
+            if let Some((x, y, w, h)) =
+                find_in_semantics(&robot, |elem| find_text(elem, "Text Input"))
+            {
                 let _ = robot.mouse_move(x + w / 2.0, y + h / 2.0);
                 std::thread::sleep(Duration::from_millis(30));
                 let _ = robot.mouse_down();
@@ -64,7 +66,9 @@ fn main() {
             // Step 2: Find and click text field with "Type here..."
             // =========================================================
             println!("--- Step 2: Click text field and type 'abc' ---");
-            if let Some((x, y, w, h)) = find_in_semantics(&robot, |elem| find_text(elem, "Type here...")) {
+            if let Some((x, y, w, h)) =
+                find_in_semantics(&robot, |elem| find_text(elem, "Type here..."))
+            {
                 // Click near right edge to position cursor at end
                 let _ = robot.mouse_move(x + w - 5.0, y + h / 2.0);
                 std::thread::sleep(Duration::from_millis(30));
@@ -72,7 +76,11 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(30));
                 let _ = robot.mouse_up();
                 std::thread::sleep(Duration::from_millis(200));
-                println!("  Clicked text field at ({:.1}, {:.1})", x + w - 5.0, y + h / 2.0);
+                println!(
+                    "  Clicked text field at ({:.1}, {:.1})",
+                    x + w - 5.0,
+                    y + h / 2.0
+                );
 
                 // Type "abc"
                 let _ = robot.type_text("abc");
@@ -84,16 +92,25 @@ fn main() {
                 // Step 3: Verify "Current value" shows "abc" (reactive)
                 // =========================================================
                 println!("--- Step 3: Verify 'Current value' shows 'abc' (reactive update) ---");
-                
+
                 // Wait for semantics tree to rebuild after typing
                 let _ = robot.wait_for_idle();
                 std::thread::sleep(Duration::from_millis(300));
-                
+
                 // Helper to find element with BOTH patterns (recursive search)
-                fn find_dual_text(elem: &compose_app::SemanticElement, pat1: &str, pat2: &str) -> Option<(f32, f32, f32, f32)> {
+                fn find_dual_text(
+                    elem: &compose_app::SemanticElement,
+                    pat1: &str,
+                    pat2: &str,
+                ) -> Option<(f32, f32, f32, f32)> {
                     if let Some(ref text) = elem.text {
                         if text.contains(pat1) && text.contains(pat2) {
-                            return Some((elem.bounds.x, elem.bounds.y, elem.bounds.width, elem.bounds.height));
+                            return Some((
+                                elem.bounds.x,
+                                elem.bounds.y,
+                                elem.bounds.width,
+                                elem.bounds.height,
+                            ));
                         }
                     }
                     for child in &elem.children {
@@ -103,8 +120,9 @@ fn main() {
                     }
                     None
                 }
-                
-                let found_abc = find_in_semantics(&robot, |elem| find_dual_text(elem, "Current value:", "abc"));
+
+                let found_abc =
+                    find_in_semantics(&robot, |elem| find_dual_text(elem, "Current value:", "abc"));
 
                 if found_abc.is_some() {
                     println!("  ✓ PASS: 'Current value' label shows 'abc' after typing\n");
@@ -118,7 +136,9 @@ fn main() {
                 // Step 4: Press "Add !" button
                 // =========================================================
                 println!("--- Step 4: Press 'Add !' button ---");
-                if let Some((bx, by, bw, bh)) = find_in_semantics(&robot, |elem| find_button(elem, "Add !")) {
+                if let Some((bx, by, bw, bh)) =
+                    find_in_semantics(&robot, |elem| find_button(elem, "Add !"))
+                {
                     let _ = robot.mouse_move(bx + bw / 2.0, by + bh / 2.0);
                     std::thread::sleep(Duration::from_millis(30));
                     let _ = robot.mouse_down();
@@ -132,13 +152,15 @@ fn main() {
                     // Step 5: Verify "Current value" shows "abc!" (after Add !)
                     // =========================================================
                     println!("--- Step 5: Verify 'Current value' shows 'abc!' (after Add !) ---");
-                    
+
                     // Wait for recomposition after button click
                     let _ = robot.wait_for_idle();
                     std::thread::sleep(Duration::from_millis(300));
-                    
+
                     // Use same recursive finder as Step 3
-                    let found_abc_exclaim = find_in_semantics(&robot, |elem| find_dual_text(elem, "Current value:", "abc!"));
+                    let found_abc_exclaim = find_in_semantics(&robot, |elem| {
+                        find_dual_text(elem, "Current value:", "abc!")
+                    });
 
                     if found_abc_exclaim.is_some() {
                         println!("  ✓ PASS: 'Current value' label shows 'abc!' after Add !\n");
@@ -164,7 +186,7 @@ fn main() {
             } else {
                 println!("✗ SOME TESTS FAILED");
             }
-            
+
             std::thread::sleep(Duration::from_secs(1));
             let _ = robot.exit();
         })

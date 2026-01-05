@@ -39,6 +39,17 @@ impl<T: Clone + 'static> AnyStateCell for TypedStateCell<T> {
     }
 }
 
+#[allow(dead_code)]
+struct RawStateCell<T: 'static> {
+    value: T,
+}
+
+impl<T: 'static> AnyStateCell for RawStateCell<T> {
+    fn as_any(&self) -> &dyn Any {
+        &self.value
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct StateArena {
     cells: RefCell<Vec<Option<Box<dyn AnyStateCell>>>>,
@@ -51,6 +62,15 @@ impl StateArena {
         let inner = MutableStateInner::new(value, runtime.clone());
         inner.install_snapshot_observer(id);
         let cell: Box<dyn AnyStateCell> = Box::new(TypedStateCell { inner });
+        cells.push(Some(cell));
+        id
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn alloc_raw<T: 'static>(&self, value: T) -> StateId {
+        let mut cells = self.cells.borrow_mut();
+        let id = StateId(cells.len() as u32);
+        let cell: Box<dyn AnyStateCell> = Box::new(RawStateCell { value });
         cells.push(Some(cell));
         id
     }
@@ -72,6 +92,15 @@ impl StateArena {
             cell.as_any()
                 .downcast_ref::<MutableStateInner<T>>()
                 .expect("state cell type mismatch")
+        })
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn get_raw<T: 'static>(&self, id: StateId) -> Ref<'_, T> {
+        Ref::map(self.get_cell(id), |cell| {
+            cell.as_any()
+                .downcast_ref::<T>()
+                .expect("raw state cell type mismatch")
         })
     }
 
@@ -630,6 +659,19 @@ impl RuntimeHandle {
             .upgrade()
             .map(|inner| f(&inner.state_arena))
             .unwrap_or_else(|| panic!("runtime dropped"))
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn alloc_value<T: 'static>(&self, value: T) -> StateId {
+        self.with_state_arena(|arena| arena.alloc_raw(value))
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn with_value<T: 'static, R>(&self, id: StateId, f: impl FnOnce(&T) -> R) -> R {
+        self.with_state_arena(|arena| {
+            let value = arena.get_raw::<T>(id);
+            f(&value)
+        })
     }
 
     pub fn schedule(&self) {

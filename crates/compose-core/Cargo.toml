@@ -8,9 +8,8 @@ description = "Core runtime for a Jetpack Compose inspired UI framework in Rust"
 [dependencies]
 futures-task = "0.3"
 ahash = "0.8.12"
-hashbrown = "0.16.0"
-rustc-hash = "2.1.1"
-smallvec = "2.0.0-alpha.11"
+rustc-hash = "1.1.0"
+smallvec = "1.15.1"
 
 [features]
 default = []

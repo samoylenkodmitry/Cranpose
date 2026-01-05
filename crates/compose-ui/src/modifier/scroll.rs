@@ -72,36 +72,79 @@ fn calculate_incremental_delta(from: Point, to: Point, is_vertical: bool) -> f32
 }
 
 // ============================================================================
-// Scroll Gesture Detector
+// Scroll Gesture Detector (Generic Implementation)
 // ============================================================================
 
-/// Encapsulates scroll gesture detection and handling logic.
+/// Trait for scroll targets that can receive scroll deltas.
+///
+/// Implemented by both `ScrollState` (regular scroll) and `LazyListState` (lazy lists).
+trait ScrollTarget {
+    /// Apply a scroll delta. Returns the consumed amount.
+    fn apply_delta(&self, delta: f32) -> f32;
+
+    /// Called after scroll to trigger any necessary invalidation.
+    fn invalidate(&self);
+}
+
+impl ScrollTarget for ScrollState {
+    fn apply_delta(&self, delta: f32) -> f32 {
+        // Regular scroll uses negative delta (natural scrolling)
+        self.dispatch_raw_delta(-delta)
+    }
+
+    fn invalidate(&self) {
+        // ScrollState triggers invalidation internally
+    }
+}
+
+impl ScrollTarget for LazyListState {
+    fn apply_delta(&self, delta: f32) -> f32 {
+        // LazyListState uses positive delta directly
+        // dispatch_scroll_delta already calls self.invalidate() which triggers the
+        // layout invalidation callback registered in lazy_scroll_impl
+        self.dispatch_scroll_delta(delta)
+    }
+
+    fn invalidate(&self) {
+        // dispatch_scroll_delta already handles invalidation internally via callback.
+        // We do NOT call request_layout_invalidation() here - that's the global
+        // nuclear option that invalidates ALL layout caches app-wide.
+        // The registered callback uses schedule_layout_repass for scoped invalidation.
+    }
+}
+
+/// Generic scroll gesture detector that works with any ScrollTarget.
 ///
 /// This struct provides a clean interface for processing pointer events
-/// and managing scroll interactions. It separates the gesture detection
-/// logic from the async event loop plumbing.
-struct ScrollGestureDetector {
+/// and managing scroll interactions. The generic parameter S determines
+/// how scroll deltas are applied.
+struct ScrollGestureDetector<S: ScrollTarget> {
     /// Shared gesture state (position tracking, drag status).
     gesture_state: Rc<RefCell<ScrollGestureState>>,
 
-    /// The scroll model to update when drag is detected.
-    scroll_state: ScrollState,
+    /// The scroll target to update when drag is detected.
+    scroll_target: S,
 
     /// Whether this is vertical or horizontal scroll.
     is_vertical: bool,
+
+    /// Whether to reverse the scroll direction (flip delta).
+    reverse_scrolling: bool,
 }
 
-impl ScrollGestureDetector {
+impl<S: ScrollTarget> ScrollGestureDetector<S> {
     /// Creates a new detector for the given scroll configuration.
     fn new(
         gesture_state: Rc<RefCell<ScrollGestureState>>,
-        scroll_state: ScrollState,
+        scroll_target: S,
         is_vertical: bool,
+        reverse_scrolling: bool,
     ) -> Self {
         Self {
             gesture_state,
-            scroll_state,
+            scroll_target,
             is_vertical,
+            reverse_scrolling,
         }
     }
 
@@ -132,12 +175,6 @@ impl ScrollGestureDetector {
     /// 3. If total movement exceeds `DRAG_THRESHOLD` (8px), start dragging.
     /// 4. While dragging, apply scroll delta and consume events.
     ///
-    /// # Why negative delta?
-    /// Natural scrolling: dragging finger down moves content down,
-    /// which means scroll offset increases (content shifts up under viewport).
-    /// The scroll model uses positive offset = content scrolled up,
-    /// so drag down = negative delta to scroll state.
-    ///
     /// Returns `true` if event should be consumed (we're actively dragging).
     fn on_move(&self, position: Point, buttons: PointerButtons) -> bool {
         let mut gs = self.gesture_state.borrow_mut();
@@ -150,7 +187,12 @@ impl ScrollGestureDetector {
             return false;
         }
 
-        let (Some(down_pos), Some(last_pos)) = (gs.drag_down_position, gs.last_position) else {
+        let Some(down_pos) = gs.drag_down_position else {
+            return false;
+        };
+
+        let Some(last_pos) = gs.last_position else {
+            gs.last_position = Some(position);
             return false;
         };
 
@@ -158,8 +200,6 @@ impl ScrollGestureDetector {
         let incremental_delta = calculate_incremental_delta(last_pos, position, self.is_vertical);
 
         // Threshold check: start dragging only after moving 8px from down position.
-        // This matches the clickable modifier's threshold, ensuring consistent
-        // gesture disambiguation across scroll containers with clickable children.
         if !gs.is_dragging && total_delta.abs() > DRAG_THRESHOLD {
             gs.is_dragging = true;
         }
@@ -167,8 +207,14 @@ impl ScrollGestureDetector {
         gs.last_position = Some(position);
 
         if gs.is_dragging {
-            // Apply scroll: negative because natural scrolling (drag down = scroll up)
-            let _ = self.scroll_state.dispatch_raw_delta(-incremental_delta);
+            drop(gs); // Release borrow before calling scroll target
+            let delta = if self.reverse_scrolling {
+                -incremental_delta
+            } else {
+                incremental_delta
+            };
+            let _ = self.scroll_target.apply_delta(delta);
+            self.scroll_target.invalidate();
             true // Consume event while dragging
         } else {
             false
@@ -262,6 +308,7 @@ fn scroll_impl(state: ScrollState, is_vertical: bool, reverse_scrolling: bool) -
             gesture_state.clone(),
             scroll_state.clone(),
             is_vertical,
+            false, // ScrollState handles reversing in layout, not input
         );
 
         async move {
@@ -292,8 +339,8 @@ fn scroll_impl(state: ScrollState, is_vertical: bool, reverse_scrolling: bool) -
 
     // Create layout modifier for applying scroll offset to content
     let element = ScrollElement::new(state.clone(), is_vertical, reverse_scrolling);
-    let layout_modifier = Modifier::with_element(element).with_inspector_metadata(
-        inspector_metadata(
+    let layout_modifier =
+        Modifier::with_element(element).with_inspector_metadata(inspector_metadata(
             if is_vertical {
                 "verticalScroll"
             } else {
@@ -303,9 +350,83 @@ fn scroll_impl(state: ScrollState, is_vertical: bool, reverse_scrolling: bool) -
                 info.add_property("isVertical", is_vertical.to_string());
                 info.add_property("reverseScrolling", reverse_scrolling.to_string());
             },
-        ),
-    );
+        ));
 
     // Combine: pointer input THEN layout modifier
     pointer_input.then(layout_modifier)
+}
+
+// ============================================================================
+// Lazy Scroll Support for LazyListState
+// ============================================================================
+
+use compose_foundation::lazy::LazyListState;
+
+impl Modifier {
+    /// Creates a vertically scrollable modifier for lazy lists.
+    ///
+    /// This connects pointer gestures to LazyListState for scroll handling.
+    /// Unlike regular vertical_scroll, no layout offset is applied here
+    /// since LazyListState manages item positioning internally.
+    /// Creates a vertically scrollable modifier for lazy lists.
+    ///
+    /// This connects pointer gestures to LazyListState for scroll handling.
+    /// Unlike regular vertical_scroll, no layout offset is applied here
+    /// since LazyListState manages item positioning internally.
+    pub fn lazy_vertical_scroll(self, state: LazyListState, reverse_scrolling: bool) -> Self {
+        self.then(lazy_scroll_impl(state, true, reverse_scrolling))
+    }
+
+    /// Creates a horizontally scrollable modifier for lazy lists.
+    pub fn lazy_horizontal_scroll(self, state: LazyListState, reverse_scrolling: bool) -> Self {
+        self.then(lazy_scroll_impl(state, false, reverse_scrolling))
+    }
+}
+
+/// Internal implementation for lazy scroll modifiers.
+fn lazy_scroll_impl(state: LazyListState, is_vertical: bool, reverse_scrolling: bool) -> Modifier {
+    let gesture_state = Rc::new(RefCell::new(ScrollGestureState::default()));
+    let list_state = state;
+
+    // Note: Layout invalidation callback is registered in LazyColumnImpl/LazyRowImpl
+    // after the node is created, using schedule_layout_repass(node_id) for O(subtree)
+    // performance instead of request_layout_invalidation() which is O(entire app).
+
+    // Use a unique key per LazyListState
+    let state_id = std::ptr::addr_of!(*state.inner_ptr()) as usize;
+    let key = (state_id, is_vertical, reverse_scrolling);
+
+    Modifier::empty().pointer_input(key, move |scope| {
+        // Use the same generic detector with LazyListState
+        let detector = ScrollGestureDetector::new(
+            gesture_state.clone(),
+            list_state,
+            is_vertical,
+            reverse_scrolling,
+        );
+
+        async move {
+            scope
+                .await_pointer_event_scope(|await_scope| async move {
+                    loop {
+                        let event = await_scope.await_pointer_event().await;
+
+                        // Delegate to detector's lifecycle methods
+                        let should_consume = match event.kind {
+                            PointerEventKind::Down => detector.on_down(event.position),
+                            PointerEventKind::Move => {
+                                detector.on_move(event.position, event.buttons)
+                            }
+                            PointerEventKind::Up => detector.on_up(),
+                            PointerEventKind::Cancel => detector.on_cancel(),
+                        };
+
+                        if should_consume {
+                            event.consume();
+                        }
+                    }
+                })
+                .await;
+        }
+    })
 }

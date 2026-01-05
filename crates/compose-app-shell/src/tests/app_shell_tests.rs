@@ -4,6 +4,8 @@ use compose_core::{
 };
 use compose_macros::composable;
 use compose_ui::{Column, ColumnSpec, Modifier, Row, RowSpec, Text};
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 #[derive(Default, Clone)]
 struct TestHitTarget;
@@ -132,6 +134,35 @@ fn tabbed_progress_content() {
     );
 }
 
+#[composable]
+fn empty_content() {}
+
+struct DeleteSurroundingHandler {
+    last_delete: Cell<Option<(usize, usize)>>,
+}
+
+impl compose_ui::text_field_focus::FocusedTextFieldHandler for DeleteSurroundingHandler {
+    fn handle_key(&self, _event: &compose_ui::KeyEvent) -> bool {
+        false
+    }
+
+    fn insert_text(&self, _text: &str) {}
+
+    fn delete_surrounding(&self, before_bytes: usize, after_bytes: usize) {
+        self.last_delete.set(Some((before_bytes, after_bytes)));
+    }
+
+    fn copy_selection(&self) -> Option<String> {
+        None
+    }
+
+    fn cut_selection(&self) -> Option<String> {
+        None
+    }
+
+    fn set_composition(&self, _text: &str, _cursor: Option<(usize, usize)>) {}
+}
+
 #[test]
 fn layout_recovers_after_tab_switching_updates() {
     let root_key = location_key(file!(), line!(), column!());
@@ -146,4 +177,23 @@ fn layout_recovers_after_tab_switching_updates() {
             "layout_tree should remain available after update cycle {frame}"
         );
     }
+}
+
+#[test]
+fn ime_delete_surrounding_marks_dirty() {
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, empty_content);
+    shell.update();
+    assert!(!shell.needs_redraw());
+
+    let focus_flag = Rc::new(RefCell::new(false));
+    let handler = Rc::new(DeleteSurroundingHandler {
+        last_delete: Cell::new(None),
+    });
+
+    compose_ui::text_field_focus::request_focus(focus_flag, handler.clone());
+    assert!(shell.on_ime_delete_surrounding(2, 1));
+    assert_eq!(handler.last_delete.get(), Some((2, 1)));
+    assert!(shell.needs_redraw());
+    compose_ui::text_field_focus::clear_focus();
 }

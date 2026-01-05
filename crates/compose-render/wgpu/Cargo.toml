@@ -12,8 +12,8 @@ compose-foundation = { path = "../../compose-foundation" }
 compose-ui = { path = "../../compose-ui" }
 compose-core = { path = "../../compose-core" }
 # webgl feature enables WebGL backend for WASM builds
-# Default features include platform-appropriate backends (Vulkan/Metal/DX12)
-wgpu = { version = "25.0", default-features = false, features = ["wgsl", "webgl"] }
+# Default features include platform-appropriate backends (Vulkan/Metal/DX12/GLES)
+wgpu = { version = "25.0", features = ["webgl"] }
 bytemuck = { version = "1.14", features = ["derive"] }
 glyphon = "0.9"
 log = "0.4"

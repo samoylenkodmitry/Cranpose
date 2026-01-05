@@ -60,17 +60,16 @@ fn dump_layout_tree(layout_box: &LayoutBox, depth: usize) -> String {
 }
 
 /// Validate that a child box's base position is within parent bounds.
-/// 
+///
 /// For nodes with explicit offset (content_offset != 0), the offset modifier
 /// is designed to allow content to spill outside parent bounds (similar to
 /// CSS position: relative). We validate the base rect origin is within parent.
 fn validate_child_within_parent(parent: &LayoutBox, child: &LayoutBox) -> Result<(), String> {
     let tolerance = 1.0;
-    
+
     // Validate base rect origin is within parent
     // (offset-induced spillage is intentional and allowed)
-    if child.rect.x + tolerance < parent.rect.x 
-        || child.rect.y + tolerance < parent.rect.y {
+    if child.rect.x + tolerance < parent.rect.x || child.rect.y + tolerance < parent.rect.y {
         return Err(format!(
             "Child {} base origin ({:.1},{:.1}) outside parent {} at ({:.1},{:.1}) size ({:.1}x{:.1})",
             child.node_id, child.rect.x, child.rect.y,
@@ -79,9 +78,9 @@ fn validate_child_within_parent(parent: &LayoutBox, child: &LayoutBox) -> Result
     }
 
     // Check if child has an explicit offset modifier
-    let has_explicit_offset = child.node_data.resolved_modifiers().offset().x.abs() > 0.001 
+    let has_explicit_offset = child.node_data.resolved_modifiers().offset().x.abs() > 0.001
         || child.node_data.resolved_modifiers().offset().y.abs() > 0.001;
-    
+
     // For non-offset nodes, also validate right/bottom bounds
     if !has_explicit_offset
         && (child.rect.x + child.rect.width > parent.rect.x + parent.rect.width + tolerance
@@ -94,7 +93,7 @@ fn validate_child_within_parent(parent: &LayoutBox, child: &LayoutBox) -> Result
         ));
     }
     // For offset nodes, right/bottom overflow is allowed (intentional offset behavior)
-    
+
     Ok(())
 }
 

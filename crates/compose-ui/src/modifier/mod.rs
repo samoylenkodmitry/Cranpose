@@ -200,6 +200,66 @@ enum ModifierKind {
     },
 }
 
+/// Iterator over modifier elements that traverses the tree without allocation.
+///
+/// This avoids the O(N) allocation of `Modifier::elements()` by using a stack-based
+/// traversal of the `ModifierKind::Combined` tree structure.
+pub struct ModifierElementIterator<'a> {
+    /// Stack of modifiers to visit (right-to-left for in-order traversal)
+    stack: Vec<&'a Modifier>,
+    /// Current position within a Single modifier's elements
+    current_elements: Option<(&'a [DynModifierElement], usize)>,
+}
+
+impl<'a> ModifierElementIterator<'a> {
+    fn new(modifier: &'a Modifier) -> Self {
+        let mut iter = Self {
+            stack: Vec::new(),
+            current_elements: None,
+        };
+        iter.push_modifier(modifier);
+        iter
+    }
+
+    fn push_modifier(&mut self, modifier: &'a Modifier) {
+        match &modifier.kind {
+            ModifierKind::Empty => {}
+            ModifierKind::Single { elements, .. } => {
+                if !elements.is_empty() {
+                    self.current_elements = Some((elements.as_slice(), 0));
+                }
+            }
+            ModifierKind::Combined { outer, inner } => {
+                // Push inner first so outer is processed first (stack is LIFO)
+                self.stack.push(inner.as_ref());
+                self.push_modifier(outer.as_ref());
+            }
+        }
+    }
+}
+
+impl<'a> Iterator for ModifierElementIterator<'a> {
+    type Item = &'a DynModifierElement;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            // First, try to yield from current elements
+            if let Some((elements, index)) = &mut self.current_elements {
+                if *index < elements.len() {
+                    let element = &elements[*index];
+                    *index += 1;
+                    return Some(element);
+                }
+                self.current_elements = None;
+            }
+
+            // Pop next modifier from stack
+            let next_modifier = self.stack.pop()?;
+            self.push_modifier(next_modifier);
+        }
+    }
+}
+
 /// A modifier chain that can be applied to composable elements.
 /// Modifiers form a persistent tree structure (via CombinedModifier pattern)
 /// to enable O(1) composition and structural sharing during recomposition.
@@ -439,9 +499,19 @@ impl Modifier {
         }
     }
 
+    /// Returns an iterator over the modifier elements without allocation.
+    ///
+    /// This is the preferred method for traversing modifier elements as it avoids
+    /// the O(N) allocation of `elements()`. The iterator traverses the tree structure
+    /// in-place using a stack-based approach.
+    pub(crate) fn iter_elements(&self) -> ModifierElementIterator<'_> {
+        ModifierElementIterator::new(self)
+    }
+
     /// Returns the flattened list of elements in this modifier chain.
-    /// For backward compatibility, this flattens the tree structure on-demand.
-    /// Note: This allocates a new Vec for Combined modifiers.
+    ///
+    /// **Note:** Consider using `iter_elements()` instead to avoid allocation.
+    /// This method flattens the tree structure on-demand, allocating a new Vec.
     pub(crate) fn elements(&self) -> Vec<DynModifierElement> {
         match &self.kind {
             ModifierKind::Empty => Vec::new(),

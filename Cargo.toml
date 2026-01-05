@@ -25,7 +25,7 @@ resolver = "2"
 
 [workspace.dependencies]
 # Force android-activity to use native-activity feature across all workspace crates
-android-activity = { version = "0.5", features = ["native-activity"] }
+android-activity = { version = "0.6", features = ["native-activity"] }
 
 # Release profile optimizations for smaller binaries
 [profile.release]

@@ -48,6 +48,7 @@ struct ShapeData {
     rect: vec4<f32>,            // x, y, width, height
     radii: vec4<f32>,           // top_left, top_right, bottom_left, bottom_right
     gradient_params: vec4<f32>, // center.x, center.y, radius, unused
+    clip_rect: vec4<f32>,       // clip_x, clip_y, clip_width, clip_height (0,0,0,0 = no clip)
     brush_type: u32,            // 0=solid, 1=linear_gradient, 2=radial_gradient
     gradient_start: u32,
     gradient_count: u32,
@@ -60,9 +61,9 @@ struct GradientStop {
 
 // Use uniform buffers for WebGL compatibility
 // Note: WebGL has a minimum uniform buffer size of 16KB
-// ShapeData is 64 bytes, so 256 shapes = 16KB
+// ShapeData is 80 bytes now (with clip_rect), so ~200 shapes = 16KB
 @group(1) @binding(0)
-var<uniform> shape_data: array<ShapeData, 256>;
+var<uniform> shape_data: array<ShapeData, 200>;
 
 @group(1) @binding(1)
 var<uniform> gradient_stops: array<GradientStop, 256>;
@@ -87,6 +88,23 @@ fn sdf_rounded_rect(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let shape = shape_data[input.shape_idx];
     let rect_pos = input.rect_pos;
+    
+    // Apply clipping: if clip_rect has non-zero size, clip to it
+    let clip_w = shape.clip_rect.z;
+    let clip_h = shape.clip_rect.w;
+    if (clip_w > 0.0 && clip_h > 0.0) {
+        let clip_left = shape.clip_rect.x;
+        let clip_top = shape.clip_rect.y;
+        let clip_right = clip_left + clip_w;
+        let clip_bottom = clip_top + clip_h;
+        
+        // Discard fragments outside clip rect
+        if (rect_pos.x < clip_left || rect_pos.x > clip_right ||
+            rect_pos.y < clip_top || rect_pos.y > clip_bottom) {
+            discard;
+        }
+    }
+    
     let rect_center = shape.rect.xy + shape.rect.zw * 0.5;
     let half_size = shape.rect.zw * 0.5;
     let local_pos = rect_pos - rect_center;

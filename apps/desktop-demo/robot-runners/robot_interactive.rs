@@ -8,9 +8,19 @@
 //! cargo run --package desktop-app --example robot_interactive --features robot-app
 //! ```
 
-use desktop_app::app;
 use compose_app::{AppLauncher, Robot};
+use desktop_app::app;
 use std::time::Duration;
+
+fn wait_for_content(robot: &Robot, expected: &str, attempts: usize, delay: Duration) -> bool {
+    for _ in 0..attempts {
+        if robot.validate_content(expected).is_ok() {
+            return true;
+        }
+        std::thread::sleep(delay);
+    }
+    false
+}
 
 fn main() {
     println!("=== Robot Interactive Demo (Semantic API) ===");
@@ -61,26 +71,19 @@ fn main() {
             for (tab_name, expected_content) in tabs {
                 println!("Switching to '{}' tab...", tab_name);
                 match robot.click_by_text(tab_name) {
-                    Ok(_) => {},
+                    Ok(_) => {}
                     Err(e) => {
                         println!("  Error clicking tab: {}", e);
                         continue;
                     }
                 }
-                
-                // Wait for idle (may timeout for animated tabs)
-                std::thread::sleep(Duration::from_millis(500));
-                match robot.wait_for_idle() {
-                    Ok(_) => println!("  Tab ready (idle achieved)"),
-                    Err(e) => println!("  Tab switched ({})", e),
+
+                if wait_for_content(&robot, expected_content, 10, Duration::from_millis(200)) {
+                    println!("  ✓ Validated: found '{}'", expected_content);
+                } else {
+                    println!("  Warning: '{}' not found", expected_content);
                 }
-                
-                // Validate using semantic tree
-                match robot.validate_content(expected_content) {
-                    Ok(_) => println!("  ✓ Validated: found '{}'", expected_content),
-                    Err(e) => println!("  Warning: {}", e),
-                }
-                
+
                 std::thread::sleep(Duration::from_millis(500));
             }
 

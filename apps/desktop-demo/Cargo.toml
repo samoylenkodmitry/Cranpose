@@ -171,3 +171,148 @@ required-features = ["robot-app"]
 name = "robot_multiline_click"
 path = "robot-runners/robot_multiline_click.rs"
 required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_list"
+path = "robot-runners/robot_lazy_list.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_subcompose_lazy"
+path = "robot-runners/robot_subcompose_lazy.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_subcompose_invalidation"
+path = "robot-runners/robot_subcompose_invalidation.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_perf"
+path = "robot-runners/robot_lazy_perf.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_max_demo"
+path = "robot-runners/robot_lazy_max_demo.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_tab_test"
+path = "robot-runners/robot_lazy_tab_test.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_fixes"
+path = "robot-runners/robot_lazy_fixes.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_variable_height"
+path = "robot-runners/robot_lazy_variable_height.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_complex_scroll"
+path = "robot-runners/robot_lazy_complex_scroll.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_duplication_bug"
+path = "robot-runners/robot_lazy_duplication_bug.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_infinite_scroll"
+path = "robot-runners/robot_lazy_infinite_scroll.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_max_jump"
+path = "robot-runners/robot_lazy_max_jump.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_lifecycle"
+path = "robot-runners/robot_lazy_lifecycle.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_varheight_lifecycle"
+path = "robot-runners/robot_lazy_varheight_lifecycle.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_extreme_nav"
+path = "robot-runners/robot_lazy_extreme_nav.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_perf_validation"
+path = "robot-runners/robot_lazy_perf_validation.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_recursive_layout"
+path = "robot-runners/robot_recursive_layout.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_list_after_modifiers"
+path = "robot-runners/robot_lazy_list_after_modifiers.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_list_end_start_dup"
+path = "robot-runners/robot_lazy_list_end_start_dup.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_list_end_alignment"
+path = "robot-runners/robot_lazy_list_end_alignment.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_list_remove_dup"
+path = "robot-runners/robot_lazy_list_remove_dup.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_positioned_boxes_after_lazy_list"
+path = "robot-runners/robot_positioned_boxes_after_lazy_list.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_content_type_reuse"
+path = "robot-runners/robot_content_type_reuse.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_stats"
+path = "robot-runners/robot_lazy_stats.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_recursive_composition"
+path = "robot-runners/robot_lazy_recursive_composition.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_list_state_reactivity"
+path = "robot-runners/robot_lazy_list_state_reactivity.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_items_rc"
+path = "robot-runners/robot_lazy_items_rc.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_items_provider"
+path = "robot-runners/robot_lazy_items_provider.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_scroll_edge_cases"
+path = "robot-runners/robot_lazy_scroll_edge_cases.rs"
+required-features = ["robot-app"]

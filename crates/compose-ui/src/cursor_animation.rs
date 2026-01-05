@@ -35,7 +35,7 @@ pub struct CursorAnimationState {
 impl CursorAnimationState {
     /// Blink interval duration
     pub const BLINK_INTERVAL: Duration = Duration::from_millis(BLINK_INTERVAL_MS);
-    
+
     /// Creates a new cursor animation state (cursor initially visible, not blinking).
     pub const fn new() -> Self {
         Self {
@@ -43,45 +43,50 @@ impl CursorAnimationState {
             next_blink_time: Cell::new(None),
         }
     }
-    
+
     /// Starts the blink animation (called when a text field gains focus).
     /// Resets cursor to visible and schedules the first transition.
     pub fn start(&self) {
         self.cursor_alpha.set(1.0);
-        self.next_blink_time.set(Some(Instant::now() + Self::BLINK_INTERVAL));
+        self.next_blink_time
+            .set(Some(Instant::now() + Self::BLINK_INTERVAL));
     }
-    
+
     /// Stops the blink animation (called when text field loses focus).
     /// Resets cursor to visible for next focus.
     pub fn stop(&self) {
         self.cursor_alpha.set(1.0); // Reset to visible for next focus
         self.next_blink_time.set(None);
     }
-    
+
     /// Returns whether blinking is active.
     #[allow(dead_code)]
     pub fn is_active(&self) -> bool {
         self.next_blink_time.get().is_some()
     }
-    
+
     /// Returns the current cursor alpha (0.0 or 1.0).
     #[allow(dead_code)]
     pub fn alpha(&self) -> f32 {
         self.cursor_alpha.get()
     }
-    
+
     /// Returns whether the cursor is currently visible.
     pub fn is_visible(&self) -> bool {
         self.cursor_alpha.get() > 0.5
     }
-    
+
     /// Advances the blink state if the transition time has passed.
     /// Returns `true` if the state changed (redraw needed).
     pub fn tick(&self, now: Instant) -> bool {
         if let Some(next) = self.next_blink_time.get() {
             if now >= next {
                 // Toggle visibility
-                let new_alpha = if self.cursor_alpha.get() > 0.5 { 0.0 } else { 1.0 };
+                let new_alpha = if self.cursor_alpha.get() > 0.5 {
+                    0.0
+                } else {
+                    1.0
+                };
                 self.cursor_alpha.set(new_alpha);
                 // Schedule next transition
                 self.next_blink_time.set(Some(now + Self::BLINK_INTERVAL));
@@ -90,7 +95,7 @@ impl CursorAnimationState {
         }
         false
     }
-    
+
     /// Returns the next blink transition time, if blinking is active.
     /// Use this for `WaitUntil` scheduling.
     pub fn next_blink_time(&self) -> Option<Instant> {
@@ -141,14 +146,14 @@ pub fn next_cursor_blink_time() -> Option<Instant> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn cursor_starts_visible() {
         let state = CursorAnimationState::new();
         assert!(state.is_visible());
         assert!(!state.is_active());
     }
-    
+
     #[test]
     fn start_schedules_blink() {
         let state = CursorAnimationState::new();
@@ -156,7 +161,7 @@ mod tests {
         assert!(state.is_active());
         assert!(state.next_blink_time().is_some());
     }
-    
+
     #[test]
     fn stop_clears_blink() {
         let state = CursorAnimationState::new();
@@ -166,24 +171,26 @@ mod tests {
         assert!(state.next_blink_time().is_none());
         assert!(state.is_visible()); // Should be visible after stop
     }
-    
+
     #[test]
     fn tick_toggles_visibility() {
         let state = CursorAnimationState::new();
         state.start();
         assert!(state.is_visible());
-        
+
         // Simulate time passing beyond blink interval
-        let future_time = Instant::now() + CursorAnimationState::BLINK_INTERVAL + Duration::from_millis(1);
+        let future_time =
+            Instant::now() + CursorAnimationState::BLINK_INTERVAL + Duration::from_millis(1);
         let changed = state.tick(future_time);
-        
+
         assert!(changed);
         assert!(!state.is_visible()); // Should have toggled
-        
+
         // Tick again after another interval
-        let future_time2 = future_time + CursorAnimationState::BLINK_INTERVAL + Duration::from_millis(1);
+        let future_time2 =
+            future_time + CursorAnimationState::BLINK_INTERVAL + Duration::from_millis(1);
         let changed2 = state.tick(future_time2);
-        
+
         assert!(changed2);
         assert!(state.is_visible()); // Should toggle back
     }

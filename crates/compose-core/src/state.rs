@@ -94,15 +94,18 @@ impl StateRecord {
     }
 
     pub(crate) fn clear_value(&self) {
-        self.value.write().unwrap().take();
+        self.value
+            .write()
+            .expect("StateRecord lock poisoned")
+            .take();
     }
 
     pub(crate) fn replace_value<T: Any>(&self, new_value: T) {
-        *self.value.write().unwrap() = Some(Box::new(new_value));
+        *self.value.write().expect("StateRecord lock poisoned") = Some(Box::new(new_value));
     }
 
     pub(crate) fn with_value<T: Any, R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        let guard = self.value.read().unwrap();
+        let guard = self.value.read().expect("StateRecord lock poisoned");
         let value = guard
             .as_ref()
             .and_then(|boxed| boxed.downcast_ref::<T>())
@@ -433,7 +436,7 @@ pub(crate) struct SnapshotMutableState<T> {
 
 impl<T> SnapshotMutableState<T> {
     fn assert_chain_integrity(&self, caller: &str, snapshot_context: Option<SnapshotId>) {
-        let head = self.head.read().unwrap().clone();
+        let head = self.head.read().expect("State head lock poisoned").clone();
         let mut cursor = Some(head);
         let mut seen: HashSet<usize> = HashSet::default();
         let mut ids = Vec::new();
@@ -481,7 +484,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         let readable = match self.readable_for(snapshot_id, invalid) {
             Some(record) => record,
             None => {
-                let mut head_guard = self.head.write().unwrap();
+                let mut head_guard = self.head.write().expect("State head lock poisoned");
                 let current_head = head_guard.clone();
                 let refreshed = readable_record_for(&current_head, snapshot_id, invalid);
                 let source = refreshed.unwrap_or_else(|| current_head.clone());
@@ -504,7 +507,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         }
 
         let refreshed = {
-            let head_guard = self.head.read().unwrap();
+            let head_guard = self.head.read().expect("State head lock poisoned");
             let current_head = head_guard.clone();
             let refreshed = readable_record_for(&current_head, snapshot_id, invalid).unwrap_or_else(
                 || {
@@ -550,7 +553,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         let id = ObjectId::new(&state);
         Arc::get_mut(&mut state).expect("fresh Arc").id = id;
 
-        *state.weak_self.lock().unwrap() = Some(Arc::downgrade(&state));
+        *state.weak_self.lock().expect("Weak self lock poisoned") = Some(Arc::downgrade(&state));
 
         // No need to advance the global snapshot for initial state creation
 
@@ -558,11 +561,17 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
     }
 
     pub(crate) fn add_apply_observer(&self, observer: Box<dyn Fn() + 'static>) {
-        self.apply_observers.lock().unwrap().push(observer);
+        self.apply_observers
+            .lock()
+            .expect("Observers lock poisoned")
+            .push(observer);
     }
 
     fn notify_applied(&self) {
-        let observers = self.apply_observers.lock().unwrap();
+        let observers = self
+            .apply_observers
+            .lock()
+            .expect("Observers lock poisoned");
         for observer in observers.iter() {
             observer();
         }
@@ -578,7 +587,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         if let Some(state) = self
             .weak_self
             .lock()
-            .unwrap()
+            .expect("Weak self lock poisoned")
             .as_ref()
             .and_then(|weak| weak.upgrade())
         {
@@ -635,12 +644,12 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
                 );
             }
         }
-        
+
         let snapshot = active_snapshot();
         if let Some(state) = self
             .weak_self
             .lock()
-            .unwrap()
+            .expect("Weak self lock poisoned")
             .as_ref()
             .and_then(|weak| weak.upgrade())
         {
@@ -653,7 +662,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
 
         match &snapshot {
             AnySnapshot::Global(global) => {
-                let mut head_guard = self.head.write().unwrap();
+                let mut head_guard = self.head.write().expect("State head lock poisoned");
                 let head = head_guard.clone();
                 if global.has_pending_children() {
                     panic!(
@@ -783,7 +792,7 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
     }
 
     fn first_record(&self) -> Arc<StateRecord> {
-        self.head.read().unwrap().clone()
+        self.head.read().expect("State head lock poisoned").clone()
     }
 
     fn readable_record(
@@ -801,7 +810,7 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
     }
 
     fn prepend_state_record(&self, record: Arc<StateRecord>) {
-        let mut head_guard = self.head.write().unwrap();
+        let mut head_guard = self.head.write().expect("State head lock poisoned");
         let current_head = head_guard.clone();
         record.set_next(Some(current_head));
         *head_guard = record;
@@ -838,7 +847,7 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
             if record.snapshot_id() == child_id {
                 let cloned = record.with_value(|value: &T| value.clone());
                 let new_id = allocate_record_id();
-                let mut head_guard = self.head.write().unwrap();
+                let mut head_guard = self.head.write().expect("State head lock poisoned");
                 let current_head = head_guard.clone();
                 let new_head = StateRecord::new(new_id, cloned, Some(current_head));
                 *head_guard = new_head;
@@ -859,7 +868,7 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
     fn commit_merged_record(&self, merged: Arc<StateRecord>) -> Result<SnapshotId, &'static str> {
         let value = merged.with_value(|value: &T| value.clone());
         let new_id = allocate_record_id();
-        let mut head_guard = self.head.write().unwrap();
+        let mut head_guard = self.head.write().expect("State head lock poisoned");
         let current_head = head_guard.clone();
         let new_head = StateRecord::new(new_id, value, Some(current_head));
         *head_guard = new_head;

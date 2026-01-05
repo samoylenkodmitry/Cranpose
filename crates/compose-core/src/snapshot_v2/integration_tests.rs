@@ -105,15 +105,18 @@ mod tests {
     #[test]
     fn test_conflict_detection_after_record_reuse() {
         let _guard = reset_runtime();
-        crate::snapshot_pinning::reset_pinning_table();
+        // Note: reset_pinning_table() is already called by reset_runtime()
 
         let global = GlobalSnapshot::get_or_create();
         let state = new_state(0);
 
         const INVALID_SNAPSHOT_ID: SnapshotId = 0;
 
-        // Inject an INVALID record to force the next writable() call to reuse it.
+        // Record the head's snapshot_id before modification for diagnostics
         let head = state.first_record();
+        let original_head_id = head.snapshot_id();
+
+        // Inject an INVALID record to force the next writable() call to reuse it.
         let invalid_record = StateRecord::new(INVALID_SNAPSHOT_ID, -1i32, head.next());
         head.set_next(Some(invalid_record.clone()));
 
@@ -124,10 +127,16 @@ mod tests {
         snap1.enter(|| state.set(10));
 
         // Reused record should now belong to snap1 and match the readable record for that snapshot.
+        let actual_snapshot_id = invalid_record.snapshot_id();
         assert_eq!(
-            invalid_record.snapshot_id(),
+            actual_snapshot_id,
             snap1_id,
-            "Writable reuse should update the recycled record's snapshot id"
+            "Writable reuse should update the recycled record's snapshot id.\n\
+             Expected snap1_id={}, got={}, original_head_id={}, global_id={}",
+            snap1_id,
+            actual_snapshot_id,
+            original_head_id,
+            global.snapshot_id()
         );
         let snap1_invalid = snap1.invalid();
         let readable = state.readable_record(snap1_id, &snap1_invalid);

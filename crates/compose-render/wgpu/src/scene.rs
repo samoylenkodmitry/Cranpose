@@ -66,7 +66,7 @@ impl HitTestTarget for HitRegion {
             x: x - self.rect.x,
             y: y - self.rect.y,
         };
-        
+
         let local_event = event.copy_with_local_position(local);
 
         let has_pointer_inputs = !self.pointer_inputs.is_empty();
@@ -84,7 +84,7 @@ impl HitTestTarget for HitRegion {
                 }
                 handler(local_event.clone());
             }
-            
+
             // Only perform click actions if NOT consumed
             if kind == PointerEventKind::Down && !local_event.is_consumed() {
                 for action in &self.click_actions {
@@ -227,12 +227,13 @@ impl RenderScene for Scene {
     }
 
     fn hit_test(&self, x: f32, y: f32) -> Vec<Self::HitTarget> {
-        let mut hits: Vec<_> = self.hits
+        let mut hits: Vec<_> = self
+            .hits
             .iter()
             .filter(|hit| hit.contains(x, y))
             .cloned()
             .collect();
-        
+
         // Sort by z-index descending (top to bottom)
         hits.sort_by(|a, b| b.z_index.cmp(&a.z_index));
         hits

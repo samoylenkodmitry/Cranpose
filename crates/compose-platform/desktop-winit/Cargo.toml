@@ -6,6 +6,6 @@ license = "Apache-2.0"
 description = "Desktop winit platform adapter for Compose-RS"
 
 [dependencies]
-winit = "0.30"
+winit = "0.31.0-beta.2"
 compose-foundation = { path = "../../compose-foundation" }
 compose-ui-graphics = { path = "../../compose-ui-graphics" }

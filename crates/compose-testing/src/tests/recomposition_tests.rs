@@ -39,9 +39,8 @@ impl Node for TestTextNode {
 #[allow(non_snake_case)]
 #[composable]
 fn Column(content: impl FnOnce()) {
-    let id = with_current_composer(|composer| {
-        composer.emit_node(|| TestContainerNode { parent: None })
-    });
+    let id =
+        with_current_composer(|composer| composer.emit_node(|| TestContainerNode { parent: None }));
     push_parent(id);
     content();
     pop_parent();

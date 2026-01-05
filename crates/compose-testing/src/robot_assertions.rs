@@ -113,7 +113,9 @@ pub trait SemanticElementLike {
     fn role(&self) -> &str;
     fn clickable(&self) -> bool;
     fn bounds(&self) -> Bounds;
-    fn children(&self) -> &[Self] where Self: Sized;
+    fn children(&self) -> &[Self]
+    where
+        Self: Sized;
 }
 
 /// Find an element by text content in the semantic tree.
@@ -132,7 +134,7 @@ pub fn find_text_center<E: SemanticElementLike>(elements: &[E], text: &str) -> O
         }
         None
     }
-    
+
     for elem in elements {
         if let Some(pos) = search(elem, text) {
             return Some(pos);
@@ -156,7 +158,7 @@ pub fn find_text_bounds<E: SemanticElementLike>(elements: &[E], text: &str) -> O
         }
         None
     }
-    
+
     for elem in elements {
         if let Some(bounds) = search(elem, text) {
             return Some(bounds);
@@ -176,7 +178,7 @@ pub fn find_button_bounds<E: SemanticElementLike>(elements: &[E], text: &str) ->
         }
         elem.children().iter().any(|c| has_text(c, text))
     }
-    
+
     fn search<E: SemanticElementLike>(elem: &E, text: &str) -> Option<Bounds> {
         if elem.clickable() && has_text(elem, text) {
             return Some(elem.bounds());
@@ -188,7 +190,7 @@ pub fn find_button_bounds<E: SemanticElementLike>(elements: &[E], text: &str) ->
         }
         None
     }
-    
+
     for elem in elements {
         if let Some(bounds) = search(elem, text) {
             return Some(bounds);
@@ -207,7 +209,7 @@ pub fn find_elements_by_role<E: SemanticElementLike>(elements: &[E], role: &str)
             search(child, role, results);
         }
     }
-    
+
     let mut results = Vec::new();
     for elem in elements {
         search(elem, role, &mut results);
@@ -274,13 +276,17 @@ mod tests {
         let items = vec![1, 2, 3];
         assert_count(&items, 3, "correct count");
     }
-    
+
     #[test]
     fn test_bounds_center() {
-        let bounds = Bounds { x: 10.0, y: 20.0, width: 100.0, height: 50.0 };
+        let bounds = Bounds {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 50.0,
+        };
         let (cx, cy) = bounds.center();
         assert_eq!(cx, 60.0);
         assert_eq!(cy, 45.0);
     }
 }
-

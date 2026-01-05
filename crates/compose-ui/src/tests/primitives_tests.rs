@@ -80,9 +80,15 @@ fn run_subcompose_measure(
             .expect("subcompose layout node");
         typed.handle()
     };
+    let measurer = Box::new(|_child_id: NodeId, _constraints: Constraints| Size::default());
+    let error = Rc::new(RefCell::new(None));
     node_handle
-        .measure(&composer, node_id, constraints)
+        .measure(&composer, node_id, constraints, measurer, Rc::clone(&error))
         .expect("measure succeeds");
+    assert!(
+        error.borrow().is_none(),
+        "unexpected subcompose measure error"
+    );
     drop(composer);
     restore_measure_composer(slots, applier, slots_host, applier_host);
 }

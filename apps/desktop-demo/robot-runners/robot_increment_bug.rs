@@ -12,9 +12,9 @@
 //! cargo run --package desktop-app --example robot_increment_bug --features robot-app
 //! ```
 
-use desktop_app::app;
 use compose_app::AppLauncher;
 use compose_testing::find_button_in_semantics;
+use desktop_app::app;
 use std::time::Duration;
 
 fn main() {
@@ -35,9 +35,10 @@ fn main() {
             }
 
             // Helper to find button center
-            let find_button_center = |robot: &compose_app::Robot, name: &str| -> Option<(f32, f32)> {
-                find_button_in_semantics(robot, name)
-                    .map(|(x, y, w, h)| (x + w / 2.0, y + h / 2.0))
+            let find_button_center = |robot: &compose_app::Robot,
+                                      name: &str|
+             -> Option<(f32, f32)> {
+                find_button_in_semantics(robot, name).map(|(x, y, w, h)| (x + w / 2.0, y + h / 2.0))
             };
 
             // Helper to get counter value
@@ -47,7 +48,9 @@ fn main() {
                         fn find_counter(elem: &compose_app::SemanticElement) -> Option<i32> {
                             if let Some(ref text) = elem.text {
                                 if text.starts_with("Counter:") {
-                                    return text.split(':').nth(1)
+                                    return text
+                                        .split(':')
+                                        .nth(1)
                                         .and_then(|s| s.trim().parse().ok());
                                 }
                             }
@@ -72,7 +75,10 @@ fn main() {
 
             println!("\n--- Step 2: Click CompositionLocal Test Tab ---");
             if let Some((x, y)) = find_button_center(&robot, "CompositionLocal Test") {
-                println!("  Found 'CompositionLocal Test' tab at ({:.1}, {:.1})", x, y);
+                println!(
+                    "  Found 'CompositionLocal Test' tab at ({:.1}, {:.1})",
+                    x, y
+                );
                 robot.click(x, y).ok();
                 println!("  ✓ Clicked");
             } else {
@@ -96,13 +102,16 @@ fn main() {
             // This triggers the gradient's pointer_input handler which updates state
             // and causes recomposition during the cursor movement.
             if let Some((tab_x, tab_y)) = counter_app_pos {
-                println!("  Moving cursor from tab ({:.1}, {:.1}) through gradient area...", tab_x, tab_y);
+                println!(
+                    "  Moving cursor from tab ({:.1}, {:.1}) through gradient area...",
+                    tab_x, tab_y
+                );
 
                 // Move to a point in the gradient area (approximately y=220-250)
                 // This is where the gradient's pointer_input handler tracks mouse position
                 let gradient_x = 80.0;
                 let gradient_y = 230.0;
-                
+
                 // Move in steps through the gradient area to trigger recomposition
                 for step in 0..20 {
                     let progress = step as f32 / 19.0;
@@ -121,11 +130,11 @@ fn main() {
             let increment_pos = find_button_center(&robot, "Increment");
             if let Some((x, y)) = increment_pos {
                 println!("  Found 'Increment' button at ({:.1}, {:.1})", x, y);
-                
+
                 // First move to the button position (may trigger additional recomposition)
                 robot.mouse_move(x, y).ok();
                 std::thread::sleep(Duration::from_millis(100));
-                
+
                 // Then click - this tests that Up event reaches the button
                 // even if Down event triggered recomposition
                 robot.click(x, y).ok();
@@ -142,14 +151,25 @@ fn main() {
             println!("\n=== Test Summary ===");
             if final_counter == initial_counter + 1 {
                 println!("✓ ALL TESTS PASSED");
-                println!("  Counter incremented from {} to {}", initial_counter, final_counter);
+                println!(
+                    "  Counter incremented from {} to {}",
+                    initial_counter, final_counter
+                );
             } else if final_counter == initial_counter {
                 println!("✗ FAIL: Counter did NOT increment");
-                println!("  Counter stayed at {} (expected {})", final_counter, initial_counter + 1);
+                println!(
+                    "  Counter stayed at {} (expected {})",
+                    final_counter,
+                    initial_counter + 1
+                );
                 println!("\n  This indicates the Increment button click didn't register.");
             } else {
                 println!("✗ FAIL: Unexpected counter value");
-                println!("  Expected: {}, Got: {}", initial_counter + 1, final_counter);
+                println!(
+                    "  Expected: {}, Got: {}",
+                    initial_counter + 1,
+                    final_counter
+                );
             }
 
             println!("\nClosing in 1 second...");

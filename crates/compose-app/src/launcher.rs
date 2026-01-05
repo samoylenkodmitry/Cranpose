@@ -135,7 +135,10 @@ impl AppLauncher {
     ///     });
     /// ```
     #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
-    pub fn with_test_driver(mut self, driver: impl FnOnce(crate::desktop::Robot) + Send + 'static) -> Self {
+    pub fn with_test_driver(
+        mut self,
+        driver: impl FnOnce(crate::desktop::Robot) + Send + 'static,
+    ) -> Self {
         self.settings.test_driver = Some(Box::new(driver));
         self
     }
@@ -161,7 +164,11 @@ impl AppLauncher {
     /// Launches the app asynchronously targeting the canvas with the given ID.
     /// Returns a Promise that resolves when the app is initialized.
     #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
-    pub async fn run_web(self, canvas_id: &str, content: impl FnMut() + 'static) -> Result<(), wasm_bindgen::JsValue> {
+    pub async fn run_web(
+        self,
+        canvas_id: &str,
+        content: impl FnMut() + 'static,
+    ) -> Result<(), wasm_bindgen::JsValue> {
         crate::web::run(canvas_id, self.settings, content).await
     }
 }

@@ -1238,7 +1238,7 @@ impl ClickableNode {
                 *press_position.borrow_mut() = None;
                 return;
             }
-            
+
             match event.kind {
                 PointerEventKind::Down => {
                     // Store global press position for drag detection on Up
@@ -1253,7 +1253,7 @@ impl ClickableNode {
                 PointerEventKind::Up => {
                     // Check if this is a click (Up near Down) or a drag (Up far from Down)
                     let press_pos_value = *press_position.borrow();
-                    
+
                     let should_click = if let Some(press_pos) = press_pos_value {
                         let dx = event.global_position.x - press_pos.x;
                         let dy = event.global_position.y - press_pos.y;
@@ -1265,10 +1265,10 @@ impl ClickableNode {
                         // was handled by a different mechanism
                         true
                     };
-                    
+
                     // Reset press position
                     *press_position.borrow_mut() = None;
-                    
+
                     if should_click {
                         handler(Point {
                             x: event.position.x,
@@ -1393,10 +1393,8 @@ impl ModifierNodeElement for ClickableElement {
         // with the new on_click while preserving press_position
         node.on_click = self.on_click.clone();
         // Recreate the cached handler with the same press_position but new click handler
-        node.cached_handler = ClickableNode::create_handler(
-            node.on_click.clone(),
-            node.press_position.clone(),
-        );
+        node.cached_handler =
+            ClickableNode::create_handler(node.on_click.clone(), node.press_position.clone());
     }
 
     fn capabilities(&self) -> NodeCapabilities {
@@ -1739,7 +1737,6 @@ fn draw_command_tag(cmd: &DrawCommand) -> u8 {
         DrawCommand::Overlay(_) => 1,
     }
 }
-
 
 /// Element that wires draw commands into the modifier node chain.
 #[derive(Clone)]

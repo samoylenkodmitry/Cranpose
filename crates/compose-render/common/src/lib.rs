@@ -30,7 +30,10 @@ pub trait RenderScene {
     /// Returns NodeIds of all hit regions at the given coordinates.
     /// This is a convenience method equivalent to `hit_test().map(|h| h.node_id())`.
     fn hit_test_nodes(&self, x: f32, y: f32) -> Vec<compose_core::NodeId> {
-        self.hit_test(x, y).into_iter().map(|h| h.node_id()).collect()
+        self.hit_test(x, y)
+            .into_iter()
+            .map(|h| h.node_id())
+            .collect()
     }
 
     /// Finds a hit target by NodeId with fresh geometry from the current scene.

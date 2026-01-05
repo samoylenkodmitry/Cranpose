@@ -7,9 +7,12 @@ description = "Modifiers, nodes, and foundation elements for Compose-RS"
 
 [dependencies]
 compose-core = { path = "../compose-core" }
+compose-macros = { path = "../compose-macros" }
 compose-ui-graphics = { path = "../compose-ui-graphics" }
 compose-ui-layout = { path = "../compose-ui-layout" }
+smallvec = "1.13"
 web-time = "1.1"
+log = "0.4"
 
 [features]
 default = []
