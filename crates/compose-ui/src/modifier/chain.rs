@@ -389,7 +389,9 @@ fn global_modifier_debug_flag() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use compose_foundation::{ModifierInvalidation, ModifierNode, NodeCapabilities};
+    use compose_foundation::{
+        InvalidationKind, ModifierInvalidation, ModifierNode, NodeCapabilities,
+    };
 
     use super::*;
     use crate::modifier::Color;
@@ -482,6 +484,23 @@ mod tests {
         assert_eq!(handle.capabilities(), NodeCapabilities::DRAW);
         assert!(handle.has_draw_nodes());
         assert!(!handle.has_layout_nodes());
+    }
+
+    #[test]
+    fn offset_update_invalidates_layout() {
+        let mut handle = ModifierChainHandle::new();
+        let _ = handle.update(&Modifier::empty().offset(0.0, 0.0));
+        handle.take_invalidations();
+
+        let _ = handle.update(&Modifier::empty().offset(12.0, 0.0));
+        let invalidations = handle.take_invalidations();
+
+        assert!(
+            invalidations
+                .iter()
+                .any(|invalidation| invalidation.kind() == InvalidationKind::Layout),
+            "expected offset changes to invalidate layout"
+        );
     }
 
     fn node_ptr<N: ModifierNode + 'static>(handle: &ModifierChainHandle) -> *const N {

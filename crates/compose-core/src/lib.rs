@@ -1035,12 +1035,16 @@ fn bubble_layout_dirty_applier(applier: &mut dyn Applier, mut node_id: NodeId) {
 fn bubble_measure_dirty_applier(applier: &mut dyn Applier, mut node_id: NodeId) {
     #[cfg(debug_assertions)]
     eprintln!("[bubble_measure_dirty] Starting from node_id={}", node_id);
-    
+
     // First, mark the starting node as needing measure
     if let Ok(node) = applier.get_mut(node_id) {
         node.mark_needs_measure();
         #[cfg(debug_assertions)]
-        eprintln!("[bubble_measure_dirty] Marked node_id={} needs_measure={}", node_id, node.needs_measure());
+        eprintln!(
+            "[bubble_measure_dirty] Marked node_id={} needs_measure={}",
+            node_id,
+            node.needs_measure()
+        );
     }
 
     // Then bubble up to ancestors
@@ -1052,7 +1056,10 @@ fn bubble_measure_dirty_applier(applier: &mut dyn Applier, mut node_id: NodeId) 
         };
 
         #[cfg(debug_assertions)]
-        eprintln!("[bubble_measure_dirty] node_id={} -> parent_id={:?}", node_id, parent_id);
+        eprintln!(
+            "[bubble_measure_dirty] node_id={} -> parent_id={:?}",
+            node_id, parent_id
+        );
 
         match parent_id {
             Some(pid) => {
@@ -1061,11 +1068,18 @@ fn bubble_measure_dirty_applier(applier: &mut dyn Applier, mut node_id: NodeId) 
                     if !parent.needs_measure() {
                         parent.mark_needs_measure();
                         #[cfg(debug_assertions)]
-                        eprintln!("[bubble_measure_dirty] Marked parent_id={} needs_measure={}", pid, parent.needs_measure());
+                        eprintln!(
+                            "[bubble_measure_dirty] Marked parent_id={} needs_measure={}",
+                            pid,
+                            parent.needs_measure()
+                        );
                         node_id = pid; // Continue bubbling
                     } else {
                         #[cfg(debug_assertions)]
-                        eprintln!("[bubble_measure_dirty] Parent {} already dirty, stopping", pid);
+                        eprintln!(
+                            "[bubble_measure_dirty] Parent {} already dirty, stopping",
+                            pid
+                        );
                         break; // Already dirty, stop
                     }
                 } else {
@@ -1076,7 +1090,10 @@ fn bubble_measure_dirty_applier(applier: &mut dyn Applier, mut node_id: NodeId) 
             }
             None => {
                 #[cfg(debug_assertions)]
-                eprintln!("[bubble_measure_dirty] Node {} has no parent, stopping at root", node_id);
+                eprintln!(
+                    "[bubble_measure_dirty] Node {} has no parent, stopping at root",
+                    node_id
+                );
                 break; // No parent, stop
             }
         }

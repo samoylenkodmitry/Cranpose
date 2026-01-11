@@ -12,10 +12,6 @@ const HORIZON_MS: i64 = 100;
 /// If no movement for this duration, assume the pointer has stopped.
 const ASSUME_STOPPED_MS: i64 = 40;
 
-/// Minimum pointer movement (in pixels) to consider as non-stopped.
-/// If total movement is below this over ASSUME_STOPPED_MS, velocity is 0.
-const MIN_MOVEMENT_THRESHOLD: f32 = 2.0;
-
 /// A data point with timestamp.
 #[derive(Clone, Copy, Default)]
 struct DataPointAtTime {
@@ -78,7 +74,10 @@ impl VelocityTracker1D {
     /// For differential tracking, `data_point` is the change since last point.
     pub fn add_data_point(&mut self, time_ms: i64, data_point: f32) {
         self.index = (self.index + 1) % HISTORY_SIZE;
-        self.samples[self.index] = Some(DataPointAtTime { time_ms, data_point });
+        self.samples[self.index] = Some(DataPointAtTime {
+            time_ms,
+            data_point,
+        });
     }
 
     /// Calculates the velocity in units/second.
@@ -89,35 +88,30 @@ impl VelocityTracker1D {
         let mut times = [0.0f32; HISTORY_SIZE];
         let mut sample_count = 0;
 
-        // Get newest sample
         let newest_sample = match self.samples[self.index] {
-            Some(s) => s,
+            Some(sample) => sample,
             None => return 0.0,
         };
 
         let mut current_index = self.index;
-        let mut oldest_sample_in_window: Option<DataPointAtTime> = None;
+        let mut previous_sample = newest_sample;
 
-        // Collect ALL samples within the HORIZON_MS window
-        // Don't break early on gaps - let the regression algorithm handle timing naturally
-        loop {
-            let sample = match self.samples[current_index] {
-                Some(s) => s,
-                None => break,
+        while let Some(sample) = self.samples[current_index] {
+            let age = (newest_sample.time_ms - sample.time_ms) as f32;
+            let delta = (sample.time_ms - previous_sample.time_ms).abs() as f32;
+            previous_sample = if self.is_differential {
+                sample
+            } else {
+                newest_sample
             };
 
-            let age = (newest_sample.time_ms - sample.time_ms) as f32;
-            
-            // Stop if sample is too old (outside the horizon window)
-            if age > HORIZON_MS as f32 {
+            if age > HORIZON_MS as f32 || delta > ASSUME_STOPPED_MS as f32 {
                 break;
             }
 
-            oldest_sample_in_window = Some(sample);
             data_points[sample_count] = sample.data_point;
-            times[sample_count] = -age; // Negative because we're going backwards
+            times[sample_count] = -age;
 
-            // Move to previous sample in ring buffer
             current_index = if current_index == 0 {
                 HISTORY_SIZE - 1
             } else {
@@ -130,28 +124,13 @@ impl VelocityTracker1D {
             }
         }
 
-        // Need at least 2 samples for velocity calculation
         if sample_count < 2 {
             return 0.0;
         }
 
-        // Check if pointer has actually moved significantly
-        // Only return 0 if there's no meaningful movement, not based on time gaps
-        if let Some(oldest) = oldest_sample_in_window {
-            let total_movement = (newest_sample.data_point - oldest.data_point).abs();
-            let time_span_ms = (newest_sample.time_ms - oldest.time_ms) as f32;
-            
-            // If pointer barely moved over a significant time, it's stopped
-            // This is more robust than gap detection - checks actual movement
-            if time_span_ms > ASSUME_STOPPED_MS as f32 && total_movement < MIN_MOVEMENT_THRESHOLD {
-                return 0.0;
-            }
-        }
+        let velocity_per_ms =
+            calculate_impulse_velocity(&data_points, &times, sample_count, self.is_differential);
 
-        // Calculate velocity using weighted least squares
-        let velocity_per_ms = self.calculate_impulse_velocity(&data_points, &times, sample_count);
-
-        // Convert from units/ms to units/second
         velocity_per_ms * 1000.0
     }
 
@@ -160,59 +139,48 @@ impl VelocityTracker1D {
         self.samples = [None; HISTORY_SIZE];
         self.index = 0;
     }
+}
 
-    /// Calculate velocity using weighted least squares linear regression.
-    ///
-    /// This gives more weight to recent samples and produces velocity
-    /// that closely matches the actual gesture speed (not amplified).
-    fn calculate_impulse_velocity(
-        &self,
-        data_points: &[f32; HISTORY_SIZE],
-        times: &[f32; HISTORY_SIZE],
-        sample_count: usize,
-    ) -> f32 {
-        if sample_count < 2 {
-            return 0.0;
-        }
-
-        // Use simple linear regression with exponential weighting for recency
-        // This gives us average velocity that closely tracks actual finger speed
-        let mut sum_weight = 0.0f32;
-        let mut sum_t = 0.0f32;
-        let mut sum_x = 0.0f32;
-        let mut sum_tt = 0.0f32;
-        let mut sum_tx = 0.0f32;
-
-        // Decay factor - recent samples weighted more (half-life ~30ms)
-        let decay = 0.95f32;
-
-        for i in 0..sample_count {
-            // Weight: more recent samples (lower index) get higher weight
-            let weight = decay.powi(i as i32);
-            let t = times[i];
-            let x = data_points[i];
-
-            sum_weight += weight;
-            sum_t += weight * t;
-            sum_x += weight * x;
-            sum_tt += weight * t * t;
-            sum_tx += weight * t * x;
-        }
-
-        // Weighted linear regression: x = a + b*t, velocity = b
-        let denom = sum_weight * sum_tt - sum_t * sum_t;
-        if denom.abs() < f32::EPSILON {
-            return 0.0;
-        }
-
-        let velocity = (sum_weight * sum_tx - sum_t * sum_x) / denom;
-        velocity
+/// Calculates velocity using the impulse strategy from Jetpack Compose.
+fn calculate_impulse_velocity(
+    data_points: &[f32; HISTORY_SIZE],
+    times: &[f32; HISTORY_SIZE],
+    sample_count: usize,
+    is_differential: bool,
+) -> f32 {
+    if sample_count < 2 {
+        return 0.0;
     }
+
+    let mut work = 0.0f32;
+    let start = sample_count - 1;
+    let mut next_time = times[start];
+
+    for i in (1..=start).rev() {
+        let current_time = next_time;
+        next_time = times[i - 1];
+        if current_time == next_time {
+            continue;
+        }
+
+        let data_points_delta = if is_differential {
+            -data_points[i - 1]
+        } else {
+            data_points[i] - data_points[i - 1]
+        };
+        let v_curr = data_points_delta / (current_time - next_time);
+        let v_prev = kinetic_energy_to_velocity(work);
+        work += (v_curr - v_prev) * v_curr.abs();
+        if i == start {
+            work *= 0.5;
+        }
+    }
+
+    kinetic_energy_to_velocity(work)
 }
 
 /// Converts kinetic energy to velocity using E = 0.5 * m * v^2 (with m = 1).
 #[inline]
-#[allow(dead_code)]
 fn kinetic_energy_to_velocity(kinetic_energy: f32) -> f32 {
     kinetic_energy.signum() * (2.0 * kinetic_energy.abs()).sqrt()
 }
@@ -272,7 +240,11 @@ mod tests {
         tracker.add_data_point(20, 100.0);
 
         let velocity = tracker.calculate_velocity();
-        assert!(velocity < 0.0, "Expected negative velocity, got {}", velocity);
+        assert!(
+            velocity < 0.0,
+            "Expected negative velocity, got {}",
+            velocity
+        );
     }
 
     #[test]
@@ -291,5 +263,15 @@ mod tests {
             velocity.abs() > 0.0,
             "Should calculate velocity from recent samples"
         );
+    }
+
+    #[test]
+    fn test_gap_over_stopped_threshold_returns_zero() {
+        let mut tracker = VelocityTracker1D::new();
+        tracker.add_data_point(0, 0.0);
+        tracker.add_data_point(100, 100.0);
+
+        let velocity = tracker.calculate_velocity();
+        assert_eq!(velocity, 0.0);
     }
 }

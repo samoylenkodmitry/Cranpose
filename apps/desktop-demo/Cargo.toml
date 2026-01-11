@@ -2,6 +2,9 @@
 name = "desktop-app"
 version = "0.1.0"
 edition = "2021"
+description = "RS-Compose desktop demo application."
+repository = "https://github.com/samoylenkodmitry/rs-compose"
+license = "Apache-2.0"
 
 [package.metadata.wasm-pack.profile.release]
 # Enable wasm-opt with size optimization (can reduce WASM size by 20-40%)

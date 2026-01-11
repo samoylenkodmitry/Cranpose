@@ -944,7 +944,11 @@ mod tests {
     fn test_items_indexed() {
         let mut content = LazyListIntervalContent::new();
         // Use Vec -> Into<Rc<[T]>> directly (efficient)
-        let data = vec!["Apple".to_string(), "Banana".to_string(), "Cherry".to_string()];
+        let data = vec![
+            "Apple".to_string(),
+            "Banana".to_string(),
+            "Cherry".to_string(),
+        ];
         let items_visited = Rc::new(RefCell::new(Vec::new()));
         let items_clone = items_visited.clone();
 
@@ -1130,5 +1134,4 @@ mod tests {
         let found_mid = content.get_index_by_slot_id(slot_id_mid);
         assert_eq!(found_mid, Some(10000));
     }
-
 }

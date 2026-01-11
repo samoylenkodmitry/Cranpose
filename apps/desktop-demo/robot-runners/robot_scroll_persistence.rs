@@ -43,8 +43,10 @@ fn main() {
 
             // Navigate to Lazy List tab
             println!("--- Navigating to Lazy List Tab ---");
-            
-            if let Some((x, y, w, h)) = find_in_semantics(&robot, |elem| find_button(elem, "Lazy List")) {
+
+            if let Some((x, y, w, h)) =
+                find_in_semantics(&robot, |elem| find_button(elem, "Lazy List"))
+            {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
                 let _ = robot.mouse_move(cx, cy);
@@ -65,7 +67,7 @@ fn main() {
             // TEST: Scroll persistence after fling
             // =========================================================
             println!("--- Test: Scroll Persistence After Fling ---");
-            
+
             let start_x = 400.0;
             let start_y = 400.0;
             let swipe_distance = 150.0;
@@ -85,7 +87,7 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(10));
             }
             let _ = robot.mouse_up();
-            
+
             // Wait for fling animation to complete
             std::thread::sleep(Duration::from_millis(600));
             println!("    Fling 1 complete");
@@ -124,7 +126,7 @@ fn main() {
                     println!("    Item 10 after fling 1: Y={:.1}", p1);
                     println!("    Item 10 after scroll 2: Y={:.1}", p2);
                     println!("    Delta: {:.1}px", delta);
-                    
+
                     // If scroll 2 continued from fling position, delta should be ~30px
                     // If it reset to 0, delta would be much larger (the item might even be off-screen)
                     if delta < 100.0 {

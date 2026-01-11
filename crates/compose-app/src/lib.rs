@@ -31,7 +31,7 @@ pub mod web;
 pub use desktop::{Robot, SemanticElement, SemanticRect};
 
 /// FPS monitoring API - use these to track frame rate for performance optimization.
-/// 
+///
 /// - `current_fps()` - Get current FPS value
 /// - `fps_stats()` - Get detailed frame statistics (avg ms, recomps/sec)
 /// - `fps_display()` - Get formatted FPS string for display

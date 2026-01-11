@@ -64,6 +64,12 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(200));
             }
 
+            println!("  Scrolling back to top before switching tabs");
+            for _ in 0..3 {
+                robot.drag(600.0, 200.0, 600.0, 700.0).ok();
+                std::thread::sleep(Duration::from_millis(150));
+            }
+
             println!("\n--- Step 2: Navigate to 'Lazy List' tab ---");
             if !click_button("Lazy List") {
                 println!("FATAL: Could not find 'Lazy List' tab button");

@@ -121,6 +121,7 @@ pub async fn run(
     };
     renderer.init_gpu(Arc::new(device), Arc::new(queue), surface_format);
     renderer.set_root_scale(scale_factor as f32);
+    compose_ui::set_density(scale_factor as f32);
 
     let app = Rc::new(RefCell::new(AppShell::new(
         renderer,

@@ -14,7 +14,9 @@
 mod robot_test_utils;
 
 use compose_app::AppLauncher;
-use compose_testing::{find_button_in_semantics, find_text_by_prefix_in_semantics, find_text_in_semantics};
+use compose_testing::{
+    find_button_in_semantics, find_text_by_prefix_in_semantics, find_text_in_semantics,
+};
 use desktop_app::app;
 use std::time::Duration;
 
@@ -48,10 +50,14 @@ fn main() {
 
             // Helper to read FirstIndex value
             let read_first_index = || -> Option<usize> {
-                find_text_by_prefix_in_semantics(&robot, "FirstIndex: ")
-                    .and_then(|(_, _, _, _, text)| {
-                        text.strip_prefix("FirstIndex: ")?.trim().parse::<usize>().ok()
-                    })
+                find_text_by_prefix_in_semantics(&robot, "FirstIndex: ").and_then(
+                    |(_, _, _, _, text)| {
+                        text.strip_prefix("FirstIndex: ")?
+                            .trim()
+                            .parse::<usize>()
+                            .ok()
+                    },
+                )
             };
 
             // Step 1: Navigate to LazyList tab
@@ -76,7 +82,7 @@ fn main() {
             println!("\n=== Step 2: Record initial FirstIndex ===");
             let initial_index = read_first_index();
             println!("  Initial FirstIndex: {:?}", initial_index);
-            
+
             if initial_index != Some(0) {
                 println!("  ⚠️  Expected FirstIndex to be 0 initially");
             }
@@ -91,14 +97,14 @@ fn main() {
             std::thread::sleep(Duration::from_millis(200));
             let _ = robot.wait_for_idle();
 
-            // Step 4: Click "Jump to Middle"  
+            // Step 4: Click "Jump to Middle"
             println!("\n=== Step 4: Click 'Jump to Middle' ===");
             if !click_button("Jump to Middle") {
                 println!("FATAL: Could not find 'Jump to Middle' button");
                 robot.exit().ok();
                 std::process::exit(1);
             }
-            
+
             // Wait for potential redraw
             std::thread::sleep(Duration::from_millis(300));
             let _ = robot.wait_for_idle();
@@ -112,7 +118,10 @@ fn main() {
             // If it's still 0, the bug is present!
             match after_jump_index {
                 Some(index) if index > 1000000 => {
-                    println!("  ✓ PASS: FirstIndex updated to {} (middle of usize::MAX)", index);
+                    println!(
+                        "  ✓ PASS: FirstIndex updated to {} (middle of usize::MAX)",
+                        index
+                    );
                     println!("\n=== Bug is FIXED: LazyList redraws after Jump to Middle ===");
                 }
                 Some(index) if index == 0 => {
@@ -128,7 +137,10 @@ fn main() {
                     std::process::exit(1);
                 }
                 Some(index) => {
-                    println!("  ⚠️  Unexpected index value: {} (expected middle of usize::MAX)", index);
+                    println!(
+                        "  ⚠️  Unexpected index value: {} (expected middle of usize::MAX)",
+                        index
+                    );
                     println!("  This may indicate partial fix or different issue");
                 }
                 None => {
@@ -140,11 +152,11 @@ fn main() {
 
             // Extra verification: check that middle items are actually visible
             println!("\n=== Step 6: Verify lazy list items actually updated ===");
-            
+
             // Item #0 should NOT be visible after jumping to middle of usize::MAX
             let found_item_0 = find_text_in_semantics(&robot, "ItemRow #0").is_some()
                 || find_text_in_semantics(&robot, "Hello #0").is_some();
-            
+
             if found_item_0 {
                 println!("");
                 println!("╔════════════════════════════════════════════════════════════════╗");

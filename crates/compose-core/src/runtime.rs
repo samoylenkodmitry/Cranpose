@@ -538,7 +538,7 @@ impl RuntimeInner {
             }
         }
         drop(callbacks);
-        
+
         // Wrap ALL frame callbacks in a single mutable snapshot so state changes
         // are properly applied to the global snapshot and visible to subsequent reads.
         // Using a single snapshot for all callbacks avoids stack exhaustion from
@@ -550,7 +550,7 @@ impl RuntimeInner {
                 }
             });
         }
-        
+
         if !self.has_invalid_scopes()
             && !self.has_updates()
             && !self.has_frame_callbacks()

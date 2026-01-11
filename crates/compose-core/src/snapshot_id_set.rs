@@ -71,37 +71,7 @@ impl SnapshotIdSet {
 
     /// Add a snapshot ID to the set (returns a new set if modified).
     pub fn set(&self, id: SnapshotId) -> Self {
-        let offset = id.wrapping_sub(self.lower_bound);
-
-        if offset < BITS_PER_SET {
-            // In lower_set range
-            let mask = 1u64 << offset;
-            if (self.lower_set & mask) == 0 {
-                return Self {
-                    upper_set: self.upper_set,
-                    lower_set: self.lower_set | mask,
-                    lower_bound: self.lower_bound,
-                    below_bound: self.below_bound.clone(),
-                };
-            }
-        } else if offset < BITS_PER_SET * 2 {
-            // In upper_set range
-            let mask = 1u64 << (offset - BITS_PER_SET);
-            if (self.upper_set & mask) == 0 {
-                return Self {
-                    upper_set: self.upper_set | mask,
-                    lower_set: self.lower_set,
-                    lower_bound: self.lower_bound,
-                    below_bound: self.below_bound.clone(),
-                };
-            }
-        } else if offset >= BITS_PER_SET * 2 {
-            // Need to shift the bit arrays
-            if !self.get(id) {
-                return self.shift_and_set(id);
-            }
-        } else {
-            // Below lower_bound
+        if id < self.lower_bound {
             if let Some(ref arr) = self.below_bound {
                 match arr.binary_search(&id) {
                     Ok(_) => {
@@ -130,6 +100,37 @@ impl SnapshotIdSet {
                     lower_bound: self.lower_bound,
                     below_bound: Some(vec![id].into_boxed_slice()),
                 };
+            }
+        }
+
+        let offset = id - self.lower_bound;
+
+        if offset < BITS_PER_SET {
+            // In lower_set range
+            let mask = 1u64 << offset;
+            if (self.lower_set & mask) == 0 {
+                return Self {
+                    upper_set: self.upper_set,
+                    lower_set: self.lower_set | mask,
+                    lower_bound: self.lower_bound,
+                    below_bound: self.below_bound.clone(),
+                };
+            }
+        } else if offset < BITS_PER_SET * 2 {
+            // In upper_set range
+            let mask = 1u64 << (offset - BITS_PER_SET);
+            if (self.upper_set & mask) == 0 {
+                return Self {
+                    upper_set: self.upper_set | mask,
+                    lower_set: self.lower_set,
+                    lower_bound: self.lower_bound,
+                    below_bound: self.below_bound.clone(),
+                };
+            }
+        } else if offset >= BITS_PER_SET * 2 {
+            // Need to shift the bit arrays
+            if !self.get(id) {
+                return self.shift_and_set(id);
             }
         }
 
@@ -315,7 +316,7 @@ impl SnapshotIdSet {
 
     // Helper: shift the bit arrays and set a new ID
     fn shift_and_set(&self, id: SnapshotId) -> Self {
-        let target_lower_bound = ((id + 1) / SNAPSHOT_ID_SIZE) * SNAPSHOT_ID_SIZE;
+        let target_lower_bound = (id / SNAPSHOT_ID_SIZE) * SNAPSHOT_ID_SIZE;
 
         let mut new_upper_set = self.upper_set;
         let mut new_lower_set = self.lower_set;
@@ -572,6 +573,30 @@ mod tests {
 
         // 10 should now be in below_bound
         assert!(set.below_bound.is_some());
+    }
+
+    #[test]
+    fn test_shift_and_set_boundary_values() {
+        let mut set = SnapshotIdSet::new();
+        let boundary = SNAPSHOT_ID_SIZE * 12 - 1;
+        set = set.set(boundary);
+        assert!(set.get(boundary));
+
+        set = set.set(boundary + 1);
+        assert!(set.get(boundary));
+        assert!(set.get(boundary + 1));
+    }
+
+    #[test]
+    fn test_set_below_lower_bound_inserts() {
+        let set = SnapshotIdSet::new().set(200);
+        let lower_bound = set.lower_bound;
+        assert!(lower_bound > 0);
+
+        let below = lower_bound - 1;
+        let set = set.set(below);
+        assert!(set.get(below));
+        assert!(set.get(200));
     }
 
     #[test]

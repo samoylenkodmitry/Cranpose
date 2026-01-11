@@ -14,7 +14,7 @@
 //! ```
 
 use compose_app::AppLauncher;
-use compose_testing::{find_button, find_in_semantics, find_text};
+use compose_testing::{find_button, find_in_semantics};
 use desktop_app::app;
 use std::time::Duration;
 
@@ -39,7 +39,9 @@ fn main() {
             let _ = robot.wait_for_idle();
 
             // Navigate to Lazy List tab
-            if let Some((x, y, w, h)) = find_in_semantics(&robot, |elem| find_button(elem, "Lazy List")) {
+            if let Some((x, y, w, h)) =
+                find_in_semantics(&robot, |elem| find_button(elem, "Lazy List"))
+            {
                 let _ = robot.mouse_move(x + w / 2.0, y + h / 2.0);
                 std::thread::sleep(Duration::from_millis(50));
                 let _ = robot.mouse_down();
@@ -59,12 +61,12 @@ fn main() {
             // TEST 1: Very slow scroll - should NOT trigger fling
             // =========================================================
             println!("--- Test 1: Very Slow Scroll (no fling expected) ---");
-            
+
             let _ = robot.mouse_move(center_x, center_y);
             std::thread::sleep(Duration::from_millis(50));
             let _ = robot.mouse_down();
             std::thread::sleep(Duration::from_millis(50));
-            
+
             // Very slow drag - 30px over 500ms = 60px/sec (below 50px/sec threshold)
             for i in 1..=10 {
                 let progress = i as f32 / 10.0;
@@ -79,12 +81,12 @@ fn main() {
             // TEST 2: Fast fling to trigger animation
             // =========================================================
             println!("--- Test 2: Fast Fling ---");
-            
+
             let _ = robot.mouse_move(center_x, center_y);
             std::thread::sleep(Duration::from_millis(100));
             let _ = robot.mouse_down();
             std::thread::sleep(Duration::from_millis(20));
-            
+
             // Fast swipe - 150px in 50ms = 3000px/sec
             for i in 1..=5 {
                 let progress = i as f32 / 5.0;
@@ -99,7 +101,7 @@ fn main() {
             // TEST 3: Interrupt fling with click (POTENTIAL BUG)
             // =========================================================
             println!("--- Test 3: Interrupt Fling With Click ---");
-            
+
             // Click while fling is still animating
             let _ = robot.mouse_move(center_x, center_y - 100.0);
             std::thread::sleep(Duration::from_millis(50));
@@ -113,7 +115,7 @@ fn main() {
             // TEST 4: Rapid consecutive flings (POTENTIAL BUG)
             // =========================================================
             println!("--- Test 4: Rapid Consecutive Flings ---");
-            
+
             // First fling
             let _ = robot.mouse_move(center_x, center_y);
             std::thread::sleep(Duration::from_millis(50));
@@ -124,7 +126,7 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(10));
             }
             let _ = robot.mouse_up();
-            
+
             // IMMEDIATELY start second fling (don't wait for first to finish)
             std::thread::sleep(Duration::from_millis(30));
             let _ = robot.mouse_move(center_x, center_y - 50.0);
@@ -143,12 +145,12 @@ fn main() {
             // TEST 5: Direction reversal (POTENTIAL BUG)
             // =========================================================
             println!("--- Test 5: Direction Reversal Mid-Gesture ---");
-            
+
             let _ = robot.mouse_move(center_x, center_y);
             std::thread::sleep(Duration::from_millis(50));
             let _ = robot.mouse_down();
             std::thread::sleep(Duration::from_millis(10));
-            
+
             // Scroll up first
             for i in 1..=3 {
                 let _ = robot.mouse_move(center_x, center_y - (50.0 * i as f32 / 3.0));
@@ -167,7 +169,7 @@ fn main() {
             // TEST 6: Scroll at boundary (should stop cleanly)
             // =========================================================
             println!("--- Test 6: Scroll At Top Boundary ---");
-            
+
             // First scroll up to reach near top
             for _ in 0..3 {
                 let _ = robot.mouse_move(center_x, center_y + 200.0);
@@ -187,12 +189,12 @@ fn main() {
             // TEST 7: Frame drop simulation (gaps in samples)
             // =========================================================
             println!("--- Test 7: Simulated Frame Drops ---");
-            
+
             let _ = robot.mouse_move(center_x, center_y);
             std::thread::sleep(Duration::from_millis(50));
             let _ = robot.mouse_down();
             std::thread::sleep(Duration::from_millis(10));
-            
+
             // Fast movement with artificial gaps
             let _ = robot.mouse_move(center_x, center_y - 30.0);
             std::thread::sleep(Duration::from_millis(60)); // Simulated frame drop!
@@ -209,7 +211,7 @@ fn main() {
             // TEST 8: Zero movement then release
             // =========================================================
             println!("--- Test 8: Touch Then Release Without Move ---");
-            
+
             let _ = robot.mouse_move(center_x, center_y);
             std::thread::sleep(Duration::from_millis(50));
             let _ = robot.mouse_down();
@@ -221,7 +223,7 @@ fn main() {
             // =========================================================
             println!("\n=== All Edge Case Tests Complete ===");
             println!("Review stderr output for [Fling] logs to verify behavior.");
-            
+
             std::thread::sleep(Duration::from_secs(1));
             let _ = robot.exit();
         })

@@ -243,34 +243,36 @@ impl NestedMutableSnapshot {
     }
 
     pub fn apply(&self) -> SnapshotApplyResult {
-        if self.state.disposed.get() {
-            return SnapshotApplyResult::Failure;
-        }
-
-        if self.applied.get() {
-            return SnapshotApplyResult::Failure;
-        }
-
-        // Apply changes to parent instead of global snapshot
-        if let Some(parent) = self.parent.upgrade() {
-            // Merge to parent (Phase 2.2) with simple conflict detection.
-            let child_modified = self.state.modified.borrow();
-            if child_modified.is_empty() {
-                self.applied.set(true);
-                self.state.dispose();
-                return SnapshotApplyResult::Success;
-            }
-            // Ask parent to merge child's modifications; it will detect conflicts.
-            if parent.merge_child_modifications(&child_modified).is_err() {
+        super::with_snapshot_lock(|| {
+            if self.state.disposed.get() {
                 return SnapshotApplyResult::Failure;
             }
 
-            self.applied.set(true);
-            self.state.dispose();
-            SnapshotApplyResult::Success
-        } else {
-            SnapshotApplyResult::Failure
-        }
+            if self.applied.get() {
+                return SnapshotApplyResult::Failure;
+            }
+
+            // Apply changes to parent instead of global snapshot
+            if let Some(parent) = self.parent.upgrade() {
+                // Merge to parent (Phase 2.2) with simple conflict detection.
+                let child_modified = self.state.modified.borrow();
+                if child_modified.is_empty() {
+                    self.applied.set(true);
+                    self.state.dispose();
+                    return SnapshotApplyResult::Success;
+                }
+                // Ask parent to merge child's modifications; it will detect conflicts.
+                if parent.merge_child_modifications(&child_modified).is_err() {
+                    return SnapshotApplyResult::Failure;
+                }
+
+                self.applied.set(true);
+                self.state.dispose();
+                SnapshotApplyResult::Success
+            } else {
+                SnapshotApplyResult::Failure
+            }
+        })
     }
 
     pub fn take_nested_mutable_snapshot(
@@ -278,48 +280,51 @@ impl NestedMutableSnapshot {
         read_observer: Option<ReadObserver>,
         write_observer: Option<WriteObserver>,
     ) -> Arc<NestedMutableSnapshot> {
-        let merged_read = merge_read_observers(read_observer, self.state.read_observer.clone());
-        let merged_write = merge_write_observers(write_observer, self.state.write_observer.clone());
+        super::with_snapshot_lock(|| {
+            let merged_read = merge_read_observers(read_observer, self.state.read_observer.clone());
+            let merged_write =
+                merge_write_observers(write_observer, self.state.write_observer.clone());
 
-        let (new_id, runtime_invalid) = allocate_snapshot();
-        let mut parent_invalid = self.state.invalid.borrow().clone();
-        parent_invalid = parent_invalid.set(new_id);
-        self.state.invalid.replace(parent_invalid.clone());
-        let invalid = parent_invalid.or(&runtime_invalid);
+            let (new_id, runtime_invalid) = allocate_snapshot();
+            let mut parent_invalid = self.state.invalid.borrow().clone();
+            parent_invalid = parent_invalid.set(new_id);
+            self.state.invalid.replace(parent_invalid.clone());
+            let invalid = parent_invalid.or(&runtime_invalid);
 
-        let self_weak = Arc::downgrade(&self.root_mutable());
+            let self_weak = Arc::downgrade(&self.root_mutable());
 
-        let nested = NestedMutableSnapshot::new(
-            new_id,
-            invalid,
-            merged_read,
-            merged_write,
-            self_weak,
-            self.state.id.get(), // base_parent_id = this snapshot's id at creation time
-        );
+            let nested = NestedMutableSnapshot::new(
+                new_id,
+                invalid,
+                merged_read,
+                merged_write,
+                self_weak,
+                self.state.id.get(), // base_parent_id = this snapshot's id at creation time
+            );
 
-        self.nested_count.set(self.nested_count.get() + 1);
-        self.state.add_pending_child(new_id);
+            self.nested_count.set(self.nested_count.get() + 1);
+            self.state.add_pending_child(new_id);
 
-        let parent_self_weak = Arc::downgrade(self);
-        nested.set_on_dispose({
-            let child_id = new_id;
-            move || {
-                if let Some(parent) = parent_self_weak.upgrade() {
-                    if parent.nested_count.get() > 0 {
-                        parent
-                            .nested_count
-                            .set(parent.nested_count.get().saturating_sub(1));
+            let parent_self_weak = Arc::downgrade(self);
+            nested.set_on_dispose({
+                let child_id = new_id;
+                move || {
+                    if let Some(parent) = parent_self_weak.upgrade() {
+                        if parent.nested_count.get() > 0 {
+                            parent
+                                .nested_count
+                                .set(parent.nested_count.get().saturating_sub(1));
+                        }
+                        let mut invalid = parent.state.invalid.borrow_mut();
+                        let new_set = invalid.clone().clear(child_id);
+                        *invalid = new_set;
+                        parent.state.remove_pending_child(child_id);
                     }
-                    let mut invalid = parent.state.invalid.borrow_mut();
-                    let new_set = invalid.clone().clear(child_id);
-                    *invalid = new_set;
-                    parent.state.remove_pending_child(child_id);
                 }
-            }
-        });
+            });
 
-        nested
+            nested
+        })
     }
 }
 

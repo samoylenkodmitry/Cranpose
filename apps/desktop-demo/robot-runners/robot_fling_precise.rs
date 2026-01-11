@@ -67,7 +67,9 @@ fn main() {
             // Navigate to Lazy List tab
             // =========================================================
             println!("--- Setup: Navigate to Lazy List Tab ---");
-            if let Some((x, y, w, h)) = find_in_semantics(&robot, |elem| find_button(elem, "Lazy List")) {
+            if let Some((x, y, w, h)) =
+                find_in_semantics(&robot, |elem| find_button(elem, "Lazy List"))
+            {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
                 let _ = robot.mouse_move(cx, cy);
@@ -88,12 +90,12 @@ fn main() {
                 find_in_semantics(robot, |elem| find_text(elem, item_text))
                     .map(|(x, y, w, h)| (x + w / 2.0, y + h / 2.0))
             }
-            
+
             // Find any "Item X" element
             fn find_any_item(robot: &Robot) -> Option<(f32, String)> {
                 // Try items 0-20
                 for i in 0..20 {
-                    let item_text = format!("Item {}", i);
+                    let item_text = format!("Item #{}", i);
                     if let Some((_, y)) = find_item(robot, &item_text) {
                         return Some((y, item_text));
                     }
@@ -102,17 +104,27 @@ fn main() {
             }
 
             // =========================================================
-            // TEST 1: Initial state - Item 0 should be visible at top
+            // TEST 1: Initial state - Item 0 should be visible in viewport
             // =========================================================
-            test!("Initial state - Item 0 visible", {
-                let item0 = find_item(&robot, "Item 0");
+            test!("Initial state - Item #0 visible", {
+                let item0 = find_item(&robot, "Item #0");
                 if item0.is_none() {
-                    return Err("Item 0 not found in initial state".to_string());
+                    return Err("Item #0 not found in initial state".to_string());
                 }
                 let (_, y) = item0.unwrap();
-                // Item 0 should be near top of scroll area (y < 200)
-                if y > 200.0 {
-                    return Err(format!("Item 0 Y position {} > 200 (should be near top)", y));
+
+                let viewport =
+                    find_in_semantics(&robot, |elem| find_text(elem, "LazyListViewport"));
+                let Some((_vx, vy, _vw, vh)) = viewport else {
+                    return Err("LazyListViewport not found in semantics".to_string());
+                };
+                if y < vy || y > (vy + vh) {
+                    return Err(format!(
+                        "Item 0 y={:.1} outside viewport bounds y=[{:.1}, {:.1}]",
+                        y,
+                        vy,
+                        vy + vh
+                    ));
                 }
                 Ok(())
             });
@@ -121,10 +133,10 @@ fn main() {
             // TEST 2: Simple drag scroll - verify position changes
             // =========================================================
             test!("Simple drag scroll - position changes", {
-                // Get Item 0 position before scroll
-                let before = find_item(&robot, "Item 0");
+                // Get Item #0 position before scroll
+                let before = find_item(&robot, "Item #0");
                 if before.is_none() {
-                    return Err("Item 0 not found before scroll".to_string());
+                    return Err("Item #0 not found before scroll".to_string());
                 }
                 let (_, before_y) = before.unwrap();
 
@@ -132,7 +144,7 @@ fn main() {
                 let start_x = 400.0;
                 let start_y = 400.0;
                 let drag_distance = 100.0;
-                
+
                 let _ = robot.mouse_move(start_x, start_y);
                 std::thread::sleep(Duration::from_millis(50));
                 let _ = robot.mouse_down();
@@ -149,8 +161,8 @@ fn main() {
                 let _ = robot.mouse_up();
                 std::thread::sleep(Duration::from_millis(200));
 
-                // Check Item 0 position after scroll
-                let after = find_item(&robot, "Item 0");
+                // Check Item #0 position after scroll
+                let after = find_item(&robot, "Item #0");
                 match after {
                     Some((_, after_y)) => {
                         let delta = after_y - before_y;
@@ -176,7 +188,7 @@ fn main() {
             test!("Scroll back to top", {
                 let start_x = 400.0;
                 let start_y = 200.0;
-                
+
                 let _ = robot.mouse_move(start_x, start_y);
                 std::thread::sleep(Duration::from_millis(50));
                 let _ = robot.mouse_down();
@@ -193,10 +205,10 @@ fn main() {
                 let _ = robot.mouse_up();
                 std::thread::sleep(Duration::from_millis(500));
 
-                // Verify Item 0 is visible again
-                let item0 = find_item(&robot, "Item 0");
+                // Verify Item #0 is visible again
+                let item0 = find_item(&robot, "Item #0");
                 if item0.is_none() {
-                    return Err("Item 0 not found after scroll back".to_string());
+                    return Err("Item #0 not found after scroll back".to_string());
                 }
                 Ok(())
             });
@@ -206,13 +218,13 @@ fn main() {
             // =========================================================
             test!("Fast swipe triggers fling", {
                 // Get starting position
-                let before = find_item(&robot, "Item 0");
+                let before = find_item(&robot, "Item #0");
                 let before_y = before.map(|(_, y)| y).unwrap_or(100.0);
 
                 // Fast swipe: 200px in 50ms = 4000 px/sec
                 let start_x = 400.0;
                 let start_y = 400.0;
-                
+
                 let _ = robot.mouse_move(start_x, start_y);
                 std::thread::sleep(Duration::from_millis(50));
                 let _ = robot.mouse_down();
@@ -228,13 +240,13 @@ fn main() {
 
                 // Release
                 let _ = robot.mouse_up();
-                
+
                 // Wait for fling to complete (longer for animation)
                 std::thread::sleep(Duration::from_millis(500));
 
                 // Check: Item 0 should have moved significantly more than just the drag distance
                 // (Because fling adds momentum)
-                let after = find_item(&robot, "Item 0");
+                let after = find_item(&robot, "Item #0");
                 match after {
                     Some((_, after_y)) => {
                         let total_movement = before_y - after_y;
@@ -263,11 +275,8 @@ fn main() {
             test!("Repeated scrolls no jump-back", {
                 // Wait for any animation to finish
                 std::thread::sleep(Duration::from_millis(300));
-                
-                // Find any visible item
-                let item_before = find_any_item(&robot);
-                let before_y = item_before.as_ref().map(|(y, _)| *y).unwrap_or(300.0);
 
+                // Find any visible item
                 // Do first scroll
                 let _ = robot.mouse_move(400.0, 400.0);
                 std::thread::sleep(Duration::from_millis(30));
@@ -313,7 +322,7 @@ fn main() {
             // =========================================================
             println!("\n=== Test Summary ===");
             println!("{} / {} tests passed", pass_count, test_count);
-            
+
             if all_passed {
                 println!("✓ ALL TESTS PASSED");
             } else {

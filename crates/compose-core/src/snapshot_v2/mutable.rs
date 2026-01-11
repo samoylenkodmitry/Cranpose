@@ -250,196 +250,201 @@ impl MutableSnapshot {
     }
 
     pub fn apply(&self) -> SnapshotApplyResult {
-        // Check disposed state first - return Failure instead of panicking
-        if self.state.disposed.get() {
-            return SnapshotApplyResult::Failure;
-        }
-
-        if self.applied.get() {
-            return SnapshotApplyResult::Failure;
-        }
-
-        let modified = self.state.modified.borrow();
-        if modified.is_empty() {
-            // No changes to apply
-            self.applied.set(true);
-            self.state.dispose();
-            return SnapshotApplyResult::Success;
-        }
-
-        let this_id = self.state.id.get();
-        let mut modified_objects: Vec<(StateObjectId, Arc<dyn StateObject>, SnapshotId)> =
-            Vec::with_capacity(modified.len());
-        for (&obj_id, (obj, writer_id)) in modified.iter() {
-            modified_objects.push((obj_id, obj.clone(), *writer_id));
-        }
-
-        drop(modified);
-
-        let parent_snapshot = GlobalSnapshot::get_or_create();
-        let parent_snapshot_id = parent_snapshot.snapshot_id();
-        let parent_invalid = parent_snapshot.invalid();
-        drop(parent_snapshot);
-
-        let next_invalid = super::runtime::open_snapshots().clear(parent_snapshot_id);
-        let optimistic = super::optimistic_merges(
-            parent_snapshot_id,
-            self.base_parent_id,
-            &modified_objects,
-            &next_invalid,
-        );
-
-        let mut operations: Vec<ApplyOperation> = Vec::with_capacity(modified_objects.len());
-
-        for (obj_id, state, writer_id) in &modified_objects {
-            let head = state.first_record();
-            let applied = match find_record_by_id(&head, *writer_id) {
-                Some(record) => record,
-                None => return SnapshotApplyResult::Failure,
-            };
-
-            let current =
-                crate::state::readable_record_for(&head, parent_snapshot_id, &next_invalid)
-                    .unwrap_or_else(|| state.readable_record(parent_snapshot_id, &parent_invalid));
-            let (previous_opt, found_base) = find_previous_record(&head, self.base_parent_id);
-            let Some(previous) = previous_opt else {
+        super::with_snapshot_lock(|| {
+            // Check disposed state first - return Failure instead of panicking
+            if self.state.disposed.get() {
                 return SnapshotApplyResult::Failure;
-            };
-
-            if !found_base || previous.snapshot_id() == PREEXISTING_SNAPSHOT_ID {
-                operations.push(ApplyOperation::PromoteChild {
-                    object_id: *obj_id,
-                    state: state.clone(),
-                    writer_id: *writer_id,
-                });
-                continue;
             }
 
-            if Arc::ptr_eq(&current, &previous) {
-                operations.push(ApplyOperation::PromoteChild {
-                    object_id: *obj_id,
-                    state: state.clone(),
-                    writer_id: *writer_id,
-                });
-                continue;
+            if self.applied.get() {
+                return SnapshotApplyResult::Failure;
             }
 
-            let merged = if let Some(candidate) = optimistic
-                .as_ref()
-                .and_then(|map| map.get(&(Arc::as_ptr(&current) as usize)))
-                .cloned()
-            {
-                candidate
-            } else {
-                match state.merge_records(
-                    Arc::clone(&previous),
-                    Arc::clone(&current),
-                    Arc::clone(&applied),
-                ) {
+            let modified = self.state.modified.borrow();
+            if modified.is_empty() {
+                // No changes to apply
+                self.applied.set(true);
+                self.state.dispose();
+                return SnapshotApplyResult::Success;
+            }
+
+            let this_id = self.state.id.get();
+            let mut modified_objects: Vec<(StateObjectId, Arc<dyn StateObject>, SnapshotId)> =
+                Vec::with_capacity(modified.len());
+            for (&obj_id, (obj, writer_id)) in modified.iter() {
+                modified_objects.push((obj_id, obj.clone(), *writer_id));
+            }
+
+            drop(modified);
+
+            let parent_snapshot = GlobalSnapshot::get_or_create();
+            let parent_snapshot_id = parent_snapshot.snapshot_id();
+            let parent_invalid = parent_snapshot.invalid();
+            drop(parent_snapshot);
+
+            let next_invalid = super::runtime::open_snapshots().clear(parent_snapshot_id);
+            let optimistic = super::optimistic_merges(
+                parent_snapshot_id,
+                self.base_parent_id,
+                &modified_objects,
+                &next_invalid,
+            );
+
+            let mut operations: Vec<ApplyOperation> = Vec::with_capacity(modified_objects.len());
+
+            for (obj_id, state, writer_id) in &modified_objects {
+                let head = state.first_record();
+                let applied = match find_record_by_id(&head, *writer_id) {
                     Some(record) => record,
                     None => return SnapshotApplyResult::Failure,
+                };
+
+                let current =
+                    crate::state::readable_record_for(&head, parent_snapshot_id, &next_invalid)
+                        .unwrap_or_else(|| {
+                            state.readable_record(parent_snapshot_id, &parent_invalid)
+                        });
+                let (previous_opt, found_base) = find_previous_record(&head, self.base_parent_id);
+                let Some(previous) = previous_opt else {
+                    return SnapshotApplyResult::Failure;
+                };
+
+                if !found_base || previous.snapshot_id() == PREEXISTING_SNAPSHOT_ID {
+                    operations.push(ApplyOperation::PromoteChild {
+                        object_id: *obj_id,
+                        state: state.clone(),
+                        writer_id: *writer_id,
+                    });
+                    continue;
                 }
-            };
 
-            if Arc::ptr_eq(&merged, &applied) {
-                operations.push(ApplyOperation::PromoteChild {
-                    object_id: *obj_id,
-                    state: state.clone(),
-                    writer_id: *writer_id,
-                });
-            } else if Arc::ptr_eq(&merged, &current) {
-                operations.push(ApplyOperation::PromoteExisting {
-                    object_id: *obj_id,
-                    state: state.clone(),
-                    source_id: current.snapshot_id(),
-                    applied: applied.clone(),
-                });
-            } else {
-                operations.push(ApplyOperation::CommitMerged {
-                    object_id: *obj_id,
-                    state: state.clone(),
-                    merged: merged.clone(),
-                    applied: applied.clone(),
-                });
-            }
-        }
+                if Arc::ptr_eq(&current, &previous) {
+                    operations.push(ApplyOperation::PromoteChild {
+                        object_id: *obj_id,
+                        state: state.clone(),
+                        writer_id: *writer_id,
+                    });
+                    continue;
+                }
 
-        let mut applied_info: Vec<(StateObjectId, Arc<dyn StateObject>, SnapshotId)> =
-            Vec::with_capacity(operations.len());
-
-        for operation in operations {
-            match operation {
-                ApplyOperation::PromoteChild {
-                    object_id,
-                    state,
-                    writer_id,
-                } => {
-                    if state.promote_record(writer_id).is_err() {
-                        return SnapshotApplyResult::Failure;
+                let merged = if let Some(candidate) = optimistic
+                    .as_ref()
+                    .and_then(|map| map.get(&(Arc::as_ptr(&current) as usize)))
+                    .cloned()
+                {
+                    candidate
+                } else {
+                    match state.merge_records(
+                        Arc::clone(&previous),
+                        Arc::clone(&current),
+                        Arc::clone(&applied),
+                    ) {
+                        Some(record) => record,
+                        None => return SnapshotApplyResult::Failure,
                     }
-                    let new_head_id = state.first_record().snapshot_id();
-                    applied_info.push((object_id, state, new_head_id));
-                }
-                ApplyOperation::PromoteExisting {
-                    object_id,
-                    state,
-                    source_id,
-                    applied,
-                } => {
-                    if state.promote_record(source_id).is_err() {
-                        return SnapshotApplyResult::Failure;
-                    }
-                    applied.set_tombstone(true);
-                    applied.clear_value();
-                    let new_head_id = state.first_record().snapshot_id();
-                    applied_info.push((object_id, state, new_head_id));
-                }
-                ApplyOperation::CommitMerged {
-                    object_id,
-                    state,
-                    merged,
-                    applied,
-                } => {
-                    let Ok(new_head_id) = state.commit_merged_record(merged) else {
-                        return SnapshotApplyResult::Failure;
-                    };
-                    applied.set_tombstone(true);
-                    applied.clear_value();
-                    applied_info.push((object_id, state, new_head_id));
+                };
+
+                if Arc::ptr_eq(&merged, &applied) {
+                    operations.push(ApplyOperation::PromoteChild {
+                        object_id: *obj_id,
+                        state: state.clone(),
+                        writer_id: *writer_id,
+                    });
+                } else if Arc::ptr_eq(&merged, &current) {
+                    operations.push(ApplyOperation::PromoteExisting {
+                        object_id: *obj_id,
+                        state: state.clone(),
+                        source_id: current.snapshot_id(),
+                        applied: applied.clone(),
+                    });
+                } else {
+                    operations.push(ApplyOperation::CommitMerged {
+                        object_id: *obj_id,
+                        state: state.clone(),
+                        merged: merged.clone(),
+                        applied: applied.clone(),
+                    });
                 }
             }
-        }
 
-        for (obj_id, _, head_id) in &applied_info {
-            super::set_last_write(*obj_id, *head_id);
-        }
+            let mut applied_info: Vec<(StateObjectId, Arc<dyn StateObject>, SnapshotId)> =
+                Vec::with_capacity(operations.len());
 
-        self.applied.set(true);
-        self.state.dispose();
+            for operation in operations {
+                match operation {
+                    ApplyOperation::PromoteChild {
+                        object_id,
+                        state,
+                        writer_id,
+                    } => {
+                        if state.promote_record(writer_id).is_err() {
+                            return SnapshotApplyResult::Failure;
+                        }
+                        let new_head_id = state.first_record().snapshot_id();
+                        applied_info.push((object_id, state, new_head_id));
+                    }
+                    ApplyOperation::PromoteExisting {
+                        object_id,
+                        state,
+                        source_id,
+                        applied,
+                    } => {
+                        if state.promote_record(source_id).is_err() {
+                            return SnapshotApplyResult::Failure;
+                        }
+                        applied.set_tombstone(true);
+                        applied.clear_value();
+                        let new_head_id = state.first_record().snapshot_id();
+                        applied_info.push((object_id, state, new_head_id));
+                    }
+                    ApplyOperation::CommitMerged {
+                        object_id,
+                        state,
+                        merged,
+                        applied,
+                    } => {
+                        let Ok(new_head_id) = state.commit_merged_record(merged) else {
+                            return SnapshotApplyResult::Failure;
+                        };
+                        applied.set_tombstone(true);
+                        applied.clear_value();
+                        applied_info.push((object_id, state, new_head_id));
+                    }
+                }
+            }
 
-        // TODO(Phase 2B): Cleanup during apply is temporarily disabled due to coordination
-        // issues with sibling snapshots. When multiple sibling snapshots apply sequentially,
-        // cleanup from the first can invalidate records that the second needs for its merge.
-        //
-        // The Kotlin implementation handles this via a global sync{} lock that serializes
-        // all snapshot operations. In Rust, we use thread-local storage without global locks,
-        // so we need a different coordination strategy.
-        //
-        // For now, cleanup only runs during advanceGlobalSnapshot(), which is sufficient
-        // for most use cases. Per-apply cleanup will be re-enabled in a future phase once
-        // proper sibling snapshot coordination is implemented.
-        //
-        // Disabled code:
-        // for (_, state, _) in &applied_info {
-        //     super::process_for_unused_records_locked(state);
-        // }
+            for (obj_id, _, head_id) in &applied_info {
+                super::set_last_write(*obj_id, *head_id);
+            }
 
-        let observer_states: Vec<Arc<dyn StateObject>> = applied_info
-            .iter()
-            .map(|(_, state, _)| state.clone())
-            .collect();
-        super::notify_apply_observers(&observer_states, this_id);
-        SnapshotApplyResult::Success
+            self.applied.set(true);
+            self.state.dispose();
+
+            // TODO(Phase 2B): Cleanup during apply is temporarily disabled due to coordination
+            // issues with sibling snapshots. When multiple sibling snapshots apply sequentially,
+            // cleanup from the first can invalidate records that the second needs for its merge.
+            //
+            // The Kotlin implementation handles this via a global sync{} lock that serializes
+            // all snapshot operations. We now mirror that with a global snapshot lock, but the
+            // cleanup remains disabled until record reuse and sibling snapshot coordination are
+            // fully validated under load.
+            //
+            // For now, cleanup only runs during advanceGlobalSnapshot(), which is sufficient
+            // for most use cases. Per-apply cleanup will be re-enabled in a future phase once
+            // proper sibling snapshot coordination is implemented.
+            //
+            // Disabled code:
+            // for (_, state, _) in &applied_info {
+            //     super::process_for_unused_records_locked(state);
+            // }
+
+            let observer_states: Vec<Arc<dyn StateObject>> = applied_info
+                .iter()
+                .map(|(_, state, _)| state.clone())
+                .collect();
+            super::notify_apply_observers(&observer_states, this_id);
+            SnapshotApplyResult::Success
+        })
     }
 
     pub fn take_nested_mutable_snapshot(
@@ -447,53 +452,56 @@ impl MutableSnapshot {
         read_observer: Option<ReadObserver>,
         write_observer: Option<WriteObserver>,
     ) -> Arc<NestedMutableSnapshot> {
-        self.validate_not_disposed();
-        self.validate_not_applied();
+        super::with_snapshot_lock(|| {
+            self.validate_not_disposed();
+            self.validate_not_applied();
 
-        let merged_read = merge_read_observers(read_observer, self.state.read_observer.clone());
-        let merged_write = merge_write_observers(write_observer, self.state.write_observer.clone());
+            let merged_read = merge_read_observers(read_observer, self.state.read_observer.clone());
+            let merged_write =
+                merge_write_observers(write_observer, self.state.write_observer.clone());
 
-        let (new_id, runtime_invalid) = allocate_snapshot();
+            let (new_id, runtime_invalid) = allocate_snapshot();
 
-        // Merge runtime invalid data with the parent's invalid set and ensure the parent
-        // also tracks the child snapshot id.
-        let mut parent_invalid = self.state.invalid.borrow().clone();
-        parent_invalid = parent_invalid.set(new_id);
-        self.state.invalid.replace(parent_invalid.clone());
-        let invalid = parent_invalid.or(&runtime_invalid);
+            // Merge runtime invalid data with the parent's invalid set and ensure the parent
+            // also tracks the child snapshot id.
+            let mut parent_invalid = self.state.invalid.borrow().clone();
+            parent_invalid = parent_invalid.set(new_id);
+            self.state.invalid.replace(parent_invalid.clone());
+            let invalid = parent_invalid.or(&runtime_invalid);
 
-        let self_weak = Arc::downgrade(self);
-        let nested = NestedMutableSnapshot::new(
-            new_id,
-            invalid,
-            merged_read,
-            merged_write,
-            self_weak,
-            self.state.id.get(), // base_parent_id for child is this snapshot's id
-        );
+            let self_weak = Arc::downgrade(self);
+            let nested = NestedMutableSnapshot::new(
+                new_id,
+                invalid,
+                merged_read,
+                merged_write,
+                self_weak,
+                self.state.id.get(), // base_parent_id for child is this snapshot's id
+            );
 
-        self.nested_count.set(self.nested_count.get() + 1);
-        self.state.add_pending_child(new_id);
+            self.nested_count.set(self.nested_count.get() + 1);
+            self.state.add_pending_child(new_id);
 
-        let parent_weak = Arc::downgrade(self);
-        nested.set_on_dispose({
-            let child_id = new_id;
-            move || {
-                if let Some(parent) = parent_weak.upgrade() {
-                    if parent.nested_count.get() > 0 {
-                        parent
-                            .nested_count
-                            .set(parent.nested_count.get().saturating_sub(1));
+            let parent_weak = Arc::downgrade(self);
+            nested.set_on_dispose({
+                let child_id = new_id;
+                move || {
+                    if let Some(parent) = parent_weak.upgrade() {
+                        if parent.nested_count.get() > 0 {
+                            parent
+                                .nested_count
+                                .set(parent.nested_count.get().saturating_sub(1));
+                        }
+                        let mut invalid = parent.state.invalid.borrow_mut();
+                        let new_set = invalid.clone().clear(child_id);
+                        *invalid = new_set;
+                        parent.state.remove_pending_child(child_id);
                     }
-                    let mut invalid = parent.state.invalid.borrow_mut();
-                    let new_set = invalid.clone().clear(child_id);
-                    *invalid = new_set;
-                    parent.state.remove_pending_child(child_id);
                 }
-            }
-        });
+            });
 
-        nested
+            nested
+        })
     }
 
     /// Merge a child's modified set into this snapshot's modified set.

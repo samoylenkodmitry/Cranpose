@@ -335,20 +335,20 @@ impl Renderer for WgpuRenderer {
 
     fn draw_dev_overlay(&mut self, text: &str, viewport: Size) {
         use compose_ui_graphics::{Brush, Color, Rect, RoundedCornerShape};
-        
+
         // Draw FPS text in top-right corner with semi-transparent background
         // Position: 8px from right edge, 8px from top
         let padding = 8.0;
         let font_size = 14.0;
-        
+
         // Measure text width (approximate: ~7px per character at 14px font)
         let char_width = 7.0;
         let text_width = text.len() as f32 * char_width;
         let text_height = font_size * 1.4;
-        
+
         let x = viewport.width - text_width - padding * 2.0;
         let y = padding;
-        
+
         // Add background rectangle (dark semi-transparent)
         let bg_rect = Rect {
             x,
@@ -362,7 +362,7 @@ impl Renderer for WgpuRenderer {
             Some(RoundedCornerShape::uniform(4.0)),
             None,
         );
-        
+
         // Add text (green color for visibility)
         let text_rect = Rect {
             x: x + padding / 2.0,
@@ -373,7 +373,7 @@ impl Renderer for WgpuRenderer {
         self.scene.push_text(
             text_rect,
             text.to_string(),
-            Color(0.0, 1.0, 0.0, 1.0), // Green
+            Color(0.0, 1.0, 0.0, 1.0),  // Green
             font_size / BASE_FONT_SIZE, // Scale relative to base
             None,
         );

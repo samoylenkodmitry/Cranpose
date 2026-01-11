@@ -6,24 +6,24 @@ use compose_animation::{FloatDecayAnimationSpec, SplineBasedDecaySpec};
 use compose_core::{FrameCallbackRegistration, FrameClock, RuntimeHandle};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+#[cfg(debug_assertions)]
 use std::sync::atomic::{AtomicU64, Ordering};
-use web_time::Instant;
 
 /// Minimum velocity (in px/sec) to trigger a fling animation.
 /// Below this, the scroll just stops immediately.
-pub const MIN_FLING_VELOCITY: f32 = 50.0;
+pub const MIN_FLING_VELOCITY: f32 = 1.0;
 
-/// Minimum delta (in pixels) to consider for boundary detection.
-/// Smaller deltas are ignored to avoid false positives from numerical precision.
-const BOUNDARY_MIN_DELTA: f32 = 1.0;
+/// Default fling friction value (matches Android ViewConfiguration).
+const DEFAULT_FLING_FRICTION: f32 = 0.015;
 
-/// Ratio of consumed/requested delta below which we consider a boundary hit.
-/// If consumed < 10% of requested, we're at a scroll boundary.
-const BOUNDARY_CONSUMED_RATIO: f32 = 0.1;
+/// Minimum unconsumed delta (in pixels) to consider a boundary hit.
+const BOUNDARY_EPSILON: f32 = 0.5;
 
 /// Global animation ID counter for debugging
+#[cfg(debug_assertions)]
 static NEXT_FLING_ID: AtomicU64 = AtomicU64::new(1);
 
+#[cfg(debug_assertions)]
 fn next_fling_id() -> u64 {
     NEXT_FLING_ID.fetch_add(1, Ordering::Relaxed)
 }
@@ -31,6 +31,7 @@ fn next_fling_id() -> u64 {
 /// State for an active fling animation.
 struct FlingAnimationState {
     /// Unique ID for debugging
+    #[cfg(debug_assertions)]
     id: u64,
     /// Initial position when fling started (used as reference for decay calc).
     initial_value: f32,
@@ -38,8 +39,8 @@ struct FlingAnimationState {
     last_value: Cell<f32>,
     /// Initial velocity in px/sec.
     initial_velocity: f32,
-    /// Animation start time (real time, not frame time).
-    start_time: Instant,
+    /// Frame time when the animation started (used for deterministic timing).
+    start_frame_time_nanos: Cell<Option<u64>>,
     /// Decay animation spec for computing position/velocity.
     decay_spec: SplineBasedDecaySpec,
     /// Current frame callback registration (kept alive to continue animation).
@@ -96,16 +97,18 @@ impl FlingAnimation {
             return;
         }
 
-        // Use moderate friction for desktop scroll feel
-        // Android default 0.015 is too floaty, higher = more friction
-        let friction = 0.04;
+        // Match Jetpack Compose's default friction (ViewConfiguration.getScrollFriction).
+        let friction = DEFAULT_FLING_FRICTION;
         let calc = compose_animation::FlingCalculator::new(friction, density);
         let decay_spec = SplineBasedDecaySpec::with_calculator(calc);
-        
+
+        #[cfg(debug_assertions)]
         let fling_id = next_fling_id();
+        #[cfg(debug_assertions)]
         let expected_distance = calc.fling_distance(velocity);
+        #[cfg(debug_assertions)]
         let expected_duration = calc.fling_duration(velocity);
-        
+
         #[cfg(debug_assertions)]
         eprintln!(
             "[Fling#{}] START: initial={:.1}, velocity={:.1}px/s, expected_distance={:.1}px, expected_duration={:.0}ms",
@@ -114,11 +117,12 @@ impl FlingAnimation {
 
         // Create animation state
         let anim_state = FlingAnimationState {
+            #[cfg(debug_assertions)]
             id: fling_id,
             initial_value,
             last_value: Cell::new(initial_value),
             initial_velocity: velocity,
-            start_time: Instant::now(),
+            start_frame_time_nanos: Cell::new(None),
             decay_spec,
             registration: None,
             is_running: Cell::new(true),
@@ -137,7 +141,9 @@ impl FlingAnimation {
             #[cfg(debug_assertions)]
             eprintln!(
                 "[Fling#{}] CANCEL: was_running={}, total_delta_applied={:.1}",
-                state.id, state.is_running.get(), state.total_delta.get()
+                state.id,
+                state.is_running.get(),
+                state.total_delta.get()
             );
             // Mark as not running to prevent callback from doing anything
             state.is_running.set(false);
@@ -163,7 +169,7 @@ impl FlingAnimation {
         let frame_clock = self.frame_clock.clone();
         let on_end = RefCell::new(Some(on_end));
 
-        let registration = self.frame_clock.with_frame_nanos(move |_frame_time_nanos| {
+        let registration = self.frame_clock.with_frame_nanos(move |frame_time_nanos| {
             let should_continue = {
                 let state_guard = state.borrow();
                 let Some(anim_state) = state_guard.as_ref() else {
@@ -174,15 +180,29 @@ impl FlingAnimation {
 
                 if !anim_state.is_running.get() {
                     #[cfg(debug_assertions)]
-                    eprintln!("[Fling#{}] Frame callback: is_running=false, exiting", anim_state.id);
+                    eprintln!(
+                        "[Fling#{}] Frame callback: is_running=false, exiting",
+                        anim_state.id
+                    );
                     return;
                 }
 
+                #[cfg(debug_assertions)]
                 let fling_id = anim_state.id;
 
-                // Calculate elapsed time
-                let elapsed = anim_state.start_time.elapsed();
-                let play_time_nanos = elapsed.as_nanos() as i64;
+                let start_time = match anim_state.start_frame_time_nanos.get() {
+                    Some(value) => value,
+                    None => {
+                        anim_state
+                            .start_frame_time_nanos
+                            .set(Some(frame_time_nanos));
+                        frame_time_nanos
+                    }
+                };
+
+                // Calculate elapsed time from frame clock (deterministic).
+                let play_time_nanos = frame_time_nanos.saturating_sub(start_time) as i64;
+                #[cfg(debug_assertions)]
                 let play_time_ms = play_time_nanos / 1_000_000;
 
                 // Get current position from decay spec (relative to initial_value)
@@ -196,13 +216,14 @@ impl FlingAnimation {
                 let last = anim_state.last_value.get();
                 let delta = new_value - last;
                 anim_state.last_value.set(new_value);
-                anim_state.total_delta.set(anim_state.total_delta.get() + delta);
+                anim_state
+                    .total_delta
+                    .set(anim_state.total_delta.get() + delta);
 
                 // Check if animation is complete
-                let duration_nanos = anim_state.decay_spec.get_duration_nanos(
-                    anim_state.initial_value,
-                    anim_state.initial_velocity,
-                );
+                let duration_nanos = anim_state
+                    .decay_spec
+                    .get_duration_nanos(anim_state.initial_value, anim_state.initial_velocity);
 
                 let current_velocity = anim_state.decay_spec.get_velocity_from_nanos(
                     play_time_nanos,
@@ -219,7 +240,10 @@ impl FlingAnimation {
                     #[cfg(debug_assertions)]
                     eprintln!(
                         "[Fling#{}] FINISH at t={}ms: total_delta={:.1}, final_value={:.1}",
-                        fling_id, play_time_ms, anim_state.total_delta.get(), new_value
+                        fling_id,
+                        play_time_ms,
+                        anim_state.total_delta.get(),
+                        new_value
                     );
                 }
 
@@ -230,10 +254,9 @@ impl FlingAnimation {
                 } else {
                     0.0
                 };
-                
-                // Stop early if we hit a boundary (consumed much less than requested)
-                let hit_boundary = delta.abs() > BOUNDARY_MIN_DELTA 
-                    && consumed.abs() < delta.abs() * BOUNDARY_CONSUMED_RATIO;
+
+                // Stop early if we hit a boundary (unconsumed delta is meaningful).
+                let hit_boundary = (delta - consumed).abs() > BOUNDARY_EPSILON;
                 if hit_boundary {
                     anim_state.is_running.set(false);
                     #[cfg(debug_assertions)]
@@ -243,7 +266,7 @@ impl FlingAnimation {
                     );
                 }
 
-                !is_finished
+                !is_finished && !hit_boundary
             };
 
             if should_continue {
@@ -287,9 +310,30 @@ impl Clone for FlingAnimation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use compose_core::DefaultScheduler;
+    use compose_core::Runtime;
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::sync::Arc;
 
     #[test]
     fn test_min_velocity_threshold() {
-        assert_eq!(MIN_FLING_VELOCITY, 50.0);
+        assert_eq!(MIN_FLING_VELOCITY, 1.0);
+    }
+
+    #[test]
+    fn test_on_end_called_when_boundary_hit() {
+        let runtime = Runtime::new(Arc::new(DefaultScheduler));
+        let handle = runtime.handle();
+        let fling = FlingAnimation::new(handle.clone());
+        let finished = Rc::new(Cell::new(false));
+        let finished_flag = Rc::clone(&finished);
+
+        fling.start_fling(0.0, 10_000.0, 1.0, |_| 0.0, move || finished_flag.set(true));
+
+        handle.drain_frame_callbacks(0);
+        handle.drain_frame_callbacks(16_000_000);
+
+        assert!(finished.get());
     }
 }

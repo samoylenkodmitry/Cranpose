@@ -3,6 +3,7 @@
 //! This module provides the `AppLauncher` API that allows apps to configure
 //! and launch on multiple platforms without knowing platform-specific details.
 
+#[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
 use std::path::PathBuf;
 
 /// Configuration for application settings.
@@ -155,7 +156,10 @@ impl AppLauncher {
     ///         robot.click(100.0, 100.0).unwrap();
     ///         robot.exit().unwrap();
     ///     })
-    ///     })\n    ///     .run(|| {\n    ///         // Your composable UI here\n    ///     });\n    /// ```
+    ///     .run(|| {
+    ///         // Your composable UI here
+    ///     });
+    /// ```
     pub fn with_headless(mut self, headless: bool) -> Self {
         self.settings.headless = headless;
         self
@@ -182,6 +186,30 @@ impl AppLauncher {
     #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
     pub fn with_fps_counter(mut self, enabled: bool) -> Self {
         self.settings.dev_options.fps_counter = enabled;
+        self
+    }
+
+    /// Enable FPS counter overlay (desktop only).
+    ///
+    /// When enabled, displays a real-time FPS counter in the top-right corner.
+    /// This is rendered directly by the renderer (not via composition) so it
+    /// doesn't affect performance measurements.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use compose_app::AppLauncher;
+    ///
+    /// AppLauncher::new()
+    ///     .with_title("My App")
+    ///     .with_fps_counter(true)
+    ///     .run(|| {
+    ///         // Your composable UI here
+    ///     });
+    /// ```
+    #[cfg(not(all(feature = "desktop", feature = "renderer-wgpu")))]
+    pub fn with_fps_counter(self, enabled: bool) -> Self {
+        let _ = enabled;
         self
     }
 

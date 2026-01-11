@@ -14,12 +14,12 @@ use std::path::PathBuf;
 
 fn main() {
     let recording_path = PathBuf::from("no_fling_recording.rs");
-    
+
     println!("=== Recorder Test ===");
     println!("Recording to: {:?}", recording_path);
     println!("Interact with the app, then close it.");
     println!("The recording will be saved automatically.\n");
-    
+
     AppLauncher::new()
         .with_title("Recorder Test")
         .with_size(800, 600)

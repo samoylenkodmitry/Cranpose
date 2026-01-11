@@ -6,8 +6,8 @@
 //! - Provides stats meaningful for optimization
 
 use std::collections::VecDeque;
-use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::RwLock;
 use web_time::Instant;
 
 /// Global FPS tracker singleton
@@ -52,15 +52,15 @@ impl FpsTracker {
 
     fn record_frame(&mut self) {
         let now = Instant::now();
-        
+
         self.frame_times.push_back(now);
         self.frame_count += 1;
-        
+
         // Keep only recent frames
         while self.frame_times.len() > FRAME_HISTORY_SIZE {
             self.frame_times.pop_front();
         }
-        
+
         // Calculate FPS from frame history
         if self.frame_times.len() >= 2 {
             let first = self.frame_times.front().unwrap();
@@ -71,7 +71,7 @@ impl FpsTracker {
                 self.avg_frame_ms = duration * 1000.0 / (self.frame_times.len() - 1) as f32;
             }
         }
-        
+
         // Calculate recompositions per second (update every second)
         let elapsed = now.duration_since(self.last_recomp_calc).as_secs_f32();
         if elapsed >= 1.0 {

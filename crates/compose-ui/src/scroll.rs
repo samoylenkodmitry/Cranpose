@@ -15,7 +15,7 @@ use compose_foundation::{
 };
 use compose_ui_graphics::Size;
 use compose_ui_layout::LayoutModifierMeasureResult;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -47,6 +47,8 @@ pub(crate) struct ScrollStateInner {
     /// Callbacks to invalidate layout when scroll value changes
     /// Using HashMap to allow multiple listeners (e.g. real node + clones)
     invalidate_callbacks: RefCell<std::collections::HashMap<u64, Box<dyn Fn()>>>,
+    /// Tracks whether we need to invalidate once a callback is registered.
+    pending_invalidation: Cell<bool>,
 }
 
 impl ScrollState {
@@ -54,13 +56,17 @@ impl ScrollState {
     pub fn new(initial: f32) -> Self {
         let id = NEXT_SCROLL_STATE_ID.fetch_add(1, Ordering::Relaxed);
         #[cfg(debug_assertions)]
-        eprintln!("[ScrollState#{}] NEW created with initial={:.1}", id, initial);
+        eprintln!(
+            "[ScrollState#{}] NEW created with initial={:.1}",
+            id, initial
+        );
         Self {
             inner: Rc::new(ScrollStateInner {
                 id,
                 value: mutableStateOf(initial),
                 max_value: RefCell::new(0.0),
                 invalidate_callbacks: RefCell::new(std::collections::HashMap::new()),
+                pending_invalidation: Cell::new(false),
             }),
         }
     }
@@ -106,12 +112,13 @@ impl ScrollState {
             // Trigger layout invalidation callbacks
             let callbacks = self.inner.invalidate_callbacks.borrow();
             if callbacks.is_empty() {
-                // Fallback: if no callbacks registered (node_id not available during on_attach),
-                // use global layout invalidation. This is less efficient but ensures scroll works.
+                // Defer invalidation until a node registers a callback.
+                self.inner.pending_invalidation.set(true);
                 #[cfg(debug_assertions)]
-                eprintln!("[ScrollState#{}] No callbacks - using global invalidation", self.inner.id);
-                drop(callbacks); // Release borrow before calling external function
-                crate::request_layout_invalidation();
+                eprintln!(
+                    "[ScrollState#{}] No callbacks - deferring invalidation",
+                    self.inner.id
+                );
             } else {
                 for callback in callbacks.values() {
                     callback();
@@ -132,13 +139,25 @@ impl ScrollState {
         let max = self.max_value();
         let clamped = position.clamp(0.0, max);
         #[cfg(debug_assertions)]
-        eprintln!("[ScrollState#{}] scroll_to({:.1}) -> clamped={:.1}, max={:.1}", 
-            self.inner.id, position, clamped, max);
+        eprintln!(
+            "[ScrollState#{}] scroll_to({:.1}) -> clamped={:.1}, max={:.1}",
+            self.inner.id, position, clamped, max
+        );
         self.inner.value.set(clamped);
 
         // Trigger layout invalidation callbacks
-        for callback in self.inner.invalidate_callbacks.borrow().values() {
-            callback();
+        let callbacks = self.inner.invalidate_callbacks.borrow();
+        if callbacks.is_empty() {
+            self.inner.pending_invalidation.set(true);
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "[ScrollState#{}] No callbacks - deferring invalidation",
+                self.inner.id
+            );
+        } else {
+            for callback in callbacks.values() {
+                callback();
+            }
         }
     }
 
@@ -151,6 +170,11 @@ impl ScrollState {
             .invalidate_callbacks
             .borrow_mut()
             .insert(id, callback);
+        if self.inner.pending_invalidation.replace(false) {
+            if let Some(callback) = self.inner.invalidate_callbacks.borrow().get(&id) {
+                callback();
+            }
+        }
         id
     }
 
@@ -286,8 +310,11 @@ impl ModifierNode for ScrollNode {
 
         if let Some(node_id) = node_id {
             #[cfg(debug_assertions)]
-            eprintln!("[ScrollNode] on_attach: registering callback for node {:?}", node_id);
-            
+            eprintln!(
+                "[ScrollNode] on_attach: registering callback for node {:?}",
+                node_id
+            );
+
             let callback_id = self.state.add_invalidate_callback(Box::new(move || {
                 // Schedule scoped layout repass for this node
                 crate::schedule_layout_repass(node_id);
@@ -370,9 +397,12 @@ impl LayoutModifierNode for ScrollNode {
         // Step 6: Read scroll value and calculate offset
         // IMPORTANT: Use value_non_reactive() during measure to avoid triggering recomposition
         let scroll = self.state.value_non_reactive().clamp(0.0, max_scroll);
-        
+
         #[cfg(debug_assertions)]
-        eprintln!("[ScrollNode] measure() - scroll={:.1}, max_scroll={:.1}", scroll, max_scroll);
+        eprintln!(
+            "[ScrollNode] measure() - scroll={:.1}, max_scroll={:.1}",
+            scroll, max_scroll
+        );
 
         let abs_scroll = if self.reverse_scrolling {
             scroll - max_scroll

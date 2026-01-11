@@ -16,7 +16,6 @@ use std::sync::{
 struct GpuResources {
     surface: wgpu::Surface<'static>,
     device: Arc<wgpu::Device>,
-    queue: Arc<wgpu::Queue>,
     config: wgpu::SurfaceConfiguration,
 }
 
@@ -194,7 +193,7 @@ pub fn run(
                                     RawWindowHandle,
                                 };
 
-                                let mut window_handle = AndroidNdkWindowHandle::new(
+                                let window_handle = AndroidNdkWindowHandle::new(
                                     std::ptr::NonNull::new(native_window.ptr().as_ptr() as *mut _)
                                         .expect("NativeWindow pointer is null"),
                                 );
@@ -269,6 +268,7 @@ pub fn run(
                             // Get display density and update platform
                             let density = get_display_density(&app);
                             android_platform.set_scale_factor(density as f64);
+                            compose_ui::set_density(density);
                             log::info!("Display density: {:.2}x", density);
 
                             // Create or reuse app shell
@@ -309,6 +309,7 @@ pub fn run(
                                         surface_format,
                                     );
                                     shell.renderer().set_root_scale(density);
+                                    compose_ui::set_density(density);
                                     log::info!("Renderer reinitialized with new GPU resources");
                                 }
                             }
@@ -334,7 +335,6 @@ pub fn run(
                             gpu_resources = Some(GpuResources {
                                 surface,
                                 device,
-                                queue,
                                 config: surface_config,
                             });
 
@@ -352,6 +352,7 @@ pub fn run(
 
                             let density = get_display_density(&app);
                             android_platform.set_scale_factor(density as f64);
+                            compose_ui::set_density(density);
                             log::info!(
                                 "Window resized to {}x{} at {:.2}x density",
                                 width,
@@ -379,6 +380,7 @@ pub fn run(
 
                                     // Update renderer scale
                                     shell.renderer().set_root_scale(density);
+                                    compose_ui::set_density(density);
                                 }
                             }
                         }

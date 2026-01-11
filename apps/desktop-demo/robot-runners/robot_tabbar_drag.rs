@@ -30,7 +30,7 @@ fn main() {
             // Find "Lazy List" tab position BEFORE drag
             let lazy_tab_before = find_in_semantics(&robot, |elem| find_button(elem, "Lazy List"));
             let x_before = lazy_tab_before.map(|(x, _, _, _)| x);
-            
+
             println!("\n--- Test: Drag tabbar should scroll tabs ---");
             println!("  'Lazy List' tab X before drag: {:?}", x_before);
 
@@ -44,9 +44,12 @@ fn main() {
             if let Some((x, y, w, h)) = counter_tab {
                 let start_x = x + w / 2.0;
                 let start_y = y + h / 2.0;
-                
-                println!("  Starting drag from 'Counter App' at ({:.1}, {:.1})", start_x, start_y);
-                
+
+                println!(
+                    "  Starting drag from 'Counter App' at ({:.1}, {:.1})",
+                    start_x, start_y
+                );
+
                 // Perform drag: press, move LEFT, release
                 let _ = robot.mouse_move(start_x, start_y);
                 std::thread::sleep(Duration::from_millis(50));
@@ -61,7 +64,7 @@ fn main() {
                 let _ = robot.mouse_up();
                 std::thread::sleep(Duration::from_millis(200));
                 let _ = robot.wait_for_idle();
-                
+
                 println!("  Dragged 200px left");
             } else {
                 println!("  ✗ Could not find 'Counter App' tab to start drag");
@@ -71,7 +74,7 @@ fn main() {
             // Find "Lazy List" tab position AFTER drag
             let lazy_tab_after = find_in_semantics(&robot, |elem| find_button(elem, "Lazy List"));
             let x_after = lazy_tab_after.map(|(x, _, _, _)| x);
-            
+
             println!("  'Lazy List' tab X after drag: {:?}", x_after);
 
             // ===== CRITICAL ASSERTION =====
@@ -81,7 +84,10 @@ fn main() {
                     if delta > 50.0 {
                         println!("  ✓ PASS: Tab moved by {:.1}px", delta);
                     } else {
-                        println!("  ✗ FAIL: Tab only moved {:.1}px - TABBAR SCROLL BROKEN!", delta);
+                        println!(
+                            "  ✗ FAIL: Tab only moved {:.1}px - TABBAR SCROLL BROKEN!",
+                            delta
+                        );
                         println!("         Expected >50px movement from 200px drag");
                         std::process::exit(1);
                     }

@@ -4308,27 +4308,27 @@ fn emit_node_works_with_new_parent_having_empty_previous() {
 fn frame_callback_state_changes_are_visible_globally() {
     let (handle, _runtime) = runtime_handle();
     let state = MutableState::with_runtime(0i32, handle.clone());
-    
+
     // Register a frame callback that updates state
     let state_for_callback = state;
     let callback_ran = Rc::new(Cell::new(false));
     let callback_ran_for_closure = callback_ran.clone();
-    
+
     let _registration = handle.frame_clock().with_frame_nanos(move |_| {
         // This state change should be visible after drain_frame_callbacks completes
         state_for_callback.set(42);
         callback_ran_for_closure.set(true);
     });
-    
+
     // Before draining, state should be 0
     assert_eq!(state.get(), 0);
-    
+
     // Drain frame callbacks - this should apply state changes to global snapshot
     handle.drain_frame_callbacks(1);
-    
+
     // Verify callback ran
     assert!(callback_ran.get(), "Frame callback should have run");
-    
+
     // CRITICAL: State change from callback should be visible
     // Before the fix, this would return 0 because the write was isolated
     assert_eq!(
@@ -4343,24 +4343,24 @@ fn frame_callback_state_changes_are_visible_globally() {
 fn multiple_frame_callbacks_state_visibility() {
     let (handle, _runtime) = runtime_handle();
     let state = MutableState::with_runtime(0i32, handle.clone());
-    
+
     // First frame callback increments by 10
     let state1 = state;
     let _reg1 = handle.frame_clock().with_frame_nanos(move |_| {
         let current = state1.get();
         state1.set(current + 10);
     });
-    
+
     // Second frame callback increments by 5
     let state2 = state;
     let _reg2 = handle.frame_clock().with_frame_nanos(move |_| {
         let current = state2.get();
         state2.set(current + 5);
     });
-    
+
     // Drain all callbacks
     handle.drain_frame_callbacks(1);
-    
+
     // Both callbacks should have run and their changes should be visible
     // The first sets to 10, the second reads 10 and sets to 15
     assert_eq!(
@@ -4369,4 +4369,3 @@ fn multiple_frame_callbacks_state_visibility() {
         "Sequential frame callback state changes should accumulate correctly"
     );
 }
-

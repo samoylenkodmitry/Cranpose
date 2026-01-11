@@ -66,7 +66,7 @@ where
 }
 
 /// Development options for debugging and performance monitoring.
-/// 
+///
 /// These are rendered directly by the renderer (not via composition)
 /// to avoid affecting performance measurements.
 #[derive(Clone, Debug, Default)]
@@ -87,7 +87,7 @@ where
     pub fn new(mut renderer: R, root_key: Key, content: impl FnMut() + 'static) -> Self {
         // Initialize FPS tracking
         fps_monitor::init_fps_tracker();
-        
+
         let runtime = StdRuntime::new();
         let mut composition = Composition::with_runtime(MemoryApplier::new(), runtime.runtime());
         let build = content;
@@ -119,7 +119,7 @@ where
     }
 
     /// Set development options for debugging and performance monitoring.
-    /// 
+    ///
     /// The FPS counter and other overlays are rendered directly by the renderer
     /// (not via composition) to avoid affecting performance measurements.
     pub fn set_dev_options(&mut self, options: DevOptions) {
@@ -238,7 +238,10 @@ where
             match self.composition.process_invalid_scopes() {
                 Ok(changed) => {
                     #[cfg(debug_assertions)]
-                    eprintln!("[Update] process_invalid_scopes returned changed={}", changed);
+                    eprintln!(
+                        "[Update] process_invalid_scopes returned changed={}",
+                        changed
+                    );
                     if changed {
                         fps_monitor::record_recomposition();
                         self.layout_dirty = true;
@@ -710,22 +713,22 @@ where
     fn process_frame(&mut self) {
         // Record frame for FPS tracking
         fps_monitor::record_frame();
-        
+
         #[cfg(debug_assertions)]
         let frame_start = Instant::now();
-        
+
         self.run_layout_phase();
-        
+
         #[cfg(debug_assertions)]
         let after_layout = Instant::now();
-        
+
         self.run_dispatch_queues();
-        
+
         #[cfg(debug_assertions)]
         let after_dispatch = Instant::now();
-        
+
         self.run_render_phase();
-        
+
         #[cfg(debug_assertions)]
         {
             let after_render = Instant::now();
@@ -733,7 +736,7 @@ where
             let dispatch_ms = after_dispatch.duration_since(after_layout).as_secs_f64() * 1000.0;
             let render_ms = after_render.duration_since(after_dispatch).as_secs_f64() * 1000.0;
             let total_ms = after_render.duration_since(frame_start).as_secs_f64() * 1000.0;
-            
+
             // Only log if frame took more than 8ms (120fps target)
             if total_ms > 8.0 {
                 eprintln!(
@@ -758,6 +761,7 @@ where
             eprintln!("[Layout] Processing {} repass nodes", repass_nodes.len());
         }
         if had_repass_nodes {
+            let root = self.composition.root();
             let mut applier = self.composition.applier_mut();
             for node_id in repass_nodes {
                 #[cfg(debug_assertions)]
@@ -773,19 +777,22 @@ where
                     node_id,
                 );
             }
-            
+
             // IMPORTANT: Also mark the actual root as needing measure.
             // The bubble may not reach root if intermediate nodes (e.g., subcomposed slot roots
             // from SubcomposeLayout) have broken parent chains. This ensures the epoch
             // is incremented so SubcomposeLayout re-measures its items.
-            if let Some(root) = self.composition.root() {
+            if let Some(root) = root {
                 if let Ok(node) = applier.get_mut(root) {
                     node.mark_needs_measure();
                     #[cfg(debug_assertions)]
-                    eprintln!("[Layout REPASS] Also marked actual root {} needs_measure", root);
+                    eprintln!(
+                        "[Layout REPASS] Also marked actual root {} needs_measure",
+                        root
+                    );
                 }
             }
-            
+
             drop(applier);
             self.layout_dirty = true;
         }
@@ -977,12 +984,14 @@ where
         } else {
             self.renderer.scene_mut().clear();
         }
-        
+
         // Draw FPS overlay if enabled (directly by renderer, no composition)
         if self.dev_options.fps_counter {
             let stats = fps_monitor::fps_stats();
-            let text = format!("{:.0} FPS | {:.1}ms | {} recomp/s", 
-                stats.fps, stats.avg_ms, stats.recomps_per_second);
+            let text = format!(
+                "{:.0} FPS | {:.1}ms | {} recomp/s",
+                stats.fps, stats.avg_ms, stats.recomps_per_second
+            );
             self.renderer.draw_dev_overlay(&text, viewport_size);
         }
     }

@@ -158,7 +158,10 @@ impl InputRecorder {
         writeln!(file, "    AppLauncher::new()")?;
         writeln!(file, "        .with_headless(true)")?;
         writeln!(file, "        .with_test_driver(|robot| {{")?;
-        writeln!(file, "            std::thread::sleep(Duration::from_millis(500));")?;
+        writeln!(
+            file,
+            "            std::thread::sleep(Duration::from_millis(500));"
+        )?;
         writeln!(file, "            let _ = robot.wait_for_idle();")?;
         writeln!(file)?;
 
@@ -166,19 +169,23 @@ impl InputRecorder {
 
         for event in &self.events {
             let (time_ms, code) = match event {
-                RecordedEvent::MouseMove { time_ms, x, y } => {
-                    (*time_ms, format!("            let _ = robot.mouse_move({:.1}, {:.1});", x, y))
-                }
-                RecordedEvent::MouseDown { time_ms } => {
-                    (*time_ms, "            let _ = robot.mouse_down();".to_string())
-                }
-                RecordedEvent::MouseUp { time_ms } => {
-                    (*time_ms, "            let _ = robot.mouse_up();".to_string())
-                }
-                RecordedEvent::KeyDown { time_ms, key } => {
-                    (*time_ms, format!("            let _ = robot.send_key(\"{}\");", key))
-                }
-                RecordedEvent::KeyUp { time_ms, key: _ } => {
+                RecordedEvent::MouseMove { time_ms, x, y } => (
+                    *time_ms,
+                    format!("            let _ = robot.mouse_move({:.1}, {:.1});", x, y),
+                ),
+                RecordedEvent::MouseDown { time_ms } => (
+                    *time_ms,
+                    "            let _ = robot.mouse_down();".to_string(),
+                ),
+                RecordedEvent::MouseUp { time_ms } => (
+                    *time_ms,
+                    "            let _ = robot.mouse_up();".to_string(),
+                ),
+                RecordedEvent::KeyDown { time_ms, key } => (
+                    *time_ms,
+                    format!("            let _ = robot.send_key(\"{}\");", key),
+                ),
+                RecordedEvent::KeyUp { time_ms: _, key: _ } => {
                     // Skip key up for now - send_key does press+release
                     continue;
                 }
@@ -187,7 +194,11 @@ impl InputRecorder {
             // Add sleep for timing
             let delta = time_ms.saturating_sub(last_time_ms);
             if delta > 5 {
-                writeln!(file, "            std::thread::sleep(Duration::from_millis({}));", delta)?;
+                writeln!(
+                    file,
+                    "            std::thread::sleep(Duration::from_millis({}));",
+                    delta
+                )?;
             }
 
             writeln!(file, "{}", code)?;
@@ -195,11 +206,17 @@ impl InputRecorder {
         }
 
         writeln!(file)?;
-        writeln!(file, "            std::thread::sleep(Duration::from_secs(1));")?;
+        writeln!(
+            file,
+            "            std::thread::sleep(Duration::from_secs(1));"
+        )?;
         writeln!(file, "            let _ = robot.exit();")?;
         writeln!(file, "        }})")?;
         writeln!(file, "        .run(|| {{")?;
-        writeln!(file, "            // TODO: Replace with your app's composable")?;
+        writeln!(
+            file,
+            "            // TODO: Replace with your app's composable"
+        )?;
         writeln!(file, "            // desktop_app::app::combined_app();")?;
         writeln!(file, "        }});")?;
         writeln!(file, "}}")?;

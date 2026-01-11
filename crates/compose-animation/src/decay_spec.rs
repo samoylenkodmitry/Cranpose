@@ -239,7 +239,8 @@ impl FlingCalculator {
     pub fn fling_distance(&self, velocity: f32) -> f32 {
         let l = self.spline_deceleration(velocity);
         let decel_minus_one = DECELERATION_RATE as f64 - 1.0;
-        self.friction * self.magic_physical_coefficient
+        self.friction
+            * self.magic_physical_coefficient
             * (DECELERATION_RATE as f64 / decel_minus_one * l).exp() as f32
     }
 
@@ -266,10 +267,20 @@ pub trait FloatDecayAnimationSpec {
     fn abs_velocity_threshold(&self) -> f32;
 
     /// Get position at a given time.
-    fn get_value_from_nanos(&self, play_time_nanos: i64, initial_value: f32, initial_velocity: f32) -> f32;
+    fn get_value_from_nanos(
+        &self,
+        play_time_nanos: i64,
+        initial_value: f32,
+        initial_velocity: f32,
+    ) -> f32;
 
     /// Get velocity at a given time.
-    fn get_velocity_from_nanos(&self, play_time_nanos: i64, initial_value: f32, initial_velocity: f32) -> f32;
+    fn get_velocity_from_nanos(
+        &self,
+        play_time_nanos: i64,
+        initial_value: f32,
+        initial_velocity: f32,
+    ) -> f32;
 
     /// Get total animation duration in nanoseconds.
     fn get_duration_nanos(&self, initial_value: f32, initial_velocity: f32) -> i64;
@@ -291,7 +302,7 @@ impl SplineBasedDecaySpec {
             calculator: FlingCalculator::with_density(density),
         }
     }
-    
+
     /// Create a spec with a custom FlingCalculator.
     pub fn with_calculator(calculator: FlingCalculator) -> Self {
         Self { calculator }
@@ -300,17 +311,26 @@ impl SplineBasedDecaySpec {
 
 impl FloatDecayAnimationSpec for SplineBasedDecaySpec {
     fn abs_velocity_threshold(&self) -> f32 {
-        // Velocity below 0.5 px/sec is considered stopped
-        0.5
+        0.0
     }
 
-    fn get_value_from_nanos(&self, play_time_nanos: i64, initial_value: f32, initial_velocity: f32) -> f32 {
+    fn get_value_from_nanos(
+        &self,
+        play_time_nanos: i64,
+        initial_value: f32,
+        initial_velocity: f32,
+    ) -> f32 {
         let time_ms = play_time_nanos / 1_000_000;
         let info = self.calculator.fling_info(initial_velocity);
         initial_value + info.position(time_ms)
     }
 
-    fn get_velocity_from_nanos(&self, play_time_nanos: i64, _initial_value: f32, initial_velocity: f32) -> f32 {
+    fn get_velocity_from_nanos(
+        &self,
+        play_time_nanos: i64,
+        _initial_value: f32,
+        initial_velocity: f32,
+    ) -> f32 {
         let time_ms = play_time_nanos / 1_000_000;
         let info = self.calculator.fling_info(initial_velocity);
         info.velocity(time_ms)

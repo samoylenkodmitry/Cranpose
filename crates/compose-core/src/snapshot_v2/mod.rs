@@ -29,7 +29,7 @@ use crate::snapshot_pinning::{self, PinHandle};
 use crate::state::{StateObject, StateRecord};
 use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, Weak};
 
 mod global;
 mod mutable;
@@ -50,6 +50,50 @@ pub use transparent::{TransparentObserverMutableSnapshot, TransparentObserverSna
 pub(crate) use runtime::{allocate_snapshot, close_snapshot, with_runtime};
 #[cfg(test)]
 pub(crate) use runtime::{reset_runtime_for_tests, TestRuntimeGuard};
+
+static SNAPSHOT_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+thread_local! {
+    static SNAPSHOT_LOCK_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+struct SnapshotLockGuard {
+    _guard: Option<MutexGuard<'static, ()>>,
+}
+
+impl SnapshotLockGuard {
+    fn new() -> Self {
+        let mut guard = None;
+        SNAPSHOT_LOCK_DEPTH.with(|depth| {
+            let current = depth.get();
+            depth.set(current + 1);
+            if current == 0 {
+                guard = Some(
+                    SNAPSHOT_LOCK
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()),
+                );
+            }
+        });
+        Self { _guard: guard }
+    }
+}
+
+impl Drop for SnapshotLockGuard {
+    fn drop(&mut self) {
+        SNAPSHOT_LOCK_DEPTH.with(|depth| {
+            let current = depth.get();
+            if current > 0 {
+                depth.set(current - 1);
+            }
+        });
+    }
+}
+
+pub(crate) fn with_snapshot_lock<T>(f: impl FnOnce() -> T) -> T {
+    let _guard = SnapshotLockGuard::new();
+    f()
+}
 
 /// Observer that is called when a state object is read.
 pub type ReadObserver = Arc<dyn Fn(&dyn StateObject) + 'static>;
@@ -351,7 +395,9 @@ pub fn take_mutable_snapshot(
     read_observer: Option<ReadObserver>,
     write_observer: Option<WriteObserver>,
 ) -> Arc<MutableSnapshot> {
-    GlobalSnapshot::get_or_create().take_nested_mutable_snapshot(read_observer, write_observer)
+    with_snapshot_lock(|| {
+        GlobalSnapshot::get_or_create().take_nested_mutable_snapshot(read_observer, write_observer)
+    })
 }
 
 /// Take a transparent observer mutable snapshot with optional observers.
@@ -366,28 +412,30 @@ pub fn take_transparent_observer_mutable_snapshot(
     read_observer: Option<ReadObserver>,
     write_observer: Option<WriteObserver>,
 ) -> Arc<TransparentObserverMutableSnapshot> {
-    let parent = current_snapshot();
-    match parent {
-        Some(AnySnapshot::TransparentMutable(transparent)) if transparent.can_reuse() => {
-            // Reuse the existing transparent snapshot
-            transparent
+    with_snapshot_lock(|| {
+        let parent = current_snapshot();
+        match parent {
+            Some(AnySnapshot::TransparentMutable(transparent)) if transparent.can_reuse() => {
+                // Reuse the existing transparent snapshot
+                transparent
+            }
+            _ => {
+                // Create a new transparent snapshot using the current snapshot's ID
+                // Transparent snapshots do NOT allocate new IDs!
+                let current = current_snapshot()
+                    .unwrap_or_else(|| AnySnapshot::Global(GlobalSnapshot::get_or_create()));
+                let id = current.snapshot_id();
+                let invalid = current.invalid();
+                TransparentObserverMutableSnapshot::new(
+                    id,
+                    invalid,
+                    read_observer,
+                    write_observer,
+                    None,
+                )
+            }
         }
-        _ => {
-            // Create a new transparent snapshot using the current snapshot's ID
-            // Transparent snapshots do NOT allocate new IDs!
-            let current = current_snapshot()
-                .unwrap_or_else(|| AnySnapshot::Global(GlobalSnapshot::get_or_create()));
-            let id = current.snapshot_id();
-            let invalid = current.invalid();
-            TransparentObserverMutableSnapshot::new(
-                id,
-                invalid,
-                read_observer,
-                write_observer,
-                None,
-            )
-        }
-    }
+    })
 }
 
 /// Allocate a new record identifier that is distinct from any active snapshot id.

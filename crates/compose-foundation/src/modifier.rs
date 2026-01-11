@@ -1080,6 +1080,35 @@ where
     result
 }
 
+fn request_auto_invalidations(
+    context: &mut dyn ModifierNodeContext,
+    capabilities: NodeCapabilities,
+) {
+    if capabilities.is_empty() {
+        return;
+    }
+
+    context.push_active_capabilities(capabilities);
+
+    if capabilities.contains(NodeCapabilities::LAYOUT) {
+        context.invalidate(InvalidationKind::Layout);
+    }
+    if capabilities.contains(NodeCapabilities::DRAW) {
+        context.invalidate(InvalidationKind::Draw);
+    }
+    if capabilities.contains(NodeCapabilities::POINTER_INPUT) {
+        context.invalidate(InvalidationKind::PointerInput);
+    }
+    if capabilities.contains(NodeCapabilities::SEMANTICS) {
+        context.invalidate(InvalidationKind::Semantics);
+    }
+    if capabilities.contains(NodeCapabilities::FOCUS) {
+        context.invalidate(InvalidationKind::Focus);
+    }
+
+    context.pop_active_capabilities();
+}
+
 /// Attaches a node tree by calling on_attach for all unattached nodes.
 ///
 /// # Safety
@@ -1363,10 +1392,12 @@ impl ModifierNodeChain {
 
                 // Optimize updates: only call update_node if element changed OR
                 // if the element type explicitly requests forced updates
-                if !same_element || element.requires_update() {
+                let needs_update = !same_element || element.requires_update();
+                if needs_update {
                     element.update_node(&mut **entry.node.borrow_mut());
                     entry.element = element.clone();
                     entry.hash_code = hash_code;
+                    request_auto_invalidations(context, capabilities);
                 }
 
                 // Always update metadata
@@ -1390,6 +1421,7 @@ impl ModifierNodeChain {
                 );
                 attach_node_tree(&mut **entry.node.borrow_mut(), context);
                 element.update_node(&mut **entry.node.borrow_mut());
+                request_auto_invalidations(context, capabilities);
                 new_entries.push(entry);
             }
         }

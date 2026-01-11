@@ -59,7 +59,7 @@ fn main() {
             // Find first item (Hello #0) BEFORE scroll
             let hello_0_before = find_in_semantics(&robot, |elem| find_text(elem, "Hello #0"));
             let y_before = hello_0_before.map(|(_, y, _, _)| y);
-            
+
             println!("\n--- Test: Scroll should move content visually ---");
             println!("  Item 'Hello #0' Y position before scroll: {:?}", y_before);
 
@@ -87,7 +87,7 @@ fn main() {
             // Find first item AFTER scroll
             let hello_0_after = find_in_semantics(&robot, |elem| find_text(elem, "Hello #0"));
             let y_after = hello_0_after.map(|(_, y, _, _)| y);
-            
+
             println!("  Item 'Hello #0' Y position after scroll: {:?}", y_after);
 
             // ===== CRITICAL ASSERTION =====
@@ -100,7 +100,10 @@ fn main() {
                         println!("  ✓ PASS: Item moved by {:.1}px", delta);
                     } else {
                         // BAD: item didn't move - scroll is visually broken!
-                        println!("  ✗ FAIL: Item only moved {:.1}px - SCROLL IS VISUALLY BROKEN!", delta);
+                        println!(
+                            "  ✗ FAIL: Item only moved {:.1}px - SCROLL IS VISUALLY BROKEN!",
+                            delta
+                        );
                         println!("         This indicates layout caches aren't being invalidated");
                         println!("         when scroll position changes.");
                         std::process::exit(1);

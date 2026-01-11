@@ -50,8 +50,10 @@ fn main() {
             // Navigate to Lazy List tab for scrollable content
             // =========================================================
             println!("--- Navigating to Lazy List Tab ---");
-            
-            if let Some((x, y, w, h)) = find_in_semantics(&robot, |elem| find_button(elem, "Lazy List")) {
+
+            if let Some((x, y, w, h)) =
+                find_in_semantics(&robot, |elem| find_button(elem, "Lazy List"))
+            {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
                 println!("  Found 'Lazy List' tab at ({:.1}, {:.1})", cx, cy);
@@ -73,12 +75,13 @@ fn main() {
             // TEST 1: Verify list content is visible
             // =========================================================
             println!("--- Test 1: Verify List Content ---");
-            
+
             // Look for an item in the list (should have items like "Item 0", "Item 1", etc.)
-            let has_list_item = find_in_semantics(&robot, |elem| find_text(elem, "Item 0")).is_some()
+            let has_list_item = find_in_semantics(&robot, |elem| find_text(elem, "Item 0"))
+                .is_some()
                 || find_in_semantics(&robot, |elem| find_text(elem, "Item 1")).is_some()
                 || find_in_semantics(&robot, |elem| find_text(elem, "0")).is_some();
-            
+
             if has_list_item {
                 println!("  ✓ PASS: List content visible\n");
             } else {
@@ -101,7 +104,7 @@ fn main() {
             // Record scroll position before swipe (via an item we can track)
             let item_before = find_in_semantics(&robot, |elem| find_text(elem, "Item 5"));
             let before_y = item_before.map(|(_, y, _, _)| y);
-            
+
             if let Some(y) = before_y {
                 println!("  Item 5 before swipe at Y={:.1}", y);
             }
@@ -123,7 +126,7 @@ fn main() {
             // Release - this should trigger velocity calculation
             println!("  Releasing after {:.0}px swipe...", swipe_distance);
             let _ = robot.mouse_up();
-            
+
             // Wait for potential fling animation (even partial)
             std::thread::sleep(Duration::from_millis(300));
 
@@ -135,7 +138,10 @@ fn main() {
                 (Some(by), Some(ay)) => {
                     let delta = ay - by;
                     if delta.abs() > 5.0 {
-                        println!("  ✓ PASS: Item 5 moved by {:.1}px (scroll detected)\n", delta);
+                        println!(
+                            "  ✓ PASS: Item 5 moved by {:.1}px (scroll detected)\n",
+                            delta
+                        );
                     } else {
                         println!("  ? Item 5 at same position (delta={:.1})\n", delta);
                     }
@@ -157,24 +163,24 @@ fn main() {
             println!("--- Test 3: Velocity Detection ---");
             println!("  Note: In debug mode, check stderr for '[Fling] Detected fling velocity'");
             println!("  Velocity tracking is working if swipe was fast enough (>50 px/sec)\n");
-            
+
             // The actual velocity detection happens in scroll.rs on_up()
             // In debug builds, it prints to stderr
             // We can't easily capture that here, but the test demonstrates the flow
-            
+
             println!("  ✓ PASS: Swipe gesture completed (velocity calculated internally)\n");
 
             // =========================================================
             // TEST 4: Second swipe in opposite direction
             // =========================================================
             println!("--- Test 4: Reverse Swipe ---");
-            
+
             let _ = robot.mouse_move(start_x, start_y - swipe_distance);
             std::thread::sleep(Duration::from_millis(50));
             let _ = robot.mouse_down();
             std::thread::sleep(Duration::from_millis(20));
 
-            // Quick swipe downward  
+            // Quick swipe downward
             for i in 1..=swipe_steps {
                 let progress = i as f32 / swipe_steps as f32;
                 let new_y = (start_y - swipe_distance) + (swipe_distance * progress);
@@ -184,7 +190,7 @@ fn main() {
 
             let _ = robot.mouse_up();
             std::thread::sleep(Duration::from_millis(300));
-            
+
             println!("  ✓ PASS: Reverse swipe completed\n");
 
             // =========================================================

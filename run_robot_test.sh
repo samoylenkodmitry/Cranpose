@@ -89,7 +89,12 @@ echo "============================================" | tee -a "$LOG_FILE"
 
 # Create temp directory for individual test results
 RESULTS_DIR=$(mktemp -d)
-trap "rm -rf $RESULTS_DIR" EXIT
+cleanup_results_dir() {
+    if [ -d "$RESULTS_DIR" ]; then
+        rm -r -- "$RESULTS_DIR"
+    fi
+}
+trap cleanup_results_dir EXIT
 
 # Function to run a single test
 run_test() {
@@ -156,7 +161,7 @@ for example in "${EXAMPLES[@]}"; do
     output_file="$RESULTS_DIR/$example.output"
     
     # Wait for result file (in case of race condition)
-    local wait_count=0
+    wait_count=0
     while [ ! -f "$result_file" ] && [ $wait_count -lt 600 ]; do
         sleep 0.1
         ((wait_count++))

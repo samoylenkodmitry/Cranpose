@@ -210,8 +210,11 @@ impl LayoutNode {
                 use std::sync::atomic::{AtomicU64, Ordering};
                 static SET_MOD_CLEAR_COUNT: AtomicU64 = AtomicU64::new(0);
                 let count = SET_MOD_CLEAR_COUNT.fetch_add(1, Ordering::Relaxed);
-                if count % 50 == 0 {
-                    eprintln!("[LayoutNode] set_modifier cleared cache (modifier changed): count={}", count + 1);
+                if count.is_multiple_of(50) {
+                    eprintln!(
+                        "[LayoutNode] set_modifier cleared cache (modifier changed): count={}",
+                        count + 1
+                    );
                 }
             }
             self.cache.clear();
@@ -246,6 +249,9 @@ impl LayoutNode {
                 InvalidationKind::Layout => {
                     if self.has_layout_modifier_nodes() {
                         self.mark_needs_measure();
+                        if let Some(id) = self.id.get() {
+                            crate::schedule_layout_repass(id);
+                        }
                     }
                 }
                 InvalidationKind::Draw => {

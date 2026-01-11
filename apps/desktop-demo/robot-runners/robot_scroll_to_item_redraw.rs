@@ -47,7 +47,7 @@ fn main() {
             let (bx, by, bw, bh) =
                 find_button_in_semantics(&robot, "Jump to 50").expect("Jump to 50 button missing");
             robot.click(bx + bw / 2.0, by + bh / 2.0).ok();
-            
+
             // Wait a bit for the frame to render (but NOT for user interaction)
             std::thread::sleep(Duration::from_millis(200));
 

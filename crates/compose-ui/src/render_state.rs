@@ -1,7 +1,7 @@
 use compose_core::NodeId;
 use std::cell::RefCell;
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 thread_local! {
     static LAYOUT_REPASS_MANAGER: RefCell<LayoutRepassManager> =
@@ -83,6 +83,29 @@ pub fn take_layout_repass_nodes() -> Vec<NodeId> {
 static RENDER_INVALIDATED: AtomicBool = AtomicBool::new(false);
 static POINTER_INVALIDATED: AtomicBool = AtomicBool::new(false);
 static FOCUS_INVALIDATED: AtomicBool = AtomicBool::new(false);
+static DENSITY_BITS: AtomicU32 = AtomicU32::new(f32::to_bits(1.0));
+
+/// Returns the current density scale factor (logical px per dp).
+pub fn current_density() -> f32 {
+    f32::from_bits(DENSITY_BITS.load(Ordering::Relaxed))
+}
+
+/// Updates the current density scale factor.
+///
+/// This triggers a global layout invalidation when the value changes because
+/// density impacts layout, text measurement, and input thresholds.
+pub fn set_density(density: f32) {
+    let normalized = if density.is_finite() && density > 0.0 {
+        density
+    } else {
+        1.0
+    };
+    let new_bits = normalized.to_bits();
+    let old_bits = DENSITY_BITS.swap(new_bits, Ordering::Relaxed);
+    if old_bits != new_bits {
+        request_layout_invalidation();
+    }
+}
 
 /// Requests that the renderer rebuild the current scene.
 pub fn request_render_invalidation() {

@@ -18,4 +18,3 @@ pub mod prelude {
     };
     pub use crate::decay_spec::{FlingCalculator, FloatDecayAnimationSpec, SplineBasedDecaySpec};
 }
-

@@ -534,8 +534,11 @@ struct App {
 impl App {
     fn new(mut settings: AppSettings, content: impl FnMut() + 'static) -> Self {
         // Create recorder if recording is enabled
-        let recorder = settings.record_to.take().map(crate::recorder::InputRecorder::new);
-        
+        let recorder = settings
+            .record_to
+            .take()
+            .map(crate::recorder::InputRecorder::new);
+
         Self {
             settings,
             content: Some(Box::new(content)),
@@ -699,14 +702,15 @@ impl ApplicationHandler for App {
         renderer.init_gpu(Arc::new(device), Arc::new(queue), surface_format);
         let initial_scale = window.scale_factor();
         renderer.set_root_scale(initial_scale as f32);
+        compose_ui::set_density(initial_scale as f32);
 
         // Take the content closure (can only be called once)
         let content = self.content.take().expect("content already taken");
         let mut app = AppShell::new(renderer, default_root_key(), content);
-        
+
         // Apply dev options (FPS counter, etc.)
         app.set_dev_options(self.settings.dev_options.clone());
-        
+
         let mut platform = DesktopWinitPlatform::default();
         platform.set_scale_factor(initial_scale);
 
@@ -774,6 +778,7 @@ impl ApplicationHandler for App {
             } => {
                 platform.set_scale_factor(scale_factor);
                 app.renderer().set_root_scale(scale_factor as f32);
+                compose_ui::set_density(scale_factor as f32);
 
                 let new_size = surface_size_writer
                     .surface_size()
