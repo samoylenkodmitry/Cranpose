@@ -51,6 +51,8 @@ pub use local::{ModifierLocalKey, ModifierLocalReadScope};
 pub use pointer_input::{AwaitPointerEventScope, PointerInputScope};
 pub use semantics::{collect_semantics_from_chain, collect_semantics_from_modifier};
 pub use slices::{collect_modifier_slices, collect_slices_from_modifier, ModifierNodeSlices};
+// Test accessibility for fling velocity
+pub use scroll::{last_fling_velocity, reset_last_fling_velocity};
 
 use crate::modifier_nodes::ClipToBoundsElement;
 use focus::{FocusRequesterElement, FocusTargetElement};

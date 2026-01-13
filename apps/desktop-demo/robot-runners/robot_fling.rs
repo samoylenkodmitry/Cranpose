@@ -14,6 +14,7 @@
 
 use compose_app::AppLauncher;
 use compose_testing::{find_button, find_in_semantics, find_text};
+use compose_ui::{last_fling_velocity, reset_last_fling_velocity};
 use desktop_app::app;
 use std::time::Duration;
 
@@ -101,6 +102,9 @@ fn main() {
             let swipe_steps = 5;
             let step_delay_ms = 10; // Fast swipe - 10ms between steps = ~900 px/sec
 
+            // Reset velocity tracker before swipe
+            reset_last_fling_velocity();
+
             // Record scroll position before swipe (via an item we can track)
             let item_before = find_in_semantics(&robot, |elem| find_text(elem, "Item 5"));
             let before_y = item_before.map(|(_, y, _, _)| y);
@@ -158,22 +162,12 @@ fn main() {
             }
 
             // =========================================================
-            // TEST 3: Verify velocity was detected (check stderr output)
+            // TEST 3: Reverse swipe with velocity assertion
             // =========================================================
-            println!("--- Test 3: Velocity Detection ---");
-            println!("  Note: In debug mode, check stderr for '[Fling] Detected fling velocity'");
-            println!("  Velocity tracking is working if swipe was fast enough (>50 px/sec)\n");
+            println!("--- Test 3: Reverse Swipe with Velocity Check ---");
 
-            // The actual velocity detection happens in scroll.rs on_up()
-            // In debug builds, it prints to stderr
-            // We can't easily capture that here, but the test demonstrates the flow
-
-            println!("  ✓ PASS: Swipe gesture completed (velocity calculated internally)\n");
-
-            // =========================================================
-            // TEST 4: Second swipe in opposite direction
-            // =========================================================
-            println!("--- Test 4: Reverse Swipe ---");
+            // Reset velocity before the reverse swipe
+            reset_last_fling_velocity();
 
             let _ = robot.mouse_move(start_x, start_y - swipe_distance);
             std::thread::sleep(Duration::from_millis(50));
@@ -191,7 +185,16 @@ fn main() {
             let _ = robot.mouse_up();
             std::thread::sleep(Duration::from_millis(300));
 
-            println!("  ✓ PASS: Reverse swipe completed\n");
+            // Check velocity was detected
+            let velocity = last_fling_velocity();
+            println!("  Measured fling velocity: {:.1} px/sec", velocity);
+
+            if velocity.abs() > 50.0 {
+                println!("  ✓ PASS: Velocity detected ({:.1} px/sec > 50 threshold)\n", velocity);
+            } else {
+                println!("  ✗ FAIL: Velocity too low ({:.1} px/sec, expected > 50)\n", velocity);
+                all_passed = false;
+            }
 
             // =========================================================
             // Summary

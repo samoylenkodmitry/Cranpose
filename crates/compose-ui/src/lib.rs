@@ -88,6 +88,8 @@ pub use render_state::{
 };
 pub use renderer::{HeadlessRenderer, PaintLayer, RecordedRenderScene, RenderOp};
 pub use scroll::{ScrollElement, ScrollNode, ScrollState};
+// Test utilities for fling velocity verification
+pub use modifier::{last_fling_velocity, reset_last_fling_velocity};
 pub use subcompose_layout::{
     Constraints, MeasureResult, Placement, SubcomposeLayoutNode, SubcomposeLayoutScope,
     SubcomposeMeasureScope, SubcomposeMeasureScopeImpl,

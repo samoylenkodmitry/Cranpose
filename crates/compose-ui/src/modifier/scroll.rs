@@ -28,6 +28,36 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use web_time::Instant;
 
+// ============================================================================
+// Test Accessibility: Last Fling Velocity
+// ============================================================================
+
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// Stores the last fling velocity calculated for test verification.
+/// Uses atomic storage so the test driver thread can read values set by the UI thread.
+static LAST_FLING_VELOCITY: AtomicU32 = AtomicU32::new(0);
+
+/// Returns the last fling velocity calculated (in px/sec).
+///
+/// This is primarily for testing - allows robot tests to verify that
+/// velocity detection is working correctly instead of relying on log output.
+pub fn last_fling_velocity() -> f32 {
+    f32::from_bits(LAST_FLING_VELOCITY.load(Ordering::SeqCst))
+}
+
+/// Resets the last fling velocity to 0.0.
+///
+/// Call this at the start of a test to ensure clean state.
+pub fn reset_last_fling_velocity() {
+    LAST_FLING_VELOCITY.store(0.0f32.to_bits(), Ordering::SeqCst);
+}
+
+/// Internal: Set the last fling velocity (called from gesture detection).
+fn set_last_fling_velocity(velocity: f32) {
+    LAST_FLING_VELOCITY.store(velocity.to_bits(), Ordering::SeqCst);
+}
+
 /// Local gesture state for scroll drag handling.
 ///
 /// This is NOT part of `ScrollState` to keep the scroll model pure.
@@ -396,6 +426,11 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
 
             (was_dragging, velocity, start_fling, existing_fling)
         };
+
+        // Always record velocity for test accessibility (even if below fling threshold)
+        if allow_fling && was_dragging {
+            set_last_fling_velocity(velocity);
+        }
 
         // Start fling animation if velocity is significant
         if start_fling {

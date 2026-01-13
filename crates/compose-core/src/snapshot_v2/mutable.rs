@@ -420,20 +420,11 @@ impl MutableSnapshot {
             self.applied.set(true);
             self.state.dispose();
 
-            // TODO(Phase 2B): Cleanup during apply is temporarily disabled due to coordination
-            // issues with sibling snapshots. When multiple sibling snapshots apply sequentially,
-            // cleanup from the first can invalidate records that the second needs for its merge.
+            // Record cleanup after apply is currently disabled due to performance concerns.
+            // Re-enabling this caused a significant performance regression during lazy list
+            // scrolling. Further investigation needed before re-enabling.
             //
-            // The Kotlin implementation handles this via a global sync{} lock that serializes
-            // all snapshot operations. We now mirror that with a global snapshot lock, but the
-            // cleanup remains disabled until record reuse and sibling snapshot coordination are
-            // fully validated under load.
-            //
-            // For now, cleanup only runs during advanceGlobalSnapshot(), which is sufficient
-            // for most use cases. Per-apply cleanup will be re-enabled in a future phase once
-            // proper sibling snapshot coordination is implemented.
-            //
-            // Disabled code:
+            // TODO: Profile cleanup impact and optimize before re-enabling:
             // for (_, state, _) in &applied_info {
             //     super::process_for_unused_records_locked(state);
             // }
