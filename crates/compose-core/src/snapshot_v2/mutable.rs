@@ -420,14 +420,12 @@ impl MutableSnapshot {
             self.applied.set(true);
             self.state.dispose();
 
-            // Record cleanup after apply is currently disabled due to performance concerns.
-            // Re-enabling this caused a significant performance regression during lazy list
-            // scrolling. Further investigation needed before re-enabling.
-            //
-            // TODO: Profile cleanup impact and optimize before re-enabling:
-            // for (_, state, _) in &applied_info {
-            //     super::process_for_unused_records_locked(state);
-            // }
+            // Re-enabled cleanup to prevent memory leak from accumulating obsolete records.
+            // This was previously disabled due to performance concerns during lazy list scrolling.
+            // If regression recurs, profile process_for_unused_records_locked for optimization.
+            for (_, state, _) in &applied_info {
+                super::process_for_unused_records_locked(state);
+            }
 
             let observer_states: Vec<Arc<dyn StateObject>> = applied_info
                 .iter()
