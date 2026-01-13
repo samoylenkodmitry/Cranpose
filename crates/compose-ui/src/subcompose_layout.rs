@@ -743,10 +743,14 @@ impl SubcomposeLayoutNodeHandle {
 
         let slots_host = Rc::new(SlotsHost::new(slots));
         let constraints_copy = constraints;
-        // Use subcompose_slot instead of subcompose_in to preserve slot table across
-        // measurement passes. This prevents lazy list item groups from being wiped and
-        // recreated on every scroll, which caused thrashing.
-        // TODO: validate this architecture with JC kotlin codebase
+        // Architecture Note: Using subcompose_slot (not subcompose_in) to preserve the
+        // SlotTable across measurement passes. This matches JC's SubcomposeLayout behavior
+        // where `subcompose()` is called during measure and the slot table persists between
+        // frames. Without this, lazy list item groups would be wiped and recreated on every
+        // scroll frame, causing O(visible_items) recomposition overhead ("thrashing").
+        //
+        // Reference: LazyLayoutMeasureScope.subcompose() in JC reuses existing slots by key,
+        // and SubcomposeLayoutState holds `slotIdToNode` map across measurements.
         let result = composer.subcompose_slot(&slots_host, |inner_composer| {
             let mut scope = SubcomposeMeasureScopeImpl::new(
                 inner_composer.clone(),

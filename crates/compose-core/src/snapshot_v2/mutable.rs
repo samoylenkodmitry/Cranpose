@@ -420,11 +420,14 @@ impl MutableSnapshot {
             self.applied.set(true);
             self.state.dispose();
 
-            // Re-enabled cleanup to prevent memory leak from accumulating obsolete records.
-            // This was previously disabled due to performance concerns during lazy list scrolling.
-            // If regression recurs, profile process_for_unused_records_locked for optimization.
+            // Track modified states for future cleanup instead of cleaning immediately.
+            // This defers the O(record_chain) work to check_and_overwrite_unused_records_locked,
+            // which runs periodically (e.g., on global snapshot advance) rather than on every apply.
+            // This prevents performance regression during rapid scrolling while still preventing leaks.
             for (_, state, _) in &applied_info {
-                super::process_for_unused_records_locked(state);
+                super::EXTRA_STATE_OBJECTS.with(|cell| {
+                    cell.borrow_mut().add_trait_object(state);
+                });
             }
 
             let observer_states: Vec<Arc<dyn StateObject>> = applied_info

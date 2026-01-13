@@ -35,7 +35,14 @@ use web_time::Instant;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Stores the last fling velocity calculated for test verification.
-/// Uses atomic storage so the test driver thread can read values set by the UI thread.
+///
+/// Uses `AtomicU32` (not thread_local) because the test driver runs on a separate
+/// thread from the UI thread, and the test needs to read values written by the UI.
+///
+/// # Parallel Test Safety
+/// This global state means parallel tests could interfere with each other.
+/// For test isolation, run robot tests sequentially (cargo test -- --test-threads=1)
+/// or use test harnesses that reset state between runs.
 static LAST_FLING_VELOCITY: AtomicU32 = AtomicU32::new(0);
 
 /// Returns the last fling velocity calculated (in px/sec).
