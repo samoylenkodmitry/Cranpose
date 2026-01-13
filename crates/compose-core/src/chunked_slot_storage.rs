@@ -106,19 +106,19 @@ impl ChunkedSlot {
 
     fn as_value<T: 'static>(&self) -> &T {
         match self {
-            ChunkedSlot::Value { data, .. } => {
-                data.downcast_ref::<T>().expect("slot value type mismatch")
-            }
-            _ => panic!("slot is not a value"),
+            ChunkedSlot::Value { data, .. } => data
+                .downcast_ref::<T>()
+                .expect("slot value type mismatch: requested type does not match stored type"),
+            _ => panic!("slot is not a value: expected Value variant, got {:?}", std::mem::discriminant(self)),
         }
     }
 
     fn as_value_mut<T: 'static>(&mut self) -> &mut T {
         match self {
-            ChunkedSlot::Value { data, .. } => {
-                data.downcast_mut::<T>().expect("slot value type mismatch")
-            }
-            _ => panic!("slot is not a value"),
+            ChunkedSlot::Value { data, .. } => data
+                .downcast_mut::<T>()
+                .expect("slot value type mismatch: requested type does not match stored type"),
+            _ => panic!("slot is not a value: expected Value variant"),
         }
     }
 }
@@ -216,7 +216,9 @@ impl ChunkedSlotStorage {
         // Fast path: if current slot is a gap (any gap, regardless of anchor), reuse it
         if let Some(existing) = self.get_slot(self.cursor) {
             if matches!(existing, ChunkedSlot::Gap { .. }) {
-                *self.get_slot_mut(self.cursor).unwrap() = slot;
+                *self.get_slot_mut(self.cursor).expect(
+                    "insert_at_cursor: slot must exist after ensure_capacity"
+                ) = slot;
                 // Update group end to account for this slot
                 if let Some(frame) = self.group_stack.last_mut() {
                     if self.cursor >= frame.end {
@@ -235,7 +237,9 @@ impl ChunkedSlotStorage {
             self.shift_across_chunks(self.cursor, gap_pos);
 
             // Now insert at cursor
-            *self.get_slot_mut(self.cursor).unwrap() = slot;
+            *self.get_slot_mut(self.cursor).expect(
+                "insert_at_cursor: slot must exist after shift"
+            ) = slot;
 
             // Update all group frames that overlap with the shifted region.
             // This assumes frames are in creation order and fully cover their ranges.
@@ -254,7 +258,9 @@ impl ChunkedSlotStorage {
         } else {
             // No gap nearby: just overwrite (fallback behavior)
             if self.cursor < self.total_slots() {
-                *self.get_slot_mut(self.cursor).unwrap() = slot;
+                *self.get_slot_mut(self.cursor).expect(
+                    "insert_at_cursor: slot must exist for overwrite"
+                ) = slot;
                 if let Some(frame) = self.group_stack.last_mut() {
                     if self.cursor >= frame.end {
                         frame.end = self.cursor + 1;
@@ -409,7 +415,9 @@ impl ChunkedSlotStorage {
                     };
                     let scope = *group_scope;
                     let len = *group_len;
-                    *self.get_slot_mut(self.cursor).unwrap() = ChunkedSlot::Group {
+                    *self.get_slot_mut(self.cursor).expect(
+                        "start_group: slot must exist for gap restoration"
+                    ) = ChunkedSlot::Group {
                         key,
                         anchor,
                         len,

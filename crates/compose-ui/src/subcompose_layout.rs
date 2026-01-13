@@ -162,6 +162,7 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
     fn record_error(&self, err: NodeError) {
         let mut slot = self.error.borrow_mut();
         if slot.is_none() {
+            eprintln!("[SubcomposeLayout] Error suppressed: {:?}", err);
             *slot = Some(err);
         }
     }
@@ -186,6 +187,7 @@ impl<'a> SubcomposeMeasureScope for SubcomposeMeasureScopeImpl<'a> {
 
     fn measure(&mut self, child: SubcomposeChild, constraints: Constraints) -> SubcomposePlaceable {
         if self.error.borrow().is_some() {
+            // Already in error state - return zero-size placeable
             return SubcomposePlaceable::new(child.node_id, Size::default());
         }
 
