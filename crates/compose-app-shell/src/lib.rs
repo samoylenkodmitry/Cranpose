@@ -742,7 +742,6 @@ where
         // Result: O(subtree) remeasurement, not O(app).
         let repass_nodes = compose_ui::take_layout_repass_nodes();
         let had_repass_nodes = !repass_nodes.is_empty();
-        #[cfg(debug_assertions)]
         if had_repass_nodes {
             let root = self.composition.root();
             let mut applier = self.composition.applier_mut();
