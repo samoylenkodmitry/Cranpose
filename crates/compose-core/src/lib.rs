@@ -3518,7 +3518,8 @@ impl<A: Applier + 'static> Composition<A> {
         loop {
             loop_count += 1;
             if loop_count > 100 {
-                panic!("process_invalid_scopes looped too many times!");
+                log::error!("process_invalid_scopes looped too many times! Breaking loop to prevent freeze.");
+                break;
             }
             runtime_handle.drain_ui();
             let pending = runtime_handle.take_invalidated_scopes();

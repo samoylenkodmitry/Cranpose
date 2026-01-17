@@ -540,6 +540,7 @@ dependencies = [
  "compose-testing",
  "compose-ui",
  "futures-task",
+ "log",
  "rustc-hash 1.1.0",
  "smallvec",
 ]

@@ -301,12 +301,7 @@ impl ModifierNode for ScrollNode {
             }));
             self.invalidation_callback_id = Some(callback_id);
         } else {
-
-            // If we don't have a node ID, we can't register a scoped callback.
-            // This suggests the modifier chain hasn't been properly initialized with an ID yet.
-            // However, on_attach usually happens after node_id is available in LayoutNode.
-            // We'll log a warning if debug logging is enabled, but for now we proceed safely.
-            // In future, we might want to panic here or handle it fundamentally.
+             log::error!("ScrollNode attached without a NodeId! Layout invalidation will fail.");
         }
 
         // Initial invalidation

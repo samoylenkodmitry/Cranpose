@@ -97,7 +97,7 @@ fn local_holder() -> CompositionLocal<Holder> {
         if opt.is_none() {
             *opt = Some(compositionLocalOf(|| Holder { count: 0 }));
         }
-        opt.as_ref().unwrap().clone()
+        opt.as_ref().expect("Local holder not initialized").clone()
     })
 }
 
