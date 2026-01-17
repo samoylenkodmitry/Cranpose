@@ -697,7 +697,14 @@ impl compose_core::Node for SubcomposeLayoutNode {
     }
 
     fn children(&self) -> Vec<NodeId> {
-        self.inner.borrow().children.iter().copied().collect()
+        let inner = self.inner.borrow();
+        // Return placement children if available (they represent the actually rendered nodes)
+        // Otherwise fall back to structural children
+        if !inner.last_placements.is_empty() {
+            inner.last_placements.clone()
+        } else {
+            inner.children.iter().copied().collect()
+        }
     }
 
     fn set_node_id(&mut self, id: NodeId) {
@@ -859,13 +866,11 @@ impl SubcomposeLayoutNodeHandle {
             inner.slots = slots_host.take();
             inner.state = state;
 
-            // FIX: Update children from placements so semantic/render tree traversal
-            // sees the actually rendered nodes. Without this, SubcomposeLayoutNode.children()
-            // returns empty and LazyList items don't appear in the semantics tree.
-            inner.children.clear();
-            for placement in &result.placements {
-                inner.children.insert(placement.node_id);
-            }
+            // Store placement children for children() traversal.
+            // This avoids clearing/rebuilding the structural children set on every measure,
+            // eliminating O(n) allocator churn. The structural children (virtual nodes) are
+            // tracked via insert_child/remove_child, while last_placements tracks rendered nodes.
+            inner.last_placements = result.placements.iter().map(|p| p.node_id).collect();
         }
 
         Ok(result)
@@ -895,6 +900,9 @@ struct SubcomposeLayoutNodeInner {
     debug_modifiers: bool,
     // Owns virtual nodes created during subcomposition
     virtual_nodes: HashMap<NodeId, Rc<LayoutNode>>,
+    // Cached placement children from the last measure pass.
+    // Used by children() for semantic/render traversal without clearing structural children.
+    last_placements: Vec<NodeId>,
 }
 
 impl SubcomposeLayoutNodeInner {
@@ -910,6 +918,7 @@ impl SubcomposeLayoutNodeInner {
             slots: SlotBackend::default(),
             debug_modifiers: false,
             virtual_nodes: HashMap::new(),
+            last_placements: Vec::new(),
         }
     }
 
