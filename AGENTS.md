@@ -4,6 +4,7 @@
 - cargo test > 1.tmp 2>& # then read and fix all
 - cargo clippy > 2.tmp 2>& # then read and fix all
 - cargo fmt
+- KISS, DRY, SOLID. don't copy-paste lazily
 - Use `cargo add <crate>` to add dependencies.
 - Use `cargo upgrade` to upgrade dependencies.
 - Use `anyhow` for error handling in application code; use `thiserror` for library code.

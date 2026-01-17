@@ -17,6 +17,110 @@ const DEFAULT_FLING_FRICTION: f32 = 0.015;
 /// Minimum unconsumed delta (in pixels) to consider a boundary hit.
 const BOUNDARY_EPSILON: f32 = 0.5;
 
+/// Schedules the next fling animation frame without creating a FlingAnimation instance.
+/// This is called recursively to drive the animation forward.
+fn schedule_next_frame<F, G>(
+    state: Rc<RefCell<Option<FlingAnimationState>>>,
+    frame_clock: FrameClock,
+    on_scroll: F,
+    on_end: G,
+) where
+    F: Fn(f32) -> f32 + 'static,
+    G: FnOnce() + 'static,
+{
+    let state_for_closure = state.clone();
+    let frame_clock_for_closure = frame_clock.clone();
+    let on_end = RefCell::new(Some(on_end));
+
+    let registration = frame_clock.with_frame_nanos(move |frame_time_nanos| {
+        let should_continue = {
+            let state_guard = state_for_closure.borrow();
+            let Some(anim_state) = state_guard.as_ref() else {
+                return;
+            };
+
+            if !anim_state.is_running.get() {
+                return;
+            }
+
+            let start_time = match anim_state.start_frame_time_nanos.get() {
+                Some(value) => value,
+                None => {
+                    anim_state
+                        .start_frame_time_nanos
+                        .set(Some(frame_time_nanos));
+                    frame_time_nanos
+                }
+            };
+
+            let play_time_nanos = frame_time_nanos.saturating_sub(start_time) as i64;
+
+            let new_value = anim_state.decay_spec.get_value_from_nanos(
+                play_time_nanos,
+                anim_state.initial_value,
+                anim_state.initial_velocity,
+            );
+
+            let last = anim_state.last_value.get();
+            let delta = new_value - last;
+            anim_state.last_value.set(new_value);
+            anim_state
+                .total_delta
+                .set(anim_state.total_delta.get() + delta);
+
+            let duration_nanos = anim_state
+                .decay_spec
+                .get_duration_nanos(anim_state.initial_value, anim_state.initial_velocity);
+
+            let current_velocity = anim_state.decay_spec.get_velocity_from_nanos(
+                play_time_nanos,
+                anim_state.initial_value,
+                anim_state.initial_velocity,
+            );
+
+            let is_finished = play_time_nanos >= duration_nanos
+                || current_velocity.abs() < anim_state.decay_spec.abs_velocity_threshold();
+
+            if is_finished {
+                anim_state.is_running.set(false);
+            }
+
+            let consumed = if delta.abs() > 0.001 {
+                on_scroll(delta)
+            } else {
+                0.0
+            };
+
+            let hit_boundary = (delta - consumed).abs() > BOUNDARY_EPSILON;
+            if hit_boundary {
+                anim_state.is_running.set(false);
+            }
+
+            !is_finished && !hit_boundary
+        };
+
+        if should_continue {
+            if let Some(on_end_fn) = on_end.borrow_mut().take() {
+                schedule_next_frame(
+                    state_for_closure.clone(),
+                    frame_clock_for_closure.clone(),
+                    on_scroll,
+                    on_end_fn,
+                );
+            }
+        } else {
+            if let Some(end_fn) = on_end.borrow_mut().take() {
+                end_fn();
+            }
+        }
+    });
+
+    // Store the registration to keep the callback alive
+    if let Some(anim_state) = state.borrow_mut().as_mut() {
+        anim_state.registration = Some(registration);
+    }
+}
+
 /// State for an active fling animation.
 struct FlingAnimationState {
     /// Initial position when fling started (used as reference for decay calc).
@@ -104,7 +208,7 @@ impl FlingAnimation {
         *self.state.borrow_mut() = Some(anim_state);
 
         // Start frame loop
-        self.schedule_frame(on_scroll, on_end);
+        schedule_next_frame(self.state.clone(), self.frame_clock.clone(), on_scroll, on_end);
     }
 
     pub fn cancel(&self) {
@@ -124,120 +228,6 @@ impl FlingAnimation {
             .is_some_and(|s| s.is_running.get())
     }
 
-    fn schedule_frame<F, G>(&self, on_scroll: F, on_end: G)
-    where
-        F: Fn(f32) -> f32 + 'static,
-        G: FnOnce() + 'static,
-    {
-        let state = self.state.clone();
-        let frame_clock = self.frame_clock.clone();
-        let on_end = RefCell::new(Some(on_end));
-
-        let registration = self.frame_clock.with_frame_nanos(move |frame_time_nanos| {
-            let should_continue = {
-                let state_guard = state.borrow();
-                let Some(anim_state) = state_guard.as_ref() else {
-                    return;
-                };
-
-                if !anim_state.is_running.get() {
-                    return;
-                }
-
-
-
-                let start_time = match anim_state.start_frame_time_nanos.get() {
-                    Some(value) => value,
-                    None => {
-                        anim_state
-                            .start_frame_time_nanos
-                            .set(Some(frame_time_nanos));
-                        frame_time_nanos
-                    }
-                };
-
-                // Calculate elapsed time from frame clock (deterministic).
-                let play_time_nanos = frame_time_nanos.saturating_sub(start_time) as i64;
-
-
-                // Get current position from decay spec (relative to initial_value)
-                let new_value = anim_state.decay_spec.get_value_from_nanos(
-                    play_time_nanos,
-                    anim_state.initial_value,
-                    anim_state.initial_velocity,
-                );
-
-                // Calculate DELTA from last applied position
-                let last = anim_state.last_value.get();
-                let delta = new_value - last;
-                anim_state.last_value.set(new_value);
-                anim_state
-                    .total_delta
-                    .set(anim_state.total_delta.get() + delta);
-
-                // Check if animation is complete
-                let duration_nanos = anim_state
-                    .decay_spec
-                    .get_duration_nanos(anim_state.initial_value, anim_state.initial_velocity);
-
-                let current_velocity = anim_state.decay_spec.get_velocity_from_nanos(
-                    play_time_nanos,
-                    anim_state.initial_value,
-                    anim_state.initial_velocity,
-                );
-
-                // Animation is done if we've exceeded duration or velocity is near zero
-                let is_finished = play_time_nanos >= duration_nanos
-                    || current_velocity.abs() < anim_state.decay_spec.abs_velocity_threshold();
-
-                if is_finished {
-                    anim_state.is_running.set(false);
-                }
-
-                // Apply the scroll DELTA (not absolute position)
-                // Check consumed amount to detect boundary hit
-                let consumed = if delta.abs() > 0.001 {
-                    on_scroll(delta)
-                } else {
-                    0.0
-                };
-
-                // Stop early if we hit a boundary (unconsumed delta is meaningful).
-                let hit_boundary = (delta - consumed).abs() > BOUNDARY_EPSILON;
-                if hit_boundary {
-                    anim_state.is_running.set(false);
-                }
-
-                !is_finished && !hit_boundary
-            };
-
-            if should_continue {
-                // Schedule next frame
-                let state_for_next = state.clone();
-                let frame_clock_for_next = frame_clock.clone();
-                let on_scroll_clone = on_scroll;
-                let on_end_moved = on_end.borrow_mut().take();
-
-                if let Some(on_end_fn) = on_end_moved {
-                    let animation = FlingAnimation {
-                        state: state_for_next,
-                        frame_clock: frame_clock_for_next,
-                    };
-                    animation.schedule_frame(on_scroll_clone, on_end_fn);
-                }
-            } else {
-                // Animation complete
-                if let Some(end_fn) = on_end.borrow_mut().take() {
-                    end_fn();
-                }
-            }
-        });
-
-        // Store the registration to keep the callback alive
-        if let Some(state) = self.state.borrow_mut().as_mut() {
-            state.registration = Some(registration);
-        }
-    }
 }
 
 impl Clone for FlingAnimation {
