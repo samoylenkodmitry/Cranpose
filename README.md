@@ -72,6 +72,14 @@ For detailed web build instructions, see [`apps/desktop-demo/README.md`](apps/de
 
 ## Quick Start
 
+### Imports
+
+```rust
+use cranpose::prelude::*;
+```
+
+The prelude pulls in `AppLauncher`, core widgets/modifiers, and the `#[composable]` attribute.
+
 ### Desktop
 
 ```rust
