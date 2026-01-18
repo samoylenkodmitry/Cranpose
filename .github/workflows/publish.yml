@@ -57,60 +57,69 @@ jobs:
           path = Path("Cargo.toml")
           text = path.read_text()
           original = text
+          lines = text.splitlines(keepends=True)
 
-          def replace_section(text, section, replacer):
-              pattern = rf"(?ms)^\\[{re.escape(section)}\\]\\n(.*?)(?=^\\[|\\Z)"
-              match = re.search(pattern, text)
-              if not match:
-                  raise SystemExit(f"Missing [{section}] in Cargo.toml")
-              old = match.group(1)
-              new = replacer(old)
-              return text[: match.start(1)] + new + text[match.end(1) :]
-
-          def update_workspace_package(section):
-              if re.search(r"(?m)^\\s*version\\s*=", section) is None:
-                  raise SystemExit("workspace.package is missing a version entry")
-              return re.sub(
-                  r'(?m)^(\\s*version\\s*=\\s*\")[^\"]+(\"\\s*)$',
-                  rf"\\1{version}\\2",
-                  section,
-              )
-
-          def update_workspace_deps(section):
-              lines = section.splitlines()
+          def find_section_bounds(lines, section):
+              header = f"[{section}]"
+              start = None
               for i, line in enumerate(lines):
-                  if re.match(r"\\s*cranpose[\\w-]*\\s*=\\s*\\{", line):
+                  if line.strip() == header:
+                      start = i + 1
+                      break
+              if start is None:
+                  raise SystemExit(f"Missing [{section}] in Cargo.toml")
+              end = len(lines)
+              for j in range(start, len(lines)):
+                  stripped = lines[j].strip()
+                  if stripped.startswith("[") and stripped.endswith("]"):
+                      end = j
+                      break
+              return start, end
+
+          def update_workspace_package(lines):
+              start, end = find_section_bounds(lines, "workspace.package")
+              found = False
+              for i in range(start, end):
+                  if re.match(r"\\s*version\\s*=", lines[i]):
                       lines[i] = re.sub(
-                          r'version\\s*=\\s*\"[^\"]+\"',
-                          f'version = \"{version}\"',
-                          line,
+                          r'(\\bversion\\s*=\\s*\")[^\"]+(\"\\s*)',
+                          rf"\\1{version}\\2",
+                          lines[i],
                       )
-              return "\n".join(lines) + ("\n" if section.endswith("\n") else "")
+                      found = True
+              if not found:
+                  raise SystemExit("workspace.package is missing a version entry")
 
-          text = replace_section(text, "workspace.package", update_workspace_package)
-          text = replace_section(text, "workspace.dependencies", update_workspace_deps)
-
-          if text != original:
-              path.write_text(text)
-
-          section_match = re.search(
-              r"(?ms)^\\[workspace\\.dependencies\\]\\n(.*?)(?=^\\[|\\Z)",
-              text,
-          )
-          if section_match:
+          def update_workspace_deps(lines):
+              start, end = find_section_bounds(lines, "workspace.dependencies")
               mismatches = []
-              for line in section_match.group(1).splitlines():
+              for i in range(start, end):
+                  line = lines[i]
                   if not re.match(r"\\s*cranpose[\\w-]*\\s*=\\s*\\{", line):
                       continue
-                  version_match = re.search(r'version\\s*=\\s*\"([^\"]+)\"', line)
-                  if not version_match or version_match.group(1) != version:
+                  if re.search(r'version\\s*=\\s*\"[^\"]+\"', line) is None:
                       mismatches.append(line.strip())
+                      continue
+                  lines[i] = re.sub(
+                      r'(version\\s*=\\s*\")[^\"]+(\"\\s*)',
+                      rf"\\1{version}\\2",
+                      line,
+                  )
+                  if re.search(rf'version\\s*=\\s*\"{re.escape(version)}\"', lines[i]) is None:
+                      mismatches.append(lines[i].strip())
               if mismatches:
                   joined = "\n".join(mismatches)
                   raise SystemExit(
                       "Some cranpose workspace dependencies were not updated:\n"
                       + joined
                   )
+
+          update_workspace_package(lines)
+          update_workspace_deps(lines)
+
+          text = "".join(lines)
+          if text != original:
+              path.write_text(text)
           PY
 
           if git diff --quiet; then
