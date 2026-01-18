@@ -185,12 +185,14 @@ impl LayoutModifierNode for PaddingNode {
         let inner_width = inner_placeable.width();
         let inner_height = inner_placeable.height();
 
+        let (width, height) = constraints.constrain(
+            inner_width + horizontal_padding,
+            inner_height + vertical_padding,
+        );
+
         // Return size with padding added, and placement offset to position child inside padding
         cranpose_ui_layout::LayoutModifierMeasureResult::new(
-            Size {
-                width: inner_width + horizontal_padding,
-                height: inner_height + vertical_padding,
-            },
+            Size { width, height },
             self.padding.left, // Place child offset by left padding
             self.padding.top,  // Place child offset by top padding
         )
@@ -264,12 +266,14 @@ impl MeasurementProxy for PaddingMeasurementProxy {
         let inner_width = inner_placeable.width();
         let inner_height = inner_placeable.height();
 
+        let (width, height) = constraints.constrain(
+            inner_width + horizontal_padding,
+            inner_height + vertical_padding,
+        );
+
         // Return size with padding added, and placement offset to position child inside padding
         cranpose_ui_layout::LayoutModifierMeasureResult::new(
-            Size {
-                width: inner_width + horizontal_padding,
-                height: inner_height + vertical_padding,
-            },
+            Size { width, height },
             self.padding.left, // Place child offset by left padding
             self.padding.top,  // Place child offset by top padding
         )
@@ -2077,40 +2081,72 @@ impl LayoutModifierNode for FillNode {
         measurable: &dyn Measurable,
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
-        let (min_width, max_width) = if self.direction != FillDirection::Vertical
+        // Calculate the fill size based on constraints
+        let (fill_width, child_min_width, child_max_width) = if self.direction
+            != FillDirection::Vertical
             && constraints.max_width != f32::INFINITY
         {
             let width = (constraints.max_width * self.fraction)
                 .round()
                 .clamp(constraints.min_width, constraints.max_width);
-            (width, width)
+            // Tight constraint for child on this axis
+            (width, width, width)
         } else {
-            (constraints.min_width, constraints.max_width)
+            (
+                constraints.max_width,
+                constraints.min_width,
+                constraints.max_width,
+            )
         };
 
-        let (min_height, max_height) = if self.direction != FillDirection::Horizontal
+        let (fill_height, child_min_height, child_max_height) = if self.direction
+            != FillDirection::Horizontal
             && constraints.max_height != f32::INFINITY
         {
             let height = (constraints.max_height * self.fraction)
                 .round()
                 .clamp(constraints.min_height, constraints.max_height);
-            (height, height)
+            // Tight constraint for child on this axis
+            (height, height, height)
         } else {
-            (constraints.min_height, constraints.max_height)
+            (
+                constraints.max_height,
+                constraints.min_height,
+                constraints.max_height,
+            )
         };
 
         let fill_constraints = Constraints {
-            min_width,
-            max_width,
-            min_height,
-            max_height,
+            min_width: child_min_width,
+            max_width: child_max_width,
+            min_height: child_min_height,
+            max_height: child_max_height,
         };
 
         let placeable = measurable.measure(fill_constraints);
-        // FillNode doesn't offset placement - child is placed at (0, 0) relative to this node
+
+        // Return the FILL size, not the child size.
+        // The child is measured within tight constraints on the fill axis,
+        // but we report the fill size to our parent.
+        let result_width = if self.direction != FillDirection::Vertical
+            && constraints.max_width != f32::INFINITY
+        {
+            fill_width
+        } else {
+            placeable.width()
+        };
+
+        let result_height = if self.direction != FillDirection::Horizontal
+            && constraints.max_height != f32::INFINITY
+        {
+            fill_height
+        } else {
+            placeable.height()
+        };
+
         cranpose_ui_layout::LayoutModifierMeasureResult::with_size(Size {
-            width: placeable.width(),
-            height: placeable.height(),
+            width: result_width,
+            height: result_height,
         })
     }
 
@@ -2154,41 +2190,68 @@ impl MeasurementProxy for FillMeasurementProxy {
         wrapped: &dyn Measurable,
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
-        // Directly implement fill measurement logic (no node reconstruction)
-        let (min_width, max_width) = if self.direction != FillDirection::Vertical
+        // Calculate the fill size based on constraints
+        let (fill_width, child_min_width, child_max_width) = if self.direction
+            != FillDirection::Vertical
             && constraints.max_width != f32::INFINITY
         {
             let width = (constraints.max_width * self.fraction)
                 .round()
                 .clamp(constraints.min_width, constraints.max_width);
-            (width, width)
+            (width, width, width)
         } else {
-            (constraints.min_width, constraints.max_width)
+            (
+                constraints.max_width,
+                constraints.min_width,
+                constraints.max_width,
+            )
         };
 
-        let (min_height, max_height) = if self.direction != FillDirection::Horizontal
+        let (fill_height, child_min_height, child_max_height) = if self.direction
+            != FillDirection::Horizontal
             && constraints.max_height != f32::INFINITY
         {
             let height = (constraints.max_height * self.fraction)
                 .round()
                 .clamp(constraints.min_height, constraints.max_height);
-            (height, height)
+            (height, height, height)
         } else {
-            (constraints.min_height, constraints.max_height)
+            (
+                constraints.max_height,
+                constraints.min_height,
+                constraints.max_height,
+            )
         };
 
         let fill_constraints = Constraints {
-            min_width,
-            max_width,
-            min_height,
-            max_height,
+            min_width: child_min_width,
+            max_width: child_max_width,
+            min_height: child_min_height,
+            max_height: child_max_height,
         };
 
         let placeable = wrapped.measure(fill_constraints);
-        // FillNode doesn't offset placement - child is placed at (0, 0) relative to this node
+
+        // Return the FILL size, not the child size
+        let result_width = if self.direction != FillDirection::Vertical
+            && constraints.max_width != f32::INFINITY
+        {
+            fill_width
+        } else {
+            placeable.width()
+        };
+
+        let result_height = if self.direction != FillDirection::Horizontal
+            && constraints.max_height != f32::INFINITY
+        {
+            fill_height
+        } else {
+            placeable.height()
+        };
+
         cranpose_ui_layout::LayoutModifierMeasureResult::with_size(Size {
-            width: placeable.width(),
-            height: placeable.height(),
+            width: result_width,
+            height: result_height,
         })
     }
 

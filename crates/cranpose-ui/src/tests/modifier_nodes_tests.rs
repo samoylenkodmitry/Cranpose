@@ -95,6 +95,27 @@ fn padding_node_adds_space_to_content() {
 }
 
 #[test]
+fn padding_node_clamps_to_constraints() {
+    let mut context = BasicModifierNodeContext::new();
+    let node = PaddingNode::new(EdgeInsets::uniform(12.0));
+    let measurable = TestMeasurable {
+        intrinsic_width: 100.0,
+        intrinsic_height: 100.0,
+    };
+    let constraints = Constraints {
+        min_width: 0.0,
+        max_width: 16.0,
+        min_height: 0.0,
+        max_height: 16.0,
+    };
+
+    let result = node.measure(&mut context, &measurable, constraints);
+
+    assert_eq!(result.size.width, 16.0);
+    assert_eq!(result.size.height, 16.0);
+}
+
+#[test]
 fn padding_node_respects_intrinsics() {
     let padding = EdgeInsets::uniform(10.0);
     let node = PaddingNode::new(padding);

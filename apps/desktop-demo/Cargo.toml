@@ -424,3 +424,13 @@ required-features = ["robot-app"]
 name = "robot_composition_local_disappear"
 path = "robot-runners/robot_composition_local_disappear.rs"
 required-features = ["robot-app"]
+
+[[example]]
+name = "robot_layout_validation"
+path = "robot-runners/robot_layout_validation.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_progress_bar"
+path = "robot-runners/robot_progress_bar.rs"
+required-features = ["robot-app"]

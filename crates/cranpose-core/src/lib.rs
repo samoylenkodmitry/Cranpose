@@ -2188,7 +2188,10 @@ impl Composer {
         }
         let started = self.with_slots_mut(|slots| slots.begin_recranpose_at_scope(scope.id()));
         if started.is_some() {
-            let previous_hint = self.core.recranpose_parent_hint.replace(scope.parent_hint());
+            let previous_hint = self
+                .core
+                .recranpose_parent_hint
+                .replace(scope.parent_hint());
             struct HintGuard {
                 core: Rc<ComposerCore>,
                 previous: Option<NodeId>,

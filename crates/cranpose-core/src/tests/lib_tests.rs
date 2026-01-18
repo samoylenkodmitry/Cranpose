@@ -2304,7 +2304,9 @@ fn cranpose_with_reuse_skips_then_recomposes() {
                 let local_state = state_clone;
                 with_current_composer(|composer| {
                     composer.cranpose_with_reuse(slot_key, options, |composer| {
-                        let scope = composer.current_recranpose_scope().expect("scope available");
+                        let scope = composer
+                            .current_recranpose_scope()
+                            .expect("scope available");
                         let changed = scope.should_recompose();
                         let has_previous = composer.remember(|| false);
                         if !changed && has_previous.with(|value| *value) {
@@ -2353,7 +2355,9 @@ fn cranpose_with_reuse_forces_recomposition_when_requested() {
                 let local_state = state_clone;
                 with_current_composer(|composer| {
                     composer.cranpose_with_reuse(slot_key, options, |composer| {
-                        let scope = composer.current_recranpose_scope().expect("scope available");
+                        let scope = composer
+                            .current_recranpose_scope()
+                            .expect("scope available");
                         let changed = scope.should_recompose();
                         let has_previous = composer.remember(|| false);
                         if !changed && has_previous.with(|value| *value) {
@@ -2397,7 +2401,9 @@ fn inactive_scopes_delay_invalidation_until_reactivated() {
     fn capture_scope(state: MutableState<i32>) {
         INVOCATIONS.with(|count| count.set(count.get() + 1));
         with_current_composer(|composer| {
-            let scope = composer.current_recranpose_scope().expect("scope available");
+            let scope = composer
+                .current_recranpose_scope()
+                .expect("scope available");
             CAPTURED_SCOPE.with(|slot| slot.replace(Some(scope)));
         });
         let _ = state.value();

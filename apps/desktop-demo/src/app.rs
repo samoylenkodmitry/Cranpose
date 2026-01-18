@@ -5,6 +5,7 @@ use cranpose_core::{
 };
 use cranpose_foundation::text::TextFieldState;
 use cranpose_foundation::PointerEventKind;
+use cranpose_foundation::SemanticsConfiguration;
 use cranpose_ui::{
     composable, BasicTextField, BoxSpec, Brush, Button, Color, Column, ColumnSpec, CornerRadii,
     GraphicsLayer, IntrinsicSize, LinearArrangement, Modifier, Point, PointerInputScope,
@@ -59,9 +60,9 @@ struct Holder {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct AnimationState {
-    progress: f32,
-    direction: f32,
+pub struct AnimationState {
+    pub progress: f32,
+    pub direction: f32,
 }
 
 impl Default for AnimationState {
@@ -74,9 +75,9 @@ impl Default for AnimationState {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct FrameStats {
-    frames: u32,
-    last_frame_ms: f32,
+pub struct FrameStats {
+    pub frames: u32,
+    pub last_frame_ms: f32,
 }
 
 impl Default for FrameStats {
@@ -141,6 +142,7 @@ pub fn combined_app() {
 
     Column(
         Modifier::empty()
+            .fill_max_size()
             .padding(20.0)
             .vertical_scroll(column_scroll_state.clone(), false),
         ColumnSpec::default(),
@@ -521,13 +523,16 @@ fn recursive_layout_example() {
             Column(
                 Modifier::empty()
                     .fill_max_width()
+                    .semantics(|config: &mut SemanticsConfiguration| {
+                        config.content_description = Some("RecursiveLayoutViewport".to_string());
+                    })
                     .padding(8.0)
                     .background(Color(0.06, 0.08, 0.16, 0.9))
                     .rounded_corners(20.0)
                     .padding(12.0),
                 ColumnSpec::default(),
                 move || {
-                    recursive_layout_node(depth, true, 0);
+                    recursive_layout_node(Modifier::empty(), depth, true, 0);
                 },
             );
         },
@@ -535,7 +540,7 @@ fn recursive_layout_example() {
 }
 
 #[composable]
-fn recursive_layout_node(depth: usize, horizontal: bool, index: usize) {
+fn recursive_layout_node(modifier: Modifier, depth: usize, horizontal: bool, index: usize) {
     let palette = [
         Color(0.25, 0.32, 0.58, 0.75),
         Color(0.30, 0.20, 0.45, 0.75),
@@ -545,7 +550,7 @@ fn recursive_layout_node(depth: usize, horizontal: bool, index: usize) {
     let accent = palette[index % palette.len()];
 
     Column(
-        Modifier::empty()
+        modifier
             .rounded_corners(18.0)
             .draw_behind({
                 move |scope| {
@@ -577,7 +582,12 @@ fn recursive_layout_node(depth: usize, horizontal: bool, index: usize) {
                     RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
                     move || {
                         for child_idx in 0..2 {
-                            recursive_layout_node(depth - 1, false, index * 2 + child_idx + 1);
+                            recursive_layout_node(
+                                Modifier::empty().rowWeight(1.0, true),
+                                depth - 1,
+                                false,
+                                index * 2 + child_idx + 1,
+                            );
                         }
                     },
                 );
@@ -587,7 +597,12 @@ fn recursive_layout_node(depth: usize, horizontal: bool, index: usize) {
                     ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
                     move || {
                         for child_idx in 0..2 {
-                            recursive_layout_node(depth - 1, true, index * 2 + child_idx + 1);
+                            recursive_layout_node(
+                                Modifier::empty().columnWeight(1.0, true),
+                                depth - 1,
+                                true,
+                                index * 2 + child_idx + 1,
+                            );
                         }
                     },
                 );
@@ -719,85 +734,19 @@ fn composition_local_content_inner() {
 }
 
 #[composable]
-fn async_runtime_example() {
-    let animation = cranpose_core::useState(AnimationState::default);
-    let stats = cranpose_core::useState(FrameStats::default);
-    let is_running = cranpose_core::useState(|| true);
-    let reset_signal = cranpose_core::useState(|| 0u64);
-
-    {
-        let animation_state = animation;
-        let stats_state = stats;
-        let running_state = is_running;
-        let reset_state = reset_signal;
-        LaunchedEffectAsync!((), move |scope| {
-            let animation = animation_state;
-            let stats = stats_state;
-            let running = running_state;
-            let reset = reset_state;
-            Box::pin(async move {
-                let clock = scope.runtime().frame_clock();
-                let mut last_time: Option<u64> = None;
-                let mut last_reset = reset.get();
-
-                animation.set(AnimationState::default());
-                stats.set(FrameStats::default());
-
-                while scope.is_active() {
-                    let nanos = clock.next_frame().await;
-                    if !scope.is_active() {
-                        break;
-                    }
-
-                    let current_reset = reset.get();
-                    if current_reset != last_reset {
-                        last_reset = current_reset;
-                        animation.set(AnimationState::default());
-                        stats.set(FrameStats::default());
-                        last_time = None;
-                        continue;
-                    }
-
-                    let running_now = running.get();
-                    if !running_now {
-                        last_time = Some(nanos);
-                        continue;
-                    }
-
-                    if let Some(previous) = last_time {
-                        let mut delta_nanos = nanos.saturating_sub(previous);
-                        if delta_nanos == 0 {
-                            // Fall back to a nominal 60 FPS delta so the animation keeps
-                            // advancing even if two callbacks report the same timestamp.
-                            delta_nanos = 16_666_667;
-                        }
-                        let dt_ms = delta_nanos as f32 / 1_000_000.0;
-                        stats.update(|state| {
-                            state.frames = state.frames.wrapping_add(1);
-                            state.last_frame_ms = dt_ms;
-                        });
-                        animation.update(|anim| {
-                            let next = anim.progress + 0.1 * anim.direction * (dt_ms / 600.0);
-                            if next >= 1.0 {
-                                anim.progress = 1.0;
-                                anim.direction = -1.0;
-                            } else if next <= 0.0 {
-                                anim.progress = 0.0;
-                                anim.direction = 1.0;
-                            } else {
-                                anim.progress = next;
-                            }
-                        });
-                    }
-
-                    last_time = Some(nanos);
-                }
-            })
-        });
-    }
-
+#[allow(non_snake_case)]
+pub fn AsyncRuntimeTabContent(
+    animation: MutableState<AnimationState>,
+    stats: MutableState<FrameStats>,
+    is_running: MutableState<bool>,
+    reset_signal: MutableState<u64>,
+) {
     Column(
         Modifier::empty()
+            .fill_max_width()
+            .semantics(|config: &mut SemanticsConfiguration| {
+                config.content_description = Some("AsyncRuntimeViewport".to_string());
+            })
             .padding(32.0)
             .background(Color(0.10, 0.14, 0.28, 1.0))
             .rounded_corners(24.0)
@@ -822,7 +771,6 @@ fn async_runtime_example() {
                 let animation_snapshot = animation.get();
                 let stats_snapshot = stats.get();
                 let progress_value = animation_snapshot.progress.clamp(0.0, 1.0);
-                let fill_width = 320.0 * progress_value;
                 Column(
                     Modifier::empty()
                         .fill_max_width()
@@ -848,6 +796,10 @@ fn async_runtime_example() {
                                     .fill_max_width()
                                     .height(26.0)
                                     .rounded_corners(13.0)
+                                    .semantics(|config: &mut SemanticsConfiguration| {
+                                        config.content_description =
+                                            Some("AsyncProgressBarTrack".to_string());
+                                    })
                                     .draw_behind(|scope| {
                                         scope.draw_round_rect(
                                             Brush::solid(Color(0.12, 0.16, 0.30, 1.0)),
@@ -856,19 +808,30 @@ fn async_runtime_example() {
                                     }),
                                 RowSpec::default(),
                                 {
-                                    let progress_width = fill_width;
+                                    let progress_fraction = progress_value;
                                     move || {
                                         // WORKAROUND: Use with_key to prevent slot truncation from destroying
                                         // sibling component scopes when conditional rendering changes structure.
                                         // TODO: Remove once proper "gaps" support is implemented in compose-core
-                                        cranpose_core::with_key(&(progress_width > 0.0), || {
-                                            if progress_width > 0.0 {
+                                        cranpose_core::with_key(&(progress_fraction > 0.0), || {
+                                            if progress_fraction > 0.0 {
                                                 Row(
                                                     Modifier::empty()
-                                                        .width(progress_width.min(360.0))
+                                                        .fill_max_width_fraction(
+                                                            progress_fraction,
+                                                        )
                                                         .height(26.0)
                                                         .then(
-                                                            Modifier::empty().rounded_corners(13.0),
+                                                            Modifier::empty()
+                                                                .rounded_corners(13.0),
+                                                        )
+                                                        .semantics(
+                                                            |config: &mut SemanticsConfiguration| {
+                                                                config.content_description = Some(
+                                                                    "AsyncProgressBarFill"
+                                                                        .to_string(),
+                                                                );
+                                                            },
                                                         )
                                                         .draw_behind(|scope| {
                                                             scope.draw_round_rect(
@@ -992,6 +955,87 @@ fn async_runtime_example() {
             }
         },
     );
+}
+
+#[composable]
+fn async_runtime_example() {
+    let animation = cranpose_core::useState(AnimationState::default);
+    let stats = cranpose_core::useState(FrameStats::default);
+    let is_running = cranpose_core::useState(|| true);
+    let reset_signal = cranpose_core::useState(|| 0u64);
+
+    {
+        let animation_state = animation;
+        let stats_state = stats;
+        let running_state = is_running;
+        let reset_state = reset_signal;
+        LaunchedEffectAsync!((), move |scope| {
+            let animation = animation_state;
+            let stats = stats_state;
+            let running = running_state;
+            let reset = reset_state;
+            Box::pin(async move {
+                let clock = scope.runtime().frame_clock();
+                let mut last_time: Option<u64> = None;
+                let mut last_reset = reset.get();
+
+                animation.set(AnimationState::default());
+                stats.set(FrameStats::default());
+
+                while scope.is_active() {
+                    let nanos = clock.next_frame().await;
+                    if !scope.is_active() {
+                        break;
+                    }
+
+                    let current_reset = reset.get();
+                    if current_reset != last_reset {
+                        last_reset = current_reset;
+                        animation.set(AnimationState::default());
+                        stats.set(FrameStats::default());
+                        last_time = None;
+                        continue;
+                    }
+
+                    let running_now = running.get();
+                    if !running_now {
+                        last_time = Some(nanos);
+                        continue;
+                    }
+
+                    if let Some(previous) = last_time {
+                        let mut delta_nanos = nanos.saturating_sub(previous);
+                        if delta_nanos == 0 {
+                            // Fall back to a nominal 60 FPS delta so the animation keeps
+                            // advancing even if two callbacks report the same timestamp.
+                            delta_nanos = 16_666_667;
+                        }
+                        let dt_ms = delta_nanos as f32 / 1_000_000.0;
+                        stats.update(|state| {
+                            state.frames = state.frames.wrapping_add(1);
+                            state.last_frame_ms = dt_ms;
+                        });
+                        animation.update(|anim| {
+                            let next = anim.progress + 0.1 * anim.direction * (dt_ms / 600.0);
+                            if next >= 1.0 {
+                                anim.progress = 1.0;
+                                anim.direction = -1.0;
+                            } else if next <= 0.0 {
+                                anim.progress = 0.0;
+                                anim.direction = 1.0;
+                            } else {
+                                anim.progress = next;
+                            }
+                        });
+                    }
+
+                    last_time = Some(nanos);
+                }
+            })
+        });
+    }
+
+    AsyncRuntimeTabContent(animation, stats, is_running, reset_signal);
 }
 
 #[composable]

@@ -135,10 +135,6 @@ fn my_app() {
 
 The desktop demo (`apps/desktop-demo`) demonstrates running the **same codebase** on all three platforms (Desktop, Android, and Web). See [`apps/desktop-demo/README.md`](apps/desktop-demo/README.md) for detailed build instructions for each platform.
 
-## Roadmap
-
-See [`docs/ROADMAP.md`](docs/ROADMAP.md) for detailed progress tracking, implementation status, and upcoming milestones.
-
 ## Contributing
 
 This repository is currently a design playground; issues and pull requests are welcome for discussions, experiments, and early prototypes that move the Jetpack Compose–style experience forward in Rust.

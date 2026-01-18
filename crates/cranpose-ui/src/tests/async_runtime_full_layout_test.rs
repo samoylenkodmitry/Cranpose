@@ -147,7 +147,6 @@ fn async_runtime_full_layout(
             let animation_snapshot = animation.get();
             let stats_snapshot = stats.get();
             let progress_value = animation_snapshot.progress.clamp(0.0, 1.0);
-            let fill_width = 320.0 * progress_value;
 
             // Progress Column with conditional Row
             Column(
@@ -171,14 +170,14 @@ fn async_runtime_full_layout(
                             .then(Modifier::empty().rounded_corners(13.0)),
                         RowSpec::default(),
                         {
-                            let progress_width = fill_width;
+                            let progress_fraction = progress_value;
                             move || {
                                 // CRITICAL: Conditional rendering that triggers the bug
                                 // When progress goes from >0 to 0 and back, this changes composition structure
-                                if progress_width > 0.0 {
+                                if progress_fraction > 0.0 {
                                     Row(
                                         Modifier::empty()
-                                            .width(progress_width.min(360.0))
+                                            .fill_max_width_fraction(progress_fraction)
                                             .then(Modifier::empty().height(26.0))
                                             .then(Modifier::empty().rounded_corners(13.0))
                                             .then(Modifier::empty().draw_behind(|scope| {

@@ -85,7 +85,6 @@ fn async_runtime_test_content(
                 let animation_snapshot = animation.get();
                 let stats_snapshot = stats.get();
                 let progress_value = animation_snapshot.progress.clamp(0.0, 1.0);
-                let fill_width = 320.0 * progress_value;
 
                 Column(
                     Modifier::empty()
@@ -110,12 +109,12 @@ fn async_runtime_test_content(
                                     })),
                                 RowSpec::default(),
                                 {
-                                    let progress_width = fill_width;
+                                    let progress_fraction = progress_value;
                                     move || {
-                                        if progress_width > 0.0 {
+                                        if progress_fraction > 0.0 {
                                             Row(
                                                 Modifier::empty()
-                                                    .width(progress_width.min(360.0))
+                                                    .fill_max_width_fraction(progress_fraction)
                                                     .then(Modifier::empty().height(26.0))
                                                     .then(Modifier::empty().rounded_corners(13.0))
                                                     .then(Modifier::empty().draw_behind(|scope| {
@@ -222,4 +221,51 @@ fn async_runtime_freezes_without_conditional_key() {
         after > before,
         "frames should continue increasing after forward flip without manual with_key workaround (before {before}, after {after})"
     );
+}
+
+#[test]
+fn async_runtime_tab_content_renders_static_states() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+
+    let animation_state = MutableState::with_runtime(
+        AnimationState {
+            progress: 1.0,
+            direction: 1.0,
+        },
+        runtime.clone(),
+    );
+    let stats_state = MutableState::with_runtime(
+        FrameStats {
+            frames: 42,
+            last_frame_ms: 16.0,
+        },
+        runtime.clone(),
+    );
+    let is_running_state = MutableState::with_runtime(false, runtime.clone());
+    let reset_signal_state = MutableState::with_runtime(0u64, runtime);
+
+    let animation_for_render = animation_state.clone();
+    let stats_for_render = stats_state.clone();
+    let is_running_for_render = is_running_state.clone();
+    let reset_for_render = reset_signal_state.clone();
+
+    let mut render = move || {
+        AsyncRuntimeTabContent(
+            animation_for_render,
+            stats_for_render,
+            is_running_for_render,
+            reset_for_render,
+        )
+    };
+
+    composition
+        .render(location_key(file!(), line!(), column!()), &mut render)
+        .expect("initial render");
+    drain_all(&mut composition).expect("initial drain");
+
+    animation_state.update(|state| state.progress = 0.0);
+    drain_all(&mut composition).expect("drain after progress 0");
+    animation_state.update(|state| state.progress = 1.0);
+    drain_all(&mut composition).expect("drain after progress 1");
 }
