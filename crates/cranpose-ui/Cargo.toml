@@ -1,8 +1,10 @@
 [package]
 name = "cranpose-ui"
-version = "0.1.0"
-edition = "2021"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "UI primitives for Cranpose"
 
 [dependencies]
@@ -28,7 +30,6 @@ test-helpers = []
 
 [dev-dependencies]
 criterion = "0.5"
-cranpose-testing = { workspace = true }
 
 [[bench]]
 name = "pipeline"

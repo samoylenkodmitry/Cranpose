@@ -606,8 +606,6 @@ version = "0.1.0"
 dependencies = [
  "ahash",
  "cranpose-macros",
- "cranpose-testing",
- "cranpose-ui",
  "futures-task",
  "log",
  "rustc-hash 2.1.1",
@@ -723,6 +721,7 @@ dependencies = [
  "cranpose-render-common",
  "cranpose-ui",
  "cranpose-ui-graphics",
+ "cranpose-ui-layout",
 ]
 
 [[package]]
@@ -734,7 +733,6 @@ dependencies = [
  "cranpose-foundation",
  "cranpose-macros",
  "cranpose-runtime-std",
- "cranpose-testing",
  "cranpose-ui-graphics",
  "cranpose-ui-layout",
  "criterion",

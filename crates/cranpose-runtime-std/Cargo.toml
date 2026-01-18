@@ -1,9 +1,11 @@
 [package]
 name = "cranpose-runtime-std"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 description = "Standard library backed runtime services for Cranpose"
-license = "Apache-2.0"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 cranpose-core = { workspace = true }

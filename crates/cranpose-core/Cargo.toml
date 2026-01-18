@@ -1,8 +1,10 @@
 [package]
 name = "cranpose-core"
-version = "0.1.0"
-edition = "2021"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Core runtime for a Jetpack Compose inspired UI framework in Rust"
 
 [dependencies]
@@ -17,6 +19,4 @@ default = []
 std-hash = []
 
 [dev-dependencies]
-cranpose-ui = { workspace = true }
 cranpose-macros = { workspace = true }
-cranpose-testing = { workspace = true }

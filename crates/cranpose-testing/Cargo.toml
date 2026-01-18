@@ -1,8 +1,10 @@
 [package]
 name = "cranpose-testing"
-version = "0.1.0"
-edition = "2021"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Testing utilities and harness for Cranpose"
 
 [dependencies]
@@ -18,6 +20,7 @@ cranpose = { workspace = true, features = ["robot"], optional = true }
 
 [dev-dependencies]
 cranpose-macros = { workspace = true }
+cranpose-ui-layout = { workspace = true }
 
 [features]
 default = []

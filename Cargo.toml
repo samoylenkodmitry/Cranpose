@@ -23,6 +23,13 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/samoylenkodmitry/cranpose"
+homepage = "https://samoylenkodmitry.github.io/cranpose/"
+
 [workspace.dependencies]
 # Force android-activity to use native-activity feature across all workspace crates
 android-activity = { version = "0.6", features = ["native-activity"] }

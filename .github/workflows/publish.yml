@@ -4,103 +4,213 @@ on:
   push:
     tags: ["v*"]
 
+permissions:
+  contents: write
+
 jobs:
-  publish:
-    name: Publish to crates.io
+  sync_versions:
+    name: Sync versions with tag
     runs-on: ubuntu-latest
+    outputs:
+      should_publish: ${{ steps.sync.outputs.should_publish }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Publish cranpose-core
+      - name: Sync Cargo versions with tag
+        id: sync
         env:
-          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: cargo publish -p cranpose-core --token "$CRATES_IO_TOKEN" || true
+          TAG_NAME: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          tag="${TAG_NAME}"
+          if [[ "$tag" != v* ]]; then
+            echo "Expected tag starting with 'v', got '$tag'" >&2
+            exit 1
+          fi
+          version="${tag#v}"
+
+          git fetch origin "$DEFAULT_BRANCH"
+          git checkout "$DEFAULT_BRANCH"
+
+          tag_commit="$(git rev-list -n 1 "$tag")"
+          branch_commit="$(git rev-parse HEAD)"
+          if [[ "$tag_commit" != "$branch_commit" ]]; then
+            echo "Tag $tag must be created from $DEFAULT_BRANCH HEAD." >&2
+            exit 1
+          fi
+
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          tag = os.environ["TAG_NAME"]
+          version = tag.removeprefix("v")
+          path = Path("Cargo.toml")
+          text = path.read_text()
+          original = text
+
+          lines = text.splitlines()
+          in_workspace_package = False
+          in_workspace_deps = False
+          for i, line in enumerate(lines):
+              stripped = line.strip()
+              if stripped.startswith("[") and stripped.endswith("]"):
+                  in_workspace_package = stripped == "[workspace.package]"
+                  in_workspace_deps = stripped == "[workspace.dependencies]"
+                  continue
+
+              if in_workspace_package and stripped.startswith("version"):
+                  lines[i] = re.sub(r'\"[^\"]+\"', f'"{version}"', line)
+                  continue
+
+              if in_workspace_deps and re.match(r"\\s*cranpose[\\w-]*\\s*=\\s*\\{", line):
+                  lines[i] = re.sub(r'version\\s*=\\s*\"[^\"]+\"', f'version = \"{version}\"', line)
+
+          text = "\n".join(lines) + ("\n" if original.endswith("\n") else "")
+          if text != original:
+              path.write_text(text)
+          PY
+
+          if git diff --quiet; then
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          cargo generate-lockfile
+
+          if git diff --name-only | grep -qvE '^(Cargo\\.toml|Cargo\\.lock)$'; then
+            echo "Unexpected changes beyond Cargo.toml/Cargo.lock" >&2
+            git diff --name-only
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock
+          git commit -m "chore(release): ${tag}"
+          git push origin "$DEFAULT_BRANCH"
+
+          git tag -f "$tag"
+          git push origin "$tag" --force
+
+          echo "should_publish=false" >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    needs: sync_versions
+    if: needs.sync_versions.outputs.should_publish == 'true'
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify tag and workspace versions
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+          import tomllib
+
+          tag = os.environ.get("GITHUB_REF_NAME", "")
+          if not tag.startswith("v"):
+              sys.exit(f"Expected tag starting with 'v', got '{tag}'")
+          tag_version = tag[1:]
+
+          with open("Cargo.toml", "rb") as handle:
+              data = tomllib.load(handle)
+
+          workspace_version = data["workspace"]["package"]["version"]
+          if tag_version != workspace_version:
+              sys.exit(
+                  f"Tag version v{tag_version} does not match workspace version {workspace_version}"
+              )
+
+          deps = data["workspace"].get("dependencies", {})
+          mismatches = []
+          for name, spec in deps.items():
+              if not name.startswith("cranpose"):
+                  continue
+              if isinstance(spec, str):
+                  dep_version = spec
+              else:
+                  dep_version = spec.get("version")
+              if dep_version != workspace_version:
+                  mismatches.append(f"{name} => {dep_version}")
+
+          if mismatches:
+              joined = "\n".join(mismatches)
+              sys.exit(
+                  "Workspace dependency versions must match workspace version:\n"
+                  + joined
+              )
+
+          print(f"Tag v{tag_version} matches workspace version {workspace_version}")
+          PY
+
+      - name: Publish cranpose-core
+        run: cargo publish -p cranpose-core
 
       - name: Publish cranpose-macros
-        env:
-          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: cargo publish -p cranpose-macros --token "$CRATES_IO_TOKEN" || true
+        run: cargo publish -p cranpose-macros
 
       - name: Publish cranpose-runtime-std
-        env:
-          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: cargo publish -p cranpose-runtime-std --token "$CRATES_IO_TOKEN" || true
+        run: cargo publish -p cranpose-runtime-std
 
       - name: Publish cranpose-ui-graphics
-        env:
-          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: cargo publish -p cranpose-ui-graphics --token "$CRATES_IO_TOKEN" || true
+        run: cargo publish -p cranpose-ui-graphics
 
       - name: Publish cranpose-ui-layout
-        env:
-          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: cargo publish -p cranpose-ui-layout --token "$CRATES_IO_TOKEN" || true
+        run: cargo publish -p cranpose-ui-layout
 
       - name: Publish cranpose-animation
-        env:
-          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: cargo publish -p cranpose-animation --token "$CRATES_IO_TOKEN" || true
+        run: cargo publish -p cranpose-animation
 
       - name: Publish cranpose-foundation
-        env:
-          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: cargo publish -p cranpose-foundation --token "$CRATES_IO_TOKEN" || true
+        run: cargo publish -p cranpose-foundation
 
       - name: Publish cranpose-ui
-        env:
-          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: cargo publish -p cranpose-ui --token "$CRATES_IO_TOKEN" || true
-
-      - name: Publish cranpose-assets
-        env:
-          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: cargo publish -p cranpose-assets --token "$CRATES_IO_TOKEN" || true
-
-      - name: Publish cranpose-app-shell
-        env:
-          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: cargo publish -p cranpose-app-shell --token "$CRATES_IO_TOKEN" || true
-
-      - name: Publish cranpose-app
-        env:
-          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: cargo publish -p cranpose-app --token "$CRATES_IO_TOKEN" || true
-
-      # Publish platform crates
-      - name: Publish cranpose-platform-web
-        env:
-          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: cargo publish -p cranpose-platform-web --token "$CRATES_IO_TOKEN" || true
-
-      - name: Publish cranpose-platform-android
-        env:
-          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: cargo publish -p cranpose-platform-android --token "$CRATES_IO_TOKEN" || true
-
-      - name: Publish cranpose-platform-desktop-winit
-        env:
-          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: cargo publish -p cranpose-platform-desktop-winit --token "$CRATES_IO_TOKEN" || true
+        run: cargo publish -p cranpose-ui
 
       # Publish render crates
       - name: Publish cranpose-render-common
-        env:
-          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: cargo publish -p cranpose-render-common --token "$CRATES_IO_TOKEN" || true
+        run: cargo publish -p cranpose-render-common
 
       - name: Publish cranpose-render-pixels
-        env:
-          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: cargo publish -p cranpose-render-pixels --token "$CRATES_IO_TOKEN" || true
+        run: cargo publish -p cranpose-render-pixels
 
       - name: Publish cranpose-render-wgpu
-        env:
-          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: cargo publish -p cranpose-render-wgpu --token "$CRATES_IO_TOKEN" || true
+        run: cargo publish -p cranpose-render-wgpu
+
+      # Publish app and platform crates
+      - name: Publish cranpose-app-shell
+        run: cargo publish -p cranpose-app-shell
+
+      # Publish platform crates
+      - name: Publish cranpose-platform-web
+        run: cargo publish -p cranpose-platform-web
+
+      - name: Publish cranpose-platform-android
+        run: cargo publish -p cranpose-platform-android
+
+      - name: Publish cranpose-platform-desktop-winit
+        run: cargo publish -p cranpose-platform-desktop-winit
+
+      - name: Publish cranpose-assets
+        run: cargo publish -p cranpose-assets
+
+      - name: Publish cranpose
+        run: cargo publish -p cranpose
 
       - name: Publish cranpose-testing
-        env:
-          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: cargo publish -p cranpose-testing --token "$CRATES_IO_TOKEN" || true
+        run: cargo publish -p cranpose-testing
