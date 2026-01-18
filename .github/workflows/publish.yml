@@ -112,13 +112,13 @@ jobs:
               new_lines = []
               version_written = False
               for line in lines[start:end]:
-                  if re.match(r"\\s*version\\s*=", line):
+                  if re.match(r"\s*version\s*=", line):
                       if not version_written:
-                          indent = re.match(r"^\\s*", line).group(0)
+                          indent = re.match(r"^\s*", line).group(0)
                           new_lines.append(f"{indent}version = \"{version}\"\n")
                           version_written = True
                       continue
-                  if re.match(r"\\s*version\\.", line):
+                  if re.match(r"\s*version\.", line):
                       continue
                   new_lines.append(line)
               if not version_written:
@@ -130,17 +130,17 @@ jobs:
               mismatches = []
               for i in range(start, end):
                   line = lines[i]
-                  if not re.match(r"\\s*cranpose[\\w-]*\\s*=\\s*\\{", line):
+                  if not re.match(r"\s*cranpose[\w-]*\s*=\s*\{", line):
                       continue
-                  if re.search(r'version\\s*=\\s*\"[^\"]+\"', line) is None:
+                  if re.search(r'version\s*=\s*"[^"]+"', line) is None:
                       mismatches.append(line.strip())
                       continue
                   lines[i] = re.sub(
-                      r'(version\\s*=\\s*\")[^\"]+(\"\\s*)',
-                      rf"\\1{version}\\2",
+                      r'(version\s*=\s*")[^"]+("\s*)',
+                      rf"\g<1>{version}\g<2>",
                       line,
                   )
-                  if re.search(rf'version\\s*=\\s*\"{re.escape(version)}\"', lines[i]) is None:
+                  if re.search(rf'version\s*=\s*"{re.escape(version)}"', lines[i]) is None:
                       mismatches.append(lines[i].strip())
               if mismatches:
                   joined = "\n".join(mismatches)
