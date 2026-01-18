@@ -59,15 +59,18 @@ jobs:
           original = text
           lines = text.splitlines(keepends=True)
 
-          def find_section_bounds(lines, section):
+          def find_section_header(lines, section):
               header = f"[{section}]"
-              start = None
               for i, line in enumerate(lines):
                   if line.strip() == header:
-                      start = i + 1
-                      break
-              if start is None:
+                      return i
+              return None
+
+          def find_section_bounds(lines, section):
+              header_index = find_section_header(lines, section)
+              if header_index is None:
                   raise SystemExit(f"Missing [{section}] in Cargo.toml")
+              start = header_index + 1
               end = len(lines)
               for j in range(start, len(lines)):
                   stripped = lines[j].strip()
@@ -76,7 +79,35 @@ jobs:
                       break
               return start, end
 
+          def ensure_workspace_package(lines):
+              header_index = find_section_header(lines, "workspace.package")
+              if header_index is not None:
+                  return
+
+              workspace_header = find_section_header(lines, "workspace")
+              if workspace_header is None:
+                  raise SystemExit("Missing [workspace] in Cargo.toml")
+              ws_start, ws_end = find_section_bounds(lines, "workspace")
+              insert_at = ws_end
+
+              block = []
+              if insert_at > 0 and lines[insert_at - 1].strip():
+                  block.append("\n")
+              block.extend(
+                  [
+                      "[workspace.package]\n",
+                      f"version = \"{version}\"\n",
+                      "edition = \"2021\"\n",
+                      "license = \"Apache-2.0\"\n",
+                      "repository = \"https://github.com/samoylenkodmitry/cranpose\"\n",
+                      "homepage = \"https://samoylenkodmitry.github.io/cranpose/\"\n",
+                      "\n",
+                  ]
+              )
+              lines[insert_at:insert_at] = block
+
           def update_workspace_package(lines):
+              ensure_workspace_package(lines)
               start, end = find_section_bounds(lines, "workspace.package")
               found = False
               for i in range(start, end):
@@ -87,8 +118,11 @@ jobs:
                           lines[i],
                       )
                       found = True
+                  elif re.match(r"\\s*version\\.", lines[i]):
+                      lines[i] = f"version = \"{version}\"\n"
+                      found = True
               if not found:
-                  raise SystemExit("workspace.package is missing a version entry")
+                  lines.insert(start, f"version = \"{version}\"\n")
 
           def update_workspace_deps(lines):
               start, end = find_section_bounds(lines, "workspace.dependencies")
