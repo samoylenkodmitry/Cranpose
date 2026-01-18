@@ -109,20 +109,21 @@ jobs:
           def update_workspace_package(lines):
               ensure_workspace_package(lines)
               start, end = find_section_bounds(lines, "workspace.package")
-              found = False
-              for i in range(start, end):
-                  if re.match(r"\\s*version\\s*=", lines[i]):
-                      lines[i] = re.sub(
-                          r'(\\bversion\\s*=\\s*\")[^\"]+(\"\\s*)',
-                          rf"\\1{version}\\2",
-                          lines[i],
-                      )
-                      found = True
-                  elif re.match(r"\\s*version\\.", lines[i]):
-                      lines[i] = f"version = \"{version}\"\n"
-                      found = True
-              if not found:
-                  lines.insert(start, f"version = \"{version}\"\n")
+              new_lines = []
+              version_written = False
+              for line in lines[start:end]:
+                  if re.match(r"\\s*version\\s*=", line):
+                      if not version_written:
+                          indent = re.match(r"^\\s*", line).group(0)
+                          new_lines.append(f"{indent}version = \"{version}\"\n")
+                          version_written = True
+                      continue
+                  if re.match(r"\\s*version\\.", line):
+                      continue
+                  new_lines.append(line)
+              if not version_written:
+                  new_lines.insert(0, f"version = \"{version}\"\n")
+              lines[start:end] = new_lines
 
           def update_workspace_deps(lines):
               start, end = find_section_bounds(lines, "workspace.dependencies")
