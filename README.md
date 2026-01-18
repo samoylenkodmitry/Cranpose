@@ -5,6 +5,9 @@ https://codewiki.google/github.com/samoylenkodmitry/cranpose
 
 # Cranpose
 
+<img width="1536" height="1024" alt="ChatGPT Image Jan 18, 2026, 10_53_13 AM" src="https://github.com/user-attachments/assets/2ce48dfe-a048-4b9d-8812-a0e4534691f8" />
+
+
 Cranpose is a Jetpack Compose–inspired declarative UI framework. The repository accompanies the architectural proposal documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and provides crate scaffolding for the core runtime, procedural macros, UI primitives, and example applications.
 
 ## 🌐 Live Demo
