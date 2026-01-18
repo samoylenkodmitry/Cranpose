@@ -50,31 +50,67 @@ jobs:
           from pathlib import Path
 
           tag = os.environ["TAG_NAME"]
-          version = tag.removeprefix("v")
+          if not tag.startswith("v"):
+              raise SystemExit(f"Expected tag starting with 'v', got '{tag}'")
+          version = tag[1:]
+
           path = Path("Cargo.toml")
           text = path.read_text()
           original = text
 
-          lines = text.splitlines()
-          in_workspace_package = False
-          in_workspace_deps = False
-          for i, line in enumerate(lines):
-              stripped = line.strip()
-              if stripped.startswith("[") and stripped.endswith("]"):
-                  in_workspace_package = stripped == "[workspace.package]"
-                  in_workspace_deps = stripped == "[workspace.dependencies]"
-                  continue
+          def replace_section(text, section, replacer):
+              pattern = rf"(?ms)^\\[{re.escape(section)}\\]\\n(.*?)(?=^\\[|\\Z)"
+              match = re.search(pattern, text)
+              if not match:
+                  raise SystemExit(f"Missing [{section}] in Cargo.toml")
+              old = match.group(1)
+              new = replacer(old)
+              return text[: match.start(1)] + new + text[match.end(1) :]
 
-              if in_workspace_package and stripped.startswith("version"):
-                  lines[i] = re.sub(r'\"[^\"]+\"', f'"{version}"', line)
-                  continue
+          def update_workspace_package(section):
+              if re.search(r"(?m)^\\s*version\\s*=", section) is None:
+                  raise SystemExit("workspace.package is missing a version entry")
+              return re.sub(
+                  r'(?m)^(\\s*version\\s*=\\s*\")[^\"]+(\"\\s*)$',
+                  rf"\\1{version}\\2",
+                  section,
+              )
 
-              if in_workspace_deps and re.match(r"\\s*cranpose[\\w-]*\\s*=\\s*\\{", line):
-                  lines[i] = re.sub(r'version\\s*=\\s*\"[^\"]+\"', f'version = \"{version}\"', line)
+          def update_workspace_deps(section):
+              lines = section.splitlines()
+              for i, line in enumerate(lines):
+                  if re.match(r"\\s*cranpose[\\w-]*\\s*=\\s*\\{", line):
+                      lines[i] = re.sub(
+                          r'version\\s*=\\s*\"[^\"]+\"',
+                          f'version = \"{version}\"',
+                          line,
+                      )
+              return "\n".join(lines) + ("\n" if section.endswith("\n") else "")
 
-          text = "\n".join(lines) + ("\n" if original.endswith("\n") else "")
+          text = replace_section(text, "workspace.package", update_workspace_package)
+          text = replace_section(text, "workspace.dependencies", update_workspace_deps)
+
           if text != original:
               path.write_text(text)
+
+          section_match = re.search(
+              r"(?ms)^\\[workspace\\.dependencies\\]\\n(.*?)(?=^\\[|\\Z)",
+              text,
+          )
+          if section_match:
+              mismatches = []
+              for line in section_match.group(1).splitlines():
+                  if not re.match(r"\\s*cranpose[\\w-]*\\s*=\\s*\\{", line):
+                      continue
+                  version_match = re.search(r'version\\s*=\\s*\"([^\"]+)\"', line)
+                  if not version_match or version_match.group(1) != version:
+                      mismatches.append(line.strip())
+              if mismatches:
+                  joined = "\n".join(mismatches)
+                  raise SystemExit(
+                      "Some cranpose workspace dependencies were not updated:\n"
+                      + joined
+                  )
           PY
 
           if git diff --quiet; then
