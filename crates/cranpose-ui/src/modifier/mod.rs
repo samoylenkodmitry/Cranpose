@@ -656,10 +656,16 @@ impl Modifier {
             }
         }
     }
-}
 
-impl PartialEq for Modifier {
-    fn eq(&self, other: &Self) -> bool {
+    /// Checks whether two modifiers are structurally equivalent for layout decisions.
+    ///
+    /// This ignores identity-sensitive modifier elements (e.g., draw closures) so
+    /// draw-only updates do not force measure/layout invalidation.
+    pub fn structural_eq(&self, other: &Self) -> bool {
+        self.eq_internal(other, false)
+    }
+
+    fn eq_internal(&self, other: &Self, consider_always_update: bool) -> bool {
         match (&self.kind, &other.kind) {
             (ModifierKind::Empty, ModifierKind::Empty) => true,
             (
@@ -672,21 +678,27 @@ impl PartialEq for Modifier {
                     inspector: _,
                 },
             ) => {
-                // Fast path: if they share the same Rc, they're definitely equal
                 if Rc::ptr_eq(e1, e2) {
                     return true;
                 }
 
-                // Slow path: compare elements by value
                 if e1.len() != e2.len() {
                     return false;
                 }
 
                 for (a, b) in e1.iter().zip(e2.iter()) {
+                    if consider_always_update && (a.requires_update() || b.requires_update()) {
+                        if !Rc::ptr_eq(a, b) {
+                            return false;
+                        }
+                        continue;
+                    }
+
                     if !a.equals_element(&**b) {
                         return false;
                     }
                 }
+
                 true
             }
             (
@@ -699,15 +711,20 @@ impl PartialEq for Modifier {
                     inner: i2,
                 },
             ) => {
-                // Fast path: if they share the same Rc pointers, they're definitely equal
                 if Rc::ptr_eq(o1, o2) && Rc::ptr_eq(i1, i2) {
                     return true;
                 }
-                // Recursive comparison
-                o1 == o2 && i1 == i2
+                o1.as_ref().eq_internal(o2.as_ref(), consider_always_update)
+                    && i1.as_ref().eq_internal(i2.as_ref(), consider_always_update)
             }
             _ => false,
         }
+    }
+}
+
+impl PartialEq for Modifier {
+    fn eq(&self, other: &Self) -> bool {
+        self.eq_internal(other, true)
     }
 }
 

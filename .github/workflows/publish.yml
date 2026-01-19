@@ -310,15 +310,15 @@ jobs:
 
           publish_if_needed() {
             local crate="$1"
-            crate_exists "$crate" "$version"
-            local rc=$?
-            if [ "$rc" -eq 0 ]; then
+            if crate_exists "$crate" "$version"; then
               echo "Skipping ${crate} ${version} (already published)."
               return 0
-            fi
-            if [ "$rc" -ne 1 ]; then
-              echo "Failed to determine publish status for ${crate} ${version}." >&2
-              exit 1
+            else
+              local rc=$?
+              if [ "$rc" -ne 1 ]; then
+                echo "Failed to determine publish status for ${crate} ${version}." >&2
+                exit 1
+              fi
             fi
             cargo publish -p "$crate"
           }

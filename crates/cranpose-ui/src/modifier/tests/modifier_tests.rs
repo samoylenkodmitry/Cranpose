@@ -64,6 +64,25 @@ fn then_short_circuits_empty_modifiers() {
 }
 
 #[test]
+fn structural_eq_ignores_always_update_elements() {
+    let modifier_a = Modifier::empty().draw_behind({
+        let width = 24.0;
+        move |_scope| {
+            let _ = width;
+        }
+    });
+    let modifier_b = Modifier::empty().draw_behind({
+        let width = 120.0;
+        move |_scope| {
+            let _ = width;
+        }
+    });
+
+    assert!(modifier_a.structural_eq(&modifier_b));
+    assert_ne!(modifier_a, modifier_b);
+}
+
+#[test]
 fn required_size_sets_explicit_constraints() {
     let modifier = Modifier::empty().required_size(Size {
         width: 32.0,

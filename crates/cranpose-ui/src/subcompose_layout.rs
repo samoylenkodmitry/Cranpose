@@ -929,7 +929,7 @@ impl SubcomposeLayoutNodeInner {
     /// Updates the modifier and collects invalidations without dispatching them.
     /// Returns the invalidations and whether the modifier changed.
     fn set_modifier_collect(&mut self, modifier: Modifier) -> (Vec<ModifierInvalidation>, bool) {
-        let modifier_changed = self.modifier != modifier;
+        let modifier_changed = !self.modifier.structural_eq(&modifier);
         self.modifier = modifier;
         self.modifier_chain.set_debug_logging(self.debug_modifiers);
         let modifier_local_invalidations = self.modifier_chain.update(&self.modifier);

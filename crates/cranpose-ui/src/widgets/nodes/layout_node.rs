@@ -232,7 +232,7 @@ impl LayoutNode {
         // state values that need to be passed to nodes even when the Modifier
         // compares as equal. This matches Jetpack Compose where update() is always
         // called on matched nodes.
-        let modifier_changed = self.modifier != modifier;
+        let modifier_changed = !self.modifier.structural_eq(&modifier);
         self.modifier = modifier;
         self.sync_modifier_chain();
         if modifier_changed {
