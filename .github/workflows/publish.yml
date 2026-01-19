@@ -279,11 +279,11 @@ jobs:
           print(f"Tag v{tag_version} matches workspace version {workspace_version}")
           PY
 
-      - name: Publish cranpose-core
-        run: cargo publish -p cranpose-core
-
       - name: Publish cranpose-macros
         run: cargo publish -p cranpose-macros
+
+      - name: Publish cranpose-core
+        run: cargo publish -p cranpose-core
 
       - name: Publish cranpose-runtime-std
         run: cargo publish -p cranpose-runtime-std
