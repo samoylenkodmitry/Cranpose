@@ -1,5 +1,6 @@
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
+use proc_macro_crate::{crate_name, FoundCrate};
 use quote::quote;
 use syn::{parse_macro_input, FnArg, Ident, ItemFn, Pat, PatType, ReturnType, Type};
 
@@ -114,10 +115,26 @@ fn is_fn_param(ty: &Type, generics: &syn::Generics) -> bool {
     is_fn_like_type(ty) || is_generic_fn_like(ty, generics)
 }
 
+fn core_crate_path() -> TokenStream2 {
+    let crate_name = crate_name("cranpose")
+        .ok()
+        .or_else(|| crate_name("cranpose-core").ok());
+
+    match crate_name {
+        Some(FoundCrate::Itself) => quote!(crate),
+        Some(FoundCrate::Name(name)) => {
+            let ident = Ident::new(&name, Span::call_site());
+            quote!(#ident)
+        }
+        None => quote!(cranpose_core),
+    }
+}
+
 #[proc_macro_attribute]
 pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr_tokens = TokenStream2::from(attr);
     let mut enable_skip = true;
+    let core_path = core_crate_path();
     if !attr_tokens.is_empty() {
         match syn::parse2::<Ident>(attr_tokens) {
             Ok(ident) if ident == "no_skip" => enable_skip = false,
@@ -189,7 +206,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     let original_block = func.block.clone();
     let helper_block = original_block.clone();
     let recranpose_block = original_block.clone();
-    let key_expr = quote! { cranpose_core::location_key(file!(), line!(), column!()) };
+    let key_expr = quote! { #core_path::location_key(file!(), line!(), column!()) };
 
     // Rebinds will be generated later in the helper_body context where we have access to slots
     let rebinds_for_no_skip: Vec<_> = param_info
@@ -264,8 +281,8 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     let ident = &info.ident;
                     quote! {
                         let #slot_ident = __composer
-                            .use_value_slot(|| cranpose_core::CallbackHolder::new());
-                        __composer.with_slot_value::<cranpose_core::CallbackHolder, _>(
+                            .use_value_slot(|| #core_path::CallbackHolder::new());
+                        __composer.with_slot_value::<#core_path::CallbackHolder, _>(
                             #slot_ident,
                             |holder| {
                                 holder.update(#ident);
@@ -278,8 +295,8 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     let ty = &info.ty;
                     quote! {
                         let #slot_ident = __composer
-                            .use_value_slot(|| cranpose_core::ParamState::<#ty>::default());
-                        if __composer.with_slot_value_mut::<cranpose_core::ParamState<#ty>, _>(
+                            .use_value_slot(|| #core_path::ParamState::<#ty>::default());
+                        if __composer.with_slot_value_mut::<#core_path::ParamState<#ty>, _>(
                             #slot_ident,
                             |state| state.update(&#ident),
                         )
@@ -300,13 +317,13 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                 } else if is_fn_param(&info.ty, &generics) {
                     quote! {
                         let #slot_ident = __composer
-                            .use_value_slot(|| cranpose_core::CallbackHolder::new());
+                            .use_value_slot(|| #core_path::CallbackHolder::new());
                     }
                 } else {
                     let ty = &info.ty;
                     quote! {
                         let #slot_ident = __composer
-                            .use_value_slot(|| cranpose_core::ParamState::<#ty>::default());
+                            .use_value_slot(|| #core_path::ParamState::<#ty>::default());
                     }
                 }
             })
@@ -325,7 +342,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                         quote! {
                             #[allow(unused_mut)]
                             let mut #pat = __composer
-                                .with_slot_value::<cranpose_core::CallbackHolder, _>(
+                                .with_slot_value::<#core_path::CallbackHolder, _>(
                                     #slot_ident,
                                     |holder| holder.clone_rc(),
                                 );
@@ -334,7 +351,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                         quote! {
                             #[allow(unused_mut)]
                             let #pat = __composer
-                                .with_slot_value::<cranpose_core::CallbackHolder, _>(
+                                .with_slot_value::<#core_path::CallbackHolder, _>(
                                     #slot_ident,
                                     |holder| holder.clone_rc(),
                                 );
@@ -363,7 +380,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                         quote! {
                             #[allow(unused_mut)]
                             let mut #pat = __composer
-                                .with_slot_value::<cranpose_core::CallbackHolder, _>(
+                                .with_slot_value::<#core_path::CallbackHolder, _>(
                                     #slot_ident,
                                     |holder| holder.clone_rc(),
                                 );
@@ -372,7 +389,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                         quote! {
                             #[allow(unused_mut)]
                             let #pat = __composer
-                                .with_slot_value::<cranpose_core::CallbackHolder, _>(
+                                .with_slot_value::<#core_path::CallbackHolder, _>(
                                     #slot_ident,
                                     |holder| holder.clone_rc(),
                                 );
@@ -383,7 +400,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     let ty = &info.ty;
                     quote! {
                         let #pat = __composer
-                            .with_slot_value::<cranpose_core::ParamState<#ty>, _>(
+                            .with_slot_value::<#core_path::ParamState<#ty>, _>(
                                 #slot_ident,
                                 |state| {
                                     state
@@ -404,7 +421,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         let recranpose_setter = quote! {
             {
                 __composer.set_recranpose_callback(move |
-                    __composer: &cranpose_core::Composer|
+                    __composer: &#core_path::Composer|
                 {
                     #recranpose_fn_ident #ty_generics_turbofish (
                         __composer
@@ -420,16 +437,16 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             let mut __changed = __current_scope.should_recompose();
             #(#param_setup)*
             let __result_slot_index = __composer
-                .use_value_slot(|| cranpose_core::ReturnSlot::<#return_ty>::default());
+                .use_value_slot(|| #core_path::ReturnSlot::<#return_ty>::default());
             let __has_previous = __composer
-                .with_slot_value::<cranpose_core::ReturnSlot<#return_ty>, _>(
+                .with_slot_value::<#core_path::ReturnSlot<#return_ty>, _>(
                     __result_slot_index,
                     |slot| slot.get().is_some(),
                 );
             if !__changed && __has_previous {
                 __composer.skip_current_group();
                 let __result = __composer
-                    .with_slot_value::<cranpose_core::ReturnSlot<#return_ty>, _>(
+                    .with_slot_value::<#core_path::ReturnSlot<#return_ty>, _>(
                         __result_slot_index,
                         |slot| {
                             slot.get()
@@ -442,7 +459,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                 #(#rebinds)*
                 #helper_block
             };
-            __composer.with_slot_value_mut::<cranpose_core::ReturnSlot<#return_ty>, _>(
+            __composer.with_slot_value_mut::<#core_path::ReturnSlot<#return_ty>, _>(
                 __result_slot_index,
                 |slot| {
                     slot.store(__value.clone());
@@ -455,12 +472,12 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         let recranpose_fn_body = quote! {
             #(#param_setup_recompose)*
             let __result_slot_index = __composer
-                .use_value_slot(|| cranpose_core::ReturnSlot::<#return_ty>::default());
+                .use_value_slot(|| #core_path::ReturnSlot::<#return_ty>::default());
             #(#rebinds_for_recompose)*
             let __value: #return_ty = {
                 #recranpose_block
             };
-            __composer.with_slot_value_mut::<cranpose_core::ReturnSlot<#return_ty>, _>(
+            __composer.with_slot_value_mut::<#core_path::ReturnSlot<#return_ty>, _>(
                 __result_slot_index,
                 |slot| {
                     slot.store(__value.clone());
@@ -473,7 +490,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         let recranpose_fn = quote! {
             #[allow(non_snake_case)]
             fn #recranpose_fn_ident #impl_generics (
-                __composer: &cranpose_core::Composer
+                __composer: &#core_path::Composer
             ) -> #return_ty #where_clause {
                 #recranpose_fn_body
             }
@@ -482,7 +499,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         let helper_fn = quote! {
             #[allow(non_snake_case)]
             fn #helper_ident #impl_generics (
-                __composer: &cranpose_core::Composer
+                __composer: &#core_path::Composer
                 #(, #helper_inputs)*
             ) -> #return_ty #where_clause {
                 #helper_body
@@ -503,8 +520,8 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             .collect();
 
         let wrapped = quote!({
-            cranpose_core::with_current_composer(|__composer: &cranpose_core::Composer| {
-                __composer.with_group(#key_expr, |__composer: &cranpose_core::Composer| {
+            #core_path::with_current_composer(|__composer: &#core_path::Composer| {
+                __composer.with_group(#key_expr, |__composer: &#core_path::Composer| {
                     #helper_ident(__composer #(, #wrapper_args)*)
                 })
             })
@@ -518,8 +535,8 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     } else {
         // no_skip path: still uses simple rebinds
         let wrapped = quote!({
-            cranpose_core::with_current_composer(|__composer: &cranpose_core::Composer| {
-                __composer.with_group(#key_expr, |__scope: &cranpose_core::Composer| {
+            #core_path::with_current_composer(|__composer: &#core_path::Composer| {
+                __composer.with_group(#key_expr, |__scope: &#core_path::Composer| {
                     #(#rebinds_for_no_skip)*
                     #original_block
                 })

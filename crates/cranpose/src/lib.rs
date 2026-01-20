@@ -16,9 +16,18 @@ pub use launcher::{AppLauncher, AppSettings};
 /// Re-export the UI crate so applications can depend on a single crate.
 pub use cranpose_ui::*;
 
+/// Core runtime helpers commonly used by applications.
+pub use cranpose_core::{mutableStateOf, remember, rememberUpdatedState, useState};
+
+#[doc(hidden)]
+pub use cranpose_core::{
+    location_key, with_current_composer, CallbackHolder, Composer, ParamState, ReturnSlot,
+};
+
 /// Convenience imports for Cranpose applications.
 pub mod prelude {
     pub use crate::{AppLauncher, AppSettings};
+    pub use cranpose_core::{mutableStateOf, remember, rememberUpdatedState, useState};
     pub use cranpose_ui::*;
 }
 

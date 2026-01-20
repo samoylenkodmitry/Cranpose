@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cranpose Isolated Demo</title>
+    <style>
+        :root {
+            --bg-1: #0f1218;
+            --bg-2: #141b24;
+            --card: #1c2633;
+            --text: #e6ecf5;
+            --muted: #8a97ad;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: "IBM Plex Mono", "Fira Code", monospace;
+            background: radial-gradient(circle at 20% 20%, #1e2b3a 0%, var(--bg-1) 45%, #0a0d12 100%);
+            color: var(--text);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 32px;
+        }
+
+        .frame {
+            width: min(980px, 95vw);
+            background: linear-gradient(145deg, var(--card), #131a23);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 20px;
+            box-shadow: 0 32px 80px rgba(0, 0, 0, 0.45);
+            padding: 24px;
+            display: grid;
+            gap: 16px;
+        }
+
+        header {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 16px;
+        }
+
+        header h1 {
+            font-size: 24px;
+            margin: 0;
+        }
+
+        header span {
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        canvas {
+            width: 100%;
+            height: 600px;
+            border-radius: 16px;
+            background: #0b0f14;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+        }
+    </style>
+</head>
+<body>
+    <div class="frame">
+        <header>
+            <h1>Cranpose Isolated Demo</h1>
+            <span>Powered by crates.io release</span>
+        </header>
+        <canvas id="cranpose-isolated-canvas" width="900" height="600"></canvas>
+    </div>
+
+    <script type="module">
+        import init, { run_app } from "./pkg/isolated_demo.js";
+
+        async function boot() {
+            await init();
+            await run_app();
+        }
+
+        boot();
+    </script>
+</body>
+</html>

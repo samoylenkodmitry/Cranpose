@@ -1,0 +1,72 @@
+[package]
+name = "isolated-demo"
+version = "0.1.0"
+edition = "2021"
+description = "Isolated Cranpose demo using crates.io dependencies"
+license = "Apache-2.0"
+repository = "https://github.com/samoylenkodmitry/cranpose"
+publish = false
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-Oz", "--all-features"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[[bin]]
+name = "isolated-demo"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[features]
+default = ["renderer-wgpu", "desktop"]
+renderer-pixels = ["cranpose/renderer-pixels"]
+renderer-wgpu = ["cranpose/renderer-wgpu"]
+desktop = ["cranpose/desktop"]
+android = ["cranpose/android"]
+web = ["cranpose/web", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:wasm-logger"]
+logging = ["dep:env_logger"]
+
+[dependencies]
+cranpose = { version = "0.0.31", default-features = false }
+log = "0.4"
+instant = { version = "0.1", features = ["wasm-bindgen"] }
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+wasm-logger = { version = "0.2", optional = true }
+getrandom = { version = "0.3", features = ["wasm_js"] }
+cranpose-core = "0.0.30"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+env_logger = { version = "0.10", optional = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+android-activity = "0.6"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Document",
+    "Element",
+    "HtmlElement",
+    "HtmlCanvasElement",
+    "CanvasRenderingContext2d",
+    "Performance",
+    "MouseEvent",
+    "Touch",
+    "TouchList",
+    "TouchEvent",
+    "PointerEvent",
+    "WheelEvent",
+    "KeyboardEvent",
+    "CssStyleDeclaration",
+    "Navigator",
+    "Clipboard",
+    "ClipboardEvent",
+    "DataTransfer",
+] }
+
+[workspace]

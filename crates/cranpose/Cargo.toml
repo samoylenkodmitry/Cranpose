@@ -19,6 +19,7 @@ robot = [] # Enable robot testing support (cranpose-ui now always included)
 
 [dependencies]
 cranpose-app-shell = { workspace = true }
+cranpose-core = { workspace = true }
 cranpose-ui = { workspace = true }
 cranpose-platform-desktop-winit = { workspace = true, optional = true }
 cranpose-platform-android = { workspace = true, optional = true }
