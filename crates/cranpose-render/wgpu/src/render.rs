@@ -16,6 +16,12 @@ use std::sync::{Arc, Mutex};
 // WebGL guarantees 16KB uniform buffers, ShapeData is 64 bytes = 256 max shapes
 const MAX_SHAPES_PER_DRAW: usize = 200; // ShapeData is 80 bytes, 16KB uniform limit = ~200 shapes
 const HARD_MAX_BUFFER_MB: usize = 64; // Maximum 64MB per buffer
+const CLEAR_COLOR: wgpu::Color = wgpu::Color {
+    r: 18.0 / 255.0,
+    g: 18.0 / 255.0,
+    b: 24.0 / 255.0,
+    a: 1.0,
+};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
@@ -250,13 +256,20 @@ pub struct GpuRenderer {
     text_renderer: TextRenderer,
     text_atlas: TextAtlas,
     swash_cache: SwashCache,
-    glyphon_cache: Cache,
     // Persistent GPU buffers (reused across frames)
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
     shape_buffers: ShapeBatchBuffers,
     // Shared text cache used by both measurement and rendering
     text_cache: SharedTextCache,
+    text_viewport: Viewport,
+    scratch_shape_data: Vec<ShapeData>,
+    scratch_gradients: Vec<GradientStop>,
+    scratch_filtered_indices: Vec<usize>,
+    scratch_vertices: Vec<Vertex>,
+    scratch_indices: Vec<u32>,
+    scratch_text_entries: Vec<(usize, TextCacheKey)>,
+    last_shape_chunk_count: usize,
 }
 
 impl GpuRenderer {
@@ -371,6 +384,7 @@ impl GpuRenderer {
             wgpu::MultisampleState::default(),
             None,
         );
+        let text_viewport = Viewport::new(&device, &glyphon_cache);
 
         // Create persistent uniform buffer
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -402,11 +416,18 @@ impl GpuRenderer {
             text_renderer,
             text_atlas,
             swash_cache,
-            glyphon_cache,
             uniform_buffer,
             uniform_bind_group,
             shape_buffers,
             text_cache,
+            text_viewport,
+            scratch_shape_data: Vec::new(),
+            scratch_gradients: Vec::new(),
+            scratch_filtered_indices: Vec::new(),
+            scratch_vertices: Vec::new(),
+            scratch_indices: Vec::new(),
+            scratch_text_entries: Vec::new(),
+            last_shape_chunk_count: 0,
         }
     }
 
@@ -427,12 +448,18 @@ impl GpuRenderer {
             height
         );
 
-        // Sort by z-index
-        let mut sorted_shapes = shapes.to_vec();
-        sorted_shapes.sort_by_key(|s| s.z_index);
-
-        let mut sorted_texts = texts.to_vec();
-        sorted_texts.sort_by_key(|t| t.z_index);
+        debug_assert!(
+            shapes
+                .windows(2)
+                .all(|pair| pair[0].z_index <= pair[1].z_index),
+            "shapes must be added in z-index order"
+        );
+        debug_assert!(
+            texts
+                .windows(2)
+                .all(|pair| pair[0].z_index <= pair[1].z_index),
+            "texts must be added in z-index order"
+        );
 
         // Update uniform buffer with viewport dimensions
         let uniforms = Uniforms {
@@ -443,24 +470,33 @@ impl GpuRenderer {
             .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
         // Chunked rendering for robustness with large scenes
-        let total_shape_count = sorted_shapes.len();
+        let total_shape_count = shapes.len();
 
         if total_shape_count > MAX_SHAPES_PER_DRAW {
-            eprintln!(
-                "INFO: Rendering {} shapes in {} chunks (max {} per draw)",
-                total_shape_count,
-                total_shape_count.div_ceil(MAX_SHAPES_PER_DRAW),
-                MAX_SHAPES_PER_DRAW
-            );
+            let chunk_count = total_shape_count.div_ceil(MAX_SHAPES_PER_DRAW);
+            if self.last_shape_chunk_count != chunk_count {
+                log::debug!(
+                    "Rendering {} shapes in {} chunks (max {} per draw)",
+                    total_shape_count,
+                    chunk_count,
+                    MAX_SHAPES_PER_DRAW
+                );
+                self.last_shape_chunk_count = chunk_count;
+            }
+        } else if self.last_shape_chunk_count != 0 {
+            self.last_shape_chunk_count = 0;
         }
 
         // First pass: collect all shape data and gradients across entire scene
         // Also collect filtered shapes (ones that pass clip test) to stay in sync
-        let mut all_gradients = Vec::new();
-        let mut all_shape_data = Vec::new();
-        let mut filtered_shapes: Vec<&DrawShape> = Vec::new();
+        self.scratch_gradients.clear();
+        self.scratch_shape_data.clear();
+        self.scratch_filtered_indices.clear();
+        self.scratch_gradients.reserve(total_shape_count);
+        self.scratch_shape_data.reserve(total_shape_count);
+        self.scratch_filtered_indices.reserve(total_shape_count);
 
-        for shape in &sorted_shapes {
+        for (shape_index, shape) in shapes.iter().enumerate() {
             let rect = shape.rect;
 
             // Scale to physical pixels
@@ -500,9 +536,9 @@ impl GpuRenderer {
             let (brush_type, gradient_start, gradient_count) = match &shape.brush {
                 Brush::Solid(_) => (0u32, 0u32, 0u32),
                 Brush::LinearGradient(colors) => {
-                    let start = all_gradients.len() as u32;
+                    let start = self.scratch_gradients.len() as u32;
                     for c in colors {
-                        all_gradients.push(GradientStop {
+                        self.scratch_gradients.push(GradientStop {
                             color: [c.r(), c.g(), c.b(), c.a()],
                         });
                     }
@@ -513,9 +549,9 @@ impl GpuRenderer {
                     center,
                     radius,
                 } => {
-                    let start = all_gradients.len() as u32;
+                    let start = self.scratch_gradients.len() as u32;
                     for c in colors {
-                        all_gradients.push(GradientStop {
+                        self.scratch_gradients.push(GradientStop {
                             color: [c.r(), c.g(), c.b(), c.a()],
                         });
                     }
@@ -543,7 +579,7 @@ impl GpuRenderer {
                 [0.0, 0.0, 0.0, 0.0]
             };
 
-            all_shape_data.push(ShapeData {
+            self.scratch_shape_data.push(ShapeData {
                 rect: [x, y, w, h],
                 radii,
                 gradient_params,
@@ -554,40 +590,52 @@ impl GpuRenderer {
                 _padding: 0,
             });
 
-            filtered_shapes.push(shape);
+            self.scratch_filtered_indices.push(shape_index);
         }
 
         // Ensure buffers can hold at least one chunk
         self.shape_buffers.ensure_capacity(
             &self.device,
             &self.shape_bind_group_layout,
-            MAX_SHAPES_PER_DRAW * 4,    // vertices
-            MAX_SHAPES_PER_DRAW * 6,    // indices
-            MAX_SHAPES_PER_DRAW,        // shapes
-            all_gradients.len().max(1), // all gradients (written once)
+            MAX_SHAPES_PER_DRAW * 4,             // vertices
+            MAX_SHAPES_PER_DRAW * 6,             // indices
+            MAX_SHAPES_PER_DRAW,                 // shapes
+            self.scratch_gradients.len().max(1), // all gradients (written once)
         );
 
         // Write gradients once for all chunks
-        if !all_gradients.is_empty() {
+        if !self.scratch_gradients.is_empty() {
             self.queue.write_buffer(
                 &self.shape_buffers.gradient_buffer,
                 0,
-                bytemuck::cast_slice(&all_gradients),
+                bytemuck::cast_slice(&self.scratch_gradients),
             );
         }
 
         // Second pass: render shapes in chunks with proper synchronization
         // Each chunk gets its own encoder+submit to ensure buffer writes complete before next chunk
-        // Use filtered_shapes (after clip culling) to stay in sync with all_shape_data
-        for (chunk_idx, chunk) in filtered_shapes.chunks(MAX_SHAPES_PER_DRAW).enumerate() {
+        // Use filtered indices (after clip culling) to stay in sync with shape data
+        let filtered_shape_count = self.scratch_filtered_indices.len();
+        let chunk_count = filtered_shape_count.div_ceil(MAX_SHAPES_PER_DRAW);
+        let mut has_shape_pass = false;
+        let mut pending_shape_encoder: Option<wgpu::CommandEncoder> = None;
+
+        for (chunk_idx, chunk) in self
+            .scratch_filtered_indices
+            .chunks(MAX_SHAPES_PER_DRAW)
+            .enumerate()
+        {
             let chunk_len = chunk.len();
             let chunk_start = chunk_idx * MAX_SHAPES_PER_DRAW;
 
-            let mut vertices = Vec::with_capacity(chunk_len * 4);
-            let mut indices = Vec::with_capacity(chunk_len * 6);
+            self.scratch_vertices.clear();
+            self.scratch_indices.clear();
+            self.scratch_vertices.reserve(chunk_len * 4);
+            self.scratch_indices.reserve(chunk_len * 6);
 
             // Build vertices and indices for this chunk
-            for (shape_idx, shape) in chunk.iter().enumerate() {
+            for (shape_idx, shape_index) in chunk.iter().enumerate() {
+                let shape = &shapes[*shape_index];
                 let rect = shape.rect;
                 let base_vertex = (shape_idx * 4) as u32;
 
@@ -611,7 +659,7 @@ impl GpuRenderer {
                 let h = rect.height * root_scale;
 
                 // Vertices for quad (in physical pixels)
-                vertices.extend_from_slice(&[
+                self.scratch_vertices.extend_from_slice(&[
                     Vertex {
                         position: [x, y],
                         color,
@@ -635,7 +683,7 @@ impl GpuRenderer {
                 ]);
 
                 // Indices for two triangles
-                indices.extend_from_slice(&[
+                self.scratch_indices.extend_from_slice(&[
                     base_vertex,
                     base_vertex + 1,
                     base_vertex + 2,
@@ -646,20 +694,20 @@ impl GpuRenderer {
             }
 
             // Get shape data slice for this chunk
-            let chunk_shape_data = &all_shape_data[chunk_start..chunk_start + chunk_len];
+            let chunk_shape_data = &self.scratch_shape_data[chunk_start..chunk_start + chunk_len];
 
             // Write chunk data and render in one encoder (submit after to ensure synchronization)
-            if !vertices.is_empty() {
+            if !self.scratch_vertices.is_empty() {
                 // Write this chunk's data to buffers
                 self.queue.write_buffer(
                     &self.shape_buffers.vertex_buffer,
                     0,
-                    bytemuck::cast_slice(&vertices),
+                    bytemuck::cast_slice(&self.scratch_vertices),
                 );
                 self.queue.write_buffer(
                     &self.shape_buffers.index_buffer,
                     0,
-                    bytemuck::cast_slice(&indices),
+                    bytemuck::cast_slice(&self.scratch_indices),
                 );
                 self.queue.write_buffer(
                     &self.shape_buffers.shape_buffer,
@@ -668,6 +716,7 @@ impl GpuRenderer {
                 );
 
                 // Create encoder for this chunk
+                has_shape_pass = true;
                 let mut encoder =
                     self.device
                         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -683,12 +732,7 @@ impl GpuRenderer {
                             resolve_target: None,
                             ops: wgpu::Operations {
                                 load: if chunk_idx == 0 {
-                                    wgpu::LoadOp::Clear(wgpu::Color {
-                                        r: 18.0 / 255.0,
-                                        g: 18.0 / 255.0,
-                                        b: 24.0 / 255.0,
-                                        a: 1.0,
-                                    })
+                                    wgpu::LoadOp::Clear(CLEAR_COLOR)
                                 } else {
                                     wgpu::LoadOp::Load // Preserve previous chunks
                                 },
@@ -713,8 +757,13 @@ impl GpuRenderer {
                     render_pass.draw_indexed(0..(chunk_len as u32 * 6), 0, 0..1);
                 }
 
-                // Submit this chunk immediately to ensure synchronization before next chunk
-                self.queue.submit(std::iter::once(encoder.finish()));
+                let is_last_chunk = chunk_idx + 1 == chunk_count;
+                if is_last_chunk {
+                    pending_shape_encoder = Some(encoder);
+                } else {
+                    // Submit this chunk immediately to ensure synchronization before next chunk.
+                    self.queue.submit(std::iter::once(encoder.finish()));
+                }
             }
         }
 
@@ -724,7 +773,10 @@ impl GpuRenderer {
 
         // Prepare text buffers (with caching for performance)
         // Font size in physical pixels for glyphon
-        for text_draw in &sorted_texts {
+        self.scratch_text_entries.clear();
+        self.scratch_text_entries.reserve(texts.len());
+
+        for (text_index, text_draw) in texts.iter().enumerate() {
             // Skip empty text or zero-sized rects
             if text_draw.text.is_empty()
                 || text_draw.rect.width <= 0.0
@@ -735,10 +787,10 @@ impl GpuRenderer {
 
             // Scale font size to physical pixels: BASE_FONT_SIZE is in dp, scale by text zoom and DPI
             let font_size_px = BASE_FONT_SIZE * text_draw.scale * root_scale;
-            let key = TextCacheKey::new(&text_draw.text, font_size_px);
+            let key = TextCacheKey::for_node(text_draw.node_id, font_size_px);
 
             // Create or update buffer in cache
-            let buffer = text_cache.entry(key).or_insert_with(|| {
+            let buffer = text_cache.entry(key.clone()).or_insert_with(|| {
                 let buffer = glyphon::Buffer::new(
                     &mut font_system,
                     Metrics::new(font_size_px, font_size_px * 1.4),
@@ -754,53 +806,46 @@ impl GpuRenderer {
             // Ensure buffer has the correct text
             buffer.ensure(
                 &mut font_system,
-                &text_draw.text,
+                text_draw.text.as_ref(),
                 font_size_px,
                 Attrs::new(),
             );
+
+            self.scratch_text_entries.push((text_index, key));
         }
 
-        // Collect text data from cache
-        let text_data: Vec<(&TextDraw, TextCacheKey)> = sorted_texts
-            .iter()
-            .filter(|t| !t.text.is_empty() && t.rect.width > 0.0 && t.rect.height > 0.0)
-            .map(|text| {
-                let font_size_px = BASE_FONT_SIZE * text.scale * root_scale;
-                (text, TextCacheKey::new(&text.text, font_size_px))
-            })
-            .collect();
-
         // Create text areas using cached buffers
-        let mut text_areas = Vec::new();
+        let mut text_areas = Vec::with_capacity(self.scratch_text_entries.len());
 
-        for (_text_draw, key) in text_data.iter() {
+        for (text_index, key) in self.scratch_text_entries.iter() {
+            let text_draw = &texts[*text_index];
             let cached = text_cache.get(key).expect("Text should be in cache");
 
             let color = GlyphonColor::rgba(
-                (_text_draw.color.r() * 255.0) as u8,
-                (_text_draw.color.g() * 255.0) as u8,
-                (_text_draw.color.b() * 255.0) as u8,
-                (_text_draw.color.a() * 255.0) as u8,
+                (text_draw.color.r() * 255.0) as u8,
+                (text_draw.color.g() * 255.0) as u8,
+                (text_draw.color.b() * 255.0) as u8,
+                (text_draw.color.a() * 255.0) as u8,
             );
 
             // Scale text position and bounds to physical pixels
-            let left_px = _text_draw.rect.x * root_scale;
-            let top_px = _text_draw.rect.y * root_scale;
+            let left_px = text_draw.rect.x * root_scale;
+            let top_px = text_draw.rect.y * root_scale;
 
             let bounds = TextBounds {
-                left: _text_draw
+                left: text_draw
                     .clip
                     .map(|c| (c.x * root_scale) as i32)
                     .unwrap_or(0),
-                top: _text_draw
+                top: text_draw
                     .clip
                     .map(|c| (c.y * root_scale) as i32)
                     .unwrap_or(0),
-                right: _text_draw
+                right: text_draw
                     .clip
                     .map(|c| ((c.x + c.width) * root_scale) as i32)
                     .unwrap_or(width as i32),
-                bottom: _text_draw
+                bottom: text_draw
                     .clip
                     .map(|c| ((c.y + c.height) * root_scale) as i32)
                     .unwrap_or(height as i32),
@@ -818,19 +863,19 @@ impl GpuRenderer {
             });
         }
 
-        // Create viewport for text rendering
-        let mut viewport = Viewport::new(&self.device, &self.glyphon_cache);
-        viewport.update(&self.queue, Resolution { width, height });
+        let has_text = !text_areas.is_empty();
 
         // Prepare all text at once
-        if !text_areas.is_empty() {
+        if has_text {
+            self.text_viewport
+                .update(&self.queue, Resolution { width, height });
             self.text_renderer
                 .prepare(
                     &self.device,
                     &self.queue,
                     &mut font_system,
                     &mut self.text_atlas,
-                    &viewport,
+                    &self.text_viewport,
                     text_areas.iter().cloned(),
                     &mut self.swash_cache,
                 )
@@ -842,39 +887,78 @@ impl GpuRenderer {
         drop(font_system);
         drop(text_cache);
 
-        // Create encoder for text rendering
-        let mut text_encoder =
-            self.device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Text Encoder"),
-                });
-
-        {
-            let mut text_pass = text_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Text Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
+        let mut submitted = false;
+        if has_text {
+            let mut text_encoder = pending_shape_encoder.take().unwrap_or_else(|| {
+                self.device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Text Encoder"),
+                    })
             });
 
-            // Create viewport for render
-            let mut viewport = Viewport::new(&self.device, &self.glyphon_cache);
-            viewport.update(&self.queue, Resolution { width, height });
+            {
+                let mut text_pass = text_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Text Render Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: if has_shape_pass {
+                                wgpu::LoadOp::Load
+                            } else {
+                                wgpu::LoadOp::Clear(CLEAR_COLOR)
+                            },
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
 
-            self.text_renderer
-                .render(&self.text_atlas, &viewport, &mut text_pass)
-                .map_err(|e| format!("Text render error: {:?}", e))?;
+                self.text_renderer
+                    .render(&self.text_atlas, &self.text_viewport, &mut text_pass)
+                    .map_err(|e| format!("Text render error: {:?}", e))?;
+            }
+
+            self.queue.submit(std::iter::once(text_encoder.finish()));
+            submitted = true;
         }
 
-        self.queue.submit(std::iter::once(text_encoder.finish()));
+        if !submitted {
+            if let Some(shape_encoder) = pending_shape_encoder.take() {
+                self.queue.submit(std::iter::once(shape_encoder.finish()));
+            } else if !has_shape_pass {
+                let mut clear_encoder =
+                    self.device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Clear Encoder"),
+                        });
+                {
+                    let _clear_pass =
+                        clear_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("Clear Render Pass"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(CLEAR_COLOR),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                        });
+                }
+                self.queue.submit(std::iter::once(clear_encoder.finish()));
+            }
+        }
+
+        if !self.scratch_text_entries.is_empty() {
+            let mut text_cache = self.text_cache.lock().unwrap();
+            crate::trim_text_cache(&mut text_cache);
+        }
 
         Ok(())
     }

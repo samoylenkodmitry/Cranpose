@@ -100,12 +100,13 @@ pub async fn run(
         .find(|f| f.is_srgb())
         .unwrap_or(surface_caps.formats[0]);
 
+    let present_mode = crate::present_mode::select_present_mode(&surface_caps);
     let surface_config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format: surface_format,
         width: (width as f64 * scale_factor) as u32,
         height: (height as f64 * scale_factor) as u32,
-        present_mode: wgpu::PresentMode::Fifo,
+        present_mode,
         alpha_mode: surface_caps.alpha_modes[0],
         view_formats: vec![],
         desired_maximum_frame_latency: 2,

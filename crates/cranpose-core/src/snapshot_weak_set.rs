@@ -36,7 +36,7 @@ impl SnapshotWeakSet {
     /// Add a state object to the set.
     ///
     /// Uses binary search to find the insertion point, maintaining sort order.
-    /// Duplicates are allowed (same hash can appear multiple times).
+    /// Live duplicates are skipped (same hash already present with a live entry).
     #[allow(dead_code)]
     pub(crate) fn add<T: StateObject + 'static>(&mut self, state: &Arc<T>) {
         let hash = Arc::as_ptr(state) as *const () as usize;
@@ -45,6 +45,14 @@ impl SnapshotWeakSet {
 
         // Binary search to find insertion point
         let pos = self.entries.partition_point(|(h, _)| *h < hash);
+
+        let has_live = self.entries[pos..]
+            .iter()
+            .take_while(|(h, _)| *h == hash)
+            .any(|(_, existing)| existing.upgrade().is_some());
+        if has_live {
+            return;
+        }
 
         self.entries.insert(pos, (hash, weak));
 
@@ -64,6 +72,14 @@ impl SnapshotWeakSet {
 
         // Binary search to find insertion point
         let pos = self.entries.partition_point(|(h, _)| *h < hash);
+
+        let has_live = self.entries[pos..]
+            .iter()
+            .take_while(|(h, _)| *h == hash)
+            .any(|(_, existing)| existing.upgrade().is_some());
+        if has_live {
+            return;
+        }
 
         self.entries.insert(pos, (hash, weak));
 
@@ -98,13 +114,11 @@ impl SnapshotWeakSet {
     }
 
     /// Get the current number of entries (including dead references).
-    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
     }
 
     /// Check if the set is empty.
-    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }

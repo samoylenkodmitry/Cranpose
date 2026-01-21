@@ -434,3 +434,8 @@ required-features = ["robot-app"]
 name = "robot_progress_bar"
 path = "robot-runners/robot_progress_bar.rs"
 required-features = ["robot-app"]
+
+[[example]]
+name = "robot_perf_harness"
+path = "robot-runners/robot_perf_harness.rs"
+required-features = ["robot-app"]

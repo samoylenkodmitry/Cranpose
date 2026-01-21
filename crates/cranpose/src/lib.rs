@@ -12,6 +12,8 @@ compile_error!("cranpose requires either `renderer-pixels` or `renderer-wgpu` fe
 
 mod launcher;
 pub use launcher::{AppLauncher, AppSettings};
+#[cfg(feature = "renderer-wgpu")]
+mod present_mode;
 
 /// Re-export the UI crate so applications can depend on a single crate.
 pub use cranpose_ui::*;

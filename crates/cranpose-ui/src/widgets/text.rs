@@ -15,19 +15,20 @@ use crate::widgets::Layout;
 use cranpose_core::{MutableState, NodeId, State};
 use cranpose_foundation::modifier_element;
 use std::rc::Rc;
+use std::sync::Arc;
 
 #[derive(Clone)]
-pub struct DynamicTextSource(Rc<dyn Fn() -> String>);
+pub struct DynamicTextSource(Rc<dyn Fn() -> Arc<str>>);
 
 impl DynamicTextSource {
     pub fn new<F>(resolver: F) -> Self
     where
-        F: Fn() -> String + 'static,
+        F: Fn() -> Arc<str> + 'static,
     {
         Self(Rc::new(resolver))
     }
 
-    fn resolve(&self) -> String {
+    fn resolve(&self) -> Arc<str> {
         (self.0)()
     }
 }
@@ -42,12 +43,12 @@ impl Eq for DynamicTextSource {}
 
 #[derive(Clone, PartialEq, Eq)]
 enum TextSource {
-    Static(String),
+    Static(Arc<str>),
     Dynamic(DynamicTextSource),
 }
 
 impl TextSource {
-    fn resolve(&self) -> String {
+    fn resolve(&self) -> Arc<str> {
         match self {
             TextSource::Static(text) => text.clone(),
             TextSource::Dynamic(dynamic) => dynamic.resolve(),
@@ -61,13 +62,13 @@ trait IntoTextSource {
 
 impl IntoTextSource for String {
     fn into_text_source(self) -> TextSource {
-        TextSource::Static(self)
+        TextSource::Static(Arc::from(self))
     }
 }
 
 impl IntoTextSource for &str {
     fn into_text_source(self) -> TextSource {
-        TextSource::Static(self.to_string())
+        TextSource::Static(Arc::from(self))
     }
 }
 
@@ -77,7 +78,9 @@ where
 {
     fn into_text_source(self) -> TextSource {
         let state = self;
-        TextSource::Dynamic(DynamicTextSource::new(move || state.value().to_string()))
+        TextSource::Dynamic(DynamicTextSource::new(move || {
+            Arc::from(state.value().to_string())
+        }))
     }
 }
 
@@ -87,7 +90,9 @@ where
 {
     fn into_text_source(self) -> TextSource {
         let state = self;
-        TextSource::Dynamic(DynamicTextSource::new(move || state.value().to_string()))
+        TextSource::Dynamic(DynamicTextSource::new(move || {
+            Arc::from(state.value().to_string())
+        }))
     }
 }
 
@@ -96,7 +101,7 @@ where
     F: Fn() -> String + 'static,
 {
     fn into_text_source(self) -> TextSource {
-        TextSource::Dynamic(DynamicTextSource::new(self))
+        TextSource::Dynamic(DynamicTextSource::new(move || Arc::from(self())))
     }
 }
 
@@ -130,7 +135,7 @@ where
 
     // Create a text modifier element that will add TextModifierNode to the chain
     // TextModifierNode handles measurement, drawing, and semantics
-    let text_element = modifier_element(TextModifierElement::new(current.clone()));
+    let text_element = modifier_element(TextModifierElement::new(current));
     let final_modifier = Modifier::from_parts(vec![text_element]);
     let combined_modifier = modifier.then(final_modifier);
 

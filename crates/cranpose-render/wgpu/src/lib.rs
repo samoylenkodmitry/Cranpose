@@ -10,6 +10,7 @@ mod shaders;
 
 pub use scene::{ClickAction, DrawShape, HitRegion, Scene, TextDraw};
 
+use cranpose_core::NodeId;
 use cranpose_render_common::{RenderScene, Renderer};
 use cranpose_ui::{set_text_measurer, LayoutTree, TextMeasurer};
 use cranpose_ui_graphics::Size;
@@ -27,18 +28,30 @@ pub enum WgpuRendererError {
     Wgpu(String),
 }
 
-/// Unified hash key for text caching - shared between measurement and rendering
-/// Only content + scale matter, not position
-#[derive(Clone)]
+/// Unified hash key for text caching - shared between measurement and rendering.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub(crate) enum TextKey {
+    Content(String),
+    Node(NodeId),
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct TextCacheKey {
-    text: String,
+    key: TextKey,
     scale_bits: u32, // f32 as bits for hashing
 }
 
 impl TextCacheKey {
     fn new(text: &str, font_size: f32) -> Self {
         Self {
-            text: text.to_string(),
+            key: TextKey::Content(text.to_string()),
+            scale_bits: font_size.to_bits(),
+        }
+    }
+
+    fn for_node(node_id: NodeId, font_size: f32) -> Self {
+        Self {
+            key: TextKey::Node(node_id),
             scale_bits: font_size.to_bits(),
         }
     }
@@ -46,18 +59,10 @@ impl TextCacheKey {
 
 impl Hash for TextCacheKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.text.hash(state);
+        self.key.hash(state);
         self.scale_bits.hash(state);
     }
 }
-
-impl PartialEq for TextCacheKey {
-    fn eq(&self, other: &Self) -> bool {
-        self.text == other.text && self.scale_bits == other.scale_bits
-    }
-}
-
-impl Eq for TextCacheKey {}
 
 /// Cached text buffer shared between measurement and rendering
 pub(crate) struct SharedTextBuffer {
@@ -132,7 +137,7 @@ pub(crate) type SharedTextCache = Arc<Mutex<HashMap<TextCacheKey, SharedTextBuff
 
 /// Trim text cache if it exceeds MAX_CACHE_ITEMS.
 /// Removes the oldest half of entries when limit is reached.
-fn trim_text_cache(cache: &mut HashMap<TextCacheKey, SharedTextBuffer>) {
+pub(crate) fn trim_text_cache(cache: &mut HashMap<TextCacheKey, SharedTextBuffer>) {
     if cache.len() > MAX_CACHE_ITEMS {
         let target_size = MAX_CACHE_ITEMS / 2;
         let to_remove = cache.len() - target_size;
@@ -371,8 +376,9 @@ impl Renderer for WgpuRenderer {
             height: text_height,
         };
         self.scene.push_text(
+            NodeId::MAX,
             text_rect,
-            text.to_string(),
+            Arc::from(text),
             Color(0.0, 1.0, 0.0, 1.0),  // Green
             font_size / BASE_FONT_SIZE, // Scale relative to base
             None,

@@ -25,6 +25,7 @@ use cranpose_foundation::{
     ModifierNodeElement, NodeCapabilities, NodeState, SemanticsConfiguration, SemanticsNode, Size,
 };
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 /// Node that stores text content and handles measurement, drawing, and semantics.
 ///
@@ -37,12 +38,12 @@ use std::hash::{Hash, Hasher};
 /// `compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/modifiers/TextStringSimpleNode.kt`
 #[derive(Debug)]
 pub struct TextModifierNode {
-    text: String,
+    text: Arc<str>,
     state: NodeState,
 }
 
 impl TextModifierNode {
-    pub fn new(text: String) -> Self {
+    pub fn new(text: Arc<str>) -> Self {
         Self {
             text,
             state: NodeState::new(),
@@ -51,6 +52,10 @@ impl TextModifierNode {
 
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    pub fn text_arc(&self) -> Arc<str> {
+        self.text.clone()
     }
 
     /// Helper to measure text content size.
@@ -154,7 +159,7 @@ impl LayoutModifierNode for TextModifierNode {
 /// Phase 2: Instead of reconstructing nodes via `TextModifierNode::new()`, this proxy
 /// directly implements measurement logic using the snapshotted text content.
 struct TextMeasurementProxy {
-    text: String,
+    text: Arc<str>,
 }
 
 impl TextMeasurementProxy {
@@ -224,7 +229,7 @@ impl DrawModifierNode for TextModifierNode {
 impl SemanticsNode for TextModifierNode {
     fn merge_semantics(&self, config: &mut SemanticsConfiguration) {
         // Provide text content for accessibility
-        config.content_description = Some(self.text.clone());
+        config.content_description = Some(self.text.to_string());
     }
 }
 
@@ -238,11 +243,11 @@ impl SemanticsNode for TextModifierNode {
 /// Matches Jetpack Compose: `TextStringSimpleElement` in BasicText.kt
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextModifierElement {
-    text: String,
+    text: Arc<str>,
 }
 
 impl TextModifierElement {
-    pub fn new(text: String) -> Self {
+    pub fn new(text: Arc<str>) -> Self {
         Self { text }
     }
 }

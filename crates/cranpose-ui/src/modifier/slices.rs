@@ -1,5 +1,6 @@
 use std::fmt;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use cranpose_foundation::{ModifierNodeChain, NodeCapabilities, PointerEvent};
 use cranpose_ui_graphics::GraphicsLayer;
@@ -24,7 +25,7 @@ pub struct ModifierNodeSlices {
     pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
     click_handlers: Vec<Rc<dyn Fn(Point)>>,
     clip_to_bounds: bool,
-    text_content: Option<String>,
+    text_content: Option<Arc<str>>,
     graphics_layer: Option<GraphicsLayer>,
     chain_guard: Option<Rc<ChainGuard>>,
 }
@@ -66,6 +67,10 @@ impl ModifierNodeSlices {
 
     pub fn text_content(&self) -> Option<&str> {
         self.text_content.as_deref()
+    }
+
+    pub fn text_content_arc(&self) -> Option<Arc<str>> {
+        self.text_content.clone()
     }
 
     pub fn graphics_layer(&self) -> Option<GraphicsLayer> {
@@ -190,12 +195,12 @@ pub fn collect_modifier_slices(chain: &ModifierNodeChain) -> ModifierNodeSlices 
         let any = node.as_any();
         if let Some(text_node) = any.downcast_ref::<TextModifierNode>() {
             // Rightmost text modifier wins
-            slices.text_content = Some(text_node.text().to_string());
+            slices.text_content = Some(text_node.text_arc());
         }
         // Also check for TextFieldModifierNode (editable text fields)
         if let Some(text_field_node) = any.downcast_ref::<TextFieldModifierNode>() {
             let text = text_field_node.text();
-            slices.text_content = Some(text.clone());
+            slices.text_content = Some(Arc::from(text));
 
             // Update content offsets for cursor positioning in collect_draw_primitives()
             text_field_node.set_content_offset(padding.left);

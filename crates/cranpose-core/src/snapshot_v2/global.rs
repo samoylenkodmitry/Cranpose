@@ -192,8 +192,8 @@ impl GlobalSnapshot {
 pub fn advance_global_snapshot(new_id: SnapshotId) {
     let global = GlobalSnapshot::get_or_create();
     global.advance(new_id);
-    // Clean up unused records after advancing
-    super::check_and_overwrite_unused_records_locked();
+    // Periodically clean up unused records after advancing
+    super::maybe_check_and_overwrite_unused_records_locked(new_id);
 }
 
 /// Get the current global snapshot ID.

@@ -296,6 +296,56 @@ pub(crate) fn new_overwritable_record_locked(state: &dyn StateObject) -> Arc<Sta
     new_record
 }
 
+/// Creates an overwritable record and ensures it is the head of the record chain.
+///
+/// This is used for global snapshot writes where the newest record must be at the head
+/// to keep tombstoning logic consistent. Reused records are unlinked from their current
+/// position before being prepended.
+pub(crate) fn new_overwritable_record_as_head_locked(state: &dyn StateObject) -> Arc<StateRecord> {
+    let head = state.first_record();
+
+    if let Some(reusable) = used_locked(&head) {
+        reusable.set_snapshot_id(SNAPSHOT_ID_MAX);
+
+        if !Arc::ptr_eq(&head, &reusable) {
+            let mut cursor = Some(Arc::clone(&head));
+            let mut unlinked = false;
+
+            while let Some(node) = cursor {
+                let next = node.next();
+                if let Some(next_record) = next {
+                    if Arc::ptr_eq(&next_record, &reusable) {
+                        node.set_next(reusable.next());
+                        unlinked = true;
+                        break;
+                    }
+                    cursor = Some(next_record);
+                } else {
+                    break;
+                }
+            }
+
+            if !unlinked {
+                debug_assert!(
+                    false,
+                    "new_overwritable_record_as_head_locked: reusable record not found in chain"
+                );
+                let new_record = StateRecord::new(SNAPSHOT_ID_MAX, (), None);
+                state.prepend_state_record(Arc::clone(&new_record));
+                return new_record;
+            }
+
+            state.prepend_state_record(Arc::clone(&reusable));
+        }
+
+        return reusable;
+    }
+
+    let new_record = StateRecord::new(SNAPSHOT_ID_MAX, (), None);
+    state.prepend_state_record(Arc::clone(&new_record));
+    new_record
+}
+
 /// Overwrites unused records in a state object's record chain with data from retained records.
 ///
 /// This function implements Kotlin's `overwriteUnusedRecordsLocked` to reclaim memory by:
@@ -662,8 +712,6 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
 
         match &snapshot {
             AnySnapshot::Global(global) => {
-                let mut head_guard = self.head.write().expect("State head lock poisoned");
-                let head = head_guard.clone();
                 if global.has_pending_children() {
                     panic!(
                         "SnapshotMutableState::set attempted global write while pending children {:?} exist (state {:?}, snapshot_id={})",
@@ -674,9 +722,10 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
                 }
 
                 let new_id = allocate_record_id();
-                let record = StateRecord::new(new_id, new_value, Some(head));
-                *head_guard = record.clone();
-                drop(head_guard);
+                let record = new_overwritable_record_as_head_locked(self);
+                record.replace_value(new_value);
+                record.set_snapshot_id(new_id);
+                record.set_tombstone(false);
                 advance_global_snapshot(new_id);
                 self.assert_chain_integrity("set(global-push)", Some(snapshot_id));
 

@@ -428,6 +428,14 @@ thread_local! {
     static EXTRA_STATE_OBJECTS: RefCell<crate::snapshot_weak_set::SnapshotWeakSet> = RefCell::new(crate::snapshot_weak_set::SnapshotWeakSet::new());
 }
 
+const UNUSED_RECORD_CLEANUP_INTERVAL: SnapshotId = 8;
+const UNUSED_RECORD_CLEANUP_BUSY_INTERVAL: SnapshotId = 2;
+const UNUSED_RECORD_CLEANUP_MIN_SIZE: usize = 256;
+
+thread_local! {
+    static LAST_UNUSED_RECORD_CLEANUP: Cell<SnapshotId> = const { Cell::new(0) };
+}
+
 /// Register an apply observer.
 ///
 /// Returns a handle that will automatically unregister the observer when dropped.
@@ -514,6 +522,27 @@ pub(crate) fn check_and_overwrite_unused_records_locked() {
     });
 }
 
+pub(crate) fn maybe_check_and_overwrite_unused_records_locked(current_snapshot_id: SnapshotId) {
+    let should_run = EXTRA_STATE_OBJECTS.with(|cell| {
+        let set = cell.borrow();
+        if set.is_empty() {
+            return false;
+        }
+        let last_cleanup = LAST_UNUSED_RECORD_CLEANUP.with(|last| last.get());
+        let interval = if set.len() >= UNUSED_RECORD_CLEANUP_MIN_SIZE {
+            UNUSED_RECORD_CLEANUP_BUSY_INTERVAL
+        } else {
+            UNUSED_RECORD_CLEANUP_INTERVAL
+        };
+        current_snapshot_id.saturating_sub(last_cleanup) >= interval
+    });
+
+    if should_run {
+        LAST_UNUSED_RECORD_CLEANUP.with(|cell| cell.set(current_snapshot_id));
+        check_and_overwrite_unused_records_locked();
+    }
+}
+
 /// Process a state object for unused record cleanup, tracking it if needed.
 ///
 /// Mirrors Kotlin's `processForUnusedRecordsLocked()`. After a state is modified:
@@ -527,6 +556,11 @@ pub(crate) fn process_for_unused_records_locked(state: &Arc<dyn crate::state::St
             cell.borrow_mut().add_trait_object(state);
         });
     }
+}
+
+#[cfg(test)]
+pub(crate) fn clear_unused_record_cleanup_for_tests() {
+    LAST_UNUSED_RECORD_CLEANUP.with(|cell| cell.set(0));
 }
 
 pub(crate) fn optimistic_merges(

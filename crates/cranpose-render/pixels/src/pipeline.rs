@@ -119,8 +119,8 @@ fn render_container(
 
     // Render text content if present in modifier slices.
     // Text is now handled via TextModifierNode in the modifier chain.
-    if let Some(value) = layout.node_data.modifier_slices().text_content() {
-        let metrics = measure_text(value);
+    if let Some(value) = layout.node_data.modifier_slices().text_content_arc() {
+        let metrics = measure_text(value.as_ref());
         let padding = style.padding;
         let text_rect = Rect {
             x: rect.x + padding.left,
@@ -130,8 +130,9 @@ fn render_container(
         };
         let transformed_text_rect = apply_layer_to_rect(text_rect, origin, node_layer);
         scene.push_text(
+            layout.node_id,
             transformed_text_rect,
-            value.to_string(),
+            value,
             apply_layer_to_color(Color(1.0, 1.0, 1.0, 1.0), node_layer),
             node_layer.scale,
             visual_clip,

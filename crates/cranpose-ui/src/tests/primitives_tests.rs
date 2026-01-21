@@ -153,7 +153,7 @@ fn CounterRow(label: &'static str, count: State<i32>) -> NodeId {
         Text(label, Modifier::empty());
         let count_for_text = count;
         let text_id = Text(
-            DynamicTextSource::new(move || format!("Count = {}", count_for_text.value())),
+            DynamicTextSource::new(move || format!("Count = {}", count_for_text.value()).into()),
             Modifier::empty(),
         );
         COUNTER_TEXT_ID.with(|slot| *slot.borrow_mut() = Some(text_id));

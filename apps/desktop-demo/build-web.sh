@@ -23,6 +23,11 @@ fi
 
 echo "Using wasm-pack at: $WASM_PACK"
 
+# Avoid version check noise in CI/profile runs.
+export WASM_PACK_SKIP_UPDATE_CHECK=1
+export WASM_PACK_DISABLE_UPDATE_CHECK=1
+WASM_PACK_LOG_LEVEL="${WASM_PACK_LOG_LEVEL:-error}"
+
 # Check if wasm-opt is available (from binaryen) for size optimization
 if command -v wasm-opt &> /dev/null; then
     echo "wasm-opt found - binary size optimization enabled"
@@ -43,29 +48,26 @@ echo "Building WASM module (optimized for size)..."
 
 # Run wasm-pack build, don't exit on error so we can handle it
 set +e
-"$WASM_PACK" build --target web --out-dir pkg --features web,renderer-wgpu --no-default-features
+"$WASM_PACK" --log-level "$WASM_PACK_LOG_LEVEL" build --target web --out-dir pkg --features web,renderer-wgpu --no-default-features
 BUILD_RESULT=$?
 set -e
 
 if [ $BUILD_RESULT -ne 0 ]; then
     echo ""
     echo "wasm-pack build failed with exit code $BUILD_RESULT"
-    echo "This might be due to wasm-opt issues. Retrying without wasm-opt..."
+    echo "WASM size optimization is required for web builds."
+    echo "Install binaryen (wasm-opt) and rerun this script."
     echo ""
-    
-    # Create a temporary Cargo.toml patch to disable wasm-opt
-    cp Cargo.toml Cargo.toml.backup
-    sed -i 's/wasm-opt = \[.*\]/wasm-opt = false/' Cargo.toml
-    
-    # Retry the build
-    "$WASM_PACK" build --target web --out-dir pkg --features web,renderer-wgpu --no-default-features
-    BUILD_RESULT=$?
-    
-    # Restore original Cargo.toml
-    mv Cargo.toml.backup Cargo.toml
-    
-    if [ $BUILD_RESULT -ne 0 ]; then
-        echo "Build failed even without wasm-opt"
+
+    if [ "${ALLOW_UNOPTIMIZED_WASM:-0}" = "1" ]; then
+        echo "ALLOW_UNOPTIMIZED_WASM=1 set - retrying with --dev (unoptimized)."
+        "$WASM_PACK" --log-level "$WASM_PACK_LOG_LEVEL" build --dev --target web --out-dir pkg --features web,renderer-wgpu --no-default-features
+        BUILD_RESULT=$?
+        if [ $BUILD_RESULT -ne 0 ]; then
+            echo "Build failed even with --dev"
+            exit 1
+        fi
+    else
         exit 1
     fi
 fi

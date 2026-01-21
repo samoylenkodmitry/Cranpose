@@ -131,6 +131,7 @@ pub(crate) fn reset_runtime_for_tests() -> TestRuntimeGuard {
     with_runtime(|runtime| runtime.reset_for_tests());
     super::clear_last_writes();
     super::global::clear_global_snapshot_for_tests();
+    super::clear_unused_record_cleanup_for_tests();
     TestRuntimeGuard { _lock: guard }
 }
 
