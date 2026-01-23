@@ -35,7 +35,14 @@ impl TransparentObserverMutableSnapshot {
         Arc::new(Self {
             // Transparent snapshots don't allocate new IDs, so they shouldn't pin
             // to prevent garbage collection of old records
-            state: SnapshotState::new_with_pinning(id, invalid, read_observer, write_observer, false, false),
+            state: SnapshotState::new_with_pinning(
+                id,
+                invalid,
+                read_observer,
+                write_observer,
+                false,
+                false,
+            ),
             parent,
             nested_count: Cell::new(0),
             applied: Cell::new(false),

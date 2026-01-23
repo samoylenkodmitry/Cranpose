@@ -1,9 +1,9 @@
 use crate::{
     layout::MeasuredNode,
     modifier::{
-        collect_modifier_slices, Modifier, ModifierChainHandle, ModifierLocalSource,
-        ModifierLocalToken, ModifierLocalsHandle, ModifierNodeSlices, ResolvedModifierLocal,
-        ResolvedModifiers,
+        Modifier, ModifierChainHandle, ModifierLocalSource, ModifierLocalToken,
+        ModifierLocalsHandle, ModifierNodeSlices, Point, ResolvedModifierLocal, ResolvedModifiers,
+        Size,
     },
 };
 use cranpose_core::{Node, NodeId};
@@ -16,6 +16,41 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
+
+/// Retained layout state for a LayoutNode.
+/// This mirrors Jetpack Compose's approach where each node stores its own
+/// measured size and placed position, eliminating the need for per-frame
+/// LayoutTree reconstruction.
+#[derive(Clone, Debug)]
+pub struct LayoutState {
+    /// The measured size of this node (width, height).
+    pub size: Size,
+    /// Position relative to parent's content origin.
+    pub position: Point,
+    /// True if this node has been placed in the current layout pass.
+    pub is_placed: bool,
+    /// The constraints used for the last measurement.
+    pub measurement_constraints: Constraints,
+    /// Offset of the content box relative to the node origin (e.g. due to padding).
+    pub content_offset: Point,
+}
+
+impl Default for LayoutState {
+    fn default() -> Self {
+        Self {
+            size: Size::default(),
+            position: Point::default(),
+            is_placed: false,
+            measurement_constraints: Constraints {
+                min_width: 0.0,
+                max_width: f32::INFINITY,
+                min_height: 0.0,
+                max_height: f32::INFINITY,
+            },
+            content_offset: Point::default(),
+        }
+    }
+}
 
 #[derive(Clone)]
 struct MeasurementCacheEntry {
@@ -176,6 +211,15 @@ pub struct LayoutNode {
     is_virtual: bool,
     /// Count of virtual children (for lazy unfolded children computation)
     virtual_children_count: Cell<usize>,
+
+    // Caching for modifier slices to avoid repeated allocation
+    modifier_slices_buffer: RefCell<ModifierNodeSlices>,
+    modifier_slices_snapshot: RefCell<Rc<ModifierNodeSlices>>,
+
+    /// Retained layout state (size, position) for this node.
+    /// Updated by measure/place and read by renderer.
+    /// Wrapped in Rc to ensure state is shared across clones (e.g. SubcomposeLayout usage).
+    layout_state: Rc<RefCell<LayoutState>>,
 }
 
 impl LayoutNode {
@@ -199,7 +243,7 @@ impl LayoutNode {
         is_virtual: bool,
     ) -> Self {
         let mut node = Self {
-            modifier: Modifier::empty(),
+            modifier,
             modifier_chain: ModifierChainHandle::new(),
             resolved_modifiers: ResolvedModifiers::default(),
             modifier_capabilities: NodeCapabilities::default(),
@@ -219,10 +263,11 @@ impl LayoutNode {
             debug_modifiers: Cell::new(false),
             is_virtual,
             virtual_children_count: Cell::new(0),
+            modifier_slices_buffer: RefCell::new(ModifierNodeSlices::default()),
+            modifier_slices_snapshot: RefCell::new(Rc::default()),
+            layout_state: Rc::new(RefCell::new(LayoutState::default())),
         };
-        if !is_virtual {
-            node.set_modifier(modifier);
-        }
+        node.sync_modifier_chain();
         node
     }
 
@@ -256,6 +301,14 @@ impl LayoutNode {
         self.resolved_modifiers = self.modifier_chain.resolved_modifiers();
         self.modifier_capabilities = self.modifier_chain.capabilities();
         self.modifier_child_capabilities = self.modifier_chain.aggregate_child_capabilities();
+
+        // Update modifier slices cache
+        // We reuse the buffer to avoid allocation, then create a shared snapshot
+        use crate::modifier::collect_modifier_slices_into;
+        let mut buffer = self.modifier_slices_buffer.borrow_mut();
+        collect_modifier_slices_into(self.modifier_chain.chain(), &mut buffer);
+        *self.modifier_slices_snapshot.borrow_mut() = Rc::new(buffer.clone());
+
         let mut invalidations = self.modifier_chain.take_invalidations();
         invalidations.extend(modifier_local_invalidations);
         self.dispatch_modifier_invalidations(&invalidations);
@@ -536,8 +589,60 @@ impl LayoutNode {
         }
     }
 
-    pub fn modifier_slices_snapshot(&self) -> ModifierNodeSlices {
-        collect_modifier_slices(self.modifier_chain.chain())
+    pub fn modifier_slices_snapshot(&self) -> Rc<ModifierNodeSlices> {
+        self.modifier_slices_snapshot.borrow().clone()
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Retained Layout State API
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// Returns a clone of the current layout state.
+    pub fn layout_state(&self) -> LayoutState {
+        self.layout_state.borrow().clone()
+    }
+
+    /// Returns the measured size of this node.
+    pub fn measured_size(&self) -> Size {
+        self.layout_state.borrow().size
+    }
+
+    /// Returns the position of this node relative to its parent.
+    pub fn position(&self) -> Point {
+        self.layout_state.borrow().position
+    }
+
+    /// Returns true if this node has been placed in the current layout pass.
+    pub fn is_placed(&self) -> bool {
+        self.layout_state.borrow().is_placed
+    }
+
+    /// Updates the measured size of this node. Called during measurement.
+    pub fn set_measured_size(&self, size: Size) {
+        let mut state = self.layout_state.borrow_mut();
+        state.size = size;
+    }
+
+    /// Updates the position of this node. Called during placement.
+    pub fn set_position(&self, position: Point) {
+        let mut state = self.layout_state.borrow_mut();
+        state.position = position;
+        state.is_placed = true;
+    }
+
+    /// Records the constraints used for measurement. Used for relayout optimization.
+    pub fn set_measurement_constraints(&self, constraints: Constraints) {
+        self.layout_state.borrow_mut().measurement_constraints = constraints;
+    }
+
+    /// Records the content offset (e.g. from padding).
+    pub fn set_content_offset(&self, offset: Point) {
+        self.layout_state.borrow_mut().content_offset = offset;
+    }
+
+    /// Clears the is_placed flag. Called at the start of a layout pass.
+    pub fn clear_placed(&self) {
+        self.layout_state.borrow_mut().is_placed = false;
     }
 
     pub fn semantics_configuration(&self) -> Option<SemanticsConfiguration> {
@@ -558,6 +663,12 @@ impl LayoutNode {
         f: impl FnMut(&mut crate::TextFieldModifierNode) -> R,
     ) -> Option<R> {
         self.modifier_chain.with_text_field_modifier_mut(f)
+    }
+
+    /// Returns a handle to the shared layout state.
+    /// Used by layout system to update state without borrowing the Applier.
+    pub fn layout_state_handle(&self) -> Rc<RefCell<LayoutState>> {
+        self.layout_state.clone()
     }
 }
 impl Clone for LayoutNode {
@@ -583,6 +694,10 @@ impl Clone for LayoutNode {
             debug_modifiers: Cell::new(self.debug_modifiers.get()),
             is_virtual: self.is_virtual,
             virtual_children_count: Cell::new(self.virtual_children_count.get()),
+            modifier_slices_buffer: RefCell::new(ModifierNodeSlices::default()),
+            modifier_slices_snapshot: RefCell::new(Rc::default()),
+            // Share the same layout state across clones
+            layout_state: self.layout_state.clone(),
         };
         node.sync_modifier_chain();
         node

@@ -63,6 +63,15 @@ impl Renderer for TestRenderer {
     ) -> Result<(), Self::Error> {
         Ok(())
     }
+
+    fn rebuild_scene_from_applier(
+        &mut self,
+        _applier: &mut cranpose_core::MemoryApplier,
+        _root: cranpose_core::NodeId,
+        _viewport: Size,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -90,6 +99,17 @@ impl Renderer for RecordingRenderer {
     ) -> Result<(), Self::Error> {
         let renderer = HeadlessRenderer::new();
         self.last_scene = Some(renderer.render(layout_tree));
+        Ok(())
+    }
+
+    fn rebuild_scene_from_applier(
+        &mut self,
+        applier: &mut cranpose_core::MemoryApplier,
+        root: cranpose_core::NodeId,
+        _viewport: Size,
+    ) -> Result<(), Self::Error> {
+        let renderer = HeadlessRenderer::new();
+        self.last_scene = Some(renderer.render_from_applier(applier, root));
         Ok(())
     }
 }

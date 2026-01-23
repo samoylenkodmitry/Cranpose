@@ -81,8 +81,7 @@ impl PinningTable {
         }
     }
 
-    /// Get the count of pins (for testing).
-    #[cfg(test)]
+    /// Get the count of pins (for testing/debugging).
     fn pin_count(&self) -> usize {
         self.heap.len()
     }
@@ -145,7 +144,7 @@ pub fn lowest_pinned_snapshot() -> Option<SnapshotId> {
 }
 
 /// Get the current count of pinned snapshots (for testing).
-#[cfg(test)]
+/// Get the current count of pinned snapshots (for testing/debugging).
 pub fn pin_count() -> usize {
     PINNING_TABLE.with(|cell| cell.borrow().pin_count())
 }

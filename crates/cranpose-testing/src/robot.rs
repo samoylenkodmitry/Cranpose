@@ -443,6 +443,15 @@ impl Renderer for TestRenderer {
     ) -> Result<(), Self::Error> {
         Ok(())
     }
+
+    fn rebuild_scene_from_applier(
+        &mut self,
+        _applier: &mut cranpose_core::MemoryApplier,
+        _root: cranpose_core::NodeId,
+        _viewport: Size,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
 }
 
 /// The scene used by TestRenderer.

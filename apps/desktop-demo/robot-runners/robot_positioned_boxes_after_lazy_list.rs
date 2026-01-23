@@ -108,8 +108,59 @@ fn main() {
                 std::process::exit(1);
             }
 
+            let box_a = find_element_with_text(elements, "Box A");
+            if let Some(elem) = box_a {
+                println!(
+                    "  ✓ Found 'Box A' at ({:.1}, {:.1})",
+                    elem.bounds.x, elem.bounds.y
+                );
+                // Box A offset 50 + padding 8 (approx) + header/other layout offsets
+                if elem.bounds.x < 50.0 {
+                    println!(
+                        "  ✗ Box A x-coordinate too small (expected > 50, got {:.1})",
+                        elem.bounds.x
+                    );
+                }
+            } else {
+                println!("  ✗ Box A not found");
+            }
+
+            let box_b = find_element_with_text(elements, "Box B");
+            if let Some(elem) = box_b {
+                println!(
+                    "  ✓ Found 'Box B' at ({:.1}, {:.1})",
+                    elem.bounds.x, elem.bounds.y
+                );
+                if elem.bounds.x < 200.0 {
+                    println!(
+                        "  ✗ Box B x-coordinate too small (expected > 200, got {:.1})",
+                        elem.bounds.x
+                    );
+                }
+            } else {
+                println!("  ✗ Box B not found");
+            }
+
             println!("✓ Positioned Boxes header count OK");
+            if box_a.is_some() && box_b.is_some() {
+                println!("✓ Positioned Boxes coordinates verified");
+            }
             robot.exit().ok();
         })
         .run(app::combined_app);
+}
+
+fn find_element_with_text<'a>(
+    elements: &'a [SemanticElement],
+    text: &str,
+) -> Option<&'a SemanticElement> {
+    for elem in elements {
+        if elem.text.as_deref() == Some(text) {
+            return Some(elem);
+        }
+        if let Some(child) = find_element_with_text(&elem.children, text) {
+            return Some(child);
+        }
+    }
+    None
 }

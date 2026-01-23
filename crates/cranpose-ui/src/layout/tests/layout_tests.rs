@@ -905,6 +905,7 @@ fn flex_parent_data_uses_resolved_weight() {
         cache,
         1,
         None,
+        None, // layout_state
     );
 
     let parent_data = measurable

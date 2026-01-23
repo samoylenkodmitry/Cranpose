@@ -691,11 +691,18 @@ impl SnapshotState {
         write_observer: Option<WriteObserver>,
         runtime_tracked: bool,
     ) -> Self {
-        Self::new_with_pinning(id, invalid, read_observer, write_observer, runtime_tracked, true)
+        Self::new_with_pinning(
+            id,
+            invalid,
+            read_observer,
+            write_observer,
+            runtime_tracked,
+            true,
+        )
     }
 
     /// Create a new SnapshotState with optional pinning control.
-    /// 
+    ///
     /// Transparent snapshots should pass `should_pin: false` since they don't allocate
     /// new IDs and shouldn't prevent garbage collection of old records.
     pub(crate) fn new_with_pinning(

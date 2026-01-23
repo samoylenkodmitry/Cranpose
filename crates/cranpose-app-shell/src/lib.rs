@@ -968,9 +968,17 @@ where
             width: self.viewport.0,
             height: self.viewport.1,
         };
-        if let Some(layout_tree) = self.layout_tree.as_ref() {
-            if let Err(err) = self.renderer.rebuild_scene(layout_tree, viewport_size) {
+
+        // Use new direct traversal rendering
+        if let Some(root) = self.composition.root() {
+            let mut applier = self.composition.applier_mut();
+            if let Err(err) =
+                self.renderer
+                    .rebuild_scene_from_applier(&mut applier, root, viewport_size)
+            {
+                // Fallback to clearing scene on error
                 log::error!("renderer rebuild failed: {err:?}");
+                self.renderer.scene_mut().clear();
             }
         } else {
             self.renderer.scene_mut().clear();
@@ -1015,7 +1023,8 @@ fn refresh_layout_box_data(
         {
             layout.node_data.modifier = modifier.clone();
             layout.node_data.resolved_modifiers = resolved_modifiers;
-            layout.node_data.modifier_slices = cranpose_ui::collect_slices_from_modifier(&modifier);
+            layout.node_data.modifier_slices =
+                std::rc::Rc::new(cranpose_ui::collect_slices_from_modifier(&modifier));
         }
     }
 

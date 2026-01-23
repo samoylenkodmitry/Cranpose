@@ -19,7 +19,7 @@ pub struct GlobalSnapshot {
 
 impl GlobalSnapshot {
     /// Create a new global snapshot.
-    /// 
+    ///
     /// The global snapshot does NOT pin because it always represents the current state
     /// and reads the latest records. Pinning would prevent garbage collection.
     pub fn new(id: SnapshotId, invalid: SnapshotIdSet) -> Arc<Self> {

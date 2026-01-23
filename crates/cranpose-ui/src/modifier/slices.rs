@@ -81,6 +81,17 @@ impl ModifierNodeSlices {
         self.chain_guard = Some(Rc::new(ChainGuard { _handle: handle }));
         self
     }
+
+    /// Resets the slice collection for reuse, retaining vector capacity.
+    pub fn clear(&mut self) {
+        self.draw_commands.clear();
+        self.pointer_inputs.clear();
+        self.click_handlers.clear();
+        self.clip_to_bounds = false;
+        self.text_content = None;
+        self.graphics_layer = None;
+        self.chain_guard = None;
+    }
 }
 
 impl fmt::Debug for ModifierNodeSlices {
@@ -99,6 +110,13 @@ impl fmt::Debug for ModifierNodeSlices {
 /// Collects modifier node slices directly from a reconciled [`ModifierNodeChain`].
 pub fn collect_modifier_slices(chain: &ModifierNodeChain) -> ModifierNodeSlices {
     let mut slices = ModifierNodeSlices::default();
+    collect_modifier_slices_into(chain, &mut slices);
+    slices
+}
+
+/// Collects modifier node slices into an existing buffer to reuse allocations.
+pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut ModifierNodeSlices) {
+    slices.clear();
 
     chain.for_each_node_with_capability(NodeCapabilities::POINTER_INPUT, |_ref, node| {
         let _any = node.as_any();
@@ -239,8 +257,6 @@ pub fn collect_modifier_slices(chain: &ModifierNodeChain) -> ModifierNodeSlices 
             .draw_commands
             .insert(0, DrawCommand::Behind(draw_cmd));
     }
-
-    slices
 }
 
 /// Collects modifier node slices by instantiating a temporary node chain from a [`Modifier`].

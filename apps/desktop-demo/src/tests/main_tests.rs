@@ -245,10 +245,10 @@ fn async_runtime_tab_content_renders_static_states() {
     let is_running_state = MutableState::with_runtime(false, runtime.clone());
     let reset_signal_state = MutableState::with_runtime(0u64, runtime);
 
-    let animation_for_render = animation_state.clone();
-    let stats_for_render = stats_state.clone();
-    let is_running_for_render = is_running_state.clone();
-    let reset_for_render = reset_signal_state.clone();
+    let animation_for_render = animation_state;
+    let stats_for_render = stats_state;
+    let is_running_for_render = is_running_state;
+    let reset_for_render = reset_signal_state;
 
     let mut render = move || {
         AsyncRuntimeTabContent(

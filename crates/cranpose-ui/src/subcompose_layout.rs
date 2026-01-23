@@ -9,7 +9,7 @@ use indexmap::IndexSet;
 
 use crate::modifier::{Modifier, ModifierChainHandle, Point, ResolvedModifiers, Size};
 use crate::widgets::nodes::{
-    allocate_virtual_node_id, is_virtual_node, register_layout_node, LayoutNode,
+    allocate_virtual_node_id, is_virtual_node, register_layout_node, LayoutNode, LayoutState,
 };
 
 use cranpose_foundation::{InvalidationKind, ModifierInvalidation, NodeCapabilities};
@@ -360,6 +360,8 @@ pub struct SubcomposeLayoutNode {
     needs_pointer_pass: Cell<bool>,
     needs_focus_sync: Cell<bool>,
     virtual_children_count: Cell<usize>,
+    /// Retained layout state (size, position) for rendering.
+    layout_state: Rc<RefCell<LayoutState>>,
 }
 
 impl SubcomposeLayoutNode {
@@ -376,6 +378,7 @@ impl SubcomposeLayoutNode {
             needs_pointer_pass: Cell::new(false),
             needs_focus_sync: Cell::new(false),
             virtual_children_count: Cell::new(0),
+            layout_state: Rc::new(RefCell::new(LayoutState::default())),
         };
         // Set modifier and dispatch invalidations after borrow is released
         // Pass empty prev_caps since this is initial construction
@@ -406,6 +409,7 @@ impl SubcomposeLayoutNode {
             needs_pointer_pass: Cell::new(false),
             needs_focus_sync: Cell::new(false),
             virtual_children_count: Cell::new(0),
+            layout_state: Rc::new(RefCell::new(LayoutState::default())),
         };
         // Set modifier and dispatch invalidations after borrow is released
         // Pass empty prev_caps since this is initial construction
@@ -451,6 +455,35 @@ impl SubcomposeLayoutNode {
 
     pub fn resolved_modifiers(&self) -> ResolvedModifiers {
         self.inner.borrow().resolved_modifiers
+    }
+
+    /// Returns a clone of the current layout state.
+    pub fn layout_state(&self) -> LayoutState {
+        self.layout_state.borrow().clone()
+    }
+
+    /// Updates the position of this node. Called during placement.
+    pub fn set_position(&self, position: Point) {
+        let mut state = self.layout_state.borrow_mut();
+        state.position = position;
+        state.is_placed = true;
+    }
+
+    /// Updates the measured size of this node. Called during measurement.
+    pub fn set_measured_size(&self, size: Size) {
+        let mut state = self.layout_state.borrow_mut();
+        state.size = size;
+    }
+
+    /// Clears the is_placed flag. Called at the start of a layout pass.
+    pub fn clear_placed(&self) {
+        self.layout_state.borrow_mut().is_placed = false;
+    }
+
+    /// Returns the modifier slices snapshot for rendering.
+    pub fn modifier_slices_snapshot(&self) -> std::rc::Rc<crate::modifier::ModifierNodeSlices> {
+        let inner = self.inner.borrow();
+        std::rc::Rc::new(crate::modifier::collect_slices_from_modifier(&inner.modifier))
     }
 
     pub fn state(&self) -> Ref<'_, SubcomposeState> {

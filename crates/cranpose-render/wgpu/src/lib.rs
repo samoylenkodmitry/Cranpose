@@ -10,17 +10,23 @@ mod shaders;
 
 pub use scene::{ClickAction, DrawShape, HitRegion, Scene, TextDraw};
 
-use cranpose_core::NodeId;
+use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::{RenderScene, Renderer};
 use cranpose_ui::{set_text_measurer, LayoutTree, TextMeasurer};
 use cranpose_ui_graphics::Size;
 use glyphon::{Attrs, Buffer, FontSystem, Metrics, Shaping};
 use lru::LruCache;
 use render::GpuRenderer;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
+
+/// Size-only cache for ultra-fast text measurement lookups.
+/// Key: (text_hash, font_size_fixed_point)
+/// Value: (text_content, size) - text stored to handle hash collisions
+type TextSizeCache = Arc<Mutex<LruCache<(u64, i32), (String, Size)>>>;
 
 #[derive(Debug)]
 pub enum WgpuRendererError {
@@ -338,6 +344,19 @@ impl Renderer for WgpuRenderer {
         Ok(())
     }
 
+    fn rebuild_scene_from_applier(
+        &mut self,
+        applier: &mut MemoryApplier,
+        root: NodeId,
+        _viewport: Size,
+    ) -> Result<(), Self::Error> {
+        self.scene.clear();
+        // Build scene in logical dp - scaling happens in GPU vertex upload
+        // Traverse layout nodes via applier instead of rebuilding LayoutTree
+        pipeline::render_from_applier(applier, root, &mut self.scene, 1.0);
+        Ok(())
+    }
+
     fn draw_dev_overlay(&mut self, text: &str, viewport: Size) {
         use cranpose_ui_graphics::{Brush, Color, Rect, RoundedCornerShape};
 
@@ -388,11 +407,12 @@ impl Renderer for WgpuRenderer {
 
 // Text measurer implementation for WGPU
 
+// Text measurer implementation for WGPU
+
 #[derive(Clone)]
 struct WgpuTextMeasurer {
     font_system: Arc<Mutex<FontSystem>>,
-    /// Size-only cache for ultra-fast lookups
-    size_cache: Arc<Mutex<LruCache<(String, i32), Size>>>,
+    size_cache: TextSizeCache,
     /// Shared buffer cache used by both measurement and rendering
     text_cache: SharedTextCache,
 }
@@ -401,7 +421,7 @@ impl WgpuTextMeasurer {
     fn new(font_system: Arc<Mutex<FontSystem>>, text_cache: SharedTextCache) -> Self {
         Self {
             font_system,
-            size_cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(64).unwrap()))),
+            size_cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(256).unwrap()))),
             text_cache,
         }
     }
@@ -412,30 +432,38 @@ pub(crate) const BASE_FONT_SIZE: f32 = 14.0;
 
 impl TextMeasurer for WgpuTextMeasurer {
     fn measure(&self, text: &str) -> cranpose_ui::TextMetrics {
-        let size_key = (text.to_string(), (BASE_FONT_SIZE * 100.0) as i32);
+        let size_int = (BASE_FONT_SIZE * 100.0) as i32;
+
+        // Calculate hash to avoid allocating String for lookup
+        let mut hasher = DefaultHasher::new();
+        text.hash(&mut hasher);
+        let text_hash = hasher.finish();
+        let cache_key = (text_hash, size_int);
 
         // Check size cache first (fastest path)
         {
             let mut cache = self.size_cache.lock().unwrap();
-            if let Some(size) = cache.get(&size_key) {
-                // For cached single-line text, use height as line_height
-                return cranpose_ui::TextMetrics {
-                    width: size.width,
-                    height: size.height,
-                    line_height: BASE_FONT_SIZE * 1.4,
-                    line_count: 1, // Cached entries are single-line simplified
-                };
+            if let Some((cached_text, size)) = cache.get(&cache_key) {
+                // Verify partial collision
+                if cached_text == text {
+                    return cranpose_ui::TextMetrics {
+                        width: size.width,
+                        height: size.height,
+                        line_height: BASE_FONT_SIZE * 1.4,
+                        line_count: 1, // Cached entries are single-line simplified
+                    };
+                }
             }
         }
 
         // Get or create text buffer
-        let cache_key = TextCacheKey::new(text, BASE_FONT_SIZE);
+        let text_buffer_key = TextCacheKey::new(text, BASE_FONT_SIZE);
         let mut font_system = self.font_system.lock().unwrap();
         let mut text_cache = self.text_cache.lock().unwrap();
 
         // Get or create buffer and calculate size
         let size = {
-            let buffer = text_cache.entry(cache_key).or_insert_with(|| {
+            let buffer = text_cache.entry(text_buffer_key).or_insert_with(|| {
                 let buffer = Buffer::new(
                     &mut font_system,
                     Metrics::new(BASE_FONT_SIZE, BASE_FONT_SIZE * 1.4),
@@ -463,7 +491,8 @@ impl TextMeasurer for WgpuTextMeasurer {
 
         // Cache the size result
         let mut size_cache = self.size_cache.lock().unwrap();
-        size_cache.put(size_key, size);
+        // Only allocate string on cache miss
+        size_cache.put(cache_key, (text.to_string(), size));
 
         // Calculate line info for multiline support
         let line_height = BASE_FONT_SIZE * 1.4;

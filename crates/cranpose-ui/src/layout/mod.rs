@@ -365,7 +365,7 @@ impl LayoutBox {
 pub struct LayoutNodeData {
     pub modifier: Modifier,
     pub resolved_modifiers: ResolvedModifiers,
-    pub modifier_slices: ModifierNodeSlices,
+    pub modifier_slices: Rc<ModifierNodeSlices>,
     pub kind: LayoutNodeKind,
 }
 
@@ -373,7 +373,7 @@ impl LayoutNodeData {
     pub fn new(
         modifier: Modifier,
         resolved_modifiers: ResolvedModifiers,
-        modifier_slices: ModifierNodeSlices,
+        modifier_slices: Rc<ModifierNodeSlices>,
         kind: LayoutNodeKind,
     ) -> Self {
         Self {
@@ -568,6 +568,14 @@ pub fn measure_layout(
 
     let measured = builder.measure_node(root, normalize_constraints(constraints))?;
 
+    // Root node has no parent to place it, so we must explicitly place it at (0,0).
+    // This ensures is_placed=true, allowing the renderer to traverse the tree.
+    if let Ok(mut applier) = applier_host.try_borrow_typed() {
+        let _ = applier.with_node::<LayoutNode, _>(root, |node| {
+            node.set_position(Point::default());
+        });
+    }
+
     // ---- Metadata ----------------------------------------------------------
     let metadata = {
         let mut applier_ref = applier_host.borrow_typed();
@@ -688,8 +696,6 @@ impl LayoutBuilderState {
         node_id: NodeId,
         constraints: Constraints,
     ) -> Result<Rc<MeasuredNode>, NodeError> {
-        let constraints = normalize_constraints(constraints);
-
         // Try SubcomposeLayoutNode first
         if let Some(subcompose) =
             Self::try_measure_subcompose(Rc::clone(&state_rc), node_id, constraints)?
@@ -751,11 +757,14 @@ impl LayoutBuilderState {
                 Err(err) => return Err(err),
             };
             let any = node.as_any_mut();
-            if let Some(subcompose) = any.downcast_mut::<SubcomposeLayoutNode>() {
+            if let Some(subcompose) =
+                any.downcast_mut::<crate::subcompose_layout::SubcomposeLayoutNode>()
+            {
                 let handle = subcompose.handle();
                 let resolved_modifiers = handle.resolved_modifiers();
                 (handle, resolved_modifiers)
             } else {
+                // eprintln!("DEBUG: try_measure_subcompose node {} downcast failed (not SubcomposeLayoutNode)", node_id);
                 return Ok(None);
             }
         };
@@ -862,6 +871,14 @@ impl LayoutBuilderState {
         );
 
         let mut children = Vec::new();
+
+        // Update the SubcomposeLayoutNode's size (position will be set by parent's placement)
+        if let Ok(mut applier) = applier_host.try_borrow_typed() {
+            let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |parent_node| {
+                parent_node.set_measured_size(Size { width, height });
+            });
+        }
+
         for placement in measure_result.placements {
             let child =
                 Self::measure_node(Rc::clone(&state_rc), placement.node_id, inner_constraints)?;
@@ -869,11 +886,24 @@ impl LayoutBuilderState {
                 x: padding.left + placement.x,
                 y: padding.top + placement.y,
             };
+
+            // Critical: Update the child LayoutNode's retained state.
+            // Standard layouts do this via Placeable::place(), but SubcomposeLayout logic
+            // bypasses Placeables and returns raw Placements.
+            if let Ok(mut applier) = applier_host.try_borrow_typed() {
+                let _ = applier.with_node::<LayoutNode, _>(placement.node_id, |node| {
+                    node.set_position(position);
+                });
+            }
+
             children.push(MeasuredChild {
                 node: child,
                 offset: position,
             });
         }
+
+        // Update the SubcomposeLayoutNode's active children for rendering
+        node_handle.set_active_children(children.iter().map(|c| c.node.node_id));
 
         Ok(Some(Rc::new(MeasuredNode::new(
             node_id,
@@ -883,7 +913,6 @@ impl LayoutBuilderState {
             children,
         ))))
     }
-
     /// Measures through the layout modifier coordinator chain using reconciled modifier nodes.
     /// Iterates through LayoutModifierNode instances from the ModifierNodeChain and calls
     /// their measure() methods, mirroring Jetpack Compose's LayoutModifierNodeCoordinator pattern.
@@ -1093,20 +1122,25 @@ impl LayoutBuilderState {
         for &child_id in children.iter() {
             let measured = Rc::new(RefCell::new(None));
             let position = Rc::new(RefCell::new(None));
-            let cache_handles = {
+
+            let data = {
                 let mut applier = applier_host.borrow_typed();
-                match applier
-                    .with_node::<LayoutNode, _>(child_id, |layout_node| layout_node.cache_handles())
-                {
-                    Ok(value) => Some(value),
-                    Err(NodeError::TypeMismatch { .. }) => Some(LayoutNodeCacheHandles::default()),
+                match applier.with_node::<LayoutNode, _>(child_id, |n| {
+                    (n.cache_handles(), n.layout_state_handle())
+                }) {
+                    Ok((cache, state)) => Some((cache, Some(state))),
+                    Err(NodeError::TypeMismatch { .. }) => {
+                        Some((LayoutNodeCacheHandles::default(), None))
+                    }
                     Err(NodeError::Missing { .. }) => None,
                     Err(err) => return Err(err),
                 }
             };
-            let Some(cache_handles) = cache_handles else {
+
+            let Some((cache_handles, layout_state)) = data else {
                 continue;
             };
+
             cache_handles.activate(cache_epoch);
 
             records.push((
@@ -1126,6 +1160,7 @@ impl LayoutBuilderState {
                 cache_handles,
                 cache_epoch,
                 Some(measure_handle.clone()),
+                layout_state,
             )));
         }
 
@@ -1224,11 +1259,13 @@ impl LayoutBuilderState {
 
         cache.store_measurement(constraints, Rc::clone(&measured));
 
-        // Clear dirty flags after successful measure
+        // Clear dirty flags and update derived state
         Self::with_applier_result(&state_rc, |applier| {
             applier.with_node::<LayoutNode, _>(node_id, |node| {
                 node.clear_needs_measure();
                 node.clear_needs_layout();
+                node.set_measured_size(Size { width, height });
+                node.set_content_offset(content_offset);
             })
         })
         .ok();
@@ -1425,6 +1462,7 @@ struct LayoutChildMeasurable {
     cache: LayoutNodeCacheHandles,
     cache_epoch: u64,
     measure_handle: Option<LayoutMeasureHandle>,
+    layout_state: Option<Rc<RefCell<crate::widgets::nodes::layout_node::LayoutState>>>,
 }
 
 impl LayoutChildMeasurable {
@@ -1439,6 +1477,7 @@ impl LayoutChildMeasurable {
         cache: LayoutNodeCacheHandles,
         cache_epoch: u64,
         measure_handle: Option<LayoutMeasureHandle>,
+        layout_state: Option<Rc<RefCell<crate::widgets::nodes::layout_node::LayoutState>>>,
     ) -> Self {
         cache.activate(cache_epoch);
         Self {
@@ -1451,6 +1490,7 @@ impl LayoutChildMeasurable {
             cache,
             cache_epoch,
             measure_handle,
+            layout_state,
         }
     }
 
@@ -1498,11 +1538,14 @@ impl LayoutChildMeasurable {
 impl Measurable for LayoutChildMeasurable {
     fn measure(&self, constraints: Constraints) -> Box<dyn Placeable> {
         self.cache.activate(self.cache_epoch);
+        let measured_size;
         if let Some(cached) = self.cache.get_measurement(constraints) {
+            measured_size = cached.size;
             *self.measured.borrow_mut() = Some(Rc::clone(&cached));
         } else {
             match self.perform_measure(constraints) {
                 Ok(measured) => {
+                    measured_size = measured.size;
                     self.cache
                         .store_measurement(constraints, Rc::clone(&measured));
                     *self.measured.borrow_mut() = Some(measured);
@@ -1510,13 +1553,33 @@ impl Measurable for LayoutChildMeasurable {
                 Err(err) => {
                     self.record_error(err);
                     self.measured.borrow_mut().take();
+                    measured_size = Size {
+                        width: 0.0,
+                        height: 0.0,
+                    };
                 }
             }
         }
+
+        // Update retained LayoutNode state with measured size (new architecture).
+        // PRIORITIZE direct handle to avoid Applier borrow conflicts during layout!
+        if let Some(state) = &self.layout_state {
+            let mut state = state.borrow_mut();
+            state.size = measured_size;
+            state.measurement_constraints = constraints;
+        } else if let Ok(mut applier) = self.applier.try_borrow_typed() {
+            let _ = applier.with_node::<LayoutNode, _>(self.node_id, |node| {
+                node.set_measured_size(measured_size);
+                node.set_measurement_constraints(constraints);
+            });
+        }
+
         Box::new(LayoutChildPlaceable::new(
+            Rc::clone(&self.applier),
             self.node_id,
             Rc::clone(&self.measured),
             Rc::clone(&self.last_position),
+            self.layout_state.clone(),
         ))
     }
 
@@ -1624,28 +1687,68 @@ impl Measurable for LayoutChildMeasurable {
 }
 
 struct LayoutChildPlaceable {
+    applier: Rc<ConcreteApplierHost<MemoryApplier>>,
     node_id: NodeId,
     measured: Rc<RefCell<Option<Rc<MeasuredNode>>>>,
     last_position: Rc<RefCell<Option<Point>>>,
+    layout_state: Option<Rc<RefCell<crate::widgets::nodes::layout_node::LayoutState>>>,
 }
 
 impl LayoutChildPlaceable {
     fn new(
+        applier: Rc<ConcreteApplierHost<MemoryApplier>>,
         node_id: NodeId,
         measured: Rc<RefCell<Option<Rc<MeasuredNode>>>>,
         last_position: Rc<RefCell<Option<Point>>>,
+        layout_state: Option<Rc<RefCell<crate::widgets::nodes::layout_node::LayoutState>>>,
     ) -> Self {
         Self {
+            applier,
             node_id,
             measured,
             last_position,
+            layout_state,
         }
     }
 }
 
 impl Placeable for LayoutChildPlaceable {
     fn place(&self, x: f32, y: f32) {
-        *self.last_position.borrow_mut() = Some(Point { x, y });
+        // Retrieve the node's own offset (from modifiers like offset(), padding(), etc.)
+        // This must be added to the placement position (x, y) provided by the parent.
+        let internal_offset = self
+            .measured
+            .borrow()
+            .as_ref()
+            .map(|m| m.offset)
+            .unwrap_or_default();
+
+        let position = Point {
+            x: x + internal_offset.x,
+            y: y + internal_offset.y,
+        };
+        // Update transient storage (for backwards compatibility during transition)
+        *self.last_position.borrow_mut() = Some(position);
+
+        // Update retained LayoutNode state (the new architecture)
+        // PRIORITIZE direct handle to avoid Applier borrow conflicts during layout!
+        if let Some(state) = &self.layout_state {
+            let mut state = state.borrow_mut();
+            state.position = position;
+            state.is_placed = true;
+        } else if let Ok(mut applier) = self.applier.try_borrow_typed() {
+            // Try LayoutNode first, then SubcomposeLayoutNode
+            if applier
+                .with_node::<LayoutNode, _>(self.node_id, |node| {
+                    node.set_position(position);
+                })
+                .is_err()
+            {
+                let _ = applier.with_node::<SubcomposeLayoutNode, _>(self.node_id, |node| {
+                    node.set_position(position);
+                });
+            }
+        }
     }
 
     fn width(&self) -> f32 {
@@ -1693,7 +1796,7 @@ fn measure_node_with_host(
 struct RuntimeNodeMetadata {
     modifier: Modifier,
     resolved_modifiers: ResolvedModifiers,
-    modifier_slices: ModifierNodeSlices,
+    modifier_slices: Rc<ModifierNodeSlices>,
     role: SemanticsRole,
     button_handler: Option<Rc<RefCell<dyn FnMut()>>>,
 }
@@ -1703,7 +1806,7 @@ impl Default for RuntimeNodeMetadata {
         Self {
             modifier: Modifier::empty(),
             resolved_modifiers: ResolvedModifiers::default(),
-            modifier_slices: ModifierNodeSlices::default(),
+            modifier_slices: Rc::default(),
             role: SemanticsRole::Unknown,
             button_handler: None,
         }
@@ -1824,7 +1927,9 @@ fn runtime_metadata_for(
             (node.modifier(), node.resolved_modifiers())
         })
     {
-        let modifier_slices = collect_slices_from_modifier(&modifier);
+        // SubcomposeLayoutNode doesn't cache slices yet, so we still allocate here.
+        // TODO: Optimize SubcomposeLayoutNode to cache slices too.
+        let modifier_slices = Rc::new(collect_slices_from_modifier(&modifier));
         return Ok(RuntimeNodeMetadata {
             modifier,
             resolved_modifiers,

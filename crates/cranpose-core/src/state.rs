@@ -135,6 +135,29 @@ impl StateRecord {
     }
 }
 
+impl Drop for StateRecord {
+    fn drop(&mut self) {
+        // Prevent recursive drop of deep chains which can cause stack overflow.
+        // We iteratively detach and drop the next record if we are the sole owner.
+        let mut next = self.next.take();
+        while let Some(node) = next {
+            match Rc::try_unwrap(node) {
+                Ok(record) => {
+                    // We were the last owner. Take its next pointer to continue the loop.
+                    // The record itself will be dropped here, but since next is None,
+                    // it won't recurse.
+                    next = record.next.take();
+                }
+                Err(_) => {
+                    // Someone else holds a reference to this node.
+                    // The chain destruction stops here.
+                    break;
+                }
+            }
+        }
+    }
+}
+
 #[inline]
 fn record_is_valid_for(
     record: &Rc<StateRecord>,
@@ -450,8 +473,7 @@ impl<T> MutationPolicy<T> for NeverEqual {
 pub trait StateObject: Any {
     fn object_id(&self) -> ObjectId;
     fn first_record(&self) -> Rc<StateRecord>;
-    fn readable_record(&self, snapshot_id: SnapshotId, invalid: &SnapshotIdSet)
-        -> Rc<StateRecord>;
+    fn readable_record(&self, snapshot_id: SnapshotId, invalid: &SnapshotIdSet) -> Rc<StateRecord>;
 
     /// Prepends a record to the head of the record chain.
     /// This is used when reusing records - the record's next pointer is updated to point to the current head,
@@ -551,11 +573,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         readable_record_for(&head, snapshot_id, invalid)
     }
 
-    fn writable_record(
-        &self,
-        snapshot_id: SnapshotId,
-        invalid: &SnapshotIdSet,
-    ) -> Rc<StateRecord> {
+    fn writable_record(&self, snapshot_id: SnapshotId, invalid: &SnapshotIdSet) -> Rc<StateRecord> {
         let readable = match self.readable_for(snapshot_id, invalid) {
             Some(record) => record,
             None => {
@@ -869,11 +887,7 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
         self.head.read().expect("State head lock poisoned").clone()
     }
 
-    fn readable_record(
-        &self,
-        snapshot_id: SnapshotId,
-        invalid: &SnapshotIdSet,
-    ) -> Rc<StateRecord> {
+    fn readable_record(&self, snapshot_id: SnapshotId, invalid: &SnapshotIdSet) -> Rc<StateRecord> {
         self.try_readable_record(snapshot_id, invalid)
             .unwrap_or_else(|| {
                 panic!(

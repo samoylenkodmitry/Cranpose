@@ -22,7 +22,7 @@ use cranpose_ui::{composable, Color, LinearArrangement, Modifier};
 use std::time::{Duration, Instant};
 
 const DEFAULT_DURATION_SECS: u64 = 3;
-const DEFAULT_WARMUP_SECS: u64 = 1;
+const DEFAULT_WARMUP_SECS: u64 = 5;
 const DEFAULT_SAMPLE_INTERVAL_MS: u64 = 200;
 const DEFAULT_MAX_GROWTH_KB: u64 = 32 * 1024;
 

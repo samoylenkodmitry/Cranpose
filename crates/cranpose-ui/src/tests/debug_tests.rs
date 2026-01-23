@@ -1,6 +1,7 @@
 use super::*;
 use crate::layout::{LayoutBox, LayoutNodeData, LayoutNodeKind};
-use crate::modifier::{Modifier, ModifierNodeSlices, Point, Rect, ResolvedModifiers};
+use crate::modifier::{Modifier, Point, Rect, ResolvedModifiers};
+use std::rc::Rc;
 
 #[test]
 fn test_count_nodes() {
@@ -15,7 +16,7 @@ fn test_count_nodes() {
         LayoutNodeData::new(
             Modifier::empty(),
             ResolvedModifiers::default(),
-            ModifierNodeSlices::default(),
+            Rc::default(),
             LayoutNodeKind::Unknown,
         )
     };
