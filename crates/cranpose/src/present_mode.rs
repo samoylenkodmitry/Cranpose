@@ -12,7 +12,7 @@ pub(crate) fn select_present_mode(caps: &wgpu::SurfaceCapabilities) -> wgpu::Pre
         if caps.present_modes.contains(&mode) {
             return mode;
         }
-        eprintln!(
+        log::warn!(
             "CRANPOSE_PRESENT_MODE requested {:?}, but it is not supported; falling back to FIFO.",
             mode
         );

@@ -7,7 +7,10 @@ use cranpose_core::{
 };
 use indexmap::IndexSet;
 
-use crate::modifier::{Modifier, ModifierChainHandle, Point, ResolvedModifiers, Size};
+use crate::modifier::{
+    collect_modifier_slices_into, Modifier, ModifierChainHandle, ModifierNodeSlices, Point,
+    ResolvedModifiers, Size,
+};
 use crate::widgets::nodes::{
     allocate_virtual_node_id, is_virtual_node, register_layout_node, LayoutNode, LayoutState,
 };
@@ -362,6 +365,9 @@ pub struct SubcomposeLayoutNode {
     virtual_children_count: Cell<usize>,
     /// Retained layout state (size, position) for rendering.
     layout_state: Rc<RefCell<LayoutState>>,
+    // Caching for modifier slices to avoid repeated allocation
+    modifier_slices_buffer: RefCell<ModifierNodeSlices>,
+    modifier_slices_snapshot: RefCell<Rc<ModifierNodeSlices>>,
 }
 
 impl SubcomposeLayoutNode {
@@ -379,11 +385,14 @@ impl SubcomposeLayoutNode {
             needs_focus_sync: Cell::new(false),
             virtual_children_count: Cell::new(0),
             layout_state: Rc::new(RefCell::new(LayoutState::default())),
+            modifier_slices_buffer: RefCell::new(ModifierNodeSlices::default()),
+            modifier_slices_snapshot: RefCell::new(Rc::default()),
         };
         // Set modifier and dispatch invalidations after borrow is released
         // Pass empty prev_caps since this is initial construction
         let (invalidations, _) = node.inner.borrow_mut().set_modifier_collect(modifier);
         node.dispatch_modifier_invalidations(&invalidations, NodeCapabilities::empty());
+        node.update_modifier_slices_cache();
         node
     }
 
@@ -410,11 +419,14 @@ impl SubcomposeLayoutNode {
             needs_focus_sync: Cell::new(false),
             virtual_children_count: Cell::new(0),
             layout_state: Rc::new(RefCell::new(LayoutState::default())),
+            modifier_slices_buffer: RefCell::new(ModifierNodeSlices::default()),
+            modifier_slices_snapshot: RefCell::new(Rc::default()),
         };
         // Set modifier and dispatch invalidations after borrow is released
         // Pass empty prev_caps since this is initial construction
         let (invalidations, _) = node.inner.borrow_mut().set_modifier_collect(modifier);
         node.dispatch_modifier_invalidations(&invalidations, NodeCapabilities::empty());
+        node.update_modifier_slices_cache();
         node
     }
 
@@ -440,9 +452,18 @@ impl SubcomposeLayoutNode {
         // Pass both prev and curr caps so removed modifiers still trigger invalidation
         self.dispatch_modifier_invalidations(&invalidations, prev_caps);
         if modifier_changed {
+            self.update_modifier_slices_cache();
             self.mark_needs_measure();
             self.request_semantics_update();
         }
+    }
+
+    /// Updates the cached modifier slices from the modifier chain.
+    fn update_modifier_slices_cache(&self) {
+        let inner = self.inner.borrow();
+        let mut buffer = self.modifier_slices_buffer.borrow_mut();
+        collect_modifier_slices_into(inner.modifier_chain.chain(), &mut buffer);
+        *self.modifier_slices_snapshot.borrow_mut() = Rc::new(buffer.clone());
     }
 
     pub fn set_debug_modifiers(&mut self, enabled: bool) {
@@ -481,9 +502,8 @@ impl SubcomposeLayoutNode {
     }
 
     /// Returns the modifier slices snapshot for rendering.
-    pub fn modifier_slices_snapshot(&self) -> std::rc::Rc<crate::modifier::ModifierNodeSlices> {
-        let inner = self.inner.borrow();
-        std::rc::Rc::new(crate::modifier::collect_slices_from_modifier(&inner.modifier))
+    pub fn modifier_slices_snapshot(&self) -> Rc<ModifierNodeSlices> {
+        self.modifier_slices_snapshot.borrow().clone()
     }
 
     pub fn state(&self) -> Ref<'_, SubcomposeState> {

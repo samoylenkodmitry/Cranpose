@@ -764,7 +764,6 @@ impl LayoutBuilderState {
                 let resolved_modifiers = handle.resolved_modifiers();
                 (handle, resolved_modifiers)
             } else {
-                // eprintln!("DEBUG: try_measure_subcompose node {} downcast failed (not SubcomposeLayoutNode)", node_id);
                 return Ok(None);
             }
         };
