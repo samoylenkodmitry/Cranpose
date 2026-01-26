@@ -1,4 +1,4 @@
-use std::sync::{OnceLock, RwLock};
+use std::cell::RefCell;
 
 use crate::text_layout_result::TextLayoutResult;
 
@@ -12,7 +12,7 @@ pub struct TextMetrics {
     pub line_count: usize,
 }
 
-pub trait TextMeasurer: Send + Sync + 'static {
+pub trait TextMeasurer: 'static {
     fn measure(&self, text: &str) -> TextMetrics;
 
     /// Returns byte offset in text for given x position.
@@ -102,48 +102,34 @@ impl TextMeasurer for MonospacedTextMeasurer {
     }
 }
 
-fn global_text_measurer() -> &'static RwLock<Box<dyn TextMeasurer>> {
-    static TEXT_MEASURER: OnceLock<RwLock<Box<dyn TextMeasurer>>> = OnceLock::new();
-    TEXT_MEASURER.get_or_init(|| RwLock::new(Box::new(MonospacedTextMeasurer)))
+thread_local! {
+    static TEXT_MEASURER: RefCell<Box<dyn TextMeasurer>> = RefCell::new(Box::new(MonospacedTextMeasurer));
 }
 
 pub fn set_text_measurer<M: TextMeasurer>(measurer: M) {
-    let mut guard = global_text_measurer()
-        .write()
-        .expect("text measurer lock poisoned");
-    *guard = Box::new(measurer);
+    TEXT_MEASURER.with(|m| {
+        *m.borrow_mut() = Box::new(measurer);
+    });
 }
 
 pub fn measure_text(text: &str) -> TextMetrics {
-    global_text_measurer()
-        .read()
-        .expect("text measurer lock poisoned")
-        .measure(text)
+    TEXT_MEASURER.with(|m| m.borrow().measure(text))
 }
 
 /// Returns byte offset in text for given x position.
 /// Used for cursor positioning on click.
 pub fn get_offset_for_position(text: &str, x: f32, y: f32) -> usize {
-    global_text_measurer()
-        .read()
-        .expect("text measurer lock poisoned")
-        .get_offset_for_position(text, x, y)
+    TEXT_MEASURER.with(|m| m.borrow().get_offset_for_position(text, x, y))
 }
 
 /// Returns x position for given byte offset.
 /// Used for cursor rendering and selection geometry.
 pub fn get_cursor_x_for_offset(text: &str, offset: usize) -> f32 {
-    global_text_measurer()
-        .read()
-        .expect("text measurer lock poisoned")
-        .get_cursor_x_for_offset(text, offset)
+    TEXT_MEASURER.with(|m| m.borrow().get_cursor_x_for_offset(text, offset))
 }
 
 /// Computes full text layout with cached glyph positions.
 /// Returns TextLayoutResult for O(1) position lookups.
 pub fn layout_text(text: &str) -> TextLayoutResult {
-    global_text_measurer()
-        .read()
-        .expect("text measurer lock poisoned")
-        .layout(text)
+    TEXT_MEASURER.with(|m| m.borrow().layout(text))
 }
