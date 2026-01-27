@@ -15,20 +15,19 @@ use crate::widgets::Layout;
 use cranpose_core::{MutableState, NodeId, State};
 use cranpose_foundation::modifier_element;
 use std::rc::Rc;
-use std::sync::Arc;
 
 #[derive(Clone)]
-pub struct DynamicTextSource(Rc<dyn Fn() -> Arc<str>>);
+pub struct DynamicTextSource(Rc<dyn Fn() -> Rc<str>>);
 
 impl DynamicTextSource {
     pub fn new<F>(resolver: F) -> Self
     where
-        F: Fn() -> Arc<str> + 'static,
+        F: Fn() -> Rc<str> + 'static,
     {
         Self(Rc::new(resolver))
     }
 
-    fn resolve(&self) -> Arc<str> {
+    fn resolve(&self) -> Rc<str> {
         (self.0)()
     }
 }
@@ -43,12 +42,12 @@ impl Eq for DynamicTextSource {}
 
 #[derive(Clone, PartialEq, Eq)]
 enum TextSource {
-    Static(Arc<str>),
+    Static(Rc<str>),
     Dynamic(DynamicTextSource),
 }
 
 impl TextSource {
-    fn resolve(&self) -> Arc<str> {
+    fn resolve(&self) -> Rc<str> {
         match self {
             TextSource::Static(text) => text.clone(),
             TextSource::Dynamic(dynamic) => dynamic.resolve(),
@@ -62,13 +61,13 @@ trait IntoTextSource {
 
 impl IntoTextSource for String {
     fn into_text_source(self) -> TextSource {
-        TextSource::Static(Arc::from(self))
+        TextSource::Static(Rc::from(self))
     }
 }
 
 impl IntoTextSource for &str {
     fn into_text_source(self) -> TextSource {
-        TextSource::Static(Arc::from(self))
+        TextSource::Static(Rc::from(self))
     }
 }
 
@@ -79,7 +78,7 @@ where
     fn into_text_source(self) -> TextSource {
         let state = self;
         TextSource::Dynamic(DynamicTextSource::new(move || {
-            Arc::from(state.value().to_string())
+            Rc::from(state.value().to_string())
         }))
     }
 }
@@ -91,7 +90,7 @@ where
     fn into_text_source(self) -> TextSource {
         let state = self;
         TextSource::Dynamic(DynamicTextSource::new(move || {
-            Arc::from(state.value().to_string())
+            Rc::from(state.value().to_string())
         }))
     }
 }
@@ -101,7 +100,7 @@ where
     F: Fn() -> String + 'static,
 {
     fn into_text_source(self) -> TextSource {
-        TextSource::Dynamic(DynamicTextSource::new(move || Arc::from(self())))
+        TextSource::Dynamic(DynamicTextSource::new(move || Rc::from(self())))
     }
 }
 

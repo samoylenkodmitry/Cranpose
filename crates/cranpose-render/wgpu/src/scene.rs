@@ -7,7 +7,6 @@ use cranpose_ui_graphics::{Brush, Color, Point, Rect, RoundedCornerShape};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct DrawShape {
@@ -22,7 +21,7 @@ pub struct DrawShape {
 pub struct TextDraw {
     pub node_id: NodeId,
     pub rect: Rect,
-    pub text: Arc<str>,
+    pub text: Rc<str>,
     pub color: Color,
     pub scale: f32,
     pub z_index: usize,
@@ -166,7 +165,7 @@ impl Scene {
         &mut self,
         node_id: NodeId,
         rect: Rect,
-        text: Arc<str>,
+        text: Rc<str>,
         color: Color,
         scale: f32,
         clip: Option<Rect>,

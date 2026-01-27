@@ -25,7 +25,7 @@ use cranpose_foundation::{
     ModifierNodeElement, NodeCapabilities, NodeState, SemanticsConfiguration, SemanticsNode, Size,
 };
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::rc::Rc;
 
 /// Node that stores text content and handles measurement, drawing, and semantics.
 ///
@@ -38,12 +38,12 @@ use std::sync::Arc;
 /// `compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/modifiers/TextStringSimpleNode.kt`
 #[derive(Debug)]
 pub struct TextModifierNode {
-    text: Arc<str>,
+    text: Rc<str>,
     state: NodeState,
 }
 
 impl TextModifierNode {
-    pub fn new(text: Arc<str>) -> Self {
+    pub fn new(text: Rc<str>) -> Self {
         Self {
             text,
             state: NodeState::new(),
@@ -54,7 +54,7 @@ impl TextModifierNode {
         &self.text
     }
 
-    pub fn text_arc(&self) -> Arc<str> {
+    pub fn text_arc(&self) -> Rc<str> {
         self.text.clone()
     }
 
@@ -159,7 +159,7 @@ impl LayoutModifierNode for TextModifierNode {
 /// Phase 2: Instead of reconstructing nodes via `TextModifierNode::new()`, this proxy
 /// directly implements measurement logic using the snapshotted text content.
 struct TextMeasurementProxy {
-    text: Arc<str>,
+    text: Rc<str>,
 }
 
 impl TextMeasurementProxy {
@@ -243,11 +243,11 @@ impl SemanticsNode for TextModifierNode {
 /// Matches Jetpack Compose: `TextStringSimpleElement` in BasicText.kt
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextModifierElement {
-    text: Arc<str>,
+    text: Rc<str>,
 }
 
 impl TextModifierElement {
-    pub fn new(text: Arc<str>) -> Self {
+    pub fn new(text: Rc<str>) -> Self {
         Self { text }
     }
 }

@@ -120,7 +120,7 @@ fn render_container(
 
     // Render text content if present in modifier slices.
     // Text is now handled via TextModifierNode in the modifier chain.
-    if let Some(value) = layout.node_data.modifier_slices().text_content_arc() {
+    if let Some(value) = layout.node_data.modifier_slices().text_content_rc() {
         let metrics = measure_text(value.as_ref());
         let padding = style.padding;
         let text_rect = Rect {
@@ -360,7 +360,7 @@ fn render_node_from_applier(
     }
 
     // Render text content if present
-    if let Some(value) = modifier_slices.text_content_arc() {
+    if let Some(value) = modifier_slices.text_content_rc() {
         let metrics = measure_text(value.as_ref());
         let padding = style.padding;
         let text_rect = Rect {

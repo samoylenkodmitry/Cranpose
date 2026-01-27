@@ -21,6 +21,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 /// Size-only cache for ultra-fast text measurement lookups.
@@ -397,7 +398,7 @@ impl Renderer for WgpuRenderer {
         self.scene.push_text(
             NodeId::MAX,
             text_rect,
-            Arc::from(text),
+            Rc::from(text),
             Color(0.0, 1.0, 0.0, 1.0),  // Green
             font_size / BASE_FONT_SIZE, // Scale relative to base
             None,

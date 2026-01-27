@@ -39,7 +39,10 @@ impl GlobalSnapshot {
                 let invalid = super::runtime::open_snapshots();
                 *snapshot = Some(GlobalSnapshot::new(id, invalid));
             }
-            snapshot.as_ref().unwrap().clone()
+            snapshot
+                .as_ref()
+                .expect("GlobalSnapshot must be initialized before use")
+                .clone()
         })
     }
 

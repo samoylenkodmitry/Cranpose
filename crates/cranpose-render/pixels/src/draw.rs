@@ -4,7 +4,8 @@ use rusttype::{point, Font, Scale};
 use std::borrow::Borrow;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
-use std::sync::{Arc, Mutex};
+use std::rc::Rc;
+use std::sync::Mutex;
 
 use cranpose_ui::{Brush, TextMeasurer, TextMetrics};
 use cranpose_ui_graphics::{Color, Rect};
@@ -27,12 +28,12 @@ pub struct CachedRusttypeTextMeasurer {
 
 #[derive(Clone)]
 struct TextKey {
-    text: Arc<str>,
+    text: Rc<str>,
 }
 
 impl PartialEq for TextKey {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.text, &other.text) || *self.text == *other.text
+        Rc::ptr_eq(&self.text, &other.text) || *self.text == *other.text
     }
 }
 
@@ -71,7 +72,7 @@ impl TextMetricsCache {
             return metrics;
         }
         let key = TextKey {
-            text: Arc::from(text),
+            text: Rc::from(text),
         };
         let metrics = measure(text);
         self.map.put(key, metrics);
