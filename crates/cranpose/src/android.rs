@@ -19,6 +19,14 @@ struct GpuResources {
     config: wgpu::SurfaceConfiguration,
 }
 
+/// Pending input event to be processed outside poll_events callback.
+/// This prevents blocking the main thread during input event acknowledgment.
+enum PendingInput {
+    PointerDown(f32, f32),
+    PointerUp(f32, f32),
+    PointerMove(f32, f32),
+}
+
 /// Get display density from Android NDK Configuration.
 ///
 /// Uses the NDK's AConfiguration_getDensity which returns density constants
@@ -157,22 +165,27 @@ pub fn run(
     // GPU resources (recreated when window is destroyed/created)
     let mut gpu_resources: Option<GpuResources> = None;
 
+    // Queue for input events (processed outside poll_events to prevent ANR)
+    let mut pending_inputs: Vec<PendingInput> = Vec::new();
+
     // Main event loop
     loop {
         // Dynamic poll duration:
-        // - None when no window (paused, no surface)
-        // - ZERO when dirty or animating (immediate rendering)
-        // - None when idle (event-driven sleep)
-        let poll_duration = if gpu_resources.is_none() {
-            None // No window, sleep until next event
+        // - ZERO when dirty, animating, OR pending inputs (immediate processing)
+        // - Short timeout (16ms ~= 60fps) otherwise to ensure responsive input handling
+        //   (Never use None/infinite wait as it can cause ANR if events arrive between checks)
+        let poll_duration = if !pending_inputs.is_empty() {
+            Some(std::time::Duration::ZERO) // Process pending inputs immediately
+        } else if gpu_resources.is_none() {
+            Some(std::time::Duration::from_millis(100)) // No window, poll occasionally
         } else if let Some(shell) = &app_shell {
             if shell.needs_redraw() {
                 Some(std::time::Duration::ZERO) // Dirty or animating, tight loop
             } else {
-                None // Idle, sleep until next event
+                Some(std::time::Duration::from_millis(16)) // Idle, poll at ~60fps for responsive input
             }
         } else {
-            None
+            Some(std::time::Duration::from_millis(100))
         };
 
         app.poll_events(poll_duration, |event| {
@@ -416,6 +429,11 @@ pub fn run(
                 // Handle input events to prevent ANR
                 _ => {
                     if let Ok(mut iter) = app.input_events_iter() {
+                        // Limit how many events we process per poll to prevent blocking
+                        // Android ANR timeout is 5 seconds, so we need to return quickly
+                        let mut events_processed = 0;
+                        const MAX_EVENTS_PER_POLL: usize = 10;
+                        
                         loop {
                             if !iter.next(|event| {
                                 let handled = match event {
@@ -434,29 +452,30 @@ pub fn run(
                                                     "[TOUCH] Down at ({:.1}, {:.1})",
                                                     logical.x, logical.y
                                                 );
-                                                if let Some(shell) = &mut app_shell {
-                                                    shell.set_cursor(logical.x, logical.y);
-                                                    shell.pointer_pressed();
-                                                }
+                                                pending_inputs.push(PendingInput::PointerDown(
+                                                    logical.x as f32,
+                                                    logical.y as f32,
+                                                ));
                                             }
                                             MotionAction::Up | MotionAction::PointerUp => {
                                                 println!(
                                                     "[TOUCH] Up at ({:.1}, {:.1})",
                                                     logical.x, logical.y
                                                 );
-                                                if let Some(shell) = &mut app_shell {
-                                                    shell.set_cursor(logical.x, logical.y);
-                                                    shell.pointer_released();
-                                                }
+                                                pending_inputs.push(PendingInput::PointerUp(
+                                                    logical.x as f32,
+                                                    logical.y as f32,
+                                                ));
                                             }
                                             MotionAction::Move => {
                                                 println!(
                                                     "[TOUCH] Move at ({:.1}, {:.1})",
                                                     logical.x, logical.y
                                                 );
-                                                if let Some(shell) = &mut app_shell {
-                                                    shell.set_cursor(logical.x, logical.y);
-                                                }
+                                                pending_inputs.push(PendingInput::PointerMove(
+                                                    logical.x as f32,
+                                                    logical.y as f32,
+                                                ));
                                             }
                                             _ => {}
                                         }
@@ -473,11 +492,39 @@ pub fn run(
                             }) {
                                 break;
                             }
+                            
+                            events_processed += 1;
+                            if events_processed >= MAX_EVENTS_PER_POLL {
+                                // Processed enough events, return to main loop
+                                // Remaining events will be processed in next poll
+                                break;
+                            }
                         }
                     }
                 }
             }
         });
+
+        // Process pending input events outside poll_events to prevent ANR
+        if !pending_inputs.is_empty() {
+            if let Some(shell) = &mut app_shell {
+                for input in pending_inputs.drain(..) {
+                    match input {
+                        PendingInput::PointerDown(x, y) => {
+                            shell.set_cursor(x, y);
+                            shell.pointer_pressed();
+                        }
+                        PendingInput::PointerUp(x, y) => {
+                            shell.set_cursor(x, y);
+                            shell.pointer_released();
+                        }
+                        PendingInput::PointerMove(x, y) => {
+                            shell.set_cursor(x, y);
+                        }
+                    }
+                }
+            }
+        }
 
         // Check if app side requested a frame (animations, state changes)
         if need_frame.swap(false, Ordering::Relaxed) {
