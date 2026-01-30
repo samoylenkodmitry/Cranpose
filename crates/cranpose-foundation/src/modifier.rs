@@ -10,12 +10,12 @@
 use std::any::{type_name, Any, TypeId};
 use std::cell::{Cell, RefCell};
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::{BitOr, BitOrAssign};
 use std::rc::Rc;
 
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 pub use cranpose_ui_graphics::DrawScope;
@@ -1168,6 +1168,10 @@ pub struct ModifierNodeChain {
     head_sentinel: Box<SentinelNode>,
     tail_sentinel: Box<SentinelNode>,
     ordered_nodes: Vec<NodeLink>,
+    // Scratch buffers reused during update to avoid repeated allocations
+    scratch_old_used: Vec<bool>,
+    scratch_match_order: Vec<Option<usize>>,
+    scratch_final_slots: Vec<Option<ModifierNodeEntry>>,
 }
 
 struct SentinelNode {
@@ -1206,20 +1210,21 @@ impl Default for ModifierNodeChain {
 ///
 /// This avoids O(n²) complexity by pre-building hash maps that allow constant-time
 /// lookups for matching entries by key, hash, or type.
+/// Uses FxHashMap for faster hashing of TypeId keys.
 struct EntryIndex {
     /// Map (TypeId, key) → index for keyed entries
-    keyed: HashMap<(TypeId, u64), Vec<usize>>,
+    keyed: FxHashMap<(TypeId, u64), Vec<usize>>,
     /// Map (TypeId, hash) → indices for unkeyed entries with specific hash
-    hashed: HashMap<(TypeId, u64), Vec<usize>>,
+    hashed: FxHashMap<(TypeId, u64), Vec<usize>>,
     /// Map TypeId → indices for all unkeyed entries of that type
-    typed: HashMap<TypeId, Vec<usize>>,
+    typed: FxHashMap<TypeId, Vec<usize>>,
 }
 
 impl EntryIndex {
     fn build(entries: &[ModifierNodeEntry]) -> Self {
-        let mut keyed = HashMap::new();
-        let mut hashed = HashMap::new();
-        let mut typed = HashMap::new();
+        let mut keyed = FxHashMap::default();
+        let mut hashed = FxHashMap::default();
+        let mut typed = FxHashMap::default();
 
         for (i, entry) in entries.iter().enumerate() {
             if let Some(key_value) = entry.key {
@@ -1305,6 +1310,9 @@ impl ModifierNodeChain {
             head_sentinel: Box::new(SentinelNode::new()),
             tail_sentinel: Box::new(SentinelNode::new()),
             ordered_nodes: Vec::new(),
+            scratch_old_used: Vec::new(),
+            scratch_match_order: Vec::new(),
+            scratch_final_slots: Vec::new(),
         };
         chain.sync_chain_links();
         chain
@@ -1355,21 +1363,25 @@ impl ModifierNodeChain {
         I: Iterator<Item = &'a DynModifierElement>,
     {
         let mut old_entries = std::mem::take(&mut self.entries);
-        let mut old_used = vec![false; old_entries.len()];
-        let mut new_entries: Vec<ModifierNodeEntry> = Vec::new();
+        let old_len = old_entries.len();
+
+        // Reuse scratch buffers: clear and resize instead of allocating new vectors
+        self.scratch_old_used.clear();
+        self.scratch_old_used.resize(old_len, false);
+
+        self.scratch_match_order.clear();
+        self.scratch_match_order.resize(old_len, None);
 
         // Build index for O(1) lookups - O(m) where m = old_entries.len()
         let index = EntryIndex::build(&old_entries);
 
-        // Track which old entry index maps to which position in new list
-        let mut match_order: Vec<Option<usize>> = vec![None; old_entries.len()];
-
-        // Track element count as we iterate
-        let mut element_count = 0usize;
+        let (lower_bound, _) = elements.size_hint();
+        self.scratch_final_slots.clear();
+        self.scratch_final_slots.reserve(old_len.max(lower_bound));
 
         // Process each new element, reusing old entries where possible - O(n)
         for (new_pos, element) in elements.enumerate() {
-            element_count = new_pos + 1;
+            self.scratch_final_slots.push(None);
             let element_type = element.element_type();
             let key = element.key();
             let hash_code = element.hash_code();
@@ -1378,7 +1390,7 @@ impl ModifierNodeChain {
             // Find best matching old entry via index - O(1) amortized
             let matched_idx = index.find_match(
                 &old_entries,
-                &old_used,
+                &self.scratch_old_used,
                 element_type,
                 key,
                 hash_code,
@@ -1387,8 +1399,8 @@ impl ModifierNodeChain {
 
             if let Some(idx) = matched_idx {
                 // Reuse existing entry
-                old_used[idx] = true;
-                match_order[idx] = Some(new_pos);
+                self.scratch_old_used[idx] = true;
+                self.scratch_match_order[idx] = Some(new_pos);
                 let entry = &mut old_entries[idx];
 
                 // Check if element actually changed
@@ -1435,48 +1447,29 @@ impl ModifierNodeChain {
                 attach_node_tree(&mut **entry.node.borrow_mut(), context);
                 element.update_node(&mut **entry.node.borrow_mut());
                 request_auto_invalidations(context, capabilities);
-                new_entries.push(entry);
+                self.scratch_final_slots[new_pos] = Some(entry);
             }
         }
 
-        // Assemble final list in correct order
-        let mut matched_entries: Vec<(usize, ModifierNodeEntry)> = Vec::new();
-        for (entry, (used, order)) in old_entries
-            .into_iter()
-            .zip(old_used.into_iter().zip(match_order))
-        {
-            if used {
-                matched_entries.push((order.unwrap(), entry));
+        for (i, entry) in old_entries.into_iter().enumerate() {
+            if self.scratch_old_used[i] {
+                let pos = self.scratch_match_order[i]
+                    .expect("Missing match order for used modifier entry");
+                self.scratch_final_slots[pos] = Some(entry);
             } else {
                 detach_node_tree(&mut **entry.node.borrow_mut());
             }
         }
 
-        matched_entries.sort_by_key(|(pos, _)| *pos);
-
-        // Merge matched entries with newly created entries
-        let mut final_entries: Vec<ModifierNodeEntry> = Vec::with_capacity(element_count);
-        let mut matched_iter = matched_entries.into_iter();
-        let mut new_iter = new_entries.into_iter();
-        let mut next_matched = matched_iter.next();
-        let mut next_new = new_iter.next();
-
-        for pos in 0..element_count {
-            if let Some((matched_pos, _)) = next_matched {
-                if matched_pos == pos {
-                    final_entries.push(next_matched.take().unwrap().1);
-                    next_matched = matched_iter.next();
-                    continue;
-                }
-            }
-
-            if let Some(entry) = next_new.take() {
-                final_entries.push(entry);
-                next_new = new_iter.next();
-            }
+        // Reuse entries vector if possible
+        self.entries.clear();
+        self.entries
+            .reserve(self.scratch_final_slots.len().saturating_sub(self.entries.capacity()));
+        for slot in self.scratch_final_slots.drain(..) {
+            let entry = slot.expect("Missing modifier entry for reconciled position");
+            self.entries.push(entry);
         }
 
-        self.entries = final_entries;
         self.sync_chain_links();
     }
 

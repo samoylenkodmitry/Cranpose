@@ -20,3 +20,4 @@ bytemuck = { version = "1.14", features = ["derive"] }
 glyphon = "0.9"
 log = "0.4"
 lru = "0.12"
+rustc-hash = "2.1.1"

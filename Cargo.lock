@@ -622,6 +622,7 @@ dependencies = [
  "cranpose-ui-graphics",
  "cranpose-ui-layout",
  "log",
+ "rustc-hash 2.1.1",
  "smallvec",
  "web-time",
 ]
@@ -700,6 +701,7 @@ dependencies = [
  "glyphon",
  "log",
  "lru",
+ "rustc-hash 2.1.1",
  "wgpu 25.0.2",
 ]
 
