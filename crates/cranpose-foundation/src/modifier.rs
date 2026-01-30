@@ -1172,6 +1172,7 @@ pub struct ModifierNodeChain {
     scratch_old_used: Vec<bool>,
     scratch_match_order: Vec<Option<usize>>,
     scratch_final_slots: Vec<Option<ModifierNodeEntry>>,
+    scratch_elements: Vec<DynModifierElement>,
 }
 
 struct SentinelNode {
@@ -1313,6 +1314,7 @@ impl ModifierNodeChain {
             scratch_old_used: Vec::new(),
             scratch_match_order: Vec::new(),
             scratch_final_slots: Vec::new(),
+            scratch_elements: Vec::new(),
         };
         chain.sync_chain_links();
         chain
@@ -1362,39 +1364,121 @@ impl ModifierNodeChain {
     ) where
         I: Iterator<Item = &'a DynModifierElement>,
     {
-        let mut old_entries = std::mem::take(&mut self.entries);
+        // Fast path: try to match elements sequentially without building index.
+        // If all elements match in order (same type and key at same position),
+        // we skip the expensive EntryIndex building. This is O(n) instead of O(n + m).
+        let old_len = self.entries.len();
+        let mut fast_path_failed_at: Option<usize> = None;
+        let mut elements_count = 0;
+
+        // Collect elements we need to process in slow path
+        self.scratch_elements.clear();
+
+        for (idx, element) in elements.enumerate() {
+            elements_count = idx + 1;
+
+            if fast_path_failed_at.is_none() && idx < old_len {
+                let entry = &mut self.entries[idx];
+                let same_type = entry.element_type == element.element_type();
+                let same_key = entry.key == element.key();
+                let same_hash = entry.hash_code == element.hash_code();
+
+                // Fast path requires same type, key, AND hash to ensure we're not
+                // breaking reordering semantics (where elements can move positions)
+                if same_type && same_key && same_hash {
+                    // Fast path: element matches at same position
+                    let same_element = entry.element.as_ref().equals_element(element.as_ref());
+                    let capabilities = element.capabilities();
+
+                    // Re-attach node if it was detached during a previous update
+                    {
+                        let node_borrow = entry.node.borrow();
+                        if !node_borrow.node_state().is_attached() {
+                            drop(node_borrow);
+                            attach_node_tree(&mut **entry.node.borrow_mut(), context);
+                        }
+                    }
+
+                    // Optimize updates: only call update_node if element changed
+                    let needs_update = !same_element || element.requires_update();
+                    if needs_update {
+                        element.update_node(&mut **entry.node.borrow_mut());
+                        entry.element = element.clone();
+                        entry.hash_code = element.hash_code();
+                        request_auto_invalidations(context, capabilities);
+                    }
+
+                    // Always update metadata
+                    entry.capabilities = capabilities;
+                    entry
+                        .node
+                        .borrow()
+                        .node_state()
+                        .set_capabilities(capabilities);
+                    continue;
+                }
+                // Fast path failed - mark position and fall through to collect
+                fast_path_failed_at = Some(idx);
+            }
+
+            // Collect element for slow path processing
+            self.scratch_elements.push(element.clone());
+        }
+
+        // Fast path succeeded if:
+        // 1. No mismatch was found (fast_path_failed_at is None)
+        // 2. All elements were processed via fast path (scratch_elements is empty)
+        // Note: If old_len=0 and we have new elements, scratch_elements won't be empty
+        if fast_path_failed_at.is_none() && self.scratch_elements.is_empty() {
+            // Detach any removed entries (elements_count <= old_len guaranteed here)
+            if elements_count < self.entries.len() {
+                for entry in self.entries.drain(elements_count..) {
+                    detach_node_tree(&mut **entry.node.borrow_mut());
+                }
+            }
+            self.sync_chain_links();
+            return;
+        }
+
+        // Slow path: need full reconciliation starting from failure point
+        // If no mismatch but we have extra elements, fail_idx is the old length
+        let fail_idx = fast_path_failed_at.unwrap_or(old_len);
+
+        // Move entries that were already processed to a safe place
+        let mut old_entries: Vec<ModifierNodeEntry> = self.entries.drain(fail_idx..).collect();
+        let processed_entries_len = self.entries.len();
         let old_len = old_entries.len();
 
-        // Reuse scratch buffers: clear and resize instead of allocating new vectors
+        // Reuse scratch buffers for the remaining entries only
         self.scratch_old_used.clear();
         self.scratch_old_used.resize(old_len, false);
 
         self.scratch_match_order.clear();
         self.scratch_match_order.resize(old_len, None);
 
-        // Build index for O(1) lookups - O(m) where m = old_entries.len()
+        // Build index only for unprocessed entries
         let index = EntryIndex::build(&old_entries);
 
-        let (lower_bound, _) = elements.size_hint();
+        let new_elements_count = self.scratch_elements.len();
         self.scratch_final_slots.clear();
-        self.scratch_final_slots.reserve(old_len.max(lower_bound));
+        self.scratch_final_slots.reserve(new_elements_count);
 
-        // Process each new element, reusing old entries where possible - O(n)
-        for (new_pos, element) in elements.enumerate() {
+        // Process each remaining element
+        for (new_pos, element) in self.scratch_elements.drain(..).enumerate() {
             self.scratch_final_slots.push(None);
             let element_type = element.element_type();
             let key = element.key();
             let hash_code = element.hash_code();
             let capabilities = element.capabilities();
 
-            // Find best matching old entry via index - O(1) amortized
+            // Find best matching old entry via index
             let matched_idx = index.find_match(
                 &old_entries,
                 &self.scratch_old_used,
                 element_type,
                 key,
                 hash_code,
-                element,
+                &element,
             );
 
             if let Some(idx) = matched_idx {
@@ -1406,7 +1490,7 @@ impl ModifierNodeChain {
                 // Check if element actually changed
                 let same_element = entry.element.as_ref().equals_element(element.as_ref());
 
-                // Re-attach node if it was detached during a previous update
+                // Re-attach node if it was detached
                 {
                     let node_borrow = entry.node.borrow();
                     if !node_borrow.node_state().is_attached() {
@@ -1415,12 +1499,11 @@ impl ModifierNodeChain {
                     }
                 }
 
-                // Optimize updates: only call update_node if element changed OR
-                // if the element type explicitly requests forced updates
+                // Optimize updates: only call update_node if element changed
                 let needs_update = !same_element || element.requires_update();
                 if needs_update {
                     element.update_node(&mut **entry.node.borrow_mut());
-                    entry.element = element.clone();
+                    entry.element = element;
                     entry.hash_code = hash_code;
                     request_auto_invalidations(context, capabilities);
                 }
@@ -1451,6 +1534,7 @@ impl ModifierNodeChain {
             }
         }
 
+        // Place matched entries in their new positions
         for (i, entry) in old_entries.into_iter().enumerate() {
             if self.scratch_old_used[i] {
                 let pos = self.scratch_match_order[i]
@@ -1461,15 +1545,17 @@ impl ModifierNodeChain {
             }
         }
 
-        // Reuse entries vector if possible
-        self.entries.clear();
-        self.entries
-            .reserve(self.scratch_final_slots.len().saturating_sub(self.entries.capacity()));
+        // Append processed entries to self.entries
+        self.entries.reserve(self.scratch_final_slots.len());
         for slot in self.scratch_final_slots.drain(..) {
             let entry = slot.expect("Missing modifier entry for reconciled position");
             self.entries.push(entry);
         }
 
+        debug_assert_eq!(
+            self.entries.len(),
+            processed_entries_len + new_elements_count
+        );
         self.sync_chain_links();
     }
 

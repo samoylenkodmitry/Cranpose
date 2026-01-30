@@ -97,7 +97,19 @@ impl ModifierChainHandle {
             .modifier_locals
             .borrow_mut()
             .sync(&self.chain, resolver);
-        self.resolved = self.compute_resolved();
+
+        // Only recompute resolved modifiers if layout-affecting nodes changed.
+        // Check if any LAYOUT invalidation was produced during update.
+        let needs_resolved_update = {
+            let ctx = self.context.borrow();
+            ctx.invalidations()
+                .iter()
+                .any(|inv| inv.kind() == InvalidationKind::Layout)
+        };
+        if needs_resolved_update {
+            self.resolved = self.compute_resolved();
+        }
+
         // Only collect inspector snapshot when debugging is enabled (lazy collection)
         let should_log = self.debug_logging || global_modifier_debug_flag();
         if should_log {
