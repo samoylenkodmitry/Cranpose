@@ -7,6 +7,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme.workspace = true
+license.workspace = true
 description = "Standard library backed runtime services for Cranpose"
 
 [dependencies]
