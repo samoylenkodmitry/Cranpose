@@ -145,11 +145,15 @@ impl AppLauncher {
     /// # Example
     ///
     /// ```no_run
+    /// use cranpose::AppLauncher;
+    ///
+    /// // In specialized environments, you might include bytes:
+    /// // static REGULAR: &[u8] = include_bytes!("../assets/Roboto-Regular.ttf");
+    /// static DUMMY_FONT: &[u8] = &[];
+    /// static FONTS: &[&[u8]] = &[DUMMY_FONT];
+    ///
     /// AppLauncher::new()
-    ///     .with_fonts(&[
-    ///         include_bytes!("../assets/Roboto-Regular.ttf"),
-    ///         include_bytes!("../assets/Roboto-Bold.ttf"),
-    ///     ])
+    ///     .with_fonts(FONTS);
     /// ```
     pub fn with_fonts(mut self, fonts: &'static [&'static [u8]]) -> Self {
         self.settings.fonts = Some(fonts);
@@ -183,18 +187,21 @@ impl AppLauncher {
     /// ```no_run
     /// use cranpose::AppLauncher;
     ///
-    /// AppLauncher::new()
+    /// let launcher = AppLauncher::new()
     ///     .with_title("Robot Test")
     ///     .with_size(800, 600)
-    ///     .with_headless(true)
-    ///     .with_test_driver(|robot| {
-    ///         robot.wait_for_idle().unwrap();
-    ///         robot.click(100.0, 100.0).unwrap();
-    ///         robot.exit().unwrap();
-    ///     })
-    ///     .run(|| {
-    ///         // Your composable UI here
-    ///     });
+    ///     .with_headless(true);
+    ///
+    /// #[cfg(feature = "robot")]
+    /// let launcher = launcher.with_test_driver(|robot| {
+    ///     robot.wait_for_idle().unwrap();
+    ///     robot.click(100.0, 100.0).unwrap();
+    ///     robot.exit().unwrap();
+    /// });
+    ///
+    /// launcher.run(|| {
+    ///     // Your composable UI here
+    /// });
     /// ```
     pub fn with_headless(mut self, headless: bool) -> Self {
         self.settings.headless = headless;
