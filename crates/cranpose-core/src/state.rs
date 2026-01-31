@@ -178,10 +178,9 @@ pub(crate) fn readable_record_for(
     snapshot_id: SnapshotId,
     invalid: &SnapshotIdSet,
 ) -> Option<Rc<StateRecord>> {
-    if record_is_valid_for(head, snapshot_id, invalid) {
-        return Some(Rc::clone(head));
-    }
-
+    // Find the highest valid record in the chain.
+    // We must scan the full chain because reused records may not be prepended
+    // as the head but still need to be found (e.g., after writes using record reuse).
     let mut best: Option<Rc<StateRecord>> = None;
     let mut cursor = Some(Rc::clone(head));
 

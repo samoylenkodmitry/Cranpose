@@ -527,6 +527,7 @@ pub fn withFrameMillis(callback: impl FnOnce(u64) + 'static) -> FrameCallbackReg
 ///     }
 /// }
 /// ```
+#[allow(non_snake_case)]
 pub fn mutableStateOf<T: Clone + 'static>(initial: T) -> MutableState<T> {
     // Get runtime handle from current composer if available, otherwise from global registry.
     // IMPORTANT: We always use with_runtime() (not composer.mutable_state_of) because
@@ -607,6 +608,7 @@ where
 ///     );
 /// }
 /// ```
+#[allow(non_snake_case)]
 pub fn useState<T: Clone + 'static>(init: impl FnOnce() -> T) -> MutableState<T> {
     remember(|| mutableStateOf(init())).with(|state| *state)
 }

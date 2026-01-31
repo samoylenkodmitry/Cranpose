@@ -146,22 +146,23 @@ impl GlobalSnapshot {
         read_observer: Option<ReadObserver>,
         write_observer: Option<WriteObserver>,
     ) -> Arc<MutableSnapshot> {
-        let (new_id, runtime_invalid) = super::runtime::allocate_snapshot();
-        // base_parent_id for the new child snapshot is the current global id.
+        // Kotlin's takeNewSnapshot pattern: allocate child, then advance global
+        // This ensures child can read global's records (old global ID not in child's invalid)
+
         let base_parent_id = self.state.id.get();
 
-        // Parent invalid set needs to track the newly opened snapshot.
-        let mut parent_invalid = self.state.invalid.borrow().clone();
-        parent_invalid = parent_invalid.set(new_id);
-        self.state.invalid.replace(parent_invalid.clone());
+        // Atomic operation: allocate child ID and advance global
+        let (new_id, child_invalid, new_global_invalid) =
+            super::runtime::with_runtime(|runtime| runtime.take_new_snapshot_advancing_global());
 
-        // Combine parent invalid information with the runtime invalid set that accounts
-        // for already-open snapshots elsewhere in the system.
-        let invalid = parent_invalid.or(&runtime_invalid);
+        // Update local GlobalSnapshot state with the new global ID
+        let new_global_id = super::runtime::with_runtime(|runtime| runtime.global_snapshot_id());
+        self.state.id.set(new_global_id);
+        self.state.invalid.replace(new_global_invalid);
 
         let child = MutableSnapshot::from_parts(
             new_id,
-            invalid,
+            child_invalid,
             read_observer,
             write_observer,
             base_parent_id,
@@ -294,7 +295,9 @@ mod tests {
         let global = GlobalSnapshot::new(1, SnapshotIdSet::new());
         let nested = global.take_nested_mutable_snapshot(None, None);
 
-        assert!(nested.snapshot_id() > global.snapshot_id());
+        // After Kotlin-style advance: child is allocated first, then global advances
+        // So child ID < new global ID (matching Kotlin's takeNewSnapshot behavior)
+        assert!(nested.snapshot_id() < global.snapshot_id());
         assert!(!nested.read_only());
     }
 

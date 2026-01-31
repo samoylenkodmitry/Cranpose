@@ -140,7 +140,7 @@ where
     let text_element = modifier_element(TextModifierElement::new(current));
     let final_modifier = Modifier::from_parts(vec![text_element]);
     let combined_modifier = modifier.then(final_modifier);
-    
+
     // text_modifier is inclusive of layout effects
     Layout(
         combined_modifier,

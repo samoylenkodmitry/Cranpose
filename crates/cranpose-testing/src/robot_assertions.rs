@@ -37,8 +37,8 @@ pub fn assert_approx_eq(actual: f32, expected: f32, tolerance: f32, msg: &str) {
 /// use cranpose_testing::robot_assertions::assert_rect_approx_eq;
 /// use cranpose_ui_graphics::Rect;
 ///
-/// let r1 = Rect::new(0.0, 0.0, 100.0, 100.0);
-/// let r2 = Rect::new(0.1, 0.0, 100.0, 99.9);
+/// let r1 = Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 };
+/// let r2 = Rect { x: 0.1, y: 0.0, width: 100.0, height: 99.9 };
 /// assert_rect_approx_eq(r1, r2, 0.2, "Rects should match");
 /// ```
 pub fn assert_rect_approx_eq(actual: Rect, expected: Rect, tolerance: f32, msg: &str) {

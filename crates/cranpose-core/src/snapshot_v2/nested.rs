@@ -281,11 +281,20 @@ impl NestedMutableSnapshot {
         let merged_read = merge_read_observers(read_observer, self.state.read_observer.clone());
         let merged_write = merge_write_observers(write_observer, self.state.write_observer.clone());
 
-        let (new_id, runtime_invalid) = allocate_snapshot();
-        let mut parent_invalid = self.state.invalid.borrow().clone();
-        parent_invalid = parent_invalid.set(new_id);
-        self.state.invalid.replace(parent_invalid.clone());
-        let invalid = parent_invalid.or(&runtime_invalid);
+        // Get parent's current state BEFORE allocating child
+        let parent_id = self.state.id.get();
+        let current_invalid = self.state.invalid.borrow().clone();
+
+        // Allocate the new child snapshot ID
+        let (new_id, _runtime_invalid) = allocate_snapshot();
+
+        // Update parent's invalid to include the child
+        let parent_invalid_with_child = current_invalid.set(new_id);
+        self.state.invalid.replace(parent_invalid_with_child);
+
+        // Child's invalid = parent's invalid + range(parent_id + 1, new_id)
+        // This does NOT include parent_id, so child can read parent's records
+        let invalid = current_invalid.add_range(parent_id + 1, new_id);
 
         let self_weak = Arc::downgrade(&self.root_mutable());
 

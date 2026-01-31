@@ -20,9 +20,15 @@ pub(super) fn find_record_by_id(
     None
 }
 
+/// Find the record that was readable when the snapshot was created.
+///
+/// This uses both base_snapshot_id and invalid set to find the record,
+/// matching Kotlin's `readable(first, snapshotId, applyingSnapshot.invalid)`.
+/// Records in the invalid set are filtered out even if their ID <= base_snapshot_id.
 pub(super) fn find_previous_record(
     head: &Rc<StateRecord>,
     base_snapshot_id: SnapshotId,
+    invalid: &SnapshotIdSet,
 ) -> (Option<Rc<StateRecord>>, bool) {
     let mut cursor = Some(Rc::clone(head));
     let mut best: Option<Rc<StateRecord>> = None;
@@ -31,16 +37,22 @@ pub(super) fn find_previous_record(
 
     while let Some(record) = cursor {
         if !record.is_tombstone() {
-            fallback = Some(record.clone());
-            if record.snapshot_id() <= base_snapshot_id {
+            let id = record.snapshot_id();
+            // A record is valid if id <= base_snapshot_id AND id is NOT in invalid set
+            let is_valid = id <= base_snapshot_id && !invalid.get(id);
+            if is_valid {
                 found_base = true;
                 let replace = best
                     .as_ref()
-                    .map(|current| current.snapshot_id() < record.snapshot_id())
+                    .map(|current| current.snapshot_id() < id)
                     .unwrap_or(true);
                 if replace {
                     best = Some(record.clone());
                 }
+            }
+            // Fallback captures the first non-tombstone record regardless of validity
+            if fallback.is_none() {
+                fallback = Some(record.clone());
             }
         }
         cursor = record.next();
@@ -283,11 +295,13 @@ impl MutableSnapshot {
         drop(parent_snapshot);
 
         let next_invalid = super::runtime::open_snapshots().clear(parent_snapshot_id);
+        let this_invalid_for_optimistic = self.state.invalid.borrow().clone();
         let optimistic = super::optimistic_merges(
             parent_snapshot_id,
             self.base_parent_id,
             &modified_objects,
             &next_invalid,
+            &this_invalid_for_optimistic,
         );
 
         let mut operations: Vec<ApplyOperation> = Vec::with_capacity(modified_objects.len());
@@ -302,7 +316,12 @@ impl MutableSnapshot {
             let current =
                 crate::state::readable_record_for(&head, parent_snapshot_id, &next_invalid)
                     .unwrap_or_else(|| state.readable_record(parent_snapshot_id, &parent_invalid));
-            let (previous_opt, found_base) = find_previous_record(&head, self.base_parent_id);
+            // Use this snapshot's invalid set to find previous (matching Kotlin's
+            // `readable(first, snapshotId, applyingSnapshot.invalid)`)
+            let this_invalid = self.state.invalid.borrow();
+            let (previous_opt, found_base) =
+                find_previous_record(&head, self.base_parent_id, &this_invalid);
+            drop(this_invalid);
             let Some(previous) = previous_opt else {
                 return SnapshotApplyResult::Failure;
             };
@@ -447,14 +466,21 @@ impl MutableSnapshot {
         let merged_read = merge_read_observers(read_observer, self.state.read_observer.clone());
         let merged_write = merge_write_observers(write_observer, self.state.write_observer.clone());
 
-        let (new_id, runtime_invalid) = allocate_snapshot();
+        // Get parent's current state BEFORE allocating child
+        let parent_id = self.state.id.get();
+        let current_invalid = self.state.invalid.borrow().clone();
 
-        // Merge runtime invalid data with the parent's invalid set and ensure the parent
-        // also tracks the child snapshot id.
-        let mut parent_invalid = self.state.invalid.borrow().clone();
-        parent_invalid = parent_invalid.set(new_id);
-        self.state.invalid.replace(parent_invalid.clone());
-        let invalid = parent_invalid.or(&runtime_invalid);
+        // Allocate the new child snapshot ID
+        let (new_id, _runtime_invalid) = allocate_snapshot();
+
+        // Update parent's invalid to include the child
+        let parent_invalid_with_child = current_invalid.set(new_id);
+        self.state.invalid.replace(parent_invalid_with_child);
+
+        // Child's invalid = parent's invalid + range(parent_id + 1, new_id)
+        // This does NOT include parent_id, so child can read parent's records
+        // (matching Kotlin's currentInvalid.addRange(snapshotId + 1, newId))
+        let invalid = current_invalid.add_range(parent_id + 1, new_id);
 
         let self_weak = Arc::downgrade(self);
         let nested = NestedMutableSnapshot::new(

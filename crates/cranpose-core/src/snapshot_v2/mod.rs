@@ -49,6 +49,7 @@ pub use readonly::ReadonlySnapshot;
 pub use transparent::{TransparentObserverMutableSnapshot, TransparentObserverSnapshot};
 
 pub(crate) use runtime::{allocate_snapshot, close_snapshot, with_runtime};
+
 #[cfg(test)]
 pub(crate) use runtime::{reset_runtime_for_tests, TestRuntimeGuard};
 
@@ -106,6 +107,60 @@ pub enum AnySnapshot {
     Global(Arc<GlobalSnapshot>),
     TransparentMutable(Arc<TransparentObserverMutableSnapshot>),
     TransparentReadonly(Arc<TransparentObserverSnapshot>),
+}
+
+/// Enum wrapper for mutable snapshot types.
+///
+/// This allows `take_mutable_snapshot` to return either a root MutableSnapshot
+/// or a NestedMutableSnapshot depending on the current context, matching Kotlin's
+/// behavior where `takeMutableSnapshot` creates nested snapshots when inside a
+/// mutable snapshot.
+#[derive(Clone)]
+pub enum AnyMutableSnapshot {
+    Root(Arc<MutableSnapshot>),
+    Nested(Arc<NestedMutableSnapshot>),
+}
+
+impl AnyMutableSnapshot {
+    /// Get the snapshot ID.
+    pub fn snapshot_id(&self) -> SnapshotId {
+        match self {
+            AnyMutableSnapshot::Root(s) => s.snapshot_id(),
+            AnyMutableSnapshot::Nested(s) => s.snapshot_id(),
+        }
+    }
+
+    /// Get the set of invalid snapshot IDs.
+    pub fn invalid(&self) -> SnapshotIdSet {
+        match self {
+            AnyMutableSnapshot::Root(s) => s.invalid(),
+            AnyMutableSnapshot::Nested(s) => s.invalid(),
+        }
+    }
+
+    /// Enter this snapshot, making it current for the duration of the closure.
+    pub fn enter<T>(&self, f: impl FnOnce() -> T) -> T {
+        match self {
+            AnyMutableSnapshot::Root(s) => s.enter(f),
+            AnyMutableSnapshot::Nested(s) => s.enter(f),
+        }
+    }
+
+    /// Apply the snapshot.
+    pub fn apply(&self) -> SnapshotApplyResult {
+        match self {
+            AnyMutableSnapshot::Root(s) => s.apply(),
+            AnyMutableSnapshot::Nested(s) => s.apply(),
+        }
+    }
+
+    /// Dispose the snapshot.
+    pub fn dispose(&self) {
+        match self {
+            AnyMutableSnapshot::Root(s) => s.dispose(),
+            AnyMutableSnapshot::Nested(s) => s.dispose(),
+        }
+    }
 }
 
 impl AnySnapshot {
@@ -344,15 +399,33 @@ pub(crate) fn set_current_snapshot(snapshot: Option<AnySnapshot>) {
     });
 }
 
-/// Convenience helper that mirrors the legacy `take_mutable_snapshot` API.
+/// Creates a mutable snapshot, matching Kotlin's `Snapshot.takeMutableSnapshot` semantics.
 ///
-/// Returns a mutable snapshot rooted at the global snapshot with the provided
-/// read/write observers installed.
+/// If called while inside a MutableSnapshot, creates a nested snapshot that will
+/// apply to the parent when `apply()` is called. This ensures proper isolation
+/// between nested operations (like event handlers during animations).
+///
+/// If called while inside a GlobalSnapshot or no snapshot, creates a root
+/// mutable snapshot that applies to the global state.
 pub fn take_mutable_snapshot(
     read_observer: Option<ReadObserver>,
     write_observer: Option<WriteObserver>,
-) -> Arc<MutableSnapshot> {
-    GlobalSnapshot::get_or_create().take_nested_mutable_snapshot(read_observer, write_observer)
+) -> AnyMutableSnapshot {
+    // Check if we're inside a mutable snapshot - if so, create nested
+    // This matches Kotlin's: (currentSnapshot() as? MutableSnapshot)?.takeNestedMutableSnapshot(...)
+    match current_snapshot() {
+        Some(AnySnapshot::Mutable(parent)) => AnyMutableSnapshot::Nested(
+            parent.take_nested_mutable_snapshot(read_observer, write_observer),
+        ),
+        Some(AnySnapshot::NestedMutable(parent)) => AnyMutableSnapshot::Nested(
+            parent.take_nested_mutable_snapshot(read_observer, write_observer),
+        ),
+        // For Global, TransparentMutable, or no snapshot: create from global
+        _ => AnyMutableSnapshot::Root(
+            GlobalSnapshot::get_or_create()
+                .take_nested_mutable_snapshot(read_observer, write_observer),
+        ),
+    }
 }
 
 /// Take a transparent observer mutable snapshot with optional observers.
@@ -569,6 +642,7 @@ pub(crate) fn optimistic_merges(
     base_parent_id: SnapshotId,
     modified_objects: &[(StateObjectId, Arc<dyn StateObject>, SnapshotId)],
     invalid_snapshots: &SnapshotIdSet,
+    applying_invalid: &SnapshotIdSet,
 ) -> Option<HashMap<usize, Rc<StateRecord>>> {
     if modified_objects.is_empty() {
         return None;
@@ -588,7 +662,9 @@ pub(crate) fn optimistic_merges(
             None => continue,
         };
 
-        let (previous_opt, found_base) = mutable::find_previous_record(&head, base_parent_id);
+        // Use applying snapshot's invalid set for previous (matching Kotlin)
+        let (previous_opt, found_base) =
+            mutable::find_previous_record(&head, base_parent_id, applying_invalid);
         let previous = previous_opt?;
 
         if !found_base || previous.snapshot_id() == crate::state::PREEXISTING_SNAPSHOT_ID {

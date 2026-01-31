@@ -213,6 +213,43 @@ impl SnapshotRuntime {
         id
     }
 
+    /// Kotlin-style takeNewSnapshot: allocate child ID, then advance global.
+    ///
+    /// Returns (child_id, child_invalid, new_global_invalid).
+    /// - child_invalid: excludes old global so child can read global's records
+    /// - new_global_invalid: includes child (so global won't read child's uncommitted changes)
+    pub(crate) fn take_new_snapshot_advancing_global(
+        &mut self,
+    ) -> (SnapshotId, SnapshotIdSet, SnapshotIdSet) {
+        let old_global_id = self.global_snapshot_id;
+
+        // Child's invalid = openSnapshots - oldGlobalId (so child can read global)
+        let child_invalid = self.open_snapshots.clear(old_global_id);
+
+        // Allocate child ID
+        let child_id = self.next_snapshot_id;
+        self.next_snapshot_id += 1;
+        self.open_snapshots = self.open_snapshots.set(child_id);
+
+        // Allocate new global ID
+        let new_global_id = self.next_snapshot_id;
+        self.next_snapshot_id += 1;
+
+        // Clear old global from open snapshots
+        self.open_snapshots = self.open_snapshots.clear(old_global_id);
+
+        // Update global snapshot ID tracking
+        self.global_snapshot_id = new_global_id;
+
+        // Global's invalid = current openSnapshots (includes child, excludes old global)
+        let new_global_invalid = self.open_snapshots.clone();
+
+        // Add new global to open snapshots
+        self.open_snapshots = self.open_snapshots.set(new_global_id);
+
+        (child_id, child_invalid, new_global_invalid)
+    }
+
     /// Get the next snapshot ID that will be allocated without incrementing the counter.
     ///
     /// This is used for cleanup operations to determine the reuse limit.

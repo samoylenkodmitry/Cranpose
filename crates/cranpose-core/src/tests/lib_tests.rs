@@ -1,6 +1,8 @@
 use super::*;
 use crate as cranpose_core;
 use crate::snapshot_v2::take_mutable_snapshot;
+#[cfg(test)]
+use crate::snapshot_v2::{reset_runtime_for_tests, TestRuntimeGuard};
 use crate::state::{MutationPolicy, SnapshotMutableState};
 use crate::SnapshotStateObserver;
 use cranpose_macros::composable;
@@ -9,6 +11,14 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+
+/// Reset the snapshot runtime for tests to ensure clean state.
+/// This matches the pattern used in integration_tests.rs.
+#[cfg(test)]
+fn reset_snapshot_runtime() -> TestRuntimeGuard {
+    crate::snapshot_pinning::reset_pinning_table();
+    reset_runtime_for_tests()
+}
 
 #[derive(Default)]
 struct TestTextNode {
@@ -329,6 +339,7 @@ fn snapshot_state_list_basic_operations() {
 
 #[test]
 fn snapshot_state_list_commits_snapshot_mutations() {
+    let _guard = reset_snapshot_runtime();
     let (runtime_handle, _runtime) = runtime_handle();
     let list = SnapshotStateList::with_runtime([10], runtime_handle.clone());
 
@@ -376,6 +387,7 @@ fn snapshot_state_map_basic_operations() {
 
 #[test]
 fn snapshot_state_map_commits_snapshot_mutations() {
+    let _guard = reset_snapshot_runtime();
     let (runtime_handle, _runtime) = runtime_handle();
     let map = SnapshotStateMap::with_runtime([(1, 1)], runtime_handle.clone());
 
@@ -2452,6 +2464,7 @@ impl MutationPolicy<i32> for SumPolicy {
 
 #[test]
 fn snapshot_state_global_write_then_read() {
+    let _guard = reset_snapshot_runtime();
     let state = SnapshotMutableState::new_in_arc(0, Arc::new(SumPolicy));
     assert_eq!(state.get(), 0);
     state.set(1);
@@ -2460,6 +2473,7 @@ fn snapshot_state_global_write_then_read() {
 
 #[test]
 fn snapshot_state_child_isolation_and_apply() {
+    let _guard = reset_snapshot_runtime();
     let state = SnapshotMutableState::new_in_arc(0, Arc::new(SumPolicy));
 
     let child = take_mutable_snapshot(None, None);
@@ -2476,6 +2490,7 @@ fn snapshot_state_child_isolation_and_apply() {
 
 #[test]
 fn snapshot_state_concurrent_children_merge() {
+    let _guard = reset_snapshot_runtime();
     let state = SnapshotMutableState::new_in_arc(0, Arc::new(SumPolicy));
 
     let first = take_mutable_snapshot(None, None);
@@ -2491,6 +2506,7 @@ fn snapshot_state_concurrent_children_merge() {
 
 #[test]
 fn snapshot_state_child_apply_after_parent_history() {
+    let _guard = reset_snapshot_runtime();
     let state = SnapshotMutableState::new_in_arc(0, Arc::new(SumPolicy));
 
     for value in 1..=5 {

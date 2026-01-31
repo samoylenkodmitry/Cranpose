@@ -179,11 +179,13 @@ mod tests {
 
         let invalid = super::runtime::open_snapshots().clear(global.snapshot_id());
         let modified = snapshot.debug_modified_objects();
+        let snapshot_invalid = snapshot.invalid();
         let optimistic = super::optimistic_merges(
             global.snapshot_id(),
             snapshot.debug_base_parent_id(),
             &modified,
             &invalid,
+            &snapshot_invalid,
         )
         .expect("expected optimistic merges");
 
@@ -215,11 +217,13 @@ mod tests {
 
         let invalid = super::runtime::open_snapshots().clear(global.snapshot_id());
         let modified = snapshot.debug_modified_objects();
+        let snapshot_invalid = snapshot.invalid();
         let optimistic = super::optimistic_merges(
             global.snapshot_id(),
             snapshot.debug_base_parent_id(),
             &modified,
             &invalid,
+            &snapshot_invalid,
         );
 
         assert!(
@@ -262,11 +266,13 @@ mod tests {
 
         let invalid = super::runtime::open_snapshots().clear(global.snapshot_id());
         let modified = snapshot.debug_modified_objects();
+        let snapshot_invalid = snapshot.invalid();
         let optimistic = super::optimistic_merges(
             global.snapshot_id(),
             snapshot.debug_base_parent_id(),
             &modified,
             &invalid,
+            &snapshot_invalid,
         )
         .expect("expected optimistic merge entries");
 
