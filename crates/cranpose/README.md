@@ -40,7 +40,7 @@ use cranpose::prelude::*;
 fn CounterApp() {
     let count = useState(|| 0);
 
-    Column(Modifier.fill_max_size().padding(20.dp), || {
+    Column(Modifier.fill_max_size().padding(20.0), || {
         Text(format!("Count: {}", count.value()));
         
         Button(

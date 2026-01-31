@@ -26,7 +26,7 @@ fn Logo() {
     Image(
         painter = image,
         content_description = "App Logo",
-        modifier = Modifier.size(50.dp)
+        modifier = Modifier.size(50.0)
     );
 }
 ```

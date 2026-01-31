@@ -48,15 +48,15 @@ fn TodoApp() {
     let input_text = useState(|| String::new());
     let next_id = useState(|| 2);
 
-    Column(Modifier.fill_max_size().padding(20.dp), || {
-        Text("My Todo List", Modifier.padding(10.dp).font_size(24.sp));
+    Column(Modifier.fill_max_size().padding(20.0), || {
+        Text("My Todo List", Modifier.padding(10.0).font_size(24.0));
 
         // Input Row
-        Row(Modifier.fill_max_width().padding(5.dp), || {
+        Row(Modifier.fill_max_width().padding(5.0), || {
             BasicTextField(
                 value = input_text.value(),
                 on_value_change = move |new_text| input_text.set(new_text),
-                Modifier.weight(1.0).padding(5.dp)
+                Modifier.weight(1.0).padding(5.0)
             );
             
             Button(
@@ -85,7 +85,7 @@ fn TodoApp() {
                 Row(
                     Modifier
                         .fill_max_width()
-                        .padding(5.dp)
+                        .padding(5.0)
                         .clickable(move || {
                             // Toggle done status
                             let mut list = items.value();
@@ -96,7 +96,7 @@ fn TodoApp() {
                         }),
                     || {
                         Text(if item.done { "[x]" } else { "[ ]" });
-                        Spacer(Modifier.width(10.dp));
+                        Spacer(Modifier.width(10.0));
                         Text(
                             item.text, 
                             Modifier.alpha(if item.done { 0.5 } else { 1.0 })

@@ -31,7 +31,7 @@ fn AnimatedBox(target_size: f32) {
     
     Box(
         Modifier
-            .size(size.value().dp())
+            .size(size.value())
             .background(Color::Blue)
     );
 }
