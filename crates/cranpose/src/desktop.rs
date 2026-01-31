@@ -144,6 +144,13 @@ pub struct Robot {
 #[cfg(feature = "robot")]
 impl Robot {
     /// Click at the specified coordinates (logical pixels)
+    ///
+    /// This simulates a full click (mouse down then mouse up) at the given location.
+    ///
+    /// # Example
+    /// ```text
+    /// robot.click(100.0, 200.0)?;
+    /// ```
     pub fn click(&self, x: f32, y: f32) -> Result<(), String> {
         self.tx
             .send(RobotCommand::Click { x, y })
@@ -157,6 +164,11 @@ impl Robot {
     }
 
     /// Move cursor to the specified coordinates (logical pixels)
+    ///
+    /// # Example
+    /// ```text
+    /// robot.move_to(150.0, 250.0)?;
+    /// ```
     pub fn move_to(&self, x: f32, y: f32) -> Result<(), String> {
         self.tx
             .send(RobotCommand::MoveTo { x, y })
@@ -175,6 +187,11 @@ impl Robot {
     }
 
     /// Press the left mouse button at the current cursor position
+    ///
+    /// # Example
+    /// ```text
+    /// robot.mouse_down()?;
+    /// ```
     pub fn mouse_down(&self) -> Result<(), String> {
         self.tx
             .send(RobotCommand::MouseDown)
@@ -188,6 +205,11 @@ impl Robot {
     }
 
     /// Release the left mouse button at the current cursor position
+    ///
+    /// # Example
+    /// ```text
+    /// robot.mouse_up()?;
+    /// ```
     pub fn mouse_up(&self) -> Result<(), String> {
         self.tx
             .send(RobotCommand::MouseUp)
@@ -262,6 +284,15 @@ impl Robot {
     }
 
     /// Wait for the application to be idle (no redraws, no animations)
+    ///
+    /// This is crucial for synchronizing tests with the app state.
+    /// It blocks until the app reports no pending updates.
+    ///
+    /// # Example
+    /// ```text
+    /// robot.click(10.0, 10.0)?;
+    /// robot.wait_for_idle()?; // Wait for click to be processed
+    /// ```
     pub fn wait_for_idle(&self) -> Result<(), String> {
         self.tx
             .send(RobotCommand::WaitForIdle)
@@ -357,6 +388,13 @@ impl Robot {
     }
 
     /// Exit the application
+    ///
+    /// This checks if the app is still running and sends an exit command.
+    ///
+    /// # Example
+    /// ```text
+    /// robot.exit()?;
+    /// ```
     pub fn exit(&self) -> Result<(), String> {
         self.tx
             .send(RobotCommand::Exit)
@@ -370,6 +408,15 @@ impl Robot {
     }
 
     /// Get semantic tree with geometric bounds
+    ///
+    /// Returns the current accessibility/semantic tree of the application.
+    /// This is the primary way to inspect the UI state.
+    ///
+    /// # Example
+    /// ```text
+    /// let elements = robot.get_semantics()?;
+    /// assert!(!elements.is_empty());
+    /// ```
     pub fn get_semantics(&self) -> Result<Vec<SemanticElement>, String> {
         self.tx
             .send(RobotCommand::GetSemantics)

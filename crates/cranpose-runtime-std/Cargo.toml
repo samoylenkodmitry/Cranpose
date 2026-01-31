@@ -2,10 +2,12 @@
 name = "cranpose-runtime-std"
 version.workspace = true
 edition.workspace = true
-description = "Standard library backed runtime services for Cranpose"
-license.workspace = true
-repository.workspace = true
 homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "Standard library backed runtime services for Cranpose"
 
 [dependencies]
 cranpose-core = { workspace = true }

@@ -9,6 +9,12 @@ use cranpose_ui_graphics::Rect;
 ///
 /// This is useful for fuzzy matching of positions and sizes that might
 /// vary slightly due to rendering.
+///
+/// # Example
+/// ```
+/// use cranpose_testing::robot_assertions::assert_approx_eq;
+/// assert_approx_eq(100.05, 100.0, 0.1, "Width should be approx 100");
+/// ```
 pub fn assert_approx_eq(actual: f32, expected: f32, tolerance: f32, msg: &str) {
     let diff = (actual - expected).abs();
     assert!(
@@ -23,6 +29,18 @@ pub fn assert_approx_eq(actual: f32, expected: f32, tolerance: f32, msg: &str) {
 }
 
 /// Assert that a rectangle is approximately equal to another.
+///
+/// Checks x, y, width, and height individually with the given tolerance.
+///
+/// # Example
+/// ```
+/// use cranpose_testing::robot_assertions::assert_rect_approx_eq;
+/// use cranpose_ui_graphics::Rect;
+///
+/// let r1 = Rect::new(0.0, 0.0, 100.0, 100.0);
+/// let r2 = Rect::new(0.1, 0.0, 100.0, 99.9);
+/// assert_rect_approx_eq(r1, r2, 0.2, "Rects should match");
+/// ```
 pub fn assert_rect_approx_eq(actual: Rect, expected: Rect, tolerance: f32, msg: &str) {
     assert_approx_eq(actual.x, expected.x, tolerance, &format!("{} - x", msg));
     assert_approx_eq(actual.y, expected.y, tolerance, &format!("{} - y", msg));
@@ -41,6 +59,8 @@ pub fn assert_rect_approx_eq(actual: Rect, expected: Rect, tolerance: f32, msg: 
 }
 
 /// Assert that a rectangle contains a point.
+///
+/// Useful for verifying that a click coordinate falls within an element.
 pub fn assert_rect_contains_point(rect: Rect, x: f32, y: f32, msg: &str) {
     assert!(
         x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height,
@@ -53,6 +73,8 @@ pub fn assert_rect_contains_point(rect: Rect, x: f32, y: f32, msg: &str) {
 }
 
 /// Assert that a list contains a specific text fragment.
+///
+/// Often used with `robot.get_all_text()` to verify content presence.
 pub fn assert_contains_text(texts: &[String], fragment: &str, msg: &str) {
     assert!(
         texts.iter().any(|t| t.contains(fragment)),
@@ -64,6 +86,8 @@ pub fn assert_contains_text(texts: &[String], fragment: &str, msg: &str) {
 }
 
 /// Assert that a list does not contain a specific text fragment.
+///
+/// Verifies absence of content (e.g. after deletion or filtering).
 pub fn assert_not_contains_text(texts: &[String], fragment: &str, msg: &str) {
     assert!(
         !texts.iter().any(|t| t.contains(fragment)),
@@ -120,6 +144,9 @@ pub trait SemanticElementLike {
 
 /// Find an element by text content in the semantic tree.
 /// Returns the center coordinates (x, y) if found.
+///
+/// # Type Parameters
+/// * `E`: A type implementing `SemanticElementLike` (e.g. `SemanticElement`)
 pub fn find_text_center<E: SemanticElementLike>(elements: &[E], text: &str) -> Option<(f32, f32)> {
     fn search<E: SemanticElementLike>(elem: &E, text: &str) -> Option<(f32, f32)> {
         if let Some(t) = elem.text() {

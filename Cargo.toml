@@ -29,6 +29,10 @@ edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/samoylenkodmitry/cranpose"
 homepage = "https://samoylenkodmitry.github.io/cranpose/"
+authors = ["Dmitry Samoylenko"]
+keywords = ["gui", "ui", "compose", "declarative", "framework"]
+categories = ["gui"]
+readme = "README.md"
 
 [workspace.dependencies]
 # Force android-activity to use native-activity feature across all workspace crates

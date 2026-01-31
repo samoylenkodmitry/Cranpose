@@ -35,7 +35,12 @@ impl SemanticElementLike for SemanticElement {
     }
 }
 
-/// Find an element by text content, returning bounds (x, y, width, height).
+/// Find an element by text content (partial match), returning bounds (x, y, width, height).
+///
+/// Searches the entire subtree depth-first.
+///
+/// # Returns
+/// Some((x, y, width, height)) if found, None otherwise.
 pub fn find_text(elem: &SemanticElement, text: &str) -> Option<(f32, f32, f32, f32)> {
     if let Some(ref t) = elem.text {
         if t.contains(text) {
@@ -56,6 +61,8 @@ pub fn find_text(elem: &SemanticElement, text: &str) -> Option<(f32, f32, f32, f
 }
 
 /// Find an element by exact text content, returning bounds (x, y, width, height).
+///
+/// Useful when partial matches might be ambiguous.
 pub fn find_text_exact(elem: &SemanticElement, text: &str) -> Option<(f32, f32, f32, f32)> {
     if let Some(ref t) = elem.text {
         if t == text {
@@ -76,6 +83,8 @@ pub fn find_text_exact(elem: &SemanticElement, text: &str) -> Option<(f32, f32, 
 }
 
 /// Find an element by text content, returning center coordinates (x, y).
+///
+/// This is a convenience helper for clicking elements.
 pub fn find_text_center(elem: &SemanticElement, text: &str) -> Option<(f32, f32)> {
     find_text(elem, text).map(|(x, y, w, h)| (x + w / 2.0, y + h / 2.0))
 }
@@ -91,6 +100,8 @@ pub fn has_text(elem: &SemanticElement, text: &str) -> bool {
 }
 
 /// Find a clickable element (button) containing the specified text.
+///
+/// Matches elements where `clickable == true` AND the element (or its children) contains the text.
 /// Returns bounds (x, y, width, height).
 pub fn find_button(elem: &SemanticElement, text: &str) -> Option<(f32, f32, f32, f32)> {
     if elem.clickable && has_text(elem, text) {
@@ -116,7 +127,12 @@ pub fn find_button_center(elem: &SemanticElement, text: &str) -> Option<(f32, f3
 }
 
 /// Search the semantic tree from Robot, applying a finder function.
-/// Returns the first match found, or None.
+///
+/// This handles the boilerplate of fetching semantics and iterating through roots.
+/// It creates a unified search context for finder functions.
+///
+/// # Returns
+/// The first result (x, y, w, h) returned by the finder function.
 pub fn find_in_semantics<F>(robot: &cranpose::Robot, finder: F) -> Option<(f32, f32, f32, f32)>
 where
     F: Fn(&SemanticElement) -> Option<(f32, f32, f32, f32)>,
@@ -137,8 +153,10 @@ where
     }
 }
 
-/// Find element by text in semantics tree.
-/// Convenience wrapper around find_in_semantics + find_text.
+/// Find element by text in semantics tree (Robot wrapper).
+///
+/// Fetches the current semantics tree from the robot and searches for text.
+/// Returns bounds (x, y, width, height).
 pub fn find_text_in_semantics(robot: &cranpose::Robot, text: &str) -> Option<(f32, f32, f32, f32)> {
     let text = text.to_string();
     find_in_semantics(robot, |elem| find_text(elem, &text))

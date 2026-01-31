@@ -41,6 +41,29 @@ impl Default for RowSpec {
     }
 }
 
+/// A layout composable that places its children in a horizontal sequence.
+///
+/// # When to use
+/// Use `Row` to arrange items side-by-side. For vertical arrangement, use [`Column`](crate::widgets::Column).
+///
+/// # Arguments
+///
+/// * `modifier` - Modifiers to apply to the row layout.
+/// * `spec` - Configuration for horizontal arrangement and vertical alignment.
+/// * `content` - The children composables to layout.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// Row(
+///     Modifier::fill_max_width(),
+///     RowSpec::default().horizontal_arrangement(LinearArrangement::SpaceBetween),
+///     || {
+///         Text("Left", Modifier::empty());
+///         Text("Right", Modifier::empty());
+///     }
+/// );
+/// ```
 #[composable]
 pub fn Row<F>(modifier: Modifier, spec: RowSpec, content: F) -> NodeId
 where

@@ -320,8 +320,22 @@ impl<'a> Iterator for ModifierInspectorIterator<'a> {
 }
 
 /// A modifier chain that can be applied to composable elements.
-/// Modifiers form a persistent tree structure (via CombinedModifier pattern)
-/// to enable O(1) composition and structural sharing during recomposition.
+///
+/// Modifiers allow you to decorate or augment a composable. Common operations include:
+/// - Adjusting layout (e.g., `padding`, `fill_max_size`)
+/// - Adding behavior (e.g., `clickable`, `scrollable`)
+/// - Drawing (e.g., `background`, `border`)
+///
+/// Modifiers are immutable and form a chain using the builder pattern.
+/// The order of modifiers matters: previous modifiers wrap subsequent ones.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// Modifier::padding(16.0)     // Applied first (outer)
+///     .background(Color::Red) // Applied second
+///     .clickable(|| println!("Clicked")) // Applied last (inner)
+/// ```
 #[derive(Clone)]
 pub struct Modifier {
     kind: ModifierKind,

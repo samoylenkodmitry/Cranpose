@@ -56,8 +56,21 @@ impl Default for AppSettings {
 
 /// Platform-agnostic application launcher.
 ///
+/// Platform-agnostic application launcher.
+///
 /// This builder provides a unified API for launching Compose applications
-/// on different platforms (desktop, Android, etc.) with proper inversion of control.
+/// on different platforms (desktop, Android, Web) with proper inversion of control.
+/// It abstracts away the differences between window creation, event loops,
+/// and surface initialization.
+///
+/// # When to use
+///
+/// Use `AppLauncher` as the standard entry point for any Cranpose application.
+/// It handles the boilerplate of:
+/// -   Creating a window or attaching to a view.
+/// -   Initializing the graphics context (WGPU instance, Surface, Adapter, Device).
+/// -   Setting up the main event loop.
+/// -   Bridging platform events to the Cranpose runtime.
 ///
 /// # Example
 ///
@@ -99,12 +112,24 @@ impl AppLauncher {
     }
 
     /// Set the window title.
+    ///
+    /// # Arguments
+    ///
+    /// * `title` - The string to display in the window title bar (Desktop/Web) or the activity label (Android).
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.settings.window_title = title.into();
         self
     }
 
-    /// Set the initial window size (desktop only).
+    /// Set the initial window size (Desktop only).
+    ///
+    /// This hint is ignored on platforms where the window size is controlled by the OS
+    /// (e.g., Android, iOS, or maximized Web canvas).
+    ///
+    /// # Arguments
+    ///
+    /// * `width` - The initial width in logical pixels.
+    /// * `height` - The initial height in logical pixels.
     pub fn with_size(mut self, width: u32, height: u32) -> Self {
         self.settings.initial_width = width;
         self.settings.initial_height = height;
@@ -113,8 +138,19 @@ impl AppLauncher {
 
     /// Set fonts to use for text rendering.
     ///
-    /// If not set, the renderer will use an empty FontSystem (text will fail to render).
-    /// Applications should provide fonts explicitly for consistent cross-platform rendering.
+    /// # Arguments
+    ///
+    /// * `fonts` - A slice of static byte slices, each representing a font file (e.g., `.ttf` or `.otf`).
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// AppLauncher::new()
+    ///     .with_fonts(&[
+    ///         include_bytes!("../assets/Roboto-Regular.ttf"),
+    ///         include_bytes!("../assets/Roboto-Bold.ttf"),
+    ///     ])
+    /// ```
     pub fn with_fonts(mut self, fonts: &'static [&'static [u8]]) -> Self {
         self.settings.fonts = Some(fonts);
         self
@@ -269,7 +305,14 @@ impl AppLauncher {
         self
     }
 
-    /// Run the application (desktop platform).
+    /// Run the application (Desktop platform).
+    ///
+    /// This method blocks the current thread and starts the platform event loop.
+    /// It should be the last call in your `main` function.
+    ///
+    /// # Arguments
+    ///
+    /// * `content` - The root composable function of your application.
     #[cfg(all(
         feature = "desktop",
         feature = "renderer-wgpu",
@@ -280,15 +323,24 @@ impl AppLauncher {
     }
 
     /// Run the application (Android platform).
-    #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
-    pub fn run(self, app: android_activity::AndroidApp, content: impl FnMut() + 'static) {
-        crate::android::run(app, self.settings, content)
-    }
+    ///
+    /// # Arguments
+    ///
+    /// * `app` - The `AndroidApp` handle provided by `android_activity`.
+    /// * `content` - The root composable function of your application.
 
     /// Run the application (Web platform).
     ///
     /// Launches the app asynchronously targeting the canvas with the given ID.
-    /// Returns a Promise that resolves when the app is initialized.
+    ///
+    /// # Arguments
+    ///
+    /// * `canvas_id` - The DOM ID of the HTML `<canvas>` element to render into.
+    /// * `content` - The root composable function.
+    ///
+    /// # Returns
+    ///
+    /// A `Promise` that resolves when the app is initialized (or fails).
     #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
     pub async fn run_web(
         self,

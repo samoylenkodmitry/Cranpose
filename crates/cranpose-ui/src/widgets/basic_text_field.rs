@@ -15,39 +15,22 @@ use cranpose_foundation::modifier_element;
 use cranpose_foundation::text::{TextFieldLineLimits, TextFieldState};
 use cranpose_ui_graphics::Color;
 
-/// Creates an editable text field.
+/// A primitive editable text field.
 ///
-/// `BasicTextField` provides an interactive box that accepts text input through
-/// software or hardware keyboard, but provides no decorations like hint or placeholder.
-/// Use a wrapper component to add decorations.
+/// # When to use
+/// Use this when you need an editable text input but want full control over the
+/// styling (no built-in borders or labels).
 ///
 /// # Arguments
 ///
-/// * `state` - The observable text field state that holds the text content
-/// * `modifier` - Optional modifiers for styling and layout
-///
-/// # Architecture
-///
-/// Following Jetpack Compose's `BasicTextField` pattern, this implementation uses:
-/// - **TextFieldElement**: Adds text field content as a modifier node
-/// - **EmptyMeasurePolicy**: Delegates all measurement to modifier nodes
-///
-/// Text content lives in the modifier node (`TextFieldModifierNode`), not in the measure policy.
+/// * `state` - The observable text field state that holds text content and cursor position.
+/// * `modifier` - Modifiers for styling and layout.
 ///
 /// # Example
 ///
-/// ```text
-/// use cranpose_foundation::text::TextFieldState;
-/// use cranpose_ui::{BasicTextField, Modifier};
-///
-/// let state = TextFieldState::new("Hello");
-/// BasicTextField(state.clone(), Modifier::empty());
-///
-/// // Edit the text programmatically
-/// state.edit(|buffer| {
-///     buffer.place_cursor_at_end();
-///     buffer.insert(", World!");
-/// });
+/// ```rust,ignore
+/// let text = remember_text_field_state("Initial text");
+/// BasicTextField(text, Modifier::padding(8.0));
 /// ```
 #[composable]
 pub fn BasicTextField(state: TextFieldState, modifier: Modifier) -> NodeId {

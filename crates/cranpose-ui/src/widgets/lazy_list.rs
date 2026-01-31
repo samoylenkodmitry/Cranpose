@@ -683,6 +683,35 @@ fn LazyRowImpl(
 ///     });
 /// });
 /// ```
+/// A vertically scrolling list that only composes and lays out visible items.
+///
+/// # When to use
+/// Use `LazyColumn` for lists with many items (100+) or unknown length.
+/// It is much more efficient than using a `Column` with `vertical_scroll` modifier
+/// because it recycles nodes and only keeps visible items in memory (virtualization).
+///
+/// # Arguments
+///
+/// * `modifier` - Modifiers to apply to the list container.
+/// * `state` - The scroll state, used to control scroll position or observe changes.
+/// * `spec` - Configuration for content padding, item spacing, and reverse layout.
+/// * `content` - A closure that defines the list content using `LazyListScope`.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let state = remember_lazy_list_state();
+/// LazyColumn(
+///     Modifier::fill_max_size(),
+///     state,
+///     LazyColumnSpec::default(),
+///     |scope| {
+///         scope.items(1000, None, None, |i| {
+///             Text(format!("Item {}", i), Modifier::padding(16.0));
+///         });
+///     }
+/// );
+/// ```
 pub fn LazyColumn<F>(
     modifier: Modifier,
     state: LazyListState,

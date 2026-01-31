@@ -31,13 +31,28 @@ pub use snapshot_state_observer::SnapshotStateObserver;
 
 /// Runs the provided closure inside a mutable snapshot and applies the result.
 ///
-/// UI event handlers should wrap state mutations in this helper so that
-/// recomposition observes the updates atomically once the snapshot applies.
+/// Use this function when you need to update `MutableState` from outside the
+/// composition or layout phase, typically in event handlers or async tasks.
+///
+/// # Why is this needed?
+/// Cranpose uses a snapshot system (MVCC) to isolate state changes. Modifications
+/// made to `MutableState` are only visible to the current thread's active snapshot.
+/// To make changes visible to the rest of the system (and trigger recomposition),
+/// they must be "applied" by committing the snapshot. This helper handles that
+/// lifecycle for you.
+///
+/// # Example
+///
+/// ```ignore
+/// // Inside a button click handler
+/// run_in_mutable_snapshot(|| {
+///     count.set(count.value() + 1);
+/// });
+/// ```
 ///
 /// # Important
-/// ALL UI event handlers (keyboard, mouse, touch, animations, custom modifier nodes)
-/// that modify `MutableState` MUST use this function or [`dispatch_ui_event`].
-/// Without it, state changes may not be visible to other snapshot contexts.
+/// ALL UI event handlers (keyboard, mouse, touch, animations) that modify state
+/// MUST use this function or [`dispatch_ui_event`].
 pub fn run_in_mutable_snapshot<T>(block: impl FnOnce() -> T) -> Result<T, &'static str> {
     let snapshot = snapshot_v2::take_mutable_snapshot(None, None);
 
@@ -482,7 +497,36 @@ pub fn withFrameMillis(callback: impl FnOnce(u64) + 'static) -> FrameCallbackReg
     })
 }
 
-#[allow(non_snake_case)]
+/// Creates a new `MutableState` initialized with the given value.
+///
+/// `MutableState` is an observable value holder. Reads are tracked by the current
+/// composer or snapshot, and writes trigger recomposition of scopes that read it.
+///
+/// # When to use
+/// Use `mutableStateOf` when:
+/// 1.  You are creating state properties inside a struct or class (not a composable function).
+/// 2.  You are implementing a custom state management solution.
+///
+/// **If you are inside a `#[composable]` function, use [`useState`] instead.**
+/// `useState` wraps `mutableStateOf` in `remember`, ensuring the state persists
+/// across recompositions. Using `mutableStateOf` directly in a composable will
+/// recreated the state on every frame, losing data.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// struct MyViewModel {
+///     name: MutableState<String>,
+/// }
+///
+/// impl MyViewModel {
+///     fn new() -> Self {
+///         Self {
+///             name: mutableStateOf("Alice".into()),
+///         }
+///     }
+/// }
+/// ```
 pub fn mutableStateOf<T: Clone + 'static>(initial: T) -> MutableState<T> {
     // Get runtime handle from current composer if available, otherwise from global registry.
     // IMPORTANT: We always use with_runtime() (not composer.mutable_state_of) because
@@ -538,7 +582,31 @@ where
     mutableStateMapOf(std::iter::empty::<(K, V)>())
 }
 
-#[allow(non_snake_case)]
+/// A composable hook that creates and remembers a `MutableState`.
+///
+/// This is the primary way to define local state in a composable function.
+/// It combines `remember` and `mutableStateOf`.
+///
+/// # Arguments
+///
+/// * `init` - A closure that provides the initial value. This is only called once
+///   when the composable enters the composition.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// #[composable]
+/// fn Counter() {
+///     // "count" persists across recompositions.
+///     // If we used mutableStateOf directly, it would reset to 0 every frame.
+///     let count = useState(|| 0);
+///
+///     Button(
+///         onClick = move || count.set(count.value() + 1),
+///         || Text(format!("Count: {}", count.value()))
+///     );
+/// }
+/// ```
 pub fn useState<T: Clone + 'static>(init: impl FnOnce() -> T) -> MutableState<T> {
     remember(|| mutableStateOf(init())).with(|state| *state)
 }

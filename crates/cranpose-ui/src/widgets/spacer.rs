@@ -8,10 +8,25 @@ use crate::modifier::{Modifier, Size};
 use crate::widgets::Layout;
 use cranpose_core::NodeId;
 
-/// Creates a spacer with the specified size.
+/// A component that represents an empty space.
 ///
-/// This is now implemented using LayoutNode with LeafMeasurePolicy,
-/// following the Jetpack Compose pattern of using Layout for all widgets.
+/// # When to use
+/// Use `Spacer` to create empty space between other composables, or to push
+/// composables apart when using weighted arrangements in `Row` or `Column`.
+///
+/// # Arguments
+///
+/// * `size` - The explicit size of the spacer.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// Row(..., || {
+///     Text("Left", Modifier::empty());
+///     Spacer(Size::new(16.0, 0.0)); // 16dp gap
+///     Text("Right", Modifier::empty());
+/// });
+/// ```
 #[composable]
 pub fn Spacer(size: Size) -> NodeId {
     Layout(

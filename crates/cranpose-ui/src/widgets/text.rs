@@ -110,21 +110,24 @@ impl IntoTextSource for DynamicTextSource {
     }
 }
 
-/// Creates a text widget displaying the specified content.
+/// High-level element that displays text.
 ///
-/// # Architecture
+/// # When to use
+/// Use this widget to display read-only text on the screen. For editable text,
+/// use [`BasicTextField`](crate::widgets::BasicTextField).
 ///
-/// Following Jetpack Compose's BasicText pattern, this implementation uses:
-/// - **TextModifierElement**: Adds text content as a modifier node
-/// - **EmptyMeasurePolicy**: Delegates all measurement to modifier nodes
+/// # Arguments
 ///
-/// This matches Kotlin's pattern:
-/// ```kotlin
-/// Layout(modifier.then(TextStringSimpleElement(...)), EmptyMeasurePolicy)
+/// * `value` - The string to display. Can be a `&str`, `String`, or `State<String>`.
+/// * `modifier` - Modifiers to apply (e.g., padding, background, layout instructions).
+///   Note: Text styling (color, font size) is typically applied via the
+///   `text_style` modifier (coming soon) or specific style modifiers.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// Text("Hello World", Modifier::padding(16.0));
 /// ```
-///
-/// Text content lives in the modifier node (TextModifierNode), not in the measure policy,
-/// which properly separates layout policy (child arrangement) from content rendering (text).
 #[composable]
 pub fn Text<S>(value: S, modifier: Modifier) -> NodeId
 where
@@ -137,9 +140,8 @@ where
     let text_element = modifier_element(TextModifierElement::new(current));
     let final_modifier = Modifier::from_parts(vec![text_element]);
     let combined_modifier = modifier.then(final_modifier);
-
-    // Use EmptyMeasurePolicy - TextModifierNode handles all measurement via LayoutModifierNode::measure()
-    // This matches Jetpack Compose's BasicText architecture where TextStringSimpleNode provides measurement
+    
+    // text_modifier is inclusive of layout effects
     Layout(
         combined_modifier,
         EmptyMeasurePolicy,

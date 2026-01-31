@@ -9,12 +9,27 @@ use crate::widgets::Layout;
 use cranpose_core::NodeId;
 use cranpose_ui_layout::{HorizontalAlignment, LinearArrangement};
 
-/// Creates a button widget with click handling.
+/// A clickable button with a background and content.
 ///
-/// This is now implemented using LayoutNode with FlexMeasurePolicy (column layout),
-/// following the Jetpack Compose pattern of using Layout for all widgets.
-/// The clickable behavior is provided via the `.clickable()` modifier, which is part
-/// of the modern modifier chain system.
+/// # When to use
+/// Use this to trigger an action when clicked. The button serves as a container
+/// for other composables (typically `Text`).
+///
+/// # Arguments
+///
+/// * `modifier` - Modifiers to apply to the button container (e.g., size, padding).
+/// * `on_click` - The callback to execute when the button is clicked.
+/// * `content` - The content to display inside the button (e.g., `Text` or `Icon`).
+///
+/// # Example
+///
+/// ```rust,ignore
+/// Button(
+///     Modifier::padding(8.0),
+///     || println!("Clicked!"),
+///     || Text("Click Me", Modifier::empty())
+/// );
+/// ```
 #[composable]
 pub fn Button<F, G>(modifier: Modifier, on_click: F, content: G) -> NodeId
 where
