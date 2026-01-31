@@ -15,6 +15,7 @@ cranpose-ui-layout = { workspace = true }
 smallvec = "1.13"
 web-time = "1.1"
 log = "0.4"
+rustc-hash = "2.1.1"
 
 [features]
 default = []

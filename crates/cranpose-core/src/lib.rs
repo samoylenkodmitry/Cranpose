@@ -105,6 +105,23 @@ pub fn in_applied_snapshot() -> bool {
     IN_APPLIED_SNAPSHOT.with(|c| c.get())
 }
 
+// ─── Cached Debug Flag ─────────────────────────────────────────────────────
+//
+// Caches the COMPOSE_DEBUG environment variable check to avoid repeated
+// syscalls in hot paths. The value is checked once on first access.
+
+#[cfg(not(target_arch = "wasm32"))]
+fn compose_debug_enabled() -> bool {
+    use std::sync::OnceLock;
+    static COMPOSE_DEBUG: OnceLock<bool> = OnceLock::new();
+    *COMPOSE_DEBUG.get_or_init(|| std::env::var_os("COMPOSE_DEBUG").is_some())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn compose_debug_enabled() -> bool {
+    false
+}
+
 #[cfg(test)]
 pub use runtime::{TestRuntime, TestScheduler};
 
@@ -2268,14 +2285,14 @@ impl Composer {
                 let reuse_allowed = true;
 
                 #[cfg(not(target_arch = "wasm32"))]
-                if std::env::var("COMPOSE_DEBUG").is_ok() {
+                if compose_debug_enabled() {
                     eprintln!("emit_node: candidate #{id} reuse_allowed={reuse_allowed}");
                 }
 
                 if reuse_allowed {
                     self.core.last_node_reused.set(Some(true));
                     #[cfg(not(target_arch = "wasm32"))]
-                    if std::env::var("COMPOSE_DEBUG").is_ok() {
+                    if compose_debug_enabled() {
                         eprintln!(
                             "emit_node: reusing node #{id} as {}",
                             std::any::type_name::<N>()
@@ -2309,7 +2326,7 @@ impl Composer {
         if let Some(old_id) = existing_id {
             if !type_matches {
                 #[cfg(not(target_arch = "wasm32"))]
-                if std::env::var("COMPOSE_DEBUG").is_ok() {
+                if compose_debug_enabled() {
                     eprintln!(
                         "emit_node: replacing node #{old_id} with new {}",
                         std::any::type_name::<N>()
@@ -2336,7 +2353,7 @@ impl Composer {
         };
         self.core.last_node_reused.set(Some(false));
         #[cfg(not(target_arch = "wasm32"))]
-        if std::env::var("COMPOSE_DEBUG").is_ok() {
+        if compose_debug_enabled() {
             eprintln!(
                 "emit_node: creating node #{} as {}",
                 id,
@@ -2536,7 +2553,7 @@ impl Composer {
             } = frame;
 
             #[cfg(not(target_arch = "wasm32"))]
-            if std::env::var("COMPOSE_DEBUG").is_ok() {
+            if compose_debug_enabled() {
                 eprintln!("pop_parent: node #{}", id);
                 eprintln!("  previous children: {:?}", previous);
                 eprintln!("  new children: {:?}", new_children);

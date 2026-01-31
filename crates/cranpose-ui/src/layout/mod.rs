@@ -1012,11 +1012,24 @@ impl LayoutBuilderState {
             });
         }
 
-        // Even if there are no layout modifiers, we use the coordinator chain
-        // (just InnerCoordinator alone). This eliminates the need for the
-        // ResolvedModifiers fallback path.
+        // Fast path: if there are no layout modifiers, measure directly without coordinator chain.
+        // This saves 3 allocations (shared_context, policy_result, InnerCoordinator box).
+        if layout_node_data.is_empty() {
+            let result = measure_policy.measure(measurables, constraints);
+            let final_size = result.size;
+            let placements = result.placements;
 
-        // Build the coordinator chain from innermost to outermost
+            return ModifierChainMeasurement {
+                result: MeasureResult {
+                    size: final_size,
+                    placements,
+                },
+                content_offset: Point::default(),
+                offset,
+            };
+        }
+
+        // Slow path: build coordinator chain for layout modifiers
         // Reverse order: rightmost modifier is measured first (innermost), leftmost is outer
         layout_node_data.reverse();
 

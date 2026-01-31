@@ -433,7 +433,7 @@ pub fn run(
                         // Android ANR timeout is 5 seconds, so we need to return quickly
                         let mut events_processed = 0;
                         const MAX_EVENTS_PER_POLL: usize = 10;
-                        
+
                         loop {
                             if !iter.next(|event| {
                                 let handled = match event {
@@ -492,7 +492,7 @@ pub fn run(
                             }) {
                                 break;
                             }
-                            
+
                             events_processed += 1;
                             if events_processed >= MAX_EVENTS_PER_POLL {
                                 // Processed enough events, return to main loop

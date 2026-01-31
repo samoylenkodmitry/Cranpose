@@ -97,10 +97,23 @@ impl ModifierChainHandle {
             .modifier_locals
             .borrow_mut()
             .sync(&self.chain, resolver);
-        self.resolved = self.compute_resolved();
-        self.collect_inspector_snapshot(modifier);
+
+        // Only recompute resolved modifiers if layout-affecting nodes changed.
+        // Check if any LAYOUT invalidation was produced during update.
+        let needs_resolved_update = {
+            let ctx = self.context.borrow();
+            ctx.invalidations()
+                .iter()
+                .any(|inv| inv.kind() == InvalidationKind::Layout)
+        };
+        if needs_resolved_update {
+            self.resolved = self.compute_resolved();
+        }
+
+        // Only collect inspector snapshot when debugging is enabled (lazy collection)
         let should_log = self.debug_logging || global_modifier_debug_flag();
         if should_log {
+            self.collect_inspector_snapshot(modifier);
             crate::debug::log_modifier_chain(self.chain(), self.inspector_snapshot());
             crate::debug::emit_modifier_chain_trace(self.inspector_snapshot());
         }
@@ -205,6 +218,14 @@ impl ModifierChainHandle {
 
     pub fn inspector_snapshot(&self) -> &[ModifierChainInspectorNode] {
         &self.inspector_snapshot
+    }
+
+    /// Explicitly collects the inspector snapshot for testing purposes.
+    /// Unlike `update()` which only collects when debug logging is enabled,
+    /// this method always populates the snapshot.
+    #[cfg(test)]
+    pub fn refresh_inspector_snapshot(&mut self, modifier: &Modifier) {
+        self.collect_inspector_snapshot(modifier);
     }
 
     /// Visits all LayoutModifierNodes in the chain with mutable access.

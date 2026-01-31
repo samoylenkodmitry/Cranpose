@@ -700,6 +700,18 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
             return record.with_value(|value: &T| value.clone());
         }
 
+        // Fallback: try reading directly from the global snapshot.
+        // This handles the case where sibling mutable snapshots have been applied
+        // but our current snapshot's invalid set was fixed at creation time.
+        // The global snapshot should have all applied changes visible.
+        let global = GlobalSnapshot::get_or_create();
+        let global_id = global.snapshot_id();
+        let global_invalid = global.invalid();
+
+        if let Some(record) = self.readable_for(global_id, &global_invalid) {
+            return record.with_value(|value: &T| value.clone());
+        }
+
         // Debug: print the record chain to understand what's available
         let head = self.first_record();
         let mut chain_ids = Vec::new();

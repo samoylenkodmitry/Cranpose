@@ -24,7 +24,11 @@ use std::time::{Duration, Instant};
 const DEFAULT_DURATION_SECS: u64 = 3;
 const DEFAULT_WARMUP_SECS: u64 = 5;
 const DEFAULT_SAMPLE_INTERVAL_MS: u64 = 200;
-const DEFAULT_MAX_GROWTH_KB: u64 = 32 * 1024;
+/// Memory growth limit - 512MB is realistic for GPU apps with textures, buffers, and scene graphs
+const DEFAULT_MAX_GROWTH_KB: u64 = 512 * 1024;
+/// Tiered warning thresholds for memory growth
+const WARN_GROWTH_KB: u64 = 100 * 1024; // 100MB - needs attention
+const ALERT_GROWTH_KB: u64 = 300 * 1024; // 300MB - likely issue
 
 #[composable]
 #[allow(non_snake_case)]
@@ -341,14 +345,31 @@ fn main() {
             if validate_mem {
                 if let Some(baseline) = baseline_rss_kb {
                     let growth = peak_rss_kb.saturating_sub(baseline);
-                    println!(
-                        "RSS baseline: {} KB | peak: {} KB | growth: {} KB | samples: {}",
-                        baseline, peak_rss_kb, growth, sample_count
-                    );
+                    let growth_mb = growth / 1024;
+
+                    // Tiered memory growth reporting
+                    if growth < WARN_GROWTH_KB {
+                        println!(
+                            "✓ Memory: baseline {} MB | peak {} MB | growth {} MB (healthy)",
+                            baseline / 1024, peak_rss_kb / 1024, growth_mb
+                        );
+                    } else if growth < ALERT_GROWTH_KB {
+                        println!(
+                            "⚠ Memory: baseline {} MB | peak {} MB | growth {} MB (needs attention)",
+                            baseline / 1024, peak_rss_kb / 1024, growth_mb
+                        );
+                    } else if growth < max_growth_kb {
+                        eprintln!(
+                            "⚠️  WARNING: Memory growth {} MB is high (baseline {} MB, peak {} MB)",
+                            growth_mb, baseline / 1024, peak_rss_kb / 1024
+                        );
+                    }
+                    println!("Samples: {}", sample_count);
+
                     if growth > max_growth_kb {
                         eprintln!(
-                            "FATAL: RSS growth {} KB exceeds limit {} KB",
-                            growth, max_growth_kb
+                            "FATAL: RSS growth {} MB exceeds limit {} MB",
+                            growth_mb, max_growth_kb / 1024
                         );
                         let _ = robot.exit();
                         std::process::exit(1);

@@ -17,7 +17,7 @@ use cranpose_ui_graphics::Size;
 use glyphon::{Attrs, Buffer, FontSystem, Metrics, Shaping};
 use lru::LruCache;
 use render::GpuRenderer;
-use std::collections::hash_map::DefaultHasher;
+use rustc_hash::FxHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
@@ -422,7 +422,8 @@ impl WgpuTextMeasurer {
     fn new(font_system: Arc<Mutex<FontSystem>>, text_cache: SharedTextCache) -> Self {
         Self {
             font_system,
-            size_cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(256).unwrap()))),
+            // Larger cache size (1024) reduces misses, FxHasher for faster lookups
+            size_cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(1024).unwrap()))),
             text_cache,
         }
     }
@@ -436,7 +437,8 @@ impl TextMeasurer for WgpuTextMeasurer {
         let size_int = (BASE_FONT_SIZE * 100.0) as i32;
 
         // Calculate hash to avoid allocating String for lookup
-        let mut hasher = DefaultHasher::new();
+        // FxHasher is ~3x faster than DefaultHasher for short strings
+        let mut hasher = FxHasher::default();
         text.hash(&mut hasher);
         let text_hash = hasher.finish();
         let cache_key = (text_hash, size_int);
