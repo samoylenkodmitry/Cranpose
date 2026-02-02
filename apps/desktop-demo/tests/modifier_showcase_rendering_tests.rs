@@ -17,6 +17,7 @@ fn simple_card_showcase() {
                 .padding(12.0)
                 .then(Modifier::empty().background(Color(1.0, 1.0, 1.0, 0.1)))
                 .then(Modifier::empty().rounded_corners(14.0)),
+            TextStyle::default(),
         );
 
         Spacer(Size {
@@ -45,10 +46,12 @@ fn simple_card_showcase() {
                                 .padding(6.0)
                                 .then(Modifier::empty().background(Color(0.3, 0.5, 0.8, 0.5)))
                                 .then(Modifier::empty().rounded_corners(8.0)),
+                            TextStyle::default(),
                         );
                         Text(
                             "Card content goes here with padding",
                             Modifier::empty().padding(4.0),
+                            TextStyle::default(),
                         );
                     },
                 );
@@ -66,6 +69,7 @@ fn positioned_boxes_showcase() {
                 .padding(12.0)
                 .then(Modifier::empty().background(Color(1.0, 1.0, 1.0, 0.1)))
                 .then(Modifier::empty().rounded_corners(14.0)),
+            TextStyle::default(),
         );
 
         Spacer(Size {
@@ -82,7 +86,11 @@ fn positioned_boxes_showcase() {
                 .then(Modifier::empty().rounded_corners(12.0)),
             BoxSpec::default(),
             || {
-                Text("Box A", Modifier::empty().padding(8.0));
+                Text(
+                    "Box A",
+                    Modifier::empty().padding(8.0),
+                    TextStyle::default(),
+                );
             },
         );
 
@@ -95,7 +103,11 @@ fn positioned_boxes_showcase() {
                 .then(Modifier::empty().rounded_corners(12.0)),
             BoxSpec::default(),
             || {
-                Text("Box B", Modifier::empty().padding(8.0));
+                Text(
+                    "Box B",
+                    Modifier::empty().padding(8.0),
+                    TextStyle::default(),
+                );
             },
         );
     });
@@ -110,6 +122,7 @@ fn dynamic_modifiers_showcase(frame: i32) {
                 .padding(12.0)
                 .then(Modifier::empty().background(Color(1.0, 1.0, 1.0, 0.1)))
                 .then(Modifier::empty().rounded_corners(14.0)),
+            TextStyle::default(),
         );
 
         Spacer(Size {
@@ -132,7 +145,11 @@ fn dynamic_modifiers_showcase(frame: i32) {
                 .then(Modifier::empty().rounded_corners(10.0)),
             BoxSpec::default(),
             || {
-                Text("Moving!", Modifier::empty().padding(4.0));
+                Text(
+                    "Moving!",
+                    Modifier::empty().padding(4.0),
+                    TextStyle::default(),
+                );
             },
         );
 
@@ -147,6 +164,7 @@ fn dynamic_modifiers_showcase(frame: i32) {
                 .padding(8.0)
                 .then(Modifier::empty().background(Color(0.2, 0.2, 0.3, 0.6)))
                 .then(Modifier::empty().rounded_corners(10.0)),
+            TextStyle::default(),
         );
     });
 }
@@ -274,7 +292,11 @@ fn test_item_list_with_spacing() {
                                 4 => "Item #4",
                                 _ => "Item",
                             };
-                            Text(text, Modifier::empty().padding_horizontal(12.0));
+                            Text(
+                                text,
+                                Modifier::empty().padding_horizontal(12.0),
+                                TextStyle::default(),
+                            );
                         },
                     );
                 }
@@ -312,7 +334,11 @@ fn test_complex_modifier_chain_ordering() {
                 .then(Modifier::empty().rounded_corners(12.0)),
             BoxSpec::default(),
             || {
-                Text("Complex modifiers!", Modifier::empty().padding(8.0));
+                Text(
+                    "Complex modifiers!",
+                    Modifier::empty().padding(8.0),
+                    TextStyle::default(),
+                );
             },
         );
     })
@@ -370,7 +396,11 @@ fn test_long_list_performance_and_structure() {
                             } else {
                                 "Item 10+"
                             };
-                            Text(text, Modifier::empty().padding_horizontal(12.0));
+                            Text(
+                                text,
+                                Modifier::empty().padding_horizontal(12.0),
+                                TextStyle::default(),
+                            );
                         },
                     );
                 }

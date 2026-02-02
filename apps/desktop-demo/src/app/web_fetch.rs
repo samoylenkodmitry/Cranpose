@@ -1,8 +1,9 @@
+use super::external_link::local_uri_handler;
 #[cfg(target_arch = "wasm32")]
 use cranpose_core::LaunchedEffectAsync;
 use cranpose_ui::{
-    composable, Brush, Button, Color, Column, ColumnSpec, CornerRadii, LinearArrangement, Modifier,
-    Row, RowSpec, Size, Spacer, Text, VerticalAlignment,
+    composable, text::TextDecoration, Brush, Button, Color, Column, ColumnSpec, CornerRadii,
+    LinearArrangement, Modifier, Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -116,6 +117,7 @@ async fn do_fetch_async() -> Result<String, String> {
 pub(crate) fn web_fetch_example() {
     let fetch_status = cranpose_core::useState(|| FetchStatus::Idle);
     let request_counter = cranpose_core::useState(|| 0u64);
+    let uri_handler = local_uri_handler().current();
 
     // Native implementation using blocking worker
     #[cfg(not(target_arch = "wasm32"))]
@@ -192,6 +194,7 @@ pub(crate) fn web_fetch_example() {
                         .padding(12.0)
                         .background(Color(1.0, 1.0, 1.0, 0.08))
                         .rounded_corners(16.0),
+                    TextStyle::default(),
                 );
 
                 Spacer(Size {
@@ -209,11 +212,50 @@ pub(crate) fn web_fetch_example() {
                         .padding(12.0)
                         .background(Color(0.12, 0.16, 0.28, 0.7))
                         .rounded_corners(14.0),
+                    TextStyle::default(),
                 );
 
                 Spacer(Size {
                     width: 0.0,
                     height: 16.0,
+                });
+
+                let api_url = "https://api.ipify.org";
+                let link_handler = uri_handler.clone();
+                Row(
+                    Modifier::empty().fill_max_width().padding(4.0),
+                    RowSpec::new()
+                        .horizontal_arrangement(LinearArrangement::SpacedBy(8.0))
+                        .vertical_alignment(VerticalAlignment::CenterVertically),
+                    move || {
+                        let link_handler = link_handler.clone();
+                        Text(
+                            "API Endpoint:",
+                            Modifier::empty().padding(2.0),
+                            TextStyle {
+                                color: Some(Color(0.7, 0.74, 0.86, 1.0)),
+                                ..Default::default()
+                            },
+                        );
+                        Text(
+                            api_url,
+                            Modifier::empty().padding(2.0).clickable(move |_| {
+                                if let Err(err) = link_handler.open_uri(api_url) {
+                                    log::error!("Failed to open {}: {:#}", api_url, err);
+                                }
+                            }),
+                            TextStyle {
+                                color: Some(Color(0.32, 0.72, 0.98, 1.0)),
+                                text_decoration: Some(TextDecoration::UNDERLINE),
+                                ..Default::default()
+                            },
+                        );
+                    },
+                );
+
+                Spacer(Size {
+                    width: 0.0,
+                    height: 12.0,
                 });
 
                 Row(
@@ -249,6 +291,7 @@ pub(crate) fn web_fetch_example() {
                                             .padding(6.0)
                                             .background(Color(1.0, 1.0, 1.0, 0.05))
                                             .rounded_corners(10.0),
+                                        TextStyle::default(),
                                     );
                                 },
                             );
@@ -268,7 +311,7 @@ pub(crate) fn web_fetch_example() {
                         Color(0.14, 0.24, 0.36, 0.8),
                     ),
                     FetchStatus::Loading => {
-                        ("Contacting api.github.com...", Color(0.20, 0.30, 0.48, 0.9))
+                        ("Contacting api.ipify.org...", Color(0.20, 0.30, 0.48, 0.9))
                     }
                     FetchStatus::Success(_) => {
                         ("Success: received response", Color(0.16, 0.42, 0.26, 0.85))
@@ -282,6 +325,7 @@ pub(crate) fn web_fetch_example() {
                         .padding(10.0)
                         .background(banner_color)
                         .rounded_corners(12.0),
+                    TextStyle::default(),
                 );
 
                 Spacer(Size {
@@ -297,6 +341,7 @@ pub(crate) fn web_fetch_example() {
                                 .padding(10.0)
                                 .background(Color(0.10, 0.16, 0.28, 0.7))
                                 .rounded_corners(12.0),
+                            TextStyle::default(),
                         );
                     }
                     FetchStatus::Loading => {
@@ -306,6 +351,7 @@ pub(crate) fn web_fetch_example() {
                                 .padding(10.0)
                                 .background(Color(0.12, 0.18, 0.32, 0.9))
                                 .rounded_corners(12.0),
+                            TextStyle::default(),
                         );
                     }
                     FetchStatus::Success(message) => {
@@ -315,6 +361,7 @@ pub(crate) fn web_fetch_example() {
                                 .padding(12.0)
                                 .background(Color(0.14, 0.34, 0.26, 0.9))
                                 .rounded_corners(14.0),
+                            TextStyle::default(),
                         );
                     }
                     FetchStatus::Error(error) => {
@@ -324,6 +371,7 @@ pub(crate) fn web_fetch_example() {
                                 .padding(12.0)
                                 .background(Color(0.40, 0.18, 0.18, 0.9))
                                 .rounded_corners(14.0),
+                            TextStyle::default(),
                         );
                     }
                 }

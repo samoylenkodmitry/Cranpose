@@ -8,9 +8,12 @@
 //! cargo run --package desktop-app --example robot_scroll_visual --features robot-app
 //! ```
 
+mod robot_test_utils;
+
 use cranpose::AppLauncher;
 use cranpose_testing::{find_button, find_in_semantics, find_text};
 use desktop_app::app;
+use robot_test_utils::find_bounds_by_text;
 use std::time::Duration;
 
 fn main() {
@@ -56,6 +59,18 @@ fn main() {
             std::thread::sleep(Duration::from_millis(300));
             let _ = robot.wait_for_idle();
 
+            let list_bounds = match find_bounds_by_text(&robot, "LazyListViewport") {
+                Some(bounds) => bounds,
+                None => {
+                    println!("  ✗ Could not find LazyListViewport bounds");
+                    std::process::exit(1);
+                }
+            };
+            let center_x = list_bounds.0 + list_bounds.2 * 0.5;
+            let start_y = list_bounds.1 + list_bounds.3 * 0.8;
+            let end_y = list_bounds.1 + list_bounds.3 * 0.2;
+            let drag_distance = (start_y - end_y).abs();
+
             // Find first item (Hello #0) BEFORE scroll
             let hello_0_before = find_in_semantics(&robot, |elem| find_text(elem, "Hello #0"));
             let y_before = hello_0_before.map(|(_, y, _, _)| y);
@@ -69,15 +84,15 @@ fn main() {
             }
 
             // Perform a drag scroll (down to scroll up)
-            let scroll_y = 400.0;
-            let _ = robot.mouse_move(400.0, scroll_y);
+            let _ = robot.mouse_move(center_x, start_y);
             std::thread::sleep(Duration::from_millis(50));
             let _ = robot.mouse_down();
             std::thread::sleep(Duration::from_millis(50));
 
             // Drag upward (content scrolls down = items move up)
             for i in 0..10 {
-                let _ = robot.mouse_move(400.0, scroll_y - (i as f32 * 20.0));
+                let progress = i as f32 / 10.0;
+                let _ = robot.mouse_move(center_x, start_y - (drag_distance * progress));
                 std::thread::sleep(Duration::from_millis(20));
             }
             let _ = robot.mouse_up();

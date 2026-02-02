@@ -87,11 +87,15 @@ impl TextFieldRefs {
 /// - Text measurement and layout
 /// - Cursor and selection rendering
 /// - Pointer input for cursor positioning
+use crate::text::TextStyle; // Add import
+
 pub struct TextFieldModifierNode {
     /// The text field state (shared)
     state: TextFieldState,
     /// Shared references for input handling
     refs: TextFieldRefs,
+    /// Text style
+    style: TextStyle, // Add style
     /// Cursor brush color
     cursor_brush: Brush,
     /// Selection highlight brush
@@ -114,6 +118,7 @@ impl std::fmt::Debug for TextFieldModifierNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TextFieldModifierNode")
             .field("text", &self.state.text())
+            .field("style", &self.style)
             .field("is_focused", &*self.refs.is_focused.borrow())
             .finish()
     }
@@ -124,15 +129,17 @@ use crate::text_field_handler::TextFieldHandler;
 
 impl TextFieldModifierNode {
     /// Creates a new text field modifier node.
-    pub fn new(state: TextFieldState) -> Self {
+    pub fn new(state: TextFieldState, style: TextStyle) -> Self {
         let value = state.value();
         let refs = TextFieldRefs::new();
         let line_limits = TextFieldLineLimits::default();
-        let cached_handler = Self::create_handler(state.clone(), refs.clone(), line_limits);
+        let cached_handler =
+            Self::create_handler(state.clone(), refs.clone(), line_limits, style.clone());
 
         Self {
             state,
             refs,
+            style,
             cursor_brush: Brush::solid(DEFAULT_CURSOR_COLOR),
             selection_brush: Brush::solid(DEFAULT_SELECTION_COLOR),
             line_limits,
@@ -163,6 +170,7 @@ impl TextFieldModifierNode {
         state: TextFieldState,
         refs: TextFieldRefs,
         line_limits: TextFieldLineLimits,
+        style: TextStyle, // Add style
     ) -> Rc<dyn Fn(PointerEvent)> {
         // Use word_boundaries module for double-click word selection
         use crate::word_boundaries::find_word_boundaries;
@@ -181,7 +189,7 @@ impl TextFieldModifierNode {
 
                     let now = web_time::Instant::now();
                     let text = state.text();
-                    let pos = crate::text::get_offset_for_position(&text, click_x, click_y);
+                    let pos = crate::text::get_offset_for_position(&text, &style, click_x, click_y);
 
                     // Detect double-click
                     let is_double_click = if let Some(last) = refs.last_click_time.get() {
@@ -228,8 +236,9 @@ impl TextFieldModifierNode {
                     if let Some(anchor) = refs.drag_anchor.get() {
                         if *refs.is_focused.borrow() {
                             let text = state.text();
-                            let current_pos =
-                                crate::text::get_offset_for_position(&text, click_x, click_y);
+                            let current_pos = crate::text::get_offset_for_position(
+                                &text, &style, click_x, click_y,
+                            );
 
                             // Update selection directly (without undo stack push)
                             state.set_selection(TextRange::new(anchor, current_pos));
@@ -350,7 +359,7 @@ impl TextFieldModifierNode {
     /// Measures the text content.
     fn measure_text_content(&self) -> Size {
         let text = self.state.text();
-        let metrics = crate::text::measure_text(&text);
+        let metrics = crate::text::measure_text(&text, &self.style);
         Size {
             width: metrics.width,
             height: metrics.height,
@@ -385,7 +394,7 @@ impl TextFieldModifierNode {
         }
 
         // Use proper text layout hit testing instead of character-based calculation
-        let byte_offset = crate::text::get_offset_for_position(&text, x_offset, 0.0);
+        let byte_offset = crate::text::get_offset_for_position(&text, &self.style, x_offset, 0.0);
 
         self.state.edit(|buffer| {
             buffer.place_cursor_before_char(byte_offset);
@@ -515,6 +524,7 @@ impl DrawModifierNode for TextFieldModifierNode {
         let content_y_offset = self.refs.content_y_offset.clone();
         let cursor_brush = self.cursor_brush.clone();
         let selection_brush = self.selection_brush.clone();
+        let style = self.style.clone(); // Capture style
 
         Some(Rc::new(move |_size| {
             // Check focus at DRAW time
@@ -528,7 +538,7 @@ impl DrawModifierNode for TextFieldModifierNode {
             let selection = state.selection();
             let padding_left = content_offset.get();
             let padding_top = content_y_offset.get();
-            let line_height = crate::text::measure_text(&text).line_height;
+            let line_height = crate::text::measure_text(&text, &style).line_height;
 
             // Draw selection highlight
             if !selection.collapsed() {
@@ -546,10 +556,11 @@ impl DrawModifierNode for TextFieldModifierNode {
                         let sel_start_in_line = sel_start.saturating_sub(line_start);
                         let sel_end_in_line = (sel_end - line_start).min(line.len());
 
-                        let sel_start_x = crate::text::measure_text(&line[..sel_start_in_line])
+                        let sel_start_x =
+                            crate::text::measure_text(&line[..sel_start_in_line], &style).width
+                                + padding_left;
+                        let sel_end_x = crate::text::measure_text(&line[..sel_end_in_line], &style)
                             .width
-                            + padding_left;
-                        let sel_end_x = crate::text::measure_text(&line[..sel_end_in_line]).width
                             + padding_left;
                         let sel_width = sel_end_x - sel_start_x;
 
@@ -608,11 +619,12 @@ impl DrawModifierNode for TextFieldModifierNode {
                             };
 
                             let comp_start_x =
-                                crate::text::measure_text(&line[..comp_start_in_line]).width
+                                crate::text::measure_text(&line[..comp_start_in_line], &style)
+                                    .width
                                     + padding_left;
-                            let comp_end_x = crate::text::measure_text(&line[..comp_end_in_line])
-                                .width
-                                + padding_left;
+                            let comp_end_x =
+                                crate::text::measure_text(&line[..comp_end_in_line], &style).width
+                                    + padding_left;
                             let comp_width = comp_end_x - comp_start_x;
 
                             if comp_width > 0.0 {
@@ -641,8 +653,8 @@ impl DrawModifierNode for TextFieldModifierNode {
                 let text_before = &text[..pos];
                 let line_index = text_before.matches('\n').count();
                 let line_start = text_before.rfind('\n').map(|i| i + 1).unwrap_or(0);
-                let cursor_x =
-                    crate::text::measure_text(&text_before[line_start..]).width + padding_left;
+                let cursor_x = crate::text::measure_text(&text_before[line_start..], &style).width
+                    + padding_left;
                 let cursor_y = padding_top + line_index as f32 * line_height;
 
                 let cursor_rect = cranpose_ui_graphics::Rect {
@@ -718,6 +730,8 @@ impl PointerInputNode for TextFieldModifierNode {
 pub struct TextFieldElement {
     /// The text field state
     state: TextFieldState,
+    /// Text style
+    style: TextStyle, // Add style
     /// Cursor color
     cursor_color: Color,
     /// Line limits configuration
@@ -726,9 +740,11 @@ pub struct TextFieldElement {
 
 impl TextFieldElement {
     /// Creates a new text field element.
-    pub fn new(state: TextFieldState) -> Self {
+    pub fn new(state: TextFieldState, style: TextStyle) -> Self {
+        // Update constructor
         Self {
             state,
+            style,
             cursor_color: DEFAULT_CURSOR_COLOR,
             line_limits: TextFieldLineLimits::default(),
         }
@@ -751,6 +767,7 @@ impl std::fmt::Debug for TextFieldElement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TextFieldElement")
             .field("text", &self.state.text())
+            .field("style", &self.style)
             .field("cursor_color", &self.cursor_color)
             .finish()
     }
@@ -766,6 +783,7 @@ impl Hash for TextFieldElement {
         self.cursor_color.1.to_bits().hash(state);
         self.cursor_color.2.to_bits().hash(state);
         self.cursor_color.3.to_bits().hash(state);
+        // TODO: Hash style
     }
 }
 
@@ -775,6 +793,7 @@ impl PartialEq for TextFieldElement {
         // This ensures node reuse when same state is passed, while detecting
         // actual changes that require updates
         self.state == other.state
+            && self.style == other.style
             && self.cursor_color == other.cursor_color
             && self.line_limits == other.line_limits
     }
@@ -786,7 +805,7 @@ impl ModifierNodeElement for TextFieldElement {
     type Node = TextFieldModifierNode;
 
     fn create(&self) -> Self::Node {
-        TextFieldModifierNode::new(self.state.clone())
+        TextFieldModifierNode::new(self.state.clone(), self.style.clone())
             .with_cursor_color(self.cursor_color)
             .with_line_limits(self.line_limits)
     }
@@ -802,6 +821,7 @@ impl ModifierNodeElement for TextFieldElement {
             node.state.clone(),
             node.refs.clone(),
             node.line_limits,
+            node.style.clone(),
         );
 
         // Check if content changed and update cache
@@ -827,6 +847,7 @@ impl ModifierNodeElement for TextFieldElement {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::text::TextStyle;
     use cranpose_core::{DefaultScheduler, Runtime};
     use std::sync::Arc;
 
@@ -840,7 +861,7 @@ mod tests {
     fn text_field_node_creation() {
         with_test_runtime(|| {
             let state = TextFieldState::new("Hello");
-            let node = TextFieldModifierNode::new(state);
+            let node = TextFieldModifierNode::new(state, TextStyle::default());
             assert_eq!(node.text(), "Hello");
             assert!(!node.is_focused());
         });
@@ -850,7 +871,7 @@ mod tests {
     fn text_field_node_focus() {
         with_test_runtime(|| {
             let state = TextFieldState::new("Test");
-            let mut node = TextFieldModifierNode::new(state);
+            let mut node = TextFieldModifierNode::new(state, TextStyle::default());
             assert!(!node.is_focused());
 
             node.set_focused(true);
@@ -865,7 +886,7 @@ mod tests {
     fn text_field_element_creates_node() {
         with_test_runtime(|| {
             let state = TextFieldState::new("Hello World");
-            let element = TextFieldElement::new(state);
+            let element = TextFieldElement::new(state, TextStyle::default());
 
             let node = element.create();
             assert_eq!(node.text(), "Hello World");
@@ -878,9 +899,9 @@ mod tests {
             let state1 = TextFieldState::new("Hello");
             let state2 = TextFieldState::new("Hello"); // Different Rc, same text
 
-            let elem1 = TextFieldElement::new(state1.clone());
-            let elem2 = TextFieldElement::new(state1.clone()); // Same state (Rc identity)
-            let elem3 = TextFieldElement::new(state2); // Different state
+            let elem1 = TextFieldElement::new(state1.clone(), TextStyle::default());
+            let elem2 = TextFieldElement::new(state1.clone(), TextStyle::default()); // Same state (Rc identity)
+            let elem3 = TextFieldElement::new(state2, TextStyle::default()); // Different state
 
             // Elements are equal only when they share the same state Rc
             // This ensures proper Eq/Hash contract compliance
@@ -898,9 +919,10 @@ mod tests {
     fn test_cursor_x_position_calculation() {
         with_test_runtime(|| {
             // Test that text measurement works correctly for cursor positioning
+            let style = crate::text::TextStyle::default();
 
             // Empty text - cursor should be at x=0
-            let empty_width = crate::text::measure_text("").width;
+            let empty_width = crate::text::measure_text("", &style).width;
             assert!(
                 empty_width.abs() < 0.1,
                 "Empty text should have 0 width, got {}",
@@ -908,7 +930,7 @@ mod tests {
             );
 
             // Non-empty text - cursor at end should be at text width
-            let hi_width = crate::text::measure_text("Hi").width;
+            let hi_width = crate::text::measure_text("Hi", &style).width;
             assert!(
                 hi_width > 0.0,
                 "Text 'Hi' should have positive width: {}",
@@ -916,7 +938,7 @@ mod tests {
             );
 
             // Partial text - cursor after 'H' should be at width of 'H'
-            let h_width = crate::text::measure_text("H").width;
+            let h_width = crate::text::measure_text("H", &style).width;
             assert!(h_width > 0.0, "Text 'H' should have positive width");
             assert!(
                 h_width < hi_width,
@@ -940,7 +962,7 @@ mod tests {
             assert_eq!(text_before_cursor, "Hi");
 
             // So cursor x = width of "Hi"
-            let cursor_x = crate::text::measure_text(text_before_cursor).width;
+            let cursor_x = crate::text::measure_text(text_before_cursor, &style).width;
             assert!(
                 (cursor_x - hi_width).abs() < 0.1,
                 "Cursor x {} should equal 'Hi' width {}",
@@ -955,7 +977,7 @@ mod tests {
     fn test_focused_node_creates_cursor() {
         with_test_runtime(|| {
             let state = TextFieldState::new("Test");
-            let element = TextFieldElement::new(state.clone());
+            let element = TextFieldElement::new(state.clone(), TextStyle::default());
             let node = element.create();
 
             // Initially not focused

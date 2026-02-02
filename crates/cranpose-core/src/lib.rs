@@ -132,11 +132,6 @@ fn compose_debug_enabled() -> bool {
     *COMPOSE_DEBUG.get_or_init(|| std::env::var_os("COMPOSE_DEBUG").is_some())
 }
 
-#[cfg(target_arch = "wasm32")]
-fn compose_debug_enabled() -> bool {
-    false
-}
-
 #[cfg(test)]
 pub use runtime::{TestRuntime, TestScheduler};
 

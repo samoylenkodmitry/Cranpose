@@ -112,6 +112,12 @@ run_test() {
             timeout_secs=240
             ;;
         robot_fling_edge_cases)
+            timeout_secs=240
+            ;;
+        robot_fling_interrupt)
+            timeout_secs=120
+            ;;
+        robot_lazy_varheight_lifecycle)
             timeout_secs=150
             ;;
         robot_no_fling_recording2)

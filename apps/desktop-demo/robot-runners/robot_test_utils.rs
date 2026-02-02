@@ -3,7 +3,7 @@
 //! This module provides common helpers for semantics tree navigation
 //! and debugging that are used across multiple robot tests.
 
-use cranpose::SemanticElement;
+use cranpose::{Robot, SemanticElement};
 use std::collections::HashMap;
 
 /// Finds an element in the semantics tree by exact text match.
@@ -22,6 +22,26 @@ pub fn find_element_by_text_exact<'a>(
         }
     }
     None
+}
+
+/// Finds element bounds by exact text match using the live semantics tree.
+#[allow(dead_code)]
+pub fn find_bounds_by_text(robot: &Robot, text: &str) -> Option<(f32, f32, f32, f32)> {
+    let semantics = robot.get_semantics().ok()?;
+    let elem = find_element_by_text_exact(&semantics, text)?;
+    Some((
+        elem.bounds.x,
+        elem.bounds.y,
+        elem.bounds.width,
+        elem.bounds.height,
+    ))
+}
+
+/// Finds element center point by exact text match using the live semantics tree.
+#[allow(dead_code)]
+pub fn find_center_by_text(robot: &Robot, text: &str) -> Option<(f32, f32)> {
+    let (x, y, w, h) = find_bounds_by_text(robot, text)?;
+    Some((x + w / 2.0, y + h / 2.0))
 }
 
 /// Finds an element within a subtree by exact text match.

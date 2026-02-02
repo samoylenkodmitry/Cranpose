@@ -8,14 +8,13 @@
 use crate::composable;
 use crate::layout::policies::EmptyMeasurePolicy;
 use crate::modifier::Modifier;
+use crate::text::TextStyle; // Add import
 use crate::text_field_modifier_node::TextFieldElement;
 use crate::widgets::Layout;
 use cranpose_core::NodeId;
 use cranpose_foundation::modifier_element;
 use cranpose_foundation::text::{TextFieldLineLimits, TextFieldState};
 use cranpose_ui_graphics::Color;
-
-/// A primitive editable text field.
 ///
 /// # When to use
 /// Use this when you need an editable text input but want full control over the
@@ -25,21 +24,31 @@ use cranpose_ui_graphics::Color;
 ///
 /// * `state` - The observable text field state that holds text content and cursor position.
 /// * `modifier` - Modifiers for styling and layout.
+/// * `style` - Text styling (color, font size).
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// let text = remember_text_field_state("Initial text");
-/// BasicTextField(text, Modifier::padding(8.0));
+/// BasicTextField(text, Modifier::padding(8.0), TextStyle::default());
 /// ```
 #[composable]
-pub fn BasicTextField(state: TextFieldState, modifier: Modifier) -> NodeId {
-    BasicTextFieldWithOptions(state, modifier, BasicTextFieldOptions::default())
+pub fn BasicTextField(state: TextFieldState, modifier: Modifier, style: TextStyle) -> NodeId {
+    BasicTextFieldWithOptions(
+        state,
+        modifier,
+        BasicTextFieldOptions {
+            text_style: style,
+            ..BasicTextFieldOptions::default()
+        },
+    )
 }
 
 /// Options for customizing BasicTextField appearance and behavior.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BasicTextFieldOptions {
+    /// Text style
+    pub text_style: TextStyle,
     /// Cursor color
     pub cursor_color: Color,
     /// Line limits: SingleLine or MultiLine with optional min/max
@@ -49,6 +58,7 @@ pub struct BasicTextFieldOptions {
 impl Default for BasicTextFieldOptions {
     fn default() -> Self {
         Self {
+            text_style: TextStyle::default(),
             cursor_color: Color(0.0, 0.0, 0.0, 1.0), // Black
             line_limits: TextFieldLineLimits::default(),
         }
@@ -70,7 +80,7 @@ pub fn BasicTextFieldWithOptions(
     let _text = state.text();
 
     // Build the text field element with line limits
-    let text_field_element = TextFieldElement::new(state)
+    let text_field_element = TextFieldElement::new(state, options.text_style)
         .with_cursor_color(options.cursor_color)
         .with_line_limits(options.line_limits);
 
@@ -108,7 +118,7 @@ mod tests {
         let result = composition.render(location_key(file!(), line!(), column!()), {
             let state = state.clone();
             move || {
-                BasicTextField(state.clone(), Modifier::empty());
+                BasicTextField(state.clone(), Modifier::empty(), TextStyle::default());
             }
         });
 

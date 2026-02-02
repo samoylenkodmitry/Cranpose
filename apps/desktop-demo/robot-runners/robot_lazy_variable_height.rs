@@ -3,7 +3,7 @@ use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
 use cranpose_testing::find_text_in_semantics;
 use cranpose_ui::widgets::{Box, BoxSpec};
 use cranpose_ui::widgets::{LazyColumn, LazyColumnSpec};
-use cranpose_ui::{Alignment, Color, Modifier, Size};
+use cranpose_ui::{Alignment, Color, Modifier, Size, TextStyle};
 use std::time::Duration;
 
 fn main() {
@@ -63,7 +63,7 @@ fn main() {
                                 .size(Size { width: 100.0, height: 100.0 })
                                 .background(Color::RED),
                             BoxSpec::new().content_alignment(Alignment::CENTER),
-                            || { cranpose_ui::widgets::Text("Item0", Modifier::default()); }
+                            || { cranpose_ui::widgets::Text("Item0", Modifier::default(), TextStyle::default()); }
                         );
                     });
 
@@ -74,7 +74,7 @@ fn main() {
                                 .size(Size { width: 100.0, height: 50.0 })
                                 .background(Color::GREEN),
                             BoxSpec::new().content_alignment(Alignment::CENTER),
-                            || { cranpose_ui::widgets::Text("Item1", Modifier::default()); }
+                            || { cranpose_ui::widgets::Text("Item1", Modifier::default(), TextStyle::default()); }
                         );
                     });
 
@@ -85,7 +85,7 @@ fn main() {
                                 .size(Size { width: 100.0, height: 200.0 })
                                 .background(Color::BLUE),
                             BoxSpec::new().content_alignment(Alignment::CENTER),
-                            || { cranpose_ui::widgets::Text("Item2", Modifier::default()); }
+                            || { cranpose_ui::widgets::Text("Item2", Modifier::default(), TextStyle::default()); }
                         );
                     });
                 },

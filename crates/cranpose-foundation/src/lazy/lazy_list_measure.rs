@@ -139,6 +139,7 @@ where
     // 2. Resolve and normalize scroll position
     let resolver = ScrollPositionResolver::new(state, config, items_count, effective_viewport_size);
     let (mut first_index, mut first_offset) = resolver.apply_pending_scroll_delta();
+
     let mut pre_measured = Vec::new();
 
     // Backward scroll: use measured sizes to avoid sticky boundaries when estimates are wrong.

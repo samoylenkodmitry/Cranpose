@@ -1,12 +1,18 @@
 //! Scene structures for GPU rendering
 
-use cranpose_core::{run_in_mutable_snapshot, NodeId};
-use cranpose_foundation::{PointerEvent, PointerEventKind};
+use cranpose_core::NodeId;
+use cranpose_foundation::PointerEvent;
 use cranpose_render_common::{HitTestTarget, RenderScene};
 use cranpose_ui_graphics::{Brush, Color, Point, Rect, RoundedCornerShape};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+
+#[derive(Clone)]
+pub enum ClickAction {
+    Simple(Rc<RefCell<dyn FnMut()>>),
+    WithPoint(Rc<dyn Fn(Point)>),
+}
 
 #[derive(Clone)]
 pub struct DrawShape {
@@ -23,27 +29,10 @@ pub struct TextDraw {
     pub rect: Rect,
     pub text: Rc<str>,
     pub color: Color,
+    pub font_size: f32,
     pub scale: f32,
     pub z_index: usize,
     pub clip: Option<Rect>,
-}
-
-#[derive(Clone)]
-pub enum ClickAction {
-    Simple(Rc<RefCell<dyn FnMut()>>),
-    WithPoint(Rc<dyn Fn(Point)>),
-}
-
-impl ClickAction {
-    pub(crate) fn invoke(&self, rect: Rect, x: f32, y: f32) {
-        match self {
-            ClickAction::Simple(handler) => (handler.borrow_mut())(),
-            ClickAction::WithPoint(handler) => handler(Point {
-                x: x - rect.x,
-                y: y - rect.y,
-            }),
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -57,64 +46,9 @@ pub struct HitRegion {
     pub hit_clip: Option<Rect>,
 }
 
-impl HitTestTarget for HitRegion {
-    fn dispatch(&self, event: PointerEvent) {
-        let x = event.global_position.x;
-        let y = event.global_position.y;
-        let kind = event.kind;
-
-        let local = Point {
-            x: x - self.rect.x,
-            y: y - self.rect.y,
-        };
-
-        let local_event = event.copy_with_local_position(local);
-
-        let has_pointer_inputs = !self.pointer_inputs.is_empty();
-        let has_click_actions = kind == PointerEventKind::Down && !self.click_actions.is_empty();
-
-        if !has_pointer_inputs && !has_click_actions {
-            return;
-        }
-
-        if let Err(err) = run_in_mutable_snapshot(|| {
-            for handler in self.pointer_inputs.iter() {
-                // If consumed by a previous handler in this loop (or outer loop), stop.
-                if local_event.is_consumed() {
-                    break;
-                }
-                handler(local_event.clone());
-            }
-
-            // Only perform click actions if NOT consumed
-            if kind == PointerEventKind::Down && !local_event.is_consumed() {
-                for action in &self.click_actions {
-                    action.invoke(self.rect, x, y);
-                }
-            }
-        }) {
-            log::error!(
-                "failed to apply mutable snapshot for pointer event {:?} at ({}, {}): {}",
-                kind,
-                x,
-                y,
-                err
-            );
-        }
-    }
-
-    fn node_id(&self) -> NodeId {
-        self.node_id
-    }
-}
-
 impl HitRegion {
-    pub fn contains(&self, x: f32, y: f32) -> bool {
-        if let Some(clip) = self.hit_clip {
-            if !clip.contains(x, y) {
-                return false;
-            }
-        }
+    fn contains(&self, x: f32, y: f32) -> bool {
+        // Simple rect check + shape check if needed
         if let Some(shape) = self.shape {
             point_in_rounded_rect(x, y, self.rect, shape)
         } else {
@@ -123,13 +57,29 @@ impl HitRegion {
     }
 }
 
+impl HitTestTarget for HitRegion {
+    fn node_id(&self) -> NodeId {
+        self.node_id
+    }
+
+    fn dispatch(&self, event: PointerEvent) {
+        let local_position = Point {
+            x: event.position.x - self.rect.x,
+            y: event.position.y - self.rect.y,
+        };
+        let local_event = event.copy_with_local_position(local_position);
+        for handler in &self.pointer_inputs {
+            handler(local_event.clone());
+        }
+    }
+}
+
 pub struct Scene {
     pub shapes: Vec<DrawShape>,
     pub texts: Vec<TextDraw>,
     pub hits: Vec<HitRegion>,
-    /// Index for O(1) node lookup by NodeId
-    node_index: HashMap<NodeId, HitRegion>,
-    next_z: usize,
+    pub next_z: usize,
+    pub node_index: HashMap<NodeId, HitRegion>,
 }
 
 impl Scene {
@@ -138,8 +88,8 @@ impl Scene {
             shapes: Vec::new(),
             texts: Vec::new(),
             hits: Vec::new(),
-            node_index: HashMap::new(),
             next_z: 0,
+            node_index: HashMap::new(),
         }
     }
 
@@ -161,12 +111,14 @@ impl Scene {
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn push_text(
         &mut self,
         node_id: NodeId,
         rect: Rect,
         text: Rc<str>,
         color: Color,
+        font_size: f32,
         scale: f32,
         clip: Option<Rect>,
     ) {
@@ -177,6 +129,7 @@ impl Scene {
             rect,
             text,
             color,
+            font_size,
             scale,
             z_index,
             clip,
@@ -230,12 +183,8 @@ impl RenderScene for Scene {
     }
 
     fn hit_test(&self, x: f32, y: f32) -> Vec<Self::HitTarget> {
-        let mut hits: Vec<_> = self
-            .hits
-            .iter()
-            .filter(|hit| hit.contains(x, y))
-            .cloned()
-            .collect();
+        let mut hits = self.hits.clone();
+        hits.retain(|hit| hit.contains(x, y));
 
         // Sort by z-index descending (top to bottom)
         hits.sort_by(|a, b| b.z_index.cmp(&a.z_index));

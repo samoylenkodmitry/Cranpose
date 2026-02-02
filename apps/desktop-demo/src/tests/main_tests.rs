@@ -152,6 +152,7 @@ fn async_runtime_test_content(
                         .padding(8.0)
                         .then(Modifier::empty().background(Color(0.18, 0.22, 0.36, 0.6)))
                         .then(Modifier::empty().rounded_corners(14.0)),
+                    TextStyle::default(),
                 );
             }
         },

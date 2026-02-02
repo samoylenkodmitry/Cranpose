@@ -11,7 +11,7 @@
 
 use cranpose::{AppLauncher, SemanticElement};
 use cranpose_testing::find_button_in_semantics;
-use cranpose_ui::{Button, Column, ColumnSpec, Modifier, Size, Spacer, Text};
+use cranpose_ui::{Button, Column, ColumnSpec, Modifier, Size, Spacer, Text, TextStyle};
 use desktop_app::app::{AnimationState, AsyncRuntimeTabContent, FrameStats};
 use std::time::Duration;
 
@@ -256,6 +256,7 @@ fn main() {
                     Text(
                         format!("Test percent: {}%", TEST_PCTS[step]),
                         Modifier::empty().padding(6.0),
+                        TextStyle::default(),
                     );
                     Button(
                         Modifier::empty().padding(6.0),
@@ -282,7 +283,7 @@ fn main() {
                             }
                         },
                         || {
-                            Text("Next", Modifier::empty().padding(4.0));
+                            Text("Next", Modifier::empty().padding(4.0), TextStyle::default());
                         },
                     );
                     Spacer(Size {

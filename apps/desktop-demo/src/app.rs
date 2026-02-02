@@ -9,15 +9,21 @@ use cranpose_foundation::SemanticsConfiguration;
 use cranpose_ui::{
     composable, BasicTextField, BoxSpec, Brush, Button, Color, Column, ColumnSpec, CornerRadii,
     GraphicsLayer, IntrinsicSize, LinearArrangement, Modifier, Point, PointerInputScope,
-    RoundedCornerShape, Row, RowSpec, Size, Spacer, Text, VerticalAlignment,
+    RoundedCornerShape, Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
 };
 use std::cell::RefCell;
 
+mod external_link;
+mod hacker_news;
 pub mod lazy_list;
 mod mineswapper2;
+pub mod scroll_repro;
 mod web_fetch;
 
+use external_link::{default_uri_handler, local_uri_handler};
+use hacker_news::hacker_news_tab;
 use lazy_list::lazy_list_example;
+use scroll_repro::scroll_repro_tab;
 use web_fetch::web_fetch_example;
 
 thread_local! {
@@ -35,7 +41,9 @@ pub enum DemoTab {
     Layout,
     ModifierShowcase,
     LazyList,
+    ScrollRepro,
     Mineswapper2,
+    HackerNews,
 }
 
 impl DemoTab {
@@ -49,7 +57,9 @@ impl DemoTab {
             DemoTab::Layout => "Recursive Layout",
             DemoTab::ModifierShowcase => "Modifiers Showcase",
             DemoTab::LazyList => "Lazy List",
+            DemoTab::ScrollRepro => "Scroll Repro",
             DemoTab::Mineswapper2 => "Mineswapper2",
+            DemoTab::HackerNews => "Hacker News",
         }
     }
 }
@@ -137,98 +147,100 @@ pub fn combined_app() {
     // Create scroll state for tabs row
     let tabs_scroll_state =
         cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|state| state.clone());
-    let column_scroll_state =
-        cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|state| state.clone());
+    let uri_handler = cranpose_core::remember(default_uri_handler).with(|state| state.clone());
+    let uri_local = local_uri_handler();
 
-    Column(
-        Modifier::empty()
-            .fill_max_size()
-            .padding(20.0)
-            .vertical_scroll(column_scroll_state.clone(), false),
-        ColumnSpec::default(),
-        move || {
-            let tab_state_for_row = active_tab;
-            let tab_state_for_content = active_tab;
-            Row(
-                Modifier::empty()
-                    .fill_max_width()
-                    .padding(8.0)
-                    .horizontal_scroll(tabs_scroll_state.clone(), false),
-                RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
-                move || {
-                    let render_tab_button = {
-                        move |tab: DemoTab| {
-                            let tab_state_for_tab = tab_state_for_row;
-                            let is_active = tab_state_for_tab.get() == tab;
+    CompositionLocalProvider(vec![uri_local.provides(uri_handler)], move || {
+        Column(
+            Modifier::empty().fill_max_size().padding(20.0),
+            ColumnSpec::default(),
+            move || {
+                let tab_state_for_row = active_tab;
+                let tab_state_for_content = active_tab;
+                Row(
+                    Modifier::empty()
+                        .fill_max_width()
+                        .padding(8.0)
+                        .horizontal_scroll(tabs_scroll_state.clone(), false),
+                    RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
+                    move || {
+                        let render_tab_button = {
+                            move |tab: DemoTab| {
+                                let tab_state_for_tab = tab_state_for_row;
+                                let is_active = tab_state_for_tab.get() == tab;
 
-                            Button(
-                                Modifier::empty()
-                                    .rounded_corners(12.0)
-                                    .draw_behind(move |scope| {
-                                        scope.draw_round_rect(
-                                            Brush::solid(if is_active {
-                                                Color(0.2, 0.45, 0.9, 1.0)
-                                            } else {
-                                                Color(0.3, 0.3, 0.3, 0.5)
-                                            }),
-                                            CornerRadii::uniform(12.0),
-                                        );
-                                    })
-                                    .padding(10.0),
-                                {
-                                    let tab_state = tab_state_for_tab;
-                                    move || {
-                                        if tab_state.get() != tab {
-                                            tab_state.set(tab);
+                                Button(
+                                    Modifier::empty()
+                                        .rounded_corners(12.0)
+                                        .draw_behind(move |scope| {
+                                            scope.draw_round_rect(
+                                                Brush::solid(if is_active {
+                                                    Color(0.2, 0.45, 0.9, 1.0)
+                                                } else {
+                                                    Color(0.3, 0.3, 0.3, 0.5)
+                                                }),
+                                                CornerRadii::uniform(12.0),
+                                            );
+                                        })
+                                        .padding(10.0),
+                                    {
+                                        let tab_state = tab_state_for_tab;
+                                        move || {
+                                            if tab_state.get() != tab {
+                                                tab_state.set(tab);
+                                            }
                                         }
-                                    }
-                                },
-                                {
-                                    let label = tab.label();
-                                    move || {
-                                        Text(label, Modifier::empty().padding(4.0));
-                                    }
-                                },
-                            );
-                        }
-                    };
+                                    },
+                                    {
+                                        let label = tab.label();
+                                        move || {
+                                            Text(
+                                                label,
+                                                Modifier::empty().padding(4.0),
+                                                TextStyle::default(),
+                                            );
+                                        }
+                                    },
+                                );
+                            }
+                        };
 
-                    render_tab_button(DemoTab::Counter);
-                    render_tab_button(DemoTab::CompositionLocal);
-                    render_tab_button(DemoTab::Async);
-                    render_tab_button(DemoTab::WebFetch);
-                    render_tab_button(DemoTab::TextInput);
-                    render_tab_button(DemoTab::Layout);
-                    render_tab_button(DemoTab::ModifierShowcase);
-                    render_tab_button(DemoTab::LazyList);
-                    render_tab_button(DemoTab::Mineswapper2);
-                },
-            );
+                        render_tab_button(DemoTab::Counter);
+                        render_tab_button(DemoTab::CompositionLocal);
+                        render_tab_button(DemoTab::Async);
+                        render_tab_button(DemoTab::WebFetch);
+                        render_tab_button(DemoTab::TextInput);
+                        render_tab_button(DemoTab::Layout);
+                        render_tab_button(DemoTab::ModifierShowcase);
+                        render_tab_button(DemoTab::LazyList);
+                        render_tab_button(DemoTab::ScrollRepro);
+                        render_tab_button(DemoTab::Mineswapper2);
+                        render_tab_button(DemoTab::HackerNews);
+                    },
+                );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 12.0,
-            });
+                Spacer(Size {
+                    width: 0.0,
+                    height: 12.0,
+                });
 
-            Spacer(Size {
-                width: 0.0,
-                height: 12.0,
-            });
-
-            let active = tab_state_for_content.get();
-            cranpose_core::with_key(&active, || match active {
-                DemoTab::Counter => counter_app(),
-                DemoTab::CompositionLocal => composition_local_example(),
-                DemoTab::Async => async_runtime_example(),
-                DemoTab::WebFetch => web_fetch_example(),
-                DemoTab::TextInput => text_input_example(),
-                DemoTab::Layout => recursive_layout_example(),
-                DemoTab::ModifierShowcase => modifier_showcase_tab(),
-                DemoTab::LazyList => lazy_list_example(),
-                DemoTab::Mineswapper2 => mineswapper2::mineswapper2_tab(),
-            });
-        },
-    );
+                let active = tab_state_for_content.get();
+                cranpose_core::with_key(&active, || match active {
+                    DemoTab::Counter => counter_app(),
+                    DemoTab::CompositionLocal => composition_local_example(),
+                    DemoTab::Async => async_runtime_example(),
+                    DemoTab::WebFetch => web_fetch_example(),
+                    DemoTab::TextInput => text_input_example(),
+                    DemoTab::Layout => recursive_layout_example(),
+                    DemoTab::ModifierShowcase => modifier_showcase_tab(),
+                    DemoTab::LazyList => lazy_list_example(),
+                    DemoTab::ScrollRepro => scroll_repro_tab(),
+                    DemoTab::Mineswapper2 => mineswapper2::mineswapper2_tab(),
+                    DemoTab::HackerNews => hacker_news_tab(),
+                });
+            },
+        );
+    });
 }
 
 /// Text Input Demo Tab - showcases BasicTextField functionality
@@ -254,6 +266,7 @@ fn text_input_example() {
                     .padding(12.0)
                     .background(Color(1.0, 1.0, 1.0, 0.08))
                     .rounded_corners(16.0),
+                TextStyle::default(),
             );
 
             Spacer(Size {
@@ -262,7 +275,11 @@ fn text_input_example() {
             });
 
             // First text field with label
-            Text("Basic Text Field:", Modifier::empty().padding(4.0));
+            Text(
+                "Basic Text Field:",
+                Modifier::empty().padding(4.0),
+                TextStyle::default(),
+            );
 
             Spacer(Size {
                 width: 0.0,
@@ -279,6 +296,7 @@ fn text_input_example() {
                         .padding(12.0)
                         .background(Color(0.15, 0.18, 0.25, 1.0))
                         .rounded_corners(8.0),
+                    TextStyle::default(),
                 );
             }
 
@@ -297,6 +315,7 @@ fn text_input_example() {
                         .padding(8.0)
                         .background(Color(0.12, 0.16, 0.28, 0.8))
                         .rounded_corners(8.0),
+                    TextStyle::default(),
                 );
             }
 
@@ -306,7 +325,11 @@ fn text_input_example() {
             });
 
             // Second text field
-            Text("Empty Text Field:", Modifier::empty().padding(4.0));
+            Text(
+                "Empty Text Field:",
+                Modifier::empty().padding(4.0),
+                TextStyle::default(),
+            );
 
             Spacer(Size {
                 width: 0.0,
@@ -322,6 +345,7 @@ fn text_input_example() {
                         .padding(12.0)
                         .background(Color(0.18, 0.15, 0.22, 1.0))
                         .rounded_corners(8.0),
+                    TextStyle::default(),
                 );
             }
 
@@ -331,7 +355,11 @@ fn text_input_example() {
             });
 
             // Buttons to manipulate text programmatically
-            Text("Programmatic Actions:", Modifier::empty().padding(4.0));
+            Text(
+                "Programmatic Actions:",
+                Modifier::empty().padding(4.0),
+                TextStyle::default(),
+            );
 
             Spacer(Size {
                 width: 0.0,
@@ -362,7 +390,11 @@ fn text_input_example() {
                                     state.set_text("");
                                 },
                                 || {
-                                    Text("Clear", Modifier::empty().padding(4.0));
+                                    Text(
+                                        "Clear",
+                                        Modifier::empty().padding(4.0),
+                                        TextStyle::default(),
+                                    );
                                 },
                             );
                         }
@@ -388,7 +420,11 @@ fn text_input_example() {
                                     // No version.set() needed - TextFieldState triggers recomposition
                                 },
                                 || {
-                                    Text("Add !", Modifier::empty().padding(4.0));
+                                    Text(
+                                        "Add !",
+                                        Modifier::empty().padding(4.0),
+                                        TextStyle::default(),
+                                    );
                                 },
                             );
                         }
@@ -413,7 +449,11 @@ fn text_input_example() {
                                     // No version.set() needed - TextFieldState triggers recomposition
                                 },
                                 || {
-                                    Text("Copy ↓", Modifier::empty().padding(4.0));
+                                    Text(
+                                        "Copy ↓",
+                                        Modifier::empty().padding(4.0),
+                                        TextStyle::default(),
+                                    );
                                 },
                             );
                         }
@@ -427,13 +467,16 @@ fn text_input_example() {
 #[composable]
 fn recursive_layout_example() {
     let depth_state = cranpose_core::useState(|| 3usize);
+    let scroll_state =
+        cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|state| state.clone());
 
     Column(
         Modifier::empty()
             .padding(32.0)
             .background(Color(0.08, 0.10, 0.18, 1.0))
             .rounded_corners(24.0)
-            .padding(20.0),
+            .padding(20.0)
+            .vertical_scroll(scroll_state, false),
         ColumnSpec::default(),
         move || {
             Text(
@@ -442,6 +485,7 @@ fn recursive_layout_example() {
                     .padding(12.0)
                     .background(Color(1.0, 1.0, 1.0, 0.08))
                     .rounded_corners(16.0),
+                TextStyle::default(),
             );
 
             Spacer(Size {
@@ -476,7 +520,11 @@ fn recursive_layout_example() {
                                 }
                             },
                             || {
-                                Text("Increase depth", Modifier::empty().padding(6.0));
+                                Text(
+                                    "Increase depth",
+                                    Modifier::empty().padding(6.0),
+                                    TextStyle::default(),
+                                );
                             },
                         );
 
@@ -499,7 +547,11 @@ fn recursive_layout_example() {
                                 }
                             },
                             || {
-                                Text("Decrease depth", Modifier::empty().padding(6.0));
+                                Text(
+                                    "Decrease depth",
+                                    Modifier::empty().padding(6.0),
+                                    TextStyle::default(),
+                                );
                             },
                         );
 
@@ -509,6 +561,7 @@ fn recursive_layout_example() {
                                 .padding(8.0)
                                 .background(Color(0.12, 0.16, 0.28, 0.8))
                                 .rounded_corners(12.0),
+                            TextStyle::default(),
                         );
                     }
                 },
@@ -566,6 +619,7 @@ fn recursive_layout_node(modifier: Modifier, depth: usize, horizontal: bool, ind
                     .padding(6.0)
                     .background(Color(0.0, 0.0, 0.0, 0.25))
                     .rounded_corners(10.0),
+                TextStyle::default(),
             );
 
             if depth <= 1 {
@@ -575,6 +629,7 @@ fn recursive_layout_node(modifier: Modifier, depth: usize, horizontal: bool, ind
                         .padding(6.0)
                         .background(Color(1.0, 1.0, 1.0, 0.12))
                         .rounded_corners(10.0),
+                    TextStyle::default(),
                 );
             } else if horizontal {
                 Row(
@@ -633,6 +688,7 @@ pub fn composition_local_example() {
                     .padding(12.0)
                     .background(Color(1.0, 1.0, 1.0, 0.1))
                     .rounded_corners(16.0),
+                TextStyle::default(),
             );
 
             Spacer(Size {
@@ -646,6 +702,7 @@ pub fn composition_local_example() {
                     .padding(8.0)
                     .background(Color(0.2, 0.3, 0.4, 0.7))
                     .rounded_corners(12.0),
+                TextStyle::default(),
             );
 
             Spacer(Size {
@@ -670,7 +727,11 @@ pub fn composition_local_example() {
                     }
                 },
                 || {
-                    Text("Increment", Modifier::empty().padding(6.0));
+                    Text(
+                        "Increment",
+                        Modifier::empty().padding(6.0),
+                        TextStyle::default(),
+                    );
                 },
             );
 
@@ -697,6 +758,7 @@ fn composition_local_content() {
             .padding(8.0)
             .background(Color(0.3, 0.3, 0.3, 0.5))
             .rounded_corners(12.0),
+        TextStyle::default(),
     );
 
     Spacer(Size {
@@ -717,6 +779,7 @@ fn composition_local_content() {
             .padding(8.0)
             .background(Color(0.9, 0.6, 0.4, 0.5))
             .rounded_corners(12.0),
+        TextStyle::default(),
     );
 }
 
@@ -730,6 +793,7 @@ fn composition_local_content_inner() {
             .padding(8.0)
             .background(Color(0.6, 0.9, 0.4, 0.7))
             .rounded_corners(12.0),
+        TextStyle::default(),
     );
 }
 
@@ -761,6 +825,7 @@ pub fn AsyncRuntimeTabContent(
                         .padding(12.0)
                         .background(Color(1.0, 1.0, 1.0, 0.08))
                         .rounded_corners(16.0),
+                    TextStyle::default(),
                 );
 
                 Spacer(Size {
@@ -784,6 +849,7 @@ pub fn AsyncRuntimeTabContent(
                             Text(
                                 format!("Progress: {:>3}%", (progress_value * 100.0) as i32),
                                 Modifier::empty().padding(6.0),
+                                TextStyle::default(),
                             );
 
                             Spacer(Size {
@@ -874,6 +940,7 @@ pub fn AsyncRuntimeTabContent(
                         .padding(8.0)
                         .background(Color(0.18, 0.22, 0.36, 0.6))
                         .rounded_corners(14.0),
+                    TextStyle::default(),
                 );
 
                 Spacer(Size {
@@ -919,7 +986,11 @@ pub fn AsyncRuntimeTabContent(
                                         "Resume animation"
                                     };
                                     move || {
-                                        Text(label, Modifier::empty().padding(6.0));
+                                        Text(
+                                            label,
+                                            Modifier::empty().padding(6.0),
+                                            TextStyle::default(),
+                                        );
                                     }
                                 },
                             );
@@ -946,7 +1017,11 @@ pub fn AsyncRuntimeTabContent(
                                     reset_tick_state.update(|tick| *tick = tick.wrapping_add(1));
                                 },
                                 || {
-                                    Text("Reset", Modifier::empty().padding(6.0));
+                                    Text(
+                                        "Reset",
+                                        Modifier::empty().padding(6.0),
+                                        TextStyle::default(),
+                                    );
                                 },
                             );
                         }
@@ -1118,6 +1193,7 @@ fn counter_app() {
                                 CornerRadii::uniform(20.0),
                             );
                         }),
+                    TextStyle::default(),
                 );
             } else {
                 Text(
@@ -1135,6 +1211,7 @@ fn counter_app() {
                                 CornerRadii::uniform(20.0),
                             );
                         }),
+                    TextStyle::default(),
                 );
             }
         });
@@ -1184,6 +1261,7 @@ fn counter_app() {
                                     CornerRadii::uniform(20.0),
                                 );
                             }),
+                        TextStyle::default(),
                     );
 
                     Spacer(Size {
@@ -1210,6 +1288,7 @@ fn counter_app() {
                                                 .background(Color(0.0, 0.0, 0.0, 0.35)),
                                         )
                                         .rounded_corners(12.0),
+                                    TextStyle::default(),
                                 );
                                 Text(
                                     format!("Wave {:.2}", wave_value),
@@ -1226,6 +1305,7 @@ fn counter_app() {
                                             translation_x: 0.0,
                                             translation_y: (wave_value - 0.5) * 12.0,
                                         }),
+                                    TextStyle::default(),
                                 );
                             }
                         },
@@ -1307,6 +1387,7 @@ fn counter_app() {
                                     .background(Color(0.1, 0.1, 0.15, 0.6))
                                     .rounded_corners(12.0)
                                     .padding(8.0),
+                                TextStyle::default(),
                             );
 
                             Spacer(Size {
@@ -1345,6 +1426,7 @@ fn counter_app() {
                                                         height: 50.0,
                                                     }),
                                                 ),
+                                                TextStyle::default(),
                                             );
                                         },
                                     );
@@ -1361,7 +1443,11 @@ fn counter_app() {
                                             .padding(10.0),
                                         || {},
                                         || {
-                                            Text("Cancel", Modifier::empty().padding(4.0));
+                                            Text(
+                                                "Cancel",
+                                                Modifier::empty().padding(4.0),
+                                                TextStyle::default(),
+                                            );
                                         },
                                     );
                                     Button(
@@ -1380,6 +1466,7 @@ fn counter_app() {
                                             Text(
                                                 "Long Button Text",
                                                 Modifier::empty().padding(4.0),
+                                                TextStyle::default(),
                                             );
                                         },
                                     );
@@ -1424,7 +1511,11 @@ fn counter_app() {
                                             }
                                         },
                                         || {
-                                            Text("Increment", Modifier::empty().padding(6.0));
+                                            Text(
+                                                "Increment",
+                                                Modifier::empty().padding(6.0),
+                                                TextStyle::default(),
+                                            );
                                         },
                                     );
                                     Button(
@@ -1442,7 +1533,11 @@ fn counter_app() {
                                             move || counter.set(counter.get() - 1)
                                         },
                                         || {
-                                            Text("Decrement", Modifier::empty().padding(6.0));
+                                            Text(
+                                                "Decrement",
+                                                Modifier::empty().padding(6.0),
+                                                TextStyle::default(),
+                                            );
                                         },
                                     );
                                 },
@@ -1460,6 +1555,7 @@ fn counter_app() {
                                     .padding(10.0)
                                     .background(Color(0.1, 0.18, 0.32, 0.6))
                                     .rounded_corners(14.0),
+                                TextStyle::default(),
                             );
 
                             Spacer(Size {
@@ -1493,7 +1589,11 @@ fn counter_app() {
                                     }
                                 },
                                 || {
-                                    Text("Fetch async value", Modifier::empty().padding(6.0));
+                                    Text(
+                                        "Fetch async value",
+                                        Modifier::empty().padding(6.0),
+                                        TextStyle::default(),
+                                    );
                                 },
                             );
                         },
@@ -1539,9 +1639,14 @@ impl ShowcaseType {
 #[composable]
 fn modifier_showcase_tab() {
     let selected_showcase = cranpose_core::useState(|| ShowcaseType::SimpleCard);
+    let scroll_state =
+        cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|state| state.clone());
 
     Row(
-        Modifier::empty().fill_max_width().padding(8.0),
+        Modifier::empty()
+            .fill_max_width()
+            .padding(8.0)
+            .vertical_scroll(scroll_state, false),
         RowSpec::new()
             .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
             .vertical_alignment(VerticalAlignment::Top),
@@ -1563,6 +1668,7 @@ fn modifier_showcase_tab() {
                                 .padding(8.0)
                                 .background(Color(1.0, 1.0, 1.0, 0.08))
                                 .rounded_corners(12.0),
+                            TextStyle::default(),
                         );
 
                         Spacer(Size {
@@ -1606,7 +1712,11 @@ fn modifier_showcase_tab() {
                                 {
                                     let label = showcase_type.label();
                                     move || {
-                                        Text(label, Modifier::empty().padding(4.0));
+                                        Text(
+                                            label,
+                                            Modifier::empty().padding(4.0),
+                                            TextStyle::default(),
+                                        );
                                     }
                                 },
                             );
@@ -1652,6 +1762,7 @@ pub fn simple_card_showcase() {
                 .padding(12.0)
                 .background(Color(1.0, 1.0, 1.0, 0.1))
                 .rounded_corners(14.0),
+            TextStyle::default(),
         );
 
         Spacer(Size {
@@ -1688,6 +1799,7 @@ pub fn simple_card_showcase() {
                                         .padding(8.0)
                                         .background(Color(0.3, 0.5, 0.8, 0.6))
                                         .rounded_corners(8.0),
+                                    TextStyle::default(),
                                 );
 
                                 Spacer(Size {
@@ -1698,6 +1810,7 @@ pub fn simple_card_showcase() {
                                 Text(
                                     "Card content goes here with padding",
                                     Modifier::empty().padding(4.0),
+                                    TextStyle::default(),
                                 );
 
                                 Spacer(Size {
@@ -1713,6 +1826,7 @@ pub fn simple_card_showcase() {
                                             .padding(8.0)
                                             .background(Color(0.2, 0.7, 0.4, 0.7))
                                             .rounded_corners(6.0),
+                                        TextStyle::default(),
                                     );
 
                                     Spacer(Size {
@@ -1726,6 +1840,7 @@ pub fn simple_card_showcase() {
                                             .padding(8.0)
                                             .background(Color(0.8, 0.3, 0.3, 0.7))
                                             .rounded_corners(6.0),
+                                        TextStyle::default(),
                                     );
                                 });
                             },
@@ -1746,6 +1861,7 @@ pub fn positioned_boxes_showcase() {
                 .padding(12.0)
                 .background(Color(1.0, 1.0, 1.0, 0.1))
                 .rounded_corners(14.0),
+            TextStyle::default(),
         );
 
         Spacer(Size {
@@ -1772,7 +1888,11 @@ pub fn positioned_boxes_showcase() {
                         .rounded_corners(12.0),
                     BoxSpec::default(),
                     || {
-                        Text("Box A", Modifier::empty().padding(6.0));
+                        Text(
+                            "Box A",
+                            Modifier::empty().padding(6.0),
+                            TextStyle::default(),
+                        );
                     },
                 );
 
@@ -1786,7 +1906,11 @@ pub fn positioned_boxes_showcase() {
                         .rounded_corners(12.0),
                     BoxSpec::default(),
                     || {
-                        Text("Box B", Modifier::empty().padding(6.0));
+                        Text(
+                            "Box B",
+                            Modifier::empty().padding(6.0),
+                            TextStyle::default(),
+                        );
                     },
                 );
 
@@ -1800,7 +1924,7 @@ pub fn positioned_boxes_showcase() {
                         .rounded_corners(10.0),
                     BoxSpec::default(),
                     || {
-                        Text("C", Modifier::empty().padding(4.0));
+                        Text("C", Modifier::empty().padding(4.0), TextStyle::default());
                     },
                 );
 
@@ -1814,7 +1938,11 @@ pub fn positioned_boxes_showcase() {
                         .rounded_corners(14.0),
                     BoxSpec::default(),
                     || {
-                        Text("Box D", Modifier::empty().padding(6.0));
+                        Text(
+                            "Box D",
+                            Modifier::empty().padding(6.0),
+                            TextStyle::default(),
+                        );
                     },
                 );
             },
@@ -1831,6 +1959,7 @@ pub fn item_list_showcase() {
                 .padding(12.0)
                 .background(Color(1.0, 1.0, 1.0, 0.1))
                 .rounded_corners(14.0),
+            TextStyle::default(),
         );
 
         Spacer(Size {
@@ -1875,7 +2004,11 @@ pub fn item_list_showcase() {
                                         4 => "Item #4",
                                         _ => "Item",
                                     };
-                                    Text(text, Modifier::empty().padding_horizontal(12.0));
+                                    Text(
+                                        text,
+                                        Modifier::empty().padding_horizontal(12.0),
+                                        TextStyle::default(),
+                                    );
 
                                     Spacer(Size {
                                         width: 0.0,
@@ -1918,6 +2051,7 @@ pub fn complex_chain_showcase() {
                 .padding(12.0)
                 .background(Color(1.0, 1.0, 1.0, 0.1))
                 .rounded_corners(14.0),
+            TextStyle::default(),
         );
 
         Spacer(Size {
@@ -1928,6 +2062,7 @@ pub fn complex_chain_showcase() {
         Text(
             "Nested: Red → Green → Blue layers",
             Modifier::empty().padding(8.0),
+            TextStyle::default(),
         );
 
         Spacer(Size {
@@ -1960,7 +2095,7 @@ pub fn complex_chain_showcase() {
                                 .rounded_corners(8.0),
                             BoxSpec::default(),
                             || {
-                                Text("Nested!", Modifier::empty());
+                                Text("Nested!", Modifier::empty(), TextStyle::default());
                             },
                         );
                     },
@@ -1976,6 +2111,7 @@ pub fn complex_chain_showcase() {
         Text(
             "Chain: offset + size + multiple backgrounds",
             Modifier::empty().padding(8.0),
+            TextStyle::default(),
         );
 
         Spacer(Size {
@@ -2000,7 +2136,7 @@ pub fn complex_chain_showcase() {
                         .rounded_corners(6.0),
                     BoxSpec::default(),
                     || {
-                        Text("Offset + Sized", Modifier::empty());
+                        Text("Offset + Sized", Modifier::empty(), TextStyle::default());
                     },
                 );
             },
@@ -2019,6 +2155,7 @@ pub fn dynamic_modifiers_showcase() {
                 .padding(12.0)
                 .background(Color(1.0, 1.0, 1.0, 0.1))
                 .rounded_corners(14.0),
+            TextStyle::default(),
         );
 
         Spacer(Size {
@@ -2050,7 +2187,7 @@ pub fn dynamic_modifiers_showcase() {
                         .rounded_corners(10.0),
                     BoxSpec::default(),
                     || {
-                        Text("Move", Modifier::empty());
+                        Text("Move", Modifier::empty(), TextStyle::default());
                     },
                 );
             },
@@ -2067,6 +2204,7 @@ pub fn dynamic_modifiers_showcase() {
                 .padding(8.0)
                 .background(Color(0.2, 0.2, 0.3, 0.6))
                 .rounded_corners(10.0),
+            TextStyle::default(),
         );
 
         Spacer(Size {
@@ -2091,7 +2229,11 @@ pub fn dynamic_modifiers_showcase() {
                 }
             },
             || {
-                Text("Advance Frame", Modifier::empty().padding(6.0));
+                Text(
+                    "Advance Frame",
+                    Modifier::empty().padding(6.0),
+                    TextStyle::default(),
+                );
             },
         );
     });
@@ -2106,6 +2248,7 @@ pub fn long_list_showcase() {
                 .padding(12.0)
                 .background(Color(1.0, 1.0, 1.0, 0.1))
                 .rounded_corners(14.0),
+            TextStyle::default(),
         );
 
         Spacer(Size {
@@ -2146,7 +2289,11 @@ pub fn long_list_showcase() {
                             } else {
                                 "Item 10+"
                             };
-                            Text(text, Modifier::empty().padding_horizontal(12.0));
+                            Text(
+                                text,
+                                Modifier::empty().padding_horizontal(12.0),
+                                TextStyle::default(),
+                            );
                         },
                     );
                 }

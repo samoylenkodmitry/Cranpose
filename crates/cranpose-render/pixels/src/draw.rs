@@ -13,7 +13,6 @@ use cranpose_ui_graphics::{Color, Rect};
 use crate::scene::{Scene, TextDraw};
 use crate::style::point_in_resolved_rounded_rect;
 
-const TEXT_SIZE: f32 = 24.0;
 static FONT: Lazy<Font<'static>> = Lazy::new(|| {
     let f = Font::try_from_bytes(include_bytes!(
         "../../../../apps/desktop-demo/assets/Roboto-Light.ttf"
@@ -29,11 +28,13 @@ pub struct CachedRusttypeTextMeasurer {
 #[derive(Clone)]
 struct TextKey {
     text: Rc<str>,
+    font_size_bits: u32,
 }
 
 impl PartialEq for TextKey {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.text, &other.text) || *self.text == *other.text
+        (Rc::ptr_eq(&self.text, &other.text) || *self.text == *other.text)
+            && self.font_size_bits == other.font_size_bits
     }
 }
 
@@ -42,6 +43,7 @@ impl Eq for TextKey {}
 impl Hash for TextKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.text.hash(state);
+        self.font_size_bits.hash(state);
     }
 }
 
@@ -64,17 +66,22 @@ impl TextMetricsCache {
         }
     }
 
-    fn get_or_measure<F>(&mut self, text: &str, measure: F) -> TextMetrics
+    fn get_or_measure<F>(&mut self, text: &str, font_size: f32, measure: F) -> TextMetrics
     where
-        F: FnOnce(&str) -> TextMetrics,
+        F: FnOnce(&str, f32) -> TextMetrics,
     {
-        if let Some(metrics) = self.map.get(text).copied() {
-            return metrics;
-        }
+        // Note: Borrow<str> lookup doesn't work well with composite key.
+        // We construct key for lookup.
         let key = TextKey {
             text: Rc::from(text),
+            font_size_bits: font_size.to_bits(),
         };
-        let metrics = measure(text);
+
+        if let Some(metrics) = self.map.get(&key).copied() {
+            return metrics;
+        }
+
+        let metrics = measure(text, font_size);
         self.map.put(key, metrics);
         metrics
     }
@@ -149,20 +156,37 @@ fn clip_bounds_from_clip(clip: Option<Rect>, width: u32, height: u32) -> Option<
     clip.and_then(|rect| clip_rect_to_bounds(rect, None, width, height))
 }
 
+// Helper to resolve font size from style
+fn resolve_font_size(style: &cranpose_ui::text::TextStyle) -> f32 {
+    match style.font_size {
+        cranpose_ui::text::TextUnit::Sp(v) => v,
+        cranpose_ui::text::TextUnit::Em(v) => v * 14.0,
+        cranpose_ui::text::TextUnit::Unspecified => 14.0, // Default to 14.0
+    }
+}
+
 impl TextMeasurer for CachedRusttypeTextMeasurer {
-    fn measure(&self, text: &str) -> TextMetrics {
+    fn measure(&self, text: &str, style: &cranpose_ui::text::TextStyle) -> TextMetrics {
+        let font_size = resolve_font_size(style);
         self.cache
             .lock()
             .expect("text metrics cache poisoned")
-            .get_or_measure(text, measure_text_impl)
+            .get_or_measure(text, font_size, measure_text_impl)
     }
 
-    fn get_offset_for_position(&self, text: &str, x: f32, _y: f32) -> usize {
+    fn get_offset_for_position(
+        &self,
+        text: &str,
+        style: &cranpose_ui::text::TextStyle,
+        x: f32,
+        _y: f32,
+    ) -> usize {
         if text.is_empty() {
             return 0;
         }
 
-        let scale = Scale::uniform(TEXT_SIZE);
+        let font_size = resolve_font_size(style);
+        let scale = Scale::uniform(font_size);
         let font = &*FONT;
         let v_metrics = font.v_metrics(scale);
         let origin = point(0.0, v_metrics.ascent);
@@ -193,7 +217,7 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
                         w = (bb.max.x - bb.min.x) as f32;
                     }
                 }
-                w.max(TEXT_SIZE * 0.5) // Minimum width for whitespace
+                w.max(font_size * 0.5) // Minimum width for whitespace
             };
 
             // Check distance to left edge of character
@@ -215,7 +239,7 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
         }
 
         // Also check end of text
-        let total_width = measure_text_impl(text).width;
+        let total_width = measure_text_impl(text, font_size).width;
         let end_dist = (x - total_width).abs();
         if end_dist < best_distance {
             best_offset = text.len();
@@ -224,21 +248,32 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
         best_offset
     }
 
-    fn get_cursor_x_for_offset(&self, text: &str, offset: usize) -> f32 {
+    fn get_cursor_x_for_offset(
+        &self,
+        text: &str,
+        style: &cranpose_ui::text::TextStyle,
+        offset: usize,
+    ) -> f32 {
         let clamped_offset = offset.min(text.len());
         if clamped_offset == 0 {
             return 0.0;
         }
 
+        let font_size = resolve_font_size(style);
         // Measure text up to offset
         let prefix = &text[..clamped_offset];
-        measure_text_impl(prefix).width
+        measure_text_impl(prefix, font_size).width
     }
 
-    fn layout(&self, text: &str) -> cranpose_ui::text_layout_result::TextLayoutResult {
+    fn layout(
+        &self,
+        text: &str,
+        style: &cranpose_ui::text::TextStyle,
+    ) -> cranpose_ui::text_layout_result::TextLayoutResult {
         use cranpose_ui::text_layout_result::{LineLayout, TextLayoutResult};
 
-        let scale = Scale::uniform(TEXT_SIZE);
+        let font_size = resolve_font_size(style);
+        let scale = Scale::uniform(font_size);
         let font = &*FONT;
         let v_metrics = font.v_metrics(scale);
         let line_height = (v_metrics.ascent - v_metrics.descent).ceil();
@@ -285,7 +320,7 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
             height: line_height,
         });
 
-        let metrics = measure_text_impl(text);
+        let metrics = measure_text_impl(text, font_size);
         TextLayoutResult::new(
             metrics.width,
             metrics.height,
@@ -298,8 +333,8 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
     }
 }
 
-fn measure_text_impl(text: &str) -> TextMetrics {
-    let scale = Scale::uniform(TEXT_SIZE);
+fn measure_text_impl(text: &str, font_size: f32) -> TextMetrics {
+    let scale = Scale::uniform(font_size);
     let font = &*FONT;
     let v_metrics = font.v_metrics(scale);
     let line_height = (v_metrics.ascent - v_metrics.descent).ceil();
@@ -423,7 +458,7 @@ fn draw_text(frame: &mut [u8], width: u32, height: u32, draw: TextDraw) {
     }
     let clip_limits =
         clip_bounds.map(|bounds| (bounds.min_x, bounds.min_y, bounds.max_x, bounds.max_y));
-    let scale = Scale::uniform(TEXT_SIZE * text_scale);
+    let scale = Scale::uniform(draw.font_size * text_scale);
     let font = &*FONT;
     let v_metrics = font.v_metrics(scale);
     let offset = point(draw.rect.x, draw.rect.y + v_metrics.ascent);

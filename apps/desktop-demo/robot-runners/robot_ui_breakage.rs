@@ -12,7 +12,7 @@
 
 use cranpose_core::useState;
 use cranpose_ui::{
-    composable, Box, BoxSpec, Button, Column, ColumnSpec, Modifier, Row, RowSpec, Text,
+    composable, Box, BoxSpec, Button, Column, ColumnSpec, Modifier, Row, RowSpec, Text, TextStyle,
 };
 // use desktop_app::app;
 use cranpose::AppLauncher;
@@ -28,19 +28,19 @@ fn reproduction_app() {
             Modifier::empty(),
             move || toggle.set(!toggle.get()),
             || {
-                Text("Toggle Parent", Modifier::empty());
+                Text("Toggle Parent", Modifier::empty(), TextStyle::default());
             },
         );
 
         if toggle.get() {
             // State B: Row parent
             Row(Modifier::empty(), RowSpec::default(), || {
-                Text("Persistent Child", Modifier::empty());
+                Text("Persistent Child", Modifier::empty(), TextStyle::default());
             });
         } else {
             // State A: Box parent
             Box(Modifier::empty(), BoxSpec::default(), || {
-                Text("Persistent Child", Modifier::empty());
+                Text("Persistent Child", Modifier::empty(), TextStyle::default());
             });
         }
     });

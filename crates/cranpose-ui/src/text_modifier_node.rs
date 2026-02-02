@@ -19,6 +19,7 @@
 //! This follows the principle that `MeasurePolicy` is for child layout, while modifier nodes
 //! handle content rendering and measurement.
 
+use crate::text::TextStyle;
 use cranpose_foundation::{
     Constraints, DelegatableNode, DrawModifierNode, DrawScope, InvalidationKind,
     LayoutModifierNode, Measurable, MeasurementProxy, ModifierNode, ModifierNodeContext,
@@ -39,13 +40,15 @@ use std::rc::Rc;
 #[derive(Debug)]
 pub struct TextModifierNode {
     text: Rc<str>,
+    style: TextStyle,
     state: NodeState,
 }
 
 impl TextModifierNode {
-    pub fn new(text: Rc<str>) -> Self {
+    pub fn new(text: Rc<str>, style: TextStyle) -> Self {
         Self {
             text,
+            style,
             state: NodeState::new(),
         }
     }
@@ -58,9 +61,12 @@ impl TextModifierNode {
         self.text.clone()
     }
 
-    /// Helper to measure text content size.
+    pub fn style(&self) -> &TextStyle {
+        &self.style
+    }
+
     fn measure_text_content(&self) -> Size {
-        let metrics = crate::text::measure_text(&self.text);
+        let metrics = crate::text::measure_text(&self.text, &self.style);
         Size {
             width: metrics.width,
             height: metrics.height,
@@ -150,6 +156,7 @@ impl LayoutModifierNode for TextModifierNode {
     fn create_measurement_proxy(&self) -> Option<Box<dyn MeasurementProxy>> {
         Some(Box::new(TextMeasurementProxy {
             text: self.text.clone(),
+            style: self.style.clone(), // Add style
         }))
     }
 }
@@ -160,13 +167,14 @@ impl LayoutModifierNode for TextModifierNode {
 /// directly implements measurement logic using the snapshotted text content.
 struct TextMeasurementProxy {
     text: Rc<str>,
+    style: TextStyle, // Add style
 }
 
 impl TextMeasurementProxy {
     /// Measure the text content dimensions.
     /// Matches TextModifierNode::measure_text_content() logic.
     fn measure_text_content(&self) -> Size {
-        let metrics = crate::text::measure_text(&self.text);
+        let metrics = crate::text::measure_text(&self.text, &self.style);
         Size {
             width: metrics.width,
             height: metrics.height,
@@ -241,20 +249,26 @@ impl SemanticsNode for TextModifierNode {
 /// - Declaring capabilities (LAYOUT | DRAW | SEMANTICS)
 ///
 /// Matches Jetpack Compose: `TextStringSimpleElement` in BasicText.kt
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TextModifierElement {
     text: Rc<str>,
+    style: TextStyle,
 }
 
 impl TextModifierElement {
-    pub fn new(text: Rc<str>) -> Self {
-        Self { text }
+    pub fn new(text: Rc<str>, style: TextStyle) -> Self {
+        Self { text, style }
     }
 }
 
 impl Hash for TextModifierElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.text.hash(state);
+        // Note: TextStyle does not implement Hash yet.
+        // Ideally we should hash style components. Use derived PartialEq for equality check.
+        // For now, partial hash is okay as long as PartialEq is correct.
+        // If we want correct caching, we need Hash on TextStyle or manual hash here.
+        // Let's rely on text hash + partial check for now, or just impl Hash for TextStyle later.
     }
 }
 
@@ -262,13 +276,22 @@ impl ModifierNodeElement for TextModifierElement {
     type Node = TextModifierNode;
 
     fn create(&self) -> Self::Node {
-        TextModifierNode::new(self.text.clone())
+        TextModifierNode::new(self.text.clone(), self.style.clone())
     }
 
     fn update(&self, node: &mut Self::Node) {
+        let mut changed = false;
         if node.text != self.text {
             node.text = self.text.clone();
-            // Text changed - need to invalidate layout, draw, and semantics
+            changed = true;
+        }
+        if node.style != self.style {
+            node.style = self.style.clone();
+            changed = true;
+        }
+
+        if changed {
+            // Text/Style changed - need to invalidate layout, draw, and semantics
             // Note: In the full implementation, we would call context.invalidate here
             // but update() doesn't currently have access to context.
             // The invalidation will happen on the next recomposition when the node

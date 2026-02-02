@@ -1,4 +1,6 @@
-use crate::{Brush, Color, Column, ColumnSpec, CornerRadii, Modifier, Row, RowSpec, Text};
+use crate::{
+    Brush, Color, Column, ColumnSpec, CornerRadii, Modifier, Row, RowSpec, Text, TextStyle,
+};
 use cranpose_core::{
     location_key, Composition, MemoryApplier, MutableState, Node, NodeError,
     __launched_effect_async_impl as launched_effect_async_impl,
@@ -121,6 +123,7 @@ fn async_runtime_demo(animation: MutableState<AnimationState>, stats: MutableSta
                     }
                 ),
                 Modifier::empty(),
+                TextStyle::default(),
             );
         }
     });
@@ -246,6 +249,7 @@ fn progress_demo(animation: MutableState<AnimationState>, stats: MutableState<Fr
                     }
                 ),
                 Modifier::empty().padding(8.0),
+                TextStyle::default(),
             );
         }
     });

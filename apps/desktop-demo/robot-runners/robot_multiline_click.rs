@@ -8,6 +8,7 @@
 
 use cranpose::{AppLauncher, Robot};
 use cranpose_testing::{find_button, find_in_semantics, find_text_exact};
+use cranpose_ui::{measure_text, TextStyle};
 use desktop_app::app;
 use std::time::Duration;
 
@@ -100,14 +101,21 @@ fn main() {
             println!("--- Step 5: Read current text state ---");
             print_all_texts(&robot);
 
-            // Step 6: Click on line 2 using calculated Y
+            // Step 6: Click on line 2 using actual text bounds
             println!("--- Step 6: Click on line 2 ---");
-            // Line height is 20.0, so line 2 is at Y = fy + padding + 20*1 + 10
-            // Let's try clicking in middle of line 2
-            const LINE_HEIGHT: f32 = 20.0;
-            const PADDING: f32 = 8.0;
-            let line2_y = fy + PADDING + LINE_HEIGHT * 1.0 + LINE_HEIGHT / 2.0;
-            let click_x = fx + 40.0; // Click in middle of line
+            let multiline_bounds =
+                find_in_semantics(&robot, |elem| find_text_exact(elem, "aaa\nbbb\nccc"));
+            let Some((tx, ty, tw, th)) = multiline_bounds else {
+                println!("✗ FAIL: Could not find multiline text bounds");
+                let _ = robot.exit();
+                return;
+            };
+            let line_height = measure_text("A", &TextStyle::default()).line_height;
+            let lines = 3.0_f32;
+            let extra_height = (th - line_height * lines).max(0.0);
+            let padding_top = extra_height / 2.0;
+            let line2_y = ty + padding_top + line_height * 1.5;
+            let click_x = tx + (tw * 0.5).max(8.0);
 
             println!(
                 "  Field at ({}, {}), clicking at ({}, {}) for line 2",
@@ -170,7 +178,7 @@ fn main() {
             let _ = robot.send_key("BackSpace");
             std::thread::sleep(Duration::from_millis(100));
 
-            let line3_y = fy + PADDING + LINE_HEIGHT * 2.0 + LINE_HEIGHT / 2.0;
+            let line3_y = ty + padding_top + line_height * 2.5;
             println!(
                 "  Clicking at ({}, {}) for line 3",
                 click_x as i32, line3_y as i32

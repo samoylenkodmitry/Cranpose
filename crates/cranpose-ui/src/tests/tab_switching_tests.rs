@@ -1,4 +1,4 @@
-use crate::{layout::LayoutEngine, Column, ColumnSpec, Modifier, Row, RowSpec, Text};
+use crate::{layout::LayoutEngine, Column, ColumnSpec, Modifier, Row, RowSpec, Text, TextStyle};
 use cranpose_core::{location_key, Composition, MemoryApplier, MutableState, NodeId};
 use cranpose_macros::composable;
 use std::cell::Cell;
@@ -51,6 +51,7 @@ fn progress_tab(progress: MutableState<f32>) {
             Text(
                 format!("Progress {:.2}", progress_value),
                 Modifier::empty().padding(2.0),
+                TextStyle::default(),
             );
 
             Row(
@@ -83,7 +84,11 @@ fn summary_tab() {
         Modifier::empty().padding(8.0),
         ColumnSpec::default(),
         move || {
-            Text("Summary Tab", Modifier::empty().padding(2.0));
+            Text(
+                "Summary Tab",
+                Modifier::empty().padding(2.0),
+                TextStyle::default(),
+            );
         },
     );
 }
@@ -242,7 +247,11 @@ fn alternating_recursive_node(depth: usize, horizontal: bool, index: usize) {
         Modifier::empty().padding(6.0),
         ColumnSpec::default(),
         move || {
-            Text(label.clone(), Modifier::empty().padding(2.0));
+            Text(
+                label.clone(),
+                Modifier::empty().padding(2.0),
+                TextStyle::default(),
+            );
             if depth > 1 {
                 if horizontal {
                     Row(
@@ -340,7 +349,11 @@ fn simple_counter_placeholder() {
         Modifier::empty().padding(4.0),
         ColumnSpec::default(),
         move || {
-            Text("Counter placeholder", Modifier::empty().padding(2.0));
+            Text(
+                "Counter placeholder",
+                Modifier::empty().padding(2.0),
+                TextStyle::default(),
+            );
         },
     );
 }

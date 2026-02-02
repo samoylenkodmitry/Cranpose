@@ -15,7 +15,7 @@ use cranpose::AppLauncher;
 use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
 use cranpose_testing::find_text_in_semantics;
 use cranpose_ui::widgets::*;
-use cranpose_ui::Modifier;
+use cranpose_ui::{Modifier, TextStyle};
 use std::time::Duration;
 
 /// Minimal test UI focused on SubcomposeLayout and LazyColumn behavior
@@ -37,10 +37,15 @@ fn test_app() {
             Text(
                 "SubcomposeLayout Test".to_string(),
                 Modifier::empty().padding(8.0),
+                TextStyle::default(),
             );
 
             // Item count indicator
-            Text("20 test items".to_string(), Modifier::empty().padding(4.0));
+            Text(
+                "20 test items".to_string(),
+                Modifier::empty().padding(4.0),
+                TextStyle::default(),
+            );
 
             // LazyColumn with fixed height for scroll testing and 20 simple items
             LazyColumn(
@@ -73,9 +78,17 @@ fn test_app() {
                                     .horizontal_arrangement(LinearArrangement::SpaceBetween),
                                 move || {
                                     // Left: Item label
-                                    Text(format!("TestItem{}", i), Modifier::empty());
+                                    Text(
+                                        format!("TestItem{}", i),
+                                        Modifier::empty(),
+                                        TextStyle::default(),
+                                    );
                                     // Right: Value
-                                    Text(format!("val={}", i * 10), Modifier::empty());
+                                    Text(
+                                        format!("val={}", i * 10),
+                                        Modifier::empty(),
+                                        TextStyle::default(),
+                                    );
                                 },
                             );
                         },
@@ -91,6 +104,7 @@ fn test_app() {
                     stats.items_in_use, stats.items_in_pool
                 ),
                 Modifier::empty().padding(8.0),
+                TextStyle::default(),
             );
         },
     );

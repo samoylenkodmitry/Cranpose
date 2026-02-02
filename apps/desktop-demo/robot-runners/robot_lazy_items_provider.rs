@@ -12,7 +12,9 @@ use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScopeExt, Lazy
 use cranpose_macros::composable;
 use cranpose_testing::find_text_in_semantics;
 use cranpose_ui::widgets::*;
-use cranpose_ui::{Color, ColumnSpec, LinearArrangement, Modifier, RowSpec, VerticalAlignment};
+use cranpose_ui::{
+    Color, ColumnSpec, LinearArrangement, Modifier, RowSpec, TextStyle, VerticalAlignment,
+};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -93,13 +95,18 @@ fn provider_item_content(item: ProviderItem) {
             .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
             .vertical_alignment(VerticalAlignment::CenterVertically),
         move || {
-            Text(format!("ProvItem #{}", id), Modifier::empty().padding(4.0));
+            Text(
+                format!("ProvItem #{}", id),
+                Modifier::empty().padding(4.0),
+                TextStyle::default(),
+            );
             Text(
                 label.clone(),
                 Modifier::empty()
                     .padding(4.0)
                     .background(Color(0.0, 0.4, 0.0, 0.5))
                     .rounded_corners(4.0),
+                TextStyle::default(),
             );
         },
     );
@@ -122,6 +129,7 @@ fn indexed_provider_item_content(index: usize, item: ProviderItem) {
             Text(
                 format!("IdxProv[{}]", index),
                 Modifier::empty().padding(4.0),
+                TextStyle::default(),
             );
             Text(
                 format!("#{} {}", id, label),
@@ -129,6 +137,7 @@ fn indexed_provider_item_content(index: usize, item: ProviderItem) {
                     .padding(4.0)
                     .background(Color(0.4, 0.0, 0.4, 0.5))
                     .rounded_corners(4.0),
+                TextStyle::default(),
             );
         },
     );
@@ -162,17 +171,20 @@ fn provider_items_test_app() {
                     .padding(12.0)
                     .background(Color(0.3, 0.4, 0.2, 0.8))
                     .rounded_corners(8.0),
+                TextStyle::default(),
             );
 
             Text(
                 "items_with_provider (callback-based):",
                 Modifier::empty().padding(4.0),
+                TextStyle::default(),
             );
             lazy_list_with_provider(state1.clone(), Rc::clone(&data));
 
             Text(
                 "items_indexed_with_provider (callback with index):",
                 Modifier::empty().padding(4.0),
+                TextStyle::default(),
             );
             lazy_list_with_indexed_provider(state2.clone(), Rc::clone(&data));
         },

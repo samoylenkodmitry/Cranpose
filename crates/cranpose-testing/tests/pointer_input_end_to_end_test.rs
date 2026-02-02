@@ -52,7 +52,11 @@ fn test_hover_app(position: MutableState<Point>, event_count: MutableState<i32>)
             })),
         ColumnSpec::default(),
         || {
-            Text("Hover area", Modifier::empty().padding(8.0));
+            Text(
+                "Hover area",
+                Modifier::empty().padding(8.0),
+                TextStyle::default(),
+            );
         },
     );
 }
@@ -119,6 +123,7 @@ fn pause_button_app(is_running: MutableState<bool>, click_count: MutableState<i3
                     click_count.get()
                 ),
                 Modifier::empty().padding(8.0),
+                TextStyle::default(),
             );
 
             // Recreate the pause button structure from the demo
@@ -140,7 +145,7 @@ fn pause_button_app(is_running: MutableState<bool>, click_count: MutableState<i3
                 {
                     let label = if running { "Pause" } else { "Resume" };
                     move || {
-                        Text(label, Modifier::empty().padding(6.0));
+                        Text(label, Modifier::empty().padding(6.0), TextStyle::default());
                     }
                 },
             );

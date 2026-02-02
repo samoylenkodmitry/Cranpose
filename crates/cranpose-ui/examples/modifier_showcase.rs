@@ -7,6 +7,7 @@
 use cranpose_core::{location_key, Composition, MemoryApplier};
 use cranpose_ui::{
     composable, Box as ComposeBox, BoxSpec, Column, ColumnSpec, Modifier, Row, RowSpec, Size, Text,
+    TextStyle,
 };
 
 /// Demonstrates a typical card UI pattern with complex modifier stacking
@@ -28,10 +29,18 @@ fn card(title: &'static str, content: &'static str) {
                 ColumnSpec::default(),
                 move || {
                     // Title with bottom padding
-                    Text(title, Modifier::empty().padding_each(0.0, 0.0, 0.0, 12.0));
+                    Text(
+                        title,
+                        Modifier::empty().padding_each(0.0, 0.0, 0.0, 12.0),
+                        TextStyle::default(),
+                    );
 
                     // Content with padding
-                    Text(content, Modifier::empty().padding(4.0));
+                    Text(
+                        content,
+                        Modifier::empty().padding(4.0),
+                        TextStyle::default(),
+                    );
                 },
             );
         },
@@ -54,7 +63,7 @@ fn animated_box(frame: i32) {
             .padding(4.0),
         BoxSpec::default(),
         || {
-            Text("Moving!", Modifier::empty());
+            Text("Moving!", Modifier::empty(), TextStyle::default());
         },
     );
 }
@@ -91,7 +100,11 @@ fn long_list(item_count: usize) {
                         } else {
                             "Item 10+"
                         };
-                        Text(text, Modifier::empty().padding_horizontal(12.0));
+                        Text(
+                            text,
+                            Modifier::empty().padding_horizontal(12.0),
+                            TextStyle::default(),
+                        );
                     },
                 );
             }
@@ -114,7 +127,7 @@ fn reorderable_modifiers(use_large_padding: bool) {
             .offset(10.0, 10.0),
         BoxSpec::default(),
         || {
-            Text("Dynamic padding!", Modifier::empty());
+            Text("Dynamic padding!", Modifier::empty(), TextStyle::default());
         },
     );
 }
@@ -123,10 +136,10 @@ fn reorderable_modifiers(use_large_padding: bool) {
 #[composable]
 fn showcase() {
     Column(Modifier::empty(), ColumnSpec::default(), || {
-        // Section 1: Card pattern
         Text(
             "=== Card Pattern ===",
             Modifier::empty().padding_each(0.0, 0.0, 0.0, 16.0),
+            TextStyle::default(),
         );
         card(
             "Welcome Card",
@@ -139,6 +152,7 @@ fn showcase() {
             Modifier::empty()
                 .padding_symmetric(0.0, 32.0)
                 .padding_each(0.0, 0.0, 0.0, 16.0),
+            TextStyle::default(),
         );
         animated_box(5); // Frame 5
 
@@ -148,6 +162,7 @@ fn showcase() {
             Modifier::empty()
                 .padding_symmetric(0.0, 32.0)
                 .padding_each(0.0, 0.0, 0.0, 16.0),
+            TextStyle::default(),
         );
         long_list(50);
 
@@ -157,6 +172,7 @@ fn showcase() {
             Modifier::empty()
                 .padding_symmetric(0.0, 32.0)
                 .padding_each(0.0, 0.0, 0.0, 16.0),
+            TextStyle::default(),
         );
         reorderable_modifiers(true); // Large padding
     });
@@ -192,7 +208,7 @@ fn main() {
         .render(location_key(file!(), line!(), column!()), || {
             // Same structure but with different modifier values
             Column(Modifier::empty(), ColumnSpec::default(), || {
-                Text("Updated!", Modifier::empty());
+                Text("Updated!", Modifier::empty(), TextStyle::default());
                 animated_box(10); // Different frame
                 reorderable_modifiers(false); // Different padding
             });

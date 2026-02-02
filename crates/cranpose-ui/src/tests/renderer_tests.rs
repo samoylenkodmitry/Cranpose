@@ -1,6 +1,7 @@
 use super::*;
 use crate::modifier::{Brush, Color, Modifier};
 use crate::primitives::{Column, ColumnSpec, SubcomposeLayout, Text};
+use crate::text::TextStyle;
 use crate::{
     layout::LayoutEngine, Composition, Placement, SubcomposeLayoutScope, SubcomposeMeasureScope,
 };
@@ -35,6 +36,7 @@ fn renderer_emits_background_and_text() {
             Text(
                 "Hello".to_string(),
                 Modifier::empty().background(Color(0.1, 0.2, 0.3, 1.0)),
+                TextStyle::default(),
             );
         })
         .expect("initial render");
@@ -69,6 +71,7 @@ fn renderer_honors_resolved_background_shape() {
                 Modifier::empty()
                     .background(Color(0.5, 0.2, 0.2, 1.0))
                     .then(Modifier::empty().rounded_corners(12.0)),
+                TextStyle::default(),
             );
         })
         .expect("initial render");
@@ -114,6 +117,7 @@ fn renderer_translates_draw_commands() {
                             .then(Modifier::empty().draw_with_content(|scope| {
                                 scope.draw_rect(Brush::solid(Color(0.0, 0.0, 0.0, 1.0)));
                             })),
+                        TextStyle::default(),
                     );
                 },
             );
@@ -181,7 +185,11 @@ fn renderer_renders_subcompose_background() {
                 Modifier::empty().background(Color(0.4, 0.4, 0.4, 1.0)),
                 |scope, constraints| {
                     let children = scope.subcompose(SlotId::new(0), || {
-                        Text("Subcomposed".to_string(), Modifier::empty());
+                        Text(
+                            "Subcomposed".to_string(),
+                            Modifier::empty(),
+                            TextStyle::default(),
+                        );
                     });
                     let placements: Vec<_> = children
                         .into_iter()

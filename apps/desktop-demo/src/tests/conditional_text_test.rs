@@ -1,5 +1,5 @@
 use cranpose_core::{self};
-use cranpose_ui::{composable, Column, ColumnSpec, Modifier, Text};
+use cranpose_ui::{composable, Column, ColumnSpec, Modifier, Text, TextStyle};
 
 #[composable]
 fn conditional_text_with_external_state(counter_state: cranpose_core::MutableState<i32>) {
@@ -7,9 +7,17 @@ fn conditional_text_with_external_state(counter_state: cranpose_core::MutableSta
     let is_even = counter_state.get() % 2 == 0;
     cranpose_core::with_key(&is_even, || {
         if is_even {
-            Text("if counter % 2 == 0", Modifier::empty());
+            Text(
+                "if counter % 2 == 0",
+                Modifier::empty(),
+                TextStyle::default(),
+            );
         } else {
-            Text("if counter % 2 != 0", Modifier::empty());
+            Text(
+                "if counter % 2 != 0",
+                Modifier::empty(),
+                TextStyle::default(),
+            );
         }
     });
 
@@ -17,6 +25,7 @@ fn conditional_text_with_external_state(counter_state: cranpose_core::MutableSta
         Text(
             format!("Counter: {}", counter_state.get()),
             Modifier::empty(),
+            TextStyle::default(),
         );
     });
 }

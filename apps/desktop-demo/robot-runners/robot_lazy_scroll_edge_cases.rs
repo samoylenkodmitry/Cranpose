@@ -18,7 +18,7 @@ use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
 use cranpose_ui::widgets::{
     Box, BoxSpec, Button, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec, Text,
 };
-use cranpose_ui::{Alignment, Color, LinearArrangement, Modifier, Size};
+use cranpose_ui::{Alignment, Color, LinearArrangement, Modifier, Size, TextStyle};
 use std::time::Duration;
 
 fn main() {
@@ -169,7 +169,7 @@ fn main() {
                                 state.scroll_to_item(50, 0.0);
                             },
                             || {
-                                Text("Jump 50", Modifier::default());
+                                Text("Jump 50", Modifier::default(), TextStyle::default());
                             },
                         );
                         Button(
@@ -178,7 +178,7 @@ fn main() {
                                 state.scroll_to_item(95, 0.0);
                             },
                             || {
-                                Text("Jump 95", Modifier::default());
+                                Text("Jump 95", Modifier::default(), TextStyle::default());
                             },
                         );
                     },
@@ -211,7 +211,11 @@ fn main() {
                                         .background(color),
                                     BoxSpec::new().content_alignment(Alignment::CENTER),
                                     move || {
-                                        Text(format!("Item {}", index), Modifier::default());
+                                        Text(
+                                            format!("Item {}", index),
+                                            Modifier::default(),
+                                            TextStyle::default(),
+                                        );
                                     },
                                 );
                             },

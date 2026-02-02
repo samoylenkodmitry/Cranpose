@@ -28,9 +28,9 @@ fn conditional_outside_closure_app(counter: MutableState<i32>) {
     // BUG REPRODUCTION: This conditional is outside any content closure
     // When counter changes, recomposition happens but the visual may not update
     if counter.get() % 2 == 0 {
-        Text("Even", Modifier::empty().padding(8.0));
+        Text("Even", Modifier::empty().padding(8.0), TextStyle::default());
     } else {
-        Text("Odd", Modifier::empty().padding(8.0));
+        Text("Odd", Modifier::empty().padding(8.0), TextStyle::default());
     }
 
     // This should work because state is read inside the closure
@@ -39,6 +39,7 @@ fn conditional_outside_closure_app(counter: MutableState<i32>) {
             Text(
                 format!("Counter: {}", counter.get()),
                 Modifier::empty().padding(8.0),
+                TextStyle::default(),
             );
         }
     });
@@ -51,14 +52,15 @@ fn conditional_inside_closure_app(counter: MutableState<i32>) {
         move || {
             // State is read here, inside the closure
             if counter.get() % 2 == 0 {
-                Text("Even", Modifier::empty().padding(8.0));
+                Text("Even", Modifier::empty().padding(8.0), TextStyle::default());
             } else {
-                Text("Odd", Modifier::empty().padding(8.0));
+                Text("Odd", Modifier::empty().padding(8.0), TextStyle::default());
             }
 
             Text(
                 format!("Counter: {}", counter.get()),
                 Modifier::empty().padding(8.0),
+                TextStyle::default(),
             );
         }
     });

@@ -60,7 +60,11 @@ fn gradient_follows_state_app(pointer_position: MutableState<Point>) {
             })),
         ColumnSpec::default(),
         || {
-            Text("Hover area", Modifier::empty().padding(8.0));
+            Text(
+                "Hover area",
+                Modifier::empty().padding(8.0),
+                TextStyle::default(),
+            );
         },
     );
 }
@@ -144,7 +148,11 @@ fn working_gradient_app(pointer_position: MutableState<Point>) {
             })),
         ColumnSpec::default(),
         || {
-            Text("Hover area", Modifier::empty().padding(8.0));
+            Text(
+                "Hover area",
+                Modifier::empty().padding(8.0),
+                TextStyle::default(),
+            );
         },
     );
 }

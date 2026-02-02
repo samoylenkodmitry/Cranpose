@@ -18,7 +18,7 @@ use cranpose_core::useState;
 use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
 use cranpose_testing::{find_button, find_in_semantics, find_text_in_semantics};
 use cranpose_ui::widgets::*;
-use cranpose_ui::{Color, Modifier};
+use cranpose_ui::{Color, Modifier, TextStyle};
 use std::time::Duration;
 
 /// Test UI that changes LazyColumn item colors on button click
@@ -42,6 +42,7 @@ fn test_app() {
                 Modifier::empty()
                     .padding(8.0)
                     .semantics(|c| c.content_description = Some("header".into())),
+                TextStyle::default(),
             );
 
             // Color scheme indicator - proves state is changing
@@ -57,6 +58,7 @@ fn test_app() {
                 Modifier::empty()
                     .padding(4.0)
                     .semantics(|c| c.content_description = Some(scheme_name.into())),
+                TextStyle::default(),
             );
 
             // Button to cycle colors
@@ -73,7 +75,11 @@ fn test_app() {
                     color_scheme_clone.set((color_scheme_clone.get() + 1) % 3);
                 },
                 || {
-                    Text("Change Colors".to_string(), Modifier::empty());
+                    Text(
+                        "Change Colors".to_string(),
+                        Modifier::empty(),
+                        TextStyle::default(),
+                    );
                 },
             );
 
@@ -114,6 +120,7 @@ fn test_app() {
                                     Text(
                                         format!("Item {} - Scheme {}", i, scheme),
                                         Modifier::empty(),
+                                        TextStyle::default(),
                                     );
                                 },
                             );

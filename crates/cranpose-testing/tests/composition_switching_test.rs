@@ -21,6 +21,7 @@ fn counter_view(counter: MutableState<i32>, render_count: MutableState<i32>) {
             Text(
                 format!("Counter: {}", counter.get()),
                 Modifier::empty().padding(8.0),
+                TextStyle::default(),
             );
 
             Button(
@@ -31,7 +32,11 @@ fn counter_view(counter: MutableState<i32>, render_count: MutableState<i32>) {
                     }
                 },
                 || {
-                    Text("Increment", Modifier::empty().padding(4.0));
+                    Text(
+                        "Increment",
+                        Modifier::empty().padding(4.0),
+                        TextStyle::default(),
+                    );
                 },
             );
         },
@@ -51,6 +56,7 @@ fn alternative_view(counter: MutableState<i32>, render_count: MutableState<i32>)
             Text(
                 format!("Alternative: {}", counter.get()),
                 Modifier::empty().padding(8.0),
+                TextStyle::default(),
             );
 
             Button(
@@ -61,7 +67,7 @@ fn alternative_view(counter: MutableState<i32>, render_count: MutableState<i32>)
                     }
                 },
                 || {
-                    Text("Add", Modifier::empty().padding(4.0));
+                    Text("Add", Modifier::empty().padding(4.0), TextStyle::default());
                 },
             );
         },
@@ -103,7 +109,11 @@ fn combined_switching_app(
                             }
                         },
                         || {
-                            Text("Counter View", Modifier::empty().padding(4.0));
+                            Text(
+                                "Counter View",
+                                Modifier::empty().padding(4.0),
+                                TextStyle::default(),
+                            );
                         },
                     );
 
@@ -121,7 +131,11 @@ fn combined_switching_app(
                             }
                         },
                         || {
-                            Text("Alternative View", Modifier::empty().padding(4.0));
+                            Text(
+                                "Alternative View",
+                                Modifier::empty().padding(4.0),
+                                TextStyle::default(),
+                            );
                         },
                     );
                 },
@@ -304,13 +318,13 @@ fn test_node_cleanup_on_view_switch() {
                 move || {
                     if show_first_inner.get() {
                         // First view with 3 text nodes
-                        Text("First A", Modifier::empty());
-                        Text("First B", Modifier::empty());
-                        Text("First C", Modifier::empty());
+                        Text("First A", Modifier::empty(), TextStyle::default());
+                        Text("First B", Modifier::empty(), TextStyle::default());
+                        Text("First C", Modifier::empty(), TextStyle::default());
                     } else {
                         // Second view with 2 text nodes
-                        Text("Second A", Modifier::empty());
-                        Text("Second B", Modifier::empty());
+                        Text("Second A", Modifier::empty(), TextStyle::default());
+                        Text("Second B", Modifier::empty(), TextStyle::default());
                     }
                 },
             );
@@ -380,6 +394,7 @@ fn test_multiple_switches_with_state_changes() {
                     Text(
                         format!("View A: {}", counter_a_inner.get()),
                         Modifier::empty(),
+                        TextStyle::default(),
                     );
                     Button(
                         Modifier::empty(),
@@ -388,13 +403,14 @@ fn test_multiple_switches_with_state_changes() {
                             move || counter_a.set(counter_a.get() + 1)
                         },
                         || {
-                            Text("Increment A", Modifier::empty());
+                            Text("Increment A", Modifier::empty(), TextStyle::default());
                         },
                     );
                 } else {
                     Text(
                         format!("View B: {}", counter_b_inner.get()),
                         Modifier::empty(),
+                        TextStyle::default(),
                     );
                     Button(
                         Modifier::empty(),
@@ -403,7 +419,7 @@ fn test_multiple_switches_with_state_changes() {
                             move || counter_b.set(counter_b.get() + 1)
                         },
                         || {
-                            Text("Increment B", Modifier::empty());
+                            Text("Increment B", Modifier::empty(), TextStyle::default());
                         },
                     );
                 }
@@ -502,14 +518,14 @@ fn test_deeply_nested_conditional_switching() {
                     let show_inner_for_column = show_inner_inner;
                     Column(Modifier::empty(), ColumnSpec::default(), move || {
                         if show_inner_for_column.get() {
-                            Text("Outer A, Inner A", Modifier::empty());
-                            Text("Nested content A", Modifier::empty());
+                            Text("Outer A, Inner A", Modifier::empty(), TextStyle::default());
+                            Text("Nested content A", Modifier::empty(), TextStyle::default());
                         } else {
-                            Text("Outer A, Inner B", Modifier::empty());
+                            Text("Outer A, Inner B", Modifier::empty(), TextStyle::default());
                         }
                     });
                 } else {
-                    Text("Outer B", Modifier::empty());
+                    Text("Outer B", Modifier::empty(), TextStyle::default());
                 }
             });
         }
@@ -557,21 +573,21 @@ fn test_switching_with_different_node_counts() {
                 match view_type_inner.get() {
                     0 => {
                         // View with 1 node
-                        Text("Single", Modifier::empty());
+                        Text("Single", Modifier::empty(), TextStyle::default());
                     }
                     1 => {
                         // View with 3 nodes
-                        Text("Triple 1", Modifier::empty());
-                        Text("Triple 2", Modifier::empty());
-                        Text("Triple 3", Modifier::empty());
+                        Text("Triple 1", Modifier::empty(), TextStyle::default());
+                        Text("Triple 2", Modifier::empty(), TextStyle::default());
+                        Text("Triple 3", Modifier::empty(), TextStyle::default());
                     }
                     2 => {
                         // View with 5 nodes including nested structure
                         Column(Modifier::empty(), ColumnSpec::default(), || {
-                            Text("Nested 1", Modifier::empty());
-                            Text("Nested 2", Modifier::empty());
+                            Text("Nested 1", Modifier::empty(), TextStyle::default());
+                            Text("Nested 2", Modifier::empty(), TextStyle::default());
                         });
-                        Text("Extra", Modifier::empty());
+                        Text("Extra", Modifier::empty(), TextStyle::default());
                     }
                     _ => {}
                 }
@@ -636,26 +652,26 @@ fn test_conditional_with_complex_button_structure() {
                     Column(Modifier::empty(), ColumnSpec::default(), {
                         let counter = counter_inner;
                         move || {
-                            Text("First View", Modifier::empty());
+                            Text("First View", Modifier::empty(), TextStyle::default());
                             Button(
                                 Modifier::empty(),
                                 move || counter.set(counter.get() + 1),
                                 || {
-                                    Text("Button 1", Modifier::empty());
+                                    Text("Button 1", Modifier::empty(), TextStyle::default());
                                 },
                             );
                             Button(
                                 Modifier::empty(),
                                 move || counter.set(counter.get() + 10),
                                 || {
-                                    Text("Button 2", Modifier::empty());
+                                    Text("Button 2", Modifier::empty(), TextStyle::default());
                                 },
                             );
                         }
                     });
                 } else {
                     // Different structure
-                    Text("Second View", Modifier::empty());
+                    Text("Second View", Modifier::empty(), TextStyle::default());
                     Button(
                         Modifier::empty(),
                         {
@@ -663,7 +679,7 @@ fn test_conditional_with_complex_button_structure() {
                             move || counter.set(counter.get() - 1)
                         },
                         || {
-                            Text("Decrement", Modifier::empty());
+                            Text("Decrement", Modifier::empty(), TextStyle::default());
                         },
                     );
                 }
@@ -738,7 +754,7 @@ fn test_clicking_same_switch_button_twice_no_duplication() {
                             Modifier::empty(),
                             move || show_counter_for_btn1.set(true),
                             || {
-                                Text("Counter App", Modifier::empty());
+                                Text("Counter App", Modifier::empty(), TextStyle::default());
                             },
                         );
 
@@ -746,7 +762,11 @@ fn test_clicking_same_switch_button_twice_no_duplication() {
                             Modifier::empty(),
                             move || show_counter_for_btn2.set(false),
                             || {
-                                Text("CompositionLocal Test", Modifier::empty());
+                                Text(
+                                    "CompositionLocal Test",
+                                    Modifier::empty(),
+                                    TextStyle::default(),
+                                );
                             },
                         );
                     }
@@ -755,14 +775,18 @@ fn test_clicking_same_switch_button_twice_no_duplication() {
                 // Conditional content
                 if show_counter_copy.get() {
                     Column(Modifier::empty(), ColumnSpec::default(), || {
-                        Text("Counter View", Modifier::empty());
-                        Text("Line 2", Modifier::empty());
+                        Text("Counter View", Modifier::empty(), TextStyle::default());
+                        Text("Line 2", Modifier::empty(), TextStyle::default());
                     });
                 } else {
                     Column(Modifier::empty(), ColumnSpec::default(), || {
-                        Text("CompositionLocal Subscription Test", Modifier::empty());
-                        Text("Counter: 0", Modifier::empty());
-                        Text("Extra content", Modifier::empty());
+                        Text(
+                            "CompositionLocal Subscription Test",
+                            Modifier::empty(),
+                            TextStyle::default(),
+                        );
+                        Text("Counter: 0", Modifier::empty(), TextStyle::default());
+                        Text("Extra content", Modifier::empty(), TextStyle::default());
                     });
                 }
             });
@@ -838,6 +862,7 @@ fn test_composition_local_content_inner(local_holder: cranpose_core::Composition
     Text(
         format!("READING local: count={}", value),
         Modifier::empty().padding(8.0),
+        TextStyle::default(),
     );
 }
 
@@ -846,6 +871,7 @@ fn test_composition_local_content(local_holder: cranpose_core::CompositionLocal<
     Text(
         "Outside provider (NOT reading)",
         Modifier::empty().padding(8.0),
+        TextStyle::default(),
     );
 
     Spacer(Size {
@@ -860,7 +886,11 @@ fn test_composition_local_content(local_holder: cranpose_core::CompositionLocal<
         height: 8.0,
     });
 
-    Text("NOT reading local", Modifier::empty().padding(8.0));
+    Text(
+        "NOT reading local",
+        Modifier::empty().padding(8.0),
+        TextStyle::default(),
+    );
 }
 
 #[composable]
@@ -875,6 +905,7 @@ fn test_composition_local_demo(
             Text(
                 "CompositionLocal Subscription Test",
                 Modifier::empty().padding(8.0),
+                TextStyle::default(),
             );
 
             Spacer(Size {
@@ -885,6 +916,7 @@ fn test_composition_local_demo(
             Text(
                 format!("Counter: {}", counter.get()),
                 Modifier::empty().padding(8.0),
+                TextStyle::default(),
             );
 
             Spacer(Size {
@@ -900,7 +932,11 @@ fn test_composition_local_demo(
                     }
                 },
                 || {
-                    Text("Increment", Modifier::empty().padding(4.0));
+                    Text(
+                        "Increment",
+                        Modifier::empty().padding(4.0),
+                        TextStyle::default(),
+                    );
                 },
             );
 
@@ -957,13 +993,13 @@ fn composable_view_a() {
         Modifier::empty().padding(20.0),
         ColumnSpec::default(),
         || {
-            Text("View A - Line 1", Modifier::empty());
-            Text("View A - Line 2", Modifier::empty());
+            Text("View A - Line 1", Modifier::empty(), TextStyle::default());
+            Text("View A - Line 2", Modifier::empty(), TextStyle::default());
             Button(
                 Modifier::empty(),
                 || {},
                 || {
-                    Text("Button A", Modifier::empty());
+                    Text("Button A", Modifier::empty(), TextStyle::default());
                 },
             );
         },
@@ -976,14 +1012,14 @@ fn composable_view_b() {
         Modifier::empty().padding(20.0),
         ColumnSpec::default(),
         || {
-            Text("View B - Line 1", Modifier::empty());
-            Text("View B - Line 2", Modifier::empty());
-            Text("View B - Line 3", Modifier::empty());
+            Text("View B - Line 1", Modifier::empty(), TextStyle::default());
+            Text("View B - Line 2", Modifier::empty(), TextStyle::default());
+            Text("View B - Line 3", Modifier::empty(), TextStyle::default());
             Button(
                 Modifier::empty(),
                 || {},
                 || {
-                    Text("Button B", Modifier::empty());
+                    Text("Button B", Modifier::empty(), TextStyle::default());
                 },
             );
         },
