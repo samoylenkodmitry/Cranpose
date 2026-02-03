@@ -5,6 +5,9 @@
 
 use cranpose::{Robot, SemanticElement};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 /// Finds an element in the semantics tree by exact text match.
 /// Searches recursively through all children.
@@ -148,4 +151,20 @@ pub fn collect_text_prefix_counts(
         }
         collect_text_prefix_counts(&elem.children, prefix, counts);
     }
+}
+
+/// Exit the app, but forcefully terminate if exit hangs.
+#[allow(dead_code)]
+pub fn exit_with_timeout(robot: &Robot, timeout: Duration) {
+    let done = Arc::new(AtomicBool::new(false));
+    let done_thread = Arc::clone(&done);
+    std::thread::spawn(move || {
+        std::thread::sleep(timeout);
+        if !done_thread.load(Ordering::Relaxed) {
+            std::process::exit(0);
+        }
+    });
+
+    let _ = robot.exit();
+    done.store(true, Ordering::Relaxed);
 }

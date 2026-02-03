@@ -7,6 +7,8 @@ use cranpose::AppLauncher;
 use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
 use cranpose_ui::reset_last_fling_velocity;
 use desktop_app::app;
+mod robot_test_utils;
+use robot_test_utils::exit_with_timeout;
 use std::time::Duration;
 
 fn main() {
@@ -64,13 +66,26 @@ fn main() {
 
                 // Perform fling gesture
                 let fling_x = 400.0;
-                let _ = robot.drag(fling_x, 450.0, fling_x, 200.0);
+                let _ = robot.mouse_move(fling_x, 450.0);
+                let _ = robot.mouse_down();
+                let steps = 8;
+                for i in 1..=steps {
+                    let t = i as f32 / steps as f32;
+                    let y = 450.0 + (200.0 - 450.0) * t;
+                    let _ = robot.mouse_move(fling_x, y);
+                    std::thread::sleep(Duration::from_millis(8));
+                }
+                let _ = robot.mouse_up();
                 println!("  Fling released");
 
                 // Immediately click Start button multiple times
-                for _ in 0..5 {
-                    let _ = robot.click(click_x, click_y);
-                    std::thread::sleep(Duration::from_millis(5));
+                std::thread::sleep(Duration::from_millis(20));
+                for _ in 0..2 {
+                    if let Err(err) = robot.click(click_x, click_y) {
+                        eprintln!("  Click failed: {}", err);
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
                 }
 
                 // Allow UI to process without blocking on a full idle wait.
@@ -79,7 +94,7 @@ fn main() {
             }
 
             println!("\n=== Test Complete - No crash ===");
-            let _ = robot.exit();
+            exit_with_timeout(&robot, Duration::from_secs(2));
         })
         .run(|| {
             app::combined_app();

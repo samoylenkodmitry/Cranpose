@@ -4,6 +4,8 @@ pub mod fonts;
 #[cfg(test)]
 mod tests;
 
+pub mod test_screens;
+
 use crate::fonts::DEMO_FONTS;
 use cranpose::AppLauncher;
 

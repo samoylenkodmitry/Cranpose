@@ -17,6 +17,7 @@ ahash = "0.8.12"
 rustc-hash = "2.1"
 smallvec = "1.15.1"
 log = "0.4"
+pollster = "0.4.0"
 
 [features]
 default = []
@@ -24,3 +25,6 @@ std-hash = []
 
 [dev-dependencies]
 cranpose-macros = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = "0.4"

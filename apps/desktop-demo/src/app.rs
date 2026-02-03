@@ -13,17 +13,14 @@ use cranpose_ui::{
 };
 use std::cell::RefCell;
 
-mod external_link;
 mod hacker_news;
 pub mod lazy_list;
 mod mineswapper2;
-pub mod scroll_repro;
 mod web_fetch;
 
-use external_link::{default_uri_handler, local_uri_handler};
+use cranpose_ui::{default_uri_handler, local_uri_handler};
 use hacker_news::hacker_news_tab;
 use lazy_list::lazy_list_example;
-use scroll_repro::scroll_repro_tab;
 use web_fetch::web_fetch_example;
 
 thread_local! {
@@ -41,7 +38,6 @@ pub enum DemoTab {
     Layout,
     ModifierShowcase,
     LazyList,
-    ScrollRepro,
     Mineswapper2,
     HackerNews,
 }
@@ -57,7 +53,6 @@ impl DemoTab {
             DemoTab::Layout => "Recursive Layout",
             DemoTab::ModifierShowcase => "Modifiers Showcase",
             DemoTab::LazyList => "Lazy List",
-            DemoTab::ScrollRepro => "Scroll Repro",
             DemoTab::Mineswapper2 => "Mineswapper2",
             DemoTab::HackerNews => "Hacker News",
         }
@@ -130,6 +125,19 @@ fn random() -> i32 {
             .subsec_nanos();
         (nanos % 10000) as i32
     }
+}
+
+#[composable]
+pub(crate) fn scrollable_tab(content: impl FnMut() + 'static) {
+    let scroll_state =
+        cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|s| s.clone());
+    Column(
+        Modifier::empty()
+            .fill_max_size()
+            .vertical_scroll(scroll_state, false),
+        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(16.0)),
+        content,
+    );
 }
 
 #[composable]
@@ -213,7 +221,6 @@ pub fn combined_app() {
                         render_tab_button(DemoTab::Layout);
                         render_tab_button(DemoTab::ModifierShowcase);
                         render_tab_button(DemoTab::LazyList);
-                        render_tab_button(DemoTab::ScrollRepro);
                         render_tab_button(DemoTab::Mineswapper2);
                         render_tab_button(DemoTab::HackerNews);
                     },
@@ -225,22 +232,43 @@ pub fn combined_app() {
                 });
 
                 let active = tab_state_for_content.get();
-                cranpose_core::with_key(&active, || match active {
-                    DemoTab::Counter => counter_app(),
-                    DemoTab::CompositionLocal => composition_local_example(),
-                    DemoTab::Async => async_runtime_example(),
-                    DemoTab::WebFetch => web_fetch_example(),
-                    DemoTab::TextInput => text_input_example(),
-                    DemoTab::Layout => recursive_layout_example(),
-                    DemoTab::ModifierShowcase => modifier_showcase_tab(),
-                    DemoTab::LazyList => lazy_list_example(),
-                    DemoTab::ScrollRepro => scroll_repro_tab(),
-                    DemoTab::Mineswapper2 => mineswapper2::mineswapper2_tab(),
-                    DemoTab::HackerNews => hacker_news_tab(),
-                });
+                cranpose_ui::Box(
+                    Modifier::empty().fill_max_width().weight(1.0),
+                    BoxSpec::default(),
+                    move || {
+                        cranpose_core::with_key(&active, || {
+                            let active_for_content = active;
+                            if tab_requires_scroll(active) {
+                                scrollable_tab(move || render_active_tab(active_for_content));
+                            } else {
+                                render_active_tab(active_for_content);
+                            }
+                        });
+                    },
+                );
             },
         );
     });
+}
+
+fn tab_requires_scroll(tab: DemoTab) -> bool {
+    !matches!(tab, DemoTab::LazyList | DemoTab::HackerNews)
+}
+
+#[composable]
+fn render_active_tab(active: DemoTab) {
+    match active {
+        DemoTab::Counter => counter_app(),
+        DemoTab::CompositionLocal => composition_local_example(),
+        DemoTab::Async => async_runtime_example(),
+        DemoTab::WebFetch => web_fetch_example(),
+        DemoTab::TextInput => text_input_example(),
+        DemoTab::Layout => recursive_layout_example(),
+        DemoTab::ModifierShowcase => modifier_showcase_tab(),
+        DemoTab::LazyList => lazy_list_example(),
+        DemoTab::Mineswapper2 => mineswapper2::mineswapper2_tab(),
+        DemoTab::HackerNews => hacker_news_tab(),
+    }
 }
 
 /// Text Input Demo Tab - showcases BasicTextField functionality
@@ -467,16 +495,13 @@ fn text_input_example() {
 #[composable]
 fn recursive_layout_example() {
     let depth_state = cranpose_core::useState(|| 3usize);
-    let scroll_state =
-        cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|state| state.clone());
 
     Column(
         Modifier::empty()
             .padding(32.0)
             .background(Color(0.08, 0.10, 0.18, 1.0))
             .rounded_corners(24.0)
-            .padding(20.0)
-            .vertical_scroll(scroll_state, false),
+            .padding(20.0),
         ColumnSpec::default(),
         move || {
             Text(
@@ -1137,24 +1162,36 @@ fn counter_app() {
                 return;
             }
             let message_for_ui = async_message_state;
-            #[cfg(not(target_arch = "wasm32"))]
             _scope.launch_background(
-                move |token| {
-                    use instant::{Duration, SystemTime};
-                    use std::thread;
-
-                    for _ in 0..5 {
-                        if token.is_cancelled() {
-                            return String::new();
-                        }
-                        thread::sleep(Duration::from_millis(80));
+                move |token| async move {
+                    if token.is_cancelled() {
+                        return String::new();
                     }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        use instant::{Duration, SystemTime};
+                        use std::thread;
 
-                    let nanos = SystemTime::now()
-                        .duration_since(SystemTime::UNIX_EPOCH)
-                        .unwrap()
-                        .subsec_nanos();
-                    format!("Background fetch #{fetch_key}: {}", nanos % 1000)
+                        for _ in 0..5 {
+                            if token.is_cancelled() {
+                                return String::new();
+                            }
+                            thread::sleep(Duration::from_millis(80));
+                        }
+
+                        let nanos = SystemTime::now()
+                            .duration_since(SystemTime::UNIX_EPOCH)
+                            .unwrap()
+                            .subsec_nanos();
+                        format!("Background fetch #{fetch_key}: {}", nanos % 1000)
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        format!(
+                            "WASM: Background threads not supported (fetch #{})",
+                            fetch_key
+                        )
+                    }
                 },
                 move |value| {
                     if value.is_empty() {
@@ -1163,12 +1200,6 @@ fn counter_app() {
                     message_for_ui.set(value);
                 },
             );
-            // On WASM, immediately set a message since we can't use background threads
-            #[cfg(target_arch = "wasm32")]
-            message_for_ui.set(format!(
-                "WASM: Background threads not supported (fetch #{})",
-                fetch_key
-            ));
         });
     }
     LaunchedEffect!(counter.get(), |_| println!("effect call"));
@@ -1639,14 +1670,9 @@ impl ShowcaseType {
 #[composable]
 fn modifier_showcase_tab() {
     let selected_showcase = cranpose_core::useState(|| ShowcaseType::SimpleCard);
-    let scroll_state =
-        cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|state| state.clone());
 
     Row(
-        Modifier::empty()
-            .fill_max_width()
-            .padding(8.0)
-            .vertical_scroll(scroll_state, false),
+        Modifier::empty().fill_max_width().padding(8.0),
         RowSpec::new()
             .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
             .vertical_alignment(VerticalAlignment::Top),

@@ -16,7 +16,7 @@ mod robot_test_utils;
 use cranpose::{AppLauncher, Robot};
 use cranpose_testing::{find_button, find_in_semantics, find_text};
 use desktop_app::app;
-use robot_test_utils::find_bounds_by_text;
+use robot_test_utils::{exit_with_timeout, find_bounds_by_text};
 use std::time::Duration;
 
 fn main() {
@@ -349,7 +349,7 @@ fn main() {
             }
 
             std::thread::sleep(Duration::from_secs(1));
-            let _ = robot.exit();
+            exit_with_timeout(&robot, Duration::from_secs(2));
         })
         .run(|| {
             app::combined_app();

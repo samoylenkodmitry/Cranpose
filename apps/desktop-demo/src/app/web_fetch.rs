@@ -1,13 +1,8 @@
-use super::external_link::local_uri_handler;
-#[cfg(target_arch = "wasm32")]
-use cranpose_core::LaunchedEffectAsync;
 use cranpose_ui::{
-    composable, text::TextDecoration, Brush, Button, Color, Column, ColumnSpec, CornerRadii,
-    LinearArrangement, Modifier, Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
+    composable, local_http_client, local_uri_handler, text::TextDecoration, Brush, Button, Color,
+    Column, ColumnSpec, CornerRadii, HttpClientRef, LinearArrangement, Modifier, Row, RowSpec,
+    Size, Spacer, Text, TextStyle, VerticalAlignment,
 };
-
-#[cfg(not(target_arch = "wasm32"))]
-use cranpose_core::LaunchedEffect;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum FetchStatus {
@@ -17,100 +12,27 @@ enum FetchStatus {
     Error(String),
 }
 
-/// Performs HTTP fetch - native implementation using reqwest blocking client
-#[cfg(not(target_arch = "wasm32"))]
-fn do_fetch_blocking() -> Result<String, String> {
-    use reqwest::blocking::Client;
-
-    let client = Client::builder()
-        .user_agent("cranpose-desktop-demo/0.1")
-        .build()
-        .map_err(|e| format!("Failed to build client: {}", e))?;
-
-    // Use ipify.org - simple, reliable, CORS-friendly
-    let response = client
-        .get("https://api.ipify.org?format=json")
-        .send()
-        .map_err(|e| format!("Request failed: {}", e))?;
-
-    let status = response.status();
-    let body = response
-        .text()
-        .map_err(|e| format!("Failed to read body: {}", e))?;
-
-    if status.is_success() {
-        // Parse JSON response to extract IP address
-        if let Some(start) = body.find("\"ip\"") {
-            if let Some(colon) = body[start..].find(':') {
-                let after_colon = &body[start + colon + 1..];
-                if let Some(quote_start) = after_colon.find('"') {
-                    if let Some(quote_end) = after_colon[quote_start + 1..].find('"') {
-                        let ip = &after_colon[quote_start + 1..quote_start + 1 + quote_end];
-                        return Ok(format!("Your public IP: {}", ip));
-                    }
-                }
-            }
-        }
-        Ok(body.trim().to_string())
-    } else {
-        Err(format!("Request failed with status {}: {}", status, body))
-    }
-}
-
-/// Performs HTTP fetch - WASM implementation using browser's fetch API
-#[cfg(target_arch = "wasm32")]
-async fn do_fetch_async() -> Result<String, String> {
-    use wasm_bindgen::JsCast;
-    use wasm_bindgen_futures::JsFuture;
-    use web_sys::{Request, RequestInit, RequestMode, Response};
-
-    let opts = RequestInit::new();
-    opts.set_method("GET");
-    opts.set_mode(RequestMode::Cors);
-
-    // Use ipify.org - simple, reliable, CORS-friendly
-    let request = Request::new_with_str_and_init("https://api.ipify.org?format=json", &opts)
-        .map_err(|e| format!("Failed to create request: {:?}", e))?;
-
-    let window = web_sys::window().ok_or("No window object")?;
-    let resp_value = JsFuture::from(window.fetch_with_request(&request))
-        .await
-        .map_err(|e| format!("Fetch failed: {:?}", e))?;
-
-    let resp: Response = resp_value
-        .dyn_into()
-        .map_err(|_| "Response is not a Response object")?;
-
-    if !resp.ok() {
-        return Err(format!("Request failed with status {}", resp.status()));
-    }
-
-    let text_promise = resp
-        .text()
-        .map_err(|e| format!("Failed to get text: {:?}", e))?;
-    let text_value = JsFuture::from(text_promise)
-        .await
-        .map_err(|e| format!("Failed to read body: {:?}", e))?;
-
-    // Parse JSON response to extract IP address
-    let text = text_value
-        .as_string()
-        .ok_or_else(|| "Response body is not a string".to_string())?;
-
-    // Extract IP from {"ip": "..."} response
-    if let Some(start) = text.find("\"ip\"") {
-        if let Some(colon) = text[start..].find(':') {
-            let after_colon = &text[start + colon + 1..];
+fn parse_ip_response(body: &str) -> String {
+    if let Some(start) = body.find("\"ip\"") {
+        if let Some(colon) = body[start..].find(':') {
+            let after_colon = &body[start + colon + 1..];
             if let Some(quote_start) = after_colon.find('"') {
                 if let Some(quote_end) = after_colon[quote_start + 1..].find('"') {
                     let ip = &after_colon[quote_start + 1..quote_start + 1 + quote_end];
-                    return Ok(format!("Your public IP: {}", ip));
+                    return format!("Your public IP: {}", ip);
                 }
             }
         }
     }
+    body.trim().to_string()
+}
 
-    Ok(text.trim().to_string())
+async fn fetch_ipify(client: &HttpClientRef) -> Result<String, String> {
+    let body = client
+        .get_text("https://api.ipify.org?format=json")
+        .await
+        .map_err(|err| format!("Request failed: {}", err))?;
+    Ok(parse_ip_response(&body))
 }
 
 #[composable]
@@ -118,64 +40,31 @@ pub(crate) fn web_fetch_example() {
     let fetch_status = cranpose_core::useState(|| FetchStatus::Idle);
     let request_counter = cranpose_core::useState(|| 0u64);
     let uri_handler = local_uri_handler().current();
+    let http_client = local_http_client().current();
 
-    // Native implementation using blocking worker
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let status_state = fetch_status;
+    cranpose_core::LaunchedEffect!(request_counter.get(), move |scope| {
         let request_key = request_counter.get();
-        LaunchedEffect!(request_key, move |scope| {
-            if request_key == 0 {
-                return;
-            }
+        if request_key == 0 {
+            return;
+        }
 
-            let status = status_state;
-            status.set(FetchStatus::Loading);
+        let status = fetch_status;
+        status.set(FetchStatus::Loading);
 
-            scope.launch_background(
-                move |token| {
-                    if token.is_cancelled() {
-                        return Err("request cancelled".to_string());
-                    }
-                    do_fetch_blocking()
-                },
-                move |fetch_result| match fetch_result {
-                    Ok(text) => status.set(FetchStatus::Success(text)),
-                    Err(error) => status.set(FetchStatus::Error(error)),
-                },
-            );
-        });
-    }
-
-    // WASM implementation using async fetch
-    #[cfg(target_arch = "wasm32")]
-    {
-        let status_state = fetch_status;
-        let request_key = request_counter.get();
-        LaunchedEffectAsync!(request_key, move |scope| {
-            let status = status_state;
-            Box::pin(async move {
-                if request_key == 0 {
-                    return;
+        let client = http_client.clone();
+        scope.launch_background(
+            move |token| async move {
+                if token.is_cancelled() {
+                    return Err("request cancelled".to_string());
                 }
-
-                status.set(FetchStatus::Loading);
-
-                match do_fetch_async().await {
-                    Ok(text) => {
-                        if scope.is_active() {
-                            status.set(FetchStatus::Success(text));
-                        }
-                    }
-                    Err(error) => {
-                        if scope.is_active() {
-                            status.set(FetchStatus::Error(error));
-                        }
-                    }
-                }
-            })
-        });
-    }
+                fetch_ipify(&client).await
+            },
+            move |fetch_result| match fetch_result {
+                Ok(text) => status.set(FetchStatus::Success(text)),
+                Err(error) => status.set(FetchStatus::Error(error)),
+            },
+        );
+    });
 
     Column(
         Modifier::empty()
@@ -187,7 +76,9 @@ pub(crate) fn web_fetch_example() {
         {
             let status_state = fetch_status;
             let request_state = request_counter;
+            let uri_handler = uri_handler.clone();
             move || {
+                let uri_handler = uri_handler.clone();
                 Text(
                     "Fetch data from the web",
                     Modifier::empty()

@@ -1,6 +1,6 @@
 use cranpose::{AppLauncher, Robot};
 use cranpose_testing::{find_in_semantics, find_text_exact};
-use desktop_app::app;
+use desktop_app::test_screens::scroll_repro::ScrollReproScreen;
 use std::time::Duration;
 
 fn wait_for_content(robot: &Robot, expected: &str, attempts: usize, delay: Duration) -> bool {
@@ -24,30 +24,11 @@ fn main() {
             println!("App launched! Starting test...");
             std::thread::sleep(Duration::from_secs(1));
 
-            // 1. Reveal "Scroll Repro" tab (it's near the end)
-            println!("Dragging tab bar to find Scroll Repro tab...");
-            // Drag left (scroll right)
-            robot.mouse_move(800.0, 50.0).unwrap();
-            robot.mouse_down().unwrap();
-            robot.mouse_move(200.0, 50.0).unwrap();
-            robot.mouse_up().unwrap();
-            std::thread::sleep(Duration::from_millis(500));
-
-            // 2. Click "Scroll Repro" tab
-            println!("Clicking Scroll Repro tab via text...");
-            if let Err(e) = robot.click_by_text("Scroll Repro") {
-                println!("Failed to click by text: {}, trying blind click...", e);
-                robot.click(800.0, 50.0).expect("Failed to click tab");
-            }
-            std::thread::sleep(Duration::from_millis(1000));
-
-            // 3. Verify we are on the tab
-            // Check for unique content "Fake Title"
-            println!("Waiting for Fake Title...");
+            println!("Waiting for scroll repro content...");
             if wait_for_content(&robot, "Fake Title", 10, Duration::from_millis(200)) {
-                println!("Scroll Repro tab active (Content found).");
+                println!("Scroll Repro content found.");
             } else {
-                panic!("Failed to switch to Scroll Repro tab (Fake Title not found)");
+                panic!("Scroll repro content not found");
             }
 
             // 4. Scroll down
@@ -139,6 +120,6 @@ fn main() {
             robot.exit().expect("Failed to exit");
         })
         .run(|| {
-            app::combined_app();
+            ScrollReproScreen();
         });
 }

@@ -6,8 +6,9 @@ use cranpose_ui::{
     TextStyle, VerticalAlignment,
 };
 
+#[allow(non_snake_case)]
 #[composable]
-pub fn scroll_repro_tab() {
+pub fn ScrollReproScreen() {
     let list_state = cranpose_foundation::lazy::remember_lazy_list_state();
 
     Column(
@@ -17,7 +18,6 @@ pub fn scroll_repro_tab() {
             .background(Color(0.96, 0.96, 0.94, 1.0)),
         ColumnSpec::default(),
         move || {
-            // Mimic HN Header roughly to occupy similar space
             Row(
                 Modifier::empty()
                     .fill_max_width()
@@ -54,7 +54,7 @@ pub fn scroll_repro_tab() {
                         None::<fn(usize) -> u64>,
                         None::<fn(usize) -> u64>,
                         move |index| {
-                            repro_item(index + 1);
+                            ReproItem(index + 1);
                         },
                     );
                 },
@@ -63,9 +63,9 @@ pub fn scroll_repro_tab() {
     );
 }
 
+#[allow(non_snake_case)]
 #[composable]
-fn repro_item(rank: usize) {
-    // Matches the story-row layout used for scroll regression coverage.
+fn ReproItem(rank: usize) {
     Row(
         Modifier::empty()
             .fill_max_width()
@@ -74,7 +74,6 @@ fn repro_item(rank: usize) {
             .rounded_corners(4.0),
         RowSpec::new().vertical_alignment(VerticalAlignment::Top),
         move || {
-            // Rank
             Text(
                 format!("{}.", rank),
                 Modifier::empty().padding(4.0),
@@ -91,7 +90,6 @@ fn repro_item(rank: usize) {
 
             Column(Modifier::empty().weight(1.0), ColumnSpec::default(), {
                 move || {
-                    // Title - Fake Title
                     Text(
                         format!("Fake Title for Item {}", rank),
                         Modifier::empty().padding(2.0),
@@ -101,7 +99,6 @@ fn repro_item(rank: usize) {
                         },
                     );
 
-                    // Metadata - Fake Metadata
                     Row(
                         Modifier::empty(),
                         RowSpec::new().vertical_alignment(VerticalAlignment::CenterVertically),

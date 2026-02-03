@@ -1,15 +1,11 @@
-use super::external_link::local_uri_handler;
-#[cfg(not(target_arch = "wasm32"))]
-use cranpose_core::LaunchedEffect;
-#[cfg(target_arch = "wasm32")]
-use cranpose_core::LaunchedEffectAsync;
 use cranpose_core::{self};
 use cranpose_foundation::lazy::LazyListScope;
 use cranpose_ui::{
-    composable,
+    composable, local_http_client, local_uri_handler,
+    text::FontWeight,
     widgets::{LazyColumn, LazyColumnSpec},
-    Brush, Button, Color, Column, ColumnSpec, CornerRadii, LinearArrangement, Modifier, Row,
-    RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
+    Brush, Button, Color, Column, ColumnSpec, CornerRadii, HttpClientRef, LinearArrangement,
+    Modifier, Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
 };
 use serde::Deserialize;
 
@@ -31,105 +27,103 @@ pub struct Story {
     pub r#type: String,
 }
 
+const PAGE_SIZE: usize = 20;
+const AUTOLOAD_THRESHOLD: usize = 5;
+
+#[derive(Clone, Debug, PartialEq)]
+struct NewsData {
+    ids: Vec<u64>,
+    stories: Vec<Story>,
+    next_index: usize,
+    is_loading_more: bool,
+}
+
+impl NewsData {
+    fn new(ids: Vec<u64>, stories: Vec<Story>, next_index: usize) -> Self {
+        Self {
+            ids,
+            stories,
+            next_index,
+            is_loading_more: false,
+        }
+    }
+
+    fn has_more(&self) -> bool {
+        self.next_index < self.ids.len()
+    }
+
+    fn with_loading_more(mut self, loading: bool) -> Self {
+        self.is_loading_more = loading;
+        self
+    }
+
+    fn append_page(mut self, stories: Vec<Story>, next_index: usize) -> Self {
+        self.stories.extend(stories);
+        self.next_index = next_index;
+        self.is_loading_more = false;
+        self
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum NewsState {
     Idle,
     Loading,
-    Success(Vec<Story>),
+    Success(NewsData),
     Error(String),
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn fetch_stories_blocking() -> Result<Vec<Story>, String> {
-    use reqwest::blocking::Client;
-    use std::time::Duration;
+async fn fetch_top_story_ids(client: &HttpClientRef) -> Result<Vec<u64>, String> {
+    let ids_json = client
+        .get_text("https://hacker-news.firebaseio.com/v0/topstories.json")
+        .await
+        .map_err(|err| format!("Failed to fetch top stories: {}", err))?;
+    serde_json::from_str(&ids_json).map_err(|e| format!("Failed to parse top stories IDs: {}", e))
+}
 
-    let client = Client::builder()
-        .timeout(Duration::from_secs(10))
-        .user_agent("cranpose-desktop-demo/0.1")
-        .build()
-        .map_err(|e| e.to_string())?;
+async fn fetch_story(client: &HttpClientRef, id: u64) -> Result<Story, String> {
+    let url = format!("https://hacker-news.firebaseio.com/v0/item/{}.json", id);
+    let json = client
+        .get_text(&url)
+        .await
+        .map_err(|err| format!("Failed to fetch story {}: {}", id, err))?;
+    serde_json::from_str::<Story>(&json).map_err(|e| format!("Failed to parse story {}: {}", id, e))
+}
 
-    let ids: Vec<u64> = client
-        .get("https://hacker-news.firebaseio.com/v0/topstories.json")
-        .send()
-        .map_err(|e| format!("Failed to fetch top stories: {}", e))?
-        .json()
-        .map_err(|e| format!("Failed to parse top stories IDs: {}", e))?;
-
+async fn fetch_stories_page(
+    client: &HttpClientRef,
+    ids: &[u64],
+    start: usize,
+    end: usize,
+) -> Result<Vec<Story>, String> {
     let mut stories = Vec::new();
-    for id in ids.iter().take(20) {
-        let url = format!("https://hacker-news.firebaseio.com/v0/item/{}.json", id);
-        match client.get(&url).send() {
-            Ok(response) => {
-                if let Ok(story) = response.json::<Story>() {
-                    stories.push(story);
-                }
-            }
+    for id in ids.iter().skip(start).take(end.saturating_sub(start)) {
+        match fetch_story(client, *id).await {
+            Ok(story) => stories.push(story),
             Err(_) => continue,
         }
     }
-
     Ok(stories)
 }
 
-#[cfg(target_arch = "wasm32")]
-async fn fetch_stories_async() -> Result<Vec<Story>, String> {
-    use wasm_bindgen::JsCast;
-    use wasm_bindgen_futures::JsFuture;
-    use web_sys::{Request, RequestInit, RequestMode, Response};
+fn page_end(start: usize, total: usize) -> usize {
+    (start + PAGE_SIZE).min(total)
+}
 
-    async fn fetch_url(url: &str) -> Result<String, String> {
-        let opts = RequestInit::new();
-        opts.set_method("GET");
-        opts.set_mode(RequestMode::Cors);
+async fn load_initial_page(client: &HttpClientRef) -> Result<NewsData, String> {
+    let ids = fetch_top_story_ids(client).await?;
+    let end = page_end(0, ids.len());
+    let stories = fetch_stories_page(client, &ids, 0, end).await?;
+    Ok(NewsData::new(ids, stories, end))
+}
 
-        let request = Request::new_with_str_and_init(url, &opts)
-            .map_err(|e| format!("Failed to create request: {:?}", e))?;
-
-        let window = web_sys::window().ok_or("No window object")?;
-        let resp_value = JsFuture::from(window.fetch_with_request(&request))
-            .await
-            .map_err(|e| format!("Fetch failed: {:?}", e))?;
-
-        let resp: Response = resp_value
-            .dyn_into()
-            .map_err(|_| "Response is not a Response object")?;
-
-        if !resp.ok() {
-            return Err(format!("Request failed with status {}", resp.status()));
-        }
-
-        let text_promise = resp
-            .text()
-            .map_err(|e| format!("Failed to get text: {:?}", e))?;
-        let text_value = JsFuture::from(text_promise)
-            .await
-            .map_err(|e| format!("Failed to read body: {:?}", e))?;
-
-        text_value
-            .as_string()
-            .ok_or_else(|| "Response body is not a string".to_string())
-    }
-
-    let ids_json = fetch_url("https://hacker-news.firebaseio.com/v0/topstories.json").await?;
-    let ids: Vec<u64> = serde_json::from_str(&ids_json)
-        .map_err(|e| format!("Failed to parse top stories IDs: {}", e))?;
-
-    let mut stories = Vec::new();
-    for id in ids.iter().take(20) {
-        let url = format!("https://hacker-news.firebaseio.com/v0/item/{}.json", id);
-        match fetch_url(&url).await {
-            Ok(json) => {
-                if let Ok(story) = serde_json::from_str::<Story>(&json) {
-                    stories.push(story);
-                }
-            }
-            Err(_) => continue,
-        }
-    }
-
-    Ok(stories)
+async fn load_more_page(
+    client: &HttpClientRef,
+    ids: Vec<u64>,
+    start: usize,
+    end: usize,
+) -> Result<Vec<Story>, String> {
+    fetch_stories_page(client, &ids, start, end).await
 }
 
 fn story_target_url(story: &Story) -> String {
@@ -143,219 +137,373 @@ fn story_comments_url(story: &Story) -> String {
     format!("https://news.ycombinator.com/item?id={}", story.id)
 }
 
+fn launch_initial_load(
+    trigger: u64,
+    state: cranpose_core::MutableState<NewsState>,
+    client: HttpClientRef,
+) {
+    cranpose_core::LaunchedEffect!(trigger, move |scope| {
+        state.set(NewsState::Loading);
+        let client = client.clone();
+
+        scope.launch_background(
+            move |token| async move {
+                if token.is_cancelled() {
+                    return Err("Cancelled".to_string());
+                }
+                load_initial_page(&client).await
+            },
+            move |result| match result {
+                Ok(data) => state.set(NewsState::Success(data)),
+                Err(err) => state.set(NewsState::Error(err)),
+            },
+        );
+    });
+}
+
+fn launch_load_more(
+    trigger: u64,
+    state: cranpose_core::MutableState<NewsState>,
+    client: HttpClientRef,
+) {
+    cranpose_core::LaunchedEffect!(trigger, move |scope| {
+        if trigger == 0 {
+            return;
+        }
+
+        let (ids, start, end) = match state.get() {
+            NewsState::Success(data) => {
+                if data.is_loading_more || !data.has_more() {
+                    return;
+                }
+                let start = data.next_index;
+                let end = page_end(start, data.ids.len());
+                let ids = data.ids.clone();
+                state.set(NewsState::Success(data.with_loading_more(true)));
+                (ids, start, end)
+            }
+            _ => return,
+        };
+
+        let ids_for_task = ids.clone();
+        let ids_for_result = ids;
+        let client = client.clone();
+        scope.launch_background(
+            move |token| async move {
+                if token.is_cancelled() {
+                    return Err("Cancelled".to_string());
+                }
+                load_more_page(&client, ids_for_task, start, end).await
+            },
+            move |result| match result {
+                Ok(new_stories) => {
+                    state.update(|current| {
+                        if let NewsState::Success(data) = current {
+                            if data.ids != ids_for_result || data.next_index != start {
+                                return;
+                            }
+                            let updated = data.clone().append_page(new_stories, end);
+                            *current = NewsState::Success(updated);
+                        }
+                    });
+                }
+                Err(err) => {
+                    log::error!("Failed to load more stories: {}", err);
+                    state.update(|current| {
+                        if let NewsState::Success(data) = current {
+                            if data.ids != ids_for_result || data.next_index != start {
+                                return;
+                            }
+                            *current = NewsState::Success(data.clone().with_loading_more(false));
+                        }
+                    });
+                }
+            },
+        );
+    });
+}
+
 #[composable]
 pub fn hacker_news_tab() {
     let news_state = cranpose_core::useState(|| NewsState::Idle);
     let refresh_trigger = cranpose_core::useState(|| 0u64);
+    let load_more_trigger = cranpose_core::useState(|| 0u64);
+    let list_state = cranpose_foundation::lazy::remember_lazy_list_state();
+    let auto_load_guard = cranpose_core::useState(|| 0usize);
+    let http_client = local_http_client().current();
 
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let state = news_state;
-        let trigger = refresh_trigger.get();
-        LaunchedEffect!(trigger, move |scope| {
-            state.set(NewsState::Loading);
+    launch_initial_load(refresh_trigger.get(), news_state, http_client.clone());
+    launch_load_more(load_more_trigger.get(), news_state, http_client.clone());
 
-            scope.launch_background(
-                move |token| {
-                    if token.is_cancelled() {
-                        return Err("Cancelled".to_string());
-                    }
-                    fetch_stories_blocking()
-                },
-                move |result| match result {
-                    Ok(stories) => state.set(NewsState::Success(stories)),
-                    Err(e) => state.set(NewsState::Error(e)),
-                },
-            );
-        });
+    let visible_start = list_state.first_visible_item_index();
+    let visible_count = list_state.stats().items_in_use;
+    let visible_end = visible_start.saturating_add(visible_count.saturating_sub(1));
+
+    if let NewsState::Success(data) = news_state.get() {
+        let last_story_index = 1usize.saturating_add(data.stories.len().saturating_sub(1));
+        let preload_index = last_story_index.saturating_sub(AUTOLOAD_THRESHOLD);
+
+        if data.has_more()
+            && !data.is_loading_more
+            && visible_end >= preload_index
+            && auto_load_guard.get() != data.next_index
+        {
+            auto_load_guard.set(data.next_index);
+            load_more_trigger.update(|v| *v = v.wrapping_add(1));
+        }
     }
 
-    #[cfg(target_arch = "wasm32")]
-    {
-        let state = news_state;
-        let trigger = refresh_trigger.get();
-        LaunchedEffectAsync!(trigger, move |scope| {
-            let state = state;
-            Box::pin(async move {
-                state.set(NewsState::Loading);
-                match fetch_stories_async().await {
-                    Ok(stories) => {
-                        if scope.is_active() {
-                            state.set(NewsState::Success(stories));
-                        }
-                    }
-                    Err(e) => {
-                        if scope.is_active() {
-                            state.set(NewsState::Error(e));
-                        }
-                    }
-                }
-            })
-        });
-    }
-
-    Column(
+    LazyColumn(
         Modifier::empty()
             .fill_max_size()
             .padding(16.0)
             .background(Color(0.96, 0.96, 0.94, 1.0)),
-        ColumnSpec::default(),
-        move || {
-            Row(
-                Modifier::empty()
-                    .fill_max_width()
-                    .background(Color(1.0, 0.4, 0.0, 1.0))
-                    .padding(8.0)
-                    .rounded_corners(4.0),
-                RowSpec::new()
-                    .vertical_alignment(VerticalAlignment::CenterVertically)
-                    .horizontal_arrangement(LinearArrangement::SpaceBetween),
-                {
-                    let trigger_state = refresh_trigger;
-                    move || {
-                        Row(
-                            Modifier::empty(),
-                            RowSpec::new().vertical_alignment(VerticalAlignment::CenterVertically),
-                            || {
-                                Text(
-                                    "Hacker News",
-                                    Modifier::empty().padding(4.0),
-                                    TextStyle {
-                                        color: Some(Color(1.0, 1.0, 1.0, 1.0)),
-                                        ..Default::default()
-                                    },
-                                );
-                            },
-                        );
-
-                        Button(
-                            Modifier::empty()
-                                .rounded_corners(4.0)
-                                .draw_behind(|scope| {
-                                    scope.draw_round_rect(
-                                        Brush::solid(Color(1.0, 1.0, 1.0, 0.2)),
-                                        CornerRadii::uniform(4.0),
+        list_state,
+        LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(12.0)),
+        move |scope| {
+            scope.item(Some(0), None, {
+                let trigger_state = refresh_trigger;
+                let auto_guard = auto_load_guard;
+                move || {
+                    Row(
+                        Modifier::empty()
+                            .fill_max_width()
+                            .background(Color(1.0, 0.4, 0.0, 1.0))
+                            .padding(8.0)
+                            .rounded_corners(4.0),
+                        RowSpec::new()
+                            .vertical_alignment(VerticalAlignment::CenterVertically)
+                            .horizontal_arrangement(LinearArrangement::SpaceBetween),
+                        move || {
+                            Row(
+                                Modifier::empty(),
+                                RowSpec::new()
+                                    .vertical_alignment(VerticalAlignment::CenterVertically),
+                                || {
+                                    Text(
+                                        "Hacker News",
+                                        Modifier::empty().padding(4.0),
+                                        TextStyle {
+                                            color: Some(Color(1.0, 1.0, 1.0, 1.0)),
+                                            ..Default::default()
+                                        },
                                     );
-                                })
-                                .padding(6.0),
-                            move || {
-                                trigger_state.update(|v| *v = v.wrapping_add(1));
-                            },
-                            || {
-                                Text(
-                                    "Refresh",
-                                    Modifier::empty().padding(2.0),
-                                    TextStyle {
-                                        color: Some(Color(1.0, 1.0, 1.0, 1.0)),
-                                        ..Default::default()
-                                    },
-                                );
-                            },
-                        );
-                    }
-                },
-            );
+                                },
+                            );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 16.0,
+                            Button(
+                                Modifier::empty()
+                                    .rounded_corners(4.0)
+                                    .draw_behind(|scope| {
+                                        scope.draw_round_rect(
+                                            Brush::solid(Color(1.0, 1.0, 1.0, 0.2)),
+                                            CornerRadii::uniform(4.0),
+                                        );
+                                    })
+                                    .padding(6.0),
+                                move || {
+                                    trigger_state.update(|v| *v = v.wrapping_add(1));
+                                    auto_guard.set(0);
+                                },
+                                || {
+                                    Text(
+                                        "Refresh",
+                                        Modifier::empty().padding(2.0),
+                                        TextStyle {
+                                            color: Some(Color(1.0, 1.0, 1.0, 1.0)),
+                                            ..Default::default()
+                                        },
+                                    );
+                                },
+                            );
+                        },
+                    );
+
+                    Spacer(Size {
+                        width: 0.0,
+                        height: 16.0,
+                    });
+                }
             });
 
             match news_state.get() {
                 NewsState::Idle => {
-                    Text(
-                        "Status: Idle",
-                        Modifier::empty().padding(8.0),
-                        TextStyle {
-                            color: Some(Color(0.2, 0.2, 0.2, 1.0)),
-                            ..Default::default()
-                        },
-                    );
+                    scope.item(Some(1), None, || {
+                        Text(
+                            "Status: Idle",
+                            Modifier::empty().padding(8.0),
+                            TextStyle {
+                                color: Some(Color(0.2, 0.2, 0.2, 1.0)),
+                                ..Default::default()
+                            },
+                        );
+                    });
                 }
                 NewsState::Loading => {
-                    Column(
-                        Modifier::empty().fill_max_width().padding(20.0),
-                        ColumnSpec::new().horizontal_alignment(
-                            cranpose_ui::HorizontalAlignment::CenterHorizontally,
-                        ),
-                        || {
-                            Text(
-                                "Loading stories...",
-                                Modifier::empty().padding(8.0),
-                                TextStyle {
-                                    color: Some(Color(0.2, 0.2, 0.2, 1.0)),
-                                    ..Default::default()
-                                },
-                            );
-                            Text(
-                                "(... fetching from API ...)",
-                                Modifier::empty().padding(4.0),
-                                TextStyle {
-                                    color: Some(Color(0.5, 0.5, 0.5, 1.0)),
-                                    ..Default::default()
-                                },
-                            );
-                        },
-                    );
+                    scope.item(Some(1), None, || {
+                        Column(
+                            Modifier::empty().fill_max_width().padding(20.0),
+                            ColumnSpec::new().horizontal_alignment(
+                                cranpose_ui::HorizontalAlignment::CenterHorizontally,
+                            ),
+                            || {
+                                Text(
+                                    "Loading stories...",
+                                    Modifier::empty().padding(8.0),
+                                    TextStyle {
+                                        color: Some(Color(0.2, 0.2, 0.2, 1.0)),
+                                        ..Default::default()
+                                    },
+                                );
+                                Text(
+                                    "(... fetching from API ...)",
+                                    Modifier::empty().padding(4.0),
+                                    TextStyle {
+                                        color: Some(Color(0.5, 0.5, 0.5, 1.0)),
+                                        ..Default::default()
+                                    },
+                                );
+                            },
+                        );
+                    });
                 }
                 NewsState::Error(error) => {
-                    Text(
-                        format!("Error: {}", error),
-                        Modifier::empty()
-                            .padding(8.0)
-                            .background(Color(1.0, 0.8, 0.8, 1.0)),
-                        TextStyle {
-                            color: Some(Color(0.8, 0.0, 0.0, 1.0)),
-                            ..Default::default()
+                    let error_message = error.clone();
+                    scope.item(Some(1), None, move || {
+                        Text(
+                            format!("Error: {}", error_message),
+                            Modifier::empty()
+                                .padding(8.0)
+                                .background(Color(1.0, 0.8, 0.8, 1.0)),
+                            TextStyle {
+                                color: Some(Color(0.8, 0.0, 0.0, 1.0)),
+                                ..Default::default()
+                            },
+                        );
+                    });
+
+                    scope.item(Some(2), None, {
+                        let trigger = refresh_trigger;
+                        let auto_guard = auto_load_guard;
+                        move || {
+                            Button(
+                                Modifier::empty()
+                                    .padding(8.0)
+                                    .background(Color(0.8, 0.8, 0.8, 1.0))
+                                    .rounded_corners(4.0),
+                                move || {
+                                    trigger.update(|v| *v = v.wrapping_add(1));
+                                    auto_guard.set(0);
+                                },
+                                || {
+                                    Text(
+                                        "Retry",
+                                        Modifier::empty().padding(8.0),
+                                        TextStyle::default(),
+                                    );
+                                },
+                            );
+                        }
+                    });
+                }
+                NewsState::Success(data) => {
+                    let stories = data.stories.clone();
+                    scope.items(
+                        stories.len(),
+                        None::<fn(usize) -> u64>,
+                        None::<fn(usize) -> u64>,
+                        move |index| {
+                            story_item(stories[index].clone(), index + 1);
                         },
                     );
 
-                    Button(
-                        Modifier::empty()
-                            .padding(8.0)
-                            .background(Color(0.8, 0.8, 0.8, 1.0))
-                            .rounded_corners(4.0),
-                        {
-                            let state = refresh_trigger;
-                            move || state.update(|v| *v = v.wrapping_add(1))
-                        },
-                        || {
-                            Text(
-                                "Retry",
-                                Modifier::empty().padding(8.0),
-                                TextStyle::default(),
-                            );
-                        },
-                    );
-                }
-                NewsState::Success(stories) => {
-                    let list_state = cranpose_foundation::lazy::remember_lazy_list_state();
-                    LazyColumn(
-                        Modifier::empty()
-                            .semantics(
-                                |config: &mut cranpose_foundation::SemanticsConfiguration| {
-                                    config.content_description = Some("HackerNewsList".to_string());
-                                },
-                            )
-                            .fill_max_width()
-                            .weight(1.0),
-                        list_state,
-                        LazyColumnSpec::new()
-                            .vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
-                        move |scope| {
-                            let stories_list = stories.clone();
-                            scope.items(
-                                stories_list.len(),
-                                None::<fn(usize) -> u64>,
-                                None::<fn(usize) -> u64>,
-                                move |index| {
-                                    story_item(stories_list[index].clone(), index + 1);
-                                },
-                            );
-                        },
-                    );
+                    scope.item(Some(u64::MAX), None, {
+                        let data = data.clone();
+                        move || {
+                            if data.has_more() {
+                                if data.is_loading_more {
+                                    loading_stub_item();
+                                } else {
+                                    Text(
+                                        format!(
+                                            "Loaded {} of {} stories",
+                                            data.stories.len(),
+                                            data.ids.len()
+                                        ),
+                                        Modifier::empty().padding(8.0),
+                                        TextStyle {
+                                            color: Some(Color(0.5, 0.5, 0.5, 1.0)),
+                                            ..Default::default()
+                                        },
+                                    );
+                                }
+                            } else {
+                                Text(
+                                    "No more stories.",
+                                    Modifier::empty().padding(8.0),
+                                    TextStyle {
+                                        color: Some(Color(0.5, 0.5, 0.5, 1.0)),
+                                        ..Default::default()
+                                    },
+                                );
+                            }
+                        }
+                    });
                 }
             }
+        },
+    );
+}
+
+#[composable]
+fn loading_stub_item() {
+    let phase = cranpose_core::useState(|| 0.0f32);
+
+    cranpose_core::LaunchedEffectAsync!((), move |scope| {
+        let phase = phase;
+        Box::pin(async move {
+            let clock = scope.runtime().frame_clock();
+            let mut last = clock.next_frame().await;
+            while scope.is_active() {
+                let now = clock.next_frame().await;
+                let delta = (now.saturating_sub(last)) as f32 / 1_000_000_000.0;
+                last = now;
+                phase.update(|value| {
+                    let next = (*value + delta * 1.2) % 1.0;
+                    *value = next;
+                });
+            }
+        })
+    });
+
+    let t = phase.get();
+    let pulse = 1.0 - (2.0 * t - 1.0).abs();
+    let alpha = 0.35 + 0.65 * pulse;
+
+    Row(
+        Modifier::empty()
+            .fill_max_width()
+            .padding(12.0)
+            .background(Color(1.0, 1.0, 1.0, 0.9))
+            .rounded_corners(6.0),
+        RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
+        move || {
+            Text(
+                "Loading more",
+                Modifier::empty().padding(2.0),
+                TextStyle {
+                    color: Some(Color(0.25, 0.25, 0.25, alpha)),
+                    ..Default::default()
+                },
+            );
+            Text(
+                "···",
+                Modifier::empty().padding(2.0),
+                TextStyle {
+                    color: Some(Color(0.25, 0.25, 0.25, alpha)),
+                    ..Default::default()
+                },
+            );
         },
     );
 }
@@ -415,6 +563,7 @@ fn story_item(story: Story, rank: usize) {
                         }),
                         TextStyle {
                             color: Some(Color(0.0, 0.0, 0.0, 0.87)),
+                            font_weight: Some(FontWeight::BOLD),
                             ..Default::default()
                         },
                     );
