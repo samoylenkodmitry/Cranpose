@@ -114,6 +114,9 @@ run_test() {
         robot_fling_edge_cases)
             timeout_secs=240
             ;;
+        robot_fling_precise)
+            timeout_secs=180
+            ;;
         robot_fling_interrupt)
             timeout_secs=120
             ;;

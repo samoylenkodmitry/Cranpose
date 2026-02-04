@@ -405,6 +405,11 @@ path = "robot-runners/robot_text_input_value_disappear.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_hacker_news_scroll"
+path = "robot-runners/robot_hacker_news_scroll.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_advance_frame_bug"
 path = "robot-runners/robot_advance_frame_bug.rs"
 required-features = ["robot-app"]

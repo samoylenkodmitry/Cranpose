@@ -147,7 +147,7 @@ fn measure_lazy_list_internal(
     state: &LazyListState,
     config: &LazyListMeasureConfig,
 ) -> MeasureResult {
-    let viewport_size = if is_vertical {
+    let raw_viewport_size = if is_vertical {
         constraints.max_height
     } else {
         constraints.max_width
@@ -272,11 +272,12 @@ fn measure_lazy_list_internal(
     let result = measure_lazy_list(
         items_count,
         state,
-        viewport_size,
+        raw_viewport_size,
         cross_axis_size,
         config,
         measure_item,
     );
+    let effective_viewport_size = result.viewport_size;
 
     // Cache measured item sizes for better scroll estimation
     for item in &result.visible_items {
@@ -290,7 +291,7 @@ fn measure_lazy_list_internal(
         .filter(|item| {
             // Item is visible if any part of it is within viewport bounds
             let item_end = item.offset + item.main_axis_size;
-            item.offset < viewport_size && item_end > 0.0
+            item.offset < effective_viewport_size && item_end > 0.0
         })
         .count();
     // Get reusable slot count from SubcomposeState (the single source of truth)
@@ -367,9 +368,17 @@ fn measure_lazy_list_internal(
         &result.visible_items,
         items_count,
         is_vertical,
-        viewport_size,
+        effective_viewport_size,
         config,
     );
+
+    let resolve_main_axis = |content_size: f32, min: f32, max: f32| {
+        if max.is_finite() {
+            content_size.clamp(min, max)
+        } else {
+            content_size.min(effective_viewport_size).max(min)
+        }
+    };
 
     // Report size that respects BOTH min and max constraints.
     // - If content < min: expand to min (e.g., fillMaxSize)
@@ -378,14 +387,18 @@ fn measure_lazy_list_internal(
     let width = if is_vertical {
         cross_axis_size
     } else {
-        result
-            .total_content_size
-            .clamp(constraints.min_width, constraints.max_width)
+        resolve_main_axis(
+            result.total_content_size,
+            constraints.min_width,
+            constraints.max_width,
+        )
     };
     let height = if is_vertical {
-        result
-            .total_content_size
-            .clamp(constraints.min_height, constraints.max_height)
+        resolve_main_axis(
+            result.total_content_size,
+            constraints.min_height,
+            constraints.max_height,
+        )
     } else {
         cross_axis_size
     };

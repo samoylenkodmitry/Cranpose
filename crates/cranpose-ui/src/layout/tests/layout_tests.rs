@@ -108,10 +108,72 @@ impl MeasurePolicy for MaxSizePolicy {
     }
 }
 
+#[derive(Clone)]
+struct RecordingPolicy {
+    seen: Rc<RefCell<Option<Constraints>>>,
+}
+
+impl MeasurePolicy for RecordingPolicy {
+    fn measure(
+        &self,
+        _measurables: &[Box<dyn Measurable>],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        *self.seen.borrow_mut() = Some(constraints);
+        MeasureResult::new(
+            Size {
+                width: 0.0,
+                height: 0.0,
+            },
+            Vec::new(),
+        )
+    }
+
+    fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+        0.0
+    }
+
+    fn max_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+        0.0
+    }
+
+    fn min_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+        0.0
+    }
+
+    fn max_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+        0.0
+    }
+}
+
 #[test]
 fn clamp_dimension_respects_infinite_max() {
     let clamped = clamp_dimension(50.0, 10.0, f32::INFINITY);
     assert_eq!(clamped, 50.0);
+}
+
+#[test]
+fn layout_measure_respects_parent_constraints_for_weighted_nodes() -> Result<(), NodeError> {
+    let seen = Rc::new(RefCell::new(None));
+    let policy = RecordingPolicy {
+        seen: Rc::clone(&seen),
+    };
+
+    let mut applier = MemoryApplier::new();
+    let root_id = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty().weight(1.0),
+        Rc::new(policy),
+    )));
+
+    measure_layout(&mut applier, root_id, Size::new(800.0, 600.0))?;
+
+    let recorded = seen.borrow().expect("expected measure to run");
+    assert!(recorded.max_width.is_finite());
+    assert!(recorded.max_height.is_finite());
+    assert_eq!(recorded.max_width, 800.0);
+    assert_eq!(recorded.max_height, 600.0);
+
+    Ok(())
 }
 
 // Note: Weight distribution tests removed - weights are not yet implemented

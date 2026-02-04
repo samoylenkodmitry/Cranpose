@@ -1,5 +1,5 @@
 use cranpose_core::{self};
-use cranpose_foundation::lazy::LazyListScope;
+use cranpose_foundation::{lazy::LazyListScope, SemanticsConfiguration};
 use cranpose_ui::{
     composable, local_http_client, local_uri_handler,
     text::FontWeight,
@@ -29,6 +29,8 @@ pub struct Story {
 
 const PAGE_SIZE: usize = 20;
 const AUTOLOAD_THRESHOLD: usize = 5;
+#[cfg(feature = "robot-app")]
+const ROBOT_STORY_COUNT: usize = 60;
 
 #[derive(Clone, Debug, PartialEq)]
 struct NewsData {
@@ -73,6 +75,7 @@ enum NewsState {
     Error(String),
 }
 
+#[cfg(not(feature = "robot-app"))]
 async fn fetch_top_story_ids(client: &HttpClientRef) -> Result<Vec<u64>, String> {
     let ids_json = client
         .get_text("https://hacker-news.firebaseio.com/v0/topstories.json")
@@ -81,6 +84,7 @@ async fn fetch_top_story_ids(client: &HttpClientRef) -> Result<Vec<u64>, String>
     serde_json::from_str(&ids_json).map_err(|e| format!("Failed to parse top stories IDs: {}", e))
 }
 
+#[cfg(not(feature = "robot-app"))]
 async fn fetch_story(client: &HttpClientRef, id: u64) -> Result<Story, String> {
     let url = format!("https://hacker-news.firebaseio.com/v0/item/{}.json", id);
     let json = client
@@ -90,6 +94,7 @@ async fn fetch_story(client: &HttpClientRef, id: u64) -> Result<Story, String> {
     serde_json::from_str::<Story>(&json).map_err(|e| format!("Failed to parse story {}: {}", id, e))
 }
 
+#[cfg(not(feature = "robot-app"))]
 async fn fetch_stories_page(
     client: &HttpClientRef,
     ids: &[u64],
@@ -110,6 +115,15 @@ fn page_end(start: usize, total: usize) -> usize {
     (start + PAGE_SIZE).min(total)
 }
 
+#[cfg(feature = "robot-app")]
+async fn load_initial_page(_client: &HttpClientRef) -> Result<NewsData, String> {
+    let ids = mock_ids();
+    let end = page_end(0, ids.len());
+    let stories = mock_stories_page(&ids, 0, end);
+    Ok(NewsData::new(ids, stories, end))
+}
+
+#[cfg(not(feature = "robot-app"))]
 async fn load_initial_page(client: &HttpClientRef) -> Result<NewsData, String> {
     let ids = fetch_top_story_ids(client).await?;
     let end = page_end(0, ids.len());
@@ -117,6 +131,17 @@ async fn load_initial_page(client: &HttpClientRef) -> Result<NewsData, String> {
     Ok(NewsData::new(ids, stories, end))
 }
 
+#[cfg(feature = "robot-app")]
+async fn load_more_page(
+    _client: &HttpClientRef,
+    ids: Vec<u64>,
+    start: usize,
+    end: usize,
+) -> Result<Vec<Story>, String> {
+    Ok(mock_stories_page(&ids, start, end))
+}
+
+#[cfg(not(feature = "robot-app"))]
 async fn load_more_page(
     client: &HttpClientRef,
     ids: Vec<u64>,
@@ -124,6 +149,38 @@ async fn load_more_page(
     end: usize,
 ) -> Result<Vec<Story>, String> {
     fetch_stories_page(client, &ids, start, end).await
+}
+
+#[cfg(feature = "robot-app")]
+fn mock_ids() -> Vec<u64> {
+    (0..ROBOT_STORY_COUNT)
+        .map(|index| 1_000_000 + index as u64)
+        .collect()
+}
+
+#[cfg(feature = "robot-app")]
+fn mock_story(id: u64, index: usize) -> Story {
+    Story {
+        id,
+        title: Some(format!("Mock Story #{}", index + 1)),
+        by: "robot".to_string(),
+        score: 100 + index as i32,
+        time: 1_700_000_000 + index as i64 * 60,
+        url: Some(format!("https://example.com/story/{}", id)),
+        descendants: Some(index as i32),
+        kids: Vec::new(),
+        r#type: "story".to_string(),
+    }
+}
+
+#[cfg(feature = "robot-app")]
+fn mock_stories_page(ids: &[u64], start: usize, end: usize) -> Vec<Story> {
+    ids.iter()
+        .enumerate()
+        .skip(start)
+        .take(end.saturating_sub(start))
+        .map(|(index, id)| mock_story(*id, index))
+        .collect()
 }
 
 fn story_target_url(story: &Story) -> String {
@@ -256,6 +313,9 @@ pub fn hacker_news_tab() {
     LazyColumn(
         Modifier::empty()
             .fill_max_size()
+            .semantics(|config: &mut SemanticsConfiguration| {
+                config.content_description = Some("HackerNewsList".to_string());
+            })
             .padding(16.0)
             .background(Color(0.96, 0.96, 0.94, 1.0)),
         list_state,

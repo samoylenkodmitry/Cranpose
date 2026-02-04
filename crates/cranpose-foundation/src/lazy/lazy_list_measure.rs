@@ -96,6 +96,9 @@ pub fn measure_lazy_list<F>(
 where
     F: FnMut(usize) -> LazyListMeasuredItem,
 {
+    let raw_viewport_size = viewport_size;
+    let is_infinite_viewport = raw_viewport_size.is_infinite();
+
     // reverse_layout is handled during placement (create_lazy_list_placements)
     // The measurement logic remains synonymous with "start" being the anchor edge
 
@@ -105,6 +108,8 @@ where
         state.update_layout_info(LazyListLayoutInfo {
             visible_items_info: Vec::new(),
             total_items_count: 0,
+            raw_viewport_size,
+            is_infinite_viewport,
             viewport_size,
             viewport_start_offset: config.before_content_padding,
             viewport_end_offset: config.after_content_padding,
@@ -122,6 +127,8 @@ where
         state.update_layout_info(LazyListLayoutInfo {
             visible_items_info: Vec::new(),
             total_items_count: items_count,
+            raw_viewport_size,
+            is_infinite_viewport,
             viewport_size,
             viewport_start_offset: config.before_content_padding,
             viewport_end_offset: config.after_content_padding,
@@ -135,6 +142,7 @@ where
     // 1. Viewport handling - detect and handle infinite viewports
     let viewport = ViewportHandler::new(viewport_size, state.average_item_size(), config.spacing);
     let effective_viewport_size = viewport.effective_size();
+    let is_infinite_viewport = viewport.is_infinite();
 
     // 2. Resolve and normalize scroll position
     let resolver = ScrollPositionResolver::new(state, config, items_count, effective_viewport_size);
@@ -226,6 +234,8 @@ where
             .map(|i| i.to_item_info())
             .collect(),
         total_items_count: items_count,
+        raw_viewport_size,
+        is_infinite_viewport,
         viewport_size: effective_viewport_size,
         viewport_start_offset: config.before_content_padding,
         viewport_end_offset: config.after_content_padding,

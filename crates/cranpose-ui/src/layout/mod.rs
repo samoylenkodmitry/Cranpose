@@ -1213,19 +1213,30 @@ impl LayoutBuilderState {
         }
 
         // Try to measure through the modifier node chain first.
-        let chain_constraints = Constraints {
-            min_width: constraints.min_width,
-            max_width: if matches!(layout_props.width(), DimensionConstraint::Unspecified) {
-                f32::INFINITY
-            } else {
-                constraints.max_width
-            },
-            min_height: constraints.min_height,
-            max_height: if matches!(layout_props.height(), DimensionConstraint::Unspecified) {
-                f32::INFINITY
-            } else {
-                constraints.max_height
-            },
+        // If a node participates in weight-based sizing, never loosen constraints;
+        // otherwise, use unbounded max on unspecified dimensions to support wrap-content
+        // behavior without fill modifiers forcing parent size.
+        let has_weight = layout_props
+            .weight()
+            .map(|weight| weight.weight > 0.0)
+            .unwrap_or(false);
+        let chain_constraints = if has_weight {
+            constraints
+        } else {
+            Constraints {
+                min_width: constraints.min_width,
+                max_width: if matches!(layout_props.width(), DimensionConstraint::Unspecified) {
+                    f32::INFINITY
+                } else {
+                    constraints.max_width
+                },
+                min_height: constraints.min_height,
+                max_height: if matches!(layout_props.height(), DimensionConstraint::Unspecified) {
+                    f32::INFINITY
+                } else {
+                    constraints.max_height
+                },
+            }
         };
 
         let mut modifier_chain_result = Self::measure_through_modifier_chain(
