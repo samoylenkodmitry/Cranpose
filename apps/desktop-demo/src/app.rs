@@ -252,7 +252,7 @@ pub fn combined_app() {
 }
 
 fn tab_requires_scroll(tab: DemoTab) -> bool {
-    !matches!(tab, DemoTab::LazyList | DemoTab::HackerNews)
+    !matches!(tab, DemoTab::HackerNews)
 }
 
 #[composable]

@@ -292,23 +292,7 @@ pub fn hacker_news_tab() {
     launch_initial_load(refresh_trigger.get(), news_state, http_client.clone());
     launch_load_more(load_more_trigger.get(), news_state, http_client.clone());
 
-    let visible_start = list_state.first_visible_item_index();
-    let visible_count = list_state.stats().items_in_use;
-    let visible_end = visible_start.saturating_add(visible_count.saturating_sub(1));
-
-    if let NewsState::Success(data) = news_state.get() {
-        let last_story_index = 1usize.saturating_add(data.stories.len().saturating_sub(1));
-        let preload_index = last_story_index.saturating_sub(AUTOLOAD_THRESHOLD);
-
-        if data.has_more()
-            && !data.is_loading_more
-            && visible_end >= preload_index
-            && auto_load_guard.get() != data.next_index
-        {
-            auto_load_guard.set(data.next_index);
-            load_more_trigger.update(|v| *v = v.wrapping_add(1));
-        }
-    }
+    AutoLoadMore(list_state, news_state, auto_load_guard, load_more_trigger);
 
     LazyColumn(
         Modifier::empty()
@@ -513,6 +497,42 @@ pub fn hacker_news_tab() {
             }
         },
     );
+}
+
+/// Auto-loads additional stories when nearing the end of the visible list.
+/// This is isolated to its own composable scope so scroll-driven recomposition
+/// does not recompose the LazyColumn content.
+#[allow(non_snake_case)]
+#[composable]
+fn AutoLoadMore(
+    list_state: cranpose_foundation::lazy::LazyListState,
+    news_state: cranpose_core::MutableState<NewsState>,
+    auto_load_guard: cranpose_core::MutableState<usize>,
+    load_more_trigger: cranpose_core::MutableState<u64>,
+) {
+    let visible_start = list_state.first_visible_item_index();
+    let visible_count = list_state.stats().items_in_use;
+    let visible_end = visible_start.saturating_add(visible_count.saturating_sub(1));
+
+    let (should_trigger, next_index) = match news_state.get() {
+        NewsState::Success(data) => {
+            let last_story_index = 1usize.saturating_add(data.stories.len().saturating_sub(1));
+            let preload_index = last_story_index.saturating_sub(AUTOLOAD_THRESHOLD);
+            let should = data.has_more()
+                && !data.is_loading_more
+                && visible_end >= preload_index
+                && auto_load_guard.get() != data.next_index;
+            (should, data.next_index)
+        }
+        _ => (false, 0),
+    };
+
+    cranpose_core::LaunchedEffect!((should_trigger,next_index), move |_scope| {
+        if should_trigger {
+            auto_load_guard.set(next_index);
+            load_more_trigger.update(|v| *v = v.wrapping_add(1));
+        }
+    });
 }
 
 #[composable]
