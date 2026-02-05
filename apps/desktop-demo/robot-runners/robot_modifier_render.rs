@@ -2,7 +2,7 @@
 //! Tests that clicking "Positioned Boxes" in modifier tab shows content
 
 use cranpose::AppLauncher;
-use cranpose_testing::{find_button, find_in_semantics, find_text};
+use cranpose_testing::{find_button, find_button_in_semantics, find_in_semantics, find_text};
 use desktop_app::app::combined_app;
 use desktop_app::fonts::DEMO_FONTS;
 use std::time::Duration;
@@ -20,9 +20,7 @@ fn main() {
             println!("✓ App launched");
 
             // Click on Modifiers Showcase tab (note: with 's')
-            if let Some((x, y, w, h)) =
-                find_in_semantics(&robot, |elem| find_button(elem, "Modifiers Showcase"))
-            {
+            if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Modifiers Showcase") {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
                 robot.click(cx, cy).expect("click modifiers tab");

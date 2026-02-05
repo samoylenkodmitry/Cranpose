@@ -1,5 +1,7 @@
+use crate::composable;
 use cranpose_core::compositionLocalOf;
 use cranpose_core::CompositionLocal;
+use cranpose_core::CompositionLocalProvider;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -70,4 +72,15 @@ pub fn local_uri_handler() -> CompositionLocal<UriHandlerRef> {
             .expect("Uri handler composition local must be initialized")
             .clone()
     })
+}
+
+#[allow(non_snake_case)]
+#[composable]
+pub fn ProvideUriHandler(content: impl FnOnce()) {
+    let uri_handler = cranpose_core::remember(default_uri_handler).with(|state| state.clone());
+    let uri_local = local_uri_handler();
+
+    CompositionLocalProvider(vec![uri_local.provides(uri_handler)], move || {
+        content();
+    });
 }

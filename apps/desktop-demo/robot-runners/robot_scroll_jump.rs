@@ -12,7 +12,7 @@
 //! ```
 
 use cranpose::{AppLauncher, Robot};
-use cranpose_testing::{find_button, find_in_semantics, find_text};
+use cranpose_testing::{find_button_in_semantics, find_in_semantics, find_text};
 use desktop_app::app;
 use std::time::Duration;
 
@@ -39,9 +39,7 @@ fn main() {
             // STEP 1: Click Lazy List tab
             // ============================================
             println!("=== STEP 1: Click Lazy List tab ===");
-            if let Some((x, y, w, h)) =
-                find_in_semantics(&robot, |elem| find_button(elem, "Lazy List"))
-            {
+            if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Lazy List") {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
                 println!("  Clicking at ({:.0}, {:.0})", cx, cy);

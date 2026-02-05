@@ -33,7 +33,7 @@ desktop = ["cranpose/desktop"]
 android = ["cranpose/android"]
 web = ["cranpose/web", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:wasm-logger"]
 # Enable real app robot testing
-robot-app = ["cranpose-testing/robot-app", "logging", "cranpose-ui/test-helpers"]
+robot-app = ["logging", "cranpose-ui/test-helpers"]
 # Enable env_logger (adds ~600KB from regex)
 logging = ["dep:env_logger"]
 
@@ -69,7 +69,7 @@ console_error_panic_hook = "0.1"
 
 [dev-dependencies]
 cranpose-macros = { path = "../../crates/cranpose-macros" }
-cranpose-testing = { path = "../../crates/cranpose-testing", features = ["robot-app"] }
+cranpose-testing = { path = "../../crates/cranpose-testing" }
 
 # Robot test runners
 [[example]]

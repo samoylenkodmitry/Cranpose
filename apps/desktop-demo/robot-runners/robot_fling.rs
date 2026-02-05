@@ -12,13 +12,11 @@
 //! cargo run --package desktop-app --example robot_fling --features robot-app
 //! ```
 
-mod robot_test_utils;
-
 use cranpose::AppLauncher;
-use cranpose_testing::{find_button, find_in_semantics, find_text};
+use cranpose_testing::{find_bounds_by_text, visible_bounds_in_viewport};
+use cranpose_testing::{find_button_in_semantics, find_in_semantics, find_text};
 use cranpose_ui::{last_fling_velocity, reset_last_fling_velocity};
 use desktop_app::app;
-use robot_test_utils::find_bounds_by_text;
 use std::time::Duration;
 
 fn main() {
@@ -55,9 +53,7 @@ fn main() {
             // =========================================================
             println!("--- Navigating to Lazy List Tab ---");
 
-            if let Some((x, y, w, h)) =
-                find_in_semantics(&robot, |elem| find_button(elem, "Lazy List"))
-            {
+            if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Lazy List") {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
                 println!("  Found 'Lazy List' tab at ({:.1}, {:.1})", cx, cy);
@@ -107,9 +103,18 @@ fn main() {
                 }
             };
 
-            let start_x = list_bounds.0 + list_bounds.2 * 0.5;
-            let start_y = list_bounds.1 + list_bounds.3 * 0.8;
-            let end_y = list_bounds.1 + list_bounds.3 * 0.2;
+            let visible_bounds = match visible_bounds_in_viewport(&robot, list_bounds, 12.0) {
+                Some(bounds) => bounds,
+                None => {
+                    println!("  ✗ LazyListViewport is not visible in the viewport");
+                    let _ = robot.exit();
+                    return;
+                }
+            };
+
+            let start_x = visible_bounds.0 + visible_bounds.2 * 0.5;
+            let start_y = visible_bounds.1 + visible_bounds.3 * 0.8;
+            let end_y = visible_bounds.1 + visible_bounds.3 * 0.2;
             let swipe_distance = (start_y - end_y).abs();
             let swipe_steps = 5;
             let step_delay_ms = 10; // Fast swipe - 10ms between steps = ~900 px/sec

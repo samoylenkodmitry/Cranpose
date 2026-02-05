@@ -27,14 +27,14 @@ pub trait TextMeasurer: 'static {
 struct MonospacedTextMeasurer;
 
 impl MonospacedTextMeasurer {
-    const DEFAULT_SIZE: f32 = 16.0;
+    const DEFAULT_SIZE: f32 = 14.0;
     const CHAR_WIDTH_RATIO: f32 = 0.6; // Width is 0.6 of Height
 
     fn get_metrics(style: &TextStyle) -> (f32, f32) {
-        let size = if let super::unit::TextUnit::Sp(v) = style.font_size {
-            v
-        } else {
-            Self::DEFAULT_SIZE
+        let size = match style.font_size {
+            super::unit::TextUnit::Sp(v) => v,
+            super::unit::TextUnit::Em(v) => v * Self::DEFAULT_SIZE,
+            super::unit::TextUnit::Unspecified => Self::DEFAULT_SIZE,
         };
         (size * Self::CHAR_WIDTH_RATIO, size) // (width, height)
     }

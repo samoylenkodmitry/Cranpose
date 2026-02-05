@@ -11,12 +11,11 @@
 //! cargo run --package desktop-app --example robot_fling_precise --features robot-app
 //! ```
 
-mod robot_test_utils;
-
 use cranpose::{AppLauncher, Robot};
-use cranpose_testing::{find_button, find_in_semantics, find_text};
+use cranpose_testing::{exit_with_timeout, find_bounds_by_text, visible_bounds_in_viewport};
+use cranpose_testing::{find_button_in_semantics, find_in_semantics, find_text};
+use cranpose_ui::{last_fling_velocity, reset_last_fling_velocity};
 use desktop_app::app;
-use robot_test_utils::{exit_with_timeout, find_bounds_by_text};
 use std::time::Duration;
 
 fn main() {
@@ -70,9 +69,7 @@ fn main() {
             // Navigate to Lazy List tab
             // =========================================================
             println!("--- Setup: Navigate to Lazy List Tab ---");
-            if let Some((x, y, w, h)) =
-                find_in_semantics(&robot, |elem| find_button(elem, "Lazy List"))
-            {
+            if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Lazy List") {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
                 let _ = robot.mouse_move(cx, cy);
@@ -96,9 +93,18 @@ fn main() {
                     return;
                 }
             };
-            let center_x = list_bounds.0 + list_bounds.2 * 0.5;
-            let upper_y = list_bounds.1 + list_bounds.3 * 0.2;
-            let lower_y = list_bounds.1 + list_bounds.3 * 0.8;
+            let visible_bounds = match visible_bounds_in_viewport(&robot, list_bounds, 12.0) {
+                Some(bounds) => bounds,
+                None => {
+                    println!("✗ LazyListViewport is not visible in the viewport");
+                    let _ = robot.exit();
+                    return;
+                }
+            };
+
+            let center_x = visible_bounds.0 + visible_bounds.2 * 0.5;
+            let upper_y = visible_bounds.1 + visible_bounds.3 * 0.2;
+            let lower_y = visible_bounds.1 + visible_bounds.3 * 0.8;
             let drag_distance = (lower_y - upper_y).max(80.0);
 
             // Find item positions function
@@ -232,6 +238,8 @@ fn main() {
             // TEST 4: Fast swipe triggers fling (check console output)
             // =========================================================
             test!("Fast swipe triggers fling", {
+                reset_last_fling_velocity();
+
                 // Get starting position
                 let before = find_item(&robot, "Item #0");
                 let before_y = before.map(|(_, y)| y).unwrap_or(100.0);
@@ -255,7 +263,7 @@ fn main() {
                 // Release
                 let _ = robot.mouse_up();
 
-                // Wait for fling to complete (ensures full momentum before measuring)
+                std::thread::sleep(Duration::from_millis(300));
                 let _ = robot.wait_for_idle();
 
                 // Check: Item 0 should have moved significantly more than just the drag distance
@@ -264,12 +272,18 @@ fn main() {
                 match after {
                     Some((_, after_y)) => {
                         let total_movement = before_y - after_y;
-                        // Should have moved more than just the 200px drag
-                        // With fling, expect at least 200px total movement
-                        if total_movement < 150.0 {
+                        let velocity = last_fling_velocity();
+                        if velocity.abs() < 50.0 {
                             return Err(format!(
-                                "Total movement {} < 150px (expected fling momentum)",
-                                total_movement
+                                "Fling velocity {:.1} < 50px/sec (expected fling momentum)",
+                                velocity
+                            ));
+                        }
+                        let min_expected = (drag_distance * 0.6).max(80.0);
+                        if total_movement < min_expected {
+                            return Err(format!(
+                                "Total movement {} < {:.1}px (expected fling momentum)",
+                                total_movement, min_expected
                             ));
                         }
                         eprintln!("  (Item 0 moved {} px total)", total_movement);

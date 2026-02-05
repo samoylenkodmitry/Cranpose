@@ -92,7 +92,8 @@ pub use render_state::{
 pub use renderer::{HeadlessRenderer, PaintLayer, RecordedRenderScene, RenderOp};
 pub use scroll::{ScrollElement, ScrollNode, ScrollState};
 pub use uri_handler::{
-    default_uri_handler, local_uri_handler, UriHandler, UriHandlerError, UriHandlerRef,
+    default_uri_handler, local_uri_handler, ProvideUriHandler, UriHandler, UriHandlerError,
+    UriHandlerRef,
 };
 // Test utilities for fling velocity verification (only with test-helpers feature)
 #[cfg(feature = "test-helpers")]

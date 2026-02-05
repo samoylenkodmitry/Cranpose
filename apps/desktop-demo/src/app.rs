@@ -18,7 +18,6 @@ pub mod lazy_list;
 mod mineswapper2;
 mod web_fetch;
 
-use cranpose_ui::{default_uri_handler, local_uri_handler};
 use hacker_news::hacker_news_tab;
 use lazy_list::lazy_list_example;
 use web_fetch::web_fetch_example;
@@ -57,6 +56,23 @@ impl DemoTab {
             DemoTab::HackerNews => "Hacker News",
         }
     }
+}
+
+pub const DEMO_TABS: [DemoTab; 10] = [
+    DemoTab::Counter,
+    DemoTab::CompositionLocal,
+    DemoTab::Async,
+    DemoTab::WebFetch,
+    DemoTab::TextInput,
+    DemoTab::Layout,
+    DemoTab::ModifierShowcase,
+    DemoTab::LazyList,
+    DemoTab::Mineswapper2,
+    DemoTab::HackerNews,
+];
+
+pub fn demo_tab_labels() -> Vec<&'static str> {
+    DEMO_TABS.iter().map(|tab| tab.label()).collect()
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -127,17 +143,89 @@ fn random() -> i32 {
     }
 }
 
+#[allow(non_snake_case)]
 #[composable]
-pub(crate) fn scrollable_tab(content: impl FnMut() + 'static) {
+pub(crate) fn ScrollableTab(content: impl FnMut() + 'static) {
     let scroll_state =
         cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|s| s.clone());
+    let modifier = Modifier::empty()
+        .fill_max_size()
+        .vertical_scroll(scroll_state, false);
     Column(
-        Modifier::empty()
-            .fill_max_size()
-            .vertical_scroll(scroll_state, false),
+        modifier,
         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(16.0)),
         content,
     );
+}
+
+#[allow(non_snake_case)]
+#[composable]
+fn TabButton(tab: DemoTab, active_tab: cranpose_core::MutableState<DemoTab>, padding: f32) {
+    let is_active = active_tab.get() == tab;
+    Button(
+        Modifier::empty()
+            .rounded_corners(12.0)
+            .draw_behind(move |scope| {
+                scope.draw_round_rect(
+                    Brush::solid(if is_active {
+                        Color(0.2, 0.45, 0.9, 1.0)
+                    } else {
+                        Color(0.3, 0.3, 0.3, 0.5)
+                    }),
+                    CornerRadii::uniform(12.0),
+                );
+            })
+            .padding(padding),
+        {
+            let tab_state = active_tab;
+            move || {
+                if tab_state.get() != tab {
+                    tab_state.set(tab);
+                }
+            }
+        },
+        {
+            let label = tab.label();
+            move || {
+                Text(label, Modifier::empty().padding(4.0), TextStyle::default());
+            }
+        },
+    );
+}
+
+#[allow(non_snake_case)]
+#[composable]
+fn TabBarHorizontal(active_tab: cranpose_core::MutableState<DemoTab>) {
+    let tabs_scroll_state =
+        cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|state| state.clone());
+    Row(
+        Modifier::empty()
+            .fill_max_width()
+            .padding(8.0)
+            .horizontal_scroll(tabs_scroll_state, false),
+        RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
+        move || {
+            for tab in DEMO_TABS {
+                TabButton(tab, active_tab, 10.0);
+            }
+        },
+    );
+}
+
+#[allow(non_snake_case)]
+#[composable]
+fn TabContent(active_tab: cranpose_core::MutableState<DemoTab>, modifier: Modifier) {
+    let active = active_tab.get();
+    cranpose_ui::Box(modifier, BoxSpec::default(), move || {
+        cranpose_core::with_key(&active, || {
+            let active_for_content = active;
+            if tab_requires_scroll(active_for_content) {
+                ScrollableTab(move || render_active_tab(active_for_content));
+            } else {
+                render_active_tab(active_for_content);
+            }
+        });
+    });
 }
 
 #[composable]
@@ -152,103 +240,20 @@ pub fn combined_app() {
         *cell.borrow_mut() = Some(active_tab);
     });
 
-    // Create scroll state for tabs row
-    let tabs_scroll_state =
-        cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|state| state.clone());
-    let uri_handler = cranpose_core::remember(default_uri_handler).with(|state| state.clone());
-    let uri_local = local_uri_handler();
+    Column(
+        Modifier::empty().fill_max_size().padding(20.0),
+        ColumnSpec::default(),
+        move || {
+            TabBarHorizontal(active_tab);
 
-    CompositionLocalProvider(vec![uri_local.provides(uri_handler)], move || {
-        Column(
-            Modifier::empty().fill_max_size().padding(20.0),
-            ColumnSpec::default(),
-            move || {
-                let tab_state_for_row = active_tab;
-                let tab_state_for_content = active_tab;
-                Row(
-                    Modifier::empty()
-                        .fill_max_width()
-                        .padding(8.0)
-                        .horizontal_scroll(tabs_scroll_state.clone(), false),
-                    RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
-                    move || {
-                        let render_tab_button = {
-                            move |tab: DemoTab| {
-                                let tab_state_for_tab = tab_state_for_row;
-                                let is_active = tab_state_for_tab.get() == tab;
+            Spacer(Size {
+                width: 0.0,
+                height: 12.0,
+            });
 
-                                Button(
-                                    Modifier::empty()
-                                        .rounded_corners(12.0)
-                                        .draw_behind(move |scope| {
-                                            scope.draw_round_rect(
-                                                Brush::solid(if is_active {
-                                                    Color(0.2, 0.45, 0.9, 1.0)
-                                                } else {
-                                                    Color(0.3, 0.3, 0.3, 0.5)
-                                                }),
-                                                CornerRadii::uniform(12.0),
-                                            );
-                                        })
-                                        .padding(10.0),
-                                    {
-                                        let tab_state = tab_state_for_tab;
-                                        move || {
-                                            if tab_state.get() != tab {
-                                                tab_state.set(tab);
-                                            }
-                                        }
-                                    },
-                                    {
-                                        let label = tab.label();
-                                        move || {
-                                            Text(
-                                                label,
-                                                Modifier::empty().padding(4.0),
-                                                TextStyle::default(),
-                                            );
-                                        }
-                                    },
-                                );
-                            }
-                        };
-
-                        render_tab_button(DemoTab::Counter);
-                        render_tab_button(DemoTab::CompositionLocal);
-                        render_tab_button(DemoTab::Async);
-                        render_tab_button(DemoTab::WebFetch);
-                        render_tab_button(DemoTab::TextInput);
-                        render_tab_button(DemoTab::Layout);
-                        render_tab_button(DemoTab::ModifierShowcase);
-                        render_tab_button(DemoTab::LazyList);
-                        render_tab_button(DemoTab::Mineswapper2);
-                        render_tab_button(DemoTab::HackerNews);
-                    },
-                );
-
-                Spacer(Size {
-                    width: 0.0,
-                    height: 12.0,
-                });
-
-                let active = tab_state_for_content.get();
-                cranpose_ui::Box(
-                    Modifier::empty().fill_max_width().weight(1.0),
-                    BoxSpec::default(),
-                    move || {
-                        cranpose_core::with_key(&active, || {
-                            let active_for_content = active;
-                            if tab_requires_scroll(active) {
-                                scrollable_tab(move || render_active_tab(active_for_content));
-                            } else {
-                                render_active_tab(active_for_content);
-                            }
-                        });
-                    },
-                );
-            },
-        );
-    });
+            TabContent(active_tab, Modifier::empty().fill_max_width().weight(1.0));
+        },
+    );
 }
 
 fn tab_requires_scroll(tab: DemoTab) -> bool {

@@ -9,13 +9,81 @@
 //! cargo run --package desktop-app --example robot_hacker_news_scroll --features robot-app
 //! ```
 
-mod robot_test_utils;
-
 use cranpose::AppLauncher;
-use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
+use cranpose_core::CompositionLocalProvider;
+use cranpose_testing::{
+    find_button_in_semantics, find_element_by_text_exact, find_in_semantics, find_text_exact,
+    print_semantics_with_bounds,
+};
+use cranpose_ui::http::HttpFuture;
+use cranpose_ui::{local_http_client, HttpClient, HttpClientRef, HttpError};
 use desktop_app::app;
-use robot_test_utils::{find_element_by_text_exact, print_semantics_with_bounds};
+use serde_json::json;
+use std::sync::Arc;
 use std::time::Duration;
+
+const MOCK_STORY_COUNT: usize = 60;
+
+struct MockHackerNewsClient {
+    ids: Vec<u64>,
+}
+
+impl MockHackerNewsClient {
+    fn new() -> Self {
+        Self {
+            ids: (0..MOCK_STORY_COUNT)
+                .map(|index| 1_000_000 + index as u64)
+                .collect(),
+        }
+    }
+
+    fn topstories_json(&self) -> String {
+        json!(self.ids).to_string()
+    }
+
+    fn story_json(&self, id: u64) -> String {
+        let index = self
+            .ids
+            .iter()
+            .position(|candidate| *candidate == id)
+            .unwrap_or(0);
+        json!({
+            "id": id,
+            "title": format!("Mock Story #{}", index + 1),
+            "by": "robot",
+            "score": 100 + index as i32,
+            "time": 1_700_000_000 + index as i64 * 60,
+            "url": format!("https://example.com/story/{}", id),
+            "descendants": index as i32,
+            "kids": [],
+            "type": "story"
+        })
+        .to_string()
+    }
+
+    fn parse_story_id(url: &str) -> Option<u64> {
+        let suffix = url.split("/item/").nth(1)?;
+        let id_str = suffix.strip_suffix(".json")?;
+        id_str.parse::<u64>().ok()
+    }
+}
+
+impl HttpClient for MockHackerNewsClient {
+    fn get_text<'a>(&'a self, url: &'a str) -> HttpFuture<'a, String> {
+        let response = if url.ends_with("/topstories.json") {
+            Ok(self.topstories_json())
+        } else if let Some(id) = Self::parse_story_id(url) {
+            Ok(self.story_json(id))
+        } else {
+            Err(HttpError::RequestFailed {
+                url: url.to_string(),
+                message: "Unknown mock endpoint".to_string(),
+            })
+        };
+
+        Box::pin(async move { response })
+    }
+}
 
 fn main() {
     env_logger::init();
@@ -41,7 +109,7 @@ fn main() {
 
             let wait_for_text = |text: &str| -> bool {
                 for _ in 0..40 {
-                    if find_text_in_semantics(&robot, text).is_some() {
+                    if find_in_semantics(&robot, |elem| find_text_exact(elem, text)).is_some() {
                         return true;
                     }
                     std::thread::sleep(Duration::from_millis(100));
@@ -56,7 +124,7 @@ fn main() {
                 std::process::exit(1);
             }
 
-            // Wait for mocked stories to appear (robot-app feature).
+            // Wait for mocked stories to appear.
             if !wait_for_text("Mock Story #1") {
                 println!("FATAL: Mock stories did not appear");
                 if let Ok(elements) = robot.get_semantics() {
@@ -121,8 +189,10 @@ fn main() {
                 let _ = robot.wait_for_idle();
             }
 
-            let story1_visible = find_text_in_semantics(&robot, "Mock Story #1").is_some();
-            let story12_visible = find_text_in_semantics(&robot, "Mock Story #12").is_some();
+            let story1_visible =
+                find_in_semantics(&robot, |elem| find_text_exact(elem, "Mock Story #1")).is_some();
+            let story12_visible =
+                find_in_semantics(&robot, |elem| find_text_exact(elem, "Mock Story #12")).is_some();
 
             if story1_visible && !story12_visible {
                 println!("  ✗ FAIL: Scroll did not reveal later stories");
@@ -136,5 +206,14 @@ fn main() {
             println!("  ✓ Scroll revealed later stories");
             let _ = robot.exit();
         })
-        .run(app::combined_app);
+        .run({
+            let mock_client: HttpClientRef = Arc::new(MockHackerNewsClient::new());
+            move || {
+                let local = local_http_client();
+                let client = mock_client.clone();
+                CompositionLocalProvider(vec![local.provides(client)], || {
+                    app::combined_app();
+                });
+            }
+        });
 }

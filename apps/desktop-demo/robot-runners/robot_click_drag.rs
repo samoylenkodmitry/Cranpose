@@ -10,7 +10,7 @@
 //! ```
 
 use cranpose::AppLauncher;
-use cranpose_testing::{find_button, find_in_semantics, find_text};
+use cranpose_testing::{find_button, find_button_in_semantics, find_in_semantics, find_text};
 use desktop_app::app;
 use std::time::Duration;
 
@@ -123,7 +123,7 @@ fn main() {
             // =========================================================
             println!("--- Test 3: Switch to Async Runtime Tab ---");
 
-            if let Some((x, y, w, h)) = find_in_semantics(&robot, |elem| find_button(elem, "Async Runtime")) {
+            if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Async Runtime") {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
                 println!("  Found 'Async Runtime' tab at ({:.1}, {:.1})", cx, cy);
@@ -150,7 +150,7 @@ fn main() {
             // =========================================================
             println!("--- Test 4: Switch Back to Counter App Tab ---");
 
-            if let Some((x, y, w, h)) = find_in_semantics(&robot, |elem| find_button(elem, "Counter App")) {
+            if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Counter App") {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
                 println!("  Found 'Counter App' tab at ({:.1}, {:.1})", cx, cy);

@@ -118,6 +118,9 @@ run_test() {
             timeout_secs=180
             ;;
         robot_fling_interrupt)
+            timeout_secs=180
+            ;;
+        robot_hacker_news_scroll)
             timeout_secs=120
             ;;
         robot_lazy_varheight_lifecycle)

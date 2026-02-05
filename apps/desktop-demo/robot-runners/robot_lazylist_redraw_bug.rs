@@ -11,8 +11,6 @@
 //!
 //! If the bug exists, FirstIndex will still show 0 after clicking the buttons.
 
-mod robot_test_utils;
-
 use cranpose::AppLauncher;
 use cranpose_testing::{
     find_button_in_semantics, find_text_by_prefix_in_semantics, find_text_in_semantics,

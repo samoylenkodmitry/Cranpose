@@ -6,11 +6,11 @@ Robot testing provides automated UI testing capabilities for Cranpose applicatio
 
 ### Enable Robot Testing
 
-Add the `robot-app` feature to your dev dependencies:
+Add `cranpose-testing` as a dev dependency:
 
 ```toml
 [dev-dependencies]
-cranpose-testing = { path = "../../crates/cranpose-testing", features = ["robot-app"] }
+cranpose-testing = { path = "../../crates/cranpose-testing" }
 ```
 
 ### Basic Example

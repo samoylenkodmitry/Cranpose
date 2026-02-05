@@ -4,25 +4,19 @@
 
 pub mod robot;
 pub mod robot_assertions;
-pub mod testing;
-
-#[cfg(feature = "robot-app")]
 pub mod robot_helpers;
+pub mod testing;
 
 // Re-export testing utilities
 pub use robot::*;
 pub use robot_assertions::{Bounds, SemanticElementLike};
-pub use testing::*;
-
-#[cfg(feature = "robot-app")]
 pub use robot_helpers::*;
+pub use testing::*;
 
 pub mod prelude {
     pub use crate::robot::*;
     pub use crate::robot_assertions;
     pub use crate::robot_assertions::{Bounds, SemanticElementLike};
-    pub use crate::testing::*;
-
-    #[cfg(feature = "robot-app")]
     pub use crate::robot_helpers::*;
+    pub use crate::testing::*;
 }

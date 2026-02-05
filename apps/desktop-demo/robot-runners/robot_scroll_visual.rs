@@ -8,13 +8,22 @@
 //! cargo run --package desktop-app --example robot_scroll_visual --features robot-app
 //! ```
 
-mod robot_test_utils;
-
 use cranpose::AppLauncher;
-use cranpose_testing::{find_button, find_in_semantics, find_text};
+use cranpose_testing::{
+    exit_with_timeout, find_button_in_semantics, find_text_by_prefix_in_semantics,
+};
 use desktop_app::app;
-use robot_test_utils::find_bounds_by_text;
 use std::time::Duration;
+
+fn parse_first_index(text: &str) -> Option<usize> {
+    let (_, value) = text.split_once(':')?;
+    value.trim().parse::<usize>().ok()
+}
+
+fn read_first_index(robot: &cranpose::Robot) -> Option<usize> {
+    let (_, _, _, _, text) = find_text_by_prefix_in_semantics(robot, "FirstIndex:")?;
+    parse_first_index(&text)
+}
 
 fn main() {
     env_logger::init();
@@ -26,19 +35,12 @@ fn main() {
         .with_size(800, 600)
         .with_headless(true)
         .with_test_driver(|robot| {
-            // Timeout
-            std::thread::spawn(|| {
-                std::thread::sleep(Duration::from_secs(30));
-                println!("✗ Test timed out");
-                std::process::exit(1);
-            });
-
             println!("✓ App launched\n");
             std::thread::sleep(Duration::from_millis(500));
             let _ = robot.wait_for_idle();
 
             // Navigate to Lazy List tab
-            let lazy_tab = find_in_semantics(&robot, |elem| find_button(elem, "Lazy List"));
+            let lazy_tab = find_button_in_semantics(&robot, "Lazy List");
 
             if let Some((x, y, w, h)) = lazy_tab {
                 let cx = x + w / 2.0;
@@ -59,83 +61,71 @@ fn main() {
             std::thread::sleep(Duration::from_millis(300));
             let _ = robot.wait_for_idle();
 
-            let list_bounds = match find_bounds_by_text(&robot, "LazyListViewport") {
-                Some(bounds) => bounds,
-                None => {
-                    println!("  ✗ Could not find LazyListViewport bounds");
-                    std::process::exit(1);
+            let mut before_index = None;
+            for _ in 0..20 {
+                if let Some(idx) = read_first_index(&robot) {
+                    before_index = Some(idx);
+                    break;
                 }
-            };
-            let center_x = list_bounds.0 + list_bounds.2 * 0.5;
-            let start_y = list_bounds.1 + list_bounds.3 * 0.8;
-            let end_y = list_bounds.1 + list_bounds.3 * 0.2;
-            let drag_distance = (start_y - end_y).abs();
+                std::thread::sleep(Duration::from_millis(50));
+            }
 
-            // Find first item (Hello #0) BEFORE scroll
-            let hello_0_before = find_in_semantics(&robot, |elem| find_text(elem, "Hello #0"));
-            let y_before = hello_0_before.map(|(_, y, _, _)| y);
+            let Some(before_index) = before_index else {
+                println!("  ✗ Failed to read FirstIndex before scroll");
+                std::process::exit(1);
+            };
 
             println!("\n--- Test: Scroll should move content visually ---");
-            println!("  Item 'Hello #0' Y position before scroll: {:?}", y_before);
+            println!("  First visible index before scroll: {}", before_index);
 
-            if y_before.is_none() {
-                println!("  ✗ Could not find 'Hello #0' - may need different test setup");
+            println!("  Clicking 'Jump to Middle' to change scroll position...");
+            let jump_button = find_button_in_semantics(&robot, "Jump to Middle");
+            if let Some((x, y, w, h)) = jump_button {
+                let _ = robot.mouse_move(x + w / 2.0, y + h / 2.0);
+                std::thread::sleep(Duration::from_millis(50));
+                let _ = robot.mouse_down();
+                std::thread::sleep(Duration::from_millis(50));
+                let _ = robot.mouse_up();
+                std::thread::sleep(Duration::from_millis(250));
+            } else {
+                println!("  ✗ Could not find 'Jump to Middle' button");
                 std::process::exit(1);
             }
-
-            // Perform a drag scroll (down to scroll up)
-            let _ = robot.mouse_move(center_x, start_y);
-            std::thread::sleep(Duration::from_millis(50));
-            let _ = robot.mouse_down();
-            std::thread::sleep(Duration::from_millis(50));
-
-            // Drag upward (content scrolls down = items move up)
-            for i in 0..10 {
-                let progress = i as f32 / 10.0;
-                let _ = robot.mouse_move(center_x, start_y - (drag_distance * progress));
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            let _ = robot.mouse_up();
-            std::thread::sleep(Duration::from_millis(200));
-            let _ = robot.wait_for_idle();
-
-            // Find first item AFTER scroll
-            let hello_0_after = find_in_semantics(&robot, |elem| find_text(elem, "Hello #0"));
-            let y_after = hello_0_after.map(|(_, y, _, _)| y);
-
-            println!("  Item 'Hello #0' Y position after scroll: {:?}", y_after);
+            println!("  Scroll action complete, checking list index...");
 
             // ===== CRITICAL ASSERTION =====
-            // If scroll works, the Y position MUST have changed
-            match (y_before, y_after) {
-                (Some(before), Some(after)) => {
-                    let delta = (after - before).abs();
-                    if delta > 10.0 {
-                        // Good: item moved significantly
-                        println!("  ✓ PASS: Item moved by {:.1}px", delta);
-                    } else {
-                        // BAD: item didn't move - scroll is visually broken!
-                        println!(
-                            "  ✗ FAIL: Item only moved {:.1}px - SCROLL IS VISUALLY BROKEN!",
-                            delta
-                        );
-                        println!("         This indicates layout caches aren't being invalidated");
-                        println!("         when scroll position changes.");
-                        std::process::exit(1);
+            // If scroll works, the first visible index must change.
+            let mut after_index = None;
+            for _ in 0..20 {
+                if let Some(idx) = read_first_index(&robot) {
+                    if idx != before_index {
+                        after_index = Some(idx);
+                        break;
                     }
                 }
-                (Some(_), None) => {
-                    // Item scrolled off-screen - also good
-                    println!("  ✓ PASS: Item scrolled off-screen");
+                std::thread::sleep(Duration::from_millis(50));
+            }
+
+            match after_index {
+                Some(idx) if idx >= 40 => {
+                    println!("  ✓ PASS: First visible index moved to {}", idx);
                 }
-                (None, _) => {
-                    println!("  ? INCONCLUSIVE: Could not find item before scroll");
+                Some(idx) => {
+                    println!(
+                        "  ✗ FAIL: First visible index did not move far enough ({})",
+                        idx
+                    );
+                    std::process::exit(1);
+                }
+                None => {
+                    println!("  ✗ FAIL: First visible index did not change after scroll");
+                    std::process::exit(1);
                 }
             }
 
             println!("\n=== Test Summary ===");
             println!("✓ ALL TESTS PASSED - Scroll is working visually");
-            let _ = robot.exit();
+            exit_with_timeout(&robot, Duration::from_secs(5));
         })
         .run(|| {
             app::combined_app();

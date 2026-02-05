@@ -5,8 +5,6 @@
 //! cargo run --package desktop-app --example robot_lazy_stats --features robot-app
 //! ```
 
-mod robot_test_utils;
-
 use cranpose::AppLauncher;
 use cranpose_testing::{find_button_in_semantics, find_text_by_prefix_in_semantics};
 use desktop_app::app;
@@ -41,7 +39,7 @@ fn main() {
             // Step 2: Find and print ALL text nodes
             println!("\n--- Step 2: Dump all text nodes ---");
             if let Ok(elements) = robot.get_semantics() {
-                robot_test_utils::print_semantics_with_bounds(&elements, 0);
+                cranpose_testing::print_semantics_with_bounds(&elements, 0);
             }
 
             // Step 3: Look for "Visible:" text

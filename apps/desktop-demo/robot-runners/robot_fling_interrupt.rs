@@ -4,11 +4,10 @@
 //! cargo run --package desktop-app --example robot_fling_interrupt --features robot-app
 
 use cranpose::AppLauncher;
+use cranpose_testing::exit_with_timeout;
 use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
 use cranpose_ui::reset_last_fling_velocity;
 use desktop_app::app;
-mod robot_test_utils;
-use robot_test_utils::exit_with_timeout;
 use std::time::Duration;
 
 fn main() {

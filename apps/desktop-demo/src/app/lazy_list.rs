@@ -7,8 +7,8 @@ use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
 use cranpose_foundation::SemanticsConfiguration;
 use cranpose_ui::widgets::{LazyColumn, LazyColumnSpec};
 use cranpose_ui::{
-    composable, Brush, Button, Color, Column, ColumnSpec, CornerRadii, LinearArrangement, Modifier,
-    Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
+    composable, Box, BoxSpec, Brush, Button, Color, Column, ColumnSpec, CornerRadii,
+    LinearArrangement, Modifier, Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
 };
 
 #[derive(Clone, Default, PartialEq)]
@@ -443,37 +443,51 @@ pub fn lazy_list_example() {
 
             // The actual LazyColumn with virtualization using the DSL
             let count = item_count.get();
-            LazyColumn(
-                Modifier::empty()
-                    .semantics(|config: &mut SemanticsConfiguration| {
-                        config.content_description = Some("LazyListViewport".to_string());
-                    })
-                    .fill_max_width()
-                    .height(400.0)
-                    .background(Color(0.06, 0.08, 0.14, 1.0))
-                    .rounded_corners(12.0),
-                list_state,
-                LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(4.0)),
-                |scope| {
-                    scope.items(
-                        count,
-                        None::<fn(usize) -> u64>, // Auto-generate keys from index
-                        // Content type = index % 5 to match height groups
-                        Some(|index: usize| (index % 5) as u64),
-                        move |index| {
-                            LifecycleListItem(index, lifecycle_stats);
-                            Text(
-                                format!("Hello #{}", index),
-                                Modifier::empty()
-                                    .padding(8.0)
-                                    .background(Color(0.3, 0.3, 0.4, 0.4))
-                                    .rounded_corners(8.0),
-                                TextStyle::default(),
-                            );
-                        },
-                    );
-                },
-            );
+            let list_container_modifier = Modifier::empty()
+                .semantics(|config: &mut SemanticsConfiguration| {
+                    config.content_description = Some("LazyListViewport".to_string());
+                })
+                .fill_max_width()
+                .height(400.0)
+                .background(Color(0.06, 0.08, 0.14, 1.0))
+                .rounded_corners(12.0)
+                .pointer_input(list_state.inner_ptr() as usize, move |scope| async move {
+                    scope
+                        .await_pointer_event_scope(|await_scope| async move {
+                            loop {
+                                let event = await_scope.await_pointer_event().await;
+                                event.consume();
+                            }
+                        })
+                        .await;
+                });
+
+            Box(list_container_modifier, BoxSpec::default(), move || {
+                LazyColumn(
+                    Modifier::empty().fill_max_width().height(400.0),
+                    list_state,
+                    LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(4.0)),
+                    |scope| {
+                        scope.items(
+                            count,
+                            None::<fn(usize) -> u64>, // Auto-generate keys from index
+                            // Content type = index % 5 to match height groups
+                            Some(|index: usize| (index % 5) as u64),
+                            move |index| {
+                                LifecycleListItem(index, lifecycle_stats);
+                                Text(
+                                    format!("Hello #{}", index),
+                                    Modifier::empty()
+                                        .padding(8.0)
+                                        .background(Color(0.3, 0.3, 0.4, 0.4))
+                                        .rounded_corners(8.0),
+                                    TextStyle::default(),
+                                );
+                            },
+                        );
+                    },
+                );
+            });
         },
     );
 }

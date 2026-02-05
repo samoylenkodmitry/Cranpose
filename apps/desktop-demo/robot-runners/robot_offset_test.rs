@@ -9,7 +9,7 @@
 //! ```
 
 use cranpose::{AppLauncher, SemanticElement};
-use cranpose_testing::{find_by_text_recursive, find_text_exact};
+use cranpose_testing::{find_button_in_semantics, find_by_text_recursive, find_text_exact};
 use desktop_app::app;
 use std::time::Duration;
 
@@ -39,8 +39,16 @@ fn main() {
             // Step 1: Navigate to Modifiers Showcase tab
             // =====================================================
             println!("\n📌 Step 1: Navigate to Modifiers Showcase tab");
-            if let Err(err) = robot.click_by_text("Modifiers Showcase") {
-                println!("   ✗ Failed to click Modifiers Showcase tab: {err}");
+            if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Modifiers Showcase") {
+                let cx = x + w / 2.0;
+                let cy = y + h / 2.0;
+                if let Err(err) = robot.click(cx, cy) {
+                    println!("   ✗ Failed to click Modifiers Showcase tab: {err}");
+                    robot.exit().ok();
+                    std::process::exit(1);
+                }
+            } else {
+                println!("   ✗ Failed to find Modifiers Showcase tab");
                 robot.exit().ok();
                 std::process::exit(1);
             }

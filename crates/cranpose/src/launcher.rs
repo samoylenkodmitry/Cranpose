@@ -326,7 +326,12 @@ impl AppLauncher {
         not(target_os = "android")
     ))]
     pub fn run(self, content: impl FnMut() + 'static) -> ! {
-        crate::desktop::run(self.settings, content)
+        let mut content = content;
+        crate::desktop::run(self.settings, move || {
+            cranpose_ui::ProvideUriHandler(|| {
+                content();
+            });
+        })
     }
 
     /// Run the application (Android platform).
@@ -337,7 +342,12 @@ impl AppLauncher {
     /// * `content` - The root composable function of your application.
     #[cfg(target_os = "android")]
     pub fn run(self, app: android_activity::AndroidApp, content: impl FnMut() + 'static) {
-        crate::android::run(app, self.settings, content);
+        let mut content = content;
+        crate::android::run(app, self.settings, move || {
+            cranpose_ui::ProvideUriHandler(|| {
+                content();
+            });
+        });
     }
 
     /// Run the application (Web platform).
@@ -358,7 +368,13 @@ impl AppLauncher {
         canvas_id: &str,
         content: impl FnMut() + 'static,
     ) -> Result<(), wasm_bindgen::JsValue> {
-        crate::web::run(canvas_id, self.settings, content).await
+        let mut content = content;
+        crate::web::run(canvas_id, self.settings, move || {
+            cranpose_ui::ProvideUriHandler(|| {
+                content();
+            });
+        })
+        .await
     }
 }
 

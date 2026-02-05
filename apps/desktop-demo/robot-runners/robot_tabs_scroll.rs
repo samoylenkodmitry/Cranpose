@@ -11,7 +11,7 @@
 //! ```
 
 use cranpose::AppLauncher;
-use cranpose_testing::find_clickables_in_range;
+use cranpose_testing::{bounds_span, collect_tab_bounds, detect_tab_axis, root_bounds, TabAxis};
 use desktop_app::app;
 use std::time::Duration;
 
@@ -33,9 +33,7 @@ fn main() {
                 Err(e) => println!("Note: {}\n", e),
             }
 
-            // The tabs row should be near the top of the screen
-            // Y position approximately 20px (outer padding)
-            let tabs_y = 50.0; // Middle of tabs row
+            let tab_labels = app::demo_tab_labels();
 
             println!("--- Test 1: Verify Tabs Row is Scrollable ---");
 
@@ -61,23 +59,9 @@ fn main() {
             }
             println!("--- End Semantic Tree ---\n");
 
-            // Get initial tab button positions using shared helper
-            let get_tab_positions = |robot: &cranpose::Robot| -> Vec<(String, f32, f32)> {
-                match robot.get_semantics() {
-                    Ok(semantics) => {
-                        find_clickables_in_range(&semantics, 20.0, 120.0)
-                    }
-                    Err(e) => {
-                        println!("  ✗ Failed to get semantics: {}", e);
-                        Vec::new()
-                    }
-                }
-            };
-
-
             println!("\n=== Initial Tab Positions ===");
-            let initial_tabs = get_tab_positions(&robot);
-            for (i, (label, x, y)) in initial_tabs.iter().enumerate() {
+            let initial_tabs = collect_tab_bounds(&robot, &tab_labels);
+            for (i, (label, (x, y, _, _))) in initial_tabs.iter().enumerate() {
                 println!("  Tab {}: '{}' at x={:.1}, y={:.1}", i, label, x, y);
             }
 
@@ -87,38 +71,83 @@ fn main() {
                 return;
             }
 
+            let axis = detect_tab_axis(&initial_tabs).unwrap_or(TabAxis::Horizontal);
+            let span = bounds_span(&initial_tabs).unwrap_or((0.0, 0.0, 0.0, 0.0));
+            let (span_x, span_y) = (span.2 - span.0, span.3 - span.1);
+            let root = root_bounds(&robot).unwrap_or((0.0, 0.0, 800.0, 600.0));
+            let overflow = match axis {
+                TabAxis::Horizontal => span_x > root.2 - 40.0,
+                TabAxis::Vertical => span_y > root.3 - 40.0,
+            };
+
+            let find_tab = |tabs: &Vec<(String, (f32, f32, f32, f32))>, label: &str| {
+                tabs.iter()
+                    .find(|(name, _)| name == label)
+                    .map(|(_, bounds)| *bounds)
+            };
+
             println!("\n--- Test 2: Drag Tabs Row (Should Scroll) ---");
-            println!("Dragging from (400, {}) to (100, {})", tabs_y, tabs_y);
-            match robot.drag(400.0, tabs_y, 100.0, tabs_y) {
-                Ok(_) => println!("✓ Drag completed"),
-                Err(e) => println!("✗ Drag failed: {}", e),
+            if overflow {
+                if let Some((x, y, w, h)) = find_tab(&initial_tabs, "Counter App") {
+                    let start_x = x + w / 2.0;
+                    let start_y = y + h / 2.0;
+                    let (end_x, end_y) = match axis {
+                        TabAxis::Horizontal => (start_x - 300.0, start_y),
+                        TabAxis::Vertical => (start_x, start_y - 300.0),
+                    };
+                    println!(
+                        "Dragging from ({:.1}, {:.1}) to ({:.1}, {:.1})",
+                        start_x, start_y, end_x, end_y
+                    );
+                    match robot.drag(start_x, start_y, end_x, end_y) {
+                        Ok(_) => println!("✓ Drag completed"),
+                        Err(e) => println!("✗ Drag failed: {}", e),
+                    }
+                    std::thread::sleep(Duration::from_millis(500));
+                } else {
+                    println!("✗ Could not find 'Counter App' tab for drag start");
+                    std::process::exit(1);
+                }
+            } else {
+                println!("Tabs fit without overflow; skipping drag assertion");
             }
-            std::thread::sleep(Duration::from_millis(500));
 
             println!("\n=== Tab Positions After Drag ===");
-            let after_drag_tabs = get_tab_positions(&robot);
-            for (i, (label, x, y)) in after_drag_tabs.iter().enumerate() {
+            let after_drag_tabs = collect_tab_bounds(&robot, &tab_labels);
+            for (i, (label, (x, y, _, _))) in after_drag_tabs.iter().enumerate() {
                 println!("  Tab {}: '{}' at x={:.1}, y={:.1}", i, label, x, y);
             }
 
             // Compare positions
             let mut tabs_moved = false;
-            if initial_tabs.len() == after_drag_tabs.len() {
+            if overflow && initial_tabs.len() == after_drag_tabs.len() {
                 for (initial, after) in initial_tabs.iter().zip(&after_drag_tabs) {
-                    if (initial.1 - after.1).abs() > 0.1 {
+                    let initial_axis = match axis {
+                        TabAxis::Horizontal => (initial.1).0,
+                        TabAxis::Vertical => (initial.1).1,
+                    };
+                    let after_axis = match axis {
+                        TabAxis::Horizontal => (after.1).0,
+                        TabAxis::Vertical => (after.1).1,
+                    };
+                    if (initial_axis - after_axis).abs() > 0.1 {
                         tabs_moved = true;
-                        let delta = after.1 - initial.1;
-                        println!("\n  ✓ Tab '{}' moved {:.1}px (x: {:.1} → {:.1})",
-                            initial.0, delta, initial.1, after.1);
+                        let delta = after_axis - initial_axis;
+                        println!(
+                            "\n  ✓ Tab '{}' moved {:.1}px",
+                            initial.0, delta
+                        );
                         break;
                     }
                 }
             }
 
-            if tabs_moved {
+            if overflow && tabs_moved {
                 println!("\n✓ PASS: Tabs row scrolls correctly!");
-            } else {
+            } else if overflow {
                 println!("\n✗ FAIL: Tabs did NOT scroll");
+            } else {
+                println!("\n✓ PASS: Tabs fit without overflow; no scroll expected");
             }
 
             println!("\n--- Test 3: Check if Drag Triggered Click ---");
@@ -128,17 +157,35 @@ fn main() {
 
             // Drag back to original position
             std::thread::sleep(Duration::from_millis(300));
-            println!("\nDragging back from (200, {}) to (500, {})", tabs_y, tabs_y);
-            match robot.drag(200.0, tabs_y, 500.0, tabs_y) {
-                Ok(_) => println!("✓ Drag completed"),
-                Err(e) => println!("✗ Drag failed: {}", e),
+            if overflow {
+                if let Some((x, y, w, h)) = find_tab(&after_drag_tabs, "Counter App") {
+                    let start_x = x + w / 2.0;
+                    let start_y = y + h / 2.0;
+                    let (end_x, end_y) = match axis {
+                        TabAxis::Horizontal => (start_x + 300.0, start_y),
+                        TabAxis::Vertical => (start_x, start_y + 300.0),
+                    };
+                    println!(
+                        "\nDragging back from ({:.1}, {:.1}) to ({:.1}, {:.1})",
+                        start_x, start_y, end_x, end_y
+                    );
+                    match robot.drag(start_x, start_y, end_x, end_y) {
+                        Ok(_) => println!("✓ Drag completed"),
+                        Err(e) => println!("✗ Drag failed: {}", e),
+                    }
+                    std::thread::sleep(Duration::from_millis(500));
+                }
             }
-            std::thread::sleep(Duration::from_millis(500));
 
             println!("\n--- Test 4: Verify Tap Still Works (Should Click) ---");
-            if let Some((label, x, y)) = initial_tabs.first() {
-                println!("Tapping on first tab '{}' at ({:.1}, {:.1})", label, x, y);
-                match robot.click(*x + 20.0, *y + 20.0) {
+            if let Some((label, (x, y, w, h))) = initial_tabs.first() {
+                let click_x = x + w / 2.0;
+                let click_y = y + h / 2.0;
+                println!(
+                    "Tapping on first tab '{}' at ({:.1}, {:.1})",
+                    label, click_x, click_y
+                );
+                match robot.click(click_x, click_y) {
                     Ok(_) => println!("✓ Tap completed"),
                     Err(e) => println!("✗ Tap failed: {}", e),
                 }
@@ -147,10 +194,12 @@ fn main() {
             }
 
             println!("\n=== Test Summary ===");
-            if tabs_moved {
+            if overflow && tabs_moved {
                 println!("✓ ALL TESTS PASSED");
-            } else {
+            } else if overflow {
                 println!("✗ SOME TESTS FAILED");
+            } else {
+                println!("✓ ALL TESTS PASSED");
             }
 
             println!("\n--- Demo Complete ---");

@@ -6,7 +6,7 @@
 //! ```
 
 use cranpose::AppLauncher;
-use cranpose_testing::{find_button, find_in_semantics, find_text};
+use cranpose_testing::{find_button, find_button_in_semantics, find_in_semantics, find_text};
 use desktop_app::app;
 use std::time::Duration;
 
@@ -31,9 +31,7 @@ fn main() {
 
             // Step 1: Switch to Text Input tab
             println!("--- Step 1: Switch to Text Input Tab ---");
-            if let Some((x, y, w, h)) =
-                find_in_semantics(&robot, |elem| find_button(elem, "Text Input"))
-            {
+            if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Text Input") {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
                 let _ = robot.mouse_move(cx, cy);

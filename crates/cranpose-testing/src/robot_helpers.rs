@@ -5,6 +5,10 @@
 
 use crate::robot_assertions::{Bounds, SemanticElementLike};
 use cranpose::SemanticElement;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 // Implement SemanticElementLike for cranpose::SemanticElement
 // This allows using the generic assertion helpers from robot_assertions
@@ -217,8 +221,70 @@ pub fn find_button_in_semantics(
     robot: &cranpose::Robot,
     text: &str,
 ) -> Option<(f32, f32, f32, f32)> {
-    let text = text.to_string();
-    find_in_semantics(robot, |elem| find_button(elem, &text))
+    let text_owned = text.to_string();
+    let mut bounds = find_in_semantics(robot, |elem| find_button(elem, &text_owned));
+
+    let Some(root) = root_bounds(robot) else {
+        return bounds;
+    };
+
+    if let Some(current) = bounds {
+        if is_horizontally_visible(current, root) {
+            return bounds;
+        }
+    } else {
+        return None;
+    }
+
+    for _ in 0..8 {
+        let Some(current) = bounds else {
+            break;
+        };
+
+        let (x, y, w, h) = current;
+        let (rx, _, rw, _) = root;
+        let dir = if x < rx {
+            1.0
+        } else if x + w > rx + rw {
+            -1.0
+        } else {
+            0.0
+        };
+
+        if dir == 0.0 {
+            break;
+        }
+
+        let min_y = y - 8.0;
+        let max_y = y + h + 8.0;
+        let start_bounds = match robot.get_semantics() {
+            Ok(semantics) => find_visible_clickable_in_range(&semantics, min_y, max_y, root),
+            Err(e) => {
+                eprintln!("  ✗ Failed to get semantics: {}", e);
+                None
+            }
+        };
+
+        if let Some((sx, sy, sw, sh)) = start_bounds {
+            let start_x = sx + sw / 2.0;
+            let start_y = sy + sh / 2.0;
+            let end_x = start_x + dir * 240.0;
+            let _ = robot.drag(start_x, start_y, end_x, start_y);
+            std::thread::sleep(Duration::from_millis(140));
+            let _ = robot.wait_for_idle();
+        } else {
+            break;
+        }
+
+        bounds = find_in_semantics(robot, |elem| find_button(elem, &text_owned));
+        if let Some(current) = bounds {
+            if is_horizontally_visible(current, root) {
+                break;
+            }
+        }
+    }
+
+    bounds
 }
 
 /// Recursively search for text in semantic elements.
@@ -266,4 +332,268 @@ pub fn find_clickables_in_range(
     }
     tabs.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
     tabs
+}
+
+pub fn find_element_by_text_exact<'a>(
+    elements: &'a [SemanticElement],
+    text: &str,
+) -> Option<&'a SemanticElement> {
+    for elem in elements {
+        if elem.text.as_deref() == Some(text) {
+            return Some(elem);
+        }
+        if let Some(found) = find_element_by_text_exact(&elem.children, text) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+pub fn find_bounds_by_text(robot: &cranpose::Robot, text: &str) -> Option<(f32, f32, f32, f32)> {
+    let semantics = robot.get_semantics().ok()?;
+    let elem = find_element_by_text_exact(&semantics, text)?;
+    Some((
+        elem.bounds.x,
+        elem.bounds.y,
+        elem.bounds.width,
+        elem.bounds.height,
+    ))
+}
+
+pub fn visible_bounds_in_viewport(
+    robot: &cranpose::Robot,
+    bounds: (f32, f32, f32, f32),
+    padding: f32,
+) -> Option<(f32, f32, f32, f32)> {
+    let semantics = robot.get_semantics().ok()?;
+    let mut viewport = None;
+    for elem in semantics.iter() {
+        let elem_bounds = (
+            elem.bounds.x,
+            elem.bounds.y,
+            elem.bounds.width,
+            elem.bounds.height,
+        );
+        viewport = Some(match viewport {
+            Some(existing) => union_bounds(existing, Some(elem_bounds)),
+            None => elem_bounds,
+        });
+    }
+    let (viewport_x, viewport_y, viewport_width, viewport_height) = viewport?;
+    let min_x = viewport_x + padding;
+    let min_y = viewport_y + padding;
+    let max_x = viewport_x + viewport_width - padding;
+    let max_y = viewport_y + viewport_height - padding;
+
+    let left = bounds.0.max(min_x);
+    let top = bounds.1.max(min_y);
+    let right = (bounds.0 + bounds.2).min(max_x);
+    let bottom = (bounds.1 + bounds.3).min(max_y);
+
+    if right <= left || bottom <= top {
+        None
+    } else {
+        Some((left, top, right - left, bottom - top))
+    }
+}
+
+pub fn find_center_by_text(robot: &cranpose::Robot, text: &str) -> Option<(f32, f32)> {
+    let (x, y, w, h) = find_bounds_by_text(robot, text)?;
+    Some((x + w / 2.0, y + h / 2.0))
+}
+
+pub fn find_in_subtree_by_text<'a>(
+    elem: &'a SemanticElement,
+    text: &str,
+) -> Option<&'a SemanticElement> {
+    if elem.text.as_deref() == Some(text) {
+        return Some(elem);
+    }
+    for child in &elem.children {
+        if let Some(found) = find_in_subtree_by_text(child, text) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+pub fn print_semantics_with_bounds(elements: &[SemanticElement], indent: usize) {
+    for elem in elements {
+        let prefix = "  ".repeat(indent);
+        let text = elem.text.as_deref().unwrap_or("");
+        println!(
+            "{}role={} text=\"{}\" bounds=({:.1},{:.1},{:.1},{:.1}){}",
+            prefix,
+            elem.role,
+            text,
+            elem.bounds.x,
+            elem.bounds.y,
+            elem.bounds.width,
+            elem.bounds.height,
+            if elem.clickable { " [CLICKABLE]" } else { "" }
+        );
+        print_semantics_with_bounds(&elem.children, indent + 1);
+    }
+}
+
+pub fn union_bounds(
+    base: (f32, f32, f32, f32),
+    other: Option<(f32, f32, f32, f32)>,
+) -> (f32, f32, f32, f32) {
+    let (x, y, w, h) = base;
+    let mut min_x = x;
+    let mut min_y = y;
+    let mut max_x = x + w;
+    let mut max_y = y + h;
+    if let Some((ox, oy, ow, oh)) = other {
+        min_x = min_x.min(ox);
+        min_y = min_y.min(oy);
+        max_x = max_x.max(ox + ow);
+        max_y = max_y.max(oy + oh);
+    }
+    (min_x, min_y, max_x - min_x, max_y - min_y)
+}
+
+pub fn count_text_in_tree(elements: &[SemanticElement], text: &str) -> usize {
+    let mut count = 0;
+    for elem in elements {
+        if elem.text.as_deref() == Some(text) {
+            count += 1;
+        }
+        count += count_text_in_tree(&elem.children, text);
+    }
+    count
+}
+
+pub fn collect_by_text_exact<'a>(
+    elements: &'a [SemanticElement],
+    text: &str,
+    results: &mut Vec<&'a SemanticElement>,
+) {
+    for elem in elements {
+        if elem.text.as_deref() == Some(text) {
+            results.push(elem);
+        }
+        collect_by_text_exact(&elem.children, text, results);
+    }
+}
+
+pub fn collect_text_prefix_counts(
+    elements: &[SemanticElement],
+    prefix: &str,
+    counts: &mut HashMap<String, usize>,
+) {
+    for elem in elements {
+        if let Some(text) = elem.text.as_deref() {
+            if text.starts_with(prefix) {
+                *counts.entry(text.to_string()).or_insert(0) += 1;
+            }
+        }
+        collect_text_prefix_counts(&elem.children, prefix, counts);
+    }
+}
+
+pub fn exit_with_timeout(robot: &cranpose::Robot, timeout: Duration) {
+    let done = Arc::new(AtomicBool::new(false));
+    let done_thread = Arc::clone(&done);
+    std::thread::spawn(move || {
+        std::thread::sleep(timeout);
+        if !done_thread.load(Ordering::Relaxed) {
+            std::process::exit(0);
+        }
+    });
+
+    let _ = robot.exit();
+    done.store(true, Ordering::Relaxed);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TabAxis {
+    Horizontal,
+    Vertical,
+}
+
+pub fn collect_tab_bounds(
+    robot: &cranpose::Robot,
+    labels: &[&str],
+) -> Vec<(String, (f32, f32, f32, f32))> {
+    let mut tabs = Vec::new();
+    for label in labels {
+        if let Some(bounds) = find_in_semantics(robot, |elem| find_button(elem, label)) {
+            tabs.push(((*label).to_string(), bounds));
+        }
+    }
+    tabs
+}
+
+pub fn bounds_span(bounds: &[(String, (f32, f32, f32, f32))]) -> Option<(f32, f32, f32, f32)> {
+    let mut iter = bounds.iter();
+    let (_, (x, y, w, h)) = iter.next()?;
+    let mut min_x = *x;
+    let mut min_y = *y;
+    let mut max_x = x + w;
+    let mut max_y = y + h;
+    for (_, (bx, by, bw, bh)) in iter {
+        min_x = min_x.min(*bx);
+        min_y = min_y.min(*by);
+        max_x = max_x.max(*bx + *bw);
+        max_y = max_y.max(*by + *bh);
+    }
+    Some((min_x, min_y, max_x, max_y))
+}
+
+pub fn detect_tab_axis(bounds: &[(String, (f32, f32, f32, f32))]) -> Option<TabAxis> {
+    let (min_x, min_y, max_x, max_y) = bounds_span(bounds)?;
+    let span_x = max_x - min_x;
+    let span_y = max_y - min_y;
+    if span_x >= span_y {
+        Some(TabAxis::Horizontal)
+    } else {
+        Some(TabAxis::Vertical)
+    }
+}
+
+pub fn root_bounds(robot: &cranpose::Robot) -> Option<(f32, f32, f32, f32)> {
+    let semantics = robot.get_semantics().ok()?;
+    let root = semantics.get(0)?;
+    Some((
+        root.bounds.x,
+        root.bounds.y,
+        root.bounds.width,
+        root.bounds.height,
+    ))
+}
+
+fn is_horizontally_visible(bounds: (f32, f32, f32, f32), root: (f32, f32, f32, f32)) -> bool {
+    let (x, _, w, _) = bounds;
+    let (rx, _, rw, _) = root;
+    let left = x >= rx + 4.0;
+    let right = x + w <= rx + rw - 4.0;
+    left && right
+}
+
+fn find_visible_clickable_in_range(
+    elements: &[SemanticElement],
+    min_y: f32,
+    max_y: f32,
+    root: (f32, f32, f32, f32),
+) -> Option<(f32, f32, f32, f32)> {
+    for elem in elements {
+        if elem.role == "Layout" && elem.clickable && elem.bounds.y > min_y && elem.bounds.y < max_y
+        {
+            let bounds = (
+                elem.bounds.x,
+                elem.bounds.y,
+                elem.bounds.width,
+                elem.bounds.height,
+            );
+            if is_horizontally_visible(bounds, root) {
+                return Some(bounds);
+            }
+        }
+        if let Some(found) = find_visible_clickable_in_range(&elem.children, min_y, max_y, root) {
+            return Some(found);
+        }
+    }
+    None
 }
