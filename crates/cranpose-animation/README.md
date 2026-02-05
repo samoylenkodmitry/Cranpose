@@ -36,3 +36,36 @@ fn AnimatedBox(target_size: f32) {
     );
 }
 ```
+
+## Example: Infinite Transition
+
+```rust
+use cranpose_animation::{
+    infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, Easing, RepeatMode, StartOffset,
+};
+use cranpose_ui::*;
+
+#[composable]
+fn PulsingDot() {
+    let transition = rememberInfiniteTransition("pulse");
+    let alpha = transition.animateFloat(
+        0.0,
+        1.0,
+        infiniteRepeatable(
+            AnimationSpec::tween(900, Easing::EaseInOut),
+            RepeatMode::Reverse,
+            StartOffset::default(),
+        ),
+        "pulse_alpha",
+    );
+
+    Box(
+        Modifier::empty()
+            .width(24.0)
+            .height(24.0)
+            .background(Color(0.2, 0.5, 0.9, alpha.value())),
+        BoxSpec::default(),
+        || {},
+    );
+}
+```

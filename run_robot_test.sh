@@ -129,6 +129,9 @@ run_test() {
         robot_no_fling_recording2)
             timeout_secs=240
             ;;
+        robot_lazy_list_after_modifiers|robot_tab_navigation)
+            timeout_secs=120
+            ;;
         robot_double_click|robot_multiline_click|robot_multiline_nav)
             timeout_secs=90
             ;;

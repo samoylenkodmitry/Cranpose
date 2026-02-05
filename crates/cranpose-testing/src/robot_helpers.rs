@@ -513,10 +513,10 @@ pub enum TabAxis {
     Vertical,
 }
 
-pub fn collect_tab_bounds(
-    robot: &cranpose::Robot,
-    labels: &[&str],
-) -> Vec<(String, (f32, f32, f32, f32))> {
+type RectBounds = (f32, f32, f32, f32);
+type LabeledRect = (String, RectBounds);
+
+pub fn collect_tab_bounds(robot: &cranpose::Robot, labels: &[&str]) -> Vec<LabeledRect> {
     let mut tabs = Vec::new();
     for label in labels {
         if let Some(bounds) = find_in_semantics(robot, |elem| find_button(elem, label)) {
@@ -526,7 +526,7 @@ pub fn collect_tab_bounds(
     tabs
 }
 
-pub fn bounds_span(bounds: &[(String, (f32, f32, f32, f32))]) -> Option<(f32, f32, f32, f32)> {
+pub fn bounds_span(bounds: &[LabeledRect]) -> Option<RectBounds> {
     let mut iter = bounds.iter();
     let (_, (x, y, w, h)) = iter.next()?;
     let mut min_x = *x;
@@ -542,7 +542,7 @@ pub fn bounds_span(bounds: &[(String, (f32, f32, f32, f32))]) -> Option<(f32, f3
     Some((min_x, min_y, max_x, max_y))
 }
 
-pub fn detect_tab_axis(bounds: &[(String, (f32, f32, f32, f32))]) -> Option<TabAxis> {
+pub fn detect_tab_axis(bounds: &[LabeledRect]) -> Option<TabAxis> {
     let (min_x, min_y, max_x, max_y) = bounds_span(bounds)?;
     let span_x = max_x - min_x;
     let span_y = max_y - min_y;
@@ -553,9 +553,9 @@ pub fn detect_tab_axis(bounds: &[(String, (f32, f32, f32, f32))]) -> Option<TabA
     }
 }
 
-pub fn root_bounds(robot: &cranpose::Robot) -> Option<(f32, f32, f32, f32)> {
+pub fn root_bounds(robot: &cranpose::Robot) -> Option<RectBounds> {
     let semantics = robot.get_semantics().ok()?;
-    let root = semantics.get(0)?;
+    let root = semantics.first()?;
     Some((
         root.bounds.x,
         root.bounds.y,

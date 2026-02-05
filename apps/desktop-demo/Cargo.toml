@@ -82,6 +82,11 @@ name = "robot_demo"
 path = "robot-runners/robot_demo.rs"
 required-features = ["robot-app"]
 
+[[example]]
+name = "robot_animation_showcase"
+path = "robot-runners/robot_animation_showcase.rs"
+required-features = ["robot-app"]
+
 
 
 [[example]]

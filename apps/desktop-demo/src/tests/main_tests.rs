@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::AsyncRuntimeEngine;
 use cranpose_core::{location_key, Composition, MemoryApplier, MutableState, NodeError};
 
 mod conditional_text_test;
@@ -10,68 +11,7 @@ fn async_runtime_test_content(
     is_running: MutableState<bool>,
     reset_signal: MutableState<u64>,
 ) {
-    {
-        let animation_state = animation;
-        let stats_state = stats;
-        let running_state = is_running;
-        let reset_state = reset_signal;
-        LaunchedEffectAsync!((), move |scope| {
-            let animation = animation_state;
-            let stats = stats_state;
-            let running = running_state;
-            let reset = reset_state;
-            Box::pin(async move {
-                let clock = scope.runtime().frame_clock();
-                let mut last_time: Option<u64> = None;
-                let mut last_reset = reset.get();
-                animation.set(AnimationState::default());
-                stats.set(FrameStats::default());
-                while scope.is_active() {
-                    let nanos = clock.next_frame().await;
-                    if !scope.is_active() {
-                        break;
-                    }
-                    let current_reset = reset.get();
-                    if current_reset != last_reset {
-                        last_reset = current_reset;
-                        animation.set(AnimationState::default());
-                        stats.set(FrameStats::default());
-                        last_time = None;
-                        continue;
-                    }
-                    let running_now = running.get();
-                    if !running_now {
-                        last_time = Some(nanos);
-                        continue;
-                    }
-                    if let Some(previous) = last_time {
-                        let mut delta_nanos = nanos.saturating_sub(previous);
-                        if delta_nanos == 0 {
-                            delta_nanos = 16_666_667;
-                        }
-                        let dt_ms = delta_nanos as f32 / 1_000_000.0;
-                        stats.update(|state| {
-                            state.frames = state.frames.wrapping_add(1);
-                            state.last_frame_ms = dt_ms;
-                        });
-                        animation.update(|anim| {
-                            let next = anim.progress + 0.1 * anim.direction * (dt_ms / 600.0);
-                            if next >= 1.0 {
-                                anim.progress = 1.0;
-                                anim.direction = -1.0;
-                            } else if next <= 0.0 {
-                                anim.progress = 0.0;
-                                anim.direction = 1.0;
-                            } else {
-                                anim.progress = next;
-                            }
-                        });
-                    }
-                    last_time = Some(nanos);
-                }
-            })
-        });
-    }
+    AsyncRuntimeEngine(animation, stats, is_running, reset_signal);
 
     Column(
         Modifier::empty()

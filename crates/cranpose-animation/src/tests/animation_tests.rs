@@ -90,6 +90,105 @@ fn animate_float_as_state_interpolates_over_time() {
 }
 
 #[test]
+fn infinite_repeatable_spec_stores_config() {
+    let spec = infiniteRepeatable::<f32>(
+        AnimationSpec::linear(1200),
+        RepeatMode::Reverse,
+        StartOffset::default(),
+    );
+    assert_eq!(spec.animation.duration_millis, 1200);
+    assert_eq!(spec.repeat_mode, RepeatMode::Reverse);
+    assert_eq!(spec.initial_start_offset, StartOffset::default());
+}
+
+#[test]
+fn remember_infinite_transition_retains_label() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let root_key = location_key(file!(), line!(), column!());
+    let group_key = location_key(file!(), line!(), column!());
+    let transition_slot = Rc::new(RefCell::new(None::<InfiniteTransition>));
+
+    {
+        let transition_slot = Rc::clone(&transition_slot);
+        composition
+            .render(root_key, move || {
+                let transition_slot = Rc::clone(&transition_slot);
+                with_current_composer(|composer| {
+                    composer.with_group(group_key, |_| {
+                        let transition = rememberInfiniteTransition("demo_label");
+                        transition_slot.borrow_mut().replace(transition);
+                    });
+                });
+            })
+            .expect("render succeeds");
+    }
+
+    let label = {
+        let borrowed = transition_slot.borrow();
+        borrowed
+            .as_ref()
+            .expect("transition available")
+            .label()
+            .to_string()
+    };
+    assert_eq!(label, "demo_label");
+}
+
+#[test]
+fn infinite_transition_animates_float_over_time() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let root_key = location_key(file!(), line!(), column!());
+    let group_key = location_key(file!(), line!(), column!());
+    let state_slot = Rc::new(RefCell::new(None::<State<f32>>));
+
+    {
+        let state_slot = Rc::clone(&state_slot);
+        composition
+            .render(root_key, move || {
+                let state_slot = Rc::clone(&state_slot);
+                with_current_composer(|composer| {
+                    composer.with_group(group_key, |_| {
+                        let transition = rememberInfiniteTransition("pulse");
+                        let state = transition.animateFloat(
+                            0.0,
+                            1.0,
+                            infiniteRepeatable(
+                                AnimationSpec::linear(1000),
+                                RepeatMode::Reverse,
+                                StartOffset::default(),
+                            ),
+                            "pulse",
+                        );
+                        state_slot.borrow_mut().replace(state);
+                    });
+                });
+            })
+            .expect("render succeeds");
+    }
+
+    let initial = state_slot.borrow().as_ref().expect("state available").get();
+    assert_eq!(initial, 0.0);
+
+    let mut time = 0u64;
+    let mut saw_change = false;
+    for _ in 0..32 {
+        time += 16_666_667;
+        runtime.drain_frame_callbacks(time);
+        let _ = composition
+            .process_invalid_scopes()
+            .expect("process invalid scopes succeeds");
+        let value = state_slot.borrow().as_ref().expect("state available").get();
+        if (value - initial).abs() > 0.0001 {
+            saw_change = true;
+            break;
+        }
+    }
+
+    assert!(saw_change, "infinite transition should animate over time");
+}
+
+#[test]
 fn easing_linear_is_identity() {
     assert_eq!(Easing::LinearEasing.transform(0.0), 0.0);
     assert_eq!(Easing::LinearEasing.transform(0.5), 0.5);

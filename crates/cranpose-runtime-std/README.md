@@ -10,7 +10,7 @@ This crate is used by application shells (like `cranpose-app-shell` or custom em
 
 ## Key Concepts
 
--   **FrameClock**: Abstraction for synchronizing updates with the display refresh rate (VSync). This crate provides implementations based on `std::time` or platform-specific APIs where applicable.
+-   **FrameClock (internal feature)**: Abstraction for synchronizing updates with the display refresh rate (VSync). Exposed only when the `internal` feature is enabled.
 -   **RuntimeScheduler**: Interface for scheduling future tasks. This implementation bridges the core runtime with standard async executors or thread pools.
 -   **MonotonicClock**: Provides high-precision , non-decreasing time measurements critical for animations and input event timestamps.
 

@@ -1,4 +1,6 @@
-use cranpose_animation::{animateFloatAsStateWithSpec, AnimationSpec, AnimationType, Easing};
+use cranpose_animation::{
+    infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, Easing, RepeatMode, StartOffset,
+};
 use cranpose_core::{self};
 use cranpose_foundation::{lazy::LazyListScope, SemanticsConfiguration};
 use cranpose_ui::{
@@ -481,38 +483,15 @@ fn AutoLoadMore(
 
 #[composable]
 fn loading_stub_item() {
-    let target = cranpose_core::useState(|| 1.0f32);
-
-    cranpose_core::LaunchedEffectAsync!((), move |scope| {
-        let target = target;
-        Box::pin(async move {
-            let clock = scope.runtime().frame_clock();
-            let mut last = clock.next_frame().await;
-            let mut elapsed_ms = 0.0f32;
-            let mut forward = true;
-            let period_ms = 900.0f32;
-
-            while scope.is_active() {
-                let now = clock.next_frame().await;
-                if !scope.is_active() {
-                    break;
-                }
-                let delta_ms = (now.saturating_sub(last)) as f32 / 1_000_000.0;
-                last = now;
-                elapsed_ms += delta_ms;
-
-                if elapsed_ms >= period_ms {
-                    elapsed_ms = 0.0;
-                    forward = !forward;
-                    target.set(if forward { 1.0 } else { 0.0 });
-                }
-            }
-        })
-    });
-
-    let pulse = animateFloatAsStateWithSpec(
-        target.get(),
-        AnimationType::Tween(AnimationSpec::tween(900, Easing::EaseInOut)),
+    let transition = rememberInfiniteTransition("loading_stub");
+    let pulse = transition.animateFloat(
+        0.0,
+        1.0,
+        infiniteRepeatable(
+            AnimationSpec::tween(900, Easing::EaseInOut),
+            RepeatMode::Reverse,
+            StartOffset::default(),
+        ),
         "loading_pulse",
     );
     let alpha = 0.35 + 0.65 * pulse.value();

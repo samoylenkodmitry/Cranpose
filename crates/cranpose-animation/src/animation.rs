@@ -7,11 +7,14 @@
 
 #![allow(non_snake_case)]
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::cell::{Cell, RefCell};
+use std::marker::PhantomData;
+use std::rc::{Rc, Weak};
 
+use cranpose_core::internal::FrameCallbackRegistration;
 use cranpose_core::{
-    with_current_composer, FrameCallbackRegistration, MutableState, Owned, RuntimeHandle, State,
+    with_current_composer, DisposableEffectResult, MutableState, Owned, RuntimeHandle, SideEffect,
+    State,
 };
 
 /// Trait for types that can be linearly interpolated.
@@ -214,6 +217,68 @@ impl Default for AnimationSpec {
     }
 }
 
+/// Repeat mode for infinite animations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepeatMode {
+    /// Restart from the beginning each cycle.
+    Restart,
+    /// Reverse direction every other cycle.
+    Reverse,
+}
+
+/// Start offset type for infinite animations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartOffsetType {
+    /// Delay the start by the specified offset.
+    Delay,
+    /// Fast forward the start by the specified offset.
+    FastForward,
+}
+
+/// Start offset configuration for infinite animations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StartOffset {
+    /// Offset in milliseconds.
+    pub offset_millis: i64,
+    /// Offset behavior (delay or fast-forward).
+    pub offset_type: StartOffsetType,
+}
+
+impl Default for StartOffset {
+    fn default() -> Self {
+        Self {
+            offset_millis: 0,
+            offset_type: StartOffsetType::Delay,
+        }
+    }
+}
+
+/// Infinite repeatable animation spec built from a duration-based animation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InfiniteRepeatableSpec<T> {
+    /// Base animation used for each iteration.
+    pub animation: AnimationSpec,
+    /// Repeat mode (restart or reverse).
+    pub repeat_mode: RepeatMode,
+    /// Start offset applied before the first iteration.
+    pub initial_start_offset: StartOffset,
+    _marker: PhantomData<fn() -> T>,
+}
+
+/// Creates an infinite repeatable animation spec.
+pub fn infiniteRepeatable<T>(
+    animation: AnimationSpec,
+    repeat_mode: RepeatMode,
+    initial_start_offset: StartOffset,
+) -> InfiniteRepeatableSpec<T> {
+    InfiniteRepeatableSpec {
+        animation,
+        repeat_mode,
+        initial_start_offset,
+        _marker: PhantomData,
+    }
+}
+
 /// Spring animation configuration.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SpringSpec {
@@ -278,6 +343,292 @@ impl Default for AnimationType {
     fn default() -> Self {
         AnimationType::Tween(AnimationSpec::default())
     }
+}
+
+trait InfiniteTransitionAnimation {
+    fn on_frame(&self, play_time_nanos: u64);
+}
+
+struct TransitionAnimationState<T: Lerp + Clone + PartialEq + 'static> {
+    value_state: MutableState<T>,
+    initial_value: RefCell<T>,
+    target_value: RefCell<T>,
+    spec: RefCell<InfiniteRepeatableSpec<T>>,
+    start_on_next_frame: Cell<bool>,
+    play_time_offset_nanos: Cell<u64>,
+}
+
+impl<T: Lerp + Clone + PartialEq + 'static> TransitionAnimationState<T> {
+    fn new(
+        initial_value: T,
+        target_value: T,
+        spec: InfiniteRepeatableSpec<T>,
+        runtime: RuntimeHandle,
+    ) -> Self {
+        Self {
+            value_state: MutableState::with_runtime(initial_value.clone(), runtime),
+            initial_value: RefCell::new(initial_value),
+            target_value: RefCell::new(target_value),
+            spec: RefCell::new(spec),
+            start_on_next_frame: Cell::new(true),
+            play_time_offset_nanos: Cell::new(0),
+        }
+    }
+
+    fn state(&self) -> State<T> {
+        self.value_state.as_state()
+    }
+
+    fn update_values(&self, initial_value: T, target_value: T, spec: InfiniteRepeatableSpec<T>) {
+        let needs_update = {
+            let current_initial = self.initial_value.borrow();
+            let current_target = self.target_value.borrow();
+            *current_initial != initial_value
+                || *current_target != target_value
+                || *self.spec.borrow() != spec
+        };
+
+        if needs_update {
+            *self.initial_value.borrow_mut() = initial_value.clone();
+            *self.target_value.borrow_mut() = target_value;
+            *self.spec.borrow_mut() = spec;
+            self.start_on_next_frame.set(true);
+            self.value_state.set(initial_value);
+        }
+    }
+
+    fn compute_value(&self, play_time_nanos: u64) -> T {
+        let offset = if self.start_on_next_frame.get() {
+            self.start_on_next_frame.set(false);
+            self.play_time_offset_nanos.set(play_time_nanos);
+            play_time_nanos
+        } else {
+            self.play_time_offset_nanos.get()
+        };
+        let local_play_time = play_time_nanos.saturating_sub(offset);
+        let spec = self.spec.borrow().clone();
+        let initial = self.initial_value.borrow();
+        let target = self.target_value.borrow();
+        compute_repeatable_value(local_play_time, &initial, &target, spec)
+    }
+}
+
+impl<T: Lerp + Clone + PartialEq + 'static> InfiniteTransitionAnimation
+    for TransitionAnimationState<T>
+{
+    fn on_frame(&self, play_time_nanos: u64) {
+        let value = self.compute_value(play_time_nanos);
+        self.value_state.set(value);
+    }
+}
+
+fn compute_repeatable_value<T: Lerp + Clone>(
+    play_time_nanos: u64,
+    initial: &T,
+    target: &T,
+    spec: InfiniteRepeatableSpec<T>,
+) -> T {
+    let duration_ms = spec.animation.duration_millis.max(1) as i64;
+    let delay_ms = spec.animation.delay_millis as i64;
+    let mut play_time_ms = (play_time_nanos / 1_000_000) as i64;
+
+    match spec.initial_start_offset.offset_type {
+        StartOffsetType::Delay => {
+            play_time_ms -= spec.initial_start_offset.offset_millis;
+        }
+        StartOffsetType::FastForward => {
+            play_time_ms += spec.initial_start_offset.offset_millis;
+        }
+    }
+
+    if play_time_ms < 0 {
+        return initial.clone();
+    }
+
+    let iteration_duration = (delay_ms + duration_ms).max(1);
+    let iteration = play_time_ms / iteration_duration;
+    let iteration_time = play_time_ms % iteration_duration;
+
+    let reverse = matches!(spec.repeat_mode, RepeatMode::Reverse) && iteration % 2 != 0;
+    let (start, end) = if reverse {
+        (target, initial)
+    } else {
+        (initial, target)
+    };
+
+    if iteration_time < delay_ms {
+        return start.clone();
+    }
+
+    let linear_progress = ((iteration_time - delay_ms) as f32 / duration_ms as f32).clamp(0.0, 1.0);
+    let eased = spec.animation.easing.transform(linear_progress);
+    start.lerp(end, eased)
+}
+
+#[derive(Clone)]
+pub struct InfiniteTransition {
+    inner: Rc<InfiniteTransitionInner>,
+}
+
+struct InfiniteTransitionInner {
+    label: String,
+    animations: RefCell<Vec<Rc<dyn InfiniteTransitionAnimation>>>,
+    run_token: MutableState<u64>,
+}
+
+impl InfiniteTransition {
+    fn new(label: &str, runtime: RuntimeHandle) -> Self {
+        Self {
+            inner: Rc::new(InfiniteTransitionInner {
+                label: label.to_string(),
+                animations: RefCell::new(Vec::new()),
+                run_token: MutableState::with_runtime(0u64, runtime),
+            }),
+        }
+    }
+
+    pub fn label(&self) -> &str {
+        &self.inner.label
+    }
+
+    fn run(&self) {
+        let run_key = self.inner.run_token.get();
+        let weak: Weak<InfiniteTransitionInner> = Rc::downgrade(&self.inner);
+        cranpose_core::LaunchedEffectAsync!(run_key, move |scope| {
+            Box::pin(async move {
+                let clock = scope.runtime().frame_clock();
+                let mut start_time: Option<u64> = None;
+
+                loop {
+                    if !scope.is_active() {
+                        break;
+                    }
+
+                    let Some(inner) = weak.upgrade() else {
+                        break;
+                    };
+
+                    if inner.animations.borrow().is_empty() {
+                        break;
+                    }
+
+                    let now = clock.next_frame().await;
+                    if !scope.is_active() {
+                        break;
+                    }
+
+                    let start = start_time.get_or_insert(now);
+                    let play_time = now.saturating_sub(*start);
+                    inner.on_frame(play_time);
+                }
+            })
+        });
+    }
+
+    #[allow(non_snake_case)]
+    pub fn animateFloat(
+        &self,
+        initial_value: f32,
+        target_value: f32,
+        animation_spec: InfiniteRepeatableSpec<f32>,
+        label: &str,
+    ) -> State<f32> {
+        let _ = label;
+        self.animateValue(initial_value, target_value, animation_spec)
+    }
+
+    #[allow(non_snake_case)]
+    pub fn animateValue<T: Lerp + Clone + PartialEq + 'static>(
+        &self,
+        initial_value: T,
+        target_value: T,
+        animation_spec: InfiniteRepeatableSpec<T>,
+    ) -> State<T> {
+        let runtime = with_current_composer(|composer| composer.runtime_handle());
+        let initial_for_remember = initial_value.clone();
+        let target_for_remember = target_value.clone();
+        let spec_for_remember = animation_spec.clone();
+        let animation_state = cranpose_core::remember(move || {
+            Rc::new(TransitionAnimationState::new(
+                initial_for_remember,
+                target_for_remember,
+                spec_for_remember,
+                runtime.clone(),
+            ))
+        })
+        .with(Rc::clone);
+
+        let animation_state_for_effect = Rc::clone(&animation_state);
+        let spec_for_effect = animation_spec;
+        SideEffect(move || {
+            animation_state_for_effect.update_values(
+                initial_value.clone(),
+                target_value.clone(),
+                spec_for_effect,
+            );
+        });
+
+        let animation_any: Rc<dyn InfiniteTransitionAnimation> = animation_state.clone();
+        let transition_inner = Rc::clone(&self.inner);
+        let animation_id = Rc::as_ptr(&animation_state) as usize;
+        cranpose_core::DisposableEffect!(animation_id, move |_scope| {
+            transition_inner.add_animation(animation_any.clone());
+            let transition_inner = Rc::clone(&transition_inner);
+            let animation_any = animation_any.clone();
+            DisposableEffectResult::new(move || {
+                transition_inner.remove_animation(&animation_any);
+            })
+        });
+
+        animation_state.state()
+    }
+}
+
+impl InfiniteTransitionInner {
+    fn add_animation(&self, animation: Rc<dyn InfiniteTransitionAnimation>) {
+        let mut list = self.animations.borrow_mut();
+        let was_empty = list.is_empty();
+        let already_present = list.iter().any(|item| Rc::ptr_eq(item, &animation));
+        if !already_present {
+            list.push(animation);
+        }
+        if was_empty && !list.is_empty() {
+            self.run_token
+                .update(|value| *value = value.wrapping_add(1));
+        }
+    }
+
+    fn remove_animation(&self, animation: &Rc<dyn InfiniteTransitionAnimation>) {
+        let mut list = self.animations.borrow_mut();
+        let was_empty = list.is_empty();
+        if let Some(index) = list.iter().position(|item| Rc::ptr_eq(item, animation)) {
+            list.remove(index);
+        }
+        let is_empty = list.is_empty();
+        drop(list);
+
+        if !was_empty && is_empty {
+            self.run_token
+                .update(|value| *value = value.wrapping_add(1));
+        }
+    }
+
+    fn on_frame(&self, play_time_nanos: u64) {
+        let animations = self.animations.borrow().clone();
+        for animation in animations {
+            animation.on_frame(play_time_nanos);
+        }
+    }
+}
+
+#[allow(non_snake_case)]
+pub fn rememberInfiniteTransition(label: &str) -> InfiniteTransition {
+    let runtime = with_current_composer(|composer| composer.runtime_handle());
+    let transition =
+        cranpose_core::remember(move || InfiniteTransition::new(label, runtime.clone()))
+            .with(|transition| transition.clone());
+    transition.run();
+    transition
 }
 
 /// Generic animatable value holder.

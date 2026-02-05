@@ -158,3 +158,7 @@ mod http_client_tests;
 #[cfg(test)]
 #[path = "tests/lazy_list_viewport_tests.rs"]
 mod lazy_list_viewport_tests;
+
+#[cfg(test)]
+#[path = "tests/lazy_list_recompose_tests.rs"]
+mod lazy_list_recompose_tests;

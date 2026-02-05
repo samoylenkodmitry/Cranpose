@@ -974,9 +974,11 @@ where
         let render_dirty = take_render_invalidation();
         let pointer_dirty = take_pointer_invalidation();
         let focus_dirty = take_focus_invalidation();
+        let draw_repass_pending = cranpose_ui::has_pending_draw_repasses();
         // Tick cursor blink timer - only marks dirty when visibility state changes
         let cursor_blink_dirty = cranpose_ui::tick_cursor_blink();
-        if render_dirty || pointer_dirty || focus_dirty || cursor_blink_dirty {
+        if render_dirty || pointer_dirty || focus_dirty || cursor_blink_dirty || draw_repass_pending
+        {
             self.scene_dirty = true;
         }
         if !self.scene_dirty {

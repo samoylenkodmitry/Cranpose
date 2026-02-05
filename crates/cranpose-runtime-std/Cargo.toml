@@ -12,3 +12,7 @@ description = "Standard library backed runtime services for Cranpose"
 
 [dependencies]
 cranpose-core = { workspace = true }
+
+[features]
+default = []
+internal = ["cranpose-core/internal"]

@@ -1,7 +1,10 @@
-use cranpose_animation::animateFloatAsState;
+use cranpose_animation::{
+    animateFloatAsState, infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, RepeatMode,
+    StartOffset,
+};
 use cranpose_core::{
     self, compositionLocalOf, CompositionLocal, CompositionLocalProvider, DisposableEffect,
-    DisposableEffectResult, LaunchedEffect, LaunchedEffectAsync, MutableState,
+    DisposableEffectResult, LaunchedEffect, MutableState,
 };
 use cranpose_foundation::text::TextFieldState;
 use cranpose_foundation::PointerEventKind;
@@ -13,11 +16,13 @@ use cranpose_ui::{
 };
 use std::cell::RefCell;
 
+mod animations;
 mod hacker_news;
 pub mod lazy_list;
 mod mineswapper2;
 mod web_fetch;
 
+use animations::AnimationsTab;
 use hacker_news::hacker_news_tab;
 use lazy_list::lazy_list_example;
 use web_fetch::web_fetch_example;
@@ -32,6 +37,7 @@ pub enum DemoTab {
     Counter,
     CompositionLocal,
     Async,
+    Animations,
     WebFetch,
     TextInput,
     Layout,
@@ -47,6 +53,7 @@ impl DemoTab {
             DemoTab::Counter => "Counter App",
             DemoTab::CompositionLocal => "CompositionLocal Test",
             DemoTab::Async => "Async Runtime",
+            DemoTab::Animations => "Animations",
             DemoTab::WebFetch => "Web Fetch",
             DemoTab::TextInput => "Text Input",
             DemoTab::Layout => "Recursive Layout",
@@ -58,10 +65,11 @@ impl DemoTab {
     }
 }
 
-pub const DEMO_TABS: [DemoTab; 10] = [
+pub const DEMO_TABS: [DemoTab; 11] = [
     DemoTab::Counter,
     DemoTab::CompositionLocal,
     DemoTab::Async,
+    DemoTab::Animations,
     DemoTab::WebFetch,
     DemoTab::TextInput,
     DemoTab::Layout,
@@ -266,6 +274,7 @@ fn render_active_tab(active: DemoTab) {
         DemoTab::Counter => counter_app(),
         DemoTab::CompositionLocal => composition_local_example(),
         DemoTab::Async => async_runtime_example(),
+        DemoTab::Animations => AnimationsTab(),
         DemoTab::WebFetch => web_fetch_example(),
         DemoTab::TextInput => text_input_example(),
         DemoTab::Layout => recursive_layout_example(),
@@ -1063,83 +1072,68 @@ pub fn AsyncRuntimeTabContent(
 }
 
 #[composable]
+#[allow(non_snake_case)]
+pub(crate) fn AsyncRuntimeEngine(
+    animation: MutableState<AnimationState>,
+    stats: MutableState<FrameStats>,
+    is_running: MutableState<bool>,
+    reset_signal: MutableState<u64>,
+) {
+    let transition = rememberInfiniteTransition("async_runtime_engine");
+    let spec = infiniteRepeatable(
+        AnimationSpec::linear(1200),
+        RepeatMode::Reverse,
+        StartOffset::default(),
+    );
+    let duration_ms = spec.animation.duration_millis as f32;
+    let progress_state = transition.animateFloat(0.0, 1.0, spec, "async_progress");
+    let progress_value = progress_state.value();
+    let progress_key = progress_value.to_bits();
+
+    let last_progress = cranpose_core::useState(|| progress_value);
+    let last_reset = cranpose_core::useState(|| reset_signal.get());
+    let running = is_running.get();
+    let reset_key = reset_signal.get();
+
+    cranpose_core::LaunchedEffect!((progress_key, running, reset_key), move |_scope| {
+        if last_reset.get() != reset_key {
+            last_reset.set(reset_key);
+            animation.set(AnimationState::default());
+            stats.set(FrameStats::default());
+            last_progress.set(progress_value);
+            return;
+        }
+
+        if !running {
+            last_progress.set(progress_value);
+            return;
+        }
+
+        let previous = last_progress.get();
+        let delta = progress_value - previous;
+        let direction = if delta >= 0.0 { 1.0 } else { -1.0 };
+        let dt_ms = (delta.abs() * duration_ms).max(0.0);
+
+        stats.update(|state| {
+            state.frames = state.frames.wrapping_add(1);
+            state.last_frame_ms = dt_ms;
+        });
+        animation.update(|anim| {
+            anim.progress = progress_value;
+            anim.direction = direction;
+        });
+        last_progress.set(progress_value);
+    });
+}
+
+#[composable]
 fn async_runtime_example() {
     let animation = cranpose_core::useState(AnimationState::default);
     let stats = cranpose_core::useState(FrameStats::default);
     let is_running = cranpose_core::useState(|| true);
     let reset_signal = cranpose_core::useState(|| 0u64);
 
-    {
-        let animation_state = animation;
-        let stats_state = stats;
-        let running_state = is_running;
-        let reset_state = reset_signal;
-        LaunchedEffectAsync!((), move |scope| {
-            let animation = animation_state;
-            let stats = stats_state;
-            let running = running_state;
-            let reset = reset_state;
-            Box::pin(async move {
-                let clock = scope.runtime().frame_clock();
-                let mut last_time: Option<u64> = None;
-                let mut last_reset = reset.get();
-
-                animation.set(AnimationState::default());
-                stats.set(FrameStats::default());
-
-                while scope.is_active() {
-                    let nanos = clock.next_frame().await;
-                    if !scope.is_active() {
-                        break;
-                    }
-
-                    let current_reset = reset.get();
-                    if current_reset != last_reset {
-                        last_reset = current_reset;
-                        animation.set(AnimationState::default());
-                        stats.set(FrameStats::default());
-                        last_time = None;
-                        continue;
-                    }
-
-                    let running_now = running.get();
-                    if !running_now {
-                        last_time = Some(nanos);
-                        continue;
-                    }
-
-                    if let Some(previous) = last_time {
-                        let mut delta_nanos = nanos.saturating_sub(previous);
-                        if delta_nanos == 0 {
-                            // Fall back to a nominal 60 FPS delta so the animation keeps
-                            // advancing even if two callbacks report the same timestamp.
-                            delta_nanos = 16_666_667;
-                        }
-                        let dt_ms = delta_nanos as f32 / 1_000_000.0;
-                        stats.update(|state| {
-                            state.frames = state.frames.wrapping_add(1);
-                            state.last_frame_ms = dt_ms;
-                        });
-                        animation.update(|anim| {
-                            let next = anim.progress + 0.1 * anim.direction * (dt_ms / 600.0);
-                            if next >= 1.0 {
-                                anim.progress = 1.0;
-                                anim.direction = -1.0;
-                            } else if next <= 0.0 {
-                                anim.progress = 0.0;
-                                anim.direction = 1.0;
-                            } else {
-                                anim.progress = next;
-                            }
-                        });
-                    }
-
-                    last_time = Some(nanos);
-                }
-            })
-        });
-    }
-
+    AsyncRuntimeEngine(animation, stats, is_running, reset_signal);
     AsyncRuntimeTabContent(animation, stats, is_running, reset_signal);
 }
 

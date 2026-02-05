@@ -12,7 +12,7 @@ readme = "README.md"
 description = "Application orchestration shell for Cranpose"
 
 [dependencies]
-cranpose-core = { workspace = true }
+cranpose-core = { workspace = true, features = ["internal"] }
 cranpose-runtime-std = { workspace = true }
 cranpose-render-common = { workspace = true }
 cranpose-ui = { workspace = true }

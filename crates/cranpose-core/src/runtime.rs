@@ -13,6 +13,7 @@ use std::task::{Context, Poll, Waker};
 use std::thread::ThreadId;
 use std::thread_local;
 
+#[cfg(any(feature = "internal", test))]
 use crate::frame_clock::FrameClock;
 use crate::platform::RuntimeScheduler;
 use crate::{Applier, Command, FrameCallbackId, NodeError, RecomposeScopeInner, ScopeId};
@@ -596,6 +597,7 @@ impl Runtime {
         *self.inner.needs_frame.borrow_mut() = value;
     }
 
+    #[cfg(any(feature = "internal", test))]
     pub fn frame_clock(&self) -> FrameClock {
         FrameClock::new(self.handle())
     }
@@ -781,6 +783,7 @@ impl RuntimeHandle {
         }
     }
 
+    #[cfg(any(feature = "internal", test))]
     pub fn frame_clock(&self) -> FrameClock {
         FrameClock::new(self.clone())
     }
