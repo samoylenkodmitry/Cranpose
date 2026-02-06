@@ -1,7 +1,7 @@
 //! Scene structures for GPU rendering
 
 use cranpose_core::NodeId;
-use cranpose_foundation::PointerEvent;
+use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_render_common::{HitTestTarget, RenderScene};
 use cranpose_ui_graphics::{Brush, Color, Point, Rect, RoundedCornerShape};
 use std::cell::RefCell;
@@ -12,6 +12,18 @@ use std::rc::Rc;
 pub enum ClickAction {
     Simple(Rc<RefCell<dyn FnMut()>>),
     WithPoint(Rc<dyn Fn(Point)>),
+}
+
+impl ClickAction {
+    fn invoke(&self, rect: Rect, x: f32, y: f32) {
+        match self {
+            ClickAction::Simple(handler) => (handler.borrow_mut())(),
+            ClickAction::WithPoint(handler) => handler(Point {
+                x: x - rect.x,
+                y: y - rect.y,
+            }),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -71,9 +83,12 @@ impl HitTestTarget for HitRegion {
         if event.is_consumed() {
             return;
         }
+        let x = event.global_position.x;
+        let y = event.global_position.y;
+        let kind = event.kind;
         let local_position = Point {
-            x: event.global_position.x - self.rect.x,
-            y: event.global_position.y - self.rect.y,
+            x: x - self.rect.x,
+            y: y - self.rect.y,
         };
         let local_event = event.copy_with_local_position(local_position);
         for handler in &self.pointer_inputs {
@@ -81,6 +96,11 @@ impl HitTestTarget for HitRegion {
                 break;
             }
             handler(local_event.clone());
+        }
+        if kind == PointerEventKind::Down && !local_event.is_consumed() {
+            for action in &self.click_actions {
+                action.invoke(self.rect, x, y);
+            }
         }
     }
 }
@@ -258,8 +278,7 @@ fn point_in_rounded_rect(x: f32, y: f32, rect: Rect, shape: RoundedCornerShape) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cranpose_foundation::PointerEventKind;
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
     fn make_handler(counter: Rc<Cell<u32>>, consume: bool) -> Rc<dyn Fn(PointerEvent)> {
@@ -331,5 +350,74 @@ mod tests {
 
         assert_eq!(count_first.get(), 1);
         assert_eq!(count_second.get(), 0);
+    }
+
+    #[test]
+    fn dispatch_triggers_click_action_on_down() {
+        let click_count = Rc::new(Cell::new(0));
+        let click_count_for_handler = Rc::clone(&click_count);
+        let click_action = ClickAction::Simple(Rc::new(RefCell::new(move || {
+            click_count_for_handler.set(click_count_for_handler.get() + 1);
+        })));
+
+        let hit = HitRegion {
+            node_id: 1,
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 50.0,
+                height: 50.0,
+            },
+            shape: None,
+            click_actions: vec![click_action],
+            pointer_inputs: Vec::new(),
+            z_index: 0,
+            hit_clip: None,
+        };
+
+        hit.dispatch(PointerEvent::new(
+            PointerEventKind::Down,
+            Point { x: 10.0, y: 10.0 },
+            Point { x: 10.0, y: 10.0 },
+        ));
+        hit.dispatch(PointerEvent::new(
+            PointerEventKind::Move,
+            Point { x: 10.0, y: 10.0 },
+            Point { x: 12.0, y: 12.0 },
+        ));
+
+        assert_eq!(click_count.get(), 1);
+    }
+
+    #[test]
+    fn dispatch_does_not_trigger_click_action_when_consumed() {
+        let click_count = Rc::new(Cell::new(0));
+        let click_count_for_handler = Rc::clone(&click_count);
+        let click_action = ClickAction::Simple(Rc::new(RefCell::new(move || {
+            click_count_for_handler.set(click_count_for_handler.get() + 1);
+        })));
+
+        let hit = HitRegion {
+            node_id: 1,
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 50.0,
+                height: 50.0,
+            },
+            shape: None,
+            click_actions: vec![click_action],
+            pointer_inputs: vec![Rc::new(|event: PointerEvent| event.consume())],
+            z_index: 0,
+            hit_clip: None,
+        };
+
+        hit.dispatch(PointerEvent::new(
+            PointerEventKind::Down,
+            Point { x: 10.0, y: 10.0 },
+            Point { x: 10.0, y: 10.0 },
+        ));
+
+        assert_eq!(click_count.get(), 0);
     }
 }
