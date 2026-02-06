@@ -1,10 +1,10 @@
 use cranpose_core::{location_key, MemoryApplier};
-use cranpose_ui::{composable, Composition, Modifier, Text};
+use cranpose_ui::{composable, Composition, Modifier, Text, TextStyle};
 use criterion::{criterion_group, criterion_main, Criterion};
 
 #[composable]
 fn static_label(label: &'static str) {
-    Text(label.to_string(), Modifier::empty());
+    Text(label.to_string(), Modifier::empty(), TextStyle::default());
 }
 
 fn skip_recomposition_static_label(c: &mut Criterion) {

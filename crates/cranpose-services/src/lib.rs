@@ -1,0 +1,29 @@
+//! Multiplatform service abstractions used by Cranpose applications.
+
+#[cfg(test)]
+use cranpose_core::{location_key, Composition, MemoryApplier};
+
+pub mod http;
+pub mod uri_handler;
+
+pub use http::{
+    default_http_client, local_http_client, HttpClient, HttpClientRef, HttpError, HttpFuture,
+};
+pub use uri_handler::{
+    default_uri_handler, local_uri_handler, ProvideUriHandler, UriHandler, UriHandlerError,
+    UriHandlerRef,
+};
+
+/// Convenience alias used in unit tests.
+#[cfg(test)]
+pub(crate) type TestComposition = Composition<MemoryApplier>;
+
+/// Build a composition with a simple in-memory applier and run the provided closure once.
+#[cfg(test)]
+pub(crate) fn run_test_composition(build: impl FnMut()) -> TestComposition {
+    let mut composition = Composition::new(MemoryApplier::new());
+    composition
+        .render(location_key(file!(), line!(), column!()), build)
+        .expect("initial render succeeds");
+    composition
+}

@@ -1,7 +1,5 @@
-use cranpose_core::CompositionLocalProvider;
-use cranpose_ui::{
-    local_uri_handler, run_test_composition, UriHandler, UriHandlerError, UriHandlerRef,
-};
+use cranpose_core::{location_key, Composition, CompositionLocalProvider, MemoryApplier};
+use cranpose_services::{local_uri_handler, UriHandler, UriHandlerError, UriHandlerRef};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -11,6 +9,13 @@ impl UriHandler for TestUriHandler {
     fn open_uri(&self, _uri: &str) -> Result<(), UriHandlerError> {
         Ok(())
     }
+}
+
+fn run_test_composition(build: impl FnMut()) {
+    let mut composition = Composition::new(MemoryApplier::new());
+    composition
+        .render(location_key(file!(), line!(), column!()), build)
+        .expect("initial render succeeds");
 }
 
 #[test]

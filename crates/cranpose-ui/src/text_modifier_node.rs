@@ -407,8 +407,10 @@ mod tests {
     fn hash_changes_when_style_changes() {
         let text = Rc::<str>::from("Hello");
         let element_a = TextModifierElement::new(text.clone(), TextStyle::default());
-        let mut style_b = TextStyle::default();
-        style_b.font_size = TextUnit::Sp(18.0);
+        let style_b = TextStyle {
+            font_size: TextUnit::Sp(18.0),
+            ..Default::default()
+        };
         let element_b = TextModifierElement::new(text, style_b);
 
         assert_ne!(element_a, element_b);
@@ -417,9 +419,11 @@ mod tests {
 
     #[test]
     fn hash_matches_for_equal_elements() {
-        let mut style = TextStyle::default();
-        style.font_size = TextUnit::Sp(14.0);
-        style.letter_spacing = TextUnit::Em(0.1);
+        let style = TextStyle {
+            font_size: TextUnit::Sp(14.0),
+            letter_spacing: TextUnit::Em(0.1),
+            ..Default::default()
+        };
         let element_a = TextModifierElement::new(Rc::<str>::from("Hash me"), style.clone());
         let element_b = TextModifierElement::new(Rc::<str>::from("Hash me"), style);
 

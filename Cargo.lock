@@ -715,6 +715,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cranpose-services"
+version = "0.0.37"
+dependencies = [
+ "cranpose-core",
+ "cranpose-macros",
+ "open",
+ "reqwest",
+ "thiserror 2.0.18",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
 name = "cranpose-testing"
 version = "0.0.37"
 dependencies = [
@@ -738,19 +752,14 @@ dependencies = [
  "cranpose-foundation",
  "cranpose-macros",
  "cranpose-runtime-std",
+ "cranpose-services",
  "cranpose-ui-graphics",
  "cranpose-ui-layout",
  "criterion",
  "futures-task",
  "indexmap",
  "log",
- "open",
- "reqwest",
  "smallvec",
- "thiserror 2.0.18",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
  "web-time",
 ]
 

@@ -44,7 +44,6 @@ fn lazy_list_item_recomposes_on_state_change() {
                 LazyColumnSpec::default(),
                 |scope| {
                     scope.item(Some(0), None, {
-                        let label_state = label_state;
                         move || {
                             Text(
                                 format!("Animated {}", label_state.value()),

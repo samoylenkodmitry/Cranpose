@@ -166,3 +166,59 @@ pub fn local_http_client() -> CompositionLocal<HttpClientRef> {
             .clone()
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::run_test_composition;
+    use cranpose_core::CompositionLocalProvider;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    struct TestHttpClient;
+
+    impl HttpClient for TestHttpClient {
+        fn get_text<'a>(&'a self, _url: &'a str) -> HttpFuture<'a, String> {
+            Box::pin(async { Ok("ok".to_string()) })
+        }
+    }
+
+    #[test]
+    fn default_http_client_is_available() {
+        let client = default_http_client();
+        let cloned = client.clone();
+        assert_eq!(Arc::strong_count(&client), 2);
+        drop(cloned);
+        assert_eq!(Arc::strong_count(&client), 1);
+    }
+
+    #[test]
+    fn local_http_client_can_be_overridden() {
+        let local = local_http_client();
+        let default_client = default_http_client();
+        let custom_client: HttpClientRef = Arc::new(TestHttpClient);
+        let captured = Rc::new(RefCell::new(None));
+
+        {
+            let captured_for_closure = Rc::clone(&captured);
+            let custom_client = custom_client.clone();
+            let local_for_provider = local.clone();
+            let local_for_read = local.clone();
+            run_test_composition(move || {
+                let captured = Rc::clone(&captured_for_closure);
+                let local_for_read = local_for_read.clone();
+                CompositionLocalProvider(
+                    vec![local_for_provider.provides(custom_client.clone())],
+                    move || {
+                        let current = local_for_read.current();
+                        *captured.borrow_mut() = Some(current);
+                    },
+                );
+            });
+        }
+
+        let current = captured.borrow().as_ref().expect("client captured").clone();
+        assert!(Arc::ptr_eq(&current, &custom_client));
+        assert!(!Arc::ptr_eq(&current, &default_client));
+    }
+}

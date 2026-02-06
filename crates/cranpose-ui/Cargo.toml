@@ -17,6 +17,7 @@ cranpose-macros = { workspace = true }
 cranpose-runtime-std = { workspace = true }
 cranpose-foundation = { workspace = true }
 cranpose-animation = { workspace = true }
+cranpose-services = { workspace = true }
 cranpose-ui-layout = { workspace = true }
 cranpose-ui-graphics = { workspace = true }
 indexmap = "=2.7.1"
@@ -25,7 +26,6 @@ futures-task = "0.3"
 # WASM-compatible time - web-time is what winit uses internally
 web-time = "1.1"
 log = "0.4"
-thiserror = "2.0.18"
 
 [features]
 default = []
@@ -39,20 +39,3 @@ criterion = "0.5"
 [[bench]]
 name = "pipeline"
 harness = false
-
-[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
-open = "5.3.3"
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "0.2"
-wasm-bindgen-futures = "0.4.58"
-web-sys = { version = "0.3", features = [
-    "Request",
-    "RequestInit",
-    "RequestMode",
-    "Response",
-    "Window",
-] }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-reqwest = { version = "0.12.24", default-features = false, features = ["blocking", "rustls-tls"] }
