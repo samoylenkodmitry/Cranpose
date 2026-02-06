@@ -112,10 +112,31 @@ run_test() {
             timeout_secs=240
             ;;
         robot_fling_edge_cases)
+            timeout_secs=240
+            ;;
+        robot_fling_precise)
+            timeout_secs=180
+            ;;
+        robot_fling_interrupt)
+            timeout_secs=180
+            ;;
+        robot_hacker_news_scroll)
+            timeout_secs=120
+            ;;
+        robot_lazy_varheight_lifecycle)
             timeout_secs=150
+            ;;
+        robot_lazy_max_jump)
+            timeout_secs=180
+            ;;
+        robot_lazy_scroll_edge_cases)
+            timeout_secs=240
             ;;
         robot_no_fling_recording2)
             timeout_secs=240
+            ;;
+        robot_lazy_list_after_modifiers|robot_tab_navigation)
+            timeout_secs=120
             ;;
         robot_double_click|robot_multiline_click|robot_multiline_nav)
             timeout_secs=90

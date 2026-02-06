@@ -422,3 +422,7 @@ macro_rules! rememberScrollState {
         rememberScrollState!(0.0)
     };
 }
+
+#[cfg(test)]
+#[path = "tests/scroll_tests.rs"]
+mod tests;

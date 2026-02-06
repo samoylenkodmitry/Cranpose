@@ -17,6 +17,9 @@
 
 use super::*;
 use std::cell::Cell;
+#[cfg(test)]
+use std::cell::RefCell;
+#[cfg(not(test))]
 use std::sync::{LazyLock, Mutex};
 
 /// Snapshot identifiers less than or equal to this value are considered
@@ -31,8 +34,15 @@ const PREEXISTING_SNAPSHOT_ID: SnapshotId = 1;
 const INITIAL_GLOBAL_SNAPSHOT_ID: SnapshotId = PREEXISTING_SNAPSHOT_ID + 1;
 
 /// Global runtime singleton, guarded by a mutex so we can mutate state safely.
+#[cfg(not(test))]
 static SNAPSHOT_RUNTIME: LazyLock<Mutex<SnapshotRuntime>> =
     LazyLock::new(|| Mutex::new(SnapshotRuntime::new()));
+
+#[cfg(test)]
+thread_local! {
+    // Thread-local runtime for tests to avoid cross-thread interference.
+    static SNAPSHOT_RUNTIME: RefCell<Option<SnapshotRuntime>> = const { RefCell::new(None) };
+}
 
 thread_local! {
     static RUNTIME_LOCK_DEPTH: Cell<usize> = const { Cell::new(0) };
@@ -61,6 +71,7 @@ impl Drop for RuntimeLockGuard {
 ///
 /// This mirrors the `sync { ... }` helper in Kotlin by ensuring exclusive
 /// access to the global snapshot bookkeeping while the provided closure runs.
+#[cfg(not(test))]
 pub(crate) fn with_runtime<T>(f: impl FnOnce(&mut SnapshotRuntime) -> T) -> T {
     let mut guard = SNAPSHOT_RUNTIME.lock().unwrap_or_else(|poisoned| {
         // If the mutex was poisoned by a panic in another test, we can still
@@ -69,6 +80,18 @@ pub(crate) fn with_runtime<T>(f: impl FnOnce(&mut SnapshotRuntime) -> T) -> T {
     });
     let _scope = RuntimeLockGuard::enter();
     f(&mut guard)
+}
+
+#[cfg(test)]
+pub(crate) fn with_runtime<T>(f: impl FnOnce(&mut SnapshotRuntime) -> T) -> T {
+    let _scope = RuntimeLockGuard::enter();
+    SNAPSHOT_RUNTIME.with(|runtime_cell| {
+        let mut runtime = runtime_cell.borrow_mut();
+        if runtime.is_none() {
+            *runtime = Some(SnapshotRuntime::new());
+        }
+        f(runtime.as_mut().expect("runtime initialized"))
+    })
 }
 
 #[cfg(test)]
@@ -114,25 +137,15 @@ pub(crate) fn open_snapshots() -> SnapshotIdSet {
 
 /// Reset runtime state for deterministic testing.
 #[cfg(test)]
-pub(crate) struct TestRuntimeGuard {
-    _lock: std::sync::MutexGuard<'static, ()>,
-}
-
-#[cfg(test)]
-static TEST_RUNTIME_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+pub(crate) struct TestRuntimeGuard;
 
 #[cfg(test)]
 pub(crate) fn reset_runtime_for_tests() -> TestRuntimeGuard {
-    // Handle poison errors - if a previous test panicked, we can still proceed
-    let guard = TEST_RUNTIME_LOCK.lock().unwrap_or_else(|poisoned| {
-        // Clear the poison by taking ownership of the guard
-        poisoned.into_inner()
-    });
     with_runtime(|runtime| runtime.reset_for_tests());
     super::clear_last_writes();
     super::global::clear_global_snapshot_for_tests();
     super::clear_unused_record_cleanup_for_tests();
-    TestRuntimeGuard { _lock: guard }
+    TestRuntimeGuard
 }
 
 /// Encapsulates global bookkeeping required by the snapshot runtime.

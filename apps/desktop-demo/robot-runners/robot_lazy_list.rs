@@ -5,15 +5,13 @@
 //! cargo run --package desktop-app --example robot_lazy_list --features robot-app
 //! ```
 
-mod robot_test_utils;
-
 use cranpose::AppLauncher;
 use cranpose_testing::{
     find_button_in_semantics, find_in_semantics, find_text_by_prefix_in_semantics, find_text_exact,
     find_text_in_semantics,
 };
+use cranpose_testing::{find_element_by_text_exact, print_semantics_with_bounds, union_bounds};
 use desktop_app::app;
-use robot_test_utils::{find_element_by_text_exact, print_semantics_with_bounds, union_bounds};
 use std::time::Duration;
 
 fn main() {

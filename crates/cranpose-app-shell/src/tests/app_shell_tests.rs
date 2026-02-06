@@ -5,7 +5,7 @@ use cranpose_core::{
 use cranpose_macros::composable;
 use cranpose_ui::{
     Box, BoxSpec, Brush, Color, Column, ColumnSpec, HeadlessRenderer, Modifier, Rect, RenderOp,
-    Row, RowSpec, Size, Text,
+    Row, RowSpec, Size, Text, TextStyle,
 };
 use cranpose_ui_graphics::DrawPrimitive;
 use std::cell::{Cell, RefCell};
@@ -160,6 +160,7 @@ fn tabbed_progress_content() {
             Text(
                 format!("Progress {:.2}", progress.value()),
                 Modifier::empty().padding(2.0),
+                TextStyle::default(),
             );
             let progress_for_branch = progress;
             let active_for_branch = active_tab;

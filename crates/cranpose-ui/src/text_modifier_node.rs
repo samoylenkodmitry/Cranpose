@@ -19,6 +19,7 @@
 //! This follows the principle that `MeasurePolicy` is for child layout, while modifier nodes
 //! handle content rendering and measurement.
 
+use crate::text::TextStyle;
 use cranpose_foundation::{
     Constraints, DelegatableNode, DrawModifierNode, DrawScope, InvalidationKind,
     LayoutModifierNode, Measurable, MeasurementProxy, ModifierNode, ModifierNodeContext,
@@ -39,13 +40,15 @@ use std::rc::Rc;
 #[derive(Debug)]
 pub struct TextModifierNode {
     text: Rc<str>,
+    style: TextStyle,
     state: NodeState,
 }
 
 impl TextModifierNode {
-    pub fn new(text: Rc<str>) -> Self {
+    pub fn new(text: Rc<str>, style: TextStyle) -> Self {
         Self {
             text,
+            style,
             state: NodeState::new(),
         }
     }
@@ -58,9 +61,12 @@ impl TextModifierNode {
         self.text.clone()
     }
 
-    /// Helper to measure text content size.
+    pub fn style(&self) -> &TextStyle {
+        &self.style
+    }
+
     fn measure_text_content(&self) -> Size {
-        let metrics = crate::text::measure_text(&self.text);
+        let metrics = crate::text::measure_text(&self.text, &self.style);
         Size {
             width: metrics.width,
             height: metrics.height,
@@ -150,6 +156,7 @@ impl LayoutModifierNode for TextModifierNode {
     fn create_measurement_proxy(&self) -> Option<Box<dyn MeasurementProxy>> {
         Some(Box::new(TextMeasurementProxy {
             text: self.text.clone(),
+            style: self.style.clone(), // Add style
         }))
     }
 }
@@ -160,13 +167,14 @@ impl LayoutModifierNode for TextModifierNode {
 /// directly implements measurement logic using the snapshotted text content.
 struct TextMeasurementProxy {
     text: Rc<str>,
+    style: TextStyle, // Add style
 }
 
 impl TextMeasurementProxy {
     /// Measure the text content dimensions.
     /// Matches TextModifierNode::measure_text_content() logic.
     fn measure_text_content(&self) -> Size {
-        let metrics = crate::text::measure_text(&self.text);
+        let metrics = crate::text::measure_text(&self.text, &self.style);
         Size {
             width: metrics.width,
             height: metrics.height,
@@ -241,20 +249,112 @@ impl SemanticsNode for TextModifierNode {
 /// - Declaring capabilities (LAYOUT | DRAW | SEMANTICS)
 ///
 /// Matches Jetpack Compose: `TextStringSimpleElement` in BasicText.kt
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TextModifierElement {
     text: Rc<str>,
+    style: TextStyle,
 }
 
 impl TextModifierElement {
-    pub fn new(text: Rc<str>) -> Self {
-        Self { text }
+    pub fn new(text: Rc<str>, style: TextStyle) -> Self {
+        Self { text, style }
     }
+}
+
+fn hash_f32_bits<H: Hasher>(value: f32, state: &mut H) {
+    value.to_bits().hash(state);
+}
+
+fn hash_text_unit<H: Hasher>(unit: crate::text::TextUnit, state: &mut H) {
+    match unit {
+        crate::text::TextUnit::Unspecified => 0u8.hash(state),
+        crate::text::TextUnit::Sp(value) => {
+            1u8.hash(state);
+            hash_f32_bits(value, state);
+        }
+        crate::text::TextUnit::Em(value) => {
+            2u8.hash(state);
+            hash_f32_bits(value, state);
+        }
+    }
+}
+
+fn hash_color<H: Hasher>(color: crate::modifier::Color, state: &mut H) {
+    hash_f32_bits(color.0, state);
+    hash_f32_bits(color.1, state);
+    hash_f32_bits(color.2, state);
+    hash_f32_bits(color.3, state);
+}
+
+fn hash_option_color<H: Hasher>(color: &Option<crate::modifier::Color>, state: &mut H) {
+    match color {
+        Some(color) => {
+            1u8.hash(state);
+            hash_color(*color, state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
+fn hash_option_f32<H: Hasher>(value: Option<f32>, state: &mut H) {
+    match value {
+        Some(value) => {
+            1u8.hash(state);
+            hash_f32_bits(value, state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
+fn hash_option_shadow<H: Hasher>(shadow: &Option<crate::text::Shadow>, state: &mut H) {
+    match shadow {
+        Some(shadow) => {
+            1u8.hash(state);
+            hash_color(shadow.color, state);
+            hash_f32_bits(shadow.offset.x, state);
+            hash_f32_bits(shadow.offset.y, state);
+            hash_f32_bits(shadow.blur_radius, state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
+fn hash_option_text_indent<H: Hasher>(indent: &Option<crate::text::TextIndent>, state: &mut H) {
+    match indent {
+        Some(indent) => {
+            1u8.hash(state);
+            hash_text_unit(indent.first_line, state);
+            hash_text_unit(indent.rest_line, state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
+fn hash_text_style<H: Hasher>(style: &TextStyle, state: &mut H) {
+    hash_option_color(&style.color, state);
+    hash_text_unit(style.font_size, state);
+    style.font_weight.hash(state);
+    style.font_style.hash(state);
+    style.font_synthesis.hash(state);
+    style.font_family.hash(state);
+    style.font_feature_settings.hash(state);
+    hash_text_unit(style.letter_spacing, state);
+    hash_option_f32(style.baseline_shift, state);
+    style.text_geometric_transform.is_some().hash(state);
+    style.locale_list.is_some().hash(state);
+    hash_option_color(&style.background, state);
+    style.text_decoration.hash(state);
+    hash_option_shadow(&style.shadow, state);
+    style.text_align.hash(state);
+    style.text_direction.hash(state);
+    hash_text_unit(style.line_height, state);
+    hash_option_text_indent(&style.text_indent, state);
 }
 
 impl Hash for TextModifierElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.text.hash(state);
+        hash_text_style(&self.style, state);
     }
 }
 
@@ -262,13 +362,22 @@ impl ModifierNodeElement for TextModifierElement {
     type Node = TextModifierNode;
 
     fn create(&self) -> Self::Node {
-        TextModifierNode::new(self.text.clone())
+        TextModifierNode::new(self.text.clone(), self.style.clone())
     }
 
     fn update(&self, node: &mut Self::Node) {
+        let mut changed = false;
         if node.text != self.text {
             node.text = self.text.clone();
-            // Text changed - need to invalidate layout, draw, and semantics
+            changed = true;
+        }
+        if node.style != self.style {
+            node.style = self.style.clone();
+            changed = true;
+        }
+
+        if changed {
+            // Text/Style changed - need to invalidate layout, draw, and semantics
             // Note: In the full implementation, we would call context.invalidate here
             // but update() doesn't currently have access to context.
             // The invalidation will happen on the next recomposition when the node
@@ -279,5 +388,46 @@ impl ModifierNodeElement for TextModifierElement {
     fn capabilities(&self) -> NodeCapabilities {
         // Text nodes participate in layout, drawing, and semantics
         NodeCapabilities::LAYOUT | NodeCapabilities::DRAW | NodeCapabilities::SEMANTICS
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::text::TextUnit;
+    use std::collections::hash_map::DefaultHasher;
+
+    fn hash_of(element: &TextModifierElement) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        element.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[test]
+    fn hash_changes_when_style_changes() {
+        let text = Rc::<str>::from("Hello");
+        let element_a = TextModifierElement::new(text.clone(), TextStyle::default());
+        let style_b = TextStyle {
+            font_size: TextUnit::Sp(18.0),
+            ..Default::default()
+        };
+        let element_b = TextModifierElement::new(text, style_b);
+
+        assert_ne!(element_a, element_b);
+        assert_ne!(hash_of(&element_a), hash_of(&element_b));
+    }
+
+    #[test]
+    fn hash_matches_for_equal_elements() {
+        let style = TextStyle {
+            font_size: TextUnit::Sp(14.0),
+            letter_spacing: TextUnit::Em(0.1),
+            ..Default::default()
+        };
+        let element_a = TextModifierElement::new(Rc::<str>::from("Hash me"), style.clone());
+        let element_b = TextModifierElement::new(Rc::<str>::from("Hash me"), style);
+
+        assert_eq!(element_a, element_b);
+        assert_eq!(hash_of(&element_a), hash_of(&element_b));
     }
 }

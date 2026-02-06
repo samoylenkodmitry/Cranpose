@@ -1,7 +1,7 @@
 use cranpose_core::useState;
 use cranpose_ui::{
     composable, Brush, Button, Color, Column, ColumnSpec, CornerRadii, LinearArrangement, Modifier,
-    Row, RowSpec, Size, Spacer, Text, VerticalAlignment,
+    Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -280,6 +280,7 @@ pub fn mineswapper2_tab() {
                                     .padding(10.0)
                                     .background(Color(1.0, 1.0, 1.0, 0.08))
                                     .rounded_corners(14.0),
+                                TextStyle::default(),
                             );
 
                             Spacer(Size {
@@ -322,7 +323,11 @@ pub fn mineswapper2_tab() {
                                                 {
                                                     let label = preset.name;
                                                     move || {
-                                                        Text(label, Modifier::empty().padding(4.0));
+                                                        Text(
+                                                            label,
+                                                            Modifier::empty().padding(4.0),
+                                                            TextStyle::default(),
+                                                        );
                                                     }
                                                 },
                                             );
@@ -351,7 +356,11 @@ pub fn mineswapper2_tab() {
                                     }
                                 },
                                 || {
-                                    Text("New Game", Modifier::empty().padding(4.0));
+                                    Text(
+                                        "New Game",
+                                        Modifier::empty().padding(4.0),
+                                        TextStyle::default(),
+                                    );
                                 },
                             );
 
@@ -380,7 +389,11 @@ pub fn mineswapper2_tab() {
                                             MineswapperTool::Flag => "Flag mode",
                                             MineswapperTool::Reveal => "Reveal mode",
                                         };
-                                        Text(label, Modifier::empty().padding(4.0));
+                                        Text(
+                                            label,
+                                            Modifier::empty().padding(4.0),
+                                            TextStyle::default(),
+                                        );
                                     }
                                 },
                             );
@@ -417,6 +430,7 @@ pub fn mineswapper2_tab() {
                         .padding(8.0)
                         .background(Color(0.15, 0.22, 0.34, 0.7))
                         .rounded_corners(12.0),
+                    TextStyle::default(),
                 );
 
                 Spacer(Size {
@@ -430,6 +444,7 @@ pub fn mineswapper2_tab() {
                         .padding(8.0)
                         .background(Color(0.12, 0.16, 0.28, 0.6))
                         .rounded_corners(12.0),
+                    TextStyle::default(),
                 );
 
                 Spacer(Size {
@@ -514,6 +529,7 @@ pub fn mineswapper2_tab() {
                                                     Text(
                                                         display_text.clone(),
                                                         Modifier::empty().padding(4.0),
+                                                        TextStyle::default(),
                                                     );
                                                 }
                                             },

@@ -505,7 +505,7 @@ impl Modifier {
     /// );
     /// ```
     pub fn horizontal_scroll(self, state: ScrollState, reverse_scrolling: bool) -> Self {
-        self.then(scroll_impl(state, false, reverse_scrolling))
+        self.then(scroll_impl(state, false, reverse_scrolling, None))
     }
 
     /// Creates a vertically scrollable modifier.
@@ -517,7 +517,37 @@ impl Modifier {
     ///   NOT the drag direction. Drag gestures always follow natural touch semantics:
     ///   drag down = scroll up (content moves down under finger).
     pub fn vertical_scroll(self, state: ScrollState, reverse_scrolling: bool) -> Self {
-        self.then(scroll_impl(state, true, reverse_scrolling))
+        self.then(scroll_impl(state, true, reverse_scrolling, None))
+    }
+
+    /// Creates a horizontally scrollable modifier with a guard that can disable scrolling.
+    pub fn horizontal_scroll_guarded(
+        self,
+        state: ScrollState,
+        reverse_scrolling: bool,
+        guard: impl Fn() -> bool + 'static,
+    ) -> Self {
+        self.then(scroll_impl(
+            state,
+            false,
+            reverse_scrolling,
+            Some(Rc::new(guard)),
+        ))
+    }
+
+    /// Creates a vertically scrollable modifier with a guard that can disable scrolling.
+    pub fn vertical_scroll_guarded(
+        self,
+        state: ScrollState,
+        reverse_scrolling: bool,
+        guard: impl Fn() -> bool + 'static,
+    ) -> Self {
+        self.then(scroll_impl(
+            state,
+            true,
+            reverse_scrolling,
+            Some(Rc::new(guard)),
+        ))
     }
 }
 
@@ -529,7 +559,12 @@ impl Modifier {
 ///
 /// The pointer input is added FIRST so it appears earlier in the modifier
 /// chain, allowing it to intercept events before layout-related handlers.
-fn scroll_impl(state: ScrollState, is_vertical: bool, reverse_scrolling: bool) -> Modifier {
+fn scroll_impl(
+    state: ScrollState,
+    is_vertical: bool,
+    reverse_scrolling: bool,
+    guard: Option<Rc<dyn Fn() -> bool>>,
+) -> Modifier {
     // Create local gesture state - each scroll modifier instance is independent
     let gesture_state = Rc::new(RefCell::new(ScrollGestureState::default()));
 
@@ -544,6 +579,7 @@ fn scroll_impl(state: ScrollState, is_vertical: bool, reverse_scrolling: bool) -
             is_vertical,
             false, // ScrollState handles reversing in layout, not input
         );
+        let guard = guard.clone();
 
         async move {
             scope
@@ -551,6 +587,18 @@ fn scroll_impl(state: ScrollState, is_vertical: bool, reverse_scrolling: bool) -
                     // Main event loop - processes events until scope is cancelled
                     loop {
                         let event = await_scope.await_pointer_event().await;
+
+                        if let Some(ref guard) = guard {
+                            if !guard() {
+                                if matches!(
+                                    event.kind,
+                                    PointerEventKind::Up | PointerEventKind::Cancel
+                                ) {
+                                    detector.on_cancel();
+                                }
+                                continue;
+                            }
+                        }
 
                         // Delegate to detector's lifecycle methods
                         let should_consume = match event.kind {
@@ -586,8 +634,8 @@ fn scroll_impl(state: ScrollState, is_vertical: bool, reverse_scrolling: bool) -
             },
         ));
 
-    // Combine: pointer input THEN layout modifier
-    pointer_input.then(layout_modifier)
+    // Combine: pointer input THEN layout modifier, clip to bounds by default
+    pointer_input.then(layout_modifier).clip_to_bounds()
 }
 
 // ============================================================================

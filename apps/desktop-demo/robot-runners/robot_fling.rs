@@ -13,7 +13,8 @@
 //! ```
 
 use cranpose::AppLauncher;
-use cranpose_testing::{find_button, find_in_semantics, find_text};
+use cranpose_testing::{find_bounds_by_text, visible_bounds_in_viewport};
+use cranpose_testing::{find_button_in_semantics, find_in_semantics, find_text};
 use cranpose_ui::{last_fling_velocity, reset_last_fling_velocity};
 use desktop_app::app;
 use std::time::Duration;
@@ -52,9 +53,7 @@ fn main() {
             // =========================================================
             println!("--- Navigating to Lazy List Tab ---");
 
-            if let Some((x, y, w, h)) =
-                find_in_semantics(&robot, |elem| find_button(elem, "Lazy List"))
-            {
+            if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Lazy List") {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
                 println!("  Found 'Lazy List' tab at ({:.1}, {:.1})", cx, cy);
@@ -95,10 +94,28 @@ fn main() {
             println!("--- Test 2: Quick Swipe (Fling Gesture) ---");
             println!("Performing fast downward swipe to trigger velocity detection...\n");
 
-            // Start position in the middle of the window
-            let start_x = 400.0;
-            let start_y = 400.0;
-            let swipe_distance = 200.0;
+            let list_bounds = match find_bounds_by_text(&robot, "LazyListViewport") {
+                Some(bounds) => bounds,
+                None => {
+                    println!("  ✗ Could not find LazyListViewport bounds");
+                    let _ = robot.exit();
+                    return;
+                }
+            };
+
+            let visible_bounds = match visible_bounds_in_viewport(&robot, list_bounds, 12.0) {
+                Some(bounds) => bounds,
+                None => {
+                    println!("  ✗ LazyListViewport is not visible in the viewport");
+                    let _ = robot.exit();
+                    return;
+                }
+            };
+
+            let start_x = visible_bounds.0 + visible_bounds.2 * 0.5;
+            let start_y = visible_bounds.1 + visible_bounds.3 * 0.8;
+            let end_y = visible_bounds.1 + visible_bounds.3 * 0.2;
+            let swipe_distance = (start_y - end_y).abs();
             let swipe_steps = 5;
             let step_delay_ms = 10; // Fast swipe - 10ms between steps = ~900 px/sec
 
@@ -169,7 +186,7 @@ fn main() {
             // Reset velocity before the reverse swipe
             reset_last_fling_velocity();
 
-            let _ = robot.mouse_move(start_x, start_y - swipe_distance);
+            let _ = robot.mouse_move(start_x, end_y);
             std::thread::sleep(Duration::from_millis(50));
             let _ = robot.mouse_down();
             std::thread::sleep(Duration::from_millis(20));
@@ -177,7 +194,7 @@ fn main() {
             // Quick swipe downward
             for i in 1..=swipe_steps {
                 let progress = i as f32 / swipe_steps as f32;
-                let new_y = (start_y - swipe_distance) + (swipe_distance * progress);
+                let new_y = end_y + (swipe_distance * progress);
                 let _ = robot.mouse_move(start_x, new_y);
                 std::thread::sleep(Duration::from_millis(step_delay_ms));
             }

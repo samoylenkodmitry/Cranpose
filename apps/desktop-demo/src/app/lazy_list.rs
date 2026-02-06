@@ -7,8 +7,8 @@ use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
 use cranpose_foundation::SemanticsConfiguration;
 use cranpose_ui::widgets::{LazyColumn, LazyColumnSpec};
 use cranpose_ui::{
-    composable, Brush, Button, Color, Column, ColumnSpec, CornerRadii, LinearArrangement, Modifier,
-    Row, RowSpec, Size, Spacer, Text, VerticalAlignment,
+    composable, Box, BoxSpec, Brush, Button, Color, Column, ColumnSpec, CornerRadii,
+    LinearArrangement, Modifier, Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
 };
 
 #[derive(Clone, Default, PartialEq)]
@@ -43,6 +43,7 @@ fn LifecycleStatsDisplay(stats: MutableState<LifecycleStats>) {
             .padding(8.0)
             .background(Color(0.0, 0.4, 0.2, 0.8))
             .rounded_corners(8.0),
+        TextStyle::default(),
     );
 }
 
@@ -69,6 +70,7 @@ fn LazyListStatsDisplay(list_state: cranpose_foundation::lazy::LazyListState) {
                     .padding(8.0)
                     .background(Color(0.2, 0.5, 0.3, 0.8))
                     .rounded_corners(8.0),
+                TextStyle::default(),
             );
             Text(
                 format!("Cached: {}", cached),
@@ -76,6 +78,7 @@ fn LazyListStatsDisplay(list_state: cranpose_foundation::lazy::LazyListState) {
                     .padding(8.0)
                     .background(Color(0.5, 0.4, 0.2, 0.8))
                     .rounded_corners(8.0),
+                TextStyle::default(),
             );
         },
     );
@@ -96,6 +99,7 @@ fn FirstVisibleIndexDisplay(list_state: cranpose_foundation::lazy::LazyListState
             .padding(8.0)
             .background(Color(0.4, 0.3, 0.5, 0.8))
             .rounded_corners(8.0),
+        TextStyle::default(),
     );
 }
 
@@ -137,7 +141,11 @@ fn LifecycleListItem(index: usize, stats: MutableState<LifecycleStats>) {
             .horizontal_arrangement(LinearArrangement::SpaceBetween)
             .vertical_alignment(VerticalAlignment::CenterVertically),
         move || {
-            Text(item_label.clone(), Modifier::empty().padding(4.0));
+            Text(
+                item_label.clone(),
+                Modifier::empty().padding(4.0),
+                TextStyle::default(),
+            );
 
             // Add i%5 colored boxes to visualize content type groups
             let box_count = index % 5;
@@ -165,6 +173,7 @@ fn LifecycleListItem(index: usize, stats: MutableState<LifecycleStats>) {
                                 .background(color)
                                 .rounded_corners(2.0)
                                 .padding(2.0),
+                            TextStyle::default(),
                         );
                     }
                 },
@@ -176,6 +185,7 @@ fn LifecycleListItem(index: usize, stats: MutableState<LifecycleStats>) {
                     .padding(6.0)
                     .background(Color(0.3, 0.3, 0.5, 0.5))
                     .rounded_corners(6.0),
+                TextStyle::default(),
             );
         },
     );
@@ -201,6 +211,7 @@ pub fn lazy_list_example() {
                     .padding(12.0)
                     .background(Color(1.0, 1.0, 1.0, 0.08))
                     .rounded_corners(16.0),
+                TextStyle::default(),
             );
 
             Spacer(Size {
@@ -216,6 +227,7 @@ pub fn lazy_list_example() {
                     .padding(8.0)
                     .background(Color(0.2, 0.3, 0.4, 0.7))
                     .rounded_corners(12.0),
+                TextStyle::default(),
             );
 
             Spacer(Size {
@@ -270,7 +282,11 @@ pub fn lazy_list_example() {
                             }
                         },
                         || {
-                            Text("Add 10 items", Modifier::empty().padding(4.0));
+                            Text(
+                                "Add 10 items",
+                                Modifier::empty().padding(4.0),
+                                TextStyle::default(),
+                            );
                         },
                     );
 
@@ -291,7 +307,11 @@ pub fn lazy_list_example() {
                             }
                         },
                         || {
-                            Text("Remove 10", Modifier::empty().padding(4.0));
+                            Text(
+                                "Remove 10",
+                                Modifier::empty().padding(4.0),
+                                TextStyle::default(),
+                            );
                         },
                     );
                 },
@@ -324,7 +344,11 @@ pub fn lazy_list_example() {
                             }
                         },
                         || {
-                            Text("Set usize::MAX", Modifier::empty().padding(4.0));
+                            Text(
+                                "Set usize::MAX",
+                                Modifier::empty().padding(4.0),
+                                TextStyle::default(),
+                            );
                         },
                     );
 
@@ -348,7 +372,11 @@ pub fn lazy_list_example() {
                             }
                         },
                         || {
-                            Text("Jump to Middle", Modifier::empty().padding(4.0));
+                            Text(
+                                "Jump to Middle",
+                                Modifier::empty().padding(4.0),
+                                TextStyle::default(),
+                            );
                         },
                     );
 
@@ -369,7 +397,11 @@ pub fn lazy_list_example() {
                             }
                         },
                         || {
-                            Text("⏫ Start", Modifier::empty().padding(4.0));
+                            Text(
+                                "⏫ Start",
+                                Modifier::empty().padding(4.0),
+                                TextStyle::default(),
+                            );
                         },
                     );
 
@@ -394,7 +426,11 @@ pub fn lazy_list_example() {
                             }
                         },
                         || {
-                            Text("⏬ End", Modifier::empty().padding(4.0));
+                            Text(
+                                "⏬ End",
+                                Modifier::empty().padding(4.0),
+                                TextStyle::default(),
+                            );
                         },
                     );
                 },
@@ -407,36 +443,51 @@ pub fn lazy_list_example() {
 
             // The actual LazyColumn with virtualization using the DSL
             let count = item_count.get();
-            LazyColumn(
-                Modifier::empty()
-                    .semantics(|config: &mut SemanticsConfiguration| {
-                        config.content_description = Some("LazyListViewport".to_string());
-                    })
-                    .fill_max_width()
-                    .height(400.0)
-                    .background(Color(0.06, 0.08, 0.14, 1.0))
-                    .rounded_corners(12.0),
-                list_state,
-                LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(4.0)),
-                |scope| {
-                    scope.items(
-                        count,
-                        None::<fn(usize) -> u64>, // Auto-generate keys from index
-                        // Content type = index % 5 to match height groups
-                        Some(|index: usize| (index % 5) as u64),
-                        move |index| {
-                            LifecycleListItem(index, lifecycle_stats);
-                            Text(
-                                format!("Hello #{}", index),
-                                Modifier::empty()
-                                    .padding(8.0)
-                                    .background(Color(0.3, 0.3, 0.4, 0.4))
-                                    .rounded_corners(8.0),
-                            );
-                        },
-                    );
-                },
-            );
+            let list_container_modifier = Modifier::empty()
+                .semantics(|config: &mut SemanticsConfiguration| {
+                    config.content_description = Some("LazyListViewport".to_string());
+                })
+                .fill_max_width()
+                .height(400.0)
+                .background(Color(0.06, 0.08, 0.14, 1.0))
+                .rounded_corners(12.0)
+                .pointer_input(list_state.inner_ptr() as usize, move |scope| async move {
+                    scope
+                        .await_pointer_event_scope(|await_scope| async move {
+                            loop {
+                                let event = await_scope.await_pointer_event().await;
+                                event.consume();
+                            }
+                        })
+                        .await;
+                });
+
+            Box(list_container_modifier, BoxSpec::default(), move || {
+                LazyColumn(
+                    Modifier::empty().fill_max_width().height(400.0),
+                    list_state,
+                    LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(4.0)),
+                    |scope| {
+                        scope.items(
+                            count,
+                            None::<fn(usize) -> u64>, // Auto-generate keys from index
+                            // Content type = index % 5 to match height groups
+                            Some(|index: usize| (index % 5) as u64),
+                            move |index| {
+                                LifecycleListItem(index, lifecycle_stats);
+                                Text(
+                                    format!("Hello #{}", index),
+                                    Modifier::empty()
+                                        .padding(8.0)
+                                        .background(Color(0.3, 0.3, 0.4, 0.4))
+                                        .rounded_corners(8.0),
+                                    TextStyle::default(),
+                                );
+                            },
+                        );
+                    },
+                );
+            });
         },
     );
 }

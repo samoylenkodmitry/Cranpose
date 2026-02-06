@@ -19,15 +19,11 @@ cranpose-app-shell = { workspace = true }
 cranpose-render-common = { workspace = true }
 cranpose-ui-graphics = { workspace = true }
 
-# Optional dependencies for real app testing
-cranpose = { workspace = true, features = ["robot"], optional = true }
+# Dependencies for real app testing
+cranpose = { workspace = true, features = ["robot"] }
 
 [dev-dependencies]
 cranpose-macros = { workspace = true }
 cranpose-ui-layout = { workspace = true }
 
-[features]
-default = []
-# Enable real app testing with actual rendering (requires display/window system)
-# This uses the REAL desktop app runner from cranpose
-robot-app = ["cranpose"]
+ 

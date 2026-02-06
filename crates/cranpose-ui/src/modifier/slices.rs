@@ -10,6 +10,7 @@ use crate::modifier_nodes::{
     BackgroundNode, ClipToBoundsNode, CornerShapeNode, DrawCommandNode, GraphicsLayerNode,
     PaddingNode,
 };
+use crate::text::TextStyle;
 use crate::text_field_modifier_node::TextFieldModifierNode;
 use crate::text_modifier_node::TextModifierNode;
 use cranpose_ui_graphics::EdgeInsets;
@@ -25,6 +26,7 @@ pub struct ModifierNodeSlices {
     click_handlers: Vec<Rc<dyn Fn(Point)>>,
     clip_to_bounds: bool,
     text_content: Option<Rc<str>>,
+    text_style: Option<TextStyle>,
     graphics_layer: Option<GraphicsLayer>,
     chain_guard: Option<Rc<ChainGuard>>,
 }
@@ -41,6 +43,7 @@ impl Clone for ModifierNodeSlices {
             click_handlers: self.click_handlers.clone(),
             clip_to_bounds: self.clip_to_bounds,
             text_content: self.text_content.clone(),
+            text_style: self.text_style.clone(),
             graphics_layer: self.graphics_layer,
             chain_guard: self.chain_guard.clone(),
         }
@@ -72,6 +75,10 @@ impl ModifierNodeSlices {
         self.text_content.clone()
     }
 
+    pub fn text_style(&self) -> Option<&TextStyle> {
+        self.text_style.as_ref()
+    }
+
     pub fn graphics_layer(&self) -> Option<GraphicsLayer> {
         self.graphics_layer
     }
@@ -88,6 +95,7 @@ impl ModifierNodeSlices {
         self.click_handlers.clear();
         self.clip_to_bounds = false;
         self.text_content = None;
+        self.text_style = None;
         self.graphics_layer = None;
         self.chain_guard = None;
     }
@@ -101,6 +109,7 @@ impl fmt::Debug for ModifierNodeSlices {
             .field("click_handlers", &self.click_handlers.len())
             .field("clip_to_bounds", &self.clip_to_bounds)
             .field("text_content", &self.text_content)
+            .field("text_style", &self.text_style)
             .field("graphics_layer", &self.graphics_layer)
             .finish()
     }
@@ -213,6 +222,7 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
         if let Some(text_node) = any.downcast_ref::<TextModifierNode>() {
             // Rightmost text modifier wins
             slices.text_content = Some(text_node.text_arc());
+            slices.text_style = Some(text_node.style().clone());
         }
         // Also check for TextFieldModifierNode (editable text fields)
         if let Some(text_field_node) = any.downcast_ref::<TextFieldModifierNode>() {

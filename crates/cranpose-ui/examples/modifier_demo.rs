@@ -2,6 +2,7 @@
 use cranpose_core::{location_key, Composition, MemoryApplier};
 use cranpose_ui::{
     composable, Box as ComposeBox, BoxSpec, Column, ColumnSpec, Modifier, Row, RowSpec, Size, Text,
+    TextStyle,
 };
 
 #[composable]
@@ -17,8 +18,12 @@ fn simple_card() {
                 Modifier::empty().padding(8.0),
                 ColumnSpec::default(),
                 || {
-                    Text("Card Title", Modifier::empty());
-                    Text("Card content goes here", Modifier::empty().padding(4.0));
+                    Text("Card Title", Modifier::empty(), TextStyle::default());
+                    Text(
+                        "Card content goes here",
+                        Modifier::empty().padding(4.0),
+                        TextStyle::default(),
+                    );
                 },
             );
         },
@@ -34,7 +39,7 @@ fn positioned_box(label: &'static str, x: f32, y: f32) {
             .padding(8.0),
         BoxSpec::default(),
         move || {
-            Text(label, Modifier::empty());
+            Text(label, Modifier::empty(), TextStyle::default());
         },
     );
 }
@@ -68,7 +73,11 @@ fn item_list(count: usize) {
                         } else {
                             "Item #10+"
                         };
-                        Text(text, Modifier::empty().padding_horizontal(12.0));
+                        Text(
+                            text,
+                            Modifier::empty().padding_horizontal(12.0),
+                            TextStyle::default(),
+                        );
                     },
                 );
             }
@@ -86,7 +95,11 @@ fn complex_chain() {
         .padding(5.0);
 
     ComposeBox(modifier, BoxSpec::default(), || {
-        Text("Complex modifiers!", Modifier::empty());
+        Text(
+            "Complex modifiers!",
+            Modifier::empty(),
+            TextStyle::default(),
+        );
     });
 }
 
@@ -96,18 +109,31 @@ fn demo() {
         Text(
             "=== Modifier System Demo ===",
             Modifier::empty().padding(10.0),
+            TextStyle::default(),
         );
 
         simple_card();
 
-        Text("=== Positioned Boxes ===", Modifier::empty().padding(10.0));
+        Text(
+            "=== Positioned Boxes ===",
+            Modifier::empty().padding(10.0),
+            TextStyle::default(),
+        );
         positioned_box("Box A", 50.0, 100.0);
         positioned_box("Box B", 200.0, 100.0);
 
-        Text("=== Item List ===", Modifier::empty().padding(10.0));
+        Text(
+            "=== Item List ===",
+            Modifier::empty().padding(10.0),
+            TextStyle::default(),
+        );
         item_list(5);
 
-        Text("=== Complex Chain ===", Modifier::empty().padding(10.0));
+        Text(
+            "=== Complex Chain ===",
+            Modifier::empty().padding(10.0),
+            TextStyle::default(),
+        );
         complex_chain();
     });
 }
@@ -139,7 +165,11 @@ fn main() {
     composition
         .render(location_key(file!(), line!(), column!()), || {
             Column(Modifier::empty(), ColumnSpec::default(), || {
-                Text("Recomposed!", Modifier::empty().padding(10.0));
+                Text(
+                    "Recomposed!",
+                    Modifier::empty().padding(10.0),
+                    TextStyle::default(),
+                );
                 positioned_box("Updated", 75.0, 125.0); // Different position
                 item_list(10); // More items
             });

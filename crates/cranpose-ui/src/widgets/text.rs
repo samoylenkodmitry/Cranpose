@@ -10,11 +10,12 @@
 use crate::composable;
 use crate::layout::policies::EmptyMeasurePolicy;
 use crate::modifier::Modifier;
+use crate::text::TextStyle;
 use crate::text_modifier_node::TextModifierElement;
 use crate::widgets::Layout;
 use cranpose_core::{MutableState, NodeId, State};
 use cranpose_foundation::modifier_element;
-use std::rc::Rc;
+use std::rc::Rc; // Added Rc import
 
 #[derive(Clone)]
 pub struct DynamicTextSource(Rc<dyn Fn() -> Rc<str>>);
@@ -120,16 +121,15 @@ impl IntoTextSource for DynamicTextSource {
 ///
 /// * `value` - The string to display. Can be a `&str`, `String`, or `State<String>`.
 /// * `modifier` - Modifiers to apply (e.g., padding, background, layout instructions).
-///   Note: Text styling (color, font size) is typically applied via the
-///   `text_style` modifier (coming soon) or specific style modifiers.
+/// * `style` - Text styling (color, font size).
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// Text("Hello World", Modifier::padding(16.0));
+/// Text("Hello World", Modifier::padding(16.0), TextStyle::default());
 /// ```
 #[composable]
-pub fn Text<S>(value: S, modifier: Modifier) -> NodeId
+pub fn Text<S>(value: S, modifier: Modifier, style: TextStyle) -> NodeId
 where
     S: IntoTextSource + Clone + PartialEq + 'static,
 {
@@ -137,7 +137,7 @@ where
 
     // Create a text modifier element that will add TextModifierNode to the chain
     // TextModifierNode handles measurement, drawing, and semantics
-    let text_element = modifier_element(TextModifierElement::new(current));
+    let text_element = modifier_element(TextModifierElement::new(current, style));
     let final_modifier = Modifier::from_parts(vec![text_element]);
     let combined_modifier = modifier.then(final_modifier);
 

@@ -13,8 +13,10 @@ pub use decay_spec::{FlingCalculator, FlingInfo, FloatDecayAnimationSpec, Spline
 
 pub mod prelude {
     pub use crate::animation::{
-        animateFloatAsState, animateFloatAsStateWithSpec, Animatable, AnimationSpec, AnimationType,
-        Easing, Lerp, SpringSpec,
+        animateFloatAsState, animateFloatAsStateWithSpec, infiniteRepeatable,
+        rememberInfiniteTransition, Animatable, AnimationSpec, AnimationType, Easing,
+        InfiniteRepeatableSpec, InfiniteTransition, Lerp, RepeatMode, SpringSpec, StartOffset,
+        StartOffsetType,
     };
     pub use crate::decay_spec::{FlingCalculator, FloatDecayAnimationSpec, SplineBasedDecaySpec};
 }

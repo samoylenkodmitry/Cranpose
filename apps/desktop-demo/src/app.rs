@@ -1,7 +1,10 @@
-use cranpose_animation::animateFloatAsState;
+use cranpose_animation::{
+    animateFloatAsState, infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, RepeatMode,
+    StartOffset,
+};
 use cranpose_core::{
     self, compositionLocalOf, CompositionLocal, CompositionLocalProvider, DisposableEffect,
-    DisposableEffectResult, LaunchedEffect, LaunchedEffectAsync, MutableState,
+    DisposableEffectResult, LaunchedEffect, MutableState,
 };
 use cranpose_foundation::text::TextFieldState;
 use cranpose_foundation::PointerEventKind;
@@ -9,14 +12,18 @@ use cranpose_foundation::SemanticsConfiguration;
 use cranpose_ui::{
     composable, BasicTextField, BoxSpec, Brush, Button, Color, Column, ColumnSpec, CornerRadii,
     GraphicsLayer, IntrinsicSize, LinearArrangement, Modifier, Point, PointerInputScope,
-    RoundedCornerShape, Row, RowSpec, Size, Spacer, Text, VerticalAlignment,
+    RoundedCornerShape, Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
 };
 use std::cell::RefCell;
 
+mod animations;
+mod hacker_news;
 pub mod lazy_list;
 mod mineswapper2;
 mod web_fetch;
 
+use animations::AnimationsTab;
+use hacker_news::hacker_news_tab;
 use lazy_list::lazy_list_example;
 use web_fetch::web_fetch_example;
 
@@ -30,12 +37,14 @@ pub enum DemoTab {
     Counter,
     CompositionLocal,
     Async,
+    Animations,
     WebFetch,
     TextInput,
     Layout,
     ModifierShowcase,
     LazyList,
     Mineswapper2,
+    HackerNews,
 }
 
 impl DemoTab {
@@ -44,14 +53,34 @@ impl DemoTab {
             DemoTab::Counter => "Counter App",
             DemoTab::CompositionLocal => "CompositionLocal Test",
             DemoTab::Async => "Async Runtime",
+            DemoTab::Animations => "Animations",
             DemoTab::WebFetch => "Web Fetch",
             DemoTab::TextInput => "Text Input",
             DemoTab::Layout => "Recursive Layout",
             DemoTab::ModifierShowcase => "Modifiers Showcase",
             DemoTab::LazyList => "Lazy List",
             DemoTab::Mineswapper2 => "Mineswapper2",
+            DemoTab::HackerNews => "Hacker News",
         }
     }
+}
+
+pub const DEMO_TABS: [DemoTab; 11] = [
+    DemoTab::Counter,
+    DemoTab::CompositionLocal,
+    DemoTab::Async,
+    DemoTab::Animations,
+    DemoTab::WebFetch,
+    DemoTab::TextInput,
+    DemoTab::Layout,
+    DemoTab::ModifierShowcase,
+    DemoTab::LazyList,
+    DemoTab::Mineswapper2,
+    DemoTab::HackerNews,
+];
+
+pub fn demo_tab_labels() -> Vec<&'static str> {
+    DEMO_TABS.iter().map(|tab| tab.label()).collect()
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -122,6 +151,91 @@ fn random() -> i32 {
     }
 }
 
+#[allow(non_snake_case)]
+#[composable]
+pub(crate) fn ScrollableTab(content: impl FnMut() + 'static) {
+    let scroll_state =
+        cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|s| s.clone());
+    let modifier = Modifier::empty()
+        .fill_max_size()
+        .vertical_scroll(scroll_state, false);
+    Column(
+        modifier,
+        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(16.0)),
+        content,
+    );
+}
+
+#[allow(non_snake_case)]
+#[composable]
+fn TabButton(tab: DemoTab, active_tab: cranpose_core::MutableState<DemoTab>, padding: f32) {
+    let is_active = active_tab.get() == tab;
+    Button(
+        Modifier::empty()
+            .rounded_corners(12.0)
+            .draw_behind(move |scope| {
+                scope.draw_round_rect(
+                    Brush::solid(if is_active {
+                        Color(0.2, 0.45, 0.9, 1.0)
+                    } else {
+                        Color(0.3, 0.3, 0.3, 0.5)
+                    }),
+                    CornerRadii::uniform(12.0),
+                );
+            })
+            .padding(padding),
+        {
+            let tab_state = active_tab;
+            move || {
+                if tab_state.get() != tab {
+                    tab_state.set(tab);
+                }
+            }
+        },
+        {
+            let label = tab.label();
+            move || {
+                Text(label, Modifier::empty().padding(4.0), TextStyle::default());
+            }
+        },
+    );
+}
+
+#[allow(non_snake_case)]
+#[composable]
+fn TabBarHorizontal(active_tab: cranpose_core::MutableState<DemoTab>) {
+    let tabs_scroll_state =
+        cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|state| state.clone());
+    Row(
+        Modifier::empty()
+            .fill_max_width()
+            .padding(8.0)
+            .horizontal_scroll(tabs_scroll_state, false),
+        RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
+        move || {
+            for tab in DEMO_TABS {
+                TabButton(tab, active_tab, 10.0);
+            }
+        },
+    );
+}
+
+#[allow(non_snake_case)]
+#[composable]
+fn TabContent(active_tab: cranpose_core::MutableState<DemoTab>, modifier: Modifier) {
+    let active = active_tab.get();
+    cranpose_ui::Box(modifier, BoxSpec::default(), move || {
+        cranpose_core::with_key(&active, || {
+            let active_for_content = active;
+            if tab_requires_scroll(active_for_content) {
+                ScrollableTab(move || render_active_tab(active_for_content));
+            } else {
+                render_active_tab(active_for_content);
+            }
+        });
+    });
+}
+
 #[composable]
 pub fn combined_app() {
     let active_tab = cranpose_core::useState(|| {
@@ -134,101 +248,41 @@ pub fn combined_app() {
         *cell.borrow_mut() = Some(active_tab);
     });
 
-    // Create scroll state for tabs row
-    let tabs_scroll_state =
-        cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|state| state.clone());
-    let column_scroll_state =
-        cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|state| state.clone());
-
     Column(
-        Modifier::empty()
-            .fill_max_size()
-            .padding(20.0)
-            .vertical_scroll(column_scroll_state.clone(), false),
+        Modifier::empty().fill_max_size().padding(20.0),
         ColumnSpec::default(),
         move || {
-            let tab_state_for_row = active_tab;
-            let tab_state_for_content = active_tab;
-            Row(
-                Modifier::empty()
-                    .fill_max_width()
-                    .padding(8.0)
-                    .horizontal_scroll(tabs_scroll_state.clone(), false),
-                RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
-                move || {
-                    let render_tab_button = {
-                        move |tab: DemoTab| {
-                            let tab_state_for_tab = tab_state_for_row;
-                            let is_active = tab_state_for_tab.get() == tab;
-
-                            Button(
-                                Modifier::empty()
-                                    .rounded_corners(12.0)
-                                    .draw_behind(move |scope| {
-                                        scope.draw_round_rect(
-                                            Brush::solid(if is_active {
-                                                Color(0.2, 0.45, 0.9, 1.0)
-                                            } else {
-                                                Color(0.3, 0.3, 0.3, 0.5)
-                                            }),
-                                            CornerRadii::uniform(12.0),
-                                        );
-                                    })
-                                    .padding(10.0),
-                                {
-                                    let tab_state = tab_state_for_tab;
-                                    move || {
-                                        if tab_state.get() != tab {
-                                            tab_state.set(tab);
-                                        }
-                                    }
-                                },
-                                {
-                                    let label = tab.label();
-                                    move || {
-                                        Text(label, Modifier::empty().padding(4.0));
-                                    }
-                                },
-                            );
-                        }
-                    };
-
-                    render_tab_button(DemoTab::Counter);
-                    render_tab_button(DemoTab::CompositionLocal);
-                    render_tab_button(DemoTab::Async);
-                    render_tab_button(DemoTab::WebFetch);
-                    render_tab_button(DemoTab::TextInput);
-                    render_tab_button(DemoTab::Layout);
-                    render_tab_button(DemoTab::ModifierShowcase);
-                    render_tab_button(DemoTab::LazyList);
-                    render_tab_button(DemoTab::Mineswapper2);
-                },
-            );
+            TabBarHorizontal(active_tab);
 
             Spacer(Size {
                 width: 0.0,
                 height: 12.0,
             });
 
-            Spacer(Size {
-                width: 0.0,
-                height: 12.0,
-            });
-
-            let active = tab_state_for_content.get();
-            cranpose_core::with_key(&active, || match active {
-                DemoTab::Counter => counter_app(),
-                DemoTab::CompositionLocal => composition_local_example(),
-                DemoTab::Async => async_runtime_example(),
-                DemoTab::WebFetch => web_fetch_example(),
-                DemoTab::TextInput => text_input_example(),
-                DemoTab::Layout => recursive_layout_example(),
-                DemoTab::ModifierShowcase => modifier_showcase_tab(),
-                DemoTab::LazyList => lazy_list_example(),
-                DemoTab::Mineswapper2 => mineswapper2::mineswapper2_tab(),
-            });
+            TabContent(active_tab, Modifier::empty().fill_max_width().weight(1.0));
         },
     );
+}
+
+fn tab_requires_scroll(tab: DemoTab) -> bool {
+    !matches!(tab, DemoTab::HackerNews)
+}
+
+#[composable]
+fn render_active_tab(active: DemoTab) {
+    match active {
+        DemoTab::Counter => counter_app(),
+        DemoTab::CompositionLocal => composition_local_example(),
+        DemoTab::Async => async_runtime_example(),
+        DemoTab::Animations => AnimationsTab(),
+        DemoTab::WebFetch => web_fetch_example(),
+        DemoTab::TextInput => text_input_example(),
+        DemoTab::Layout => recursive_layout_example(),
+        DemoTab::ModifierShowcase => modifier_showcase_tab(),
+        DemoTab::LazyList => lazy_list_example(),
+        DemoTab::Mineswapper2 => mineswapper2::mineswapper2_tab(),
+        DemoTab::HackerNews => hacker_news_tab(),
+    }
 }
 
 /// Text Input Demo Tab - showcases BasicTextField functionality
@@ -254,6 +308,7 @@ fn text_input_example() {
                     .padding(12.0)
                     .background(Color(1.0, 1.0, 1.0, 0.08))
                     .rounded_corners(16.0),
+                TextStyle::default(),
             );
 
             Spacer(Size {
@@ -262,7 +317,11 @@ fn text_input_example() {
             });
 
             // First text field with label
-            Text("Basic Text Field:", Modifier::empty().padding(4.0));
+            Text(
+                "Basic Text Field:",
+                Modifier::empty().padding(4.0),
+                TextStyle::default(),
+            );
 
             Spacer(Size {
                 width: 0.0,
@@ -279,6 +338,7 @@ fn text_input_example() {
                         .padding(12.0)
                         .background(Color(0.15, 0.18, 0.25, 1.0))
                         .rounded_corners(8.0),
+                    TextStyle::default(),
                 );
             }
 
@@ -297,6 +357,7 @@ fn text_input_example() {
                         .padding(8.0)
                         .background(Color(0.12, 0.16, 0.28, 0.8))
                         .rounded_corners(8.0),
+                    TextStyle::default(),
                 );
             }
 
@@ -306,7 +367,11 @@ fn text_input_example() {
             });
 
             // Second text field
-            Text("Empty Text Field:", Modifier::empty().padding(4.0));
+            Text(
+                "Empty Text Field:",
+                Modifier::empty().padding(4.0),
+                TextStyle::default(),
+            );
 
             Spacer(Size {
                 width: 0.0,
@@ -322,6 +387,7 @@ fn text_input_example() {
                         .padding(12.0)
                         .background(Color(0.18, 0.15, 0.22, 1.0))
                         .rounded_corners(8.0),
+                    TextStyle::default(),
                 );
             }
 
@@ -331,7 +397,11 @@ fn text_input_example() {
             });
 
             // Buttons to manipulate text programmatically
-            Text("Programmatic Actions:", Modifier::empty().padding(4.0));
+            Text(
+                "Programmatic Actions:",
+                Modifier::empty().padding(4.0),
+                TextStyle::default(),
+            );
 
             Spacer(Size {
                 width: 0.0,
@@ -362,7 +432,11 @@ fn text_input_example() {
                                     state.set_text("");
                                 },
                                 || {
-                                    Text("Clear", Modifier::empty().padding(4.0));
+                                    Text(
+                                        "Clear",
+                                        Modifier::empty().padding(4.0),
+                                        TextStyle::default(),
+                                    );
                                 },
                             );
                         }
@@ -388,7 +462,11 @@ fn text_input_example() {
                                     // No version.set() needed - TextFieldState triggers recomposition
                                 },
                                 || {
-                                    Text("Add !", Modifier::empty().padding(4.0));
+                                    Text(
+                                        "Add !",
+                                        Modifier::empty().padding(4.0),
+                                        TextStyle::default(),
+                                    );
                                 },
                             );
                         }
@@ -413,7 +491,11 @@ fn text_input_example() {
                                     // No version.set() needed - TextFieldState triggers recomposition
                                 },
                                 || {
-                                    Text("Copy ↓", Modifier::empty().padding(4.0));
+                                    Text(
+                                        "Copy ↓",
+                                        Modifier::empty().padding(4.0),
+                                        TextStyle::default(),
+                                    );
                                 },
                             );
                         }
@@ -442,6 +524,7 @@ fn recursive_layout_example() {
                     .padding(12.0)
                     .background(Color(1.0, 1.0, 1.0, 0.08))
                     .rounded_corners(16.0),
+                TextStyle::default(),
             );
 
             Spacer(Size {
@@ -476,7 +559,11 @@ fn recursive_layout_example() {
                                 }
                             },
                             || {
-                                Text("Increase depth", Modifier::empty().padding(6.0));
+                                Text(
+                                    "Increase depth",
+                                    Modifier::empty().padding(6.0),
+                                    TextStyle::default(),
+                                );
                             },
                         );
 
@@ -499,7 +586,11 @@ fn recursive_layout_example() {
                                 }
                             },
                             || {
-                                Text("Decrease depth", Modifier::empty().padding(6.0));
+                                Text(
+                                    "Decrease depth",
+                                    Modifier::empty().padding(6.0),
+                                    TextStyle::default(),
+                                );
                             },
                         );
 
@@ -509,6 +600,7 @@ fn recursive_layout_example() {
                                 .padding(8.0)
                                 .background(Color(0.12, 0.16, 0.28, 0.8))
                                 .rounded_corners(12.0),
+                            TextStyle::default(),
                         );
                     }
                 },
@@ -566,6 +658,7 @@ fn recursive_layout_node(modifier: Modifier, depth: usize, horizontal: bool, ind
                     .padding(6.0)
                     .background(Color(0.0, 0.0, 0.0, 0.25))
                     .rounded_corners(10.0),
+                TextStyle::default(),
             );
 
             if depth <= 1 {
@@ -575,6 +668,7 @@ fn recursive_layout_node(modifier: Modifier, depth: usize, horizontal: bool, ind
                         .padding(6.0)
                         .background(Color(1.0, 1.0, 1.0, 0.12))
                         .rounded_corners(10.0),
+                    TextStyle::default(),
                 );
             } else if horizontal {
                 Row(
@@ -633,6 +727,7 @@ pub fn composition_local_example() {
                     .padding(12.0)
                     .background(Color(1.0, 1.0, 1.0, 0.1))
                     .rounded_corners(16.0),
+                TextStyle::default(),
             );
 
             Spacer(Size {
@@ -646,6 +741,7 @@ pub fn composition_local_example() {
                     .padding(8.0)
                     .background(Color(0.2, 0.3, 0.4, 0.7))
                     .rounded_corners(12.0),
+                TextStyle::default(),
             );
 
             Spacer(Size {
@@ -670,7 +766,11 @@ pub fn composition_local_example() {
                     }
                 },
                 || {
-                    Text("Increment", Modifier::empty().padding(6.0));
+                    Text(
+                        "Increment",
+                        Modifier::empty().padding(6.0),
+                        TextStyle::default(),
+                    );
                 },
             );
 
@@ -697,6 +797,7 @@ fn composition_local_content() {
             .padding(8.0)
             .background(Color(0.3, 0.3, 0.3, 0.5))
             .rounded_corners(12.0),
+        TextStyle::default(),
     );
 
     Spacer(Size {
@@ -717,6 +818,7 @@ fn composition_local_content() {
             .padding(8.0)
             .background(Color(0.9, 0.6, 0.4, 0.5))
             .rounded_corners(12.0),
+        TextStyle::default(),
     );
 }
 
@@ -730,6 +832,7 @@ fn composition_local_content_inner() {
             .padding(8.0)
             .background(Color(0.6, 0.9, 0.4, 0.7))
             .rounded_corners(12.0),
+        TextStyle::default(),
     );
 }
 
@@ -761,6 +864,7 @@ pub fn AsyncRuntimeTabContent(
                         .padding(12.0)
                         .background(Color(1.0, 1.0, 1.0, 0.08))
                         .rounded_corners(16.0),
+                    TextStyle::default(),
                 );
 
                 Spacer(Size {
@@ -784,6 +888,7 @@ pub fn AsyncRuntimeTabContent(
                             Text(
                                 format!("Progress: {:>3}%", (progress_value * 100.0) as i32),
                                 Modifier::empty().padding(6.0),
+                                TextStyle::default(),
                             );
 
                             Spacer(Size {
@@ -874,6 +979,7 @@ pub fn AsyncRuntimeTabContent(
                         .padding(8.0)
                         .background(Color(0.18, 0.22, 0.36, 0.6))
                         .rounded_corners(14.0),
+                    TextStyle::default(),
                 );
 
                 Spacer(Size {
@@ -919,7 +1025,11 @@ pub fn AsyncRuntimeTabContent(
                                         "Resume animation"
                                     };
                                     move || {
-                                        Text(label, Modifier::empty().padding(6.0));
+                                        Text(
+                                            label,
+                                            Modifier::empty().padding(6.0),
+                                            TextStyle::default(),
+                                        );
                                     }
                                 },
                             );
@@ -946,7 +1056,11 @@ pub fn AsyncRuntimeTabContent(
                                     reset_tick_state.update(|tick| *tick = tick.wrapping_add(1));
                                 },
                                 || {
-                                    Text("Reset", Modifier::empty().padding(6.0));
+                                    Text(
+                                        "Reset",
+                                        Modifier::empty().padding(6.0),
+                                        TextStyle::default(),
+                                    );
                                 },
                             );
                         }
@@ -958,83 +1072,68 @@ pub fn AsyncRuntimeTabContent(
 }
 
 #[composable]
+#[allow(non_snake_case)]
+pub(crate) fn AsyncRuntimeEngine(
+    animation: MutableState<AnimationState>,
+    stats: MutableState<FrameStats>,
+    is_running: MutableState<bool>,
+    reset_signal: MutableState<u64>,
+) {
+    let transition = rememberInfiniteTransition("async_runtime_engine");
+    let spec = infiniteRepeatable(
+        AnimationSpec::linear(1200),
+        RepeatMode::Reverse,
+        StartOffset::default(),
+    );
+    let duration_ms = spec.animation.duration_millis as f32;
+    let progress_state = transition.animateFloat(0.0, 1.0, spec, "async_progress");
+    let progress_value = progress_state.value();
+    let progress_key = progress_value.to_bits();
+
+    let last_progress = cranpose_core::useState(|| progress_value);
+    let last_reset = cranpose_core::useState(|| reset_signal.get());
+    let running = is_running.get();
+    let reset_key = reset_signal.get();
+
+    cranpose_core::LaunchedEffect!((progress_key, running, reset_key), move |_scope| {
+        if last_reset.get() != reset_key {
+            last_reset.set(reset_key);
+            animation.set(AnimationState::default());
+            stats.set(FrameStats::default());
+            last_progress.set(progress_value);
+            return;
+        }
+
+        if !running {
+            last_progress.set(progress_value);
+            return;
+        }
+
+        let previous = last_progress.get();
+        let delta = progress_value - previous;
+        let direction = if delta >= 0.0 { 1.0 } else { -1.0 };
+        let dt_ms = (delta.abs() * duration_ms).max(0.0);
+
+        stats.update(|state| {
+            state.frames = state.frames.wrapping_add(1);
+            state.last_frame_ms = dt_ms;
+        });
+        animation.update(|anim| {
+            anim.progress = progress_value;
+            anim.direction = direction;
+        });
+        last_progress.set(progress_value);
+    });
+}
+
+#[composable]
 fn async_runtime_example() {
     let animation = cranpose_core::useState(AnimationState::default);
     let stats = cranpose_core::useState(FrameStats::default);
     let is_running = cranpose_core::useState(|| true);
     let reset_signal = cranpose_core::useState(|| 0u64);
 
-    {
-        let animation_state = animation;
-        let stats_state = stats;
-        let running_state = is_running;
-        let reset_state = reset_signal;
-        LaunchedEffectAsync!((), move |scope| {
-            let animation = animation_state;
-            let stats = stats_state;
-            let running = running_state;
-            let reset = reset_state;
-            Box::pin(async move {
-                let clock = scope.runtime().frame_clock();
-                let mut last_time: Option<u64> = None;
-                let mut last_reset = reset.get();
-
-                animation.set(AnimationState::default());
-                stats.set(FrameStats::default());
-
-                while scope.is_active() {
-                    let nanos = clock.next_frame().await;
-                    if !scope.is_active() {
-                        break;
-                    }
-
-                    let current_reset = reset.get();
-                    if current_reset != last_reset {
-                        last_reset = current_reset;
-                        animation.set(AnimationState::default());
-                        stats.set(FrameStats::default());
-                        last_time = None;
-                        continue;
-                    }
-
-                    let running_now = running.get();
-                    if !running_now {
-                        last_time = Some(nanos);
-                        continue;
-                    }
-
-                    if let Some(previous) = last_time {
-                        let mut delta_nanos = nanos.saturating_sub(previous);
-                        if delta_nanos == 0 {
-                            // Fall back to a nominal 60 FPS delta so the animation keeps
-                            // advancing even if two callbacks report the same timestamp.
-                            delta_nanos = 16_666_667;
-                        }
-                        let dt_ms = delta_nanos as f32 / 1_000_000.0;
-                        stats.update(|state| {
-                            state.frames = state.frames.wrapping_add(1);
-                            state.last_frame_ms = dt_ms;
-                        });
-                        animation.update(|anim| {
-                            let next = anim.progress + 0.1 * anim.direction * (dt_ms / 600.0);
-                            if next >= 1.0 {
-                                anim.progress = 1.0;
-                                anim.direction = -1.0;
-                            } else if next <= 0.0 {
-                                anim.progress = 0.0;
-                                anim.direction = 1.0;
-                            } else {
-                                anim.progress = next;
-                            }
-                        });
-                    }
-
-                    last_time = Some(nanos);
-                }
-            })
-        });
-    }
-
+    AsyncRuntimeEngine(animation, stats, is_running, reset_signal);
     AsyncRuntimeTabContent(animation, stats, is_running, reset_signal);
 }
 
@@ -1062,24 +1161,36 @@ fn counter_app() {
                 return;
             }
             let message_for_ui = async_message_state;
-            #[cfg(not(target_arch = "wasm32"))]
             _scope.launch_background(
-                move |token| {
-                    use instant::{Duration, SystemTime};
-                    use std::thread;
-
-                    for _ in 0..5 {
-                        if token.is_cancelled() {
-                            return String::new();
-                        }
-                        thread::sleep(Duration::from_millis(80));
+                move |token| async move {
+                    if token.is_cancelled() {
+                        return String::new();
                     }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        use instant::{Duration, SystemTime};
+                        use std::thread;
 
-                    let nanos = SystemTime::now()
-                        .duration_since(SystemTime::UNIX_EPOCH)
-                        .unwrap()
-                        .subsec_nanos();
-                    format!("Background fetch #{fetch_key}: {}", nanos % 1000)
+                        for _ in 0..5 {
+                            if token.is_cancelled() {
+                                return String::new();
+                            }
+                            thread::sleep(Duration::from_millis(80));
+                        }
+
+                        let nanos = SystemTime::now()
+                            .duration_since(SystemTime::UNIX_EPOCH)
+                            .unwrap()
+                            .subsec_nanos();
+                        format!("Background fetch #{fetch_key}: {}", nanos % 1000)
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        format!(
+                            "WASM: Background threads not supported (fetch #{})",
+                            fetch_key
+                        )
+                    }
                 },
                 move |value| {
                     if value.is_empty() {
@@ -1088,12 +1199,6 @@ fn counter_app() {
                     message_for_ui.set(value);
                 },
             );
-            // On WASM, immediately set a message since we can't use background threads
-            #[cfg(target_arch = "wasm32")]
-            message_for_ui.set(format!(
-                "WASM: Background threads not supported (fetch #{})",
-                fetch_key
-            ));
         });
     }
     LaunchedEffect!(counter.get(), |_| println!("effect call"));
@@ -1118,6 +1223,7 @@ fn counter_app() {
                                 CornerRadii::uniform(20.0),
                             );
                         }),
+                    TextStyle::default(),
                 );
             } else {
                 Text(
@@ -1135,6 +1241,7 @@ fn counter_app() {
                                 CornerRadii::uniform(20.0),
                             );
                         }),
+                    TextStyle::default(),
                 );
             }
         });
@@ -1184,6 +1291,7 @@ fn counter_app() {
                                     CornerRadii::uniform(20.0),
                                 );
                             }),
+                        TextStyle::default(),
                     );
 
                     Spacer(Size {
@@ -1210,6 +1318,7 @@ fn counter_app() {
                                                 .background(Color(0.0, 0.0, 0.0, 0.35)),
                                         )
                                         .rounded_corners(12.0),
+                                    TextStyle::default(),
                                 );
                                 Text(
                                     format!("Wave {:.2}", wave_value),
@@ -1226,6 +1335,7 @@ fn counter_app() {
                                             translation_x: 0.0,
                                             translation_y: (wave_value - 0.5) * 12.0,
                                         }),
+                                    TextStyle::default(),
                                 );
                             }
                         },
@@ -1307,6 +1417,7 @@ fn counter_app() {
                                     .background(Color(0.1, 0.1, 0.15, 0.6))
                                     .rounded_corners(12.0)
                                     .padding(8.0),
+                                TextStyle::default(),
                             );
 
                             Spacer(Size {
@@ -1345,6 +1456,7 @@ fn counter_app() {
                                                         height: 50.0,
                                                     }),
                                                 ),
+                                                TextStyle::default(),
                                             );
                                         },
                                     );
@@ -1361,7 +1473,11 @@ fn counter_app() {
                                             .padding(10.0),
                                         || {},
                                         || {
-                                            Text("Cancel", Modifier::empty().padding(4.0));
+                                            Text(
+                                                "Cancel",
+                                                Modifier::empty().padding(4.0),
+                                                TextStyle::default(),
+                                            );
                                         },
                                     );
                                     Button(
@@ -1380,6 +1496,7 @@ fn counter_app() {
                                             Text(
                                                 "Long Button Text",
                                                 Modifier::empty().padding(4.0),
+                                                TextStyle::default(),
                                             );
                                         },
                                     );
@@ -1424,7 +1541,11 @@ fn counter_app() {
                                             }
                                         },
                                         || {
-                                            Text("Increment", Modifier::empty().padding(6.0));
+                                            Text(
+                                                "Increment",
+                                                Modifier::empty().padding(6.0),
+                                                TextStyle::default(),
+                                            );
                                         },
                                     );
                                     Button(
@@ -1442,7 +1563,11 @@ fn counter_app() {
                                             move || counter.set(counter.get() - 1)
                                         },
                                         || {
-                                            Text("Decrement", Modifier::empty().padding(6.0));
+                                            Text(
+                                                "Decrement",
+                                                Modifier::empty().padding(6.0),
+                                                TextStyle::default(),
+                                            );
                                         },
                                     );
                                 },
@@ -1460,6 +1585,7 @@ fn counter_app() {
                                     .padding(10.0)
                                     .background(Color(0.1, 0.18, 0.32, 0.6))
                                     .rounded_corners(14.0),
+                                TextStyle::default(),
                             );
 
                             Spacer(Size {
@@ -1493,7 +1619,11 @@ fn counter_app() {
                                     }
                                 },
                                 || {
-                                    Text("Fetch async value", Modifier::empty().padding(6.0));
+                                    Text(
+                                        "Fetch async value",
+                                        Modifier::empty().padding(6.0),
+                                        TextStyle::default(),
+                                    );
                                 },
                             );
                         },
@@ -1563,6 +1693,7 @@ fn modifier_showcase_tab() {
                                 .padding(8.0)
                                 .background(Color(1.0, 1.0, 1.0, 0.08))
                                 .rounded_corners(12.0),
+                            TextStyle::default(),
                         );
 
                         Spacer(Size {
@@ -1606,7 +1737,11 @@ fn modifier_showcase_tab() {
                                 {
                                     let label = showcase_type.label();
                                     move || {
-                                        Text(label, Modifier::empty().padding(4.0));
+                                        Text(
+                                            label,
+                                            Modifier::empty().padding(4.0),
+                                            TextStyle::default(),
+                                        );
                                     }
                                 },
                             );
@@ -1652,6 +1787,7 @@ pub fn simple_card_showcase() {
                 .padding(12.0)
                 .background(Color(1.0, 1.0, 1.0, 0.1))
                 .rounded_corners(14.0),
+            TextStyle::default(),
         );
 
         Spacer(Size {
@@ -1688,6 +1824,7 @@ pub fn simple_card_showcase() {
                                         .padding(8.0)
                                         .background(Color(0.3, 0.5, 0.8, 0.6))
                                         .rounded_corners(8.0),
+                                    TextStyle::default(),
                                 );
 
                                 Spacer(Size {
@@ -1698,6 +1835,7 @@ pub fn simple_card_showcase() {
                                 Text(
                                     "Card content goes here with padding",
                                     Modifier::empty().padding(4.0),
+                                    TextStyle::default(),
                                 );
 
                                 Spacer(Size {
@@ -1713,6 +1851,7 @@ pub fn simple_card_showcase() {
                                             .padding(8.0)
                                             .background(Color(0.2, 0.7, 0.4, 0.7))
                                             .rounded_corners(6.0),
+                                        TextStyle::default(),
                                     );
 
                                     Spacer(Size {
@@ -1726,6 +1865,7 @@ pub fn simple_card_showcase() {
                                             .padding(8.0)
                                             .background(Color(0.8, 0.3, 0.3, 0.7))
                                             .rounded_corners(6.0),
+                                        TextStyle::default(),
                                     );
                                 });
                             },
@@ -1746,6 +1886,7 @@ pub fn positioned_boxes_showcase() {
                 .padding(12.0)
                 .background(Color(1.0, 1.0, 1.0, 0.1))
                 .rounded_corners(14.0),
+            TextStyle::default(),
         );
 
         Spacer(Size {
@@ -1772,7 +1913,11 @@ pub fn positioned_boxes_showcase() {
                         .rounded_corners(12.0),
                     BoxSpec::default(),
                     || {
-                        Text("Box A", Modifier::empty().padding(6.0));
+                        Text(
+                            "Box A",
+                            Modifier::empty().padding(6.0),
+                            TextStyle::default(),
+                        );
                     },
                 );
 
@@ -1786,7 +1931,11 @@ pub fn positioned_boxes_showcase() {
                         .rounded_corners(12.0),
                     BoxSpec::default(),
                     || {
-                        Text("Box B", Modifier::empty().padding(6.0));
+                        Text(
+                            "Box B",
+                            Modifier::empty().padding(6.0),
+                            TextStyle::default(),
+                        );
                     },
                 );
 
@@ -1800,7 +1949,7 @@ pub fn positioned_boxes_showcase() {
                         .rounded_corners(10.0),
                     BoxSpec::default(),
                     || {
-                        Text("C", Modifier::empty().padding(4.0));
+                        Text("C", Modifier::empty().padding(4.0), TextStyle::default());
                     },
                 );
 
@@ -1814,7 +1963,11 @@ pub fn positioned_boxes_showcase() {
                         .rounded_corners(14.0),
                     BoxSpec::default(),
                     || {
-                        Text("Box D", Modifier::empty().padding(6.0));
+                        Text(
+                            "Box D",
+                            Modifier::empty().padding(6.0),
+                            TextStyle::default(),
+                        );
                     },
                 );
             },
@@ -1831,6 +1984,7 @@ pub fn item_list_showcase() {
                 .padding(12.0)
                 .background(Color(1.0, 1.0, 1.0, 0.1))
                 .rounded_corners(14.0),
+            TextStyle::default(),
         );
 
         Spacer(Size {
@@ -1875,7 +2029,11 @@ pub fn item_list_showcase() {
                                         4 => "Item #4",
                                         _ => "Item",
                                     };
-                                    Text(text, Modifier::empty().padding_horizontal(12.0));
+                                    Text(
+                                        text,
+                                        Modifier::empty().padding_horizontal(12.0),
+                                        TextStyle::default(),
+                                    );
 
                                     Spacer(Size {
                                         width: 0.0,
@@ -1918,6 +2076,7 @@ pub fn complex_chain_showcase() {
                 .padding(12.0)
                 .background(Color(1.0, 1.0, 1.0, 0.1))
                 .rounded_corners(14.0),
+            TextStyle::default(),
         );
 
         Spacer(Size {
@@ -1928,6 +2087,7 @@ pub fn complex_chain_showcase() {
         Text(
             "Nested: Red → Green → Blue layers",
             Modifier::empty().padding(8.0),
+            TextStyle::default(),
         );
 
         Spacer(Size {
@@ -1960,7 +2120,7 @@ pub fn complex_chain_showcase() {
                                 .rounded_corners(8.0),
                             BoxSpec::default(),
                             || {
-                                Text("Nested!", Modifier::empty());
+                                Text("Nested!", Modifier::empty(), TextStyle::default());
                             },
                         );
                     },
@@ -1976,6 +2136,7 @@ pub fn complex_chain_showcase() {
         Text(
             "Chain: offset + size + multiple backgrounds",
             Modifier::empty().padding(8.0),
+            TextStyle::default(),
         );
 
         Spacer(Size {
@@ -2000,7 +2161,7 @@ pub fn complex_chain_showcase() {
                         .rounded_corners(6.0),
                     BoxSpec::default(),
                     || {
-                        Text("Offset + Sized", Modifier::empty());
+                        Text("Offset + Sized", Modifier::empty(), TextStyle::default());
                     },
                 );
             },
@@ -2019,6 +2180,7 @@ pub fn dynamic_modifiers_showcase() {
                 .padding(12.0)
                 .background(Color(1.0, 1.0, 1.0, 0.1))
                 .rounded_corners(14.0),
+            TextStyle::default(),
         );
 
         Spacer(Size {
@@ -2050,7 +2212,7 @@ pub fn dynamic_modifiers_showcase() {
                         .rounded_corners(10.0),
                     BoxSpec::default(),
                     || {
-                        Text("Move", Modifier::empty());
+                        Text("Move", Modifier::empty(), TextStyle::default());
                     },
                 );
             },
@@ -2067,6 +2229,7 @@ pub fn dynamic_modifiers_showcase() {
                 .padding(8.0)
                 .background(Color(0.2, 0.2, 0.3, 0.6))
                 .rounded_corners(10.0),
+            TextStyle::default(),
         );
 
         Spacer(Size {
@@ -2091,7 +2254,11 @@ pub fn dynamic_modifiers_showcase() {
                 }
             },
             || {
-                Text("Advance Frame", Modifier::empty().padding(6.0));
+                Text(
+                    "Advance Frame",
+                    Modifier::empty().padding(6.0),
+                    TextStyle::default(),
+                );
             },
         );
     });
@@ -2106,6 +2273,7 @@ pub fn long_list_showcase() {
                 .padding(12.0)
                 .background(Color(1.0, 1.0, 1.0, 0.1))
                 .rounded_corners(14.0),
+            TextStyle::default(),
         );
 
         Spacer(Size {
@@ -2146,7 +2314,11 @@ pub fn long_list_showcase() {
                             } else {
                                 "Item 10+"
                             };
-                            Text(text, Modifier::empty().padding_horizontal(12.0));
+                            Text(
+                                text,
+                                Modifier::empty().padding_horizontal(12.0),
+                                TextStyle::default(),
+                            );
                         },
                     );
                 }

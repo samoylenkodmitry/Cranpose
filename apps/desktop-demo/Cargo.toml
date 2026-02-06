@@ -33,7 +33,7 @@ desktop = ["cranpose/desktop"]
 android = ["cranpose/android"]
 web = ["cranpose/web", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:wasm-logger"]
 # Enable real app robot testing
-robot-app = ["cranpose-testing/robot-app", "logging", "cranpose-ui/test-helpers"]
+robot-app = ["logging", "cranpose-ui/test-helpers"]
 # Enable env_logger (adds ~600KB from regex)
 logging = ["dep:env_logger"]
 
@@ -49,12 +49,14 @@ wasm-bindgen = { version = "0.2", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
 wasm-logger = { version = "0.2", optional = true }
 getrandom = { version = "0.3", features = ["wasm_js"] }
+anyhow = "1.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+cranpose-services = { path = "../../crates/cranpose-services" }
 
 # Non-WASM dependencies
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 env_logger = { version = "0.10", optional = true }
-anyhow = "1.0"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 
 # Android-specific dependencies (only when building for Android)
 [target.'cfg(target_os = "android")'.dependencies]
@@ -63,19 +65,12 @@ android-activity = { workspace = true }
 # WASM-specific dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"
-js-sys = "0.3"
-web-sys = { version = "0.3", features = [
-    "Window",
-    "Request",
-    "RequestInit",
-    "RequestMode",
-    "Response",
-    "Headers",
-] }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 
 [dev-dependencies]
 cranpose-macros = { path = "../../crates/cranpose-macros" }
-cranpose-testing = { path = "../../crates/cranpose-testing", features = ["robot-app"] }
+cranpose-testing = { path = "../../crates/cranpose-testing" }
 
 # Robot test runners
 [[example]]
@@ -86,6 +81,11 @@ required-features = ["robot-app"]
 [[example]]
 name = "robot_demo"
 path = "robot-runners/robot_demo.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_animation_showcase"
+path = "robot-runners/robot_animation_showcase.rs"
 required-features = ["robot-app"]
 
 
@@ -411,6 +411,11 @@ path = "robot-runners/robot_text_input_value_disappear.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_hacker_news_scroll"
+path = "robot-runners/robot_hacker_news_scroll.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_advance_frame_bug"
 path = "robot-runners/robot_advance_frame_bug.rs"
 required-features = ["robot-app"]
@@ -443,4 +448,9 @@ required-features = ["robot-app"]
 [[example]]
 name = "robot_fling_interrupt"
 path = "robot-runners/robot_fling_interrupt.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_scroll_bug"
+path = "robot-runners/robot_scroll_bug.rs"
 required-features = ["robot-app"]

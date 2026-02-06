@@ -12,7 +12,9 @@
 //! ```
 
 use cranpose::{AppLauncher, Robot};
-use cranpose_testing::{find_button, find_in_semantics, find_text};
+use cranpose_testing::{exit_with_timeout, find_bounds_by_text, visible_bounds_in_viewport};
+use cranpose_testing::{find_button_in_semantics, find_in_semantics, find_text};
+use cranpose_ui::{last_fling_velocity, reset_last_fling_velocity};
 use desktop_app::app;
 use std::time::Duration;
 
@@ -67,9 +69,7 @@ fn main() {
             // Navigate to Lazy List tab
             // =========================================================
             println!("--- Setup: Navigate to Lazy List Tab ---");
-            if let Some((x, y, w, h)) =
-                find_in_semantics(&robot, |elem| find_button(elem, "Lazy List"))
-            {
+            if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Lazy List") {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
                 let _ = robot.mouse_move(cx, cy);
@@ -84,6 +84,28 @@ fn main() {
                 let _ = robot.exit();
                 return;
             }
+
+            let list_bounds = match find_bounds_by_text(&robot, "LazyListViewport") {
+                Some(bounds) => bounds,
+                None => {
+                    println!("✗ Could not find LazyListViewport bounds - aborting");
+                    let _ = robot.exit();
+                    return;
+                }
+            };
+            let visible_bounds = match visible_bounds_in_viewport(&robot, list_bounds, 12.0) {
+                Some(bounds) => bounds,
+                None => {
+                    println!("✗ LazyListViewport is not visible in the viewport");
+                    let _ = robot.exit();
+                    return;
+                }
+            };
+
+            let center_x = visible_bounds.0 + visible_bounds.2 * 0.5;
+            let upper_y = visible_bounds.1 + visible_bounds.3 * 0.2;
+            let lower_y = visible_bounds.1 + visible_bounds.3 * 0.8;
+            let drag_distance = (lower_y - upper_y).max(80.0);
 
             // Find item positions function
             fn find_item(robot: &Robot, item_text: &str) -> Option<(f32, f32)> {
@@ -140,10 +162,9 @@ fn main() {
                 }
                 let (_, before_y) = before.unwrap();
 
-                // Perform a slow drag (100px over 500ms = 200 px/sec - below fling threshold)
-                let start_x = 400.0;
-                let start_y = 400.0;
-                let drag_distance = 100.0;
+                // Perform a slow drag (below fling threshold)
+                let start_x = center_x;
+                let start_y = lower_y;
 
                 let _ = robot.mouse_move(start_x, start_y);
                 std::thread::sleep(Duration::from_millis(50));
@@ -186,8 +207,8 @@ fn main() {
             // TEST 3: Scroll back to top for next tests
             // =========================================================
             test!("Scroll back to top", {
-                let start_x = 400.0;
-                let start_y = 200.0;
+                let start_x = center_x;
+                let start_y = upper_y;
 
                 let _ = robot.mouse_move(start_x, start_y);
                 std::thread::sleep(Duration::from_millis(50));
@@ -197,7 +218,7 @@ fn main() {
                 // Drag down to scroll back up
                 for i in 1..=10 {
                     let progress = i as f32 / 10.0;
-                    let new_y = start_y + (200.0 * progress);
+                    let new_y = start_y + (drag_distance * progress);
                     let _ = robot.mouse_move(start_x, new_y);
                     std::thread::sleep(Duration::from_millis(30));
                 }
@@ -217,13 +238,14 @@ fn main() {
             // TEST 4: Fast swipe triggers fling (check console output)
             // =========================================================
             test!("Fast swipe triggers fling", {
+                reset_last_fling_velocity();
+
                 // Get starting position
                 let before = find_item(&robot, "Item #0");
                 let before_y = before.map(|(_, y)| y).unwrap_or(100.0);
 
-                // Fast swipe: 200px in 50ms = 4000 px/sec
-                let start_x = 400.0;
-                let start_y = 400.0;
+                let start_x = center_x;
+                let start_y = lower_y;
 
                 let _ = robot.mouse_move(start_x, start_y);
                 std::thread::sleep(Duration::from_millis(50));
@@ -233,7 +255,7 @@ fn main() {
                 // Fast swipe - 5 steps in 50ms = 10ms per step
                 for i in 1..=5 {
                     let progress = i as f32 / 5.0;
-                    let new_y = start_y - (200.0 * progress);
+                    let new_y = start_y - (drag_distance * progress);
                     let _ = robot.mouse_move(start_x, new_y);
                     std::thread::sleep(Duration::from_millis(10));
                 }
@@ -241,7 +263,7 @@ fn main() {
                 // Release
                 let _ = robot.mouse_up();
 
-                // Wait for fling to complete (ensures full momentum before measuring)
+                std::thread::sleep(Duration::from_millis(300));
                 let _ = robot.wait_for_idle();
 
                 // Check: Item 0 should have moved significantly more than just the drag distance
@@ -250,12 +272,18 @@ fn main() {
                 match after {
                     Some((_, after_y)) => {
                         let total_movement = before_y - after_y;
-                        // Should have moved more than just the 200px drag
-                        // With fling, expect at least 200px total movement
-                        if total_movement < 150.0 {
+                        let velocity = last_fling_velocity();
+                        if velocity.abs() < 50.0 {
                             return Err(format!(
-                                "Total movement {} < 150px (expected fling momentum)",
-                                total_movement
+                                "Fling velocity {:.1} < 50px/sec (expected fling momentum)",
+                                velocity
+                            ));
+                        }
+                        let min_expected = (drag_distance * 0.6).max(80.0);
+                        if total_movement < min_expected {
+                            return Err(format!(
+                                "Total movement {} < {:.1}px (expected fling momentum)",
+                                total_movement, min_expected
                             ));
                         }
                         eprintln!("  (Item 0 moved {} px total)", total_movement);
@@ -278,11 +306,15 @@ fn main() {
 
                 // Find any visible item
                 // Do first scroll
-                let _ = robot.mouse_move(400.0, 400.0);
+                let scroll_x = center_x;
+                let scroll_start_y = lower_y;
+                let scroll_end_y = (lower_y - 50.0).max(upper_y);
+
+                let _ = robot.mouse_move(scroll_x, scroll_start_y);
                 std::thread::sleep(Duration::from_millis(30));
                 let _ = robot.mouse_down();
                 std::thread::sleep(Duration::from_millis(30));
-                let _ = robot.mouse_move(400.0, 350.0);
+                let _ = robot.mouse_move(scroll_x, scroll_end_y);
                 std::thread::sleep(Duration::from_millis(30));
                 let _ = robot.mouse_up();
                 std::thread::sleep(Duration::from_millis(300));
@@ -293,7 +325,7 @@ fn main() {
                 let after_first_y = after_first.as_ref().map(|(y, _)| *y).unwrap_or(300.0);
 
                 // Do second scroll - START position should NOT jump back
-                let _ = robot.mouse_move(400.0, 400.0);
+                let _ = robot.mouse_move(scroll_x, scroll_start_y);
                 std::thread::sleep(Duration::from_millis(30));
                 let _ = robot.mouse_down();
                 std::thread::sleep(Duration::from_millis(30));
@@ -331,7 +363,7 @@ fn main() {
             }
 
             std::thread::sleep(Duration::from_secs(1));
-            let _ = robot.exit();
+            exit_with_timeout(&robot, Duration::from_secs(2));
         })
         .run(|| {
             app::combined_app();

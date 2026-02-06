@@ -1,22 +1,22 @@
 use cranpose_core::{location_key, Composition, MemoryApplier};
-use cranpose_ui::{composable, Column, ColumnSpec, Modifier, Text};
+use cranpose_ui::{composable, Column, ColumnSpec, Modifier, Text, TextStyle};
 
 #[composable]
 fn inner_content() {
-    Text("Inner 1", Modifier::empty());
-    Text("Inner 2", Modifier::empty());
+    Text("Inner 1", Modifier::empty(), TextStyle::default());
+    Text("Inner 2", Modifier::empty(), TextStyle::default());
 }
 
 #[composable]
 fn outer_content() {
-    Text("Outer start", Modifier::empty());
+    Text("Outer start", Modifier::empty(), TextStyle::default());
 
     // This Column should contain "Inner 1" and "Inner 2"
     Column(Modifier::empty(), ColumnSpec::default(), || {
         inner_content();
     });
 
-    Text("Outer end", Modifier::empty());
+    Text("Outer end", Modifier::empty(), TextStyle::default());
 }
 
 fn main() {

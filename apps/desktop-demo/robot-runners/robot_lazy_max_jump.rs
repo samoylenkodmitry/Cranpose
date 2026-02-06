@@ -13,7 +13,7 @@ use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
 use cranpose_ui::widgets::{
     Box, BoxSpec, Button, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec, Text,
 };
-use cranpose_ui::{Alignment, Color, Modifier, Size};
+use cranpose_ui::{Alignment, Color, Modifier, Size, TextStyle};
 use std::time::Duration;
 
 fn main() {
@@ -148,7 +148,7 @@ fn main() {
                                     item_count.set(usize::MAX);
                                 },
                                 || {
-                                    Text("Set MAX", Modifier::default());
+                                    Text("Set MAX", Modifier::default(), TextStyle::default());
                                 },
                             );
 
@@ -161,7 +161,7 @@ fn main() {
                                     state.scroll_to_item(middle, 0.0);
                                 },
                                 || {
-                                    Text("Go Middle", Modifier::default());
+                                    Text("Go Middle", Modifier::default(), TextStyle::default());
                                 },
                             );
                         },
@@ -203,6 +203,7 @@ fn main() {
                                                     Text(
                                                         format!("Item {}", index),
                                                         Modifier::default(),
+                                                        TextStyle::default(),
                                                     );
                                                 },
                                             );

@@ -3,7 +3,7 @@
 pub extern crate self as cranpose_core;
 
 pub mod composer_context;
-pub mod frame_clock;
+mod frame_clock;
 mod launched_effect;
 pub mod owned;
 pub mod platform;
@@ -17,7 +17,11 @@ mod snapshot_weak_set;
 mod state;
 pub mod subcompose;
 
-pub use frame_clock::{FrameCallbackRegistration, FrameClock};
+#[cfg(feature = "internal")]
+#[doc(hidden)]
+pub mod internal {
+    pub use crate::frame_clock::{FrameCallbackRegistration, FrameClock};
+}
 pub use launched_effect::{
     CancelToken, LaunchedEffectScope, __launched_effect_async_impl, __launched_effect_impl,
 };
@@ -132,11 +136,6 @@ fn compose_debug_enabled() -> bool {
     *COMPOSE_DEBUG.get_or_init(|| std::env::var_os("COMPOSE_DEBUG").is_some())
 }
 
-#[cfg(target_arch = "wasm32")]
-fn compose_debug_enabled() -> bool {
-    false
-}
-
 #[cfg(test)]
 pub use runtime::{TestRuntime, TestScheduler};
 
@@ -207,6 +206,7 @@ pub(crate) struct RecomposeScopeInner {
     parent_hint: Cell<Option<NodeId>>,
     recompose: RefCell<Option<RecomposeCallback>>,
     local_stack: RefCell<Vec<LocalContext>>,
+    slots_host: RefCell<Option<Weak<SlotsHost>>>,
 }
 
 impl RecomposeScopeInner {
@@ -223,6 +223,7 @@ impl RecomposeScopeInner {
             parent_hint: Cell::new(None),
             recompose: RefCell::new(None),
             local_stack: RefCell::new(Vec::new()),
+            slots_host: RefCell::new(None),
         }
     }
 }
@@ -320,6 +321,18 @@ impl RecomposeScope {
 
     fn parent_hint(&self) -> Option<NodeId> {
         self.inner.parent_hint.get()
+    }
+
+    fn set_slots_host(&self, host: Weak<SlotsHost>) {
+        *self.inner.slots_host.borrow_mut() = Some(host);
+    }
+
+    fn slots_host(&self) -> Option<Rc<SlotsHost>> {
+        self.inner
+            .slots_host
+            .borrow()
+            .as_ref()
+            .and_then(|weak| weak.upgrade())
     }
 
     pub fn deactivate(&self) {
@@ -477,8 +490,9 @@ pub fn rememberUpdatedState<T: Clone + 'static>(value: T) -> MutableState<T> {
     })
 }
 
+#[cfg(feature = "internal")]
 #[allow(non_snake_case)]
-pub fn withFrameNanos(callback: impl FnOnce(u64) + 'static) -> FrameCallbackRegistration {
+pub fn withFrameNanos(callback: impl FnOnce(u64) + 'static) -> internal::FrameCallbackRegistration {
     with_current_composer(|composer| {
         composer
             .runtime_handle()
@@ -487,8 +501,11 @@ pub fn withFrameNanos(callback: impl FnOnce(u64) + 'static) -> FrameCallbackRegi
     })
 }
 
+#[cfg(feature = "internal")]
 #[allow(non_snake_case)]
-pub fn withFrameMillis(callback: impl FnOnce(u64) + 'static) -> FrameCallbackRegistration {
+pub fn withFrameMillis(
+    callback: impl FnOnce(u64) + 'static,
+) -> internal::FrameCallbackRegistration {
     with_current_composer(|composer| {
         composer
             .runtime_handle()
@@ -1853,6 +1870,9 @@ impl Composer {
         self.with_slots_mut(|slots| {
             SlotStorage::set_group_scope(slots, group, scope_ref.id());
         });
+
+        let slots_host = self.active_slots_host();
+        scope_ref.set_slots_host(Rc::downgrade(&slots_host));
 
         {
             let mut stack = self.scope_stack();
@@ -3625,9 +3645,22 @@ impl<A: Applier + 'static> Composition<A> {
             }
             did_recompose = true;
             let runtime_clone = runtime_handle.clone();
+            let root_host = self.slots_host();
+            let mut scope_groups: Vec<(Rc<SlotsHost>, Vec<RecomposeScope>)> = Vec::new();
+            for scope in scopes {
+                let host = scope.slots_host().unwrap_or_else(|| Rc::clone(&root_host));
+                if let Some((_, group)) = scope_groups
+                    .iter_mut()
+                    .find(|(existing, _)| Rc::ptr_eq(existing, &host))
+                {
+                    group.push(scope);
+                } else {
+                    scope_groups.push((host, vec![scope]));
+                }
+            }
             let (mut commands, side_effects) = {
                 let composer = Composer::new(
-                    self.slots_host(),
+                    Rc::clone(&root_host),
                     self.applier_host(),
                     runtime_clone,
                     self.observer.clone(),
@@ -3635,8 +3668,18 @@ impl<A: Applier + 'static> Composition<A> {
                 );
                 self.observer.begin_frame();
                 composer.install(|composer| {
-                    for scope in scopes.iter() {
-                        composer.recranpose_group(scope);
+                    for (host, scopes) in scope_groups.into_iter() {
+                        if Rc::ptr_eq(&host, &root_host) {
+                            for scope in scopes.iter() {
+                                composer.recranpose_group(scope);
+                            }
+                        } else {
+                            composer.with_slot_override(host, |composer| {
+                                for scope in scopes.iter() {
+                                    composer.recranpose_group(scope);
+                                }
+                            });
+                        }
                     }
                     let commands = composer.take_commands();
                     let side_effects = composer.take_side_effects();

@@ -1,7 +1,7 @@
 use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
 use cranpose_testing::robot::create_headless_robot_test;
 use cranpose_ui::widgets::{LazyColumn, LazyColumnSpec, Text};
-use cranpose_ui::Modifier;
+use cranpose_ui::{Modifier, TextStyle};
 
 #[test]
 fn test_lazy_column_reverse_layout() {
@@ -13,7 +13,11 @@ fn test_lazy_column_reverse_layout() {
         LazyColumn(Modifier::empty(), state, spec, |scope| {
             scope.items(3, None::<fn(usize) -> u64>, None::<fn(usize) -> u64>, |i| {
                 // Items: "Item 0", "Item 1", "Item 2"
-                Text(format!("Item {}", i), Modifier::empty());
+                Text(
+                    format!("Item {}", i),
+                    Modifier::empty(),
+                    TextStyle::default(),
+                );
             });
         });
     });

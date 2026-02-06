@@ -19,7 +19,7 @@ mod render_state;
 mod renderer;
 pub mod scroll;
 mod subcompose_layout;
-mod text;
+pub mod text;
 pub mod text_field_focus;
 mod text_field_handler;
 mod text_field_input;
@@ -97,7 +97,7 @@ pub use subcompose_layout::{
 };
 pub use text::{
     get_cursor_x_for_offset, get_offset_for_position, layout_text, measure_text, set_text_measurer,
-    TextMeasurer, TextMetrics,
+    TextMeasurer, TextMetrics, TextStyle,
 };
 pub use text_field_modifier_node::{TextFieldElement, TextFieldModifierNode};
 pub use text_modifier_node::{TextModifierElement, TextModifierNode};
@@ -133,5 +133,17 @@ mod anchor_async_tests;
 mod async_runtime_full_layout_test;
 
 #[cfg(test)]
+#[path = "tests/cursor_position_tests.rs"]
+mod cursor_position_tests;
+
+#[cfg(test)]
 #[path = "tests/tab_switching_tests.rs"]
 mod tab_switching_tests;
+
+#[cfg(test)]
+#[path = "tests/lazy_list_viewport_tests.rs"]
+mod lazy_list_viewport_tests;
+
+#[cfg(test)]
+#[path = "tests/lazy_list_recompose_tests.rs"]
+mod lazy_list_recompose_tests;

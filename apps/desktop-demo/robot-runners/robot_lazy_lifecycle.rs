@@ -14,7 +14,9 @@ use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope, LazyLis
 use cranpose_macros::composable;
 use cranpose_testing::find_text_in_semantics;
 use cranpose_ui::widgets::*;
-use cranpose_ui::{Color, ColumnSpec, LinearArrangement, Modifier, RowSpec, VerticalAlignment};
+use cranpose_ui::{
+    Color, ColumnSpec, LinearArrangement, Modifier, RowSpec, TextStyle, VerticalAlignment,
+};
 use std::time::Duration;
 
 /// Lifecycle stats stored in compose state
@@ -38,6 +40,7 @@ fn stats_display(stats: MutableState<LifecycleStats>) {
             .padding(8.0)
             .background(Color(0.0, 0.4, 0.2, 0.8))
             .rounded_corners(8.0),
+        TextStyle::default(),
     );
 }
 
@@ -84,6 +87,7 @@ fn lifecycle_test_app() {
                     .padding(12.0)
                     .background(Color(0.2, 0.3, 0.5, 0.8))
                     .rounded_corners(8.0),
+                TextStyle::default(),
             );
 
             // Stats display - isolated component, only this recomposes on stats change
@@ -92,6 +96,7 @@ fn lifecycle_test_app() {
             Text(
                 "20 items - scroll to test lifecycle",
                 Modifier::empty().padding(8.0),
+                TextStyle::default(),
             );
 
             // Lazy list - should not recompose when stats change
@@ -137,13 +142,18 @@ fn lifecycle_item(index: usize, stats: MutableState<LifecycleStats>) {
             .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
             .vertical_alignment(VerticalAlignment::CenterVertically),
         move || {
-            Text(format!("Item #{}", index), Modifier::empty().padding(4.0));
+            Text(
+                format!("Item #{}", index),
+                Modifier::empty().padding(4.0),
+                TextStyle::default(),
+            );
             Text(
                 format!("C:{}", item_cranpose_count.get()),
                 Modifier::empty()
                     .padding(4.0)
                     .background(Color(0.0, 0.3, 0.0, 0.5))
                     .rounded_corners(4.0),
+                TextStyle::default(),
             );
         },
     );

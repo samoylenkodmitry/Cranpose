@@ -31,3 +31,4 @@
 - do not ever rm -rf, prefer mv to some _old name
 - all tests should pass, its never *not yours*
 - zero warnings on all build/clippy/test commands, never *was pre-existing*
+- the #[cfg(feature = "robot-app")] is forbidden 

@@ -10,7 +10,7 @@
 
 use crate::{
     Brush, Button, Color, Column, ColumnSpec, CornerRadii, Modifier, Row, RowSpec, Size, Spacer,
-    Text,
+    Text, TextStyle,
 };
 use cranpose_core::{
     location_key, Composition, MemoryApplier, MutableState, Node,
@@ -136,7 +136,11 @@ fn async_runtime_full_layout(
         ColumnSpec::default(),
         move || {
             // Title Text
-            Text("Async Runtime Demo", Modifier::empty().padding(12.0));
+            Text(
+                "Async Runtime Demo",
+                Modifier::empty().padding(12.0),
+                TextStyle::default(),
+            );
 
             Spacer(Size {
                 width: 0.0,
@@ -156,6 +160,7 @@ fn async_runtime_full_layout(
                     Text(
                         format!("Progress: {:>3}%", (progress_value * 100.0) as i32),
                         Modifier::empty().padding(6.0),
+                        TextStyle::default(),
                     );
 
                     Spacer(Size {
@@ -216,6 +221,7 @@ fn async_runtime_full_layout(
                     }
                 ),
                 Modifier::empty().padding(8.0),
+                TextStyle::default(),
             );
 
             Spacer(Size {
@@ -245,7 +251,11 @@ fn async_runtime_full_layout(
                                 move || toggle_state.set(!toggle_state.get())
                             },
                             move || {
-                                Text(button_label, Modifier::empty().padding(6.0));
+                                Text(
+                                    button_label,
+                                    Modifier::empty().padding(6.0),
+                                    TextStyle::default(),
+                                );
                             },
                         );
                     },

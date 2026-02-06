@@ -20,6 +20,7 @@ members = [
     "crates/cranpose-render/wgpu",
     "apps/desktop-demo",
     "apps/minimal-single-file",
+    "crates/cranpose-services",
 ]
 resolver = "2"
 
@@ -51,6 +52,7 @@ cranpose-render-common = { path = "crates/cranpose-render/common", version = "0.
 cranpose-render-pixels = { path = "crates/cranpose-render/pixels", version = "0.0.37" }
 cranpose-render-wgpu = { path = "crates/cranpose-render/wgpu", version = "0.0.37" }
 cranpose-runtime-std = { path = "crates/cranpose-runtime-std", version = "0.0.37" }
+cranpose-services = { path = "crates/cranpose-services", version = "0.0.37" }
 cranpose-testing = { path = "crates/cranpose-testing", version = "0.0.37" }
 cranpose-ui = { path = "crates/cranpose-ui", version = "0.0.37" }
 cranpose-ui-graphics = { path = "crates/cranpose-ui-graphics", version = "0.0.37" }

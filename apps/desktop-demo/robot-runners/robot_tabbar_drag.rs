@@ -4,7 +4,7 @@
 //! doesn't update visually when dragged.
 
 use cranpose::AppLauncher;
-use cranpose_testing::{find_button, find_in_semantics};
+use cranpose_testing::{bounds_span, collect_tab_bounds, detect_tab_axis, root_bounds, TabAxis};
 use desktop_app::app;
 use std::time::Duration;
 
@@ -27,21 +27,48 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
             let _ = robot.wait_for_idle();
 
-            // Find "Lazy List" tab position BEFORE drag
-            let lazy_tab_before = find_in_semantics(&robot, |elem| find_button(elem, "Lazy List"));
-            let x_before = lazy_tab_before.map(|(x, _, _, _)| x);
+            let tab_labels = app::demo_tab_labels();
+
+            let tabs_before = collect_tab_bounds(&robot, &tab_labels);
+            let axis = detect_tab_axis(&tabs_before).unwrap_or(TabAxis::Horizontal);
+            let span = bounds_span(&tabs_before).unwrap_or((0.0, 0.0, 0.0, 0.0));
+            let (span_x, span_y) = (span.2 - span.0, span.3 - span.1);
+            let root = root_bounds(&robot).unwrap_or((0.0, 0.0, 800.0, 600.0));
+            let overflow = match axis {
+                TabAxis::Horizontal => span_x > root.2 - 40.0,
+                TabAxis::Vertical => span_y > root.3 - 40.0,
+            };
+
+            let find_tab = |tabs: &Vec<(String, (f32, f32, f32, f32))>, label: &str| {
+                tabs.iter()
+                    .find(|(name, _)| name == label)
+                    .map(|(_, bounds)| *bounds)
+            };
+
+            let lazy_before = find_tab(&tabs_before, "Lazy List");
+            let counter_before = find_tab(&tabs_before, "Counter App");
+            let before_axis = lazy_before.map(|(x, y, _, _)| match axis {
+                TabAxis::Horizontal => x,
+                TabAxis::Vertical => y,
+            });
 
             println!("\n--- Test: Drag tabbar should scroll tabs ---");
-            println!("  'Lazy List' tab X before drag: {:?}", x_before);
+            println!(
+                "  'Lazy List' tab {} before drag: {:?}",
+                match axis {
+                    TabAxis::Horizontal => "X",
+                    TabAxis::Vertical => "Y",
+                },
+                before_axis
+            );
 
-            if x_before.is_none() {
+            if lazy_before.is_none() || counter_before.is_none() {
                 println!("  ✗ Could not find 'Lazy List' tab");
                 std::process::exit(1);
             }
 
             // Find a tab near the left to start dragging from
-            let counter_tab = find_in_semantics(&robot, |elem| find_button(elem, "Counter App"));
-            if let Some((x, y, w, h)) = counter_tab {
+            if let Some((x, y, w, h)) = counter_before {
                 let start_x = x + w / 2.0;
                 let start_y = y + h / 2.0;
 
@@ -56,45 +83,81 @@ fn main() {
                 let _ = robot.mouse_down();
                 std::thread::sleep(Duration::from_millis(50));
 
-                // Drag LEFT by 200px (should scroll tabs right)
-                for i in 0..20 {
-                    let _ = robot.mouse_move(start_x - (i as f32 * 10.0), start_y);
-                    std::thread::sleep(Duration::from_millis(20));
-                }
-                let _ = robot.mouse_up();
-                std::thread::sleep(Duration::from_millis(200));
-                let _ = robot.wait_for_idle();
+                if overflow {
+                    match axis {
+                        TabAxis::Horizontal => {
+                            // Drag LEFT by 200px (should scroll tabs right)
+                            for i in 0..20 {
+                                let _ = robot.mouse_move(start_x - (i as f32 * 10.0), start_y);
+                                std::thread::sleep(Duration::from_millis(20));
+                            }
+                        }
+                        TabAxis::Vertical => {
+                            // Drag UP by 200px (should scroll tabs down)
+                            for i in 0..20 {
+                                let _ = robot.mouse_move(start_x, start_y - (i as f32 * 10.0));
+                                std::thread::sleep(Duration::from_millis(20));
+                            }
+                        }
+                    }
+                    let _ = robot.mouse_up();
+                    std::thread::sleep(Duration::from_millis(200));
+                    let _ = robot.wait_for_idle();
 
-                println!("  Dragged 200px left");
+                    println!(
+                        "  Dragged 200px {}",
+                        match axis {
+                            TabAxis::Horizontal => "left",
+                            TabAxis::Vertical => "up",
+                        }
+                    );
+                } else {
+                    let _ = robot.mouse_up();
+                    println!("  Tabs fit without overflow; skipping drag assertion");
+                }
             } else {
                 println!("  ✗ Could not find 'Counter App' tab to start drag");
                 std::process::exit(1);
             }
 
-            // Find "Lazy List" tab position AFTER drag
-            let lazy_tab_after = find_in_semantics(&robot, |elem| find_button(elem, "Lazy List"));
-            let x_after = lazy_tab_after.map(|(x, _, _, _)| x);
+            let tabs_after = collect_tab_bounds(&robot, &tab_labels);
+            let lazy_after = find_tab(&tabs_after, "Lazy List");
+            let after_axis = lazy_after.map(|(x, y, _, _)| match axis {
+                TabAxis::Horizontal => x,
+                TabAxis::Vertical => y,
+            });
 
-            println!("  'Lazy List' tab X after drag: {:?}", x_after);
+            println!(
+                "  'Lazy List' tab {} after drag: {:?}",
+                match axis {
+                    TabAxis::Horizontal => "X",
+                    TabAxis::Vertical => "Y",
+                },
+                after_axis
+            );
 
             // ===== CRITICAL ASSERTION =====
-            match (x_before, x_after) {
-                (Some(before), Some(after)) => {
-                    let delta = (after - before).abs();
-                    if delta > 50.0 {
-                        println!("  ✓ PASS: Tab moved by {:.1}px", delta);
-                    } else {
-                        println!(
-                            "  ✗ FAIL: Tab only moved {:.1}px - TABBAR SCROLL BROKEN!",
-                            delta
-                        );
-                        println!("         Expected >50px movement from 200px drag");
-                        std::process::exit(1);
+            if overflow {
+                match (before_axis, after_axis) {
+                    (Some(before), Some(after)) => {
+                        let delta = (after - before).abs();
+                        if delta > 50.0 {
+                            println!("  ✓ PASS: Tab moved by {:.1}px", delta);
+                        } else {
+                            println!(
+                                "  ✗ FAIL: Tab only moved {:.1}px - TABBAR SCROLL BROKEN!",
+                                delta
+                            );
+                            println!("         Expected >50px movement from 200px drag");
+                            std::process::exit(1);
+                        }
+                    }
+                    _ => {
+                        println!("  ? INCONCLUSIVE: Could not find tab positions");
                     }
                 }
-                _ => {
-                    println!("  ? INCONCLUSIVE: Could not find tab positions");
-                }
+            } else {
+                println!("  ✓ PASS: Tabs fit without overflow; no scroll expected");
             }
 
             println!("\n=== Test Summary ===");

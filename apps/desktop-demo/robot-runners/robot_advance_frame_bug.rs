@@ -16,7 +16,7 @@
 //! ```
 
 use cranpose::AppLauncher;
-use cranpose_testing::{find_button, find_in_semantics, find_text};
+use cranpose_testing::{find_button, find_button_in_semantics, find_in_semantics, find_text};
 use desktop_app::app;
 use std::time::Duration;
 
@@ -84,19 +84,17 @@ fn main() {
             // =========================================================
             println!("--- Step 1: Navigate to Modifiers tab ---");
 
-            if let Some((x, y, w, h)) =
-                find_in_semantics(&robot, |elem| find_button(elem, "Modifiers"))
-            {
+            if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Modifiers Showcase") {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!("  Found 'Modifiers' tab at ({:.1}, {:.1})", cx, cy);
+                println!("  Found 'Modifiers Showcase' tab at ({:.1}, {:.1})", cx, cy);
 
                 let _ = robot.click(cx, cy);
                 std::thread::sleep(Duration::from_millis(500));
                 let _ = robot.wait_for_idle();
-                println!("  ✓ Clicked Modifiers tab\n");
+                println!("  ✓ Clicked Modifiers Showcase tab\n");
             } else {
-                println!("  ✗ FAIL: Could not find 'Modifiers' tab\n");
+                println!("  ✗ FAIL: Could not find 'Modifiers Showcase' tab\n");
                 all_passed = false;
             }
 

@@ -8,7 +8,7 @@ use cranpose_foundation::{
 use cranpose_ui::{
     composable, Box as ComposeBox, BoxSpec, Column, ColumnSpec, EdgeInsets, Modifier,
     OffsetElement, OffsetNode, PaddingElement, PaddingNode, Row, RowSpec, Size, SizeElement,
-    SizeNode, Text,
+    SizeNode, Text, TextStyle,
 };
 use cranpose_ui_layout::{Constraints, Measurable, Placeable};
 
@@ -83,7 +83,7 @@ fn test_complex_modifier_chain_ordering() {
                 .padding(5.0),
             BoxSpec::default(),
             || {
-                Text("Test", Modifier::empty());
+                Text("Test", Modifier::empty(), TextStyle::default());
             },
         );
     }
@@ -123,7 +123,7 @@ fn test_modifier_chain_recomposition() {
             Modifier::empty().padding(padding),
             BoxSpec::default(),
             || {
-                Text("Dynamic", Modifier::empty());
+                Text("Dynamic", Modifier::empty(), TextStyle::default());
             },
         );
     }
@@ -168,7 +168,7 @@ fn test_large_modifier_chain_performance() {
         }
 
         ComposeBox(modifier, BoxSpec::default(), || {
-            Text("Deep chain", Modifier::empty());
+            Text("Deep chain", Modifier::empty(), TextStyle::default());
         });
     }
 
@@ -221,7 +221,7 @@ fn test_many_items_with_modifiers() {
                         } else {
                             "Item 10+"
                         };
-                        Text(text, Modifier::empty());
+                        Text(text, Modifier::empty(), TextStyle::default());
                     },
                 );
             }
@@ -263,13 +263,13 @@ fn test_nested_layouts_with_modifiers() {
                             .offset(5.0, 5.0),
                         BoxSpec::default(),
                         || {
-                            Text("Nested", Modifier::empty());
+                            Text("Nested", Modifier::empty(), TextStyle::default());
                         },
                     );
                 });
 
                 Row(Modifier::empty().padding(5.0), RowSpec::default(), || {
-                    Text("Second row", Modifier::empty());
+                    Text("Second row", Modifier::empty(), TextStyle::default());
                 });
             },
         );
@@ -316,7 +316,7 @@ fn test_dynamic_list_recomposition() {
                     9 => "Item 9",
                     _ => "Item 10+",
                 };
-                Text(text, Modifier::empty().padding(4.0));
+                Text(text, Modifier::empty().padding(4.0), TextStyle::default());
             }
         });
     }
@@ -368,6 +368,7 @@ fn test_text_with_modifiers() {
                     width: 100.0,
                     height: 30.0,
                 }),
+            TextStyle::default(),
         );
     }
 
@@ -392,8 +393,12 @@ fn test_card_list_pattern() {
             BoxSpec::default(),
             move || {
                 Column(Modifier::empty(), ColumnSpec::default(), move || {
-                    Text(title, Modifier::empty().padding_each(0.0, 0.0, 0.0, 8.0));
-                    Text(description, Modifier::empty());
+                    Text(
+                        title,
+                        Modifier::empty().padding_each(0.0, 0.0, 0.0, 8.0),
+                        TextStyle::default(),
+                    );
+                    Text(description, Modifier::empty(), TextStyle::default());
                 });
             },
         );
@@ -435,7 +440,7 @@ fn test_rapid_modifier_changes() {
             Modifier::empty().offset(frame as f32, frame as f32),
             BoxSpec::default(),
             || {
-                Text("Moving", Modifier::empty());
+                Text("Moving", Modifier::empty(), TextStyle::default());
             },
         );
     }

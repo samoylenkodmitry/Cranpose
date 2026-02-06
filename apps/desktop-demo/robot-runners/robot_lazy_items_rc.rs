@@ -12,7 +12,9 @@ use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScopeExt, Lazy
 use cranpose_macros::composable;
 use cranpose_testing::find_text_in_semantics;
 use cranpose_ui::widgets::*;
-use cranpose_ui::{Color, ColumnSpec, LinearArrangement, Modifier, RowSpec, VerticalAlignment};
+use cranpose_ui::{
+    Color, ColumnSpec, LinearArrangement, Modifier, RowSpec, TextStyle, VerticalAlignment,
+};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -79,13 +81,18 @@ fn rc_item_content(item: &TestItem) {
             .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
             .vertical_alignment(VerticalAlignment::CenterVertically),
         move || {
-            Text(format!("RcItem #{}", id), Modifier::empty().padding(4.0));
+            Text(
+                format!("RcItem #{}", id),
+                Modifier::empty().padding(4.0),
+                TextStyle::default(),
+            );
             Text(
                 name.clone(),
                 Modifier::empty()
                     .padding(4.0)
                     .background(Color(0.0, 0.3, 0.0, 0.5))
                     .rounded_corners(4.0),
+                TextStyle::default(),
             );
         },
     );
@@ -108,6 +115,7 @@ fn indexed_rc_item_content(index: usize, item: &TestItem) {
             Text(
                 format!("IdxRcItem[{}]", index),
                 Modifier::empty().padding(4.0),
+                TextStyle::default(),
             );
             Text(
                 format!("#{} {}", id, name),
@@ -115,6 +123,7 @@ fn indexed_rc_item_content(index: usize, item: &TestItem) {
                     .padding(4.0)
                     .background(Color(0.3, 0.0, 0.3, 0.5))
                     .rounded_corners(4.0),
+                TextStyle::default(),
             );
         },
     );
@@ -148,17 +157,20 @@ fn rc_items_test_app() {
                     .padding(12.0)
                     .background(Color(0.2, 0.3, 0.5, 0.8))
                     .rounded_corners(8.0),
+                TextStyle::default(),
             );
 
             Text(
                 "items_slice_rc (zero-copy):",
                 Modifier::empty().padding(4.0),
+                TextStyle::default(),
             );
             lazy_list_with_rc(state1.clone(), Rc::clone(&data));
 
             Text(
                 "items_indexed_rc (zero-copy with index):",
                 Modifier::empty().padding(4.0),
+                TextStyle::default(),
             );
             lazy_list_with_indexed_rc(state2.clone(), Rc::clone(&data));
         },

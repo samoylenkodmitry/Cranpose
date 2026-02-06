@@ -18,7 +18,7 @@ use cranpose_ui::widgets::{
     BasicTextField, Box, BoxSpec, Button, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row,
     RowSpec, Text,
 };
-use cranpose_ui::{composable, Color, LinearArrangement, Modifier};
+use cranpose_ui::{composable, Color, LinearArrangement, Modifier, TextStyle};
 use std::time::{Duration, Instant};
 
 const DEFAULT_DURATION_SECS: u64 = 3;
@@ -53,7 +53,11 @@ fn PerfHarnessApp() {
         move || {
             let input_state = input_state.clone();
             let input_state_for_row = input_state.clone();
-            Text("Perf Harness".to_string(), Modifier::empty());
+            Text(
+                "Perf Harness".to_string(),
+                Modifier::empty(),
+                TextStyle::default(),
+            );
             Row(
                 Modifier::empty(),
                 RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
@@ -66,7 +70,11 @@ fn PerfHarnessApp() {
                             counter.set(counter.get().saturating_add(1));
                         },
                         || {
-                            Text("Toggle".to_string(), Modifier::empty());
+                            Text(
+                                "Toggle".to_string(),
+                                Modifier::empty(),
+                                TextStyle::default(),
+                            );
                         },
                     );
                     Button(
@@ -75,7 +83,11 @@ fn PerfHarnessApp() {
                             dense.set(!dense.get());
                         },
                         || {
-                            Text("Density".to_string(), Modifier::empty());
+                            Text(
+                                "Density".to_string(),
+                                Modifier::empty(),
+                                TextStyle::default(),
+                            );
                         },
                     );
                     {
@@ -88,13 +100,14 @@ fn PerfHarnessApp() {
                                 input_state.set_text(format!("Input {}", next));
                             },
                             || {
-                                Text("Text+".to_string(), Modifier::empty());
+                                Text("Text+".to_string(), Modifier::empty(), TextStyle::default());
                             },
                         );
                     }
                     Text(
                         format!("Counter: {}", counter.get()),
                         Modifier::empty().padding(4.0),
+                        TextStyle::default(),
                     );
                 },
             );
@@ -103,11 +116,13 @@ fn PerfHarnessApp() {
             Text(
                 format!("Toggle State: {}", toggle_label),
                 Modifier::empty().padding(2.0),
+                TextStyle::default(),
             );
             let density_label = if dense.get() { "ON" } else { "OFF" };
             Text(
                 format!("Density: {}", density_label),
                 Modifier::empty().padding(2.0),
+                TextStyle::default(),
             );
             {
                 let input_state = input_state.clone();
@@ -119,6 +134,7 @@ fn PerfHarnessApp() {
                         .padding(6.0)
                         .background(Color(0.12, 0.14, 0.2, 1.0))
                         .rounded_corners(6.0),
+                    TextStyle::default(),
                 );
             }
 
@@ -155,11 +171,16 @@ fn PerfHarnessApp() {
                                             LinearArrangement::SpacedBy(8.0),
                                         ),
                                         move || {
-                                            Text(format!("Item {}", i), Modifier::empty());
+                                            Text(
+                                                format!("Item {}", i),
+                                                Modifier::empty(),
+                                                TextStyle::default(),
+                                            );
                                             if dense_mode {
                                                 Text(
                                                     format!("Detail {}", i * 3),
                                                     Modifier::empty(),
+                                                    TextStyle::default(),
                                                 );
                                             }
                                         },

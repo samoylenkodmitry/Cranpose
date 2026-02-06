@@ -36,21 +36,21 @@ fn equal_width_buttons_api_demonstration() {
                 Modifier::empty().width_intrinsic(IntrinsicSize::Max),
                 || {},
                 || {
-                    Text("OK", Modifier::empty());
+                    Text("OK", Modifier::empty(), TextStyle::default());
                 },
             );
             Button(
                 Modifier::empty().width_intrinsic(IntrinsicSize::Max),
                 || {},
                 || {
-                    Text("Cancel", Modifier::empty());
+                    Text("Cancel", Modifier::empty(), TextStyle::default());
                 },
             );
             Button(
                 Modifier::empty().width_intrinsic(IntrinsicSize::Max),
                 || {},
                 || {
-                    Text("Apply", Modifier::empty());
+                    Text("Apply", Modifier::empty(), TextStyle::default());
                 },
             );
         });
@@ -70,9 +70,9 @@ fn column_with_intrinsic_width() {
                 .then(Modifier::empty().background(Color(0.8, 0.8, 0.8, 1.0))),
             ColumnSpec::default(),
             || {
-                Text("Short", Modifier::empty());
-                Text("Much Longer Text", Modifier::empty());
-                Text("Mid", Modifier::empty());
+                Text("Short", Modifier::empty(), TextStyle::default());
+                Text("Much Longer Text", Modifier::empty(), TextStyle::default());
+                Text("Mid", Modifier::empty(), TextStyle::default());
             },
         );
     });
@@ -129,7 +129,7 @@ fn min_intrinsic_vs_max_intrinsic() {
             Modifier::empty().width_intrinsic(IntrinsicSize::Min),
             ColumnSpec::default(),
             || {
-                Text("Content", Modifier::empty());
+                Text("Content", Modifier::empty(), TextStyle::default());
             },
         );
     });
@@ -139,7 +139,7 @@ fn min_intrinsic_vs_max_intrinsic() {
             Modifier::empty().width_intrinsic(IntrinsicSize::Max),
             ColumnSpec::default(),
             || {
-                Text("Content", Modifier::empty());
+                Text("Content", Modifier::empty(), TextStyle::default());
             },
         );
     });
@@ -159,8 +159,8 @@ fn intrinsic_size_with_padding() {
                 .then(Modifier::empty().background(Color(0.9, 0.9, 0.9, 1.0))),
             ColumnSpec::default(),
             || {
-                Text("Button 1", Modifier::empty());
-                Text("Button 2 - Longer", Modifier::empty());
+                Text("Button 1", Modifier::empty(), TextStyle::default());
+                Text("Button 2 - Longer", Modifier::empty(), TextStyle::default());
             },
         );
     });
@@ -177,16 +177,16 @@ fn nested_intrinsic_sizing() {
                 Modifier::empty().width_intrinsic(IntrinsicSize::Max),
                 RowSpec::default(),
                 || {
-                    Text("Left", Modifier::empty());
-                    Text("Right", Modifier::empty());
+                    Text("Left", Modifier::empty(), TextStyle::default());
+                    Text("Right", Modifier::empty(), TextStyle::default());
                 },
             );
             Row(
                 Modifier::empty().width_intrinsic(IntrinsicSize::Max),
                 RowSpec::default(),
                 || {
-                    Text("A", Modifier::empty());
-                    Text("B", Modifier::empty());
+                    Text("A", Modifier::empty(), TextStyle::default());
+                    Text("B", Modifier::empty(), TextStyle::default());
                 },
             );
         });

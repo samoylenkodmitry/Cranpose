@@ -509,6 +509,7 @@ fn dynamic_modifiers_showcase_with_frame(frame: MutableState<i32>) {
                 .padding(12.0)
                 .then(Modifier::empty().background(Color(1.0, 1.0, 1.0, 0.1)))
                 .then(Modifier::empty().rounded_corners(14.0)),
+            TextStyle::default(),
         );
 
         Spacer(Size {
@@ -540,7 +541,7 @@ fn dynamic_modifiers_showcase_with_frame(frame: MutableState<i32>) {
                         .then(Modifier::empty().rounded_corners(10.0)),
                     BoxSpec::default(),
                     || {
-                        Text("Move", Modifier::empty());
+                        Text("Move", Modifier::empty(), TextStyle::default());
                     },
                 );
             },
@@ -557,6 +558,7 @@ fn dynamic_modifiers_showcase_with_frame(frame: MutableState<i32>) {
                 .padding(8.0)
                 .then(Modifier::empty().background(Color(0.2, 0.2, 0.3, 0.6)))
                 .then(Modifier::empty().rounded_corners(10.0)),
+            TextStyle::default(),
         );
     });
 }

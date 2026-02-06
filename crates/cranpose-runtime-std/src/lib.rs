@@ -10,7 +10,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use cranpose_core::{Clock, FrameClock, Runtime, RuntimeHandle, RuntimeScheduler};
+#[cfg(feature = "internal")]
+use cranpose_core::internal::FrameClock;
+use cranpose_core::{Clock, Runtime, RuntimeHandle, RuntimeScheduler};
 
 // On WASM, wrap closures to make them Sync since WASM is single-threaded
 #[cfg(target_arch = "wasm32")]
@@ -159,6 +161,7 @@ impl StdRuntime {
     }
 
     /// Returns the runtime's frame clock.
+    #[cfg(feature = "internal")]
     pub fn frame_clock(&self) -> FrameClock {
         self.runtime.frame_clock()
     }

@@ -10,7 +10,7 @@
 //! ```
 
 use cranpose::AppLauncher;
-use cranpose_testing::{find_button, find_in_semantics};
+use cranpose_testing::find_button_in_semantics;
 use desktop_app::app;
 use std::time::Duration;
 
@@ -47,16 +47,16 @@ fn main() {
             // =========================================================
             println!("--- Test: Click 'Web Fetch' Tab Then Move Cursor ---");
 
-            // Record reference tab position BEFORE any interaction
-            let ref_tab_before =
-                find_in_semantics(&robot, |elem| find_button(elem, "Modifiers Showcase"));
+            // Find "Web Fetch" tab (may auto-scroll to reveal)
+            let web_fetch_tab = find_button_in_semantics(&robot, "Web Fetch");
+
+            // Record reference tab position AFTER any auto-scroll
+            let ref_tab_before = find_button_in_semantics(&robot, "Modifiers Showcase");
             let ref_x_before = ref_tab_before.map(|(x, _, _, _)| x).unwrap_or(0.0);
             println!(
                 "  Reference tab ('Modifiers Showcase') initial x={:.1}",
                 ref_x_before
             );
-
-            let web_fetch_tab = find_in_semantics(&robot, |elem| find_button(elem, "Web Fetch"));
             if let Some((x, y, w, h)) = web_fetch_tab {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
@@ -75,16 +75,12 @@ fn main() {
 
                 // Now move cursor to the RIGHT (without pressing any button)
                 println!("  Moving cursor 150px right (no button pressed)...");
-                for i in 0..15 {
-                    let _ = robot.mouse_move(cx + (i as f32 * 10.0), cy);
-                    std::thread::sleep(Duration::from_millis(30));
-                }
+                let _ = robot.mouse_move(cx + 150.0, cy);
                 let _ = robot.wait_for_idle();
                 std::thread::sleep(Duration::from_millis(200));
 
                 // Check if reference tab moved (it should NOT)
-                let ref_tab_after =
-                    find_in_semantics(&robot, |elem| find_button(elem, "Modifiers Showcase"));
+                let ref_tab_after = find_button_in_semantics(&robot, "Modifiers Showcase");
                 let ref_x_after = ref_tab_after.map(|(x, _, _, _)| x).unwrap_or(0.0);
 
                 let scroll_delta = (ref_x_after - ref_x_before).abs();
@@ -107,8 +103,7 @@ fn main() {
                 println!("  Could not find 'Web Fetch' tab, trying 'Counter App'");
 
                 // Fallback to Counter App tab
-                let counter_tab =
-                    find_in_semantics(&robot, |elem| find_button(elem, "Counter App"));
+                let counter_tab = find_button_in_semantics(&robot, "Counter App");
                 if let Some((x, y, w, h)) = counter_tab {
                     let cx = x + w / 2.0;
                     let cy = y + h / 2.0;
@@ -125,15 +120,11 @@ fn main() {
                     println!("  Clicked 'Counter App' tab");
 
                     println!("  Moving cursor 150px right (no button pressed)...");
-                    for i in 0..15 {
-                        let _ = robot.mouse_move(cx + (i as f32 * 10.0), cy);
-                        std::thread::sleep(Duration::from_millis(30));
-                    }
+                    let _ = robot.mouse_move(cx + 150.0, cy);
                     let _ = robot.wait_for_idle();
                     std::thread::sleep(Duration::from_millis(200));
 
-                    let ref_tab_after =
-                        find_in_semantics(&robot, |elem| find_button(elem, "Modifiers Showcase"));
+                    let ref_tab_after = find_button_in_semantics(&robot, "Modifiers Showcase");
                     let ref_x_after = ref_tab_after.map(|(x, _, _, _)| x).unwrap_or(0.0);
 
                     let scroll_delta = (ref_x_after - ref_x_before).abs();

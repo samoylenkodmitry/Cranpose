@@ -8,12 +8,10 @@
 //! cargo run --package desktop-app --example robot_lazy_recursive_composition --features robot-app
 //! ```
 
-mod robot_test_utils;
-
 use cranpose::AppLauncher;
+use cranpose_testing::find_element_by_text_exact;
 use cranpose_testing::{find_button_in_semantics, find_in_semantics, find_text_exact};
 use desktop_app::app;
-use robot_test_utils::find_element_by_text_exact;
 use std::time::Duration;
 
 fn main() {

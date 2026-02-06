@@ -1,8 +1,10 @@
 use crate::{hash_key, with_current_composer, Key, RuntimeHandle, TaskHandle};
+#[cfg(not(target_arch = "wasm32"))]
 use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::hash::Hash;
 use std::pin::Pin;
+#[cfg(not(target_arch = "wasm32"))]
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -14,8 +16,10 @@ struct LaunchedEffectState {
 }
 
 struct LaunchedEffectCancellation {
+    #[cfg(not(target_arch = "wasm32"))]
     runtime: RuntimeHandle,
     active: Arc<AtomicBool>,
+    #[cfg(not(target_arch = "wasm32"))]
     continuations: Rc<RefCell<Vec<u64>>>,
 }
 
@@ -45,15 +49,19 @@ impl LaunchedEffectState {
     ) {
         self.cancel_current();
         let active = Arc::new(AtomicBool::new(true));
+        #[cfg(not(target_arch = "wasm32"))]
         let continuations = Rc::new(RefCell::new(Vec::new()));
         self.cancel = Some(LaunchedEffectCancellation {
+            #[cfg(not(target_arch = "wasm32"))]
             runtime: runtime.clone(),
             active: Arc::clone(&active),
+            #[cfg(not(target_arch = "wasm32"))]
             continuations: Rc::clone(&continuations),
         });
         let scope = LaunchedEffectScope {
             active: Arc::clone(&active),
             runtime: runtime.clone(),
+            #[cfg(not(target_arch = "wasm32"))]
             continuations,
         };
         runtime.enqueue_ui_task(Box::new(move || effect(scope)));
@@ -69,9 +77,12 @@ impl LaunchedEffectState {
 impl LaunchedEffectCancellation {
     fn cancel(&self) {
         self.active.store(false, Ordering::SeqCst);
-        let mut pending = self.continuations.borrow_mut();
-        for id in pending.drain(..) {
-            self.runtime.cancel_ui_cont(id);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut pending = self.continuations.borrow_mut();
+            for id in pending.drain(..) {
+                self.runtime.cancel_ui_cont(id);
+            }
         }
     }
 }
@@ -95,15 +106,19 @@ impl LaunchedEffectAsyncState {
     ) {
         self.cancel_current();
         let active = Arc::new(AtomicBool::new(true));
+        #[cfg(not(target_arch = "wasm32"))]
         let continuations = Rc::new(RefCell::new(Vec::new()));
         self.cancel = Some(LaunchedEffectCancellation {
+            #[cfg(not(target_arch = "wasm32"))]
             runtime: runtime.clone(),
             active: Arc::clone(&active),
+            #[cfg(not(target_arch = "wasm32"))]
             continuations: Rc::clone(&continuations),
         });
         let scope = LaunchedEffectScope {
             active: Arc::clone(&active),
             runtime: runtime.clone(),
+            #[cfg(not(target_arch = "wasm32"))]
             continuations,
         };
         let future = mk_future(scope.clone());
@@ -148,14 +163,17 @@ impl Drop for LaunchedEffectAsyncState {
 pub struct LaunchedEffectScope {
     active: Arc<AtomicBool>,
     runtime: RuntimeHandle,
+    #[cfg(not(target_arch = "wasm32"))]
     continuations: Rc<RefCell<Vec<u64>>>,
 }
 
 impl LaunchedEffectScope {
+    #[cfg(not(target_arch = "wasm32"))]
     fn track_continuation(&self, id: u64) {
         self.continuations.borrow_mut().push(id);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn release_continuation(&self, id: u64) {
         let mut continuations = self.continuations.borrow_mut();
         if let Some(index) = continuations.iter().position(|entry| *entry == id) {
@@ -221,15 +239,18 @@ impl LaunchedEffectScope {
         });
     }
 
-    /// Runs background work on a worker thread and delivers results to the UI.
+    /// Runs background work and delivers results to the UI.
     ///
-    /// `work` executes on a background thread, receives a cooperative
-    /// [`CancelToken`], and must produce a `Send` value. The `on_ui` continuation
-    /// runs on the runtime thread, so it may capture `Rc`/`RefCell` state safely.
-    pub fn launch_background<T, Work, Ui>(&self, work: Work, on_ui: Ui)
+    /// On native targets, `work` runs on a worker thread and its future is
+    /// driven to completion there. On WASM, `work` runs as a task on the
+    /// browser event loop. The `on_ui` continuation always runs on the runtime
+    /// thread, so it may capture `Rc`/`RefCell` state safely.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn launch_background<T, Work, Ui, Fut>(&self, work: Work, on_ui: Ui)
     where
         T: Send + 'static,
-        Work: FnOnce(CancelToken) -> T + Send + 'static,
+        Work: FnOnce(CancelToken) -> Fut + Send + 'static,
+        Fut: Future<Output = T> + Send + 'static,
         Ui: FnOnce(T) + 'static,
     {
         if !self.is_active() {
@@ -257,11 +278,44 @@ impl LaunchedEffectScope {
 
         std::thread::spawn(move || {
             let token = CancelToken::new(Arc::clone(&active_for_thread));
-            let value = work(token.clone());
+            let value = pollster::block_on(work(token.clone()));
             if token.is_cancelled() {
                 return;
             }
             dispatcher.post_invoke(cont_id, value);
+        });
+    }
+
+    /// Runs background work and delivers results to the UI.
+    ///
+    /// On native targets, `work` runs on a worker thread and its future is
+    /// driven to completion there. On WASM, `work` runs as a task on the
+    /// browser event loop. The `on_ui` continuation always runs on the runtime
+    /// thread, so it may capture `Rc`/`RefCell` state safely.
+    #[cfg(target_arch = "wasm32")]
+    pub fn launch_background<T, Work, Ui, Fut>(&self, work: Work, on_ui: Ui)
+    where
+        T: 'static,
+        Work: FnOnce(CancelToken) -> Fut + 'static,
+        Fut: Future<Output = T> + 'static,
+        Ui: FnOnce(T) + 'static,
+    {
+        if !self.is_active() {
+            return;
+        }
+        let active_for_task = Arc::clone(&self.active);
+        let scope = self.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let token = CancelToken::new(Arc::clone(&active_for_task));
+            let value = work(token.clone()).await;
+            if token.is_cancelled() {
+                return;
+            }
+            scope.post_ui(move || {
+                if token.is_active() {
+                    on_ui(value);
+                }
+            });
         });
     }
 }

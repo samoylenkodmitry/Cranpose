@@ -19,8 +19,6 @@
 //! ROBOT_SKIP_SCROLL=1 cargo run --package desktop-app --example robot_lazy_list_state_reactivity --features robot-app
 //! ```
 
-mod robot_test_utils;
-
 use cranpose::AppLauncher;
 use cranpose_testing::{find_button_in_semantics, find_text_by_prefix_in_semantics};
 use desktop_app::app;
@@ -111,7 +109,7 @@ fn main() {
             // Debug: dump all text nodes
             println!("  Dumping semantics tree:");
             if let Ok(elements) = robot.get_semantics() {
-                robot_test_utils::print_semantics_with_bounds(&elements, 2);
+                cranpose_testing::print_semantics_with_bounds(&elements, 2);
             }
 
             let after_jump_index = find_text_by_prefix_in_semantics(&robot, "FirstIndex:");

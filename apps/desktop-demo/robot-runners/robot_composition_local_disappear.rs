@@ -17,7 +17,7 @@
 //! ```
 
 use cranpose::AppLauncher;
-use cranpose_testing::{find_button, find_in_semantics, find_text};
+use cranpose_testing::{find_button, find_button_in_semantics, find_in_semantics, find_text};
 use desktop_app::app;
 use std::time::Duration;
 
@@ -60,9 +60,7 @@ fn main() {
             // =========================================================
             println!("--- Step 1: Navigate to CompositionLocal Test tab ---");
 
-            if let Some((x, y, w, h)) =
-                find_in_semantics(&robot, |elem| find_button(elem, "CompositionLocal Test"))
-            {
+            if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "CompositionLocal Test") {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
                 println!(

@@ -12,7 +12,7 @@ use cranpose::AppLauncher;
 use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
 use cranpose_testing::find_text_in_semantics;
 use cranpose_ui::widgets::*;
-use cranpose_ui::{Color, LinearArrangement, Modifier};
+use cranpose_ui::{Color, LinearArrangement, Modifier, TextStyle};
 use std::time::{Duration, Instant};
 
 /// Total items = usize::MAX (18,446,744,073,709,551,615 on 64-bit)
@@ -32,12 +32,14 @@ fn test_app() {
             Text(
                 "LazyColumn Performance Test".to_string(),
                 Modifier::empty().padding(8.0),
+                TextStyle::default(),
             );
 
             // Item count display (formatted for readability)
             Text(
                 format!("{} items (usize::MAX)", format_large_number(ITEM_COUNT)),
                 Modifier::empty().padding(4.0),
+                TextStyle::default(),
             );
 
             // LazyColumn with MASSIVE item count
@@ -69,7 +71,11 @@ fn test_app() {
                                     .background(bg),
                                 BoxSpec::new(),
                                 move || {
-                                    Text(format!("Item #{}", i), Modifier::empty());
+                                    Text(
+                                        format!("Item #{}", i),
+                                        Modifier::empty(),
+                                        TextStyle::default(),
+                                    );
                                 },
                             );
                         },
@@ -85,6 +91,7 @@ fn test_app() {
                     stats.items_in_use, stats.items_in_pool
                 ),
                 Modifier::empty().padding(8.0),
+                TextStyle::default(),
             );
 
             // Jump to Middle button
@@ -97,7 +104,11 @@ fn test_app() {
                     list_state.scroll_to_item(middle_index, 0.0);
                 },
                 || {
-                    Text("Jump to Middle".to_string(), Modifier::empty());
+                    Text(
+                        "Jump to Middle".to_string(),
+                        Modifier::empty(),
+                        TextStyle::default(),
+                    );
                 },
             );
         },

@@ -15,7 +15,9 @@ use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope, LazyLis
 use cranpose_macros::composable;
 use cranpose_testing::find_text_in_semantics;
 use cranpose_ui::widgets::*;
-use cranpose_ui::{Color, ColumnSpec, LinearArrangement, Modifier, RowSpec, VerticalAlignment};
+use cranpose_ui::{
+    Color, ColumnSpec, LinearArrangement, Modifier, RowSpec, TextStyle, VerticalAlignment,
+};
 use std::time::Duration;
 
 /// Lifecycle stats stored in compose state
@@ -45,6 +47,7 @@ fn stats_display(stats: MutableState<LifecycleStats>) {
             .padding(8.0)
             .background(Color(0.0, 0.4, 0.2, 0.8))
             .rounded_corners(8.0),
+        TextStyle::default(),
     );
 }
 
@@ -91,6 +94,7 @@ fn varheight_test_app() {
                     .padding(12.0)
                     .background(Color(0.2, 0.3, 0.5, 0.8))
                     .rounded_corners(8.0),
+                TextStyle::default(),
             );
 
             stats_display(stats);
@@ -98,6 +102,7 @@ fn varheight_test_app() {
             Text(
                 "30 items with heights: 40/60/80/100/120px",
                 Modifier::empty().padding(8.0),
+                TextStyle::default(),
             );
 
             variable_height_lazy_list(state.clone(), stats);
@@ -142,13 +147,18 @@ fn variable_height_item(index: usize, stats: MutableState<LifecycleStats>) {
             .horizontal_arrangement(LinearArrangement::SpaceBetween)
             .vertical_alignment(VerticalAlignment::CenterVertically),
         move || {
-            Text(format!("Item #{}", index), Modifier::empty().padding(4.0));
+            Text(
+                format!("Item #{}", index),
+                Modifier::empty().padding(4.0),
+                TextStyle::default(),
+            );
             Text(
                 format!("h={}px", height as i32),
                 Modifier::empty()
                     .padding(6.0)
                     .background(Color(0.3, 0.3, 0.5, 0.5))
                     .rounded_corners(6.0),
+                TextStyle::default(),
             );
         },
     );
@@ -167,10 +177,21 @@ fn main() {
             std::thread::sleep(Duration::from_millis(100));
 
             let find_visible_items = || {
+                let semantics = match robot.get_semantics() {
+                    Ok(semantics) => semantics,
+                    Err(e) => {
+                        eprintln!("  ✗ Failed to get semantics: {}", e);
+                        return Vec::new();
+                    }
+                };
+
                 let mut items: Vec<usize> = Vec::new();
                 for i in 0..30 {
                     let item_text = format!("Item #{}", i);
-                    if find_text_in_semantics(&robot, &item_text).is_some() {
+                    if semantics
+                        .iter()
+                        .any(|root| cranpose_testing::find_text_exact(root, &item_text).is_some())
+                    {
                         items.push(i);
                     }
                 }
@@ -178,15 +199,18 @@ fn main() {
             };
 
             let read_stats = || -> Option<(usize, usize, usize)> {
-                if let Some((_, _, _, _, text)) =
-                    cranpose_testing::find_text_by_prefix_in_semantics(&robot, "Stats: C=")
-                {
-                    let parts: Vec<&str> = text.split_whitespace().collect();
-                    if parts.len() >= 4 {
-                        let c = parts[1].strip_prefix("C=")?.parse().ok()?;
-                        let e = parts[2].strip_prefix("E=")?.parse().ok()?;
-                        let d = parts[3].strip_prefix("D=")?.parse().ok()?;
-                        return Some((c, e, d));
+                let semantics = robot.get_semantics().ok()?;
+                for root in semantics.iter() {
+                    if let Some((_, _, _, _, text)) =
+                        cranpose_testing::find_text_by_prefix(root, "Stats: C=")
+                    {
+                        let parts: Vec<&str> = text.split_whitespace().collect();
+                        if parts.len() >= 4 {
+                            let c = parts[1].strip_prefix("C=")?.parse().ok()?;
+                            let e = parts[2].strip_prefix("E=")?.parse().ok()?;
+                            let d = parts[3].strip_prefix("D=")?.parse().ok()?;
+                            return Some((c, e, d));
+                        }
                     }
                 }
                 None
@@ -194,13 +218,14 @@ fn main() {
 
             // Step 1: Initial state
             println!("\n--- Step 1: Initial state ---");
+            let _ = robot.wait_for_idle();
             let initial_items = find_visible_items();
             println!(
                 "  Visible items: {:?} (count={}, variable heights)",
                 initial_items,
                 initial_items.len()
             );
-            let initial_composes = if let Some((c, e, d)) = read_stats() {
+            let _initial_composes = if let Some((c, e, d)) = read_stats() {
                 println!("  Stats: Composes={} Effects={} Disposes={}", c, e, d);
                 assert_eq!(c, e, "Composes should equal effects initially");
                 assert_eq!(d, 0, "No disposes initially");
@@ -225,6 +250,7 @@ fn main() {
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
+            let _ = robot.wait_for_idle();
             let after_scroll = find_visible_items();
             println!("  Visible after scroll: {:?}", after_scroll);
             if let Some((c, e, d)) = read_stats() {
@@ -245,6 +271,7 @@ fn main() {
                     .ok();
                 std::thread::sleep(Duration::from_millis(100));
             }
+            let _ = robot.wait_for_idle();
             let after_back = find_visible_items();
             println!("  Visible after scroll back: {:?}", after_back);
 

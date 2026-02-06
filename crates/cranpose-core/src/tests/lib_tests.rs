@@ -539,7 +539,7 @@ fn launched_effect_background_updates_ui() {
                 LaunchedEffect!((), move |scope| {
                     if let Some(rx) = receiver.borrow_mut().take() {
                         scope.launch_background(
-                            move |_| rx.recv().expect("value available"),
+                            move |_| async move { rx.recv().expect("value available") },
                             move |value| state.set_value(value),
                         );
                     }
@@ -562,6 +562,44 @@ fn launched_effect_background_updates_ui() {
 }
 
 #[test]
+fn launched_effect_background_async_updates_ui() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let state = MutableState::with_runtime(0i32, runtime.clone());
+    let (tx, rx) = std::sync::mpsc::channel::<i32>();
+    let receiver = Rc::new(RefCell::new(Some(rx)));
+
+    {
+        let receiver = Rc::clone(&receiver);
+        composition
+            .render(0, move || {
+                let receiver = Rc::clone(&receiver);
+                LaunchedEffect!((), move |scope| {
+                    if let Some(rx) = receiver.borrow_mut().take() {
+                        scope.launch_background(
+                            move |_| async move { rx.recv().expect("value available") },
+                            move |value| state.set_value(value),
+                        );
+                    }
+                });
+            })
+            .expect("render succeeds");
+    }
+
+    tx.send(42).expect("send succeeds");
+    for _ in 0..5 {
+        let _ = composition
+            .process_invalid_scopes()
+            .expect("process succeeds");
+        if state.value() == 42 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(state.value(), 42);
+}
+
+#[test]
 fn launched_effect_background_ignores_late_result_after_cancel() {
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
@@ -580,7 +618,7 @@ fn launched_effect_background_ignores_late_result_after_cancel() {
                     if key == 0 {
                         if let Some(rx) = receiver.borrow_mut().take() {
                             scope.launch_background(
-                                move |_| rx.recv().expect("value available"),
+                                move |_| async move { rx.recv().expect("value available") },
                                 move |value| result_state.set_value(value),
                             );
                         }
@@ -602,7 +640,7 @@ fn launched_effect_background_ignores_late_result_after_cancel() {
                     if key == 0 {
                         if let Some(rx) = receiver.borrow_mut().take() {
                             scope.launch_background(
-                                move |_| rx.recv().expect("value available"),
+                                move |_| async move { rx.recv().expect("value available") },
                                 move |value| result_state.set_value(value),
                             );
                         }

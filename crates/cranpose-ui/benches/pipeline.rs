@@ -1,7 +1,7 @@
 use cranpose_core::{location_key, Composition, Key, MemoryApplier};
 use cranpose_ui::{
     composable, measure_layout, Column, ColumnSpec, HeadlessRenderer, LayoutMeasurements, Modifier,
-    Row, RowSpec, Size, Text,
+    Row, RowSpec, Size, Text, TextStyle,
 };
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 
@@ -27,7 +27,11 @@ fn pipeline_content(sections: usize, rows_per_section: usize) {
                     Modifier::empty().fill_max_width(),
                     ColumnSpec::default(),
                     move || {
-                        Text(format!("Section {section}"), Modifier::empty());
+                        Text(
+                            format!("Section {section}"),
+                            Modifier::empty(),
+                            TextStyle::default(),
+                        );
                         for row in 0..rows_per_section {
                             Row(
                                 Modifier::empty().fill_max_width(),
@@ -36,8 +40,13 @@ fn pipeline_content(sections: usize, rows_per_section: usize) {
                                     Text(
                                         format!("Item {section}-{row} title"),
                                         Modifier::empty().weight(1.0),
+                                        TextStyle::default(),
                                     );
-                                    Text(format!("Detail {section}-{row}"), Modifier::empty());
+                                    Text(
+                                        format!("Detail {section}-{row}"),
+                                        Modifier::empty(),
+                                        TextStyle::default(),
+                                    );
                                 },
                             );
                         }
@@ -68,7 +77,11 @@ fn recursive_section(depth: usize, rows_per_level: usize, level: usize) {
         Modifier::empty().fill_max_width(),
         ColumnSpec::default(),
         move || {
-            Text(format!("Level {level}"), Modifier::empty());
+            Text(
+                format!("Level {level}"),
+                Modifier::empty(),
+                TextStyle::default(),
+            );
             for row in 0..rows_per_level {
                 Row(
                     Modifier::empty().fill_max_width(),
@@ -77,8 +90,13 @@ fn recursive_section(depth: usize, rows_per_level: usize, level: usize) {
                         Text(
                             format!("Node {level}-{row} title"),
                             Modifier::empty().weight(1.0),
+                            TextStyle::default(),
                         );
-                        Text(format!("Detail {level}-{row}"), Modifier::empty());
+                        Text(
+                            format!("Detail {level}-{row}"),
+                            Modifier::empty(),
+                            TextStyle::default(),
+                        );
                     },
                 );
             }

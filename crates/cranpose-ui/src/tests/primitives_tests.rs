@@ -3,6 +3,7 @@ use crate::composable;
 use crate::layout::LayoutBox;
 use crate::modifier::{Modifier, Size};
 use crate::subcompose_layout::{Constraints, SubcomposeLayoutNode};
+use crate::text::TextStyle;
 use crate::widgets::nodes::LayoutNode;
 use crate::widgets::{
     BoxWithConstraints, Column, ColumnSpec, DynamicTextSource, Row, RowSpec, Spacer, Text,
@@ -150,11 +151,12 @@ fn measure_subcompose_node(
 fn CounterRow(label: &'static str, count: State<i32>) -> NodeId {
     COUNTER_ROW_INVOCATIONS.with(|calls| calls.set(calls.get() + 1));
     Column(Modifier::empty(), ColumnSpec::default(), move || {
-        Text(label, Modifier::empty());
+        Text(label, Modifier::empty(), TextStyle::default());
         let count_for_text = count;
         let text_id = Text(
             DynamicTextSource::new(move || format!("Count = {}", count_for_text.value()).into()),
             Modifier::empty(),
+            TextStyle::default(),
         );
         COUNTER_TEXT_ID.with(|slot| *slot.borrow_mut() = Some(text_id));
     })
@@ -174,7 +176,7 @@ fn layout_column_produces_expected_measurements() {
                 Modifier::empty().padding(10.0),
                 ColumnSpec::default(),
                 move || {
-                    let id = Text("Hello", Modifier::empty());
+                    let id = Text("Hello", Modifier::empty(), TextStyle::default());
                     *text_id_capture.borrow_mut() = Some(id);
                     Spacer(Size {
                         width: 0.0,
@@ -198,8 +200,11 @@ fn layout_column_produces_expected_measurements() {
         .expect("compute layout");
 
     let root_layout = layout_tree.root().clone();
-    assert!((root_layout.rect.width - 60.0).abs() < 1e-3);
-    assert!((root_layout.rect.height - 70.0).abs() < 1e-3);
+    let text_metrics = crate::text::measure_text("Hello", &TextStyle::default());
+    let expected_root_width = text_metrics.width + 20.0;
+    let expected_root_height = text_metrics.height + 30.0 + 20.0;
+    assert!((root_layout.rect.width - expected_root_width).abs() < 1e-3);
+    assert!((root_layout.rect.height - expected_root_height).abs() < 1e-3);
     assert_eq!(root_layout.children.len(), 2);
 
     let text_layout = &root_layout.children[0];
@@ -209,8 +214,8 @@ fn layout_column_produces_expected_measurements() {
     );
     assert!((text_layout.rect.x - 10.0).abs() < 1e-3);
     assert!((text_layout.rect.y - 10.0).abs() < 1e-3);
-    assert!((text_layout.rect.width - 40.0).abs() < 1e-3);
-    assert!((text_layout.rect.height - 20.0).abs() < 1e-3);
+    assert!((text_layout.rect.width - text_metrics.width).abs() < 1e-3);
+    assert!((text_layout.rect.height - text_metrics.height).abs() < 1e-3);
 }
 
 #[test]
@@ -228,8 +233,11 @@ fn modifier_offset_translates_layout() {
                 Modifier::empty().padding(10.0),
                 ColumnSpec::default(),
                 move || {
-                    *text_id_capture.borrow_mut() =
-                        Some(Text("Hello", Modifier::empty().offset(5.0, 7.5)));
+                    *text_id_capture.borrow_mut() = Some(Text(
+                        "Hello",
+                        Modifier::empty().offset(5.0, 7.5),
+                        TextStyle::default(),
+                    ));
                 },
             );
         })
@@ -276,7 +284,7 @@ fn box_with_constraints_composes_different_content() {
                         "narrow"
                     };
                     record_capture.borrow_mut().push(label.to_string());
-                    Text(label, Modifier::empty());
+                    Text(label, Modifier::empty(), TextStyle::default());
                 }
             });
         })
@@ -321,7 +329,7 @@ fn box_with_constraints_reacts_to_constraint_changes() {
                 move |scope| {
                     let _ = scope.max_width();
                     invocations_capture.set(invocations_capture.get() + 1);
-                    Text("child", Modifier::empty());
+                    Text("child", Modifier::empty(), TextStyle::default());
                 }
             });
         })
@@ -371,8 +379,16 @@ fn test_fill_max_width_respects_parent_bounds() {
                             .then(Modifier::empty().padding(8.0)),
                         RowSpec::default(),
                         move || {
-                            Text("Button 1", Modifier::empty().padding(4.0));
-                            Text("Button 2", Modifier::empty().padding(4.0));
+                            Text(
+                                "Button 1",
+                                Modifier::empty().padding(4.0),
+                                TextStyle::default(),
+                            );
+                            Text(
+                                "Button 2",
+                                Modifier::empty().padding(4.0),
+                                TextStyle::default(),
+                            );
                         },
                     ));
                 },
@@ -518,8 +534,16 @@ fn test_fill_max_width_with_background_and_double_padding() {
                                     .then(Modifier::empty().padding(8.0)),
                                 RowSpec::default(),
                                 move || {
-                                    Text("OK", Modifier::empty().padding(4.0));
-                                    Text("Cancel", Modifier::empty().padding(4.0));
+                                    Text(
+                                        "OK",
+                                        Modifier::empty().padding(4.0),
+                                        TextStyle::default(),
+                                    );
+                                    Text(
+                                        "Cancel",
+                                        Modifier::empty().padding(4.0),
+                                        TextStyle::default(),
+                                    );
                                 },
                             ));
                         },
@@ -1084,7 +1108,11 @@ fn modifier_chain_text_with_padding() {
 
     composition
         .render(key, move || {
-            *text_id_render.borrow_mut() = Some(Text("Hello", Modifier::empty().padding(10.0)));
+            *text_id_render.borrow_mut() = Some(Text(
+                "Hello",
+                Modifier::empty().padding(10.0),
+                TextStyle::default(),
+            ));
         })
         .expect("render");
 

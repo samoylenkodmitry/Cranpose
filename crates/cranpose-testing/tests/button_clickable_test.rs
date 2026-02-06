@@ -17,6 +17,7 @@ fn simple_button_app(clicked_count: MutableState<i32>) {
             Text(
                 format!("Clicks: {}", clicked_count.get()),
                 Modifier::empty().padding(8.0),
+                TextStyle::default(),
             );
 
             Button(
@@ -28,7 +29,11 @@ fn simple_button_app(clicked_count: MutableState<i32>) {
                     }
                 },
                 || {
-                    Text("Click me", Modifier::empty().padding(4.0));
+                    Text(
+                        "Click me",
+                        Modifier::empty().padding(4.0),
+                        TextStyle::default(),
+                    );
                 },
             );
         },
@@ -92,6 +97,7 @@ fn multi_button_app(button1_clicks: MutableState<i32>, button2_clicks: MutableSt
             Text(
                 format!("Button 1 clicks: {}", button1_clicks.get()),
                 Modifier::empty().padding(8.0),
+                TextStyle::default(),
             );
 
             Button(
@@ -103,13 +109,18 @@ fn multi_button_app(button1_clicks: MutableState<i32>, button2_clicks: MutableSt
                     }
                 },
                 || {
-                    Text("Button 1", Modifier::empty().padding(4.0));
+                    Text(
+                        "Button 1",
+                        Modifier::empty().padding(4.0),
+                        TextStyle::default(),
+                    );
                 },
             );
 
             Text(
                 format!("Button 2 clicks: {}", button2_clicks.get()),
                 Modifier::empty().padding(8.0),
+                TextStyle::default(),
             );
 
             Button(
@@ -121,7 +132,11 @@ fn multi_button_app(button1_clicks: MutableState<i32>, button2_clicks: MutableSt
                     }
                 },
                 || {
-                    Text("Button 2", Modifier::empty().padding(4.0));
+                    Text(
+                        "Button 2",
+                        Modifier::empty().padding(4.0),
+                        TextStyle::default(),
+                    );
                 },
             );
         },

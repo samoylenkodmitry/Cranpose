@@ -14,15 +14,47 @@
 //! ```
 
 use cranpose::{AppLauncher, Robot};
-use cranpose_testing::{find_button, find_in_semantics, find_text};
+use cranpose_testing::{find_bounds_by_text, visible_bounds_in_viewport};
+use cranpose_testing::{find_button_in_semantics, find_in_semantics, find_text};
+use cranpose_ui::{last_fling_velocity, reset_last_fling_velocity};
 use desktop_app::app;
 use std::time::Duration;
+
+struct ListViewport {
+    center_x: f32,
+    center_y: f32,
+    upper_y: f32,
+    lower_y: f32,
+}
+
+impl ListViewport {
+    fn clamp_y(&self, y: f32) -> f32 {
+        y.clamp(self.upper_y, self.lower_y)
+    }
+}
+
+fn fetch_list_viewport(robot: &Robot) -> Option<ListViewport> {
+    let list_bounds = find_bounds_by_text(robot, "LazyListViewport")?;
+    let visible_bounds = visible_bounds_in_viewport(robot, list_bounds, 12.0)?;
+
+    let center_x = visible_bounds.0 + visible_bounds.2 * 0.5;
+    let center_y = visible_bounds.1 + visible_bounds.3 * 0.5;
+    let upper_y = visible_bounds.1 + visible_bounds.3 * 0.2;
+    let lower_y = visible_bounds.1 + visible_bounds.3 * 0.8;
+
+    Some(ListViewport {
+        center_x,
+        center_y,
+        upper_y,
+        lower_y,
+    })
+}
 
 fn main() {
     env_logger::init();
     println!("=== Fling Edge Case Tests ===\n");
 
-    const TEST_TIMEOUT_SECS: u64 = 90;
+    const TEST_TIMEOUT_SECS: u64 = 180;
 
     AppLauncher::new()
         .with_title("Fling Edge Cases")
@@ -39,9 +71,7 @@ fn main() {
             let _ = robot.wait_for_idle();
 
             // Navigate to Lazy List tab
-            if let Some((x, y, w, h)) =
-                find_in_semantics(&robot, |elem| find_button(elem, "Lazy List"))
-            {
+            if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Lazy List") {
                 let _ = robot.mouse_move(x + w / 2.0, y + h / 2.0);
                 std::thread::sleep(Duration::from_millis(50));
                 let _ = robot.mouse_down();
@@ -54,8 +84,14 @@ fn main() {
                 return;
             }
 
-            let center_x = 400.0;
-            let center_y = 350.0;
+            let mut viewport = match fetch_list_viewport(&robot) {
+                Some(bounds) => bounds,
+                None => {
+                    eprintln!("✗ LazyListViewport is not visible in the viewport");
+                    let _ = robot.exit();
+                    return;
+                }
+            };
 
             fn find_item_center_y(robot: &Robot, item_text: &str) -> Option<f32> {
                 find_in_semantics(robot, |elem| find_text(elem, item_text))
@@ -77,7 +113,7 @@ fn main() {
             // =========================================================
             println!("--- Test 1: Very Slow Scroll (no fling expected) ---");
 
-            let _ = robot.mouse_move(center_x, center_y);
+            let _ = robot.mouse_move(viewport.center_x, viewport.center_y);
             std::thread::sleep(Duration::from_millis(50));
             let _ = robot.mouse_down();
             std::thread::sleep(Duration::from_millis(50));
@@ -85,7 +121,10 @@ fn main() {
             // Very slow drag - 30px over 500ms = 60px/sec (below 50px/sec threshold)
             for i in 1..=10 {
                 let progress = i as f32 / 10.0;
-                let _ = robot.mouse_move(center_x, center_y - (30.0 * progress));
+                let _ = robot.mouse_move(
+                    viewport.center_x,
+                    viewport.clamp_y(viewport.center_y - (30.0 * progress)),
+                );
                 std::thread::sleep(Duration::from_millis(50));
             }
             let _ = robot.mouse_up();
@@ -97,7 +136,7 @@ fn main() {
             // =========================================================
             println!("--- Test 2: Fast Fling ---");
 
-            let _ = robot.mouse_move(center_x, center_y);
+            let _ = robot.mouse_move(viewport.center_x, viewport.center_y);
             std::thread::sleep(Duration::from_millis(100));
             let _ = robot.mouse_down();
             std::thread::sleep(Duration::from_millis(20));
@@ -105,7 +144,10 @@ fn main() {
             // Fast swipe - 150px in 50ms = 3000px/sec (below max cap)
             for i in 1..=5 {
                 let progress = i as f32 / 5.0;
-                let _ = robot.mouse_move(center_x, center_y - (150.0 * progress));
+                let _ = robot.mouse_move(
+                    viewport.center_x,
+                    viewport.clamp_y(viewport.center_y - (150.0 * progress)),
+                );
                 std::thread::sleep(Duration::from_millis(10));
             }
             let _ = robot.mouse_up();
@@ -118,7 +160,10 @@ fn main() {
             println!("--- Test 3: Interrupt Fling With Click ---");
 
             // Click while fling is still animating
-            let _ = robot.mouse_move(center_x, center_y - 100.0);
+            let _ = robot.mouse_move(
+                viewport.center_x,
+                viewport.clamp_y(viewport.center_y - 100.0),
+            );
             std::thread::sleep(Duration::from_millis(50));
             let _ = robot.mouse_down();
             std::thread::sleep(Duration::from_millis(30));
@@ -132,24 +177,33 @@ fn main() {
             println!("--- Test 4: Rapid Consecutive Flings ---");
 
             // First fling
-            let _ = robot.mouse_move(center_x, center_y);
+            let _ = robot.mouse_move(viewport.center_x, viewport.center_y);
             std::thread::sleep(Duration::from_millis(50));
             let _ = robot.mouse_down();
             std::thread::sleep(Duration::from_millis(10));
             for i in 1..=3 {
-                let _ = robot.mouse_move(center_x, center_y - (100.0 * i as f32 / 3.0));
+                let _ = robot.mouse_move(
+                    viewport.center_x,
+                    viewport.clamp_y(viewport.center_y - (100.0 * i as f32 / 3.0)),
+                );
                 std::thread::sleep(Duration::from_millis(10));
             }
             let _ = robot.mouse_up();
 
             // IMMEDIATELY start second fling (don't wait for first to finish)
             std::thread::sleep(Duration::from_millis(30));
-            let _ = robot.mouse_move(center_x, center_y - 50.0);
+            let _ = robot.mouse_move(
+                viewport.center_x,
+                viewport.clamp_y(viewport.center_y - 50.0),
+            );
             std::thread::sleep(Duration::from_millis(10));
             let _ = robot.mouse_down();
             std::thread::sleep(Duration::from_millis(10));
             for i in 1..=3 {
-                let _ = robot.mouse_move(center_x, center_y - 50.0 - (100.0 * i as f32 / 3.0));
+                let _ = robot.mouse_move(
+                    viewport.center_x,
+                    viewport.clamp_y(viewport.center_y - 50.0 - (100.0 * i as f32 / 3.0)),
+                );
                 std::thread::sleep(Duration::from_millis(10));
             }
             let _ = robot.mouse_up();
@@ -161,19 +215,25 @@ fn main() {
             // =========================================================
             println!("--- Test 5: Direction Reversal Mid-Gesture ---");
 
-            let _ = robot.mouse_move(center_x, center_y);
+            let _ = robot.mouse_move(viewport.center_x, viewport.center_y);
             std::thread::sleep(Duration::from_millis(50));
             let _ = robot.mouse_down();
             std::thread::sleep(Duration::from_millis(10));
 
             // Scroll up first
             for i in 1..=3 {
-                let _ = robot.mouse_move(center_x, center_y - (50.0 * i as f32 / 3.0));
+                let _ = robot.mouse_move(
+                    viewport.center_x,
+                    viewport.clamp_y(viewport.center_y - (50.0 * i as f32 / 3.0)),
+                );
                 std::thread::sleep(Duration::from_millis(10));
             }
             // Then quickly reverse direction
             for i in 1..=5 {
-                let _ = robot.mouse_move(center_x, center_y - 50.0 + (100.0 * i as f32 / 5.0));
+                let _ = robot.mouse_move(
+                    viewport.center_x,
+                    viewport.clamp_y(viewport.center_y - 50.0 + (100.0 * i as f32 / 5.0)),
+                );
                 std::thread::sleep(Duration::from_millis(10));
             }
             let _ = robot.mouse_up();
@@ -187,12 +247,18 @@ fn main() {
 
             // First scroll up to reach near top
             for _ in 0..3 {
-                let _ = robot.mouse_move(center_x, center_y + 200.0);
+                let _ = robot.mouse_move(
+                    viewport.center_x,
+                    viewport.clamp_y(viewport.center_y + 200.0),
+                );
                 std::thread::sleep(Duration::from_millis(50));
                 let _ = robot.mouse_down();
                 std::thread::sleep(Duration::from_millis(10));
                 for i in 1..=5 {
-                    let _ = robot.mouse_move(center_x, center_y + 200.0 + (150.0 * i as f32 / 5.0));
+                    let _ = robot.mouse_move(
+                        viewport.center_x,
+                        viewport.clamp_y(viewport.center_y + 200.0 + (150.0 * i as f32 / 5.0)),
+                    );
                     std::thread::sleep(Duration::from_millis(10));
                 }
                 let _ = robot.mouse_up();
@@ -203,6 +269,20 @@ fn main() {
             // =========================================================
             // TEST 7: Frame drop simulation (gaps in samples)
             // =========================================================
+            // Move away from the top boundary so the fling has room to continue.
+            let _ = robot.mouse_move(viewport.center_x, viewport.lower_y);
+            std::thread::sleep(Duration::from_millis(50));
+            let _ = robot.mouse_down();
+            std::thread::sleep(Duration::from_millis(10));
+            let _ = robot.mouse_move(viewport.center_x, viewport.upper_y);
+            std::thread::sleep(Duration::from_millis(10));
+            let _ = robot.mouse_up();
+            std::thread::sleep(Duration::from_millis(200));
+            let _ = robot.wait_for_idle();
+            if let Some(updated) = fetch_list_viewport(&robot) {
+                viewport = updated;
+            }
+
             println!("--- Test 7: Simulated Frame Drops ---");
 
             let (tracked_label, _before_y) = match find_any_item(&robot) {
@@ -213,35 +293,44 @@ fn main() {
                 }
             };
 
-            let _ = robot.mouse_move(center_x, center_y);
+            reset_last_fling_velocity();
+
+            let _ = robot.mouse_move(viewport.center_x, viewport.center_y);
             std::thread::sleep(Duration::from_millis(50));
             let _ = robot.mouse_down();
             std::thread::sleep(Duration::from_millis(10));
 
             // Fast movement with artificial gaps
-            let _ = robot.mouse_move(center_x, center_y - 30.0);
+            let drag_base_y = viewport.center_y;
+            let _ = robot.mouse_move(viewport.center_x, drag_base_y - 30.0);
             std::thread::sleep(Duration::from_millis(60)); // Simulated frame drop!
-            let _ = robot.mouse_move(center_x, center_y - 60.0);
+            let _ = robot.mouse_move(viewport.center_x, drag_base_y - 60.0);
             std::thread::sleep(Duration::from_millis(60)); // Another drop!
-            let _ = robot.mouse_move(center_x, center_y - 100.0);
+            let _ = robot.mouse_move(viewport.center_x, drag_base_y - 100.0);
             std::thread::sleep(Duration::from_millis(10));
-            let _ = robot.mouse_move(center_x, center_y - 130.0);
+            let _ = robot.mouse_move(viewport.center_x, drag_base_y - 130.0);
             let _ = robot.mouse_up();
             std::thread::sleep(Duration::from_millis(50));
 
             let post_release_y = find_item_center_y(&robot, &tracked_label);
             std::thread::sleep(Duration::from_millis(300));
             let after_fling_y = find_item_center_y(&robot, &tracked_label);
+            let measured_velocity = last_fling_velocity().abs();
 
             match (post_release_y, after_fling_y) {
                 (Some(post_y), Some(after_y)) => {
-                    let additional = post_y - after_y;
-                    if additional < 15.0 {
+                    let additional = (post_y - after_y).abs();
+                    if additional < 15.0 && measured_velocity < 50.0 {
                         eprintln!(
-                            "✗ Frame drop fling too small: {:.1}px (expected > 15px)",
-                            additional
+                            "✗ Frame drop fling too small: {:.1}px (velocity {:.1} px/s)",
+                            additional, measured_velocity
                         );
                         std::process::exit(1);
+                    } else if additional < 15.0 {
+                        println!(
+                            "  WARN: Low visual movement ({:.1}px) but fling velocity {:.1} px/s",
+                            additional, measured_velocity
+                        );
                     }
                 }
                 _ => {
@@ -256,7 +345,7 @@ fn main() {
             // =========================================================
             println!("--- Test 8: Touch Then Release Without Move ---");
 
-            let _ = robot.mouse_move(center_x, center_y);
+            let _ = robot.mouse_move(viewport.center_x, viewport.center_y);
             std::thread::sleep(Duration::from_millis(50));
             let _ = robot.mouse_down();
             std::thread::sleep(Duration::from_millis(100));

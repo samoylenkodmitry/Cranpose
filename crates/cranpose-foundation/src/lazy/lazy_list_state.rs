@@ -780,6 +780,12 @@ pub struct LazyListLayoutInfo {
     /// Total number of items in the list.
     pub total_items_count: usize,
 
+    /// Raw viewport size reported by parent constraints (before infinite fallback).
+    pub raw_viewport_size: f32,
+
+    /// Whether the viewport was treated as infinite/unbounded.
+    pub is_infinite_viewport: bool,
+
     /// Size of the viewport in the main axis.
     pub viewport_size: f32,
 

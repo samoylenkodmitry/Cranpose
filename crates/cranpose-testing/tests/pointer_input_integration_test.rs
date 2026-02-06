@@ -43,7 +43,11 @@ fn hover_tracking_app(hover_position: MutableState<Point>, is_hovered: MutableSt
             })),
         ColumnSpec::default(),
         || {
-            Text("Hover area", Modifier::empty().padding(8.0));
+            Text(
+                "Hover area",
+                Modifier::empty().padding(8.0),
+                TextStyle::default(),
+            );
         },
     );
 }
@@ -104,6 +108,7 @@ fn button_with_modifiers_app(click_count: MutableState<i32>) {
             Text(
                 format!("Clicks: {}", click_count.get()),
                 Modifier::empty().padding(8.0),
+                TextStyle::default(),
             );
 
             // Button with draw_behind modifier (like the pause button)
@@ -123,7 +128,11 @@ fn button_with_modifiers_app(click_count: MutableState<i32>) {
                     }
                 },
                 || {
-                    Text("Click me", Modifier::empty().padding(4.0));
+                    Text(
+                        "Click me",
+                        Modifier::empty().padding(4.0),
+                        TextStyle::default(),
+                    );
                 },
             );
         },
@@ -187,7 +196,11 @@ fn dynamic_label_button_app(click_count: MutableState<i32>, is_active: MutableSt
                 {
                     let label_str = label.to_string();
                     move || {
-                        Text(label_str.clone(), Modifier::empty().padding(4.0));
+                        Text(
+                            label_str.clone(),
+                            Modifier::empty().padding(4.0),
+                            TextStyle::default(),
+                        );
                     }
                 },
             );

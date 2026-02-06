@@ -12,7 +12,7 @@ readme = "README.md"
 description = "Animation system for Cranpose"
 
 [dependencies]
-cranpose-core = { workspace = true }
+cranpose-core = { workspace = true, features = ["internal"] }
 
 [features]
 default = []

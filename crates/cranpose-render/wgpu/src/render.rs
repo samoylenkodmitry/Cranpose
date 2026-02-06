@@ -2,7 +2,7 @@
 
 use crate::scene::{DrawShape, TextDraw};
 use crate::shaders;
-use crate::{SharedTextBuffer, SharedTextCache, TextCacheKey, BASE_FONT_SIZE};
+use crate::{SharedTextBuffer, SharedTextCache, TextCacheKey};
 use bytemuck::{Pod, Zeroable};
 use cranpose_ui_graphics::{Brush, Color};
 use glyphon::{
@@ -785,8 +785,8 @@ impl GpuRenderer {
                 continue;
             }
 
-            // Scale font size to physical pixels: BASE_FONT_SIZE is in dp, scale by text zoom and DPI
-            let font_size_px = BASE_FONT_SIZE * text_draw.scale * root_scale;
+            // Scale font size to physical pixels: font_size is in dp, scale by text zoom and DPI
+            let font_size_px = text_draw.font_size * text_draw.scale * root_scale;
             let key = TextCacheKey::for_node(text_draw.node_id, font_size_px);
 
             // Create or update buffer in cache

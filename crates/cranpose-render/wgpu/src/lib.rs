@@ -399,10 +399,19 @@ impl Renderer for WgpuRenderer {
             NodeId::MAX,
             text_rect,
             Rc::from(text),
-            Color(0.0, 1.0, 0.0, 1.0),  // Green
-            font_size / BASE_FONT_SIZE, // Scale relative to base
+            Color(0.0, 1.0, 0.0, 1.0), // Green
+            font_size,
+            1.0,
             None,
         );
+    }
+}
+
+fn resolve_font_size(style: &cranpose_ui::text::TextStyle) -> f32 {
+    match style.font_size {
+        cranpose_ui::text::TextUnit::Sp(v) => v,
+        cranpose_ui::text::TextUnit::Em(v) => v * 14.0,
+        cranpose_ui::text::TextUnit::Unspecified => 14.0,
     }
 }
 
@@ -430,11 +439,15 @@ impl WgpuTextMeasurer {
 }
 
 // Base font size in logical units (dp) - shared between measurement and rendering
-pub(crate) const BASE_FONT_SIZE: f32 = 14.0;
 
 impl TextMeasurer for WgpuTextMeasurer {
-    fn measure(&self, text: &str) -> cranpose_ui::TextMetrics {
-        let size_int = (BASE_FONT_SIZE * 100.0) as i32;
+    fn measure(
+        &self,
+        text: &str,
+        style: &cranpose_ui::text::TextStyle,
+    ) -> cranpose_ui::TextMetrics {
+        let font_size = resolve_font_size(style);
+        let size_int = (font_size * 100.0) as i32;
 
         // Calculate hash to avoid allocating String for lookup
         // FxHasher is ~3x faster than DefaultHasher for short strings
@@ -452,7 +465,7 @@ impl TextMeasurer for WgpuTextMeasurer {
                     return cranpose_ui::TextMetrics {
                         width: size.width,
                         height: size.height,
-                        line_height: BASE_FONT_SIZE * 1.4,
+                        line_height: font_size * 1.4,
                         line_count: 1, // Cached entries are single-line simplified
                     };
                 }
@@ -460,17 +473,15 @@ impl TextMeasurer for WgpuTextMeasurer {
         }
 
         // Get or create text buffer
-        let text_buffer_key = TextCacheKey::new(text, BASE_FONT_SIZE);
+        let text_buffer_key = TextCacheKey::new(text, font_size);
         let mut font_system = self.font_system.lock().unwrap();
         let mut text_cache = self.text_cache.lock().unwrap();
 
         // Get or create buffer and calculate size
         let size = {
             let buffer = text_cache.entry(text_buffer_key).or_insert_with(|| {
-                let buffer = Buffer::new(
-                    &mut font_system,
-                    Metrics::new(BASE_FONT_SIZE, BASE_FONT_SIZE * 1.4),
-                );
+                let buffer =
+                    Buffer::new(&mut font_system, Metrics::new(font_size, font_size * 1.4));
                 SharedTextBuffer {
                     buffer,
                     text: String::new(),
@@ -480,10 +491,10 @@ impl TextMeasurer for WgpuTextMeasurer {
             });
 
             // Ensure buffer has the correct text
-            buffer.ensure(&mut font_system, text, BASE_FONT_SIZE, Attrs::new());
+            buffer.ensure(&mut font_system, text, font_size, Attrs::new());
 
             // Calculate size if not cached
-            buffer.size(BASE_FONT_SIZE)
+            buffer.size(font_size)
         };
 
         // Trim cache if needed (after we're done with buffer reference)
@@ -498,7 +509,7 @@ impl TextMeasurer for WgpuTextMeasurer {
         size_cache.put(cache_key, (text.to_string(), size));
 
         // Calculate line info for multiline support
-        let line_height = BASE_FONT_SIZE * 1.4;
+        let line_height = font_size * 1.4;
         let line_count = text.split('\n').count().max(1);
 
         cranpose_ui::TextMetrics {
@@ -509,12 +520,19 @@ impl TextMeasurer for WgpuTextMeasurer {
         }
     }
 
-    fn get_offset_for_position(&self, text: &str, x: f32, y: f32) -> usize {
+    fn get_offset_for_position(
+        &self,
+        text: &str,
+        style: &cranpose_ui::text::TextStyle,
+        x: f32,
+        y: f32,
+    ) -> usize {
+        let font_size = resolve_font_size(style);
         if text.is_empty() {
             return 0;
         }
 
-        let line_height = BASE_FONT_SIZE * 1.4;
+        let line_height = font_size * 1.4;
 
         // Calculate which line was clicked based on Y coordinate
         let line_index = (y / line_height).floor().max(0.0) as usize;
@@ -535,15 +553,12 @@ impl TextMeasurer for WgpuTextMeasurer {
         }
 
         // Use glyphon's hit testing for the specific line
-        let cache_key = TextCacheKey::new(line_text, BASE_FONT_SIZE);
+        let cache_key = TextCacheKey::new(line_text, font_size);
         let mut font_system = self.font_system.lock().unwrap();
         let mut text_cache = self.text_cache.lock().unwrap();
 
         let buffer = text_cache.entry(cache_key).or_insert_with(|| {
-            let buffer = Buffer::new(
-                &mut font_system,
-                Metrics::new(BASE_FONT_SIZE, BASE_FONT_SIZE * 1.4),
-            );
+            let buffer = Buffer::new(&mut font_system, Metrics::new(font_size, font_size * 1.4));
             SharedTextBuffer {
                 buffer,
                 text: String::new(),
@@ -552,7 +567,7 @@ impl TextMeasurer for WgpuTextMeasurer {
             }
         });
 
-        buffer.ensure(&mut font_system, line_text, BASE_FONT_SIZE, Attrs::new());
+        buffer.ensure(&mut font_system, line_text, font_size, Attrs::new());
 
         // Find closest glyph position using layout runs
         let mut best_offset = 0;
@@ -585,7 +600,12 @@ impl TextMeasurer for WgpuTextMeasurer {
         line_start_byte + best_offset.min(line_text.len())
     }
 
-    fn get_cursor_x_for_offset(&self, text: &str, offset: usize) -> f32 {
+    fn get_cursor_x_for_offset(
+        &self,
+        text: &str,
+        style: &cranpose_ui::text::TextStyle,
+        offset: usize,
+    ) -> f32 {
         let clamped_offset = offset.min(text.len());
         if clamped_offset == 0 {
             return 0.0;
@@ -593,21 +613,26 @@ impl TextMeasurer for WgpuTextMeasurer {
 
         // Measure text up to offset
         let prefix = &text[..clamped_offset];
-        self.measure(prefix).width
+        self.measure(prefix, style).width
     }
 
-    fn layout(&self, text: &str) -> cranpose_ui::text_layout_result::TextLayoutResult {
+    fn layout(
+        &self,
+        text: &str,
+        style: &cranpose_ui::text::TextStyle,
+    ) -> cranpose_ui::text_layout_result::TextLayoutResult {
         use cranpose_ui::text_layout_result::{LineLayout, TextLayoutResult};
 
-        let line_height = BASE_FONT_SIZE * 1.4;
+        let font_size = resolve_font_size(style);
+        let line_height = font_size * 1.4;
 
         // Get buffer to extract glyph positions
-        let cache_key = TextCacheKey::new(text, BASE_FONT_SIZE);
+        let cache_key = TextCacheKey::new(text, font_size);
         let mut font_system = self.font_system.lock().unwrap();
         let mut text_cache = self.text_cache.lock().unwrap();
 
         let buffer = text_cache.entry(cache_key.clone()).or_insert_with(|| {
-            let buffer = Buffer::new(&mut font_system, Metrics::new(BASE_FONT_SIZE, line_height));
+            let buffer = Buffer::new(&mut font_system, Metrics::new(font_size, line_height));
             SharedTextBuffer {
                 buffer,
                 text: String::new(),
@@ -615,7 +640,7 @@ impl TextMeasurer for WgpuTextMeasurer {
                 cached_size: None,
             }
         });
-        buffer.ensure(&mut font_system, text, BASE_FONT_SIZE, Attrs::new());
+        buffer.ensure(&mut font_system, text, font_size, Attrs::new());
 
         // Extract glyph positions from layout runs
         let mut glyph_x_positions = Vec::new();
@@ -652,7 +677,7 @@ impl TextMeasurer for WgpuTextMeasurer {
         }
 
         // Add end position
-        let total_width = self.measure(text).width;
+        let total_width = self.measure(text, style).width;
         glyph_x_positions.push(total_width);
         char_to_byte.push(text.len());
 
@@ -686,7 +711,7 @@ impl TextMeasurer for WgpuTextMeasurer {
             });
         }
 
-        let metrics = self.measure(text);
+        let metrics = self.measure(text, style);
         TextLayoutResult::new(
             metrics.width,
             metrics.height,

@@ -3,7 +3,8 @@
 //! Drives decay animation using the runtime's frame callback system.
 
 use cranpose_animation::{FloatDecayAnimationSpec, SplineBasedDecaySpec};
-use cranpose_core::{FrameCallbackRegistration, FrameClock, RuntimeHandle};
+use cranpose_core::internal::{FrameCallbackRegistration, FrameClock};
+use cranpose_core::RuntimeHandle;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 

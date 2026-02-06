@@ -273,6 +273,13 @@ where
     }
 
     pub fn set_cursor(&mut self, x: f32, y: f32) -> bool {
+        enter_event_handler();
+        let result = run_in_mutable_snapshot(|| self.set_cursor_inner(x, y)).unwrap_or(false);
+        exit_event_handler();
+        result
+    }
+
+    fn set_cursor_inner(&mut self, x: f32, y: f32) -> bool {
         self.cursor = (x, y);
 
         // During a gesture (button pressed), ONLY dispatch to the tracked hit path.
@@ -345,7 +352,7 @@ where
 
     pub fn pointer_pressed(&mut self) -> bool {
         enter_event_handler();
-        let result = self.pointer_pressed_inner();
+        let result = run_in_mutable_snapshot(|| self.pointer_pressed_inner()).unwrap_or(false);
         exit_event_handler();
         result
     }
@@ -398,7 +405,7 @@ where
 
     pub fn pointer_released(&mut self) -> bool {
         enter_event_handler();
-        let result = self.pointer_released_inner();
+        let result = run_in_mutable_snapshot(|| self.pointer_released_inner()).unwrap_or(false);
         exit_event_handler();
         result
     }
@@ -448,6 +455,14 @@ where
     /// - Mouse leaves window while button pressed
     /// - Any other gesture abort scenario
     pub fn cancel_gesture(&mut self) {
+        enter_event_handler();
+        let _ = run_in_mutable_snapshot(|| {
+            self.cancel_gesture_inner();
+        });
+        exit_event_handler();
+    }
+
+    fn cancel_gesture_inner(&mut self) {
         // Resolve FRESH targets from cached NodeIds
         let targets = self.resolve_hit_path(PointerId::PRIMARY);
 
@@ -959,9 +974,11 @@ where
         let render_dirty = take_render_invalidation();
         let pointer_dirty = take_pointer_invalidation();
         let focus_dirty = take_focus_invalidation();
+        let draw_repass_pending = cranpose_ui::has_pending_draw_repasses();
         // Tick cursor blink timer - only marks dirty when visibility state changes
         let cursor_blink_dirty = cranpose_ui::tick_cursor_blink();
-        if render_dirty || pointer_dirty || focus_dirty || cursor_blink_dirty {
+        if render_dirty || pointer_dirty || focus_dirty || cursor_blink_dirty || draw_repass_pending
+        {
             self.scene_dirty = true;
         }
         if !self.scene_dirty {

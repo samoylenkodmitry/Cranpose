@@ -165,11 +165,6 @@ pub(crate) fn apply_draw_commands(
     }
 }
 
-pub(crate) fn point_in_rounded_rect(x: f32, y: f32, rect: Rect, shape: RoundedCornerShape) -> bool {
-    let radii = shape.resolve(rect.width, rect.height);
-    point_in_resolved_rounded_rect(x, y, rect, &radii)
-}
-
 pub(crate) fn point_in_resolved_rounded_rect(
     x: f32,
     y: f32,

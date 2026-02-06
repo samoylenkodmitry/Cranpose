@@ -121,7 +121,14 @@ fn render_container(
     // Render text content if present in modifier slices.
     // Text is now handled via TextModifierNode in the modifier chain.
     if let Some(value) = layout.node_data.modifier_slices().text_content_rc() {
-        let metrics = measure_text(value.as_ref());
+        let default_text_style = cranpose_ui::text::TextStyle::default();
+        let text_style_ref = layout
+            .node_data
+            .modifier_slices()
+            .text_style()
+            .unwrap_or(&default_text_style);
+
+        let metrics = measure_text(value.as_ref(), text_style_ref);
         let padding = style.padding;
         let text_rect = Rect {
             x: rect.x + padding.left,
@@ -130,11 +137,21 @@ fn render_container(
             height: metrics.height,
         };
         let transformed_text_rect = apply_layer_to_rect(text_rect, origin, node_layer);
+
+        // Extract color and font size from text style or default
+        let text_color = text_style_ref.color.unwrap_or(Color(1.0, 1.0, 1.0, 1.0));
+        let font_size = match text_style_ref.font_size {
+            cranpose_ui::text::TextUnit::Sp(v) => v,
+            cranpose_ui::text::TextUnit::Em(v) => v * 14.0, // basic Em support
+            cranpose_ui::text::TextUnit::Unspecified => 14.0,
+        };
+
         scene.push_text(
             layout.node_id,
             transformed_text_rect,
             value,
-            apply_layer_to_color(Color(1.0, 1.0, 1.0, 1.0), node_layer),
+            apply_layer_to_color(text_color, node_layer),
+            font_size,
             node_layer.scale,
             visual_clip,
         );
@@ -361,7 +378,10 @@ fn render_node_from_applier(
 
     // Render text content if present
     if let Some(value) = modifier_slices.text_content_rc() {
-        let metrics = measure_text(value.as_ref());
+        let default_text_style = cranpose_ui::text::TextStyle::default();
+        let text_style_ref = modifier_slices.text_style().unwrap_or(&default_text_style);
+
+        let metrics = measure_text(value.as_ref(), text_style_ref);
         let padding = style.padding;
         let text_rect = Rect {
             x: rect.x + padding.left,
@@ -370,11 +390,21 @@ fn render_node_from_applier(
             height: metrics.height,
         };
         let transformed_text_rect = apply_layer_to_rect(text_rect, origin, node_layer);
+
+        // Extract color and font size
+        let text_color = text_style_ref.color.unwrap_or(Color(1.0, 1.0, 1.0, 1.0));
+        let font_size = match text_style_ref.font_size {
+            cranpose_ui::text::TextUnit::Sp(v) => v,
+            cranpose_ui::text::TextUnit::Em(v) => v * 14.0,
+            cranpose_ui::text::TextUnit::Unspecified => 14.0,
+        };
+
         scene.push_text(
             node_id,
             transformed_text_rect,
             value,
-            apply_layer_to_color(Color(1.0, 1.0, 1.0, 1.0), node_layer),
+            apply_layer_to_color(text_color, node_layer),
+            font_size,
             node_layer.scale,
             visual_clip,
         );
