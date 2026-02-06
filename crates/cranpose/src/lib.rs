@@ -15,6 +15,8 @@ pub use launcher::{AppLauncher, AppSettings};
 #[cfg(feature = "renderer-wgpu")]
 mod present_mode;
 
+/// Re-export framework services (HTTP, URI, etc.) from the dedicated services crate.
+pub use cranpose_services::*;
 /// Re-export the UI crate so applications can depend on a single crate.
 pub use cranpose_ui::*;
 
@@ -30,6 +32,7 @@ pub use cranpose_core::{
 pub mod prelude {
     pub use crate::{AppLauncher, AppSettings};
     pub use cranpose_core::{mutableStateOf, remember, rememberUpdatedState, useState};
+    pub use cranpose_services::*;
     pub use cranpose_ui::*;
 }
 

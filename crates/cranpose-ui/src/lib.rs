@@ -29,16 +29,6 @@ mod text_modifier_node;
 pub mod widgets;
 mod word_boundaries;
 
-// Backward-compat re-exports for service modules that moved to `cranpose-services`.
-pub mod http {
-    pub use cranpose_services::http::*;
-}
-
-// Backward-compat re-exports for service modules that moved to `cranpose-services`.
-pub mod uri_handler {
-    pub use cranpose_services::uri_handler::*;
-}
-
 // Export for cursor blink animation - AppShell checks this to continuously redraw
 pub use text_field_focus::has_focused_field;
 // Export cursor blink timing for WaitUntil scheduling
@@ -86,13 +76,6 @@ pub use primitives::{
 };
 // Lazy list exports - single source from cranpose-foundation
 pub use cranpose_foundation::lazy::{LazyListItemInfo, LazyListLayoutInfo, LazyListState};
-pub use cranpose_services::http::{
-    default_http_client, local_http_client, HttpClient, HttpClientRef, HttpError, HttpFuture,
-};
-pub use cranpose_services::uri_handler::{
-    default_uri_handler, local_uri_handler, ProvideUriHandler, UriHandler, UriHandlerError,
-    UriHandlerRef,
-};
 pub use key_event::{KeyCode, KeyEvent, KeyEventType, Modifiers};
 pub use render_state::{
     current_density, has_pending_draw_repasses, has_pending_layout_repasses,

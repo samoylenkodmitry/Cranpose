@@ -41,7 +41,7 @@ static SNAPSHOT_RUNTIME: LazyLock<Mutex<SnapshotRuntime>> =
 #[cfg(test)]
 thread_local! {
     // Thread-local runtime for tests to avoid cross-thread interference.
-    static SNAPSHOT_RUNTIME: RefCell<Option<SnapshotRuntime>> = RefCell::new(None);
+    static SNAPSHOT_RUNTIME: RefCell<Option<SnapshotRuntime>> = const { RefCell::new(None) };
 }
 
 thread_local! {

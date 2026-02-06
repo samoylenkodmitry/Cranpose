@@ -18,4 +18,4 @@ Applications can consume these services through CompositionLocals and override t
 - **Default implementations**:
   - Desktop: `reqwest` for HTTP and `open` for URIs
   - Web: browser `fetch` and `window.open`
-  - Android URI opening currently returns `UnsupportedPlatform`
+  - Android: `reqwest` for HTTP and `webbrowser` (ACTION_VIEW) for URIs

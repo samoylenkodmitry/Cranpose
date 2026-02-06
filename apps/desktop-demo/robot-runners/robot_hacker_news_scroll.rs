@@ -11,12 +11,11 @@
 
 use cranpose::AppLauncher;
 use cranpose_core::CompositionLocalProvider;
+use cranpose_services::{local_http_client, HttpClient, HttpClientRef, HttpError, HttpFuture};
 use cranpose_testing::{
     find_button_in_semantics, find_element_by_text_exact, find_in_semantics, find_text_exact,
     print_semantics_with_bounds,
 };
-use cranpose_ui::http::HttpFuture;
-use cranpose_ui::{local_http_client, HttpClient, HttpClientRef, HttpError};
 use desktop_app::app;
 use serde_json::json;
 use std::sync::Arc;

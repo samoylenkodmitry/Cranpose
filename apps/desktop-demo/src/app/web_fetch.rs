@@ -1,7 +1,7 @@
+use cranpose_services::{local_http_client, local_uri_handler, HttpClientRef};
 use cranpose_ui::{
-    composable, local_http_client, local_uri_handler, text::TextDecoration, Brush, Button, Color,
-    Column, ColumnSpec, CornerRadii, HttpClientRef, LinearArrangement, Modifier, Row, RowSpec,
-    Size, Spacer, Text, TextStyle, VerticalAlignment,
+    composable, text::TextDecoration, Brush, Button, Color, Column, ColumnSpec, CornerRadii,
+    LinearArrangement, Modifier, Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]

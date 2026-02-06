@@ -328,7 +328,7 @@ impl AppLauncher {
     pub fn run(self, content: impl FnMut() + 'static) -> ! {
         let mut content = content;
         crate::desktop::run(self.settings, move || {
-            cranpose_ui::ProvideUriHandler(|| {
+            crate::ProvideUriHandler(|| {
                 content();
             });
         })
@@ -344,7 +344,7 @@ impl AppLauncher {
     pub fn run(self, app: android_activity::AndroidApp, content: impl FnMut() + 'static) {
         let mut content = content;
         crate::android::run(app, self.settings, move || {
-            cranpose_ui::ProvideUriHandler(|| {
+            crate::ProvideUriHandler(|| {
                 content();
             });
         });
@@ -370,7 +370,7 @@ impl AppLauncher {
     ) -> Result<(), wasm_bindgen::JsValue> {
         let mut content = content;
         crate::web::run(canvas_id, self.settings, move || {
-            cranpose_ui::ProvideUriHandler(|| {
+            crate::ProvideUriHandler(|| {
                 content();
             });
         })

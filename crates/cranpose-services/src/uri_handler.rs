@@ -48,7 +48,8 @@ impl UriHandler for PlatformUriHandler {
 
         #[cfg(target_os = "android")]
         {
-            Err(UriHandlerError::UnsupportedPlatform(uri.to_string()))
+            webbrowser::open(uri).map_err(|err| UriHandlerError::OpenFailed(err.to_string()))?;
+            Ok(())
         }
     }
 }
