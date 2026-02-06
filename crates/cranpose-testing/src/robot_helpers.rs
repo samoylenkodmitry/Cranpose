@@ -229,7 +229,7 @@ pub fn find_button_in_semantics(
     };
 
     if let Some(current) = bounds {
-        if is_horizontally_visible(current, root) {
+        if is_fully_visible(current, root) {
             return bounds;
         }
     } else {
@@ -241,44 +241,35 @@ pub fn find_button_in_semantics(
             break;
         };
 
-        let (x, y, w, h) = current;
-        let (rx, _, rw, _) = root;
-        let dir = if x < rx {
-            1.0
-        } else if x + w > rx + rw {
-            -1.0
-        } else {
-            0.0
+        let Some((axis, dir)) = overflow_axis_direction(current, root) else {
+            break;
         };
 
-        if dir == 0.0 {
-            break;
-        }
-
-        let min_y = y - 8.0;
-        let max_y = y + h + 8.0;
-        let start_bounds = match robot.get_semantics() {
-            Ok(semantics) => find_visible_clickable_in_range(&semantics, min_y, max_y, root),
+        let semantics = match robot.get_semantics() {
+            Ok(semantics) => semantics,
             Err(e) => {
                 eprintln!("  ✗ Failed to get semantics: {}", e);
-                None
+                break;
             }
         };
 
-        if let Some((sx, sy, sw, sh)) = start_bounds {
-            let start_x = sx + sw / 2.0;
-            let start_y = sy + sh / 2.0;
-            let end_x = start_x + dir * 240.0;
-            let _ = robot.drag(start_x, start_y, end_x, start_y);
-            std::thread::sleep(Duration::from_millis(140));
-            let _ = robot.wait_for_idle();
-        } else {
+        let Some((sx, sy, sw, sh)) = find_scroll_anchor(&semantics, current, root, axis) else {
             break;
-        }
+        };
+
+        let start_x = sx + sw / 2.0;
+        let start_y = sy + sh / 2.0;
+        let (end_x, end_y) = match axis {
+            TabAxis::Horizontal => (start_x + dir * SCROLL_STEP, start_y),
+            TabAxis::Vertical => (start_x, start_y + dir * SCROLL_STEP),
+        };
+        let _ = robot.drag(start_x, start_y, end_x, end_y);
+        std::thread::sleep(Duration::from_millis(SCROLL_SETTLE_MS));
+        let _ = robot.wait_for_idle();
 
         bounds = find_in_semantics(robot, |elem| find_button(elem, &text_owned));
         if let Some(current) = bounds {
-            if is_horizontally_visible(current, root) {
+            if is_fully_visible(current, root) {
                 break;
             }
         }
@@ -564,36 +555,215 @@ pub fn root_bounds(robot: &cranpose::Robot) -> Option<RectBounds> {
     ))
 }
 
-fn is_horizontally_visible(bounds: (f32, f32, f32, f32), root: (f32, f32, f32, f32)) -> bool {
-    let (x, _, w, _) = bounds;
-    let (rx, _, rw, _) = root;
-    let left = x >= rx + 4.0;
-    let right = x + w <= rx + rw - 4.0;
-    left && right
+const VISIBILITY_PADDING: f32 = 4.0;
+const SCROLL_STEP: f32 = 240.0;
+const SCROLL_SETTLE_MS: u64 = 140;
+
+fn is_axis_visible(bounds: RectBounds, root: RectBounds, axis: TabAxis) -> bool {
+    let (x, y, w, h) = bounds;
+    let (rx, ry, rw, rh) = root;
+    match axis {
+        TabAxis::Horizontal => {
+            x >= rx + VISIBILITY_PADDING && x + w <= rx + rw - VISIBILITY_PADDING
+        }
+        TabAxis::Vertical => y >= ry + VISIBILITY_PADDING && y + h <= ry + rh - VISIBILITY_PADDING,
+    }
 }
 
-fn find_visible_clickable_in_range(
+fn is_fully_visible(bounds: RectBounds, root: RectBounds) -> bool {
+    is_axis_visible(bounds, root, TabAxis::Horizontal)
+        && is_axis_visible(bounds, root, TabAxis::Vertical)
+}
+
+fn overflow_axis_direction(bounds: RectBounds, root: RectBounds) -> Option<(TabAxis, f32)> {
+    let (x, y, w, h) = bounds;
+    let (rx, ry, rw, rh) = root;
+
+    let overflow_left = (rx + VISIBILITY_PADDING - x).max(0.0);
+    let overflow_right = (x + w - (rx + rw - VISIBILITY_PADDING)).max(0.0);
+    let overflow_top = (ry + VISIBILITY_PADDING - y).max(0.0);
+    let overflow_bottom = (y + h - (ry + rh - VISIBILITY_PADDING)).max(0.0);
+
+    let horizontal_overflow = overflow_left.max(overflow_right);
+    let vertical_overflow = overflow_top.max(overflow_bottom);
+
+    if horizontal_overflow <= 0.0 && vertical_overflow <= 0.0 {
+        return None;
+    }
+
+    if horizontal_overflow >= vertical_overflow {
+        if overflow_left > 0.0 {
+            Some((TabAxis::Horizontal, 1.0))
+        } else {
+            Some((TabAxis::Horizontal, -1.0))
+        }
+    } else if overflow_top > 0.0 {
+        Some((TabAxis::Vertical, 1.0))
+    } else {
+        Some((TabAxis::Vertical, -1.0))
+    }
+}
+
+fn intersects_root(bounds: RectBounds, root: RectBounds) -> bool {
+    let (x, y, w, h) = bounds;
+    let (rx, ry, rw, rh) = root;
+    let left = x.max(rx);
+    let top = y.max(ry);
+    let right = (x + w).min(rx + rw);
+    let bottom = (y + h).min(ry + rh);
+    right > left && bottom > top
+}
+
+fn overlap_len(a_start: f32, a_len: f32, b_start: f32, b_len: f32) -> f32 {
+    let a_end = a_start + a_len;
+    let b_end = b_start + b_len;
+    (a_end.min(b_end) - a_start.max(b_start)).max(0.0)
+}
+
+fn cross_axis_overlap(bounds: RectBounds, target: RectBounds, axis: TabAxis) -> f32 {
+    match axis {
+        TabAxis::Horizontal => overlap_len(bounds.1, bounds.3, target.1, target.3),
+        TabAxis::Vertical => overlap_len(bounds.0, bounds.2, target.0, target.2),
+    }
+}
+
+fn primary_axis_distance(bounds: RectBounds, target: RectBounds, axis: TabAxis) -> f32 {
+    let center = match axis {
+        TabAxis::Horizontal => bounds.0 + bounds.2 / 2.0,
+        TabAxis::Vertical => bounds.1 + bounds.3 / 2.0,
+    };
+    let target_center = match axis {
+        TabAxis::Horizontal => target.0 + target.2 / 2.0,
+        TabAxis::Vertical => target.1 + target.3 / 2.0,
+    };
+    (center - target_center).abs()
+}
+
+fn find_scroll_anchor(
     elements: &[SemanticElement],
-    min_y: f32,
-    max_y: f32,
-    root: (f32, f32, f32, f32),
-) -> Option<(f32, f32, f32, f32)> {
+    target: RectBounds,
+    root: RectBounds,
+    axis: TabAxis,
+) -> Option<RectBounds> {
+    let mut best: Option<(RectBounds, f32, f32)> = None;
+
     for elem in elements {
-        if elem.role == "Layout" && elem.clickable && elem.bounds.y > min_y && elem.bounds.y < max_y
-        {
+        if elem.clickable {
             let bounds = (
                 elem.bounds.x,
                 elem.bounds.y,
                 elem.bounds.width,
                 elem.bounds.height,
             );
-            if is_horizontally_visible(bounds, root) {
-                return Some(bounds);
+            if is_fully_visible(bounds, root) && intersects_root(bounds, root) {
+                let overlap = cross_axis_overlap(bounds, target, axis);
+                if overlap > 0.0 {
+                    let distance = primary_axis_distance(bounds, target, axis);
+                    match best {
+                        None => best = Some((bounds, overlap, distance)),
+                        Some((_, best_overlap, best_distance)) => {
+                            let is_better_overlap = overlap > best_overlap + f32::EPSILON;
+                            let is_better_distance = (overlap - best_overlap).abs() <= f32::EPSILON
+                                && distance < best_distance;
+                            if is_better_overlap || is_better_distance {
+                                best = Some((bounds, overlap, distance));
+                            }
+                        }
+                    }
+                }
             }
         }
-        if let Some(found) = find_visible_clickable_in_range(&elem.children, min_y, max_y, root) {
-            return Some(found);
+
+        if let Some(found) = find_scroll_anchor(&elem.children, target, root, axis) {
+            let overlap = cross_axis_overlap(found, target, axis);
+            let distance = primary_axis_distance(found, target, axis);
+            match best {
+                None => best = Some((found, overlap, distance)),
+                Some((_, best_overlap, best_distance)) => {
+                    let is_better_overlap = overlap > best_overlap + f32::EPSILON;
+                    let is_better_distance =
+                        (overlap - best_overlap).abs() <= f32::EPSILON && distance < best_distance;
+                    if is_better_overlap || is_better_distance {
+                        best = Some((found, overlap, distance));
+                    }
+                }
+            }
         }
     }
-    None
+
+    best.map(|(bounds, _, _)| bounds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cranpose::SemanticRect;
+
+    fn semantic_element(
+        role: &str,
+        text: Option<&str>,
+        clickable: bool,
+        bounds: RectBounds,
+        children: Vec<SemanticElement>,
+    ) -> SemanticElement {
+        SemanticElement {
+            role: role.to_string(),
+            text: text.map(ToString::to_string),
+            clickable,
+            bounds: SemanticRect {
+                x: bounds.0,
+                y: bounds.1,
+                width: bounds.2,
+                height: bounds.3,
+            },
+            children,
+        }
+    }
+
+    #[test]
+    fn overflow_axis_direction_detects_horizontal_overflow() {
+        let root = (0.0, 0.0, 300.0, 200.0);
+        let target = (320.0, 20.0, 80.0, 30.0);
+        assert_eq!(
+            overflow_axis_direction(target, root),
+            Some((TabAxis::Horizontal, -1.0))
+        );
+    }
+
+    #[test]
+    fn overflow_axis_direction_detects_vertical_overflow() {
+        let root = (0.0, 0.0, 300.0, 200.0);
+        let target = (20.0, -60.0, 80.0, 30.0);
+        assert_eq!(
+            overflow_axis_direction(target, root),
+            Some((TabAxis::Vertical, 1.0))
+        );
+    }
+
+    #[test]
+    fn find_scroll_anchor_prefers_cross_axis_overlap() {
+        let root = (0.0, 0.0, 300.0, 200.0);
+        let target = (320.0, 22.0, 80.0, 28.0);
+
+        let same_row = semantic_element(
+            "Layout",
+            Some("same-row"),
+            true,
+            (120.0, 20.0, 80.0, 30.0),
+            vec![],
+        );
+        let other_row = semantic_element(
+            "Layout",
+            Some("other-row"),
+            true,
+            (120.0, 130.0, 80.0, 30.0),
+            vec![],
+        );
+        let root_elem = semantic_element("Layout", None, false, root, vec![same_row, other_row]);
+
+        let anchor = find_scroll_anchor(&[root_elem], target, root, TabAxis::Horizontal)
+            .expect("expected anchor");
+
+        assert_eq!(anchor, (120.0, 20.0, 80.0, 30.0));
+    }
 }

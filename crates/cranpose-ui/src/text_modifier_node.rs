@@ -261,14 +261,100 @@ impl TextModifierElement {
     }
 }
 
+fn hash_f32_bits<H: Hasher>(value: f32, state: &mut H) {
+    value.to_bits().hash(state);
+}
+
+fn hash_text_unit<H: Hasher>(unit: crate::text::TextUnit, state: &mut H) {
+    match unit {
+        crate::text::TextUnit::Unspecified => 0u8.hash(state),
+        crate::text::TextUnit::Sp(value) => {
+            1u8.hash(state);
+            hash_f32_bits(value, state);
+        }
+        crate::text::TextUnit::Em(value) => {
+            2u8.hash(state);
+            hash_f32_bits(value, state);
+        }
+    }
+}
+
+fn hash_color<H: Hasher>(color: crate::modifier::Color, state: &mut H) {
+    hash_f32_bits(color.0, state);
+    hash_f32_bits(color.1, state);
+    hash_f32_bits(color.2, state);
+    hash_f32_bits(color.3, state);
+}
+
+fn hash_option_color<H: Hasher>(color: &Option<crate::modifier::Color>, state: &mut H) {
+    match color {
+        Some(color) => {
+            1u8.hash(state);
+            hash_color(*color, state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
+fn hash_option_f32<H: Hasher>(value: Option<f32>, state: &mut H) {
+    match value {
+        Some(value) => {
+            1u8.hash(state);
+            hash_f32_bits(value, state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
+fn hash_option_shadow<H: Hasher>(shadow: &Option<crate::text::Shadow>, state: &mut H) {
+    match shadow {
+        Some(shadow) => {
+            1u8.hash(state);
+            hash_color(shadow.color, state);
+            hash_f32_bits(shadow.offset.x, state);
+            hash_f32_bits(shadow.offset.y, state);
+            hash_f32_bits(shadow.blur_radius, state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
+fn hash_option_text_indent<H: Hasher>(indent: &Option<crate::text::TextIndent>, state: &mut H) {
+    match indent {
+        Some(indent) => {
+            1u8.hash(state);
+            hash_text_unit(indent.first_line, state);
+            hash_text_unit(indent.rest_line, state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
+fn hash_text_style<H: Hasher>(style: &TextStyle, state: &mut H) {
+    hash_option_color(&style.color, state);
+    hash_text_unit(style.font_size, state);
+    style.font_weight.hash(state);
+    style.font_style.hash(state);
+    style.font_synthesis.hash(state);
+    style.font_family.hash(state);
+    style.font_feature_settings.hash(state);
+    hash_text_unit(style.letter_spacing, state);
+    hash_option_f32(style.baseline_shift, state);
+    style.text_geometric_transform.is_some().hash(state);
+    style.locale_list.is_some().hash(state);
+    hash_option_color(&style.background, state);
+    style.text_decoration.hash(state);
+    hash_option_shadow(&style.shadow, state);
+    style.text_align.hash(state);
+    style.text_direction.hash(state);
+    hash_text_unit(style.line_height, state);
+    hash_option_text_indent(&style.text_indent, state);
+}
+
 impl Hash for TextModifierElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.text.hash(state);
-        // Note: TextStyle does not implement Hash yet.
-        // Ideally we should hash style components. Use derived PartialEq for equality check.
-        // For now, partial hash is okay as long as PartialEq is correct.
-        // If we want correct caching, we need Hash on TextStyle or manual hash here.
-        // Let's rely on text hash + partial check for now, or just impl Hash for TextStyle later.
+        hash_text_style(&self.style, state);
     }
 }
 
@@ -302,5 +388,42 @@ impl ModifierNodeElement for TextModifierElement {
     fn capabilities(&self) -> NodeCapabilities {
         // Text nodes participate in layout, drawing, and semantics
         NodeCapabilities::LAYOUT | NodeCapabilities::DRAW | NodeCapabilities::SEMANTICS
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::text::TextUnit;
+    use std::collections::hash_map::DefaultHasher;
+
+    fn hash_of(element: &TextModifierElement) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        element.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[test]
+    fn hash_changes_when_style_changes() {
+        let text = Rc::<str>::from("Hello");
+        let element_a = TextModifierElement::new(text.clone(), TextStyle::default());
+        let mut style_b = TextStyle::default();
+        style_b.font_size = TextUnit::Sp(18.0);
+        let element_b = TextModifierElement::new(text, style_b);
+
+        assert_ne!(element_a, element_b);
+        assert_ne!(hash_of(&element_a), hash_of(&element_b));
+    }
+
+    #[test]
+    fn hash_matches_for_equal_elements() {
+        let mut style = TextStyle::default();
+        style.font_size = TextUnit::Sp(14.0);
+        style.letter_spacing = TextUnit::Em(0.1);
+        let element_a = TextModifierElement::new(Rc::<str>::from("Hash me"), style.clone());
+        let element_b = TextModifierElement::new(Rc::<str>::from("Hash me"), style);
+
+        assert_eq!(element_a, element_b);
+        assert_eq!(hash_of(&element_a), hash_of(&element_b));
     }
 }
