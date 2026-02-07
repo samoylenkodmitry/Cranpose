@@ -967,25 +967,22 @@ impl GpuRenderer {
                 self.ensure_image_cached(&image_draw.image)?;
             }
 
-            // Shared index data for all image quads.
-            let quad_indices: [u32; 6] = [0, 1, 2, 2, 1, 3];
-            self.queue.write_buffer(
-                &self.image_index_buffer,
-                0,
-                bytemuck::cast_slice(&quad_indices),
-            );
-
             // Pre-compute all image vertices and per-image draw metadata before
             // starting the render pass. queue.write_buffer is staged and only
             // the last write to a given offset survives until submission, so we
             // must write ALL vertices at distinct offsets before encoding any
             // draw commands.
+            //
+            // We use absolute vertex indices in the index buffer (instead of
+            // base_vertex in draw_indexed) because WebGL2 does not support
+            // draw_elements_instanced_base_vertex.
             struct ImageDrawCmd {
-                base_vertex: i32,
+                index_start: u32,
                 scissor: (u32, u32, u32, u32),
                 image_id: u64,
             }
             let mut image_vertices: Vec<Vertex> = Vec::with_capacity(images.len() * 4);
+            let mut image_indices: Vec<u32> = Vec::with_capacity(images.len() * 6);
             let mut image_cmds: Vec<ImageDrawCmd> = Vec::with_capacity(images.len());
 
             for image_draw in images {
@@ -1026,7 +1023,16 @@ impl GpuRenderer {
                     (0.0, 0.0, 1.0, 1.0)
                 };
 
-                let base_vertex = image_vertices.len() as i32;
+                let base_vertex = image_vertices.len() as u32;
+                let index_start = image_indices.len() as u32;
+                image_indices.extend_from_slice(&[
+                    base_vertex,
+                    base_vertex + 1,
+                    base_vertex + 2,
+                    base_vertex + 2,
+                    base_vertex + 1,
+                    base_vertex + 3,
+                ]);
                 image_vertices.extend_from_slice(&[
                     Vertex {
                         position: [x, y],
@@ -1051,7 +1057,7 @@ impl GpuRenderer {
                 ]);
 
                 image_cmds.push(ImageDrawCmd {
-                    base_vertex,
+                    index_start,
                     scissor,
                     image_id: image_draw.image.id(),
                 });
@@ -1069,11 +1075,30 @@ impl GpuRenderer {
                     });
                 }
 
-                // Write ALL vertices in one call before encoding any draw commands
+                // Resize index buffer if needed
+                let needed_index_bytes =
+                    (image_indices.len() * std::mem::size_of::<u32>()) as u64;
+                if needed_index_bytes > self.image_index_buffer.size() {
+                    self.image_index_buffer =
+                        self.device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("Image Index Buffer"),
+                            size: needed_index_bytes,
+                            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                            mapped_at_creation: false,
+                        });
+                }
+
+                // Write ALL vertices and indices in one call each before
+                // encoding any draw commands
                 self.queue.write_buffer(
                     &self.image_vertex_buffer,
                     0,
                     bytemuck::cast_slice(&image_vertices),
+                );
+                self.queue.write_buffer(
+                    &self.image_index_buffer,
+                    0,
+                    bytemuck::cast_slice(&image_indices),
                 );
 
                 let mut image_encoder = pending_shape_encoder.take().unwrap_or_else(|| {
@@ -1121,7 +1146,7 @@ impl GpuRenderer {
                             .get(&cmd.image_id)
                             .ok_or_else(|| "image texture missing from cache".to_string())?;
                         render_pass.set_bind_group(1, &cached.bind_group, &[]);
-                        render_pass.draw_indexed(0..6, cmd.base_vertex, 0..1);
+                        render_pass.draw_indexed(cmd.index_start..(cmd.index_start + 6), 0, 0..1);
                     }
                     has_image_pass = true;
                 }
