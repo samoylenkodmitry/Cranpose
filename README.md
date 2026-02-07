@@ -1,6 +1,7 @@
 [https://codewiki.google/github.com/samoylenkodmitry/cranpose](https://codewiki.google/github.com/samoylenkodmitry/rs-compose)
 
-[WIP.webm](https://github.com/user-attachments/assets/00533605-aa9c-4555-896c-c939195e3dce)
+[v0.0.40.webm](https://github.com/user-attachments/assets/df50209b-abfd-426a-b79c-a51a9543b385)
+
 ## 🌐 Live Demo
 
 **[Try it in your browser!](https://samoylenkodmitry.github.io/Cranpose/)**
