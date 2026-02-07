@@ -7,6 +7,7 @@ use crate::composable;
 use crate::layout::core::Alignment;
 use crate::layout::policies::LeafMeasurePolicy;
 use crate::modifier::{Modifier, Rect, Size};
+use crate::render_state::current_density;
 use crate::widgets::Layout;
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{ColorFilter, DrawScope, ImageBitmap};
@@ -127,7 +128,15 @@ where
     P: Into<Painter> + Clone + PartialEq + 'static,
 {
     let painter = painter.into();
-    let intrinsic_size = painter.intrinsic_size();
+    let density = current_density().max(1.0);
+    let pixel_size = painter.intrinsic_size();
+    // Convert pixel dimensions to dp so the layout requests a size that maps
+    // back to the original pixel count after the renderer applies the scale
+    // factor, achieving 1:1 pixel-perfect rendering.
+    let intrinsic_dp = Size {
+        width: pixel_size.width / density,
+        height: pixel_size.height / density,
+    };
     let draw_alpha = alpha.clamp(0.0, 1.0);
     let draw_painter = painter.clone();
 
@@ -147,12 +156,7 @@ where
                 return;
             }
             let container_size = scope.size();
-            let rect = destination_rect(
-                draw_painter.intrinsic_size(),
-                container_size,
-                alignment,
-                content_scale,
-            );
+            let rect = destination_rect(intrinsic_dp, container_size, alignment, content_scale);
             if rect.width <= 0.0 || rect.height <= 0.0 {
                 return;
             }
@@ -164,11 +168,7 @@ where
             );
         });
 
-    Layout(
-        image_modifier,
-        LeafMeasurePolicy::new(intrinsic_size),
-        || {},
-    )
+    Layout(image_modifier, LeafMeasurePolicy::new(intrinsic_dp), || {})
 }
 
 #[cfg(test)]

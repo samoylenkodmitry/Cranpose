@@ -1076,16 +1076,14 @@ impl GpuRenderer {
                 }
 
                 // Resize index buffer if needed
-                let needed_index_bytes =
-                    (image_indices.len() * std::mem::size_of::<u32>()) as u64;
+                let needed_index_bytes = (image_indices.len() * std::mem::size_of::<u32>()) as u64;
                 if needed_index_bytes > self.image_index_buffer.size() {
-                    self.image_index_buffer =
-                        self.device.create_buffer(&wgpu::BufferDescriptor {
-                            label: Some("Image Index Buffer"),
-                            size: needed_index_bytes,
-                            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-                            mapped_at_creation: false,
-                        });
+                    self.image_index_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("Image Index Buffer"),
+                        size: needed_index_bytes,
+                        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
                 }
 
                 // Write ALL vertices and indices in one call each before

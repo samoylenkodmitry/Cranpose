@@ -242,7 +242,6 @@ pub(crate) fn xkcd_tab() {
                     Box(
                         Modifier::empty()
                             .fill_max_width()
-                            .height(360.0)
                             .background(Color(0.06, 0.06, 0.06, 1.0))
                             .rounded_corners(14.0)
                             .padding(8.0),
@@ -255,9 +254,9 @@ pub(crate) fn xkcd_tab() {
                                 Image(
                                     bitmap.clone(),
                                     description.clone(),
-                                    Modifier::empty().fill_max_size(),
+                                    Modifier::empty(),
                                     Alignment::CENTER,
-                                    ContentScale::Fit,
+                                    ContentScale::None,
                                     1.0,
                                     None,
                                 );
