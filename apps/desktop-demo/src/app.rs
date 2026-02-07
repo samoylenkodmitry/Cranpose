@@ -142,23 +142,9 @@ fn local_holder() -> CompositionLocal<Holder> {
 }
 
 fn random() -> i32 {
-    // For WASM compatibility, use a simple counter-based seed
-    #[cfg(target_arch = "wasm32")]
-    {
-        use std::sync::atomic::{AtomicU32, Ordering};
-        static COUNTER: AtomicU32 = AtomicU32::new(0);
-        (COUNTER.fetch_add(1, Ordering::Relaxed) % 10000) as i32
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use instant::SystemTime;
-
-        let nanos = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .subsec_nanos();
-        (nanos % 10000) as i32
-    }
+    let mut buf = [0u8; 4];
+    getrandom::fill(&mut buf).expect("getrandom failed");
+    (u32::from_le_bytes(buf) % 10000) as i32
 }
 
 #[allow(non_snake_case)]
@@ -1178,31 +1164,22 @@ fn counter_app() {
                     if token.is_cancelled() {
                         return String::new();
                     }
+                    // Simulate background work with a delay on native
                     #[cfg(not(target_arch = "wasm32"))]
                     {
-                        use instant::{Duration, SystemTime};
+                        use instant::Duration;
                         use std::thread;
-
                         for _ in 0..5 {
                             if token.is_cancelled() {
                                 return String::new();
                             }
                             thread::sleep(Duration::from_millis(80));
                         }
-
-                        let nanos = SystemTime::now()
-                            .duration_since(SystemTime::UNIX_EPOCH)
-                            .unwrap()
-                            .subsec_nanos();
-                        format!("Background fetch #{fetch_key}: {}", nanos % 1000)
                     }
-                    #[cfg(target_arch = "wasm32")]
-                    {
-                        format!(
-                            "WASM: Background threads not supported (fetch #{})",
-                            fetch_key
-                        )
-                    }
+                    let mut buf = [0u8; 4];
+                    getrandom::fill(&mut buf).expect("getrandom failed");
+                    let val = u32::from_le_bytes(buf) % 1000;
+                    format!("Background fetch #{fetch_key}: {val}")
                 },
                 move |value| {
                     if value.is_empty() {

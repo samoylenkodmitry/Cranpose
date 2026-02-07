@@ -228,20 +228,9 @@ impl MineswapperGame {
 }
 
 fn random_seed() -> u64 {
-    #[cfg(target_arch = "wasm32")]
-    {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(12345);
-        COUNTER.fetch_add(1, Ordering::Relaxed)
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use instant::SystemTime;
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos() as u64
-    }
+    let mut buf = [0u8; 8];
+    getrandom::fill(&mut buf).expect("getrandom failed");
+    u64::from_le_bytes(buf)
 }
 
 #[composable]

@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context};
-use cranpose_services::{local_http_client, HttpClientRef, HttpError};
+use cranpose_services::{local_http_client, local_uri_handler, HttpClientRef, HttpError};
 use cranpose_ui::{
     composable, Alignment, Box, BoxSpec, Color, Column, ColumnSpec, ContentScale, Image,
     ImageBitmap, LinearArrangement, Modifier, Row, RowSpec, Size, Spacer, Text, TextStyle,
@@ -32,21 +32,10 @@ fn random_u32(max_exclusive: u32) -> u32 {
     if max_exclusive <= 1 {
         return 1;
     }
-    #[cfg(target_arch = "wasm32")]
-    {
-        use std::sync::atomic::{AtomicU32, Ordering};
-        static COUNTER: AtomicU32 = AtomicU32::new(1);
-        (COUNTER.fetch_add(1, Ordering::Relaxed) % max_exclusive).max(1)
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use instant::SystemTime;
-        let nanos = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .subsec_nanos();
-        (nanos % max_exclusive).max(1)
-    }
+    let mut buf = [0u8; 4];
+    getrandom::fill(&mut buf).expect("getrandom failed");
+    let raw = u32::from_le_bytes(buf);
+    (raw % max_exclusive).max(1)
 }
 
 fn decode_bitmap(bytes: &[u8]) -> anyhow::Result<ImageBitmap> {
@@ -134,6 +123,7 @@ pub(crate) fn xkcd_tab() {
     let state = cranpose_core::useState(|| XkcdState::Loading);
     let request_id = cranpose_core::useState(|| 1u64);
     let http_client = local_http_client().current();
+    let uri_handler = local_uri_handler().current();
 
     cranpose_core::LaunchedEffect!(request_id.get(), move |scope| {
         state.set(XkcdState::Loading);
@@ -230,6 +220,24 @@ pub(crate) fn xkcd_tab() {
                             .rounded_corners(12.0),
                         TextStyle::default(),
                     );
+
+                    {
+                        let url = format!("https://xkcd.com/{}", loaded.comic.num);
+                        let uri_handler = uri_handler.clone();
+                        Text(
+                            url.clone(),
+                            Modifier::empty()
+                                .padding(8.0)
+                                .background(Color(0.14, 0.18, 0.30, 0.8))
+                                .rounded_corners(10.0)
+                                .clickable(move |_| {
+                                    if let Err(err) = uri_handler.open_uri(&url) {
+                                        log::error!("Failed to open xkcd link {}: {:#}", url, err);
+                                    }
+                                }),
+                            TextStyle::default(),
+                        );
+                    }
 
                     Box(
                         Modifier::empty()
