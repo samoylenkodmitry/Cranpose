@@ -3486,7 +3486,7 @@ impl CallbackHolder {
     }
 
     /// Produce a forwarder closure that keeps the holder alive and forwards calls to it.
-    pub fn clone_rc(&self) -> impl FnMut() + 'static {
+    pub fn clone_rc(&self) -> impl Fn() + 'static {
         let rc = self.rc.clone();
         move || {
             (rc.borrow_mut())();
@@ -3498,6 +3498,45 @@ impl Default for CallbackHolder {
     fn default() -> Self {
         Self {
             rc: Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>)),
+        }
+    }
+}
+
+/// CallbackHolder1 keeps the latest single-argument callback closure alive across recompositions.
+/// It mirrors [`CallbackHolder`] but supports callbacks that receive one argument.
+#[derive(Clone)]
+pub struct CallbackHolder1<A: 'static> {
+    #[allow(clippy::type_complexity)]
+    rc: Rc<RefCell<Box<dyn FnMut(A)>>>,
+}
+
+impl<A: 'static> CallbackHolder1<A> {
+    /// Create a new holder with a no-op callback so callers can invoke it immediately.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Replace the stored callback with a new closure provided by the caller.
+    pub fn update<F>(&self, f: F)
+    where
+        F: FnMut(A) + 'static,
+    {
+        *self.rc.borrow_mut() = Box::new(f);
+    }
+
+    /// Produce a forwarder closure that keeps the holder alive and forwards calls to it.
+    pub fn clone_rc(&self) -> impl Fn(A) + 'static {
+        let rc = self.rc.clone();
+        move |arg| {
+            (rc.borrow_mut())(arg);
+        }
+    }
+}
+
+impl<A: 'static> Default for CallbackHolder1<A> {
+    fn default() -> Self {
+        Self {
+            rc: Rc::new(RefCell::new(Box::new(|_| {}) as Box<dyn FnMut(A)>)),
         }
     }
 }
