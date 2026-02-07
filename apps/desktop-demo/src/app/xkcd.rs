@@ -56,9 +56,43 @@ fn decode_bitmap(bytes: &[u8]) -> anyhow::Result<ImageBitmap> {
         .map_err(|err| anyhow!("invalid RGBA bitmap: {err}"))
 }
 
+/// On WASM, route through our Cloudflare Worker CORS proxy since xkcd.com
+/// doesn't serve `Access-Control-Allow-Origin` headers and browser fetch
+/// blocks the response. Native builds hit xkcd directly.
+fn cors_url(url: &str) -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        format!(
+            "https://cranpose-cors-proxy.cranpose.workers.dev/?url={}",
+            url_encode(url)
+        )
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        url.to_string()
+    }
+}
+
+/// Percent-encode a URL for use as a query parameter.
+#[cfg(target_arch = "wasm32")]
+fn url_encode(input: &str) -> String {
+    let mut encoded = String::with_capacity(input.len() * 2);
+    for byte in input.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => {
+                encoded.push_str(&format!("%{byte:02X}"));
+            }
+        }
+    }
+    encoded
+}
+
 async fn fetch_latest_comic_num(client: &HttpClientRef) -> Result<u32, String> {
     let body = client
-        .get_text("https://xkcd.com/info.0.json")
+        .get_text(&cors_url("https://xkcd.com/info.0.json"))
         .await
         .map_err(|err| format!("failed to fetch latest xkcd info: {err}"))?;
     let latest: XkcdResponse = serde_json::from_str(&body)
@@ -71,7 +105,7 @@ async fn fetch_random_comic(client: &HttpClientRef) -> Result<LoadedComic, Strin
 
     for _ in 0..8 {
         let candidate = random_u32(latest_num.saturating_add(1)).clamp(1, latest_num);
-        let info_url = format!("https://xkcd.com/{candidate}/info.0.json");
+        let info_url = cors_url(&format!("https://xkcd.com/{candidate}/info.0.json"));
 
         let info_body = match client.get_text(&info_url).await {
             Ok(body) => body,
@@ -83,7 +117,7 @@ async fn fetch_random_comic(client: &HttpClientRef) -> Result<LoadedComic, Strin
             .map_err(|err| format!("failed to parse comic metadata: {err}"))?;
 
         let image_bytes = client
-            .get_bytes(&comic.img)
+            .get_bytes(&cors_url(&comic.img))
             .await
             .map_err(|err| format!("failed to download comic image: {err}"))?;
 
