@@ -1,14 +1,15 @@
 //! GPU rendering implementation using WGPU
 
-use crate::scene::{DrawShape, TextDraw};
+use crate::scene::{DrawShape, ImageDraw, TextDraw};
 use crate::shaders;
 use crate::{SharedTextBuffer, SharedTextCache, TextCacheKey};
 use bytemuck::{Pod, Zeroable};
-use cranpose_ui_graphics::{Brush, Color};
+use cranpose_ui_graphics::{Brush, Color, ColorFilter, ImageBitmap};
 use glyphon::{
     Attrs, Cache, Color as GlyphonColor, FontSystem, Metrics, Resolution, SwashCache, TextArea,
     TextAtlas, TextBounds, TextRenderer, Viewport,
 };
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 // Chunked rendering constants for robustness with large scenes
@@ -22,6 +23,7 @@ const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     b: 24.0 / 255.0,
     a: 1.0,
 };
+const MAX_TEXTURE_CACHE_ITEMS: usize = 256;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
@@ -68,6 +70,10 @@ struct ShapeData {
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct GradientStop {
     color: [f32; 4],
+}
+
+struct CachedImageTexture {
+    bind_group: wgpu::BindGroup,
 }
 
 // Cached text buffer is now defined in lib.rs as SharedTextBuffer and shared
@@ -252,6 +258,9 @@ pub struct GpuRenderer {
     surface_format: wgpu::TextureFormat,
     pipeline: wgpu::RenderPipeline,
     shape_bind_group_layout: wgpu::BindGroupLayout,
+    image_pipeline: wgpu::RenderPipeline,
+    image_bind_group_layout: wgpu::BindGroupLayout,
+    image_sampler: wgpu::Sampler,
     font_system: Arc<Mutex<FontSystem>>,
     text_renderer: TextRenderer,
     text_atlas: TextAtlas,
@@ -260,6 +269,9 @@ pub struct GpuRenderer {
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
     shape_buffers: ShapeBatchBuffers,
+    image_vertex_buffer: wgpu::Buffer,
+    image_index_buffer: wgpu::Buffer,
+    image_texture_cache: HashMap<u64, CachedImageTexture>,
     // Shared text cache used by both measurement and rendering
     text_cache: SharedTextCache,
     text_viewport: Viewport,
@@ -369,6 +381,75 @@ impl GpuRenderer {
             cache: None,
         });
 
+        let image_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Image Shader"),
+            source: wgpu::ShaderSource::Wgsl(shaders::IMAGE_SHADER.into()),
+        });
+
+        let image_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Image Texture Bind Group Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+
+        let image_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Image Pipeline Layout"),
+                bind_group_layouts: &[&uniform_bind_group_layout, &image_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+
+        let image_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Image Pipeline"),
+            layout: Some(&image_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &image_shader,
+                entry_point: Some("image_vs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[Vertex::desc()],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &image_shader,
+                entry_point: Some("image_fs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
         let swash_cache = SwashCache::new();
         let glyphon_cache = Cache::new(&device);
         let mut text_atlas = TextAtlas::new(&device, &queue, &glyphon_cache, surface_format);
@@ -406,12 +487,40 @@ impl GpuRenderer {
         // Create persistent shape buffers
         let shape_buffers = ShapeBatchBuffers::new(&device, &shape_bind_group_layout);
 
+        let image_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Image Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        let image_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Image Vertex Buffer"),
+            size: (std::mem::size_of::<Vertex>() * 4) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let image_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Image Index Buffer"),
+            size: (std::mem::size_of::<u32>() * 6) as u64,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         Self {
             device,
             queue,
             surface_format,
             pipeline,
             shape_bind_group_layout,
+            image_pipeline,
+            image_bind_group_layout,
+            image_sampler,
             font_system,
             text_renderer,
             text_atlas,
@@ -419,6 +528,9 @@ impl GpuRenderer {
             uniform_buffer,
             uniform_bind_group,
             shape_buffers,
+            image_vertex_buffer,
+            image_index_buffer,
+            image_texture_cache: HashMap::new(),
             text_cache,
             text_viewport,
             scratch_shape_data: Vec::new(),
@@ -431,18 +543,94 @@ impl GpuRenderer {
         }
     }
 
+    fn ensure_image_cached(&mut self, image: &ImageBitmap) -> Result<(), String> {
+        if self.image_texture_cache.contains_key(&image.id()) {
+            return Ok(());
+        }
+
+        let size = wgpu::Extent3d {
+            width: image.width(),
+            height: image.height(),
+            depth_or_array_layers: 1,
+        };
+
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Image Texture"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            image.pixels(),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * image.width()),
+                rows_per_image: Some(image.height()),
+            },
+            size,
+        );
+
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Image Texture Bind Group"),
+            layout: &self.image_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.image_sampler),
+                },
+            ],
+        });
+
+        // Keep cache bounded to avoid unbounded GPU memory growth in long sessions.
+        if self.image_texture_cache.len() >= MAX_TEXTURE_CACHE_ITEMS {
+            let remove_count = self.image_texture_cache.len() - (MAX_TEXTURE_CACHE_ITEMS / 2) + 1;
+            let keys: Vec<u64> = self
+                .image_texture_cache
+                .keys()
+                .take(remove_count)
+                .copied()
+                .collect();
+            for key in keys {
+                self.image_texture_cache.remove(&key);
+            }
+        }
+
+        self.image_texture_cache
+            .insert(image.id(), CachedImageTexture { bind_group });
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)] // Render path needs explicit scene slices and target metadata.
     pub fn render(
         &mut self,
         view: &wgpu::TextureView,
         shapes: &[DrawShape],
+        images: &[ImageDraw],
         texts: &[TextDraw],
         width: u32,
         height: u32,
         root_scale: f32,
     ) -> Result<(), String> {
         log::trace!(
-            "🎨 Rendering: {} shapes, {} texts (size: {}x{})",
+            "🎨 Rendering: {} shapes, {} images, {} texts (size: {}x{})",
             shapes.len(),
+            images.len(),
             texts.len(),
             width,
             height
@@ -459,6 +647,12 @@ impl GpuRenderer {
                 .windows(2)
                 .all(|pair| pair[0].z_index <= pair[1].z_index),
             "texts must be added in z-index order"
+        );
+        debug_assert!(
+            images
+                .windows(2)
+                .all(|pair| pair[0].z_index <= pair[1].z_index),
+            "images must be added in z-index order"
         );
 
         // Update uniform buffer with viewport dimensions
@@ -767,6 +961,121 @@ impl GpuRenderer {
             }
         }
 
+        let mut has_image_pass = false;
+        if !images.is_empty() {
+            for image_draw in images {
+                self.ensure_image_cached(&image_draw.image)?;
+            }
+
+            // Shared index data for all image quads.
+            let quad_indices: [u32; 6] = [0, 1, 2, 2, 1, 3];
+            self.queue.write_buffer(
+                &self.image_index_buffer,
+                0,
+                bytemuck::cast_slice(&quad_indices),
+            );
+
+            let mut image_encoder = pending_shape_encoder.take().unwrap_or_else(|| {
+                self.device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Image Encoder"),
+                    })
+            });
+
+            {
+                let mut render_pass =
+                    image_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Image Render Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: if has_shape_pass {
+                                    wgpu::LoadOp::Load
+                                } else {
+                                    wgpu::LoadOp::Clear(CLEAR_COLOR)
+                                },
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+
+                render_pass.set_pipeline(&self.image_pipeline);
+                render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                render_pass
+                    .set_index_buffer(self.image_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+
+                for image_draw in images {
+                    let rect = image_draw.rect;
+                    if rect.width <= 0.0 || rect.height <= 0.0 || image_draw.alpha <= 0.0 {
+                        continue;
+                    }
+
+                    let x = rect.x * root_scale;
+                    let y = rect.y * root_scale;
+                    let w = rect.width * root_scale;
+                    let h = rect.height * root_scale;
+                    if w <= 0.0 || h <= 0.0 {
+                        continue;
+                    }
+
+                    let tint = tint_for_image(image_draw.color_filter, image_draw.alpha);
+                    if tint[3] <= 0.0 {
+                        continue;
+                    }
+
+                    let vertices = [
+                        Vertex {
+                            position: [x, y],
+                            color: tint,
+                            uv: [0.0, 0.0],
+                        },
+                        Vertex {
+                            position: [x + w, y],
+                            color: tint,
+                            uv: [1.0, 0.0],
+                        },
+                        Vertex {
+                            position: [x, y + h],
+                            color: tint,
+                            uv: [0.0, 1.0],
+                        },
+                        Vertex {
+                            position: [x + w, y + h],
+                            color: tint,
+                            uv: [1.0, 1.0],
+                        },
+                    ];
+
+                    self.queue.write_buffer(
+                        &self.image_vertex_buffer,
+                        0,
+                        bytemuck::cast_slice(&vertices),
+                    );
+
+                    let scissor = scissor_rect_for_image(image_draw, root_scale, width, height);
+                    let Some((sx, sy, sw, sh)) = scissor else {
+                        continue;
+                    };
+                    render_pass.set_scissor_rect(sx, sy, sw, sh);
+
+                    let cached = self
+                        .image_texture_cache
+                        .get(&image_draw.image.id())
+                        .ok_or_else(|| "image texture missing from cache".to_string())?;
+                    render_pass.set_bind_group(1, &cached.bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, self.image_vertex_buffer.slice(..));
+                    render_pass.draw_indexed(0..6, 0, 0..1);
+                    has_image_pass = true;
+                }
+            }
+
+            pending_shape_encoder = Some(image_encoder);
+        }
+
         // Prepare text rendering - create buffers and text areas (with caching)
         let mut font_system = self.font_system.lock().unwrap();
         let mut text_cache = self.text_cache.lock().unwrap();
@@ -903,7 +1212,7 @@ impl GpuRenderer {
                         view,
                         resolve_target: None,
                         ops: wgpu::Operations {
-                            load: if has_shape_pass {
+                            load: if has_shape_pass || has_image_pass {
                                 wgpu::LoadOp::Load
                             } else {
                                 wgpu::LoadOp::Clear(CLEAR_COLOR)
@@ -928,7 +1237,7 @@ impl GpuRenderer {
         if !submitted {
             if let Some(shape_encoder) = pending_shape_encoder.take() {
                 self.queue.submit(std::iter::once(shape_encoder.finish()));
-            } else if !has_shape_pass {
+            } else if !has_shape_pass && !has_image_pass {
                 let mut clear_encoder =
                     self.device
                         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -962,4 +1271,52 @@ impl GpuRenderer {
 
         Ok(())
     }
+}
+
+fn tint_for_image(color_filter: Option<ColorFilter>, alpha: f32) -> [f32; 4] {
+    let alpha = alpha.clamp(0.0, 1.0);
+    match color_filter {
+        Some(ColorFilter::Tint(tint)) => [
+            tint.r().clamp(0.0, 1.0),
+            tint.g().clamp(0.0, 1.0),
+            tint.b().clamp(0.0, 1.0),
+            (tint.a() * alpha).clamp(0.0, 1.0),
+        ],
+        None => [1.0, 1.0, 1.0, alpha],
+    }
+}
+
+fn scissor_rect_for_image(
+    image: &ImageDraw,
+    root_scale: f32,
+    width: u32,
+    height: u32,
+) -> Option<(u32, u32, u32, u32)> {
+    let mut left = image.rect.x * root_scale;
+    let mut top = image.rect.y * root_scale;
+    let mut right = (image.rect.x + image.rect.width) * root_scale;
+    let mut bottom = (image.rect.y + image.rect.height) * root_scale;
+
+    if let Some(clip) = image.clip {
+        left = left.max(clip.x * root_scale);
+        top = top.max(clip.y * root_scale);
+        right = right.min((clip.x + clip.width) * root_scale);
+        bottom = bottom.min((clip.y + clip.height) * root_scale);
+    }
+
+    left = left.max(0.0).min(width as f32).floor();
+    top = top.max(0.0).min(height as f32).floor();
+    right = right.max(0.0).min(width as f32).ceil();
+    bottom = bottom.max(0.0).min(height as f32).ceil();
+
+    if right <= left || bottom <= top {
+        return None;
+    }
+
+    Some((
+        left as u32,
+        top as u32,
+        (right - left) as u32,
+        (bottom - top) as u32,
+    ))
 }

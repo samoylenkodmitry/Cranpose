@@ -1,6 +1,6 @@
 //! Geometric primitives: Point, Size, Rect, Insets, Path
 
-use crate::Brush;
+use crate::{Brush, ColorFilter, ImageBitmap};
 use std::ops::AddAssign;
 
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
@@ -242,6 +242,12 @@ pub enum DrawPrimitive {
         brush: Brush,
         radii: CornerRadii,
     },
+    Image {
+        rect: Rect,
+        image: ImageBitmap,
+        alpha: f32,
+        color_filter: Option<ColorFilter>,
+    },
 }
 
 pub trait DrawScope {
@@ -251,6 +257,14 @@ pub trait DrawScope {
     /// Draws a rectangle at the specified position and size.
     fn draw_rect_at(&mut self, rect: Rect, brush: Brush);
     fn draw_round_rect(&mut self, brush: Brush, radii: CornerRadii);
+    fn draw_image(&mut self, image: ImageBitmap);
+    fn draw_image_at(
+        &mut self,
+        rect: Rect,
+        image: ImageBitmap,
+        alpha: f32,
+        color_filter: Option<ColorFilter>,
+    );
     fn into_primitives(self) -> Vec<DrawPrimitive>;
 }
 
@@ -295,7 +309,76 @@ impl DrawScope for DrawScopeDefault {
         });
     }
 
+    fn draw_image(&mut self, image: ImageBitmap) {
+        self.primitives.push(DrawPrimitive::Image {
+            rect: Rect::from_size(self.size),
+            image,
+            alpha: 1.0,
+            color_filter: None,
+        });
+    }
+
+    fn draw_image_at(
+        &mut self,
+        rect: Rect,
+        image: ImageBitmap,
+        alpha: f32,
+        color_filter: Option<ColorFilter>,
+    ) {
+        self.primitives.push(DrawPrimitive::Image {
+            rect,
+            image,
+            alpha: alpha.clamp(0.0, 1.0),
+            color_filter,
+        });
+    }
+
     fn into_primitives(self) -> Vec<DrawPrimitive> {
         self.primitives
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Color, ImageBitmap};
+
+    #[test]
+    fn draw_image_uses_scope_size_as_default_rect() {
+        let mut scope = DrawScopeDefault::new(Size::new(40.0, 24.0));
+        let image = ImageBitmap::from_rgba8(2, 2, vec![255; 16]).expect("image");
+        scope.draw_image(image.clone());
+        let primitives = scope.into_primitives();
+        assert_eq!(primitives.len(), 1);
+        match &primitives[0] {
+            DrawPrimitive::Image {
+                rect,
+                image: actual,
+                alpha,
+                color_filter,
+            } => {
+                assert_eq!(*rect, Rect::from_size(Size::new(40.0, 24.0)));
+                assert_eq!(*actual, image);
+                assert_eq!(*alpha, 1.0);
+                assert!(color_filter.is_none());
+            }
+            other => panic!("expected image primitive, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn draw_image_at_clamps_alpha() {
+        let mut scope = DrawScopeDefault::new(Size::new(10.0, 10.0));
+        let image = ImageBitmap::from_rgba8(1, 1, vec![255, 255, 255, 255]).expect("image");
+        scope.draw_image_at(
+            Rect::from_origin_size(Point::new(2.0, 3.0), Size::new(5.0, 6.0)),
+            image,
+            3.0,
+            Some(ColorFilter::Tint(Color::from_rgba_u8(128, 128, 255, 255))),
+        );
+        match &scope.into_primitives()[0] {
+            DrawPrimitive::Image { alpha, .. } => assert_eq!(*alpha, 1.0),
+            other => panic!("expected image primitive, got {other:?}"),
+        }
     }
 }

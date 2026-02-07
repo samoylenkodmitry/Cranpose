@@ -51,7 +51,7 @@ pub mod web;
 
 // Re-export Robot type from desktop module when robot feature is enabled
 #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
-pub use desktop::{Robot, SemanticElement, SemanticRect};
+pub use desktop::{Robot, RobotScreenshot, SemanticElement, SemanticRect};
 
 /// FPS monitoring API - use these to track frame rate for performance optimization.
 ///

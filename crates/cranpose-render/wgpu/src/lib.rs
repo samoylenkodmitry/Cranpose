@@ -8,7 +8,7 @@ mod render;
 mod scene;
 mod shaders;
 
-pub use scene::{ClickAction, DrawShape, HitRegion, Scene, TextDraw};
+pub use scene::{ClickAction, DrawShape, HitRegion, ImageDraw, Scene, TextDraw};
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::{RenderScene, Renderer};
@@ -294,6 +294,7 @@ impl WgpuRenderer {
                 .render(
                     view,
                     &self.scene.shapes,
+                    &self.scene.images,
                     &self.scene.texts,
                     width,
                     height,

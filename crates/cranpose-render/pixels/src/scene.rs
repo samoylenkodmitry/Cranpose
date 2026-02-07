@@ -5,7 +5,9 @@ use std::rc::Rc;
 use cranpose_core::NodeId;
 use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_render_common::{HitTestTarget, RenderScene};
-use cranpose_ui_graphics::{Brush, Color, Point, Rect, RoundedCornerShape};
+use cranpose_ui_graphics::{
+    Brush, Color, ColorFilter, ImageBitmap, Point, Rect, RoundedCornerShape,
+};
 
 #[derive(Clone)]
 pub enum ClickAction {
@@ -42,6 +44,16 @@ pub struct TextDraw {
     pub color: Color,
     pub font_size: f32,
     pub scale: f32,
+    pub z_index: usize,
+    pub clip: Option<Rect>,
+}
+
+#[derive(Clone)]
+pub struct ImageDraw {
+    pub rect: Rect,
+    pub image: ImageBitmap,
+    pub alpha: f32,
+    pub color_filter: Option<ColorFilter>,
     pub z_index: usize,
     pub clip: Option<Rect>,
 }
@@ -106,6 +118,7 @@ impl HitTestTarget for HitRegion {
 
 pub struct Scene {
     pub shapes: Vec<DrawShape>,
+    pub images: Vec<ImageDraw>,
     pub texts: Vec<TextDraw>,
     pub hits: Vec<HitRegion>,
     pub next_z: usize,
@@ -116,6 +129,7 @@ impl Scene {
     pub fn new() -> Self {
         Self {
             shapes: Vec::new(),
+            images: Vec::new(),
             texts: Vec::new(),
             hits: Vec::new(),
             next_z: 0,
@@ -136,6 +150,26 @@ impl Scene {
             rect,
             brush,
             shape,
+            z_index,
+            clip,
+        });
+    }
+
+    pub fn push_image(
+        &mut self,
+        rect: Rect,
+        image: ImageBitmap,
+        alpha: f32,
+        color_filter: Option<ColorFilter>,
+        clip: Option<Rect>,
+    ) {
+        let z_index = self.next_z;
+        self.next_z += 1;
+        self.images.push(ImageDraw {
+            rect,
+            image,
+            alpha: alpha.clamp(0.0, 1.0),
+            color_filter,
             z_index,
             clip,
         });
@@ -206,6 +240,7 @@ impl RenderScene for Scene {
 
     fn clear(&mut self) {
         self.shapes.clear();
+        self.images.clear();
         self.texts.clear();
         self.hits.clear();
         self.node_index.clear();

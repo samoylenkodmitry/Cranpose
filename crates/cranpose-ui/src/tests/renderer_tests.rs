@@ -144,6 +144,11 @@ fn renderer_translates_draw_commands() {
                     saw_translated = true;
                 }
             }
+            DrawPrimitive::Image { rect, .. } => {
+                if rect.x >= 10.0 && rect.y >= 10.0 {
+                    saw_translated = true;
+                }
+            }
         }
     }
     assert!(
@@ -167,7 +172,9 @@ fn renderer_translates_draw_commands() {
     assert_eq!(overlay_ops.len(), 1);
     if let RenderOp::Primitive { primitive, .. } = overlay_ops[0] {
         match primitive {
-            DrawPrimitive::Rect { rect, .. } | DrawPrimitive::RoundRect { rect, .. } => {
+            DrawPrimitive::Rect { rect, .. }
+            | DrawPrimitive::RoundRect { rect, .. }
+            | DrawPrimitive::Image { rect, .. } => {
                 assert!(rect.x >= 10.0);
                 assert!(rect.y >= 10.0);
             }

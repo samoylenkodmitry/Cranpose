@@ -694,10 +694,62 @@ fn find_scroll_anchor(
     best.map(|(bounds, _, _)| bounds)
 }
 
+/// Capture a full screenshot from the running robot app.
+pub fn capture_screenshot(robot: &cranpose::Robot) -> Option<cranpose::RobotScreenshot> {
+    robot.screenshot().ok()
+}
+
+/// Returns pixel RGBA at `(x, y)` from a screenshot.
+pub fn screenshot_pixel(screenshot: &cranpose::RobotScreenshot, x: u32, y: u32) -> Option<[u8; 4]> {
+    if x >= screenshot.width || y >= screenshot.height {
+        return None;
+    }
+    let index = ((y * screenshot.width + x) * 4) as usize;
+    Some([
+        screenshot.pixels[index],
+        screenshot.pixels[index + 1],
+        screenshot.pixels[index + 2],
+        screenshot.pixels[index + 3],
+    ])
+}
+
+/// Crops a rectangular region from a screenshot.
+pub fn crop_screenshot(
+    screenshot: &cranpose::RobotScreenshot,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+) -> Option<cranpose::RobotScreenshot> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let end_x = x.checked_add(width)?;
+    let end_y = y.checked_add(height)?;
+    if end_x > screenshot.width || end_y > screenshot.height {
+        return None;
+    }
+
+    let mut pixels = vec![0u8; (width * height * 4) as usize];
+    for row in 0..height {
+        let src_start = (((y + row) * screenshot.width + x) * 4) as usize;
+        let src_end = src_start + (width * 4) as usize;
+        let dst_start = (row * width * 4) as usize;
+        let dst_end = dst_start + (width * 4) as usize;
+        pixels[dst_start..dst_end].copy_from_slice(&screenshot.pixels[src_start..src_end]);
+    }
+
+    Some(cranpose::RobotScreenshot {
+        width,
+        height,
+        pixels,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cranpose::SemanticRect;
+    use cranpose::{RobotScreenshot, SemanticRect};
 
     fn semantic_element(
         role: &str,
@@ -765,5 +817,34 @@ mod tests {
             .expect("expected anchor");
 
         assert_eq!(anchor, (120.0, 20.0, 80.0, 30.0));
+    }
+
+    #[test]
+    fn screenshot_pixel_reads_expected_value() {
+        let screenshot = RobotScreenshot {
+            width: 2,
+            height: 1,
+            pixels: vec![1, 2, 3, 4, 5, 6, 7, 8],
+        };
+        assert_eq!(screenshot_pixel(&screenshot, 1, 0), Some([5, 6, 7, 8]));
+    }
+
+    #[test]
+    fn crop_screenshot_extracts_region() {
+        let screenshot = RobotScreenshot {
+            width: 3,
+            height: 2,
+            pixels: vec![
+                1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255, 13, 14, 15, 255, 16, 17,
+                18, 255,
+            ],
+        };
+        let cropped = crop_screenshot(&screenshot, 1, 0, 2, 2).expect("crop");
+        assert_eq!(cropped.width, 2);
+        assert_eq!(cropped.height, 2);
+        assert_eq!(
+            cropped.pixels,
+            vec![4, 5, 6, 255, 7, 8, 9, 255, 13, 14, 15, 255, 16, 17, 18, 255]
+        );
     }
 }

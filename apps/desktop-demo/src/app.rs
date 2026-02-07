@@ -18,14 +18,18 @@ use std::cell::RefCell;
 
 mod animations;
 mod hacker_news;
+mod images;
 pub mod lazy_list;
 mod mineswapper2;
 mod web_fetch;
+mod xkcd;
 
 use animations::AnimationsTab;
 use hacker_news::hacker_news_tab;
+use images::images_tab;
 use lazy_list::lazy_list_example;
 use web_fetch::web_fetch_example;
+use xkcd::xkcd_tab;
 
 thread_local! {
     pub static TEST_COMPOSITION_LOCAL_COUNTER: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
@@ -45,6 +49,8 @@ pub enum DemoTab {
     LazyList,
     Mineswapper2,
     HackerNews,
+    Images,
+    Xkcd,
 }
 
 impl DemoTab {
@@ -61,11 +67,13 @@ impl DemoTab {
             DemoTab::LazyList => "Lazy List",
             DemoTab::Mineswapper2 => "Mineswapper2",
             DemoTab::HackerNews => "Hacker News",
+            DemoTab::Images => "Images",
+            DemoTab::Xkcd => "XKCD",
         }
     }
 }
 
-pub const DEMO_TABS: [DemoTab; 11] = [
+pub const DEMO_TABS: [DemoTab; 13] = [
     DemoTab::Counter,
     DemoTab::CompositionLocal,
     DemoTab::Async,
@@ -77,6 +85,8 @@ pub const DEMO_TABS: [DemoTab; 11] = [
     DemoTab::LazyList,
     DemoTab::Mineswapper2,
     DemoTab::HackerNews,
+    DemoTab::Images,
+    DemoTab::Xkcd,
 ];
 
 pub fn demo_tab_labels() -> Vec<&'static str> {
@@ -282,6 +292,8 @@ fn render_active_tab(active: DemoTab) {
         DemoTab::LazyList => lazy_list_example(),
         DemoTab::Mineswapper2 => mineswapper2::mineswapper2_tab(),
         DemoTab::HackerNews => hacker_news_tab(),
+        DemoTab::Images => images_tab(),
+        DemoTab::Xkcd => xkcd_tab(),
     }
 }
 

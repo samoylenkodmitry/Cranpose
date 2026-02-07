@@ -27,6 +27,10 @@ pub type HttpFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, HttpError>> +
 
 pub trait HttpClient: Send + Sync {
     fn get_text<'a>(&'a self, url: &'a str) -> HttpFuture<'a, String>;
+
+    fn get_bytes<'a>(&'a self, url: &'a str) -> HttpFuture<'a, Vec<u8>> {
+        Box::pin(async move { self.get_text(url).await.map(|text| text.into_bytes()) })
+    }
 }
 
 pub type HttpClientRef = Arc<dyn HttpClient>;
@@ -44,6 +48,20 @@ impl HttpClient for DefaultHttpClient {
             #[cfg(target_arch = "wasm32")]
             {
                 fetch_text_web(url).await
+            }
+        })
+    }
+
+    fn get_bytes<'a>(&'a self, url: &'a str) -> HttpFuture<'a, Vec<u8>> {
+        Box::pin(async move {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                fetch_bytes_native(url)
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            {
+                fetch_bytes_web(url).await
             }
         })
     }
@@ -86,6 +104,48 @@ fn fetch_text_native(url: &str) -> Result<String, HttpError> {
         url: url.to_string(),
         message: err.to_string(),
     })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn fetch_bytes_native(url: &str) -> Result<Vec<u8>, HttpError> {
+    use std::sync::OnceLock;
+    use std::time::Duration;
+
+    static CLIENT: OnceLock<Result<reqwest::blocking::Client, HttpError>> = OnceLock::new();
+    let client = CLIENT
+        .get_or_init(|| {
+            reqwest::blocking::Client::builder()
+                .timeout(Duration::from_secs(10))
+                .user_agent("cranpose/0.1")
+                .build()
+                .map_err(|err| HttpError::ClientInit(err.to_string()))
+        })
+        .as_ref()
+        .map_err(|err| err.clone())?;
+
+    let response = client
+        .get(url)
+        .send()
+        .map_err(|err| HttpError::RequestFailed {
+            url: url.to_string(),
+            message: err.to_string(),
+        })?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(HttpError::HttpStatus {
+            url: url.to_string(),
+            status: status.as_u16(),
+        });
+    }
+
+    response
+        .bytes()
+        .map(|bytes| bytes.to_vec())
+        .map_err(|err| HttpError::BodyReadFailed {
+            url: url.to_string(),
+            message: err.to_string(),
+        })
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -146,6 +206,62 @@ async fn fetch_text_web(url: &str) -> Result<String, HttpError> {
         })
 }
 
+#[cfg(target_arch = "wasm32")]
+async fn fetch_bytes_web(url: &str) -> Result<Vec<u8>, HttpError> {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen_futures::JsFuture;
+    use web_sys::{Request, RequestInit, RequestMode, Response};
+
+    let opts = RequestInit::new();
+    opts.set_method("GET");
+    opts.set_mode(RequestMode::Cors);
+
+    let request =
+        Request::new_with_str_and_init(url, &opts).map_err(|err| HttpError::RequestFailed {
+            url: url.to_string(),
+            message: format!("{:?}", err),
+        })?;
+
+    let window = web_sys::window().ok_or(HttpError::NoWindow)?;
+    let resp_value = JsFuture::from(window.fetch_with_request(&request))
+        .await
+        .map_err(|err| HttpError::RequestFailed {
+            url: url.to_string(),
+            message: format!("{:?}", err),
+        })?;
+
+    let resp: Response = resp_value
+        .dyn_into()
+        .map_err(|_| HttpError::InvalidResponse {
+            url: url.to_string(),
+            message: "Response is not a Response object".to_string(),
+        })?;
+
+    if !resp.ok() {
+        return Err(HttpError::HttpStatus {
+            url: url.to_string(),
+            status: resp.status(),
+        });
+    }
+
+    let bytes_promise = resp
+        .array_buffer()
+        .map_err(|err| HttpError::BodyReadFailed {
+            url: url.to_string(),
+            message: format!("{:?}", err),
+        })?;
+    let bytes_value =
+        JsFuture::from(bytes_promise)
+            .await
+            .map_err(|err| HttpError::BodyReadFailed {
+                url: url.to_string(),
+                message: format!("{:?}", err),
+            })?;
+
+    let array = js_sys::Uint8Array::new(&bytes_value);
+    Ok(array.to_vec())
+}
+
 pub fn default_http_client() -> HttpClientRef {
     Arc::new(DefaultHttpClient)
 }
@@ -190,6 +306,13 @@ mod tests {
         assert_eq!(Arc::strong_count(&client), 2);
         drop(cloned);
         assert_eq!(Arc::strong_count(&client), 1);
+    }
+
+    #[test]
+    fn test_client_uses_default_get_bytes_from_text() {
+        let client = TestHttpClient;
+        let bytes = pollster::block_on(client.get_bytes("https://example.com")).expect("bytes");
+        assert_eq!(bytes, b"ok".to_vec());
     }
 
     #[test]

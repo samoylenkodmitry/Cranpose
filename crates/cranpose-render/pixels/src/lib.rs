@@ -8,7 +8,7 @@ use cranpose_ui::{set_text_measurer, LayoutTree};
 use cranpose_ui_graphics::Size;
 
 pub use draw::draw_scene;
-pub use scene::{HitRegion, Scene};
+pub use scene::{HitRegion, ImageDraw, Scene};
 
 #[derive(Debug)]
 pub enum PixelsRendererError {

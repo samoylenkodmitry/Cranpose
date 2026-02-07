@@ -160,6 +160,17 @@ pub(crate) fn apply_draw_commands(
                     let brush = apply_layer_to_brush(brush, layer);
                     scene.push_shape(transformed, brush, Some(shape), clip);
                 }
+                DrawPrimitive::Image {
+                    rect: local_rect,
+                    image,
+                    alpha,
+                    color_filter,
+                } => {
+                    let draw_rect = local_rect.translate(rect.x, rect.y);
+                    let transformed = apply_layer_to_rect(draw_rect, origin, layer);
+                    let combined_alpha = (alpha * layer.alpha).clamp(0.0, 1.0);
+                    scene.push_image(transformed, image, combined_alpha, color_filter, clip);
+                }
             }
         }
     }

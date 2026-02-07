@@ -8,9 +8,9 @@ use std::rc::Rc;
 use std::sync::Mutex;
 
 use cranpose_ui::{Brush, TextMeasurer, TextMetrics};
-use cranpose_ui_graphics::{Color, Rect};
+use cranpose_ui_graphics::{Color, ColorFilter, Rect};
 
-use crate::scene::{Scene, TextDraw};
+use crate::scene::{ImageDraw, Scene, TextDraw};
 use crate::style::point_in_resolved_rounded_rect;
 
 static FONT: Lazy<Font<'static>> = Lazy::new(|| {
@@ -382,20 +382,36 @@ pub fn draw_scene(frame: &mut [u8], width: u32, height: u32, scene: &Scene) {
         chunk.copy_from_slice(&[18, 18, 24, 255]);
     }
 
-    let mut shapes = scene.shapes.clone();
-    shapes.sort_by(|a, b| a.z_index.cmp(&b.z_index));
-    for shape in shapes {
-        draw_shape(frame, width, height, shape);
+    let mut ordered_items =
+        Vec::with_capacity(scene.shapes.len() + scene.images.len() + scene.texts.len());
+    for (index, shape) in scene.shapes.iter().enumerate() {
+        ordered_items.push((shape.z_index, RenderItem::Shape(index)));
     }
+    for (index, image) in scene.images.iter().enumerate() {
+        ordered_items.push((image.z_index, RenderItem::Image(index)));
+    }
+    for (index, text) in scene.texts.iter().enumerate() {
+        ordered_items.push((text.z_index, RenderItem::Text(index)));
+    }
+    ordered_items.sort_by_key(|(z, _)| *z);
 
-    let mut texts = scene.texts.clone();
-    texts.sort_by(|a, b| a.z_index.cmp(&b.z_index));
-    for text in texts {
-        draw_text(frame, width, height, text);
+    for (_, item) in ordered_items {
+        match item {
+            RenderItem::Shape(index) => draw_shape(frame, width, height, &scene.shapes[index]),
+            RenderItem::Image(index) => draw_image(frame, width, height, &scene.images[index]),
+            RenderItem::Text(index) => draw_text(frame, width, height, &scene.texts[index]),
+        }
     }
 }
 
-fn draw_shape(frame: &mut [u8], width: u32, height: u32, draw: crate::scene::DrawShape) {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RenderItem {
+    Shape(usize),
+    Image(usize),
+    Text(usize),
+}
+
+fn draw_shape(frame: &mut [u8], width: u32, height: u32, draw: &crate::scene::DrawShape) {
     let clip_bounds = match clip_rect_to_bounds(draw.rect, draw.clip, width, height) {
         Some(bounds) => bounds,
         None => return,
@@ -429,24 +445,62 @@ fn draw_shape(frame: &mut [u8], width: u32, height: u32, draw: crate::scene::Dra
                 continue;
             }
             let idx = ((py as u32 * width + px as u32) * 4) as usize;
-            let existing = &mut frame[idx..idx + 4];
-            let dst_r = existing[0] as f32 / 255.0;
-            let dst_g = existing[1] as f32 / 255.0;
-            let dst_b = existing[2] as f32 / 255.0;
-            let dst_a = existing[3] as f32 / 255.0;
-            let out_r = sample[0] * alpha + dst_r * (1.0 - alpha);
-            let out_g = sample[1] * alpha + dst_g * (1.0 - alpha);
-            let out_b = sample[2] * alpha + dst_b * (1.0 - alpha);
-            let out_a = alpha + dst_a * (1.0 - alpha);
-            existing[0] = (out_r.clamp(0.0, 1.0) * 255.0).round() as u8;
-            existing[1] = (out_g.clamp(0.0, 1.0) * 255.0).round() as u8;
-            existing[2] = (out_b.clamp(0.0, 1.0) * 255.0).round() as u8;
-            existing[3] = (out_a.clamp(0.0, 1.0) * 255.0).round() as u8;
+            blend_pixel(&mut frame[idx..idx + 4], sample);
         }
     }
 }
 
-fn draw_text(frame: &mut [u8], width: u32, height: u32, draw: TextDraw) {
+fn draw_image(frame: &mut [u8], width: u32, height: u32, draw: &ImageDraw) {
+    if draw.alpha <= 0.0 || draw.rect.width <= 0.0 || draw.rect.height <= 0.0 {
+        return;
+    }
+
+    let clip_bounds = match clip_rect_to_bounds(draw.rect, draw.clip, width, height) {
+        Some(bounds) => bounds,
+        None => return,
+    };
+
+    let src_width = draw.image.width();
+    let src_height = draw.image.height();
+    if src_width == 0 || src_height == 0 {
+        return;
+    }
+    let src_pixels = draw.image.pixels();
+
+    for py in clip_bounds.min_y..clip_bounds.max_y {
+        for px in clip_bounds.min_x..clip_bounds.max_x {
+            let sample_x = px as f32 + 0.5;
+            let sample_y = py as f32 + 0.5;
+            let u = ((sample_x - draw.rect.x) / draw.rect.width).clamp(0.0, 1.0);
+            let v = ((sample_y - draw.rect.y) / draw.rect.height).clamp(0.0, 1.0);
+
+            let src_x = ((u * src_width as f32).floor() as i32).clamp(0, src_width as i32 - 1);
+            let src_y = ((v * src_height as f32).floor() as i32).clamp(0, src_height as i32 - 1);
+            let src_idx = ((src_y as u32 * src_width + src_x as u32) * 4) as usize;
+
+            let mut sample = [
+                src_pixels[src_idx] as f32 / 255.0,
+                src_pixels[src_idx + 1] as f32 / 255.0,
+                src_pixels[src_idx + 2] as f32 / 255.0,
+                src_pixels[src_idx + 3] as f32 / 255.0,
+            ];
+
+            if let Some(filter) = draw.color_filter {
+                sample = apply_color_filter(sample, filter);
+            }
+
+            sample[3] *= draw.alpha.clamp(0.0, 1.0);
+            if sample[3] <= 0.0 {
+                continue;
+            }
+
+            let dst_idx = ((py as u32 * width + px as u32) * 4) as usize;
+            blend_pixel(&mut frame[dst_idx..dst_idx + 4], sample);
+        }
+    }
+}
+
+fn draw_text(frame: &mut [u8], width: u32, height: u32, draw: &TextDraw) {
     let color = color_to_rgba(draw.color);
     let text_scale = draw.scale.max(0.0);
     if text_scale == 0.0 {
@@ -482,18 +536,44 @@ fn draw_text(frame: &mut [u8], width: u32, height: u32, draw: TextDraw) {
                     return;
                 }
                 let idx = ((py as u32 * width + px as u32) * 4) as usize;
-                let alpha = value;
-                let existing = &mut frame[idx..idx + 4];
-                for i in 0..3 {
-                    let dst = existing[i] as f32 / 255.0;
-                    let blended = (color[i] * alpha) + dst * (1.0 - alpha);
-                    existing[i] = (blended.clamp(0.0, 1.0) * 255.0).round() as u8;
-                }
-                let dst_alpha = existing[3] as f32 / 255.0;
-                let out_alpha = alpha + dst_alpha * (1.0 - alpha);
-                existing[3] = (out_alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
+                blend_pixel(
+                    &mut frame[idx..idx + 4],
+                    [color[0], color[1], color[2], value],
+                );
             });
         }
+    }
+}
+
+fn blend_pixel(dst: &mut [u8], src: [f32; 4]) {
+    let src_alpha = src[3].clamp(0.0, 1.0);
+    if src_alpha <= 0.0 {
+        return;
+    }
+    let dst_r = dst[0] as f32 / 255.0;
+    let dst_g = dst[1] as f32 / 255.0;
+    let dst_b = dst[2] as f32 / 255.0;
+    let dst_a = dst[3] as f32 / 255.0;
+
+    let out_r = src[0].clamp(0.0, 1.0) * src_alpha + dst_r * (1.0 - src_alpha);
+    let out_g = src[1].clamp(0.0, 1.0) * src_alpha + dst_g * (1.0 - src_alpha);
+    let out_b = src[2].clamp(0.0, 1.0) * src_alpha + dst_b * (1.0 - src_alpha);
+    let out_a = src_alpha + dst_a * (1.0 - src_alpha);
+
+    dst[0] = (out_r.clamp(0.0, 1.0) * 255.0).round() as u8;
+    dst[1] = (out_g.clamp(0.0, 1.0) * 255.0).round() as u8;
+    dst[2] = (out_b.clamp(0.0, 1.0) * 255.0).round() as u8;
+    dst[3] = (out_a.clamp(0.0, 1.0) * 255.0).round() as u8;
+}
+
+fn apply_color_filter(sample: [f32; 4], filter: ColorFilter) -> [f32; 4] {
+    match filter {
+        ColorFilter::Tint(tint) => [
+            sample[0] * tint.r(),
+            sample[1] * tint.g(),
+            sample[2] * tint.b(),
+            sample[3] * tint.a(),
+        ],
     }
 }
 
