@@ -136,6 +136,18 @@ fn compose_debug_enabled() -> bool {
     *COMPOSE_DEBUG.get_or_init(|| std::env::var_os("COMPOSE_DEBUG").is_some())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn input_debug_enabled() -> bool {
+    use std::sync::OnceLock;
+    static INPUT_DEBUG: OnceLock<bool> = OnceLock::new();
+    *INPUT_DEBUG.get_or_init(|| std::env::var_os("CRANPOSE_INPUT_DEBUG").is_some())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn input_debug_enabled() -> bool {
+    false
+}
+
 #[cfg(test)]
 pub use runtime::{TestRuntime, TestScheduler};
 
@@ -263,6 +275,14 @@ impl RecomposeScope {
     }
 
     fn invalidate(&self) {
+        if input_debug_enabled() {
+            eprintln!(
+                "[CRANPOSE_INPUT_DEBUG] scope invalidate id={} active={} enqueued={}",
+                self.inner.id,
+                self.inner.active.get(),
+                self.inner.enqueued.get()
+            );
+        }
         self.inner.invalid.set(true);
         if !self.inner.active.get() {
             return;
@@ -2935,6 +2955,16 @@ impl<T: Clone + 'static> MutableStateInner<T> {
                 .collect()
         };
 
+        if input_debug_enabled() {
+            let scope_ids: Vec<_> = watchers.iter().map(|scope| scope.id()).collect();
+            eprintln!(
+                "[CRANPOSE_INPUT_DEBUG] state {:?} invalidate_watchers count={} scopes={:?}",
+                self.state.id(),
+                scope_ids.len(),
+                scope_ids
+            );
+        }
+
         for watcher in watchers {
             watcher.invalidate();
         }
@@ -3000,6 +3030,14 @@ impl<T: Clone + 'static> State<T> {
                     .any(|w| w.upgrade().map(|inner| inner.id == id).unwrap_or(false));
                 if !already_registered {
                     watchers.push(scope.downgrade());
+                    if input_debug_enabled() {
+                        eprintln!(
+                            "[CRANPOSE_INPUT_DEBUG] state {:?} subscribe scope={} watchers={}",
+                            inner.state.id(),
+                            id,
+                            watchers.len()
+                        );
+                    }
                 }
             });
         }
@@ -3448,7 +3486,7 @@ impl CallbackHolder {
     }
 
     /// Produce a forwarder closure that keeps the holder alive and forwards calls to it.
-    pub fn clone_rc(&self) -> impl FnMut() + 'static {
+    pub fn clone_rc(&self) -> impl Fn() + 'static {
         let rc = self.rc.clone();
         move || {
             (rc.borrow_mut())();
@@ -3460,6 +3498,45 @@ impl Default for CallbackHolder {
     fn default() -> Self {
         Self {
             rc: Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>)),
+        }
+    }
+}
+
+/// CallbackHolder1 keeps the latest single-argument callback closure alive across recompositions.
+/// It mirrors [`CallbackHolder`] but supports callbacks that receive one argument.
+#[derive(Clone)]
+pub struct CallbackHolder1<A: 'static> {
+    #[allow(clippy::type_complexity)]
+    rc: Rc<RefCell<Box<dyn FnMut(A)>>>,
+}
+
+impl<A: 'static> CallbackHolder1<A> {
+    /// Create a new holder with a no-op callback so callers can invoke it immediately.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Replace the stored callback with a new closure provided by the caller.
+    pub fn update<F>(&self, f: F)
+    where
+        F: FnMut(A) + 'static,
+    {
+        *self.rc.borrow_mut() = Box::new(f);
+    }
+
+    /// Produce a forwarder closure that keeps the holder alive and forwards calls to it.
+    pub fn clone_rc(&self) -> impl Fn(A) + 'static {
+        let rc = self.rc.clone();
+        move |arg| {
+            (rc.borrow_mut())(arg);
+        }
+    }
+}
+
+impl<A: 'static> Default for CallbackHolder1<A> {
+    fn default() -> Self {
+        Self {
+            rc: Rc::new(RefCell::new(Box::new(|_| {}) as Box<dyn FnMut(A)>)),
         }
     }
 }
@@ -3632,6 +3709,13 @@ impl<A: Applier + 'static> Composition<A> {
             if pending.is_empty() {
                 break;
             }
+            if input_debug_enabled() {
+                let pending_ids: Vec<_> = pending.iter().map(|(id, _)| *id).collect();
+                eprintln!(
+                    "[CRANPOSE_INPUT_DEBUG] process_invalid_scopes pending_ids={:?}",
+                    pending_ids
+                );
+            }
             let mut scopes = Vec::new();
             for (id, weak) in pending {
                 if let Some(inner) = weak.upgrade() {
@@ -3642,6 +3726,13 @@ impl<A: Applier + 'static> Composition<A> {
             }
             if scopes.is_empty() {
                 continue;
+            }
+            if input_debug_enabled() {
+                let scope_ids: Vec<_> = scopes.iter().map(|scope| scope.id()).collect();
+                eprintln!(
+                    "[CRANPOSE_INPUT_DEBUG] process_invalid_scopes live_scope_ids={:?}",
+                    scope_ids
+                );
             }
             did_recompose = true;
             let runtime_clone = runtime_handle.clone();

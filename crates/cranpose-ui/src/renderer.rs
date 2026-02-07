@@ -155,6 +155,19 @@ fn translate_primitive(primitive: DrawPrimitive, dx: f32, dy: f32) -> DrawPrimit
             brush,
             radii,
         },
+        DrawPrimitive::Image {
+            rect,
+            image,
+            alpha,
+            color_filter,
+            src_rect,
+        } => DrawPrimitive::Image {
+            rect: rect.translate(dx, dy),
+            image,
+            alpha,
+            color_filter,
+            src_rect,
+        },
     }
 }
 

@@ -53,6 +53,9 @@ anyhow = "1.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 cranpose-services = { path = "../../crates/cranpose-services" }
+image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+zip = { version = "7.4.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+cranpose-ui-graphics = { version = "0.0.38", path = "../../crates/cranpose-ui-graphics" }
 
 # Non-WASM dependencies
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -86,6 +89,11 @@ required-features = ["robot-app"]
 [[example]]
 name = "robot_animation_showcase"
 path = "robot-runners/robot_animation_showcase.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_image_chessboard"
+path = "robot-runners/robot_image_chessboard.rs"
 required-features = ["robot-app"]
 
 

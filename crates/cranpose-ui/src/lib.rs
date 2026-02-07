@@ -37,7 +37,7 @@ pub use cursor_animation::{
     stop_cursor_blink, tick_cursor_blink,
 };
 
-pub use cranpose_ui_graphics::Dp;
+pub use cranpose_ui_graphics::{ColorFilter, Dp, ImageBitmap};
 pub use cranpose_ui_layout::IntrinsicSize;
 pub use draw::{execute_draw_commands, DrawCacheBuilder, DrawCommand};
 pub use focus_dispatch::{
@@ -70,9 +70,10 @@ pub use pointer_dispatch::{
     schedule_pointer_repass,
 };
 pub use primitives::{
-    BasicTextField, BasicTextFieldOptions, Box, BoxScope, BoxSpec, BoxWithConstraints,
-    BoxWithConstraintsScope, BoxWithConstraintsScopeImpl, Button, Column, ColumnSpec, ForEach,
-    Layout, LayoutNode, Row, RowSpec, Spacer, SubcomposeLayout, Text,
+    BasicTextField, BasicTextFieldOptions, BitmapPainter, Box, BoxScope, BoxSpec,
+    BoxWithConstraints, BoxWithConstraintsScope, BoxWithConstraintsScopeImpl, Button, Canvas,
+    Column, ColumnSpec, ContentScale, ForEach, Image, Layout, LayoutNode, Painter, Row, RowSpec,
+    Spacer, SubcomposeLayout, Text, DEFAULT_ALPHA,
 };
 // Lazy list exports - single source from cranpose-foundation
 pub use cranpose_foundation::lazy::{LazyListItemInfo, LazyListLayoutInfo, LazyListState};

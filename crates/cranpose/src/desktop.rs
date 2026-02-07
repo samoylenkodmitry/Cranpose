@@ -7,6 +7,7 @@ use cranpose_app_shell::{default_root_key, AppShell};
 use cranpose_platform_desktop_winit::DesktopWinitPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ButtonSource, ElementState, MouseButton, WindowEvent};
@@ -18,6 +19,11 @@ use cranpose_ui::{LayoutBox, SemanticsAction, SemanticsNode, SemanticsRole};
 
 #[cfg(feature = "robot")]
 use std::sync::mpsc;
+
+fn desktop_input_debug_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_INPUT_DEBUG").is_some())
+}
 
 /// Serializable semantic element combining semantics + geometry
 ///
@@ -51,6 +57,18 @@ pub struct SemanticRect {
     pub width: f32,
     /// Height in logical pixels
     pub height: f32,
+}
+
+/// RGBA screenshot captured from the current render scene.
+#[cfg(feature = "robot")]
+#[derive(Debug, Clone)]
+pub struct RobotScreenshot {
+    /// Screenshot width in pixels.
+    pub width: u32,
+    /// Screenshot height in pixels.
+    pub height: u32,
+    /// Packed RGBA8 pixel buffer in row-major order.
+    pub pixels: Vec<u8>,
 }
 
 /// Robot command for controlling the application
@@ -91,6 +109,7 @@ enum RobotCommand {
     },
     WaitForIdle,
     GetSemantics,
+    GetScreenshot,
     Exit,
 }
 
@@ -100,6 +119,7 @@ enum RobotCommand {
 enum RobotResponse {
     Ok,
     Semantics(Vec<SemanticElement>),
+    Screenshot(RobotScreenshot),
     Error(String),
 }
 
@@ -426,6 +446,19 @@ impl Robot {
             Ok(RobotResponse::Error(e)) => Err(e),
             Ok(_) => Err("Unexpected response".to_string()),
             Err(e) => Err(format!("Failed to receive: {}", e)),
+        }
+    }
+
+    /// Capture a screenshot of the current render scene.
+    pub fn screenshot(&self) -> Result<RobotScreenshot, String> {
+        self.tx
+            .send(RobotCommand::GetScreenshot)
+            .map_err(|e| format!("Failed to send screenshot command: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::Screenshot(image)) => Ok(image),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
         }
     }
 
@@ -759,6 +792,13 @@ impl ApplicationHandler for App {
         // Apply dev options (FPS counter, etc.)
         app.set_dev_options(self.settings.dev_options.clone());
 
+        // Runtime-driven frame scheduling: Compose invalidations and animations
+        // request frames via the runtime waker, not per-input host redraw forcing.
+        let frame_waker_window = window.clone();
+        app.set_frame_waker(move || {
+            frame_waker_window.request_redraw();
+        });
+
         let mut platform = DesktopWinitPlatform::default();
         platform.set_scale_factor(initial_scale);
 
@@ -849,6 +889,12 @@ impl ApplicationHandler for App {
             } => {
                 if primary {
                     let logical = platform.pointer_position(position);
+                    if desktop_input_debug_enabled() {
+                        eprintln!(
+                            "[CRANPOSE_INPUT_DEBUG] desktop pointer move ({:.2},{:.2})",
+                            logical.x, logical.y
+                        );
+                    }
                     app.set_cursor(logical.x, logical.y);
                     // Record mouse move
                     if let Some(recorder) = &mut self.recorder {
@@ -869,6 +915,12 @@ impl ApplicationHandler for App {
             } => {
                 if primary {
                     let logical = platform.pointer_position(position);
+                    if desktop_input_debug_enabled() {
+                        eprintln!(
+                            "[CRANPOSE_INPUT_DEBUG] desktop pointer button {:?} at ({:.2},{:.2})",
+                            state, logical.x, logical.y
+                        );
+                    }
                     app.set_cursor(logical.x, logical.y);
                     match state {
                         ElementState::Pressed => {
@@ -904,9 +956,7 @@ impl ApplicationHandler for App {
                 }
                 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
                 if let Some(text) = app.get_primary_selection() {
-                    if app.on_paste(&text) {
-                        window.request_redraw();
-                    }
+                    app.on_paste(&text);
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
@@ -1005,9 +1055,7 @@ impl ApplicationHandler for App {
                 }
 
                 // Dispatch to text fields
-                if app.on_key_event(&key_event) {
-                    window.request_redraw();
-                }
+                app.on_key_event(&key_event);
             }
             WindowEvent::Focused(false) => {
                 // Window lost focus - cancel any in-progress gestures
@@ -1020,34 +1068,26 @@ impl ApplicationHandler for App {
                 match ime_event {
                     Ime::Preedit(text, cursor) => {
                         // IME is composing - show preedit text with underline
-                        if app.on_ime_preedit(&text, cursor) {
-                            window.request_redraw();
-                        }
+                        app.on_ime_preedit(&text, cursor);
                     }
                     Ime::Commit(text) => {
                         // IME finished - commit the final text
                         // First clear composition state, then insert the final text
                         let _ = app.on_ime_preedit("", None);
-                        if app.on_paste(&text) {
-                            window.request_redraw();
-                        }
+                        app.on_paste(&text);
                     }
                     Ime::DeleteSurrounding {
                         before_bytes,
                         after_bytes,
                     } => {
-                        if app.on_ime_delete_surrounding(before_bytes, after_bytes) {
-                            window.request_redraw();
-                        }
+                        app.on_ime_delete_surrounding(before_bytes, after_bytes);
                     }
                     Ime::Enabled => {
                         // IME was enabled - no action needed
                     }
                     Ime::Disabled => {
                         // IME was disabled - clear any composition state
-                        if app.on_ime_preedit("", None) {
-                            window.request_redraw();
-                        }
+                        app.on_ime_preedit("", None);
                     }
                 }
             }
@@ -1058,6 +1098,9 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                if desktop_input_debug_enabled() {
+                    eprintln!("[CRANPOSE_INPUT_DEBUG] desktop redraw requested");
+                }
                 app.update();
 
                 let output = match surface.get_current_texture() {
@@ -1120,7 +1163,6 @@ impl ApplicationHandler for App {
                         app.set_cursor(x, y);
                         app.pointer_pressed();
                         app.pointer_released();
-                        window.request_redraw();
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
                     RobotCommand::MoveTo { x, y } => {
@@ -1129,7 +1171,6 @@ impl ApplicationHandler for App {
                         if let Some(recorder) = &mut self.recorder {
                             recorder.record_mouse_move(x, y);
                         }
-                        window.request_redraw();
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
                     RobotCommand::MouseDown => {
@@ -1167,6 +1208,10 @@ impl ApplicationHandler for App {
                         let semantics = extract_semantics(app);
                         let _ = controller.tx.send(RobotResponse::Semantics(semantics));
                     }
+                    RobotCommand::GetScreenshot => {
+                        let screenshot = capture_screenshot(app);
+                        let _ = controller.tx.send(RobotResponse::Screenshot(screenshot));
+                    }
                     RobotCommand::TypeText(text) => {
                         use cranpose_app_shell::{KeyEvent, KeyEventType, Modifiers};
 
@@ -1184,7 +1229,6 @@ impl ApplicationHandler for App {
                         }
                         // Process the key events immediately to update layout/semantics
                         app.update();
-                        window.request_redraw();
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
                     RobotCommand::SendKey(key) => {
@@ -1239,7 +1283,6 @@ impl ApplicationHandler for App {
                             KeyEvent::new(key_code, text, Modifiers::NONE, KeyEventType::KeyDown);
                         app.on_key_event(&key_event);
                         app.update();
-                        window.request_redraw();
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
                     RobotCommand::SendKeyWithModifiers {
@@ -1306,7 +1349,6 @@ impl ApplicationHandler for App {
                             KeyEvent::new(key_code, text, modifiers, KeyEventType::KeyDown);
                         app.on_key_event(&key_event);
                         app.update();
-                        window.request_redraw();
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
                     RobotCommand::WaitForIdle => {
@@ -1357,7 +1399,14 @@ impl ApplicationHandler for App {
             }
         }
 
-        if app.needs_redraw() {
+        let needs_redraw = app.needs_redraw();
+        if desktop_input_debug_enabled() && needs_redraw {
+            eprintln!(
+                "[CRANPOSE_INPUT_DEBUG] about_to_wait needs_redraw={}",
+                needs_redraw
+            );
+        }
+        if needs_redraw {
             window.request_redraw();
         }
 
@@ -1416,6 +1465,324 @@ pub fn run(mut settings: AppSettings, content: impl FnMut() + 'static) -> ! {
     let _ = event_loop.run_app(app);
 
     std::process::exit(0)
+}
+
+#[cfg(feature = "robot")]
+fn capture_screenshot(app: &AppShell<WgpuRenderer>) -> RobotScreenshot {
+    let (width, height) = if let Some(layout_tree) = app.layout_tree() {
+        (
+            layout_tree.root().rect.width.max(1.0).ceil() as u32,
+            layout_tree.root().rect.height.max(1.0).ceil() as u32,
+        )
+    } else {
+        let (bw, bh) = app.buffer_size();
+        (bw.max(1), bh.max(1))
+    };
+
+    let mut pixels = vec![0u8; width as usize * height as usize * 4];
+    for chunk in pixels.chunks_exact_mut(4) {
+        chunk.copy_from_slice(&[18, 18, 24, 255]);
+    }
+
+    let scene = app.scene();
+    let mut items = Vec::with_capacity(scene.shapes.len() + scene.images.len());
+    for (index, shape) in scene.shapes.iter().enumerate() {
+        items.push((shape.z_index, ScreenshotItem::Shape(index)));
+    }
+    for (index, image) in scene.images.iter().enumerate() {
+        items.push((image.z_index, ScreenshotItem::Image(index)));
+    }
+    items.sort_by_key(|(z, _)| *z);
+
+    for (_, item) in items {
+        match item {
+            ScreenshotItem::Shape(index) => {
+                draw_shape_screenshot(&mut pixels, width, height, &scene.shapes[index]);
+            }
+            ScreenshotItem::Image(index) => {
+                draw_image_screenshot(&mut pixels, width, height, &scene.images[index]);
+            }
+        }
+    }
+
+    RobotScreenshot {
+        width,
+        height,
+        pixels,
+    }
+}
+
+#[cfg(feature = "robot")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScreenshotItem {
+    Shape(usize),
+    Image(usize),
+}
+
+#[cfg(feature = "robot")]
+#[derive(Clone, Copy)]
+struct ClipBounds {
+    min_x: i32,
+    min_y: i32,
+    max_x: i32,
+    max_y: i32,
+}
+
+#[cfg(feature = "robot")]
+fn draw_shape_screenshot(
+    frame: &mut [u8],
+    width: u32,
+    height: u32,
+    draw: &cranpose_render_wgpu::DrawShape,
+) {
+    let clip_bounds = match clip_rect_to_bounds(draw.rect, draw.clip, width, height) {
+        Some(bounds) => bounds,
+        None => return,
+    };
+
+    let rect = draw.rect;
+    let resolved_shape = draw
+        .shape
+        .map(|shape| shape.resolve(rect.width, rect.height));
+    for py in clip_bounds.min_y..clip_bounds.max_y {
+        for px in clip_bounds.min_x..clip_bounds.max_x {
+            let center_x = px as f32 + 0.5;
+            let center_y = py as f32 + 0.5;
+            if let Some(radii) = resolved_shape {
+                if !point_in_resolved_rounded_rect(center_x, center_y, rect, radii) {
+                    continue;
+                }
+            }
+
+            let sample = sample_brush(&draw.brush, rect, center_x, center_y);
+            if sample[3] <= 0.0 {
+                continue;
+            }
+            let idx = ((py as u32 * width + px as u32) * 4) as usize;
+            blend_pixel(&mut frame[idx..idx + 4], sample);
+        }
+    }
+}
+
+#[cfg(feature = "robot")]
+fn draw_image_screenshot(
+    frame: &mut [u8],
+    width: u32,
+    height: u32,
+    draw: &cranpose_render_wgpu::ImageDraw,
+) {
+    if draw.alpha <= 0.0 || draw.rect.width <= 0.0 || draw.rect.height <= 0.0 {
+        return;
+    }
+
+    let clip_bounds = match clip_rect_to_bounds(draw.rect, draw.clip, width, height) {
+        Some(bounds) => bounds,
+        None => return,
+    };
+    let src_pixels = draw.image.pixels();
+    let src_width = draw.image.width();
+    let src_height = draw.image.height();
+
+    for py in clip_bounds.min_y..clip_bounds.max_y {
+        for px in clip_bounds.min_x..clip_bounds.max_x {
+            let sample_x = px as f32 + 0.5;
+            let sample_y = py as f32 + 0.5;
+            let u = ((sample_x - draw.rect.x) / draw.rect.width).clamp(0.0, 1.0);
+            let v = ((sample_y - draw.rect.y) / draw.rect.height).clamp(0.0, 1.0);
+
+            let src_x = ((u * src_width as f32).floor() as i32).clamp(0, src_width as i32 - 1);
+            let src_y = ((v * src_height as f32).floor() as i32).clamp(0, src_height as i32 - 1);
+            let src_idx = ((src_y as u32 * src_width + src_x as u32) * 4) as usize;
+
+            let mut sample = [
+                src_pixels[src_idx] as f32 / 255.0,
+                src_pixels[src_idx + 1] as f32 / 255.0,
+                src_pixels[src_idx + 2] as f32 / 255.0,
+                src_pixels[src_idx + 3] as f32 / 255.0,
+            ];
+
+            if let Some(filter) = draw.color_filter {
+                sample = apply_color_filter(sample, filter);
+            }
+            sample[3] *= draw.alpha;
+            if sample[3] <= 0.0 {
+                continue;
+            }
+
+            let idx = ((py as u32 * width + px as u32) * 4) as usize;
+            blend_pixel(&mut frame[idx..idx + 4], sample);
+        }
+    }
+}
+
+#[cfg(feature = "robot")]
+fn clip_rect_to_bounds(
+    rect: cranpose_ui::Rect,
+    clip: Option<cranpose_ui::Rect>,
+    width: u32,
+    height: u32,
+) -> Option<ClipBounds> {
+    let mut min_x = rect.x.max(0.0);
+    let mut min_y = rect.y.max(0.0);
+    let mut max_x = (rect.x + rect.width).min(width as f32);
+    let mut max_y = (rect.y + rect.height).min(height as f32);
+
+    if let Some(clip_rect) = clip {
+        min_x = min_x.max(clip_rect.x);
+        min_y = min_y.max(clip_rect.y);
+        max_x = max_x.min(clip_rect.x + clip_rect.width);
+        max_y = max_y.min(clip_rect.y + clip_rect.height);
+    }
+
+    if max_x <= min_x || max_y <= min_y {
+        return None;
+    }
+
+    Some(ClipBounds {
+        min_x: min_x.floor() as i32,
+        min_y: min_y.floor() as i32,
+        max_x: max_x.ceil() as i32,
+        max_y: max_y.ceil() as i32,
+    })
+}
+
+#[cfg(feature = "robot")]
+fn blend_pixel(dst: &mut [u8], src: [f32; 4]) {
+    let alpha = src[3].clamp(0.0, 1.0);
+    if alpha <= 0.0 {
+        return;
+    }
+    let dst_r = dst[0] as f32 / 255.0;
+    let dst_g = dst[1] as f32 / 255.0;
+    let dst_b = dst[2] as f32 / 255.0;
+    let dst_a = dst[3] as f32 / 255.0;
+
+    let out_r = src[0] * alpha + dst_r * (1.0 - alpha);
+    let out_g = src[1] * alpha + dst_g * (1.0 - alpha);
+    let out_b = src[2] * alpha + dst_b * (1.0 - alpha);
+    let out_a = alpha + dst_a * (1.0 - alpha);
+
+    dst[0] = (out_r.clamp(0.0, 1.0) * 255.0).round() as u8;
+    dst[1] = (out_g.clamp(0.0, 1.0) * 255.0).round() as u8;
+    dst[2] = (out_b.clamp(0.0, 1.0) * 255.0).round() as u8;
+    dst[3] = (out_a.clamp(0.0, 1.0) * 255.0).round() as u8;
+}
+
+#[cfg(feature = "robot")]
+fn sample_brush(brush: &cranpose_ui::Brush, rect: cranpose_ui::Rect, x: f32, y: f32) -> [f32; 4] {
+    match brush {
+        cranpose_ui::Brush::Solid(color) => [color.r(), color.g(), color.b(), color.a()],
+        cranpose_ui::Brush::LinearGradient(colors) => {
+            let t = if rect.height.abs() <= f32::EPSILON {
+                0.0
+            } else {
+                ((y - rect.y) / rect.height).clamp(0.0, 1.0)
+            };
+            let color = interpolate_colors(colors, t);
+            [color.r(), color.g(), color.b(), color.a()]
+        }
+        cranpose_ui::Brush::RadialGradient {
+            colors,
+            center,
+            radius,
+        } => {
+            let cx = rect.x + center.x;
+            let cy = rect.y + center.y;
+            let radius = (*radius).max(f32::EPSILON);
+            let dx = x - cx;
+            let dy = y - cy;
+            let distance = (dx * dx + dy * dy).sqrt();
+            let t = (distance / radius).clamp(0.0, 1.0);
+            let color = interpolate_colors(colors, t);
+            [color.r(), color.g(), color.b(), color.a()]
+        }
+    }
+}
+
+#[cfg(feature = "robot")]
+fn interpolate_colors(colors: &[cranpose_ui::Color], t: f32) -> cranpose_ui::Color {
+    if colors.is_empty() {
+        return cranpose_ui::Color::TRANSPARENT;
+    }
+    if colors.len() == 1 {
+        return colors[0];
+    }
+    let clamped = t.clamp(0.0, 1.0);
+    let segments = (colors.len() - 1) as f32;
+    let scaled = clamped * segments;
+    let index = scaled.floor() as usize;
+    if index >= colors.len() - 1 {
+        return *colors.last().unwrap_or(&cranpose_ui::Color::TRANSPARENT);
+    }
+    let frac = scaled - index as f32;
+    let start = colors[index];
+    let end = colors[index + 1];
+    let lerp = |a: f32, b: f32| a + (b - a) * frac;
+    cranpose_ui::Color::rgba(
+        lerp(start.r(), end.r()),
+        lerp(start.g(), end.g()),
+        lerp(start.b(), end.b()),
+        lerp(start.a(), end.a()),
+    )
+}
+
+#[cfg(feature = "robot")]
+fn point_in_resolved_rounded_rect(
+    x: f32,
+    y: f32,
+    rect: cranpose_ui::Rect,
+    radii: cranpose_ui::CornerRadii,
+) -> bool {
+    if !rect.contains(x, y) {
+        return false;
+    }
+    let left = rect.x;
+    let right = rect.x + rect.width;
+    let top = rect.y;
+    let bottom = rect.y + rect.height;
+
+    if radii.top_left > 0.0 && x < left + radii.top_left && y < top + radii.top_left {
+        let cx = left + radii.top_left;
+        let cy = top + radii.top_left;
+        if (x - cx).powi(2) + (y - cy).powi(2) > radii.top_left.powi(2) {
+            return false;
+        }
+    }
+    if radii.top_right > 0.0 && x > right - radii.top_right && y < top + radii.top_right {
+        let cx = right - radii.top_right;
+        let cy = top + radii.top_right;
+        if (x - cx).powi(2) + (y - cy).powi(2) > radii.top_right.powi(2) {
+            return false;
+        }
+    }
+    if radii.bottom_right > 0.0 && x > right - radii.bottom_right && y > bottom - radii.bottom_right
+    {
+        let cx = right - radii.bottom_right;
+        let cy = bottom - radii.bottom_right;
+        if (x - cx).powi(2) + (y - cy).powi(2) > radii.bottom_right.powi(2) {
+            return false;
+        }
+    }
+    if radii.bottom_left > 0.0 && x < left + radii.bottom_left && y > bottom - radii.bottom_left {
+        let cx = left + radii.bottom_left;
+        let cy = bottom - radii.bottom_left;
+        if (x - cx).powi(2) + (y - cy).powi(2) > radii.bottom_left.powi(2) {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(feature = "robot")]
+fn apply_color_filter(sample: [f32; 4], filter: cranpose_ui::ColorFilter) -> [f32; 4] {
+    match filter {
+        cranpose_ui::ColorFilter::Tint(tint) => [
+            sample[0] * tint.r(),
+            sample[1] * tint.g(),
+            sample[2] * tint.b(),
+            sample[3] * tint.a(),
+        ],
+    }
 }
 
 /// Extract semantic elements by combining semantic tree with layout tree

@@ -3,7 +3,9 @@
 use cranpose_core::NodeId;
 use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_render_common::{HitTestTarget, RenderScene};
-use cranpose_ui_graphics::{Brush, Color, Point, Rect, RoundedCornerShape};
+use cranpose_ui_graphics::{
+    Brush, Color, ColorFilter, ImageBitmap, Point, Rect, RoundedCornerShape,
+};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -45,6 +47,18 @@ pub struct TextDraw {
     pub scale: f32,
     pub z_index: usize,
     pub clip: Option<Rect>,
+}
+
+#[derive(Clone)]
+pub struct ImageDraw {
+    pub rect: Rect,
+    pub image: ImageBitmap,
+    pub alpha: f32,
+    pub color_filter: Option<ColorFilter>,
+    pub z_index: usize,
+    pub clip: Option<Rect>,
+    /// Source sub-region in image-pixel coordinates. `None` means full image.
+    pub src_rect: Option<Rect>,
 }
 
 #[derive(Clone)]
@@ -107,6 +121,7 @@ impl HitTestTarget for HitRegion {
 
 pub struct Scene {
     pub shapes: Vec<DrawShape>,
+    pub images: Vec<ImageDraw>,
     pub texts: Vec<TextDraw>,
     pub hits: Vec<HitRegion>,
     pub next_z: usize,
@@ -117,6 +132,7 @@ impl Scene {
     pub fn new() -> Self {
         Self {
             shapes: Vec::new(),
+            images: Vec::new(),
             texts: Vec::new(),
             hits: Vec::new(),
             next_z: 0,
@@ -139,6 +155,28 @@ impl Scene {
             shape,
             z_index,
             clip,
+        });
+    }
+
+    pub fn push_image(
+        &mut self,
+        rect: Rect,
+        image: ImageBitmap,
+        alpha: f32,
+        color_filter: Option<ColorFilter>,
+        clip: Option<Rect>,
+        src_rect: Option<Rect>,
+    ) {
+        let z_index = self.next_z;
+        self.next_z += 1;
+        self.images.push(ImageDraw {
+            rect,
+            image,
+            alpha: alpha.clamp(0.0, 1.0),
+            color_filter,
+            z_index,
+            clip,
+            src_rect,
         });
     }
 
@@ -207,6 +245,7 @@ impl RenderScene for Scene {
 
     fn clear(&mut self) {
         self.shapes.clear();
+        self.images.clear();
         self.texts.clear();
         self.hits.clear();
         self.node_index.clear();

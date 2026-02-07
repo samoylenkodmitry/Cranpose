@@ -115,6 +115,29 @@ fn is_fn_param(ty: &Type, generics: &syn::Generics) -> bool {
     is_fn_like_type(ty) || is_generic_fn_like(ty, generics)
 }
 
+/// Check if a type is `impl Fn() + ...` or `impl FnMut() + ...` with **zero** arguments.
+/// Only these can be stored through [`CallbackHolder`] (excludes `FnOnce` which can't be
+/// called more than once).
+fn is_zero_arg_fn_impl_trait(ty: &Type) -> bool {
+    if let Type::ImplTrait(impl_trait) = ty {
+        impl_trait.bounds.iter().any(|bound| {
+            if let syn::TypeParamBound::Trait(trait_bound) = bound {
+                if let Some(segment) = trait_bound.path.segments.last() {
+                    let ident_str = segment.ident.to_string();
+                    if ident_str == "Fn" || ident_str == "FnMut" {
+                        if let syn::PathArguments::Parenthesized(args) = &segment.arguments {
+                            return args.inputs.is_empty();
+                        }
+                    }
+                }
+            }
+            false
+        })
+    } else {
+        false
+    }
+}
+
 fn core_crate_path() -> TokenStream2 {
     let crate_name = crate_name("cranpose")
         .ok()
@@ -238,12 +261,13 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         })
         .collect();
 
-    // Check if any params are impl Trait - if so, can't use skip optimization
-    let has_impl_trait = param_info
+    // Check if any params are impl Trait that we can't store in a slot.
+    // Zero-arg Fn-like impl traits (impl Fn() + 'static) are handled via CallbackHolder.
+    let has_unhandled_impl_trait = param_info
         .iter()
-        .any(|info| matches!(info.ty, Type::ImplTrait(_)));
+        .any(|info| info.is_impl_trait && !is_zero_arg_fn_impl_trait(&info.ty));
 
-    if enable_skip && !has_impl_trait {
+    if enable_skip && !has_unhandled_impl_trait {
         let helper_ident = Ident::new(
             &format!("__cranpose_impl_{}", func.sig.ident),
             Span::call_site(),
@@ -252,11 +276,12 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
         let ty_generics_turbofish = ty_generics.as_turbofish();
 
-        // Helper function signature: all params except impl Trait (which can't be named)
+        // Helper function signature: all params except unhandled impl Trait.
+        // Zero-arg Fn impl traits are included (they become anonymous generics).
         let helper_inputs: Vec<TokenStream2> = param_info
             .iter()
             .filter_map(|info| {
-                if info.is_impl_trait {
+                if info.is_impl_trait && !is_zero_arg_fn_impl_trait(&info.ty) {
                     None
                 } else {
                     let ident = &info.ident;
@@ -275,9 +300,10 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             .iter()
             .zip(param_state_slots.iter())
             .map(|(info, slot_ident)| {
-                if info.is_impl_trait {
-                    quote! { __changed = true; }
-                } else if is_fn_param(&info.ty, &generics) {
+                // Zero-arg Fn impl traits and generic Fn params → CallbackHolder
+                if (info.is_impl_trait && is_zero_arg_fn_impl_trait(&info.ty))
+                    || (!info.is_impl_trait && is_fn_param(&info.ty, &generics))
+                {
                     let ident = &info.ident;
                     quote! {
                         let #slot_ident = __composer
@@ -290,6 +316,9 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                         );
                         __changed = true;
                     }
+                } else if info.is_impl_trait {
+                    // Non-Fn impl trait – cannot store, always mark changed
+                    quote! { __changed = true; }
                 } else {
                     let ident = &info.ident;
                     let ty = &info.ty;
@@ -312,13 +341,15 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             .iter()
             .zip(param_state_slots.iter())
             .map(|(info, slot_ident)| {
-                if info.is_impl_trait {
-                    quote! {}
-                } else if is_fn_param(&info.ty, &generics) {
+                if (info.is_impl_trait && is_zero_arg_fn_impl_trait(&info.ty))
+                    || (!info.is_impl_trait && is_fn_param(&info.ty, &generics))
+                {
                     quote! {
                         let #slot_ident = __composer
                             .use_value_slot(|| #core_path::CallbackHolder::new());
                     }
+                } else if info.is_impl_trait {
+                    quote! {}
                 } else {
                     let ty = &info.ty;
                     quote! {
@@ -333,9 +364,9 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             .iter()
             .zip(param_state_slots.iter())
             .map(|(info, slot_ident)| {
-                if info.is_impl_trait {
-                    quote! {}
-                } else if is_fn_param(&info.ty, &generics) {
+                if (info.is_impl_trait && is_zero_arg_fn_impl_trait(&info.ty))
+                    || (!info.is_impl_trait && is_fn_param(&info.ty, &generics))
+                {
                     let pat = &info.pat;
                     let can_add_mut = matches!(pat.as_ref(), Pat::Ident(_));
                     if can_add_mut && !info.pat_is_mut {
@@ -357,6 +388,8 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                                 );
                         }
                     }
+                } else if info.is_impl_trait {
+                    quote! {}
                 } else {
                     let pat = &info.pat;
                     let ident = &info.ident;
@@ -371,9 +404,9 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             .iter()
             .zip(param_state_slots.iter())
             .map(|(info, slot_ident)| {
-                if info.is_impl_trait {
-                    quote! {}
-                } else if is_fn_param(&info.ty, &generics) {
+                if (info.is_impl_trait && is_zero_arg_fn_impl_trait(&info.ty))
+                    || (!info.is_impl_trait && is_fn_param(&info.ty, &generics))
+                {
                     let pat = &info.pat;
                     let can_add_mut = matches!(pat.as_ref(), Pat::Ident(_));
                     if can_add_mut && !info.pat_is_mut {
@@ -395,6 +428,8 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                                 );
                         }
                     }
+                } else if info.is_impl_trait {
+                    quote! {}
                 } else {
                     let pat = &info.pat;
                     let ty = &info.ty;
@@ -497,7 +532,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         };
 
         let helper_fn = quote! {
-            #[allow(non_snake_case)]
+            #[allow(non_snake_case, clippy::too_many_arguments)]
             fn #helper_ident #impl_generics (
                 __composer: &#core_path::Composer
                 #(, #helper_inputs)*
@@ -506,11 +541,11 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         };
 
-        // Wrapper args: pass all params except impl Trait on initial call
+        // Wrapper args: pass all params except unhandled impl Trait on initial call
         let wrapper_args: Vec<TokenStream2> = param_info
             .iter()
             .filter_map(|info| {
-                if info.is_impl_trait {
+                if info.is_impl_trait && !is_zero_arg_fn_impl_trait(&info.ty) {
                     None
                 } else {
                     let ident = &info.ident;

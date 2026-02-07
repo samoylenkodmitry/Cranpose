@@ -18,14 +18,20 @@ use std::cell::RefCell;
 
 mod animations;
 mod hacker_news;
+mod images;
 pub mod lazy_list;
 mod mineswapper2;
 mod web_fetch;
+mod winamp;
+mod xkcd;
 
 use animations::AnimationsTab;
 use hacker_news::hacker_news_tab;
+use images::images_tab;
 use lazy_list::lazy_list_example;
 use web_fetch::web_fetch_example;
+use winamp::WinampTab;
+use xkcd::xkcd_tab;
 
 thread_local! {
     pub static TEST_COMPOSITION_LOCAL_COUNTER: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
@@ -45,6 +51,9 @@ pub enum DemoTab {
     LazyList,
     Mineswapper2,
     HackerNews,
+    Images,
+    Winamp,
+    Xkcd,
 }
 
 impl DemoTab {
@@ -61,11 +70,14 @@ impl DemoTab {
             DemoTab::LazyList => "Lazy List",
             DemoTab::Mineswapper2 => "Mineswapper2",
             DemoTab::HackerNews => "Hacker News",
+            DemoTab::Images => "Images",
+            DemoTab::Winamp => "Winamp",
+            DemoTab::Xkcd => "XKCD",
         }
     }
 }
 
-pub const DEMO_TABS: [DemoTab; 11] = [
+pub const DEMO_TABS: [DemoTab; 14] = [
     DemoTab::Counter,
     DemoTab::CompositionLocal,
     DemoTab::Async,
@@ -77,6 +89,9 @@ pub const DEMO_TABS: [DemoTab; 11] = [
     DemoTab::LazyList,
     DemoTab::Mineswapper2,
     DemoTab::HackerNews,
+    DemoTab::Images,
+    DemoTab::Winamp,
+    DemoTab::Xkcd,
 ];
 
 pub fn demo_tab_labels() -> Vec<&'static str> {
@@ -132,23 +147,9 @@ fn local_holder() -> CompositionLocal<Holder> {
 }
 
 fn random() -> i32 {
-    // For WASM compatibility, use a simple counter-based seed
-    #[cfg(target_arch = "wasm32")]
-    {
-        use std::sync::atomic::{AtomicU32, Ordering};
-        static COUNTER: AtomicU32 = AtomicU32::new(0);
-        (COUNTER.fetch_add(1, Ordering::Relaxed) % 10000) as i32
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use instant::SystemTime;
-
-        let nanos = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .subsec_nanos();
-        (nanos % 10000) as i32
-    }
+    let mut buf = [0u8; 4];
+    getrandom::fill(&mut buf).expect("getrandom failed");
+    (u32::from_le_bytes(buf) % 10000) as i32
 }
 
 #[allow(non_snake_case)]
@@ -265,7 +266,7 @@ pub fn combined_app() {
 }
 
 fn tab_requires_scroll(tab: DemoTab) -> bool {
-    !matches!(tab, DemoTab::HackerNews)
+    !matches!(tab, DemoTab::HackerNews | DemoTab::Winamp)
 }
 
 #[composable]
@@ -282,6 +283,9 @@ fn render_active_tab(active: DemoTab) {
         DemoTab::LazyList => lazy_list_example(),
         DemoTab::Mineswapper2 => mineswapper2::mineswapper2_tab(),
         DemoTab::HackerNews => hacker_news_tab(),
+        DemoTab::Images => images_tab(),
+        DemoTab::Winamp => WinampTab(),
+        DemoTab::Xkcd => xkcd_tab(),
     }
 }
 
@@ -1166,31 +1170,22 @@ fn counter_app() {
                     if token.is_cancelled() {
                         return String::new();
                     }
+                    // Simulate background work with a delay on native
                     #[cfg(not(target_arch = "wasm32"))]
                     {
-                        use instant::{Duration, SystemTime};
+                        use instant::Duration;
                         use std::thread;
-
                         for _ in 0..5 {
                             if token.is_cancelled() {
                                 return String::new();
                             }
                             thread::sleep(Duration::from_millis(80));
                         }
-
-                        let nanos = SystemTime::now()
-                            .duration_since(SystemTime::UNIX_EPOCH)
-                            .unwrap()
-                            .subsec_nanos();
-                        format!("Background fetch #{fetch_key}: {}", nanos % 1000)
                     }
-                    #[cfg(target_arch = "wasm32")]
-                    {
-                        format!(
-                            "WASM: Background threads not supported (fetch #{})",
-                            fetch_key
-                        )
-                    }
+                    let mut buf = [0u8; 4];
+                    getrandom::fill(&mut buf).expect("getrandom failed");
+                    let val = u32::from_le_bytes(buf) % 1000;
+                    format!("Background fetch #{fetch_key}: {val}")
                 },
                 move |value| {
                     if value.is_empty() {

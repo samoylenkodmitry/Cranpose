@@ -8,12 +8,14 @@
 mod brush;
 mod color;
 mod geometry;
+mod image;
 mod typography;
 mod unit;
 
 pub use brush::*;
 pub use color::*;
 pub use geometry::*;
+pub use image::*;
 pub use typography::*;
 pub use unit::*;
 
@@ -21,5 +23,6 @@ pub mod prelude {
     pub use crate::brush::Brush;
     pub use crate::color::Color;
     pub use crate::geometry::{CornerRadii, EdgeInsets, Point, Rect, RoundedCornerShape, Size};
+    pub use crate::image::{ColorFilter, ImageBitmap, ImageBitmapError};
     pub use crate::unit::{Dp, Sp};
 }
