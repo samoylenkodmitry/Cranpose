@@ -460,12 +460,19 @@ fn draw_image(frame: &mut [u8], width: u32, height: u32, draw: &ImageDraw) {
         None => return,
     };
 
-    let src_width = draw.image.width();
-    let src_height = draw.image.height();
-    if src_width == 0 || src_height == 0 {
+    let img_width = draw.image.width();
+    let img_height = draw.image.height();
+    if img_width == 0 || img_height == 0 {
         return;
     }
     let src_pixels = draw.image.pixels();
+
+    // Source region: either a sub-rect or the full image
+    let (sr_x, sr_y, sr_w, sr_h) = if let Some(sr) = draw.src_rect {
+        (sr.x, sr.y, sr.width, sr.height)
+    } else {
+        (0.0, 0.0, img_width as f32, img_height as f32)
+    };
 
     for py in clip_bounds.min_y..clip_bounds.max_y {
         for px in clip_bounds.min_x..clip_bounds.max_x {
@@ -474,9 +481,9 @@ fn draw_image(frame: &mut [u8], width: u32, height: u32, draw: &ImageDraw) {
             let u = ((sample_x - draw.rect.x) / draw.rect.width).clamp(0.0, 1.0);
             let v = ((sample_y - draw.rect.y) / draw.rect.height).clamp(0.0, 1.0);
 
-            let src_x = ((u * src_width as f32).floor() as i32).clamp(0, src_width as i32 - 1);
-            let src_y = ((v * src_height as f32).floor() as i32).clamp(0, src_height as i32 - 1);
-            let src_idx = ((src_y as u32 * src_width + src_x as u32) * 4) as usize;
+            let src_x = ((sr_x + u * sr_w).floor() as i32).clamp(0, img_width as i32 - 1);
+            let src_y = ((sr_y + v * sr_h).floor() as i32).clamp(0, img_height as i32 - 1);
+            let src_idx = ((src_y as u32 * img_width + src_x as u32) * 4) as usize;
 
             let mut sample = [
                 src_pixels[src_idx] as f32 / 255.0,

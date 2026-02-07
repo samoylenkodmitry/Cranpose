@@ -71,9 +71,9 @@ pub use pointer_dispatch::{
 };
 pub use primitives::{
     BasicTextField, BasicTextFieldOptions, BitmapPainter, Box, BoxScope, BoxSpec,
-    BoxWithConstraints, BoxWithConstraintsScope, BoxWithConstraintsScopeImpl, Button, Column,
-    ColumnSpec, ContentScale, ForEach, Image, Layout, LayoutNode, Painter, Row, RowSpec, Spacer,
-    SubcomposeLayout, Text, DEFAULT_ALPHA,
+    BoxWithConstraints, BoxWithConstraintsScope, BoxWithConstraintsScopeImpl, Button, Canvas,
+    Column, ColumnSpec, ContentScale, ForEach, Image, Layout, LayoutNode, Painter, Row, RowSpec,
+    Spacer, SubcomposeLayout, Text, DEFAULT_ALPHA,
 };
 // Lazy list exports - single source from cranpose-foundation
 pub use cranpose_foundation::lazy::{LazyListItemInfo, LazyListLayoutInfo, LazyListState};

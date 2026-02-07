@@ -492,8 +492,8 @@ impl GpuRenderer {
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
             mipmap_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
@@ -975,105 +975,159 @@ impl GpuRenderer {
                 bytemuck::cast_slice(&quad_indices),
             );
 
-            let mut image_encoder = pending_shape_encoder.take().unwrap_or_else(|| {
-                self.device
-                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("Image Encoder"),
-                    })
-            });
+            // Pre-compute all image vertices and per-image draw metadata before
+            // starting the render pass. queue.write_buffer is staged and only
+            // the last write to a given offset survives until submission, so we
+            // must write ALL vertices at distinct offsets before encoding any
+            // draw commands.
+            struct ImageDrawCmd {
+                base_vertex: i32,
+                scissor: (u32, u32, u32, u32),
+                image_id: u64,
+            }
+            let mut image_vertices: Vec<Vertex> = Vec::with_capacity(images.len() * 4);
+            let mut image_cmds: Vec<ImageDrawCmd> = Vec::with_capacity(images.len());
 
-            {
-                let mut render_pass =
-                    image_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Image Render Pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: if has_shape_pass {
-                                    wgpu::LoadOp::Load
-                                } else {
-                                    wgpu::LoadOp::Clear(CLEAR_COLOR)
-                                },
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                    });
-
-                render_pass.set_pipeline(&self.image_pipeline);
-                render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                render_pass
-                    .set_index_buffer(self.image_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-
-                for image_draw in images {
-                    let rect = image_draw.rect;
-                    if rect.width <= 0.0 || rect.height <= 0.0 || image_draw.alpha <= 0.0 {
-                        continue;
-                    }
-
-                    let x = rect.x * root_scale;
-                    let y = rect.y * root_scale;
-                    let w = rect.width * root_scale;
-                    let h = rect.height * root_scale;
-                    if w <= 0.0 || h <= 0.0 {
-                        continue;
-                    }
-
-                    let tint = tint_for_image(image_draw.color_filter, image_draw.alpha);
-                    if tint[3] <= 0.0 {
-                        continue;
-                    }
-
-                    let vertices = [
-                        Vertex {
-                            position: [x, y],
-                            color: tint,
-                            uv: [0.0, 0.0],
-                        },
-                        Vertex {
-                            position: [x + w, y],
-                            color: tint,
-                            uv: [1.0, 0.0],
-                        },
-                        Vertex {
-                            position: [x, y + h],
-                            color: tint,
-                            uv: [0.0, 1.0],
-                        },
-                        Vertex {
-                            position: [x + w, y + h],
-                            color: tint,
-                            uv: [1.0, 1.0],
-                        },
-                    ];
-
-                    self.queue.write_buffer(
-                        &self.image_vertex_buffer,
-                        0,
-                        bytemuck::cast_slice(&vertices),
-                    );
-
-                    let scissor = scissor_rect_for_image(image_draw, root_scale, width, height);
-                    let Some((sx, sy, sw, sh)) = scissor else {
-                        continue;
-                    };
-                    render_pass.set_scissor_rect(sx, sy, sw, sh);
-
-                    let cached = self
-                        .image_texture_cache
-                        .get(&image_draw.image.id())
-                        .ok_or_else(|| "image texture missing from cache".to_string())?;
-                    render_pass.set_bind_group(1, &cached.bind_group, &[]);
-                    render_pass.set_vertex_buffer(0, self.image_vertex_buffer.slice(..));
-                    render_pass.draw_indexed(0..6, 0, 0..1);
-                    has_image_pass = true;
+            for image_draw in images {
+                let rect = image_draw.rect;
+                if rect.width <= 0.0 || rect.height <= 0.0 || image_draw.alpha <= 0.0 {
+                    continue;
                 }
+
+                let x = rect.x * root_scale;
+                let y = rect.y * root_scale;
+                let w = rect.width * root_scale;
+                let h = rect.height * root_scale;
+                if w <= 0.0 || h <= 0.0 {
+                    continue;
+                }
+
+                let tint = tint_for_image(image_draw.color_filter, image_draw.alpha);
+                if tint[3] <= 0.0 {
+                    continue;
+                }
+
+                let scissor = scissor_rect_for_image(image_draw, root_scale, width, height);
+                let Some(scissor) = scissor else {
+                    continue;
+                };
+
+                // Compute UV coordinates: sub-region or full image
+                let (u_min, v_min, u_max, v_max) = if let Some(sr) = image_draw.src_rect {
+                    let iw = image_draw.image.width() as f32;
+                    let ih = image_draw.image.height() as f32;
+                    (
+                        sr.x / iw,
+                        sr.y / ih,
+                        (sr.x + sr.width) / iw,
+                        (sr.y + sr.height) / ih,
+                    )
+                } else {
+                    (0.0, 0.0, 1.0, 1.0)
+                };
+
+                let base_vertex = image_vertices.len() as i32;
+                image_vertices.extend_from_slice(&[
+                    Vertex {
+                        position: [x, y],
+                        color: tint,
+                        uv: [u_min, v_min],
+                    },
+                    Vertex {
+                        position: [x + w, y],
+                        color: tint,
+                        uv: [u_max, v_min],
+                    },
+                    Vertex {
+                        position: [x, y + h],
+                        color: tint,
+                        uv: [u_min, v_max],
+                    },
+                    Vertex {
+                        position: [x + w, y + h],
+                        color: tint,
+                        uv: [u_max, v_max],
+                    },
+                ]);
+
+                image_cmds.push(ImageDrawCmd {
+                    base_vertex,
+                    scissor,
+                    image_id: image_draw.image.id(),
+                });
             }
 
-            pending_shape_encoder = Some(image_encoder);
+            if !image_cmds.is_empty() {
+                // Resize vertex buffer if needed
+                let needed_bytes = (image_vertices.len() * std::mem::size_of::<Vertex>()) as u64;
+                if needed_bytes > self.image_vertex_buffer.size() {
+                    self.image_vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("Image Vertex Buffer"),
+                        size: needed_bytes,
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
+                }
+
+                // Write ALL vertices in one call before encoding any draw commands
+                self.queue.write_buffer(
+                    &self.image_vertex_buffer,
+                    0,
+                    bytemuck::cast_slice(&image_vertices),
+                );
+
+                let mut image_encoder = pending_shape_encoder.take().unwrap_or_else(|| {
+                    self.device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Image Encoder"),
+                        })
+                });
+
+                {
+                    let mut render_pass =
+                        image_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("Image Render Pass"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: if has_shape_pass {
+                                        wgpu::LoadOp::Load
+                                    } else {
+                                        wgpu::LoadOp::Clear(CLEAR_COLOR)
+                                    },
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                        });
+
+                    render_pass.set_pipeline(&self.image_pipeline);
+                    render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    render_pass.set_index_buffer(
+                        self.image_index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint32,
+                    );
+                    render_pass.set_vertex_buffer(0, self.image_vertex_buffer.slice(..));
+
+                    for cmd in &image_cmds {
+                        let (sx, sy, sw, sh) = cmd.scissor;
+                        render_pass.set_scissor_rect(sx, sy, sw, sh);
+
+                        let cached = self
+                            .image_texture_cache
+                            .get(&cmd.image_id)
+                            .ok_or_else(|| "image texture missing from cache".to_string())?;
+                        render_pass.set_bind_group(1, &cached.bind_group, &[]);
+                        render_pass.draw_indexed(0..6, cmd.base_vertex, 0..1);
+                    }
+                    has_image_pass = true;
+                }
+
+                pending_shape_encoder = Some(image_encoder);
+            }
         }
 
         // Prepare text rendering - create buffers and text areas (with caching)

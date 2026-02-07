@@ -3,6 +3,7 @@
 pub mod basic_text_field;
 pub mod box_widget;
 pub mod button;
+pub mod canvas;
 pub mod column;
 pub mod foreach;
 pub mod image;
@@ -17,6 +18,7 @@ pub mod text;
 pub use basic_text_field::*;
 pub use box_widget::*;
 pub use button::*;
+pub use canvas::*;
 pub use column::*;
 pub use foreach::*;
 pub use image::*;

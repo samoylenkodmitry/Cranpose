@@ -165,11 +165,19 @@ pub(crate) fn apply_draw_commands(
                     image,
                     alpha,
                     color_filter,
+                    src_rect,
                 } => {
                     let draw_rect = local_rect.translate(rect.x, rect.y);
                     let transformed = apply_layer_to_rect(draw_rect, origin, layer);
                     let combined_alpha = (alpha * layer.alpha).clamp(0.0, 1.0);
-                    scene.push_image(transformed, image, combined_alpha, color_filter, clip);
+                    scene.push_image(
+                        transformed,
+                        image,
+                        combined_alpha,
+                        color_filter,
+                        clip,
+                        src_rect,
+                    );
                 }
             }
         }

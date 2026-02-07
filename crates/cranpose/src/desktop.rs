@@ -7,6 +7,7 @@ use cranpose_app_shell::{default_root_key, AppShell};
 use cranpose_platform_desktop_winit::DesktopWinitPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ButtonSource, ElementState, MouseButton, WindowEvent};
@@ -18,6 +19,11 @@ use cranpose_ui::{LayoutBox, SemanticsAction, SemanticsNode, SemanticsRole};
 
 #[cfg(feature = "robot")]
 use std::sync::mpsc;
+
+fn desktop_input_debug_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_INPUT_DEBUG").is_some())
+}
 
 /// Serializable semantic element combining semantics + geometry
 ///
@@ -786,6 +792,13 @@ impl ApplicationHandler for App {
         // Apply dev options (FPS counter, etc.)
         app.set_dev_options(self.settings.dev_options.clone());
 
+        // Runtime-driven frame scheduling: Compose invalidations and animations
+        // request frames via the runtime waker, not per-input host redraw forcing.
+        let frame_waker_window = window.clone();
+        app.set_frame_waker(move || {
+            frame_waker_window.request_redraw();
+        });
+
         let mut platform = DesktopWinitPlatform::default();
         platform.set_scale_factor(initial_scale);
 
@@ -876,6 +889,12 @@ impl ApplicationHandler for App {
             } => {
                 if primary {
                     let logical = platform.pointer_position(position);
+                    if desktop_input_debug_enabled() {
+                        eprintln!(
+                            "[CRANPOSE_INPUT_DEBUG] desktop pointer move ({:.2},{:.2})",
+                            logical.x, logical.y
+                        );
+                    }
                     app.set_cursor(logical.x, logical.y);
                     // Record mouse move
                     if let Some(recorder) = &mut self.recorder {
@@ -896,6 +915,12 @@ impl ApplicationHandler for App {
             } => {
                 if primary {
                     let logical = platform.pointer_position(position);
+                    if desktop_input_debug_enabled() {
+                        eprintln!(
+                            "[CRANPOSE_INPUT_DEBUG] desktop pointer button {:?} at ({:.2},{:.2})",
+                            state, logical.x, logical.y
+                        );
+                    }
                     app.set_cursor(logical.x, logical.y);
                     match state {
                         ElementState::Pressed => {
@@ -931,9 +956,7 @@ impl ApplicationHandler for App {
                 }
                 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
                 if let Some(text) = app.get_primary_selection() {
-                    if app.on_paste(&text) {
-                        window.request_redraw();
-                    }
+                    app.on_paste(&text);
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
@@ -1032,9 +1055,7 @@ impl ApplicationHandler for App {
                 }
 
                 // Dispatch to text fields
-                if app.on_key_event(&key_event) {
-                    window.request_redraw();
-                }
+                app.on_key_event(&key_event);
             }
             WindowEvent::Focused(false) => {
                 // Window lost focus - cancel any in-progress gestures
@@ -1047,34 +1068,26 @@ impl ApplicationHandler for App {
                 match ime_event {
                     Ime::Preedit(text, cursor) => {
                         // IME is composing - show preedit text with underline
-                        if app.on_ime_preedit(&text, cursor) {
-                            window.request_redraw();
-                        }
+                        app.on_ime_preedit(&text, cursor);
                     }
                     Ime::Commit(text) => {
                         // IME finished - commit the final text
                         // First clear composition state, then insert the final text
                         let _ = app.on_ime_preedit("", None);
-                        if app.on_paste(&text) {
-                            window.request_redraw();
-                        }
+                        app.on_paste(&text);
                     }
                     Ime::DeleteSurrounding {
                         before_bytes,
                         after_bytes,
                     } => {
-                        if app.on_ime_delete_surrounding(before_bytes, after_bytes) {
-                            window.request_redraw();
-                        }
+                        app.on_ime_delete_surrounding(before_bytes, after_bytes);
                     }
                     Ime::Enabled => {
                         // IME was enabled - no action needed
                     }
                     Ime::Disabled => {
                         // IME was disabled - clear any composition state
-                        if app.on_ime_preedit("", None) {
-                            window.request_redraw();
-                        }
+                        app.on_ime_preedit("", None);
                     }
                 }
             }
@@ -1085,6 +1098,9 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                if desktop_input_debug_enabled() {
+                    eprintln!("[CRANPOSE_INPUT_DEBUG] desktop redraw requested");
+                }
                 app.update();
 
                 let output = match surface.get_current_texture() {
@@ -1147,7 +1163,6 @@ impl ApplicationHandler for App {
                         app.set_cursor(x, y);
                         app.pointer_pressed();
                         app.pointer_released();
-                        window.request_redraw();
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
                     RobotCommand::MoveTo { x, y } => {
@@ -1156,7 +1171,6 @@ impl ApplicationHandler for App {
                         if let Some(recorder) = &mut self.recorder {
                             recorder.record_mouse_move(x, y);
                         }
-                        window.request_redraw();
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
                     RobotCommand::MouseDown => {
@@ -1215,7 +1229,6 @@ impl ApplicationHandler for App {
                         }
                         // Process the key events immediately to update layout/semantics
                         app.update();
-                        window.request_redraw();
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
                     RobotCommand::SendKey(key) => {
@@ -1270,7 +1283,6 @@ impl ApplicationHandler for App {
                             KeyEvent::new(key_code, text, Modifiers::NONE, KeyEventType::KeyDown);
                         app.on_key_event(&key_event);
                         app.update();
-                        window.request_redraw();
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
                     RobotCommand::SendKeyWithModifiers {
@@ -1337,7 +1349,6 @@ impl ApplicationHandler for App {
                             KeyEvent::new(key_code, text, modifiers, KeyEventType::KeyDown);
                         app.on_key_event(&key_event);
                         app.update();
-                        window.request_redraw();
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
                     RobotCommand::WaitForIdle => {
@@ -1388,7 +1399,14 @@ impl ApplicationHandler for App {
             }
         }
 
-        if app.needs_redraw() {
+        let needs_redraw = app.needs_redraw();
+        if desktop_input_debug_enabled() && needs_redraw {
+            eprintln!(
+                "[CRANPOSE_INPUT_DEBUG] about_to_wait needs_redraw={}",
+                needs_redraw
+            );
+        }
+        if needs_redraw {
             window.request_redraw();
         }
 

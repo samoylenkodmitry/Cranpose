@@ -57,6 +57,8 @@ pub struct ImageDraw {
     pub color_filter: Option<ColorFilter>,
     pub z_index: usize,
     pub clip: Option<Rect>,
+    /// Source sub-region in image-pixel coordinates. `None` means full image.
+    pub src_rect: Option<Rect>,
 }
 
 #[derive(Clone)]
@@ -163,6 +165,7 @@ impl Scene {
         alpha: f32,
         color_filter: Option<ColorFilter>,
         clip: Option<Rect>,
+        src_rect: Option<Rect>,
     ) {
         let z_index = self.next_z;
         self.next_z += 1;
@@ -173,6 +176,7 @@ impl Scene {
             color_filter,
             z_index,
             clip,
+            src_rect,
         });
     }
 

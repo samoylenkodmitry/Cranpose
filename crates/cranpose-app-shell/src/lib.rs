@@ -9,6 +9,7 @@ pub use fps_monitor::{
 };
 
 use std::fmt::Debug;
+use std::sync::OnceLock;
 // Use web_time for cross-platform time support (native + WASM) - compatible with winit
 use web_time::Instant;
 
@@ -79,6 +80,11 @@ pub struct DevOptions {
     pub recomposition_counter: bool,
     /// Show layout timing breakdown
     pub layout_timing: bool,
+}
+
+fn input_pipeline_debug_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_INPUT_DEBUG").is_some())
 }
 
 impl<R> AppShell<R>
@@ -186,7 +192,22 @@ where
     /// Returns true if the shell needs to redraw (dirty flag, layout dirty, active animations).
     /// Note: Cursor blink is now timer-based and uses WaitUntil scheduling, not continuous redraw.
     pub fn needs_redraw(&self) -> bool {
-        self.is_dirty || self.layout_dirty || self.has_active_animations()
+        if self.is_dirty
+            || self.layout_dirty
+            || self.scene_dirty
+            || peek_render_invalidation()
+            || peek_pointer_invalidation()
+            || peek_focus_invalidation()
+            || peek_layout_invalidation()
+            || cranpose_ui::has_pending_layout_repasses()
+            || cranpose_ui::has_pending_draw_repasses()
+            || has_pending_pointer_repasses()
+            || has_pending_focus_invalidations()
+        {
+            return true;
+        }
+
+        self.composition.should_render()
     }
 
     /// Marks the shell as dirty, indicating a redraw is needed.
@@ -234,9 +255,22 @@ where
             .as_nanos() as u64;
         self.runtime.drain_frame_callbacks(frame_time);
         self.runtime.runtime_handle().drain_ui();
-        if self.composition.should_render() {
+        let should_render = self.composition.should_render();
+        if input_pipeline_debug_enabled() && should_render {
+            eprintln!(
+                "[CRANPOSE_INPUT_DEBUG] update begin: should_render=true layout_dirty={} scene_dirty={} is_dirty={}",
+                self.layout_dirty, self.scene_dirty, self.is_dirty
+            );
+        }
+        if should_render {
             match self.composition.process_invalid_scopes() {
                 Ok(changed) => {
+                    if input_pipeline_debug_enabled() {
+                        eprintln!(
+                            "[CRANPOSE_INPUT_DEBUG] process_invalid_scopes changed={}",
+                            changed
+                        );
+                    }
                     if changed {
                         fps_monitor::record_recomposition();
                         self.layout_dirty = true;
@@ -276,6 +310,12 @@ where
         enter_event_handler();
         let result = run_in_mutable_snapshot(|| self.set_cursor_inner(x, y)).unwrap_or(false);
         exit_event_handler();
+        if input_pipeline_debug_enabled() {
+            eprintln!(
+                "[CRANPOSE_INPUT_DEBUG] set_cursor ({:.2},{:.2}) -> {}",
+                x, y, result
+            );
+        }
         result
     }
 
@@ -301,7 +341,6 @@ where
                             break;
                         }
                     }
-                    self.mark_dirty();
                     return true;
                 }
 
@@ -321,7 +360,6 @@ where
                             break;
                         }
                     }
-                    self.mark_dirty();
                     return true;
                 }
                 return false;
@@ -343,7 +381,6 @@ where
                     break;
                 }
             }
-            self.mark_dirty();
             true
         } else {
             false
@@ -354,6 +391,9 @@ where
         enter_event_handler();
         let result = run_in_mutable_snapshot(|| self.pointer_pressed_inner()).unwrap_or(false);
         exit_event_handler();
+        if input_pipeline_debug_enabled() {
+            eprintln!("[CRANPOSE_INPUT_DEBUG] pointer_pressed -> {}", result);
+        }
         result
     }
 
@@ -396,7 +436,6 @@ where
                     break;
                 }
             }
-            self.mark_dirty();
             true
         } else {
             false
@@ -407,6 +446,9 @@ where
         enter_event_handler();
         let result = run_in_mutable_snapshot(|| self.pointer_released_inner()).unwrap_or(false);
         exit_event_handler();
+        if input_pipeline_debug_enabled() {
+            eprintln!("[CRANPOSE_INPUT_DEBUG] pointer_released -> {}", result);
+        }
         result
     }
 
@@ -442,7 +484,6 @@ where
                     break;
                 }
             }
-            self.mark_dirty();
             true
         } else {
             false
@@ -486,7 +527,6 @@ where
             for hit in targets {
                 hit.dispatch(event.clone());
             }
-            self.mark_dirty();
         }
     }
     /// Routes a keyboard event to the focused text field, if any.

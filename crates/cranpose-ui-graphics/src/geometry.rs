@@ -247,6 +247,10 @@ pub enum DrawPrimitive {
         image: ImageBitmap,
         alpha: f32,
         color_filter: Option<ColorFilter>,
+        /// Optional source rectangle in image-pixel coordinates.
+        /// When `None`, the entire image is drawn. When `Some`, only the
+        /// specified sub-region of the source image is sampled.
+        src_rect: Option<Rect>,
     },
 }
 
@@ -262,6 +266,16 @@ pub trait DrawScope {
         &mut self,
         rect: Rect,
         image: ImageBitmap,
+        alpha: f32,
+        color_filter: Option<ColorFilter>,
+    );
+    /// Draws a sub-region of an image. `src_rect` is in image-pixel
+    /// coordinates; `dst_rect` is in scope coordinates.
+    fn draw_image_src(
+        &mut self,
+        image: ImageBitmap,
+        src_rect: Rect,
+        dst_rect: Rect,
         alpha: f32,
         color_filter: Option<ColorFilter>,
     );
@@ -315,6 +329,7 @@ impl DrawScope for DrawScopeDefault {
             image,
             alpha: 1.0,
             color_filter: None,
+            src_rect: None,
         });
     }
 
@@ -330,6 +345,24 @@ impl DrawScope for DrawScopeDefault {
             image,
             alpha: alpha.clamp(0.0, 1.0),
             color_filter,
+            src_rect: None,
+        });
+    }
+
+    fn draw_image_src(
+        &mut self,
+        image: ImageBitmap,
+        src_rect: Rect,
+        dst_rect: Rect,
+        alpha: f32,
+        color_filter: Option<ColorFilter>,
+    ) {
+        self.primitives.push(DrawPrimitive::Image {
+            rect: dst_rect,
+            image,
+            alpha: alpha.clamp(0.0, 1.0),
+            color_filter,
+            src_rect: Some(src_rect),
         });
     }
 
@@ -356,11 +389,49 @@ mod tests {
                 image: actual,
                 alpha,
                 color_filter,
+                src_rect,
             } => {
                 assert_eq!(*rect, Rect::from_size(Size::new(40.0, 24.0)));
                 assert_eq!(*actual, image);
                 assert_eq!(*alpha, 1.0);
                 assert!(color_filter.is_none());
+                assert!(src_rect.is_none());
+            }
+            other => panic!("expected image primitive, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn draw_image_src_stores_src_rect() {
+        let mut scope = DrawScopeDefault::new(Size::new(100.0, 100.0));
+        let image = ImageBitmap::from_rgba8(64, 64, vec![255; 64 * 64 * 4]).expect("image");
+        let src = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 30.0,
+            height: 40.0,
+        };
+        let dst = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 60.0,
+            height: 80.0,
+        };
+        scope.draw_image_src(image.clone(), src, dst, 0.8, None);
+        let primitives = scope.into_primitives();
+        assert_eq!(primitives.len(), 1);
+        match &primitives[0] {
+            DrawPrimitive::Image {
+                rect,
+                image: actual,
+                alpha,
+                src_rect,
+                ..
+            } => {
+                assert_eq!(*rect, dst);
+                assert_eq!(*actual, image);
+                assert!((alpha - 0.8).abs() < 1e-5);
+                assert_eq!(*src_rect, Some(src));
             }
             other => panic!("expected image primitive, got {other:?}"),
         }

@@ -22,6 +22,7 @@ mod images;
 pub mod lazy_list;
 mod mineswapper2;
 mod web_fetch;
+mod winamp;
 mod xkcd;
 
 use animations::AnimationsTab;
@@ -29,6 +30,7 @@ use hacker_news::hacker_news_tab;
 use images::images_tab;
 use lazy_list::lazy_list_example;
 use web_fetch::web_fetch_example;
+use winamp::WinampTab;
 use xkcd::xkcd_tab;
 
 thread_local! {
@@ -50,6 +52,7 @@ pub enum DemoTab {
     Mineswapper2,
     HackerNews,
     Images,
+    Winamp,
     Xkcd,
 }
 
@@ -68,12 +71,13 @@ impl DemoTab {
             DemoTab::Mineswapper2 => "Mineswapper2",
             DemoTab::HackerNews => "Hacker News",
             DemoTab::Images => "Images",
+            DemoTab::Winamp => "Winamp",
             DemoTab::Xkcd => "XKCD",
         }
     }
 }
 
-pub const DEMO_TABS: [DemoTab; 13] = [
+pub const DEMO_TABS: [DemoTab; 14] = [
     DemoTab::Counter,
     DemoTab::CompositionLocal,
     DemoTab::Async,
@@ -86,6 +90,7 @@ pub const DEMO_TABS: [DemoTab; 13] = [
     DemoTab::Mineswapper2,
     DemoTab::HackerNews,
     DemoTab::Images,
+    DemoTab::Winamp,
     DemoTab::Xkcd,
 ];
 
@@ -261,7 +266,7 @@ pub fn combined_app() {
 }
 
 fn tab_requires_scroll(tab: DemoTab) -> bool {
-    !matches!(tab, DemoTab::HackerNews)
+    !matches!(tab, DemoTab::HackerNews | DemoTab::Winamp)
 }
 
 #[composable]
@@ -279,6 +284,7 @@ fn render_active_tab(active: DemoTab) {
         DemoTab::Mineswapper2 => mineswapper2::mineswapper2_tab(),
         DemoTab::HackerNews => hacker_news_tab(),
         DemoTab::Images => images_tab(),
+        DemoTab::Winamp => WinampTab(),
         DemoTab::Xkcd => xkcd_tab(),
     }
 }
