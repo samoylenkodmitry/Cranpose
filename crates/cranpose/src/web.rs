@@ -49,11 +49,12 @@ pub async fn run(
     canvas.set_width((width as f64 * scale_factor) as u32);
     canvas.set_height((height as f64 * scale_factor) as u32);
 
-    // Set CSS size using HtmlElement API
+    // Set CSS size and disable browser touch gesture handling on the canvas
     if let Some(html_element) = canvas.dyn_ref::<web_sys::HtmlElement>() {
         let style = html_element.style();
         style.set_property("width", &format!("{}px", width))?;
         style.set_property("height", &format!("{}px", height))?;
+        style.set_property("touch-action", "none")?;
     }
 
     // Initialize WGPU
@@ -156,8 +157,13 @@ pub async fn run(
 
     {
         let app = app.clone();
-        let closure = Closure::wrap(Box::new(move |_event: MouseEvent| {
+        let platform = platform.clone();
+        let closure = Closure::wrap(Box::new(move |event: MouseEvent| {
+            let x = event.offset_x() as f64;
+            let y = event.offset_y() as f64;
+            let logical = platform.borrow().pointer_position(x, y);
             if let Ok(mut app_mut) = app.try_borrow_mut() {
+                app_mut.set_cursor(logical.x, logical.y);
                 app_mut.pointer_pressed();
             }
         }) as Box<dyn FnMut(_)>);
@@ -167,8 +173,13 @@ pub async fn run(
 
     {
         let app = app.clone();
-        let closure = Closure::wrap(Box::new(move |_event: MouseEvent| {
+        let platform = platform.clone();
+        let closure = Closure::wrap(Box::new(move |event: MouseEvent| {
+            let x = event.offset_x() as f64;
+            let y = event.offset_y() as f64;
+            let logical = platform.borrow().pointer_position(x, y);
             if let Ok(mut app_mut) = app.try_borrow_mut() {
+                app_mut.set_cursor(logical.x, logical.y);
                 app_mut.pointer_released();
             }
         }) as Box<dyn FnMut(_)>);
@@ -195,9 +206,14 @@ pub async fn run(
 
     {
         let app = app.clone();
+        let platform = platform.clone();
         let closure = Closure::wrap(Box::new(move |event: PointerEvent| {
             event.prevent_default();
+            let x = event.offset_x() as f64;
+            let y = event.offset_y() as f64;
+            let logical = platform.borrow().pointer_position(x, y);
             if let Ok(mut app_mut) = app.try_borrow_mut() {
+                app_mut.set_cursor(logical.x, logical.y);
                 app_mut.pointer_pressed();
             }
         }) as Box<dyn FnMut(_)>);
@@ -207,13 +223,31 @@ pub async fn run(
 
     {
         let app = app.clone();
+        let platform = platform.clone();
         let closure = Closure::wrap(Box::new(move |event: PointerEvent| {
             event.prevent_default();
+            let x = event.offset_x() as f64;
+            let y = event.offset_y() as f64;
+            let logical = platform.borrow().pointer_position(x, y);
             if let Ok(mut app_mut) = app.try_borrow_mut() {
+                app_mut.set_cursor(logical.x, logical.y);
                 app_mut.pointer_released();
             }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("pointerup", closure.as_ref().unchecked_ref())?;
+        closure.forget();
+    }
+
+    {
+        let app = app.clone();
+        let closure = Closure::wrap(Box::new(move |event: PointerEvent| {
+            event.prevent_default();
+            if let Ok(mut app_mut) = app.try_borrow_mut() {
+                app_mut.cancel_gesture();
+            }
+        }) as Box<dyn FnMut(_)>);
+        canvas
+            .add_event_listener_with_callback("pointercancel", closure.as_ref().unchecked_ref())?;
         closure.forget();
     }
 
