@@ -4,13 +4,12 @@
 #![allow(clippy::too_many_arguments)] // API matches Jetpack Compose Image signature.
 
 use crate::composable;
-use crate::layout::core::Alignment;
-use crate::layout::policies::LeafMeasurePolicy;
+use crate::layout::core::{Alignment, Measurable};
 use crate::modifier::{Modifier, Rect, Size};
-use crate::render_state::current_density;
 use crate::widgets::Layout;
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{ColorFilter, DrawScope, ImageBitmap};
+use cranpose_ui_layout::{Constraints, MeasurePolicy, MeasureResult};
 
 pub const DEFAULT_ALPHA: f32 = 1.0;
 
@@ -97,6 +96,75 @@ pub fn BitmapPainter(bitmap: ImageBitmap) -> Painter {
     Painter::from_bitmap(bitmap)
 }
 
+/// Measure policy for Image that preserves aspect ratio when constraints
+/// force the image smaller than its intrinsic size.
+///
+/// Unlike [`LeafMeasurePolicy`] which clamps width and height independently,
+/// this scales both dimensions by the same factor so the image is never
+/// distorted by layout constraints.
+#[derive(Clone, Debug, PartialEq)]
+struct ImageMeasurePolicy {
+    intrinsic_size: Size,
+}
+
+impl MeasurePolicy for ImageMeasurePolicy {
+    fn measure(
+        &self,
+        _measurables: &[Box<dyn Measurable>],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let iw = self.intrinsic_size.width;
+        let ih = self.intrinsic_size.height;
+
+        if iw <= 0.0 || ih <= 0.0 {
+            let (w, h) = constraints.constrain(0.0, 0.0);
+            return MeasureResult::new(
+                Size {
+                    width: w,
+                    height: h,
+                },
+                vec![],
+            );
+        }
+
+        // Clamp each axis to its constraint range.
+        let cw = iw.clamp(constraints.min_width, constraints.max_width);
+        let ch = ih.clamp(constraints.min_height, constraints.max_height);
+
+        // If either axis had to shrink, scale both by the smaller factor
+        // so the aspect ratio is preserved.
+        let scale_x = cw / iw;
+        let scale_y = ch / ih;
+
+        let (width, height) = if scale_x < 1.0 || scale_y < 1.0 {
+            let factor = scale_x.min(scale_y);
+            let w = (iw * factor).clamp(constraints.min_width, constraints.max_width);
+            let h = (ih * factor).clamp(constraints.min_height, constraints.max_height);
+            (w, h)
+        } else {
+            (cw, ch)
+        };
+
+        MeasureResult::new(Size { width, height }, vec![])
+    }
+
+    fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+        self.intrinsic_size.width
+    }
+
+    fn max_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+        self.intrinsic_size.width
+    }
+
+    fn min_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+        self.intrinsic_size.height
+    }
+
+    fn max_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+        self.intrinsic_size.height
+    }
+}
+
 fn destination_rect(
     src_size: Size,
     dst_size: Size,
@@ -128,15 +196,11 @@ where
     P: Into<Painter> + Clone + PartialEq + 'static,
 {
     let painter = painter.into();
-    let density = current_density().max(1.0);
-    let pixel_size = painter.intrinsic_size();
-    // Convert pixel dimensions to dp so the layout requests a size that maps
-    // back to the original pixel count after the renderer applies the scale
-    // factor, achieving 1:1 pixel-perfect rendering.
-    let intrinsic_dp = Size {
-        width: pixel_size.width / density,
-        height: pixel_size.height / density,
-    };
+    // Treat bitmap pixels as dp (1 image-pixel = 1 dp).  This keeps images
+    // at the same visual size on every screen density.  On hi-dpi screens the
+    // bitmap is upscaled by the renderer, which is the correct behaviour for
+    // web-loaded and most application images.
+    let intrinsic_dp = painter.intrinsic_size();
     let draw_alpha = alpha.clamp(0.0, 1.0);
     let draw_painter = painter.clone();
 
@@ -168,7 +232,13 @@ where
             );
         });
 
-    Layout(image_modifier, LeafMeasurePolicy::new(intrinsic_dp), || {})
+    Layout(
+        image_modifier,
+        ImageMeasurePolicy {
+            intrinsic_size: intrinsic_dp,
+        },
+        || {},
+    )
 }
 
 #[cfg(test)]
@@ -218,5 +288,64 @@ mod tests {
                 height: 150.0,
             }
         );
+    }
+
+    // --- ImageMeasurePolicy tests ---
+
+    fn measure_image(intrinsic: Size, constraints: Constraints) -> Size {
+        let policy = ImageMeasurePolicy {
+            intrinsic_size: intrinsic,
+        };
+        policy.measure(&[], constraints).size
+    }
+
+    #[test]
+    fn image_measure_unconstrained() {
+        let size = measure_image(
+            Size::new(800.0, 600.0),
+            Constraints::loose(f32::INFINITY, f32::INFINITY),
+        );
+        assert_eq!(size, Size::new(800.0, 600.0));
+    }
+
+    #[test]
+    fn image_measure_width_constrained_preserves_aspect_ratio() {
+        // 800×600 constrained to max_width=400 → should scale to 400×300
+        let size = measure_image(
+            Size::new(800.0, 600.0),
+            Constraints::loose(400.0, f32::INFINITY),
+        );
+        assert_eq!(size, Size::new(400.0, 300.0));
+    }
+
+    #[test]
+    fn image_measure_height_constrained_preserves_aspect_ratio() {
+        // 800×600 constrained to max_height=300 → should scale to 400×300
+        let size = measure_image(
+            Size::new(800.0, 600.0),
+            Constraints::loose(f32::INFINITY, 300.0),
+        );
+        assert_eq!(size, Size::new(400.0, 300.0));
+    }
+
+    #[test]
+    fn image_measure_both_constrained_uses_smaller_factor() {
+        // 800×600 constrained to 200×400 → width is the bottleneck (0.25)
+        // scaled: 200×150
+        let size = measure_image(Size::new(800.0, 600.0), Constraints::loose(200.0, 400.0));
+        assert_eq!(size, Size::new(200.0, 150.0));
+    }
+
+    #[test]
+    fn image_measure_fits_within_constraints() {
+        // 200×100 in a 400×400 container → stays at intrinsic size
+        let size = measure_image(Size::new(200.0, 100.0), Constraints::loose(400.0, 400.0));
+        assert_eq!(size, Size::new(200.0, 100.0));
+    }
+
+    #[test]
+    fn image_measure_zero_intrinsic() {
+        let size = measure_image(Size::ZERO, Constraints::loose(400.0, 400.0));
+        assert_eq!(size, Size::new(0.0, 0.0));
     }
 }

@@ -1195,12 +1195,10 @@ fn TransportButtons(cbuttons: ImageBitmap, state: MutableState<WinampState>, sca
 }
 
 fn ui_scale() -> f32 {
-    let density = current_density();
-    if density > 0.0 {
-        1.0 / density
-    } else {
-        1.0
-    }
+    // Skin pixel coordinates map directly to dp.  On high-density screens the
+    // renderer upscales automatically, keeping the skin at the same visual
+    // size as on a 1× desktop display.
+    1.0
 }
 
 fn snap_to_pixel(value: f32) -> f32 {

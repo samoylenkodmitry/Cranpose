@@ -2,8 +2,8 @@ use anyhow::{anyhow, Context};
 use cranpose_services::{local_http_client, local_uri_handler, HttpClientRef, HttpError};
 use cranpose_ui::{
     composable, Alignment, Box, BoxSpec, Color, Column, ColumnSpec, ContentScale, Image,
-    ImageBitmap, LinearArrangement, Modifier, Row, RowSpec, Size, Spacer, Text, TextStyle,
-    VerticalAlignment,
+    ImageBitmap, LinearArrangement, Modifier, Row, RowSpec, ScrollState, Size, Spacer, Text,
+    TextStyle, VerticalAlignment,
 };
 use serde::Deserialize;
 
@@ -239,17 +239,24 @@ pub(crate) fn xkcd_tab() {
                         );
                     }
 
-                    Box(
-                        Modifier::empty()
-                            .fill_max_width()
-                            .background(Color(0.06, 0.06, 0.06, 1.0))
-                            .rounded_corners(14.0)
-                            .padding(8.0),
-                        BoxSpec::default().content_alignment(Alignment::CENTER),
-                        {
-                            let bitmap = loaded.bitmap.clone();
-                            let description =
-                                Some(format!("xkcd #{} {}", loaded.comic.num, loaded.comic.title));
+                    {
+                        let bitmap = loaded.bitmap.clone();
+                        let description =
+                            Some(format!("xkcd #{} {}", loaded.comic.num, loaded.comic.title));
+                        let h_scroll =
+                            cranpose_core::remember(|| ScrollState::new(0.0)).with(|s| s.clone());
+                        let v_scroll =
+                            cranpose_core::remember(|| ScrollState::new(0.0)).with(|s| s.clone());
+                        Box(
+                            Modifier::empty()
+                                .fill_max_width()
+                                .weight(1.0)
+                                .background(Color(0.06, 0.06, 0.06, 1.0))
+                                .rounded_corners(14.0)
+                                .padding(8.0)
+                                .horizontal_scroll(h_scroll, false)
+                                .vertical_scroll(v_scroll, false),
+                            BoxSpec::default().content_alignment(Alignment::CENTER),
                             move || {
                                 Image(
                                     bitmap.clone(),
@@ -260,9 +267,9 @@ pub(crate) fn xkcd_tab() {
                                     1.0,
                                     None,
                                 );
-                            }
-                        },
-                    );
+                            },
+                        );
+                    }
 
                     Spacer(Size::new(0.0, 4.0));
                     Text(
