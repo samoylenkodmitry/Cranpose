@@ -618,6 +618,16 @@ fn sample_brush(brush: &Brush, rect: Rect, x: f32, y: f32) -> [f32; 4] {
             let t = (distance / radius).clamp(0.0, 1.0);
             color_to_rgba(interpolate_colors(colors, t))
         }
+        Brush::SweepGradient { colors, center } => {
+            let cx = rect.x + center.x;
+            let cy = rect.y + center.y;
+            let dx = x - cx;
+            let dy = y - cy;
+            let angle = dy.atan2(dx);
+            // Map [-PI, PI] to [0, 1]
+            let t = (angle / std::f32::consts::TAU + 0.5).clamp(0.0, 1.0);
+            color_to_rgba(interpolate_colors(colors, t))
+        }
     }
 }
 

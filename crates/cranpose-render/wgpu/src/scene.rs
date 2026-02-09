@@ -4,7 +4,7 @@ use cranpose_core::NodeId;
 use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_render_common::{HitTestTarget, RenderScene};
 use cranpose_ui_graphics::{
-    Brush, Color, ColorFilter, ImageBitmap, Point, Rect, RoundedCornerShape,
+    Brush, Color, ColorFilter, ImageBitmap, Point, Rect, RenderEffect, RoundedCornerShape,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -119,11 +119,23 @@ impl HitTestTarget for HitRegion {
     }
 }
 
+/// A subtree that should be rendered offscreen and processed by a RenderEffect.
+#[derive(Clone)]
+pub struct EffectLayer {
+    pub rect: Rect,
+    pub effect: RenderEffect,
+    /// Z-index of the first draw item in this effect layer's subtree.
+    pub z_start: usize,
+    /// Z-index one past the last draw item in this effect layer's subtree.
+    pub z_end: usize,
+}
+
 pub struct Scene {
     pub shapes: Vec<DrawShape>,
     pub images: Vec<ImageDraw>,
     pub texts: Vec<TextDraw>,
     pub hits: Vec<HitRegion>,
+    pub effect_layers: Vec<EffectLayer>,
     pub next_z: usize,
     pub node_index: HashMap<NodeId, HitRegion>,
 }
@@ -135,6 +147,7 @@ impl Scene {
             images: Vec::new(),
             texts: Vec::new(),
             hits: Vec::new(),
+            effect_layers: Vec::new(),
             next_z: 0,
             node_index: HashMap::new(),
         }
@@ -248,6 +261,7 @@ impl RenderScene for Scene {
         self.images.clear();
         self.texts.clear();
         self.hits.clear();
+        self.effect_layers.clear();
         self.node_index.clear();
         self.next_z = 0;
     }

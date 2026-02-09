@@ -44,7 +44,7 @@ impl Clone for ModifierNodeSlices {
             clip_to_bounds: self.clip_to_bounds,
             text_content: self.text_content.clone(),
             text_style: self.text_style.clone(),
-            graphics_layer: self.graphics_layer,
+            graphics_layer: self.graphics_layer.clone(),
             chain_guard: self.chain_guard.clone(),
         }
     }
@@ -80,7 +80,7 @@ impl ModifierNodeSlices {
     }
 
     pub fn graphics_layer(&self) -> Option<GraphicsLayer> {
-        self.graphics_layer
+        self.graphics_layer.clone()
     }
 
     pub fn with_chain_guard(mut self, handle: ModifierChainHandle) -> Self {

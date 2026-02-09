@@ -163,6 +163,30 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             let c2 = gradient_stops[shape.gradient_start + next_idx].color;
             color = mix(c1, c2, local_t);
         }
+    } else if (shape.brush_type == 3u) {
+        // Sweep gradient - angle-based interpolation around center
+        let center = shape.gradient_params.xy;
+        let dx = rect_pos.x - center.x;
+        let dy = rect_pos.y - center.y;
+        let angle = atan2(dy, dx);
+        // Map [-PI, PI] to [0, 1]
+        let t = clamp(angle / (2.0 * 3.14159265358979) + 0.5, 0.0, 1.0);
+
+        let count = shape.gradient_count;
+
+        if (count <= 1u) {
+            color = gradient_stops[shape.gradient_start].color;
+        } else {
+            let segments = count - 1u;
+            let scaled = t * f32(segments);
+            let idx = min(u32(scaled), segments);
+            let next_idx = min(idx + 1u, segments);
+            let local_t = fract(scaled);
+
+            let c1 = gradient_stops[shape.gradient_start + idx].color;
+            let c2 = gradient_stops[shape.gradient_start + next_idx].color;
+            color = mix(c1, c2, local_t);
+        }
     }
 
     return vec4<f32>(color.rgb, color.a * alpha);
@@ -211,5 +235,145 @@ fn image_vs_main(input: VertexInput) -> VertexOutput {
 fn image_fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let sampled = textureSample(image_texture, image_sampler, input.uv);
     return sampled * input.color;
+}
+"#;
+
+#[allow(dead_code)] // Available for external use by custom shaders
+/// Fullscreen quad vertex shader shared by all post-process effects.
+///
+/// Generates a full-screen triangle pair from vertex ID (no vertex buffer needed).
+/// Output UV covers [0,1]x[0,1].
+pub const FULLSCREEN_QUAD_VS: &str = r#"
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+}
+
+@vertex
+fn fullscreen_vs(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
+    // Generate fullscreen triangle from vertex index (0,1,2 → covers clip space)
+    var output: VertexOutput;
+    let x = f32(i32(vertex_index & 1u) * 2 - 1);
+    let y = f32(i32(vertex_index >> 1u) * 2 - 1);
+    // Map clip [-1,1] to UV [0,1] with Y flipped for texture coordinates
+    output.uv = vec2<f32>(x * 0.5 + 0.5, 1.0 - (y * 0.5 + 0.5));
+    output.position = vec4<f32>(x, y, 0.0, 1.0);
+    return output;
+}
+"#;
+
+/// Two-pass separable Gaussian blur post-process shader.
+///
+/// Uniforms (via push-style uniform buffer):
+/// - direction: vec2<f32> — (1,0) for horizontal, (0,1) for vertical
+/// - radius: vec2<f32> — blur radius in pixels (x,y)
+/// - texture_size: vec2<f32> — input texture dimensions in pixels
+pub const BLUR_SHADER: &str = r#"
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+}
+
+@vertex
+fn fullscreen_vs(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
+    var output: VertexOutput;
+    let x = f32(i32(vertex_index & 1u) * 2 - 1);
+    let y = f32(i32(vertex_index >> 1u) * 2 - 1);
+    output.uv = vec2<f32>(x * 0.5 + 0.5, 1.0 - (y * 0.5 + 0.5));
+    output.position = vec4<f32>(x, y, 0.0, 1.0);
+    return output;
+}
+
+struct BlurUniforms {
+    direction: vec2<f32>,   // (1,0) horizontal, (0,1) vertical
+    radius: vec2<f32>,      // blur radius in pixels
+    texture_size: vec2<f32>,
+    _padding: vec2<f32>,
+}
+
+@group(0) @binding(0) var input_texture: texture_2d<f32>;
+@group(0) @binding(1) var input_sampler: sampler;
+@group(1) @binding(0) var<uniform> blur: BlurUniforms;
+
+@fragment
+fn blur_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+    let pixel_size = 1.0 / blur.texture_size;
+    let dir = blur.direction;
+    // Use the radius component matching the direction
+    let r = dot(dir, blur.radius);
+    let sigma = max(r / 3.0, 0.001);
+
+    // Number of taps on each side (capped at 32 for performance)
+    let tap_count = min(i32(ceil(r)), 32);
+
+    if (tap_count <= 0) {
+        return textureSample(input_texture, input_sampler, input.uv);
+    }
+
+    var color = vec4<f32>(0.0);
+    var total_weight = 0.0;
+
+    for (var i = -tap_count; i <= tap_count; i = i + 1) {
+        let offset = f32(i);
+        let weight = exp(-(offset * offset) / (2.0 * sigma * sigma));
+        let sample_uv = input.uv + dir * offset * pixel_size;
+        color = color + textureSample(input_texture, input_sampler, sample_uv) * weight;
+        total_weight = total_weight + weight;
+    }
+
+    return color / total_weight;
+}
+"#;
+
+/// Simple fullscreen blit shader for compositing offscreen targets to the surface.
+///
+/// Renders the entire offscreen texture as a fullscreen quad with alpha blending.
+/// Transparent regions contribute nothing, so only the effect-processed content
+/// is composited onto the existing surface.
+pub const BLIT_SHADER: &str = r#"
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+}
+
+@vertex
+fn fullscreen_vs(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
+    var output: VertexOutput;
+    let x = f32(i32(vertex_index & 1u) * 2 - 1);
+    let y = f32(i32(vertex_index >> 1u) * 2 - 1);
+    output.uv = vec2<f32>(x * 0.5 + 0.5, 1.0 - (y * 0.5 + 0.5));
+    output.position = vec4<f32>(x, y, 0.0, 1.0);
+    return output;
+}
+
+@group(0) @binding(0) var input_texture: texture_2d<f32>;
+@group(0) @binding(1) var input_sampler: sampler;
+
+@fragment
+fn blit_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+    return textureSample(input_texture, input_sampler, input.uv);
+}
+"#;
+
+#[allow(dead_code)] // Available for external use by custom shaders
+/// Default vertex shader preamble for RuntimeShader effects.
+///
+/// RuntimeShader WGSL modules must include their own fullscreen vertex shader.
+/// This constant provides the standard one they can copy or the framework
+/// can prepend automatically.
+pub const EFFECT_VS_PREAMBLE: &str = r#"
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+}
+
+@vertex
+fn fullscreen_vs(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
+    var output: VertexOutput;
+    let x = f32(i32(vertex_index & 1u) * 2 - 1);
+    let y = f32(i32(vertex_index >> 1u) * 2 - 1);
+    output.uv = vec2<f32>(x * 0.5 + 0.5, 1.0 - (y * 0.5 + 0.5));
+    output.position = vec4<f32>(x, y, 0.0, 1.0);
+    return output;
 }
 "#;

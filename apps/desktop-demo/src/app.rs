@@ -21,6 +21,7 @@ mod hacker_news;
 mod images;
 pub mod lazy_list;
 mod mineswapper2;
+mod shaders;
 mod web_fetch;
 mod winamp;
 mod xkcd;
@@ -29,6 +30,7 @@ use animations::AnimationsTab;
 use hacker_news::hacker_news_tab;
 use images::images_tab;
 use lazy_list::lazy_list_example;
+use shaders::ShadersTab;
 use web_fetch::web_fetch_example;
 use winamp::WinampTab;
 use xkcd::xkcd_tab;
@@ -54,6 +56,7 @@ pub enum DemoTab {
     Images,
     Winamp,
     Xkcd,
+    Shaders,
 }
 
 impl DemoTab {
@@ -73,11 +76,12 @@ impl DemoTab {
             DemoTab::Images => "Images",
             DemoTab::Winamp => "Winamp",
             DemoTab::Xkcd => "XKCD",
+            DemoTab::Shaders => "Shaders",
         }
     }
 }
 
-pub const DEMO_TABS: [DemoTab; 14] = [
+pub const DEMO_TABS: [DemoTab; 15] = [
     DemoTab::Counter,
     DemoTab::CompositionLocal,
     DemoTab::Async,
@@ -92,6 +96,7 @@ pub const DEMO_TABS: [DemoTab; 14] = [
     DemoTab::Images,
     DemoTab::Winamp,
     DemoTab::Xkcd,
+    DemoTab::Shaders,
 ];
 
 pub fn demo_tab_labels() -> Vec<&'static str> {
@@ -286,6 +291,7 @@ fn render_active_tab(active: DemoTab) {
         DemoTab::Images => images_tab(),
         DemoTab::Winamp => WinampTab(),
         DemoTab::Xkcd => xkcd_tab(),
+        DemoTab::Shaders => ShadersTab(),
     }
 }
 
@@ -1329,6 +1335,7 @@ fn counter_app() {
                                             scale: 0.85 + wave_value * 0.3,
                                             translation_x: 0.0,
                                             translation_y: (wave_value - 0.5) * 12.0,
+                                            render_effect: None,
                                         }),
                                     TextStyle::default(),
                                 );

@@ -9,6 +9,8 @@ mod brush;
 mod color;
 mod geometry;
 mod image;
+pub mod liquid_glass;
+pub mod render_effect;
 mod typography;
 mod unit;
 
@@ -16,6 +18,8 @@ pub use brush::*;
 pub use color::*;
 pub use geometry::*;
 pub use image::*;
+pub use liquid_glass::*;
+pub use render_effect::*;
 pub use typography::*;
 pub use unit::*;
 

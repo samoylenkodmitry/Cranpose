@@ -8,7 +8,7 @@ use cranpose_render_common::Brush;
 use cranpose_ui::{measure_text, LayoutBox, LayoutNode, LayoutNodeKind, SubcomposeLayoutNode};
 use cranpose_ui_graphics::{Color, GraphicsLayer, Point, Rect, RoundedCornerShape, Size};
 
-use crate::scene::{ClickAction, Scene};
+use crate::scene::{ClickAction, EffectLayer, Scene};
 
 // Re-use style functions from a local copy
 mod style;
@@ -28,6 +28,7 @@ pub(crate) fn render_layout_tree_with_scale(root: &LayoutBox, scene: &mut Scene,
         scale,
         translation_x: 0.0,
         translation_y: 0.0,
+        render_effect: None,
     };
     render_layout_node(root, root_layer, scene, None, None);
 }
@@ -88,7 +89,7 @@ fn render_container(
         height: rect.height,
     };
     let origin = (rect.x, rect.y);
-    let transformed_rect = apply_layer_to_rect(rect, origin, node_layer);
+    let transformed_rect = apply_layer_to_rect(rect, origin, &node_layer);
 
     if transformed_rect.width <= 0.0 || transformed_rect.height <= 0.0 {
         return;
@@ -114,13 +115,17 @@ fn render_container(
         (None, None) => None,
     };
 
+    // Track z_start for effect layer if this node has a render effect
+    let has_effect = node_layer.render_effect.is_some();
+    let z_start = scene.next_z;
+
     apply_draw_commands(
         &style.draw_commands,
         DrawPlacement::Behind,
         rect,
         origin,
         size,
-        node_layer,
+        &node_layer,
         visual_clip,
         scene,
     );
@@ -131,7 +136,7 @@ fn render_container(
     });
 
     if let Some(color) = style.background {
-        let brush = apply_layer_to_brush(Brush::solid(color), node_layer);
+        let brush = apply_layer_to_brush(Brush::solid(color), &node_layer);
         scene.push_shape(transformed_rect, brush, scaled_shape, visual_clip);
     }
 
@@ -153,7 +158,7 @@ fn render_container(
             width: metrics.width,
             height: metrics.height,
         };
-        let transformed_text_rect = apply_layer_to_rect(text_rect, origin, node_layer);
+        let transformed_text_rect = apply_layer_to_rect(text_rect, origin, &node_layer);
 
         // Extract color and font size from text style or default
         let text_color = text_style_ref.color.unwrap_or(Color(1.0, 1.0, 1.0, 1.0));
@@ -167,7 +172,7 @@ fn render_container(
             layout.node_id,
             transformed_text_rect,
             value,
-            apply_layer_to_color(text_color, node_layer),
+            apply_layer_to_color(text_color, &node_layer),
             font_size,
             node_layer.scale,
             visual_clip,
@@ -188,7 +193,13 @@ fn render_container(
     );
 
     for child_layout in &layout.children {
-        render_layout_node(child_layout, node_layer, scene, visual_clip, hit_clip);
+        render_layout_node(
+            child_layout,
+            node_layer.clone(),
+            scene,
+            visual_clip,
+            hit_clip,
+        );
     }
 
     apply_draw_commands(
@@ -197,10 +208,22 @@ fn render_container(
         rect,
         origin,
         size,
-        node_layer,
+        &node_layer,
         visual_clip,
         scene,
     );
+
+    // Record effect layer if this node has a render effect
+    if has_effect {
+        if let Some(effect) = &node_layer.render_effect {
+            scene.effect_layers.push(EffectLayer {
+                rect: transformed_rect,
+                effect: effect.clone(),
+                z_start,
+                z_end: scene.next_z,
+            });
+        }
+    }
 }
 
 fn render_spacer(
@@ -275,6 +298,7 @@ pub(crate) fn render_from_applier(
         scale,
         translation_x: 0.0,
         translation_y: 0.0,
+        render_effect: None,
     };
     render_node_from_applier(
         applier,
@@ -355,7 +379,7 @@ fn render_node_from_applier(
         height: rect.height,
     };
     let origin = (rect.x, rect.y);
-    let transformed_rect = apply_layer_to_rect(rect, origin, node_layer);
+    let transformed_rect = apply_layer_to_rect(rect, origin, &node_layer);
 
     if transformed_rect.width <= 0.0 || transformed_rect.height <= 0.0 {
         return;
@@ -381,6 +405,10 @@ fn render_node_from_applier(
         (None, None) => None,
     };
 
+    // Track z_start for effect layer if this node has a render effect
+    let has_effect = node_layer.render_effect.is_some();
+    let z_start = scene.next_z;
+
     // Draw behind layer
     apply_draw_commands(
         &style.draw_commands,
@@ -388,7 +416,7 @@ fn render_node_from_applier(
         rect,
         origin,
         size,
-        node_layer,
+        &node_layer,
         visual_clip,
         scene,
     );
@@ -399,7 +427,7 @@ fn render_node_from_applier(
     });
 
     if let Some(color) = style.background {
-        let brush = apply_layer_to_brush(Brush::solid(color), node_layer);
+        let brush = apply_layer_to_brush(Brush::solid(color), &node_layer);
         scene.push_shape(transformed_rect, brush, scaled_shape, visual_clip);
     }
 
@@ -416,7 +444,7 @@ fn render_node_from_applier(
             width: metrics.width,
             height: metrics.height,
         };
-        let transformed_text_rect = apply_layer_to_rect(text_rect, origin, node_layer);
+        let transformed_text_rect = apply_layer_to_rect(text_rect, origin, &node_layer);
 
         // Extract color and font size
         let text_color = text_style_ref.color.unwrap_or(Color(1.0, 1.0, 1.0, 1.0));
@@ -430,7 +458,7 @@ fn render_node_from_applier(
             node_id,
             transformed_text_rect,
             value,
-            apply_layer_to_color(text_color, node_layer),
+            apply_layer_to_color(text_color, &node_layer),
             font_size,
             node_layer.scale,
             visual_clip,
@@ -462,7 +490,7 @@ fn render_node_from_applier(
         render_node_from_applier(
             applier,
             child_id,
-            node_layer,
+            node_layer.clone(),
             scene,
             visual_clip,
             hit_clip,
@@ -477,8 +505,20 @@ fn render_node_from_applier(
         rect,
         origin,
         size,
-        node_layer,
+        &node_layer,
         visual_clip,
         scene,
     );
+
+    // Record effect layer if this node has a render effect
+    if has_effect {
+        if let Some(effect) = &node_layer.render_effect {
+            scene.effect_layers.push(EffectLayer {
+                rect: transformed_rect,
+                effect: effect.clone(),
+                z_start,
+                z_end: scene.next_z,
+            });
+        }
+    }
 }

@@ -1696,6 +1696,16 @@ fn sample_brush(brush: &cranpose_ui::Brush, rect: cranpose_ui::Rect, x: f32, y: 
             let color = interpolate_colors(colors, t);
             [color.r(), color.g(), color.b(), color.a()]
         }
+        cranpose_ui::Brush::SweepGradient { colors, center } => {
+            let cx = rect.x + center.x;
+            let cy = rect.y + center.y;
+            let dx = x - cx;
+            let dy = y - cy;
+            let angle = dy.atan2(dx);
+            let t = (angle / std::f32::consts::TAU + 0.5).clamp(0.0, 1.0);
+            let color = interpolate_colors(colors, t);
+            [color.r(), color.g(), color.b(), color.a()]
+        }
     }
 }
 

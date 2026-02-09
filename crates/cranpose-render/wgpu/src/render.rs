@@ -1,6 +1,7 @@
 //! GPU rendering implementation using WGPU
 
-use crate::scene::{DrawShape, ImageDraw, TextDraw};
+use crate::effect_renderer::EffectRenderer;
+use crate::scene::{DrawShape, EffectLayer, ImageDraw, TextDraw};
 use crate::shaders;
 use crate::{SharedTextBuffer, SharedTextCache, TextCacheKey};
 use bytemuck::{Pod, Zeroable};
@@ -10,6 +11,7 @@ use glyphon::{
     TextAtlas, TextBounds, TextRenderer, Viewport,
 };
 use std::collections::HashMap;
+use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
 // Chunked rendering constants for robustness with large scenes
@@ -282,6 +284,7 @@ pub struct GpuRenderer {
     scratch_indices: Vec<u32>,
     scratch_text_entries: Vec<(usize, TextCacheKey)>,
     last_shape_chunk_count: usize,
+    effect_renderer: EffectRenderer,
 }
 
 impl GpuRenderer {
@@ -512,6 +515,8 @@ impl GpuRenderer {
             mapped_at_creation: false,
         });
 
+        let effect_renderer = EffectRenderer::new(&device, surface_format);
+
         Self {
             device,
             queue,
@@ -540,6 +545,7 @@ impl GpuRenderer {
             scratch_indices: Vec::new(),
             scratch_text_entries: Vec::new(),
             last_shape_chunk_count: 0,
+            effect_renderer,
         }
     }
 
@@ -623,6 +629,7 @@ impl GpuRenderer {
         shapes: &[DrawShape],
         images: &[ImageDraw],
         texts: &[TextDraw],
+        effect_layers: &[EffectLayer],
         width: u32,
         height: u32,
         root_scale: f32,
@@ -654,6 +661,16 @@ impl GpuRenderer {
                 .all(|pair| pair[0].z_index <= pair[1].z_index),
             "images must be added in z-index order"
         );
+
+        // Build z-index exclusion ranges from effect layers.
+        // Items in these ranges are rendered offscreen with effects applied.
+        // Items with z >= max_effect_z_end are rendered AFTER effect compositing
+        // so they appear on top of the composited effect result.
+        let effect_z_ranges: Vec<Range<usize>> = effect_layers
+            .iter()
+            .map(|layer| layer.z_start..layer.z_end)
+            .collect();
+        let max_effect_z_end = effect_layers.iter().map(|l| l.z_end).max().unwrap_or(0);
 
         // Update uniform buffer with viewport dimensions
         let uniforms = Uniforms {
@@ -691,6 +708,18 @@ impl GpuRenderer {
         self.scratch_filtered_indices.reserve(total_shape_count);
 
         for (shape_index, shape) in shapes.iter().enumerate() {
+            // Skip shapes that belong to an effect layer (will be rendered offscreen)
+            if effect_z_ranges
+                .iter()
+                .any(|range| range.contains(&shape.z_index))
+            {
+                continue;
+            }
+            // Skip shapes after effects — they render in a later pass on top
+            if max_effect_z_end > 0 && shape.z_index >= max_effect_z_end {
+                continue;
+            }
+
             let rect = shape.rect;
 
             // Scale to physical pixels
@@ -757,6 +786,21 @@ impl GpuRenderer {
                         0.0,
                     ];
                     (2u32, start, colors.len() as u32)
+                }
+                Brush::SweepGradient { colors, center } => {
+                    let start = self.scratch_gradients.len() as u32;
+                    for c in colors {
+                        self.scratch_gradients.push(GradientStop {
+                            color: [c.r(), c.g(), c.b(), c.a()],
+                        });
+                    }
+                    gradient_params = [
+                        x + center.x * root_scale,
+                        y + center.y * root_scale,
+                        0.0,
+                        0.0,
+                    ];
+                    (3u32, start, colors.len() as u32)
                 }
             };
 
@@ -840,7 +884,7 @@ impl GpuRenderer {
                         let first = colors.first().unwrap_or(&Color(1.0, 1.0, 1.0, 1.0));
                         [first.r(), first.g(), first.b(), first.a()]
                     }
-                    Brush::RadialGradient { colors, .. } => {
+                    Brush::RadialGradient { colors, .. } | Brush::SweepGradient { colors, .. } => {
                         let first = colors.first().unwrap_or(&Color(1.0, 1.0, 1.0, 1.0));
                         [first.r(), first.g(), first.b(), first.a()]
                     }
@@ -986,6 +1030,18 @@ impl GpuRenderer {
             let mut image_cmds: Vec<ImageDrawCmd> = Vec::with_capacity(images.len());
 
             for image_draw in images {
+                // Skip images that belong to an effect layer
+                if effect_z_ranges
+                    .iter()
+                    .any(|range| range.contains(&image_draw.z_index))
+                {
+                    continue;
+                }
+                // Skip images after effects — they render in a later pass on top
+                if max_effect_z_end > 0 && image_draw.z_index >= max_effect_z_end {
+                    continue;
+                }
+
                 let rect = image_draw.rect;
                 if rect.width <= 0.0 || rect.height <= 0.0 || image_draw.alpha <= 0.0 {
                     continue;
@@ -1163,6 +1219,18 @@ impl GpuRenderer {
         self.scratch_text_entries.reserve(texts.len());
 
         for (text_index, text_draw) in texts.iter().enumerate() {
+            // Skip texts that belong to an effect layer
+            if effect_z_ranges
+                .iter()
+                .any(|range| range.contains(&text_draw.z_index))
+            {
+                continue;
+            }
+            // Skip texts after effects — they render in a later pass on top
+            if max_effect_z_end > 0 && text_draw.z_index >= max_effect_z_end {
+                continue;
+            }
+
             // Skip empty text or zero-sized rects
             if text_draw.text.is_empty()
                 || text_draw.rect.width <= 0.0
@@ -1345,6 +1413,784 @@ impl GpuRenderer {
             let mut text_cache = self.text_cache.lock().unwrap();
             crate::trim_text_cache(&mut text_cache);
         }
+
+        // === Effect layer processing ===
+        // For each effect layer, render its items to an offscreen target,
+        // apply the effect, and composite the result onto the surface.
+        if !effect_layers.is_empty() {
+            self.render_effect_layers(
+                view,
+                shapes,
+                images,
+                texts,
+                effect_layers,
+                width,
+                height,
+                root_scale,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// Render effect layers: for each layer, render its shapes, images, and text
+    /// to an offscreen target, apply the effect, then composite onto the surface.
+    #[allow(clippy::too_many_arguments)]
+    fn render_effect_layers(
+        &mut self,
+        surface_view: &wgpu::TextureView,
+        shapes: &[DrawShape],
+        images: &[ImageDraw],
+        texts: &[TextDraw],
+        effect_layers: &[EffectLayer],
+        width: u32,
+        height: u32,
+        root_scale: f32,
+    ) -> Result<(), String> {
+        for layer in effect_layers {
+            let z_range = layer.z_start..layer.z_end;
+
+            // Collect items in this effect layer's z-range
+            let layer_shapes: Vec<&DrawShape> = shapes
+                .iter()
+                .filter(|s| z_range.contains(&s.z_index))
+                .collect();
+            let layer_images: Vec<&ImageDraw> = images
+                .iter()
+                .filter(|i| z_range.contains(&i.z_index))
+                .collect();
+            let layer_texts: Vec<&TextDraw> = texts
+                .iter()
+                .filter(|t| z_range.contains(&t.z_index))
+                .collect();
+
+            if layer_shapes.is_empty() && layer_images.is_empty() && layer_texts.is_empty() {
+                continue;
+            }
+
+            // Acquire offscreen target (full viewport size for coordinate compatibility)
+            let source = self
+                .effect_renderer
+                .offscreen_pool
+                .acquire(&self.device, width, height);
+
+            // Render all content types to offscreen target.
+            // Shapes first (with Clear), then images and text (with Load).
+            let mut has_content = false;
+
+            if !layer_shapes.is_empty() {
+                self.render_shapes_to_offscreen(
+                    &source.view,
+                    &layer_shapes,
+                    width,
+                    height,
+                    root_scale,
+                    false,
+                );
+                has_content = true;
+            }
+
+            if !layer_images.is_empty() {
+                self.render_images_to_offscreen(
+                    &source.view,
+                    &layer_images,
+                    width,
+                    height,
+                    root_scale,
+                    has_content,
+                )?;
+                has_content = true;
+            }
+
+            if !layer_texts.is_empty() {
+                self.render_text_to_offscreen(
+                    &source.view,
+                    &layer_texts,
+                    width,
+                    height,
+                    root_scale,
+                    has_content,
+                )?;
+            }
+
+            // Acquire destination for effect output
+            let dest = self
+                .effect_renderer
+                .offscreen_pool
+                .acquire(&self.device, width, height);
+
+            // Compute effect layer pixel rect for shader coordinate mapping
+            let layer_pixel_rect = [
+                layer.rect.x * root_scale,
+                layer.rect.y * root_scale,
+                layer.rect.width * root_scale,
+                layer.rect.height * root_scale,
+            ];
+
+            // Apply the effect: source → dest
+            self.effect_renderer.apply_effect(
+                &self.device,
+                &self.queue,
+                &source,
+                &dest.view,
+                &layer.effect,
+                layer_pixel_rect,
+            );
+
+            // Composite the effected result onto the surface with alpha blending
+            self.effect_renderer.composite_to_view(
+                &self.device,
+                &self.queue,
+                &dest,
+                surface_view,
+                wgpu::LoadOp::Load,
+            );
+
+            // Return offscreen targets to pool
+            self.effect_renderer.offscreen_pool.release(source);
+            self.effect_renderer.offscreen_pool.release(dest);
+        }
+
+        // Render items that come AFTER effect layers in z-order.
+        // These were excluded from the main render pass so they draw on top
+        // of the composited effect result.
+        let max_z_end = effect_layers.iter().map(|l| l.z_end).max().unwrap_or(0);
+
+        let after_shapes: Vec<&DrawShape> =
+            shapes.iter().filter(|s| s.z_index >= max_z_end).collect();
+        let after_images: Vec<&ImageDraw> =
+            images.iter().filter(|i| i.z_index >= max_z_end).collect();
+        let after_texts: Vec<&TextDraw> = texts.iter().filter(|t| t.z_index >= max_z_end).collect();
+
+        if !after_shapes.is_empty() {
+            self.render_shapes_to_offscreen(
+                surface_view,
+                &after_shapes,
+                width,
+                height,
+                root_scale,
+                true,
+            );
+        }
+        if !after_images.is_empty() {
+            self.render_images_to_offscreen(
+                surface_view,
+                &after_images,
+                width,
+                height,
+                root_scale,
+                true,
+            )?;
+        }
+        if !after_texts.is_empty() {
+            self.render_text_to_offscreen(
+                surface_view,
+                &after_texts,
+                width,
+                height,
+                root_scale,
+                true,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// Render a subset of shapes to a target view.
+    ///
+    /// Uses the same shape pipeline and uniforms as the main render path.
+    /// When `has_prior_content` is false, clears to transparent first;
+    /// when true, preserves existing content (LoadOp::Load).
+    fn render_shapes_to_offscreen(
+        &mut self,
+        target_view: &wgpu::TextureView,
+        layer_shapes: &[&DrawShape],
+        width: u32,
+        height: u32,
+        root_scale: f32,
+        has_prior_content: bool,
+    ) {
+        if layer_shapes.is_empty() {
+            return;
+        }
+
+        // Update viewport uniforms (should already be set, but ensure correctness)
+        let uniforms = Uniforms {
+            viewport: [width as f32, height as f32],
+            _padding: [0.0, 0.0],
+        };
+        self.queue
+            .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+
+        // Build shape data for this subset
+        self.scratch_shape_data.clear();
+        self.scratch_gradients.clear();
+        self.scratch_vertices.clear();
+        self.scratch_indices.clear();
+
+        for (idx, shape) in layer_shapes.iter().enumerate() {
+            let rect = shape.rect;
+            let x = rect.x * root_scale;
+            let y = rect.y * root_scale;
+            let w = rect.width * root_scale;
+            let h = rect.height * root_scale;
+
+            // Clip rect (scaled to physical pixels)
+            let clip_rect = if let Some(clip) = shape.clip {
+                [
+                    clip.x * root_scale,
+                    clip.y * root_scale,
+                    clip.width * root_scale,
+                    clip.height * root_scale,
+                ]
+            } else {
+                [0.0, 0.0, 0.0, 0.0]
+            };
+
+            // Gradient parameters
+            let mut gradient_params = [0.0f32; 4];
+            let (brush_type, gradient_start, gradient_count) = match &shape.brush {
+                Brush::Solid(_) => (0u32, 0u32, 0u32),
+                Brush::LinearGradient(colors) => {
+                    let start = self.scratch_gradients.len() as u32;
+                    for c in colors {
+                        self.scratch_gradients.push(GradientStop {
+                            color: [c.r(), c.g(), c.b(), c.a()],
+                        });
+                    }
+                    (1u32, start, colors.len() as u32)
+                }
+                Brush::RadialGradient {
+                    colors,
+                    center,
+                    radius,
+                } => {
+                    let start = self.scratch_gradients.len() as u32;
+                    for c in colors {
+                        self.scratch_gradients.push(GradientStop {
+                            color: [c.r(), c.g(), c.b(), c.a()],
+                        });
+                    }
+                    gradient_params = [
+                        x + center.x * root_scale,
+                        y + center.y * root_scale,
+                        (radius * root_scale).max(f32::EPSILON),
+                        0.0,
+                    ];
+                    (2u32, start, colors.len() as u32)
+                }
+                Brush::SweepGradient { colors, center } => {
+                    let start = self.scratch_gradients.len() as u32;
+                    for c in colors {
+                        self.scratch_gradients.push(GradientStop {
+                            color: [c.r(), c.g(), c.b(), c.a()],
+                        });
+                    }
+                    gradient_params = [
+                        x + center.x * root_scale,
+                        y + center.y * root_scale,
+                        0.0,
+                        0.0,
+                    ];
+                    (3u32, start, colors.len() as u32)
+                }
+            };
+
+            let radii = if let Some(rounded) = shape.shape {
+                let resolved = rounded.resolve(rect.width, rect.height);
+                [
+                    resolved.top_left * root_scale,
+                    resolved.top_right * root_scale,
+                    resolved.bottom_left * root_scale,
+                    resolved.bottom_right * root_scale,
+                ]
+            } else {
+                [0.0, 0.0, 0.0, 0.0]
+            };
+
+            self.scratch_shape_data.push(ShapeData {
+                rect: [x, y, w, h],
+                radii,
+                gradient_params,
+                clip_rect,
+                brush_type,
+                gradient_start,
+                gradient_count,
+                _padding: 0,
+            });
+
+            // Build vertices
+            let base_vertex = (idx * 4) as u32;
+            let color = match &shape.brush {
+                Brush::Solid(c) => [c.r(), c.g(), c.b(), c.a()],
+                Brush::LinearGradient(colors) => {
+                    let first = colors.first().unwrap_or(&Color(1.0, 1.0, 1.0, 1.0));
+                    [first.r(), first.g(), first.b(), first.a()]
+                }
+                Brush::RadialGradient { colors, .. } | Brush::SweepGradient { colors, .. } => {
+                    let first = colors.first().unwrap_or(&Color(1.0, 1.0, 1.0, 1.0));
+                    [first.r(), first.g(), first.b(), first.a()]
+                }
+            };
+
+            self.scratch_vertices.extend_from_slice(&[
+                Vertex {
+                    position: [x, y],
+                    color,
+                    uv: [0.0, 0.0],
+                },
+                Vertex {
+                    position: [x + w, y],
+                    color,
+                    uv: [1.0, 0.0],
+                },
+                Vertex {
+                    position: [x, y + h],
+                    color,
+                    uv: [0.0, 1.0],
+                },
+                Vertex {
+                    position: [x + w, y + h],
+                    color,
+                    uv: [1.0, 1.0],
+                },
+            ]);
+
+            self.scratch_indices.extend_from_slice(&[
+                base_vertex,
+                base_vertex + 1,
+                base_vertex + 2,
+                base_vertex + 2,
+                base_vertex + 1,
+                base_vertex + 3,
+            ]);
+        }
+
+        if self.scratch_vertices.is_empty() {
+            return;
+        }
+
+        let shape_count = self.scratch_shape_data.len();
+
+        // Ensure buffers have capacity
+        self.shape_buffers.ensure_capacity(
+            &self.device,
+            &self.shape_bind_group_layout,
+            shape_count * 4,
+            shape_count * 6,
+            shape_count,
+            self.scratch_gradients.len().max(1),
+        );
+
+        // Write data to GPU buffers
+        self.queue.write_buffer(
+            &self.shape_buffers.vertex_buffer,
+            0,
+            bytemuck::cast_slice(&self.scratch_vertices),
+        );
+        self.queue.write_buffer(
+            &self.shape_buffers.index_buffer,
+            0,
+            bytemuck::cast_slice(&self.scratch_indices),
+        );
+        self.queue.write_buffer(
+            &self.shape_buffers.shape_buffer,
+            0,
+            bytemuck::cast_slice(&self.scratch_shape_data),
+        );
+        if !self.scratch_gradients.is_empty() {
+            self.queue.write_buffer(
+                &self.shape_buffers.gradient_buffer,
+                0,
+                bytemuck::cast_slice(&self.scratch_gradients),
+            );
+        }
+
+        // Create render pass targeting the view
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Effect Layer Shape Encoder"),
+            });
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Effect Layer Shape Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: if has_prior_content {
+                            wgpu::LoadOp::Load
+                        } else {
+                            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                        },
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            render_pass.set_pipeline(&self.pipeline);
+            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            render_pass.set_bind_group(1, &self.shape_buffers.bind_group, &[]);
+            render_pass.set_vertex_buffer(0, self.shape_buffers.vertex_buffer.slice(..));
+            render_pass.set_index_buffer(
+                self.shape_buffers.index_buffer.slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+            render_pass.draw_indexed(0..(shape_count as u32 * 6), 0, 0..1);
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    /// Render a subset of images to an offscreen target view.
+    #[allow(clippy::too_many_arguments)]
+    fn render_images_to_offscreen(
+        &mut self,
+        target_view: &wgpu::TextureView,
+        layer_images: &[&ImageDraw],
+        width: u32,
+        height: u32,
+        root_scale: f32,
+        has_prior_content: bool,
+    ) -> Result<(), String> {
+        // Ensure all images are cached
+        for image_draw in layer_images {
+            self.ensure_image_cached(&image_draw.image)?;
+        }
+
+        // Build vertices and draw commands (same batching approach as main render)
+        struct ImageDrawCmd {
+            index_start: u32,
+            scissor: (u32, u32, u32, u32),
+            image_id: u64,
+        }
+        let mut image_vertices: Vec<Vertex> = Vec::with_capacity(layer_images.len() * 4);
+        let mut image_indices: Vec<u32> = Vec::with_capacity(layer_images.len() * 6);
+        let mut image_cmds: Vec<ImageDrawCmd> = Vec::with_capacity(layer_images.len());
+
+        for image_draw in layer_images {
+            let rect = image_draw.rect;
+            if rect.width <= 0.0 || rect.height <= 0.0 || image_draw.alpha <= 0.0 {
+                continue;
+            }
+
+            let x = rect.x * root_scale;
+            let y = rect.y * root_scale;
+            let w = rect.width * root_scale;
+            let h = rect.height * root_scale;
+            if w <= 0.0 || h <= 0.0 {
+                continue;
+            }
+
+            let tint = tint_for_image(image_draw.color_filter, image_draw.alpha);
+            if tint[3] <= 0.0 {
+                continue;
+            }
+
+            let scissor = scissor_rect_for_image(image_draw, root_scale, width, height);
+            let Some(scissor) = scissor else {
+                continue;
+            };
+
+            let (u_min, v_min, u_max, v_max) = if let Some(sr) = image_draw.src_rect {
+                let iw = image_draw.image.width() as f32;
+                let ih = image_draw.image.height() as f32;
+                (
+                    sr.x / iw,
+                    sr.y / ih,
+                    (sr.x + sr.width) / iw,
+                    (sr.y + sr.height) / ih,
+                )
+            } else {
+                (0.0, 0.0, 1.0, 1.0)
+            };
+
+            let base_vertex = image_vertices.len() as u32;
+            let index_start = image_indices.len() as u32;
+            image_indices.extend_from_slice(&[
+                base_vertex,
+                base_vertex + 1,
+                base_vertex + 2,
+                base_vertex + 2,
+                base_vertex + 1,
+                base_vertex + 3,
+            ]);
+            image_vertices.extend_from_slice(&[
+                Vertex {
+                    position: [x, y],
+                    color: tint,
+                    uv: [u_min, v_min],
+                },
+                Vertex {
+                    position: [x + w, y],
+                    color: tint,
+                    uv: [u_max, v_min],
+                },
+                Vertex {
+                    position: [x, y + h],
+                    color: tint,
+                    uv: [u_min, v_max],
+                },
+                Vertex {
+                    position: [x + w, y + h],
+                    color: tint,
+                    uv: [u_max, v_max],
+                },
+            ]);
+
+            image_cmds.push(ImageDrawCmd {
+                index_start,
+                scissor,
+                image_id: image_draw.image.id(),
+            });
+        }
+
+        if image_cmds.is_empty() {
+            return Ok(());
+        }
+
+        // Resize buffers if needed
+        let needed_bytes = (image_vertices.len() * std::mem::size_of::<Vertex>()) as u64;
+        if needed_bytes > self.image_vertex_buffer.size() {
+            self.image_vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Image Vertex Buffer"),
+                size: needed_bytes,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+        let needed_index_bytes = (image_indices.len() * std::mem::size_of::<u32>()) as u64;
+        if needed_index_bytes > self.image_index_buffer.size() {
+            self.image_index_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Image Index Buffer"),
+                size: needed_index_bytes,
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+
+        self.queue.write_buffer(
+            &self.image_vertex_buffer,
+            0,
+            bytemuck::cast_slice(&image_vertices),
+        );
+        self.queue.write_buffer(
+            &self.image_index_buffer,
+            0,
+            bytemuck::cast_slice(&image_indices),
+        );
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Effect Layer Image Encoder"),
+            });
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Effect Layer Image Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: if has_prior_content {
+                            wgpu::LoadOp::Load
+                        } else {
+                            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                        },
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            render_pass.set_pipeline(&self.image_pipeline);
+            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            render_pass
+                .set_index_buffer(self.image_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            render_pass.set_vertex_buffer(0, self.image_vertex_buffer.slice(..));
+
+            for cmd in &image_cmds {
+                let (sx, sy, sw, sh) = cmd.scissor;
+                render_pass.set_scissor_rect(sx, sy, sw, sh);
+
+                let cached = self
+                    .image_texture_cache
+                    .get(&cmd.image_id)
+                    .ok_or_else(|| "image texture missing from cache".to_string())?;
+                render_pass.set_bind_group(1, &cached.bind_group, &[]);
+                render_pass.draw_indexed(cmd.index_start..(cmd.index_start + 6), 0, 0..1);
+            }
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        Ok(())
+    }
+
+    /// Render a subset of text to an offscreen target view.
+    #[allow(clippy::too_many_arguments)]
+    fn render_text_to_offscreen(
+        &mut self,
+        target_view: &wgpu::TextureView,
+        layer_texts: &[&TextDraw],
+        width: u32,
+        height: u32,
+        root_scale: f32,
+        has_prior_content: bool,
+    ) -> Result<(), String> {
+        let mut font_system = self.font_system.lock().unwrap();
+        let mut text_cache = self.text_cache.lock().unwrap();
+
+        // Prepare text buffers for this subset
+        let mut text_keys: Vec<TextCacheKey> = Vec::with_capacity(layer_texts.len());
+
+        for text_draw in layer_texts {
+            if text_draw.text.is_empty()
+                || text_draw.rect.width <= 0.0
+                || text_draw.rect.height <= 0.0
+            {
+                continue;
+            }
+
+            let font_size_px = text_draw.font_size * text_draw.scale * root_scale;
+            let key = TextCacheKey::for_node(text_draw.node_id, font_size_px);
+
+            let buffer = text_cache.entry(key.clone()).or_insert_with(|| {
+                let buffer = glyphon::Buffer::new(
+                    &mut font_system,
+                    Metrics::new(font_size_px, font_size_px * 1.4),
+                );
+                SharedTextBuffer {
+                    buffer,
+                    text: String::new(),
+                    font_size: 0.0,
+                    cached_size: None,
+                }
+            });
+
+            buffer.ensure(
+                &mut font_system,
+                text_draw.text.as_ref(),
+                font_size_px,
+                Attrs::new(),
+            );
+
+            text_keys.push(key);
+        }
+
+        // Build text areas
+        let mut text_areas = Vec::with_capacity(text_keys.len());
+        let mut key_idx = 0;
+
+        for text_draw in layer_texts {
+            if text_draw.text.is_empty()
+                || text_draw.rect.width <= 0.0
+                || text_draw.rect.height <= 0.0
+            {
+                continue;
+            }
+
+            let key = &text_keys[key_idx];
+            key_idx += 1;
+
+            let cached = text_cache.get(key).expect("Text should be in cache");
+
+            let color = GlyphonColor::rgba(
+                (text_draw.color.r() * 255.0) as u8,
+                (text_draw.color.g() * 255.0) as u8,
+                (text_draw.color.b() * 255.0) as u8,
+                (text_draw.color.a() * 255.0) as u8,
+            );
+
+            let left_px = text_draw.rect.x * root_scale;
+            let top_px = text_draw.rect.y * root_scale;
+
+            let bounds = TextBounds {
+                left: text_draw
+                    .clip
+                    .map(|c| (c.x * root_scale) as i32)
+                    .unwrap_or(0),
+                top: text_draw
+                    .clip
+                    .map(|c| (c.y * root_scale) as i32)
+                    .unwrap_or(0),
+                right: text_draw
+                    .clip
+                    .map(|c| ((c.x + c.width) * root_scale) as i32)
+                    .unwrap_or(width as i32),
+                bottom: text_draw
+                    .clip
+                    .map(|c| ((c.y + c.height) * root_scale) as i32)
+                    .unwrap_or(height as i32),
+            };
+
+            text_areas.push(TextArea {
+                buffer: &cached.buffer,
+                left: left_px,
+                top: top_px,
+                scale: 1.0,
+                bounds,
+                default_color: color,
+                custom_glyphs: &[],
+            });
+        }
+
+        if text_areas.is_empty() {
+            return Ok(());
+        }
+
+        // Prepare and render text to offscreen target
+        self.text_viewport
+            .update(&self.queue, Resolution { width, height });
+        self.text_renderer
+            .prepare(
+                &self.device,
+                &self.queue,
+                &mut font_system,
+                &mut self.text_atlas,
+                &self.text_viewport,
+                text_areas.iter().cloned(),
+                &mut self.swash_cache,
+            )
+            .map_err(|e| format!("Effect text prepare error: {:?}", e))?;
+
+        drop(font_system);
+        drop(text_cache);
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Effect Layer Text Encoder"),
+            });
+        {
+            let mut text_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Effect Layer Text Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: if has_prior_content {
+                            wgpu::LoadOp::Load
+                        } else {
+                            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                        },
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            self.text_renderer
+                .render(&self.text_atlas, &self.text_viewport, &mut text_pass)
+                .map_err(|e| format!("Effect text render error: {:?}", e))?;
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
 
         Ok(())
     }

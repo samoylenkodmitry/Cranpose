@@ -87,7 +87,7 @@ fn hash_option_f32<H: Hasher>(state: &mut H, value: Option<f32>) {
     }
 }
 
-fn hash_graphics_layer<H: Hasher>(state: &mut H, layer: GraphicsLayer) {
+fn hash_graphics_layer<H: Hasher>(state: &mut H, layer: &GraphicsLayer) {
     hash_f32_value(state, layer.alpha);
     hash_f32_value(state, layer.scale);
     hash_f32_value(state, layer.translation_x);
@@ -554,7 +554,7 @@ impl GraphicsLayerNode {
     }
 
     pub fn layer(&self) -> GraphicsLayer {
-        self.layer
+        self.layer.clone()
     }
 }
 
@@ -584,7 +584,7 @@ impl GraphicsLayerElement {
 
 impl Hash for GraphicsLayerElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        hash_graphics_layer(state, self.layer);
+        hash_graphics_layer(state, &self.layer);
     }
 }
 
@@ -592,12 +592,12 @@ impl ModifierNodeElement for GraphicsLayerElement {
     type Node = GraphicsLayerNode;
 
     fn create(&self) -> Self::Node {
-        GraphicsLayerNode::new(self.layer)
+        GraphicsLayerNode::new(self.layer.clone())
     }
 
     fn update(&self, node: &mut Self::Node) {
         if node.layer != self.layer {
-            node.layer = self.layer;
+            node.layer = self.layer.clone();
         }
     }
 

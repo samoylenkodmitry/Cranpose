@@ -6,7 +6,7 @@ impl Modifier {
     ///
     /// Example: `Modifier::empty().graphics_layer(GraphicsLayer { alpha: 0.5, ..Default::default() })`
     pub fn graphics_layer(self, layer: GraphicsLayer) -> Self {
-        let inspector_values = layer;
+        let inspector_values = layer.clone();
         let modifier = Self::with_element(GraphicsLayerElement::new(layer))
             .with_inspector_metadata(inspector_metadata("graphicsLayer", move |info| {
                 info.add_property("alpha", inspector_values.alpha.to_string());

@@ -25,16 +25,14 @@ impl NodeStyle {
         let slices: &ModifierNodeSlices = data.modifier_slices();
         let pointer_inputs = slices.pointer_inputs().to_vec();
 
-        // Visual properties (background, shape) are now encoded in draw commands within modifier
-        // slices. Graphics layer is extracted directly from the slices for coordinate transformations.
         Self {
             padding: resolved.padding(),
-            background: None, // Now rendered via draw commands
+            background: None,
             click_actions: slices.click_handlers().to_vec(),
-            shape: None, // Now encoded in draw command round rects
+            shape: None,
             pointer_inputs,
             draw_commands: slices.draw_commands().to_vec(),
-            graphics_layer: slices.graphics_layer(), // Extracted from GraphicsLayerNode
+            graphics_layer: slices.graphics_layer(),
             clip_to_bounds: slices.clip_to_bounds(),
         }
     }
@@ -50,13 +48,18 @@ pub(crate) fn combine_layers(
             scale: current.scale * layer.scale,
             translation_x: current.translation_x + layer.translation_x,
             translation_y: current.translation_y + layer.translation_y,
+            // render_effect is NOT inherited — it applies only to this layer's subtree
+            render_effect: layer.render_effect,
         }
     } else {
-        current
+        GraphicsLayer {
+            render_effect: None,
+            ..current
+        }
     }
 }
 
-pub(crate) fn apply_layer_to_rect(rect: Rect, origin: (f32, f32), layer: GraphicsLayer) -> Rect {
+pub(crate) fn apply_layer_to_rect(rect: Rect, origin: (f32, f32), layer: &GraphicsLayer) -> Rect {
     let offset_x = rect.x - origin.0;
     let offset_y = rect.y - origin.1;
     Rect {
@@ -67,7 +70,7 @@ pub(crate) fn apply_layer_to_rect(rect: Rect, origin: (f32, f32), layer: Graphic
     }
 }
 
-pub(crate) fn apply_layer_to_color(color: Color, layer: GraphicsLayer) -> Color {
+pub(crate) fn apply_layer_to_color(color: Color, layer: &GraphicsLayer) -> Color {
     Color(
         color.0,
         color.1,
@@ -76,7 +79,7 @@ pub(crate) fn apply_layer_to_color(color: Color, layer: GraphicsLayer) -> Color 
     )
 }
 
-pub(crate) fn apply_layer_to_brush(brush: Brush, layer: GraphicsLayer) -> Brush {
+pub(crate) fn apply_layer_to_brush(brush: Brush, layer: &GraphicsLayer) -> Brush {
     match brush {
         Brush::Solid(color) => Brush::solid(apply_layer_to_color(color, layer)),
         Brush::LinearGradient(colors) => Brush::LinearGradient(
@@ -102,6 +105,17 @@ pub(crate) fn apply_layer_to_brush(brush: Brush, layer: GraphicsLayer) -> Brush 
                 radius,
             }
         }
+        Brush::SweepGradient { colors, mut center } => {
+            center.x *= layer.scale;
+            center.y *= layer.scale;
+            Brush::SweepGradient {
+                colors: colors
+                    .into_iter()
+                    .map(|c| apply_layer_to_color(c, layer))
+                    .collect(),
+                center,
+            }
+        }
     }
 }
 
@@ -120,14 +134,14 @@ pub(crate) enum DrawPlacement {
     Overlay,
 }
 
-#[allow(clippy::too_many_arguments)] // Render operations need all style and placement parameters
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_draw_commands(
     commands: &[DrawCommand],
     placement: DrawPlacement,
     rect: Rect,
     origin: (f32, f32),
     size: Size,
-    layer: GraphicsLayer,
+    layer: &GraphicsLayer,
     clip: Option<Rect>,
     scene: &mut Scene,
 ) {

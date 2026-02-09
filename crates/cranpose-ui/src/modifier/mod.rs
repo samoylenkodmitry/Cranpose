@@ -12,6 +12,7 @@ use std::rc::Rc;
 
 mod alignment;
 mod background;
+mod blur;
 mod chain;
 mod clickable;
 mod draw_cache;

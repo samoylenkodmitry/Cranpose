@@ -3,9 +3,12 @@
 //! This renderer uses WGPU for cross-platform GPU support across
 //! desktop (Windows/Mac/Linux), web (WebGPU), and mobile (Android/iOS).
 
+mod effect_renderer;
+mod offscreen;
 mod pipeline;
 mod render;
 mod scene;
+mod shader_cache;
 mod shaders;
 
 pub use scene::{ClickAction, DrawShape, HitRegion, ImageDraw, Scene, TextDraw};
@@ -296,6 +299,7 @@ impl WgpuRenderer {
                     &self.scene.shapes,
                     &self.scene.images,
                     &self.scene.texts,
+                    &self.scene.effect_layers,
                     width,
                     height,
                     self.root_scale,

@@ -50,13 +50,14 @@ pub(crate) fn combine_layers(
             scale: current.scale * layer.scale,
             translation_x: current.translation_x + layer.translation_x,
             translation_y: current.translation_y + layer.translation_y,
+            render_effect: layer.render_effect,
         }
     } else {
         current
     }
 }
 
-pub(crate) fn apply_layer_to_rect(rect: Rect, origin: (f32, f32), layer: GraphicsLayer) -> Rect {
+pub(crate) fn apply_layer_to_rect(rect: Rect, origin: (f32, f32), layer: &GraphicsLayer) -> Rect {
     let offset_x = rect.x - origin.0;
     let offset_y = rect.y - origin.1;
     Rect {
@@ -67,7 +68,7 @@ pub(crate) fn apply_layer_to_rect(rect: Rect, origin: (f32, f32), layer: Graphic
     }
 }
 
-pub(crate) fn apply_layer_to_color(color: Color, layer: GraphicsLayer) -> Color {
+pub(crate) fn apply_layer_to_color(color: Color, layer: &GraphicsLayer) -> Color {
     Color(
         color.0,
         color.1,
@@ -76,7 +77,7 @@ pub(crate) fn apply_layer_to_color(color: Color, layer: GraphicsLayer) -> Color 
     )
 }
 
-pub(crate) fn apply_layer_to_brush(brush: Brush, layer: GraphicsLayer) -> Brush {
+pub(crate) fn apply_layer_to_brush(brush: Brush, layer: &GraphicsLayer) -> Brush {
     match brush {
         Brush::Solid(color) => Brush::solid(apply_layer_to_color(color, layer)),
         Brush::LinearGradient(colors) => Brush::LinearGradient(
@@ -100,6 +101,17 @@ pub(crate) fn apply_layer_to_brush(brush: Brush, layer: GraphicsLayer) -> Brush 
                     .collect(),
                 center,
                 radius,
+            }
+        }
+        Brush::SweepGradient { colors, mut center } => {
+            center.x *= layer.scale;
+            center.y *= layer.scale;
+            Brush::SweepGradient {
+                colors: colors
+                    .into_iter()
+                    .map(|c| apply_layer_to_color(c, layer))
+                    .collect(),
+                center,
             }
         }
     }
@@ -127,7 +139,7 @@ pub(crate) fn apply_draw_commands(
     rect: Rect,
     origin: (f32, f32),
     size: Size,
-    layer: GraphicsLayer,
+    layer: &GraphicsLayer,
     clip: Option<Rect>,
     scene: &mut Scene,
 ) {
