@@ -287,6 +287,7 @@ fn InteractiveEffectsDemo() {
             Box(
                 Modifier::empty()
                     .size_points(area_w, area_h)
+                    .clip_to_bounds()
                     .rounded_corners(16.0),
                 BoxSpec::default(),
                 move || {

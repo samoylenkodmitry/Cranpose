@@ -506,14 +506,25 @@ impl EffectRenderer {
 
         // Get or compile pipeline
         let source_hash = shader.source_hash();
-        let pipeline = self.shader_cache.get_or_create(
+        let Some(pipeline) = self.shader_cache.get_or_create(
             device,
             source_hash,
             shader.source(),
             self.surface_format,
             &self.effect_texture_bind_group_layout,
             &self.effect_uniform_bind_group_layout,
-        );
+        ) else {
+            // Invalid or unsupported shader source: degrade gracefully by rendering
+            // the original source texture without applying an effect.
+            self.composite_to_view(
+                device,
+                queue,
+                source,
+                dest_view,
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            );
+            return;
+        };
 
         // Create bind groups
         let texture_bind_group = OffscreenPool::create_texture_bind_group(
