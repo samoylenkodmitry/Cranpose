@@ -6,7 +6,7 @@ use crate::scene::{BackdropLayer, DrawShape, EffectLayer, ImageDraw, TextDraw};
 use crate::shaders;
 use crate::{SharedTextBuffer, SharedTextCache, TextCacheKey};
 use bytemuck::{Pod, Zeroable};
-use cranpose_ui_graphics::{Brush, Color, ColorFilter, ImageBitmap};
+use cranpose_ui_graphics::{Brush, Color, ColorFilter, ImageBitmap, Rect};
 use glyphon::{
     Attrs, Cache, Color as GlyphonColor, FontSystem, Metrics, Resolution, SwashCache, TextArea,
     TextAtlas, TextBounds, TextRenderer, Viewport,
@@ -77,6 +77,30 @@ struct GradientStop {
 
 struct CachedImageTexture {
     bind_group: wgpu::BindGroup,
+}
+
+#[derive(Clone, Copy)]
+enum LayerEventKind {
+    Backdrop(usize),
+    Effect(usize),
+}
+
+#[derive(Clone, Copy)]
+struct LayerEvent {
+    z_index: usize,
+    kind: LayerEventKind,
+}
+
+impl LayerEvent {
+    fn sort_key(self) -> (usize, u8) {
+        let kind_order = match self.kind {
+            // Backdrop must run before same-z content/effects so it samples only
+            // already-rendered background.
+            LayerEventKind::Backdrop(_) => 0,
+            LayerEventKind::Effect(_) => 1,
+        };
+        (self.z_index, kind_order)
+    }
 }
 
 // Cached text buffer is now defined in lib.rs as SharedTextBuffer and shared
@@ -1464,51 +1488,6 @@ impl GpuRenderer {
         height: u32,
         root_scale: f32,
     ) -> Result<(), String> {
-        #[derive(Clone, Copy)]
-        enum LayerEventKind {
-            Backdrop(usize),
-            Effect(usize),
-        }
-
-        #[derive(Clone, Copy)]
-        struct LayerEvent {
-            z_index: usize,
-            kind: LayerEventKind,
-        }
-
-        impl LayerEvent {
-            fn sort_key(self) -> (usize, u8) {
-                let kind_order = match self.kind {
-                    // Backdrop must run before same-z content/effects so it samples only
-                    // already rendered background.
-                    LayerEventKind::Backdrop(_) => 0,
-                    LayerEventKind::Effect(_) => 1,
-                };
-                (self.z_index, kind_order)
-            }
-        }
-
-        let mut events = Vec::with_capacity(effect_layers.len() + backdrop_layers.len());
-        for (index, layer) in backdrop_layers.iter().enumerate() {
-            events.push(LayerEvent {
-                z_index: layer.z_index,
-                kind: LayerEventKind::Backdrop(index),
-            });
-        }
-        for (index, layer) in effect_layers.iter().enumerate() {
-            events.push(LayerEvent {
-                z_index: layer.z_start,
-                kind: LayerEventKind::Effect(index),
-            });
-        }
-        events.sort_by_key(|event| event.sort_key());
-
-        let mut effect_z_ranges: Vec<Range<usize>> = effect_layers
-            .iter()
-            .map(|layer| layer.z_start..layer.z_end)
-            .collect();
-        effect_z_ranges.sort_by_key(|range| range.start);
-
         let scene_end = scene_end_z(shapes, images, texts, effect_layers, backdrop_layers);
 
         // Double-buffer path: accumulate everything into an intermediate texture.
@@ -1518,71 +1497,20 @@ impl GpuRenderer {
             .acquire(&self.device, width, height);
         self.clear_target_view(&accum.view, CLEAR_COLOR);
 
-        let mut cursor_z = 0usize;
-        for event in events {
-            if event.z_index > cursor_z {
-                self.render_non_effect_segment(
-                    &accum.view,
-                    shapes,
-                    images,
-                    texts,
-                    cursor_z,
-                    event.z_index,
-                    &effect_z_ranges,
-                    width,
-                    height,
-                    root_scale,
-                )?;
-                cursor_z = event.z_index;
-            } else if event.z_index < cursor_z {
-                // Already consumed by a previous effect range.
-                continue;
-            }
-
-            match event.kind {
-                LayerEventKind::Backdrop(index) => {
-                    self.apply_backdrop_layer_to_target(
-                        &accum,
-                        &backdrop_layers[index],
-                        width,
-                        height,
-                        root_scale,
-                    )?;
-                }
-                LayerEventKind::Effect(index) => {
-                    let layer = &effect_layers[index];
-                    if layer.z_start < cursor_z {
-                        continue;
-                    }
-                    self.render_effect_layer_to_target(
-                        &accum.view,
-                        shapes,
-                        images,
-                        texts,
-                        layer,
-                        width,
-                        height,
-                        root_scale,
-                    )?;
-                    cursor_z = cursor_z.max(layer.z_end);
-                }
-            }
-        }
-
-        if cursor_z < scene_end {
-            self.render_non_effect_segment(
-                &accum.view,
-                shapes,
-                images,
-                texts,
-                cursor_z,
-                scene_end,
-                &effect_z_ranges,
-                width,
-                height,
-                root_scale,
-            )?;
-        }
+        self.render_range_with_layer_events_to_target(
+            &accum,
+            shapes,
+            images,
+            texts,
+            effect_layers,
+            backdrop_layers,
+            0,
+            scene_end,
+            None,
+            width,
+            height,
+            root_scale,
+        )?;
 
         self.effect_renderer.composite_to_view(
             &self.device,
@@ -1595,6 +1523,107 @@ impl GpuRenderer {
 
         let mut text_cache = self.text_cache.lock().unwrap();
         crate::trim_text_cache(&mut text_cache);
+
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_range_with_layer_events_to_target(
+        &mut self,
+        target: &OffscreenTarget,
+        shapes: &[DrawShape],
+        images: &[ImageDraw],
+        texts: &[TextDraw],
+        effect_layers: &[EffectLayer],
+        backdrop_layers: &[BackdropLayer],
+        z_start: usize,
+        z_end: usize,
+        excluded_effect_layer: Option<usize>,
+        width: u32,
+        height: u32,
+        root_scale: f32,
+    ) -> Result<(), String> {
+        if z_start >= z_end {
+            return Ok(());
+        }
+
+        let effect_z_ranges =
+            collect_effect_ranges(effect_layers, z_start, z_end, excluded_effect_layer);
+        let events = collect_layer_events(
+            effect_layers,
+            backdrop_layers,
+            z_start,
+            z_end,
+            excluded_effect_layer,
+        );
+
+        let mut cursor_z = z_start;
+        for event in events {
+            if event.z_index > cursor_z {
+                self.render_non_effect_segment(
+                    &target.view,
+                    shapes,
+                    images,
+                    texts,
+                    cursor_z,
+                    event.z_index,
+                    &effect_z_ranges,
+                    width,
+                    height,
+                    root_scale,
+                )?;
+                cursor_z = event.z_index;
+            } else if event.z_index < cursor_z {
+                // Already consumed by a previously composited effect range.
+                continue;
+            }
+
+            match event.kind {
+                LayerEventKind::Backdrop(index) => {
+                    self.apply_backdrop_layer_to_target(
+                        target,
+                        &backdrop_layers[index],
+                        width,
+                        height,
+                        root_scale,
+                    )?;
+                }
+                LayerEventKind::Effect(index) => {
+                    let layer = &effect_layers[index];
+                    if layer.z_start < cursor_z {
+                        continue;
+                    }
+                    self.render_effect_layer_to_target(
+                        &target.view,
+                        shapes,
+                        images,
+                        texts,
+                        effect_layers,
+                        backdrop_layers,
+                        index,
+                        width,
+                        height,
+                        root_scale,
+                    )?;
+                    cursor_z = cursor_z.max(layer.z_end);
+                }
+            }
+        }
+
+        if cursor_z < z_end {
+            self.render_non_effect_segment(
+                &target.view,
+                shapes,
+                images,
+                texts,
+                cursor_z,
+                z_end,
+                &effect_z_ranges,
+                width,
+                height,
+                root_scale,
+            )?;
+        }
 
         Ok(())
     }
@@ -1688,68 +1717,43 @@ impl GpuRenderer {
         shapes: &[DrawShape],
         images: &[ImageDraw],
         texts: &[TextDraw],
-        layer: &EffectLayer,
+        effect_layers: &[EffectLayer],
+        backdrop_layers: &[BackdropLayer],
+        effect_layer_index: usize,
         width: u32,
         height: u32,
         root_scale: f32,
     ) -> Result<(), String> {
-        let z_range = layer.z_start..layer.z_end;
-
-        let layer_shapes: Vec<&DrawShape> = shapes
-            .iter()
-            .filter(|shape| z_range.contains(&shape.z_index))
-            .collect();
-        let layer_images: Vec<&ImageDraw> = images
-            .iter()
-            .filter(|image| z_range.contains(&image.z_index))
-            .collect();
-        let layer_texts: Vec<&TextDraw> = texts
-            .iter()
-            .filter(|text| z_range.contains(&text.z_index))
-            .collect();
-
-        if layer_shapes.is_empty() && layer_images.is_empty() && layer_texts.is_empty() {
+        let layer = effect_layers
+            .get(effect_layer_index)
+            .cloned()
+            .ok_or_else(|| "effect layer index out of bounds".to_string())?;
+        let Some(scissor) =
+            scissor_rect_for_layer(layer.rect, layer.clip, root_scale, width, height)
+        else {
             return Ok(());
-        }
+        };
 
         let source = self
             .effect_renderer
             .offscreen_pool
             .acquire(&self.device, width, height);
+        self.clear_target_view(&source.view, wgpu::Color::TRANSPARENT);
 
-        let mut has_content = false;
-        if !layer_shapes.is_empty() {
-            self.render_shapes_to_offscreen(
-                &source.view,
-                &layer_shapes,
-                width,
-                height,
-                root_scale,
-                has_content,
-            );
-            has_content = true;
-        }
-        if !layer_images.is_empty() {
-            self.render_images_to_offscreen(
-                &source.view,
-                &layer_images,
-                width,
-                height,
-                root_scale,
-                has_content,
-            )?;
-            has_content = true;
-        }
-        if !layer_texts.is_empty() {
-            self.render_text_to_offscreen(
-                &source.view,
-                &layer_texts,
-                width,
-                height,
-                root_scale,
-                has_content,
-            )?;
-        }
+        self.render_range_with_layer_events_to_target(
+            &source,
+            shapes,
+            images,
+            texts,
+            effect_layers,
+            backdrop_layers,
+            layer.z_start,
+            layer.z_end,
+            Some(effect_layer_index),
+            width,
+            height,
+            root_scale,
+        )?;
 
         let dest = self
             .effect_renderer
@@ -1772,12 +1776,13 @@ impl GpuRenderer {
             layer_pixel_rect,
         );
 
-        self.effect_renderer.composite_to_view(
+        self.effect_renderer.composite_to_view_scissored(
             &self.device,
             &self.queue,
             &dest,
             target_view,
             wgpu::LoadOp::Load,
+            Some(scissor),
         );
 
         self.effect_renderer.offscreen_pool.release(source);
@@ -1794,7 +1799,9 @@ impl GpuRenderer {
         height: u32,
         root_scale: f32,
     ) -> Result<(), String> {
-        let Some(scissor) = scissor_rect_for_rect(layer.rect, root_scale, width, height) else {
+        let Some(scissor) =
+            scissor_rect_for_layer(layer.rect, layer.clip, root_scale, width, height)
+        else {
             return Ok(());
         };
 
@@ -2636,6 +2643,65 @@ fn is_in_effect_range(z_index: usize, effect_z_ranges: &[Range<usize>]) -> bool 
     effect_z_ranges.iter().any(|range| range.contains(&z_index))
 }
 
+fn effect_layer_in_range(layer: &EffectLayer, z_start: usize, z_end: usize) -> bool {
+    layer.z_start >= z_start && layer.z_start < z_end && layer.z_end <= z_end
+}
+
+fn collect_effect_ranges(
+    effect_layers: &[EffectLayer],
+    z_start: usize,
+    z_end: usize,
+    excluded_effect_layer: Option<usize>,
+) -> Vec<Range<usize>> {
+    let mut ranges: Vec<Range<usize>> = effect_layers
+        .iter()
+        .enumerate()
+        .filter_map(|(index, layer)| {
+            if Some(index) == excluded_effect_layer {
+                return None;
+            }
+            if effect_layer_in_range(layer, z_start, z_end) {
+                Some(layer.z_start..layer.z_end)
+            } else {
+                None
+            }
+        })
+        .collect();
+    ranges.sort_by_key(|range| range.start);
+    ranges
+}
+
+fn collect_layer_events(
+    effect_layers: &[EffectLayer],
+    backdrop_layers: &[BackdropLayer],
+    z_start: usize,
+    z_end: usize,
+    excluded_effect_layer: Option<usize>,
+) -> Vec<LayerEvent> {
+    let mut events = Vec::with_capacity(effect_layers.len() + backdrop_layers.len());
+    for (index, layer) in backdrop_layers.iter().enumerate() {
+        if layer.z_index >= z_start && layer.z_index < z_end {
+            events.push(LayerEvent {
+                z_index: layer.z_index,
+                kind: LayerEventKind::Backdrop(index),
+            });
+        }
+    }
+    for (index, layer) in effect_layers.iter().enumerate() {
+        if Some(index) == excluded_effect_layer {
+            continue;
+        }
+        if effect_layer_in_range(layer, z_start, z_end) {
+            events.push(LayerEvent {
+                z_index: layer.z_start,
+                kind: LayerEventKind::Effect(index),
+            });
+        }
+    }
+    events.sort_by_key(|event| event.sort_key());
+    events
+}
+
 fn scene_end_z(
     shapes: &[DrawShape],
     images: &[ImageDraw],
@@ -2663,7 +2729,7 @@ fn scene_end_z(
 }
 
 fn scissor_rect_for_rect(
-    rect: cranpose_ui_graphics::Rect,
+    rect: Rect,
     root_scale: f32,
     width: u32,
     height: u32,
@@ -2688,6 +2754,39 @@ fn scissor_rect_for_rect(
         (right - left) as u32,
         (bottom - top) as u32,
     ))
+}
+
+fn scissor_rect_for_layer(
+    rect: Rect,
+    clip: Option<Rect>,
+    root_scale: f32,
+    width: u32,
+    height: u32,
+) -> Option<(u32, u32, u32, u32)> {
+    let clipped_rect = match clip {
+        Some(clip_rect) => intersect_rect(rect, clip_rect)?,
+        None => rect,
+    };
+
+    scissor_rect_for_rect(clipped_rect, root_scale, width, height)
+}
+
+fn intersect_rect(a: Rect, b: Rect) -> Option<Rect> {
+    let left = a.x.max(b.x);
+    let top = a.y.max(b.y);
+    let right = (a.x + a.width).min(b.x + b.width);
+    let bottom = (a.y + a.height).min(b.y + b.height);
+
+    if right <= left || bottom <= top {
+        return None;
+    }
+
+    Some(Rect {
+        x: left,
+        y: top,
+        width: right - left,
+        height: bottom - top,
+    })
 }
 
 fn tint_for_image(color_filter: Option<ColorFilter>, alpha: f32) -> [f32; 4] {
@@ -2736,4 +2835,100 @@ fn scissor_rect_for_image(
         (right - left) as u32,
         (bottom - top) as u32,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cranpose_ui_graphics::{Rect, RenderEffect};
+
+    fn effect_layer(z_start: usize, z_end: usize) -> EffectLayer {
+        EffectLayer {
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            clip: None,
+            effect: RenderEffect::blur(4.0),
+            z_start,
+            z_end,
+        }
+    }
+
+    fn backdrop_layer(z_index: usize) -> BackdropLayer {
+        BackdropLayer {
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            clip: None,
+            effect: RenderEffect::blur(2.0),
+            z_index,
+        }
+    }
+
+    #[test]
+    fn scissor_rect_for_layer_intersects_with_clip() {
+        let rect = Rect {
+            x: 10.0,
+            y: 10.0,
+            width: 30.0,
+            height: 20.0,
+        };
+        let clip = Rect {
+            x: 20.0,
+            y: 15.0,
+            width: 100.0,
+            height: 100.0,
+        };
+
+        let scissor = scissor_rect_for_layer(rect, Some(clip), 1.0, 200, 200);
+        assert_eq!(scissor, Some((20, 15, 20, 15)));
+    }
+
+    #[test]
+    fn collect_effect_ranges_respects_excluded_effect() {
+        let layers = vec![effect_layer(10, 40), effect_layer(20, 30)];
+        let ranges = collect_effect_ranges(&layers, 10, 40, Some(0));
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0], 20..30);
+    }
+
+    #[test]
+    fn collect_layer_events_includes_nested_when_parent_excluded() {
+        let effects = vec![effect_layer(10, 40), effect_layer(20, 30)];
+        let backdrops = vec![backdrop_layer(25)];
+        let events = collect_layer_events(&effects, &backdrops, 10, 40, Some(0));
+        assert_eq!(events.len(), 2);
+
+        match events[0].kind {
+            LayerEventKind::Effect(index) => assert_eq!(index, 1),
+            LayerEventKind::Backdrop(_) => panic!("expected nested effect as first event"),
+        }
+        match events[1].kind {
+            LayerEventKind::Backdrop(index) => assert_eq!(index, 0),
+            LayerEventKind::Effect(_) => panic!("expected backdrop as second event"),
+        }
+    }
+
+    #[test]
+    fn collect_layer_events_sorts_backdrop_before_effect_at_same_z() {
+        let effects = vec![effect_layer(10, 20)];
+        let backdrops = vec![backdrop_layer(10)];
+        let events = collect_layer_events(&effects, &backdrops, 0, 30, None);
+        assert_eq!(events.len(), 2);
+
+        match events[0].kind {
+            LayerEventKind::Backdrop(_) => {}
+            LayerEventKind::Effect(_) => panic!("expected backdrop to run before effect"),
+        }
+        match events[1].kind {
+            LayerEventKind::Effect(_) => {}
+            LayerEventKind::Backdrop(_) => panic!("expected effect as second event"),
+        }
+    }
 }

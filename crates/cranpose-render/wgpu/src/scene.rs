@@ -123,6 +123,7 @@ impl HitTestTarget for HitRegion {
 #[derive(Clone)]
 pub struct EffectLayer {
     pub rect: Rect,
+    pub clip: Option<Rect>,
     pub effect: RenderEffect,
     /// Z-index of the first draw item in this effect layer's subtree.
     pub z_start: usize,
@@ -134,6 +135,7 @@ pub struct EffectLayer {
 #[derive(Clone)]
 pub struct BackdropLayer {
     pub rect: Rect,
+    pub clip: Option<Rect>,
     pub effect: RenderEffect,
     /// Z-index at which this backdrop effect should be applied.
     pub z_index: usize,

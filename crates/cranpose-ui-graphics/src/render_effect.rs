@@ -108,7 +108,7 @@ impl RuntimeShader {
 
 impl PartialEq for RuntimeShader {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.source, &other.source) && self.uniforms == other.uniforms
+        self.source.as_ref() == other.source.as_ref() && self.uniforms == other.uniforms
     }
 }
 
@@ -247,5 +247,43 @@ mod tests {
         let s1 = RuntimeShader::new("fn main() {}");
         let s2 = RuntimeShader::new("fn main() {}");
         assert_eq!(s1.source_hash(), s2.source_hash());
+    }
+
+    #[test]
+    fn blur_xy_preserves_tile_mode() {
+        let effect = RenderEffect::blur_xy(3.0, 7.0, TileMode::Clamp);
+        match effect {
+            RenderEffect::Blur {
+                radius_x,
+                radius_y,
+                edge_treatment,
+            } => {
+                assert_eq!(radius_x, 3.0);
+                assert_eq!(radius_y, 7.0);
+                assert_eq!(edge_treatment, TileMode::Clamp);
+            }
+            _ => panic!("expected Blur"),
+        }
+    }
+
+    #[test]
+    fn offset_constructor_sets_components() {
+        let effect = RenderEffect::offset(11.0, -5.0);
+        match effect {
+            RenderEffect::Offset { offset_x, offset_y } => {
+                assert_eq!(offset_x, 11.0);
+                assert_eq!(offset_y, -5.0);
+            }
+            _ => panic!("expected Offset"),
+        }
+    }
+
+    #[test]
+    fn runtime_shader_equality_is_source_value_based() {
+        let mut s1 = RuntimeShader::new("fn main() {}");
+        let mut s2 = RuntimeShader::new("fn main() {}");
+        s1.set_float(0, 1.0);
+        s2.set_float(0, 1.0);
+        assert_eq!(s1, s2);
     }
 }

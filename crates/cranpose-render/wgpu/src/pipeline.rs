@@ -125,6 +125,7 @@ fn render_container(
         if let Some(effect) = &node_layer.backdrop_effect {
             scene.backdrop_layers.push(BackdropLayer {
                 rect: transformed_rect,
+                clip: visual_clip,
                 effect: effect.clone(),
                 z_index: z_start,
             });
@@ -230,6 +231,7 @@ fn render_container(
         if let Some(effect) = &node_layer.render_effect {
             scene.effect_layers.push(EffectLayer {
                 rect: transformed_rect,
+                clip: visual_clip,
                 effect: effect.clone(),
                 z_start,
                 z_end: scene.next_z,
@@ -427,6 +429,7 @@ fn render_node_from_applier(
         if let Some(effect) = &node_layer.backdrop_effect {
             scene.backdrop_layers.push(BackdropLayer {
                 rect: transformed_rect,
+                clip: visual_clip,
                 effect: effect.clone(),
                 z_index: z_start,
             });
@@ -539,6 +542,7 @@ fn render_node_from_applier(
         if let Some(effect) = &node_layer.render_effect {
             scene.effect_layers.push(EffectLayer {
                 rect: transformed_rect,
+                clip: visual_clip,
                 effect: effect.clone(),
                 z_start,
                 z_end: scene.next_z,

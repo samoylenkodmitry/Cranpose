@@ -50,11 +50,16 @@ pub(crate) fn combine_layers(
             scale: current.scale * layer.scale,
             translation_x: current.translation_x + layer.translation_x,
             translation_y: current.translation_y + layer.translation_y,
+            // Effects are local to this modifier layer and are not inherited.
             render_effect: layer.render_effect,
             backdrop_effect: layer.backdrop_effect,
         }
     } else {
-        current
+        GraphicsLayer {
+            render_effect: None,
+            backdrop_effect: None,
+            ..current
+        }
     }
 }
 
@@ -241,4 +246,47 @@ pub(crate) fn point_in_resolved_rounded_rect(
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cranpose_ui_graphics::RenderEffect;
+
+    #[test]
+    fn combine_layers_clears_effects_without_new_layer() {
+        let current = GraphicsLayer {
+            alpha: 0.7,
+            scale: 1.2,
+            translation_x: 4.0,
+            translation_y: 6.0,
+            render_effect: Some(RenderEffect::blur(4.0)),
+            backdrop_effect: Some(RenderEffect::blur(2.0)),
+        };
+
+        let combined = combine_layers(current.clone(), None);
+        assert_eq!(combined.alpha, current.alpha);
+        assert_eq!(combined.scale, current.scale);
+        assert_eq!(combined.translation_x, current.translation_x);
+        assert_eq!(combined.translation_y, current.translation_y);
+        assert!(combined.render_effect.is_none());
+        assert!(combined.backdrop_effect.is_none());
+    }
+
+    #[test]
+    fn combine_layers_uses_local_effect_configuration() {
+        let parent = GraphicsLayer {
+            render_effect: Some(RenderEffect::blur(8.0)),
+            ..Default::default()
+        };
+        let local = GraphicsLayer {
+            render_effect: Some(RenderEffect::offset(5.0, 1.0)),
+            backdrop_effect: Some(RenderEffect::blur(1.0)),
+            ..Default::default()
+        };
+
+        let combined = combine_layers(parent, Some(local.clone()));
+        assert_eq!(combined.render_effect, local.render_effect);
+        assert_eq!(combined.backdrop_effect, local.backdrop_effect);
+    }
 }

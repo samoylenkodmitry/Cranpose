@@ -268,6 +268,7 @@ fn fullscreen_vs(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 /// - direction: vec2<f32> — (1,0) for horizontal, (0,1) for vertical
 /// - radius: vec2<f32> — blur radius in pixels (x,y)
 /// - texture_size: vec2<f32> — input texture dimensions in pixels
+/// - tile_mode: f32 — 0.0 = Clamp, 1.0 = Decal
 pub const BLUR_SHADER: &str = r#"
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -288,7 +289,8 @@ struct BlurUniforms {
     direction: vec2<f32>,   // (1,0) horizontal, (0,1) vertical
     radius: vec2<f32>,      // blur radius in pixels
     texture_size: vec2<f32>,
-    _padding: vec2<f32>,
+    tile_mode: f32,         // 0 = Clamp, 1 = Decal
+    _padding: f32,
 }
 
 @group(0) @binding(0) var input_texture: texture_2d<f32>;
@@ -317,11 +319,64 @@ fn blur_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         let offset = f32(i);
         let weight = exp(-(offset * offset) / (2.0 * sigma * sigma));
         let sample_uv = input.uv + dir * offset * pixel_size;
-        color = color + textureSample(input_texture, input_sampler, sample_uv) * weight;
+        var sample = vec4<f32>(0.0);
+        if (blur.tile_mode >= 0.5) {
+            // Decal: out-of-bounds samples are transparent.
+            if (sample_uv.x >= 0.0 && sample_uv.x <= 1.0 && sample_uv.y >= 0.0 && sample_uv.y <= 1.0) {
+                sample = textureSample(input_texture, input_sampler, sample_uv);
+            }
+        } else {
+            // Clamp: sample nearest edge texel outside bounds.
+            let clamped_uv = clamp(sample_uv, vec2<f32>(0.0), vec2<f32>(1.0));
+            sample = textureSample(input_texture, input_sampler, clamped_uv);
+        }
+        color = color + sample * weight;
         total_weight = total_weight + weight;
     }
 
     return color / total_weight;
+}
+"#;
+
+/// Offset post-process shader.
+///
+/// Translates the source texture by the provided pixel offset. Pixels shifted
+/// outside the source texture become transparent.
+pub const OFFSET_SHADER: &str = r#"
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+}
+
+@vertex
+fn fullscreen_vs(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
+    var output: VertexOutput;
+    let x = f32(i32(vertex_index & 1u) * 2 - 1);
+    let y = f32(i32(vertex_index >> 1u) * 2 - 1);
+    output.uv = vec2<f32>(x * 0.5 + 0.5, 1.0 - (y * 0.5 + 0.5));
+    output.position = vec4<f32>(x, y, 0.0, 1.0);
+    return output;
+}
+
+struct OffsetUniforms {
+    offset: vec2<f32>, // in pixels
+    _padding: vec2<f32>,
+}
+
+@group(0) @binding(0) var input_texture: texture_2d<f32>;
+@group(0) @binding(1) var input_sampler: sampler;
+@group(1) @binding(0) var<uniform> params: OffsetUniforms;
+
+@fragment
+fn offset_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+    let tex_size = vec2<f32>(textureDimensions(input_texture));
+    let shifted_uv = input.uv - params.offset / max(tex_size, vec2<f32>(1.0));
+
+    if (shifted_uv.x < 0.0 || shifted_uv.x > 1.0 || shifted_uv.y < 0.0 || shifted_uv.y > 1.0) {
+        return vec4<f32>(0.0);
+    }
+
+    return textureSample(input_texture, input_sampler, shifted_uv);
 }
 "#;
 

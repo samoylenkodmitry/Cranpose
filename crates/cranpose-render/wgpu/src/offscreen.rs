@@ -38,9 +38,12 @@ impl OffscreenTarget {
         }
     }
 
-    /// Returns true if this target is large enough for the requested dimensions.
-    fn fits(&self, width: u32, height: u32) -> bool {
-        self.width >= width && self.height >= height
+    /// Returns true if this target exactly matches the requested dimensions.
+    ///
+    /// Effects rely on a 1:1 mapping between render target texels and viewport
+    /// coordinates, so larger pooled textures are not considered compatible.
+    fn matches_size(&self, width: u32, height: u32) -> bool {
+        self.width == width && self.height == height
     }
 }
 
@@ -61,12 +64,16 @@ impl OffscreenPool {
         }
     }
 
-    /// Acquire an offscreen target of at least the given dimensions.
+    /// Acquire an offscreen target for the given dimensions.
     ///
-    /// Returns a pooled target if one is large enough, otherwise creates a new one.
+    /// Returns a pooled target when dimensions exactly match, otherwise creates
+    /// a new target for the requested size.
     pub fn acquire(&mut self, device: &wgpu::Device, width: u32, height: u32) -> OffscreenTarget {
-        // Find the smallest fitting target to minimize waste
-        if let Some(idx) = self.available.iter().position(|t| t.fits(width, height)) {
+        if let Some(idx) = self
+            .available
+            .iter()
+            .position(|t| t.matches_size(width, height))
+        {
             self.available.swap_remove(idx)
         } else {
             OffscreenTarget::new(device, self.format, width, height)

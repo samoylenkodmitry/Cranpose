@@ -9,7 +9,7 @@ use cranpose_ui::{
     PointerEventKind, PointerInputScope, Text, TextStyle,
 };
 use cranpose_ui_graphics::{
-    liquid_glass_effect, LiquidGlassRect, LiquidGlassSpec, RenderEffect, RuntimeShader,
+    liquid_glass_effect, LiquidGlassRect, LiquidGlassSpec, RenderEffect, RuntimeShader, TileMode,
 };
 
 use super::images::generate_chessboard_bitmap;
@@ -194,6 +194,7 @@ pub(crate) fn ShadersTab() {
 
             SweepGradientDemo();
             InteractiveEffectsDemo();
+            EffectSemanticsDemo();
         },
     );
 }
@@ -383,6 +384,288 @@ fn InteractiveEffectsDemo() {
                 }),
                 TextStyle::default(),
             );
+        },
+    );
+}
+
+#[composable]
+fn EffectSemanticsDemo() {
+    let preview_w = 172.0;
+    let preview_h = 80.0;
+    let checkerboard: ImageBitmap =
+        cranpose_core::remember(|| generate_chessboard_bitmap(18, 10)).with(|b| b.clone());
+
+    Column(
+        Modifier::empty(),
+        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
+        move || {
+            Text(
+                "Effect Semantics Checks",
+                Modifier::empty().padding(8.0).draw_behind(|scope| {
+                    scope.draw_round_rect(
+                        Brush::solid(Color(0.14, 0.18, 0.30, 0.8)),
+                        CornerRadii::uniform(12.0),
+                    );
+                }),
+                TextStyle::default(),
+            );
+
+            EffectPreviewCard(
+                "Offset",
+                "RenderEffect::offset(20, 12)",
+                Some(RenderEffect::offset(20.0, 12.0)),
+                checkerboard.clone(),
+                preview_w,
+                preview_h,
+            );
+            EffectPreviewCard(
+                "Blur Clamp",
+                "blur_xy(10, 10, TileMode::Clamp)",
+                Some(RenderEffect::blur_xy(10.0, 10.0, TileMode::Clamp)),
+                checkerboard.clone(),
+                preview_w,
+                preview_h,
+            );
+            EffectPreviewCard(
+                "Blur Decal",
+                "blur_xy(10, 10, TileMode::Decal)",
+                Some(RenderEffect::blur_xy(10.0, 10.0, TileMode::Decal)),
+                checkerboard.clone(),
+                preview_w,
+                preview_h,
+            );
+
+            NestedLayerEventDemo(checkerboard.clone());
+
+            Text(
+                "WGPU path executes effects. Pixels backend currently logs fallback without effect passes.",
+                Modifier::empty().padding(6.0).draw_behind(|scope| {
+                    scope.draw_round_rect(
+                        Brush::solid(Color(1.0, 1.0, 1.0, 0.05)),
+                        CornerRadii::uniform(8.0),
+                    );
+                }),
+                TextStyle {
+                    color: Some(Color(0.9, 0.9, 1.0, 0.75)),
+                    ..Default::default()
+                },
+            );
+        },
+    );
+}
+
+#[composable]
+fn EffectPreviewCard(
+    title: &'static str,
+    subtitle: &'static str,
+    effect: Option<RenderEffect>,
+    checkerboard: ImageBitmap,
+    preview_w: f32,
+    preview_h: f32,
+) {
+    Box(
+        Modifier::empty()
+            .size_points(360.0, preview_h + 18.0)
+            .draw_behind(|scope| {
+                scope.draw_round_rect(
+                    Brush::solid(Color(1.0, 1.0, 1.0, 0.05)),
+                    CornerRadii::uniform(12.0),
+                );
+            })
+            .padding(8.0),
+        BoxSpec::default(),
+        move || {
+            Box(
+                Modifier::empty()
+                    .size_points(preview_w, preview_h)
+                    .graphics_layer(GraphicsLayer {
+                        render_effect: effect.clone(),
+                        ..Default::default()
+                    })
+                    .rounded_corners(12.0),
+                BoxSpec::default(),
+                {
+                    let board = checkerboard.clone();
+                    move || {
+                        Image(
+                            board.clone(),
+                            None,
+                            Modifier::empty().size_points(preview_w, preview_h),
+                            Alignment::CENTER,
+                            ContentScale::Crop,
+                            1.0,
+                            None,
+                        );
+                        Text(
+                            "EDGE",
+                            Modifier::empty()
+                                .absolute_offset(8.0, 8.0)
+                                .draw_behind(|scope| {
+                                    scope.draw_round_rect(
+                                        Brush::solid(Color(0.0, 0.0, 0.0, 0.55)),
+                                        CornerRadii::uniform(6.0),
+                                    );
+                                }),
+                            TextStyle {
+                                color: Some(Color(1.0, 0.9, 0.2, 1.0)),
+                                ..Default::default()
+                            },
+                        );
+                        Text(
+                            "MID",
+                            Modifier::empty()
+                                .absolute_offset(preview_w * 0.5 - 16.0, preview_h * 0.45)
+                                .draw_behind(|scope| {
+                                    scope.draw_round_rect(
+                                        Brush::solid(Color(0.0, 0.0, 0.0, 0.45)),
+                                        CornerRadii::uniform(6.0),
+                                    );
+                                }),
+                            TextStyle {
+                                color: Some(Color(0.6, 1.0, 0.9, 1.0)),
+                                ..Default::default()
+                            },
+                        );
+                    }
+                },
+            );
+
+            Column(
+                Modifier::empty().absolute_offset(preview_w + 10.0, 4.0),
+                ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(4.0)),
+                move || {
+                    Text(
+                        title,
+                        Modifier::empty(),
+                        TextStyle {
+                            color: Some(Color(0.95, 0.95, 1.0, 1.0)),
+                            ..Default::default()
+                        },
+                    );
+                    Text(
+                        subtitle,
+                        Modifier::empty(),
+                        TextStyle {
+                            color: Some(Color(0.75, 0.82, 0.95, 0.95)),
+                            ..Default::default()
+                        },
+                    );
+                },
+            );
+        },
+    );
+}
+
+#[composable]
+fn NestedLayerEventDemo(checkerboard: ImageBitmap) {
+    let area_w = 360.0;
+    let area_h = 150.0;
+    let parent_w = 214.0;
+    let parent_h = 116.0;
+
+    Box(
+        Modifier::empty()
+            .size_points(area_w, area_h)
+            .rounded_corners(14.0)
+            .draw_behind(|scope| {
+                scope.draw_round_rect(
+                    Brush::solid(Color(1.0, 1.0, 1.0, 0.04)),
+                    CornerRadii::uniform(14.0),
+                );
+            }),
+        BoxSpec::default(),
+        {
+            let board = checkerboard.clone();
+            move || {
+                Image(
+                    board.clone(),
+                    None,
+                    Modifier::empty().size_points(area_w, area_h),
+                    Alignment::CENTER,
+                    ContentScale::Crop,
+                    1.0,
+                    None,
+                );
+
+                Text(
+                    "Nested parent render_effect + child backdrop",
+                    Modifier::empty()
+                        .absolute_offset(8.0, 8.0)
+                        .draw_behind(|scope| {
+                            scope.draw_round_rect(
+                                Brush::solid(Color(0.0, 0.0, 0.0, 0.55)),
+                                CornerRadii::uniform(7.0),
+                            );
+                        }),
+                    TextStyle {
+                        color: Some(Color(0.9, 0.95, 1.0, 0.95)),
+                        ..Default::default()
+                    },
+                );
+
+                Box(
+                    Modifier::empty()
+                        .absolute_offset(24.0, 24.0)
+                        .size_points(parent_w, parent_h)
+                        .graphics_layer(GraphicsLayer {
+                            render_effect: Some(RenderEffect::blur_xy(5.0, 5.0, TileMode::Clamp)),
+                            ..Default::default()
+                        })
+                        .draw_behind(|scope| {
+                            scope.draw_round_rect(
+                                Brush::solid(Color(0.45, 0.75, 1.0, 0.25)),
+                                CornerRadii::uniform(14.0),
+                            );
+                        }),
+                    BoxSpec::default(),
+                    move || {
+                        Text(
+                            "Parent render_effect",
+                            Modifier::empty()
+                                .absolute_offset(10.0, 8.0)
+                                .draw_behind(|scope| {
+                                    scope.draw_round_rect(
+                                        Brush::solid(Color(0.0, 0.0, 0.0, 0.55)),
+                                        CornerRadii::uniform(7.0),
+                                    );
+                                }),
+                            TextStyle {
+                                color: Some(Color(1.0, 1.0, 1.0, 0.95)),
+                                ..Default::default()
+                            },
+                        );
+
+                        Box(
+                            Modifier::empty()
+                                .absolute_offset(108.0, 36.0)
+                                .size_points(92.0, 64.0)
+                                .backdrop_effect(RenderEffect::blur(8.0))
+                                .draw_behind(|scope| {
+                                    scope.draw_round_rect(
+                                        Brush::solid(Color(0.6, 1.0, 0.7, 0.28)),
+                                        CornerRadii::uniform(12.0),
+                                    );
+                                }),
+                            BoxSpec::new().content_alignment(Alignment::CENTER),
+                            || {
+                                Text(
+                                    "Child backdrop",
+                                    Modifier::empty().draw_behind(|scope| {
+                                        scope.draw_round_rect(
+                                            Brush::solid(Color(0.0, 0.0, 0.0, 0.45)),
+                                            CornerRadii::uniform(6.0),
+                                        );
+                                    }),
+                                    TextStyle {
+                                        color: Some(Color(1.0, 1.0, 1.0, 0.95)),
+                                        ..Default::default()
+                                    },
+                                );
+                            },
+                        );
+                    },
+                );
+            }
         },
     );
 }

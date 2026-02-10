@@ -1,4 +1,5 @@
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::Brush;
@@ -10,6 +11,18 @@ use crate::style::{
     apply_draw_commands, apply_layer_to_brush, apply_layer_to_color, apply_layer_to_rect,
     combine_layers, scale_corner_radii, DrawPlacement, NodeStyle,
 };
+
+static REPORTED_UNSUPPORTED_PIXELS_EFFECTS: AtomicBool = AtomicBool::new(false);
+
+fn report_unsupported_effects(layer: &GraphicsLayer) {
+    if (layer.render_effect.is_some() || layer.backdrop_effect.is_some())
+        && !REPORTED_UNSUPPORTED_PIXELS_EFFECTS.swap(true, Ordering::Relaxed)
+    {
+        log::warn!(
+            "Pixels renderer does not support render/backdrop effects yet; falling back to base layer rendering"
+        );
+    }
+}
 
 pub(crate) fn render_layout_tree(root: &LayoutBox, scene: &mut Scene) {
     render_layout_node(root, GraphicsLayer::default(), scene, None, None);
@@ -65,6 +78,7 @@ fn render_container(
 ) {
     let style = NodeStyle::from_layout_node(&layout.node_data);
     let node_layer = combine_layers(parent_layer, style.graphics_layer);
+    report_unsupported_effects(&node_layer);
     let rect = layout.rect;
     let size = Size {
         width: rect.width,
@@ -329,6 +343,7 @@ fn render_node_from_applier(
     };
 
     let node_layer = combine_layers(parent_layer, style.graphics_layer);
+    report_unsupported_effects(&node_layer);
     let size = Size {
         width: rect.width,
         height: rect.height,

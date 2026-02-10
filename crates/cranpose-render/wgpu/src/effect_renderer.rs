@@ -6,7 +6,7 @@
 use crate::offscreen::{OffscreenPool, OffscreenTarget};
 use crate::shader_cache::ShaderPipelineCache;
 use crate::shaders;
-use cranpose_ui_graphics::{RenderEffect, RuntimeShader};
+use cranpose_ui_graphics::{RenderEffect, RuntimeShader, TileMode};
 
 /// Manages GPU resources for applying render effects (blur, custom shaders).
 pub(crate) struct EffectRenderer {
@@ -17,6 +17,11 @@ pub(crate) struct EffectRenderer {
     blur_pipeline: wgpu::RenderPipeline,
     blur_uniform_buffer: wgpu::Buffer,
     blur_uniform_bind_group_layout: wgpu::BindGroupLayout,
+
+    // Offset pipeline (compiled once)
+    offset_pipeline: wgpu::RenderPipeline,
+    offset_uniform_buffer: wgpu::Buffer,
+    offset_uniform_bind_group_layout: wgpu::BindGroupLayout,
 
     // Blit pipeline for compositing offscreen targets to the surface
     blit_pipeline: wgpu::RenderPipeline,
@@ -41,6 +46,15 @@ struct BlurUniforms {
     direction: [f32; 2],
     radius: [f32; 2],
     texture_size: [f32; 2],
+    tile_mode: f32,
+    _padding: f32,
+}
+
+/// Offset uniform data matching the WGSL `OffsetUniforms` struct.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct OffsetUniforms {
+    offset: [f32; 2],
     _padding: [f32; 2],
 }
 
@@ -54,6 +68,22 @@ impl EffectRenderer {
         let blur_uniform_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Blur Uniform Bind Group Layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+
+        // Offset-specific uniform layout
+        let offset_uniform_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Offset Uniform Bind Group Layout"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -93,6 +123,54 @@ impl EffectRenderer {
             fragment: Some(wgpu::FragmentState {
                 module: &blur_shader,
                 entry_point: Some("blur_fs"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        // Compile offset pipeline
+        let offset_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Offset Shader"),
+            source: wgpu::ShaderSource::Wgsl(shaders::OFFSET_SHADER.into()),
+        });
+
+        let offset_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Offset Pipeline Layout"),
+                bind_group_layouts: &[
+                    &effect_texture_bind_group_layout,
+                    &offset_uniform_bind_group_layout,
+                ],
+                push_constant_ranges: &[],
+            });
+
+        let offset_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Offset Pipeline"),
+            layout: Some(&offset_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &offset_shader,
+                entry_point: Some("fullscreen_vs"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &offset_shader,
+                entry_point: Some("offset_fs"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -165,6 +243,13 @@ impl EffectRenderer {
             mapped_at_creation: false,
         });
 
+        let offset_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Offset Uniform Buffer"),
+            size: std::mem::size_of::<OffsetUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         let effect_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Effect Uniform Buffer"),
             size: (RuntimeShader::MAX_UNIFORMS * std::mem::size_of::<f32>()) as u64,
@@ -187,6 +272,9 @@ impl EffectRenderer {
             blur_pipeline,
             blur_uniform_buffer,
             blur_uniform_bind_group_layout,
+            offset_pipeline,
+            offset_uniform_buffer,
+            offset_uniform_bind_group_layout,
             blit_pipeline,
             effect_texture_bind_group_layout,
             effect_uniform_bind_group_layout,
@@ -202,6 +290,7 @@ impl EffectRenderer {
     /// Uses an intermediate offscreen target for the horizontal pass.
     /// Each pass is submitted separately to avoid the `queue.write_buffer`
     /// staging bug where the second uniform write overwrites the first.
+    #[allow(clippy::too_many_arguments)]
     pub fn apply_blur(
         &mut self,
         device: &wgpu::Device,
@@ -210,9 +299,11 @@ impl EffectRenderer {
         dest_view: &wgpu::TextureView,
         radius_x: f32,
         radius_y: f32,
+        tile_mode: TileMode,
     ) {
         let width = source.width;
         let height = source.height;
+        let tile_mode_value = tile_mode_uniform_value(tile_mode);
 
         // Acquire intermediate target for horizontal pass
         let intermediate = self.offscreen_pool.acquire(device, width, height);
@@ -226,7 +317,8 @@ impl EffectRenderer {
                 direction: [1.0, 0.0],
                 radius: [radius_x, radius_y],
                 texture_size: [width as f32, height as f32],
-                _padding: [0.0; 2],
+                tile_mode: tile_mode_value,
+                _padding: 0.0,
             };
             queue.write_buffer(&self.blur_uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
@@ -276,7 +368,8 @@ impl EffectRenderer {
                 direction: [0.0, 1.0],
                 radius: [radius_x, radius_y],
                 texture_size: [width as f32, height as f32],
-                _padding: [0.0; 2],
+                tile_mode: tile_mode_value,
+                _padding: 0.0,
             };
             queue.write_buffer(&self.blur_uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
@@ -322,6 +415,67 @@ impl EffectRenderer {
 
         // Return intermediate to pool
         self.offscreen_pool.release(intermediate);
+    }
+
+    /// Apply a fixed pixel offset to a source texture.
+    pub fn apply_offset(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        source: &OffscreenTarget,
+        dest_view: &wgpu::TextureView,
+        offset_x: f32,
+        offset_y: f32,
+    ) {
+        let uniforms = OffsetUniforms {
+            offset: [offset_x, offset_y],
+            _padding: [0.0; 2],
+        };
+        queue.write_buffer(
+            &self.offset_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&uniforms),
+        );
+
+        let texture_bind_group = OffscreenPool::create_texture_bind_group(
+            device,
+            &self.effect_texture_bind_group_layout,
+            source,
+            &self.effect_sampler,
+        );
+        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Offset Uniform Bind Group"),
+            layout: &self.offset_uniform_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: self.offset_uniform_buffer.as_entire_binding(),
+            }],
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Offset Effect Encoder"),
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Offset Effect Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: dest_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                ..Default::default()
+            });
+
+            pass.set_pipeline(&self.offset_pipeline);
+            pass.set_bind_group(0, &texture_bind_group, &[]);
+            pass.set_bind_group(1, &uniform_bind_group, &[]);
+            pass.draw(0..4, 0..1);
+        }
+        queue.submit(std::iter::once(encoder.finish()));
     }
 
     /// Apply a custom RuntimeShader effect to a source texture.
@@ -420,20 +574,22 @@ impl EffectRenderer {
     ) {
         match effect {
             RenderEffect::Blur {
-                radius_x, radius_y, ..
+                radius_x,
+                radius_y,
+                edge_treatment,
             } => {
-                self.apply_blur(device, queue, source, dest_view, *radius_x, *radius_y);
-            }
-            RenderEffect::Offset { .. } => {
-                // Offset is handled at the scene level via translation, not post-process.
-                // Just composite source directly.
-                self.composite_to_view(
+                self.apply_blur(
                     device,
                     queue,
                     source,
                     dest_view,
-                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    *radius_x,
+                    *radius_y,
+                    *edge_treatment,
                 );
+            }
+            RenderEffect::Offset { offset_x, offset_y } => {
+                self.apply_offset(device, queue, source, dest_view, *offset_x, *offset_y);
             }
             RenderEffect::Shader { shader } => {
                 self.apply_shader(device, queue, source, dest_view, shader, layer_pixel_rect);
@@ -526,5 +682,12 @@ impl EffectRenderer {
             pass.draw(0..4, 0..1);
         }
         queue.submit(std::iter::once(encoder.finish()));
+    }
+}
+
+fn tile_mode_uniform_value(tile_mode: TileMode) -> f32 {
+    match tile_mode {
+        TileMode::Clamp => 0.0,
+        TileMode::Decal => 1.0,
     }
 }
