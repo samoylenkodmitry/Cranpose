@@ -1,6 +1,7 @@
 use cranpose_ui::{collect_slices_from_modifier, GraphicsLayer, Modifier, RenderEffect};
 use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 #[test]
 fn backdrop_effect_is_visible_in_modifier_slices() {
@@ -45,4 +46,29 @@ fn stacked_lazy_translation_and_backdrop_effect_are_both_preserved() {
     assert!((layer.translation_x - 64.0).abs() < 1e-6);
     assert!((layer.translation_y - 48.0).abs() < 1e-6);
     assert!(layer.backdrop_effect.is_some());
+}
+
+#[test]
+fn lazy_graphics_layer_state_writes_auto_request_render_invalidation() {
+    let runtime =
+        cranpose_core::runtime::Runtime::new(Arc::new(cranpose_core::runtime::DefaultScheduler));
+    let x_state = cranpose_core::MutableState::with_runtime(10.0f32, runtime.handle());
+
+    let modifier = Modifier::empty().graphics_layer_lazy({
+        let x_state = x_state;
+        move || GraphicsLayer {
+            translation_x: x_state.get(),
+            ..Default::default()
+        }
+    });
+    let slices = collect_slices_from_modifier(&modifier);
+
+    let _ = cranpose_ui::take_render_invalidation();
+    let layer = slices.graphics_layer().expect("layer expected");
+    assert!((layer.translation_x - 10.0).abs() < 1e-6);
+
+    x_state.set(42.0);
+    assert!(cranpose_ui::take_render_invalidation());
+    let updated = slices.graphics_layer().expect("layer expected");
+    assert!((updated.translation_x - 42.0).abs() < 1e-6);
 }

@@ -69,6 +69,7 @@ use cranpose_ui_layout::{Alignment, HorizontalAlignment, IntrinsicSize, Vertical
 
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::draw::DrawCommand;
 use crate::modifier::{Color, EdgeInsets, GraphicsLayer, LayoutWeight, Point, RoundedCornerShape};
@@ -117,6 +118,12 @@ fn hash_vertical_alignment<H: Hasher>(state: &mut H, alignment: VerticalAlignmen
 fn hash_alignment<H: Hasher>(state: &mut H, alignment: Alignment) {
     hash_horizontal_alignment(state, alignment.horizontal);
     hash_vertical_alignment(state, alignment.vertical);
+}
+
+static NEXT_LAZY_GRAPHICS_LAYER_SCOPE_ID: AtomicUsize = AtomicUsize::new(1);
+
+fn next_lazy_graphics_layer_scope_id() -> usize {
+    NEXT_LAZY_GRAPHICS_LAYER_SCOPE_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 // ============================================================================
@@ -544,6 +551,8 @@ impl ModifierNodeElement for CornerShapeElement {
 pub struct GraphicsLayerNode {
     layer: GraphicsLayer,
     layer_resolver: Option<Rc<dyn Fn() -> GraphicsLayer>>,
+    lazy_scope_id: Option<usize>,
+    lazy_observer: Option<cranpose_core::SnapshotStateObserver>,
     state: NodeState,
 }
 
@@ -552,21 +561,29 @@ impl GraphicsLayerNode {
         Self {
             layer,
             layer_resolver: None,
+            lazy_scope_id: None,
+            lazy_observer: None,
             state: NodeState::new(),
         }
     }
 
     pub fn new_lazy(layer_resolver: Rc<dyn Fn() -> GraphicsLayer>) -> Self {
-        let layer = layer_resolver();
-        Self {
-            layer,
+        let mut node = Self {
+            layer: GraphicsLayer::default(),
             layer_resolver: Some(layer_resolver),
+            lazy_scope_id: None,
+            lazy_observer: None,
             state: NodeState::new(),
+        };
+        node.ensure_lazy_observation();
+        if let Some(resolve) = node.layer_resolver() {
+            node.layer = resolve();
         }
+        node
     }
 
     pub fn layer(&self) -> GraphicsLayer {
-        if let Some(resolve) = &self.layer_resolver {
+        if let Some(resolve) = self.layer_resolver() {
             resolve()
         } else {
             self.layer.clone()
@@ -574,17 +591,57 @@ impl GraphicsLayerNode {
     }
 
     pub fn layer_resolver(&self) -> Option<Rc<dyn Fn() -> GraphicsLayer>> {
-        self.layer_resolver.clone()
+        self.layer_resolver.as_ref().map(|resolve| {
+            let resolve = resolve.clone();
+            match (&self.lazy_observer, self.lazy_scope_id) {
+                (Some(observer), Some(scope_id)) => {
+                    let observer = observer.clone();
+                    Rc::new(move || {
+                        observer.observe_reads(
+                            scope_id,
+                            |_| crate::request_render_invalidation(),
+                            || resolve(),
+                        )
+                    }) as Rc<dyn Fn() -> GraphicsLayer>
+                }
+                _ => resolve,
+            }
+        })
     }
 
     fn set_static(&mut self, layer: GraphicsLayer) {
         self.layer = layer;
         self.layer_resolver = None;
+        self.clear_lazy_observation();
     }
 
     fn set_lazy(&mut self, layer_resolver: Rc<dyn Fn() -> GraphicsLayer>) {
-        self.layer = layer_resolver();
         self.layer_resolver = Some(layer_resolver);
+        self.ensure_lazy_observation();
+        if let Some(resolve) = self.layer_resolver() {
+            self.layer = resolve();
+        }
+    }
+
+    fn ensure_lazy_observation(&mut self) {
+        if self.layer_resolver.is_none() {
+            self.clear_lazy_observation();
+            return;
+        }
+        if self.lazy_observer.is_some() {
+            return;
+        }
+        let observer = cranpose_core::SnapshotStateObserver::new(|callback| callback());
+        observer.start();
+        self.lazy_scope_id = Some(next_lazy_graphics_layer_scope_id());
+        self.lazy_observer = Some(observer);
+    }
+
+    fn clear_lazy_observation(&mut self) {
+        if let Some(observer) = self.lazy_observer.take() {
+            observer.stop();
+        }
+        self.lazy_scope_id = None;
     }
 }
 
@@ -597,6 +654,10 @@ impl DelegatableNode for GraphicsLayerNode {
 impl ModifierNode for GraphicsLayerNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
         context.invalidate(cranpose_foundation::InvalidationKind::Draw);
+    }
+
+    fn on_detach(&mut self) {
+        self.clear_lazy_observation();
     }
 }
 

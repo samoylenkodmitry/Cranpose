@@ -162,8 +162,6 @@ fn clamped_drag_position(
 
 fn apply_drag_position(pos: &cranpose_core::MutableState<Point>, next: Point) {
     pos.set(next);
-    // Lazy graphics-layer reads happen at render time, so dragging must request redraw.
-    cranpose_ui::request_render_invalidation();
 }
 
 // ── Composables ─────────────────────────────────────────────────────────────
@@ -541,16 +539,14 @@ mod tests {
     }
 
     #[test]
-    fn apply_drag_position_updates_state_and_requests_render() {
+    fn apply_drag_position_updates_state() {
         let runtime = cranpose_core::runtime::Runtime::new(Arc::new(
             cranpose_core::runtime::DefaultScheduler,
         ));
         let pos = cranpose_core::MutableState::with_runtime(Point::ZERO, runtime.handle());
 
-        let _ = cranpose_ui::take_render_invalidation();
         apply_drag_position(&pos, Point::new(42.0, 24.0));
 
         assert_eq!(pos.get(), Point::new(42.0, 24.0));
-        assert!(cranpose_ui::take_render_invalidation());
     }
 }
