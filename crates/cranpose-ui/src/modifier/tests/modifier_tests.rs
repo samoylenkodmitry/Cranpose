@@ -1,11 +1,13 @@
 use super::{
     inspector_metadata, Alignment, Color, DimensionConstraint, EdgeInsets, GraphicsLayer,
-    HorizontalAlignment, Modifier, ModifierChainHandle, Point, SemanticsConfiguration, Size,
-    VerticalAlignment,
+    HorizontalAlignment, Modifier, ModifierChainHandle, Point, RenderEffect, RuntimeShader,
+    SemanticsConfiguration, Size, VerticalAlignment,
 };
 use cranpose_foundation::{
     DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState,
 };
+use std::cell::Cell;
+use std::rc::Rc;
 
 #[test]
 fn padding_nodes_resolve_padding_values() {
@@ -139,6 +141,106 @@ fn graphics_layer_modifier_creates_node() {
         },
     );
     assert!(has_graphics_layer, "Expected GraphicsLayerNode in chain");
+}
+
+#[test]
+fn backdrop_effect_modifier_creates_graphics_layer_with_backdrop_effect() {
+    use crate::modifier_nodes::GraphicsLayerNode;
+
+    let modifier = Modifier::empty().backdrop_effect(RenderEffect::blur(8.0));
+    let mut handle = ModifierChainHandle::new();
+    let _ = handle.update(&modifier);
+
+    let chain = handle.chain();
+    let mut found = false;
+    chain.for_each_node_with_capability(
+        cranpose_foundation::NodeCapabilities::DRAW,
+        |_ref, node| {
+            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+                let layer = layer_node.layer();
+                found = layer.backdrop_effect.is_some();
+            }
+        },
+    );
+
+    assert!(
+        found,
+        "Expected backdrop_effect to be present in GraphicsLayer"
+    );
+}
+
+#[test]
+fn graphics_layer_lazy_reads_latest_value_without_recomposition() {
+    use crate::modifier_nodes::GraphicsLayerNode;
+
+    let alpha = Rc::new(Cell::new(0.25f32));
+    let modifier = Modifier::empty().graphics_layer_lazy({
+        let alpha = alpha.clone();
+        move || GraphicsLayer {
+            alpha: alpha.get(),
+            ..Default::default()
+        }
+    });
+
+    let mut handle = ModifierChainHandle::new();
+    let _ = handle.update(&modifier);
+
+    let chain = handle.chain();
+    let read_alpha = |expected: f32| {
+        let mut observed = None;
+        chain.for_each_node_with_capability(
+            cranpose_foundation::NodeCapabilities::DRAW,
+            |_ref, node| {
+                if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+                    observed = Some(layer_node.layer().alpha);
+                }
+            },
+        );
+        let value = observed.expect("graphics layer node");
+        assert!((value - expected).abs() < 1e-6);
+    };
+
+    read_alpha(0.25);
+    alpha.set(0.85);
+    read_alpha(0.85);
+}
+
+#[test]
+fn shader_background_wraps_runtime_shader_as_backdrop_effect() {
+    use crate::modifier_nodes::GraphicsLayerNode;
+
+    let modifier = Modifier::empty().shader_background(RuntimeShader::new(
+        "@group(0) @binding(0) var input_texture: texture_2d<f32>;\n\
+         @group(0) @binding(1) var input_sampler: sampler;\n\
+         @group(1) @binding(0) var<uniform> u: array<vec4<f32>, 64>;\n\
+         @vertex fn fullscreen_vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {\n\
+             let x = f32(i32(i & 1u) * 2 - 1);\n\
+             let y = f32(i32(i >> 1u) * 2 - 1);\n\
+             return vec4<f32>(x, y, 0.0, 1.0);\n\
+         }\n\
+         @fragment fn effect_fs() -> @location(0) vec4<f32> { return vec4<f32>(0.0); }",
+    ));
+    let mut handle = ModifierChainHandle::new();
+    let _ = handle.update(&modifier);
+
+    let chain = handle.chain();
+    let mut found_shader = false;
+    chain.for_each_node_with_capability(
+        cranpose_foundation::NodeCapabilities::DRAW,
+        |_ref, node| {
+            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+                found_shader = matches!(
+                    layer_node.layer().backdrop_effect,
+                    Some(RenderEffect::Shader { .. })
+                );
+            }
+        },
+    );
+
+    assert!(
+        found_shader,
+        "Expected shader_background to configure backdrop shader"
+    );
 }
 
 #[test]

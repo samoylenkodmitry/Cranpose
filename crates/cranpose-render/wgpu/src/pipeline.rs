@@ -8,7 +8,7 @@ use cranpose_render_common::Brush;
 use cranpose_ui::{measure_text, LayoutBox, LayoutNode, LayoutNodeKind, SubcomposeLayoutNode};
 use cranpose_ui_graphics::{Color, GraphicsLayer, Point, Rect, RoundedCornerShape, Size};
 
-use crate::scene::{ClickAction, EffectLayer, Scene};
+use crate::scene::{BackdropLayer, ClickAction, EffectLayer, Scene};
 
 // Re-use style functions from a local copy
 mod style;
@@ -29,6 +29,7 @@ pub(crate) fn render_layout_tree_with_scale(root: &LayoutBox, scene: &mut Scene,
         translation_x: 0.0,
         translation_y: 0.0,
         render_effect: None,
+        backdrop_effect: None,
     };
     render_layout_node(root, root_layer, scene, None, None);
 }
@@ -115,9 +116,20 @@ fn render_container(
         (None, None) => None,
     };
 
-    // Track z_start for effect layer if this node has a render effect
+    // Track z_start for layer events emitted by this node.
     let has_effect = node_layer.render_effect.is_some();
+    let has_backdrop = node_layer.backdrop_effect.is_some();
     let z_start = scene.next_z;
+
+    if has_backdrop {
+        if let Some(effect) = &node_layer.backdrop_effect {
+            scene.backdrop_layers.push(BackdropLayer {
+                rect: transformed_rect,
+                effect: effect.clone(),
+                z_index: z_start,
+            });
+        }
+    }
 
     apply_draw_commands(
         &style.draw_commands,
@@ -299,6 +311,7 @@ pub(crate) fn render_from_applier(
         translation_x: 0.0,
         translation_y: 0.0,
         render_effect: None,
+        backdrop_effect: None,
     };
     render_node_from_applier(
         applier,
@@ -405,9 +418,20 @@ fn render_node_from_applier(
         (None, None) => None,
     };
 
-    // Track z_start for effect layer if this node has a render effect
+    // Track z_start for layer events emitted by this node.
     let has_effect = node_layer.render_effect.is_some();
+    let has_backdrop = node_layer.backdrop_effect.is_some();
     let z_start = scene.next_z;
+
+    if has_backdrop {
+        if let Some(effect) = &node_layer.backdrop_effect {
+            scene.backdrop_layers.push(BackdropLayer {
+                rect: transformed_rect,
+                effect: effect.clone(),
+                z_index: z_start,
+            });
+        }
+    }
 
     // Draw behind layer
     apply_draw_commands(

@@ -1336,6 +1336,7 @@ fn counter_app() {
                                             translation_x: 0.0,
                                             translation_y: (wave_value - 0.5) * 12.0,
                                             render_effect: None,
+                                            backdrop_effect: None,
                                         }),
                                     TextStyle::default(),
                                 );

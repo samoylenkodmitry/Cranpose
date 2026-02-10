@@ -479,6 +479,20 @@ impl EffectRenderer {
         dest_view: &wgpu::TextureView,
         load_op: wgpu::LoadOp<wgpu::Color>,
     ) {
+        self.composite_to_view_scissored(device, queue, source, dest_view, load_op, None);
+    }
+
+    /// Composite an offscreen target onto a destination view using alpha blending
+    /// with an optional scissor region.
+    pub fn composite_to_view_scissored(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        source: &OffscreenTarget,
+        dest_view: &wgpu::TextureView,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        scissor: Option<(u32, u32, u32, u32)>,
+    ) {
         let texture_bind_group = OffscreenPool::create_texture_bind_group(
             device,
             &self.effect_texture_bind_group_layout,
@@ -506,6 +520,9 @@ impl EffectRenderer {
 
             pass.set_pipeline(&self.blit_pipeline);
             pass.set_bind_group(0, &texture_bind_group, &[]);
+            if let Some((x, y, w, h)) = scissor {
+                pass.set_scissor_rect(x, y, w, h);
+            }
             pass.draw(0..4, 0..1);
         }
         queue.submit(std::iter::once(encoder.finish()));

@@ -130,12 +130,22 @@ pub struct EffectLayer {
     pub z_end: usize,
 }
 
+/// A backdrop effect applied to already-rendered content behind a node.
+#[derive(Clone)]
+pub struct BackdropLayer {
+    pub rect: Rect,
+    pub effect: RenderEffect,
+    /// Z-index at which this backdrop effect should be applied.
+    pub z_index: usize,
+}
+
 pub struct Scene {
     pub shapes: Vec<DrawShape>,
     pub images: Vec<ImageDraw>,
     pub texts: Vec<TextDraw>,
     pub hits: Vec<HitRegion>,
     pub effect_layers: Vec<EffectLayer>,
+    pub backdrop_layers: Vec<BackdropLayer>,
     pub next_z: usize,
     pub node_index: HashMap<NodeId, HitRegion>,
 }
@@ -148,6 +158,7 @@ impl Scene {
             texts: Vec::new(),
             hits: Vec::new(),
             effect_layers: Vec::new(),
+            backdrop_layers: Vec::new(),
             next_z: 0,
             node_index: HashMap::new(),
         }
@@ -262,6 +273,7 @@ impl RenderScene for Scene {
         self.texts.clear();
         self.hits.clear();
         self.effect_layers.clear();
+        self.backdrop_layers.clear();
         self.node_index.clear();
         self.next_z = 0;
     }

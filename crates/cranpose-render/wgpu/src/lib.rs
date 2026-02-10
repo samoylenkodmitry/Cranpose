@@ -11,7 +11,7 @@ mod scene;
 mod shader_cache;
 mod shaders;
 
-pub use scene::{ClickAction, DrawShape, HitRegion, ImageDraw, Scene, TextDraw};
+pub use scene::{BackdropLayer, ClickAction, DrawShape, HitRegion, ImageDraw, Scene, TextDraw};
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::{RenderScene, Renderer};
@@ -300,6 +300,7 @@ impl WgpuRenderer {
                     &self.scene.images,
                     &self.scene.texts,
                     &self.scene.effect_layers,
+                    &self.scene.backdrop_layers,
                     width,
                     height,
                     self.root_scale,

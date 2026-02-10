@@ -51,6 +51,7 @@ pub(crate) fn combine_layers(
             translation_x: current.translation_x + layer.translation_x,
             translation_y: current.translation_y + layer.translation_y,
             render_effect: layer.render_effect,
+            backdrop_effect: layer.backdrop_effect,
         }
     } else {
         current

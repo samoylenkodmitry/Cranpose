@@ -1,7 +1,8 @@
 //! GPU rendering implementation using WGPU
 
 use crate::effect_renderer::EffectRenderer;
-use crate::scene::{DrawShape, EffectLayer, ImageDraw, TextDraw};
+use crate::offscreen::OffscreenTarget;
+use crate::scene::{BackdropLayer, DrawShape, EffectLayer, ImageDraw, TextDraw};
 use crate::shaders;
 use crate::{SharedTextBuffer, SharedTextCache, TextCacheKey};
 use bytemuck::{Pod, Zeroable};
@@ -630,15 +631,18 @@ impl GpuRenderer {
         images: &[ImageDraw],
         texts: &[TextDraw],
         effect_layers: &[EffectLayer],
+        backdrop_layers: &[BackdropLayer],
         width: u32,
         height: u32,
         root_scale: f32,
     ) -> Result<(), String> {
         log::trace!(
-            "🎨 Rendering: {} shapes, {} images, {} texts (size: {}x{})",
+            "🎨 Rendering: {} shapes, {} images, {} texts, {} effect layers, {} backdrop layers (size: {}x{})",
             shapes.len(),
             images.len(),
             texts.len(),
+            effect_layers.len(),
+            backdrop_layers.len(),
             width,
             height
         );
@@ -661,6 +665,20 @@ impl GpuRenderer {
                 .all(|pair| pair[0].z_index <= pair[1].z_index),
             "images must be added in z-index order"
         );
+
+        if !effect_layers.is_empty() || !backdrop_layers.is_empty() {
+            return self.render_with_layer_events(
+                view,
+                shapes,
+                images,
+                texts,
+                effect_layers,
+                backdrop_layers,
+                width,
+                height,
+                root_scale,
+            );
+        }
 
         // Build z-index exclusion ranges from effect layers.
         // Items in these ranges are rendered offscreen with effects applied.
@@ -1433,6 +1451,424 @@ impl GpuRenderer {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn render_with_layer_events(
+        &mut self,
+        surface_view: &wgpu::TextureView,
+        shapes: &[DrawShape],
+        images: &[ImageDraw],
+        texts: &[TextDraw],
+        effect_layers: &[EffectLayer],
+        backdrop_layers: &[BackdropLayer],
+        width: u32,
+        height: u32,
+        root_scale: f32,
+    ) -> Result<(), String> {
+        #[derive(Clone, Copy)]
+        enum LayerEventKind {
+            Backdrop(usize),
+            Effect(usize),
+        }
+
+        #[derive(Clone, Copy)]
+        struct LayerEvent {
+            z_index: usize,
+            kind: LayerEventKind,
+        }
+
+        impl LayerEvent {
+            fn sort_key(self) -> (usize, u8) {
+                let kind_order = match self.kind {
+                    // Backdrop must run before same-z content/effects so it samples only
+                    // already rendered background.
+                    LayerEventKind::Backdrop(_) => 0,
+                    LayerEventKind::Effect(_) => 1,
+                };
+                (self.z_index, kind_order)
+            }
+        }
+
+        let mut events = Vec::with_capacity(effect_layers.len() + backdrop_layers.len());
+        for (index, layer) in backdrop_layers.iter().enumerate() {
+            events.push(LayerEvent {
+                z_index: layer.z_index,
+                kind: LayerEventKind::Backdrop(index),
+            });
+        }
+        for (index, layer) in effect_layers.iter().enumerate() {
+            events.push(LayerEvent {
+                z_index: layer.z_start,
+                kind: LayerEventKind::Effect(index),
+            });
+        }
+        events.sort_by_key(|event| event.sort_key());
+
+        let mut effect_z_ranges: Vec<Range<usize>> = effect_layers
+            .iter()
+            .map(|layer| layer.z_start..layer.z_end)
+            .collect();
+        effect_z_ranges.sort_by_key(|range| range.start);
+
+        let scene_end = scene_end_z(shapes, images, texts, effect_layers, backdrop_layers);
+
+        // Double-buffer path: accumulate everything into an intermediate texture.
+        let accum = self
+            .effect_renderer
+            .offscreen_pool
+            .acquire(&self.device, width, height);
+        self.clear_target_view(&accum.view, CLEAR_COLOR);
+
+        let mut cursor_z = 0usize;
+        for event in events {
+            if event.z_index > cursor_z {
+                self.render_non_effect_segment(
+                    &accum.view,
+                    shapes,
+                    images,
+                    texts,
+                    cursor_z,
+                    event.z_index,
+                    &effect_z_ranges,
+                    width,
+                    height,
+                    root_scale,
+                )?;
+                cursor_z = event.z_index;
+            } else if event.z_index < cursor_z {
+                // Already consumed by a previous effect range.
+                continue;
+            }
+
+            match event.kind {
+                LayerEventKind::Backdrop(index) => {
+                    self.apply_backdrop_layer_to_target(
+                        &accum,
+                        &backdrop_layers[index],
+                        width,
+                        height,
+                        root_scale,
+                    )?;
+                }
+                LayerEventKind::Effect(index) => {
+                    let layer = &effect_layers[index];
+                    if layer.z_start < cursor_z {
+                        continue;
+                    }
+                    self.render_effect_layer_to_target(
+                        &accum.view,
+                        shapes,
+                        images,
+                        texts,
+                        layer,
+                        width,
+                        height,
+                        root_scale,
+                    )?;
+                    cursor_z = cursor_z.max(layer.z_end);
+                }
+            }
+        }
+
+        if cursor_z < scene_end {
+            self.render_non_effect_segment(
+                &accum.view,
+                shapes,
+                images,
+                texts,
+                cursor_z,
+                scene_end,
+                &effect_z_ranges,
+                width,
+                height,
+                root_scale,
+            )?;
+        }
+
+        self.effect_renderer.composite_to_view(
+            &self.device,
+            &self.queue,
+            &accum,
+            surface_view,
+            wgpu::LoadOp::Clear(CLEAR_COLOR),
+        );
+        self.effect_renderer.offscreen_pool.release(accum);
+
+        let mut text_cache = self.text_cache.lock().unwrap();
+        crate::trim_text_cache(&mut text_cache);
+
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_non_effect_segment(
+        &mut self,
+        target_view: &wgpu::TextureView,
+        shapes: &[DrawShape],
+        images: &[ImageDraw],
+        texts: &[TextDraw],
+        z_start: usize,
+        z_end: usize,
+        effect_z_ranges: &[Range<usize>],
+        width: u32,
+        height: u32,
+        root_scale: f32,
+    ) -> Result<(), String> {
+        let layer_shapes: Vec<&DrawShape> = shapes
+            .iter()
+            .filter(|shape| {
+                shape.z_index >= z_start
+                    && shape.z_index < z_end
+                    && !is_in_effect_range(shape.z_index, effect_z_ranges)
+            })
+            .collect();
+        let layer_images: Vec<&ImageDraw> = images
+            .iter()
+            .filter(|image| {
+                image.z_index >= z_start
+                    && image.z_index < z_end
+                    && !is_in_effect_range(image.z_index, effect_z_ranges)
+            })
+            .collect();
+        let layer_texts: Vec<&TextDraw> = texts
+            .iter()
+            .filter(|text| {
+                text.z_index >= z_start
+                    && text.z_index < z_end
+                    && !is_in_effect_range(text.z_index, effect_z_ranges)
+            })
+            .collect();
+
+        if layer_shapes.is_empty() && layer_images.is_empty() && layer_texts.is_empty() {
+            return Ok(());
+        }
+
+        let mut has_content = true;
+        if !layer_shapes.is_empty() {
+            self.render_shapes_to_offscreen(
+                target_view,
+                &layer_shapes,
+                width,
+                height,
+                root_scale,
+                has_content,
+            );
+            has_content = true;
+        }
+
+        if !layer_images.is_empty() {
+            self.render_images_to_offscreen(
+                target_view,
+                &layer_images,
+                width,
+                height,
+                root_scale,
+                has_content,
+            )?;
+            has_content = true;
+        }
+
+        if !layer_texts.is_empty() {
+            self.render_text_to_offscreen(
+                target_view,
+                &layer_texts,
+                width,
+                height,
+                root_scale,
+                has_content,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_effect_layer_to_target(
+        &mut self,
+        target_view: &wgpu::TextureView,
+        shapes: &[DrawShape],
+        images: &[ImageDraw],
+        texts: &[TextDraw],
+        layer: &EffectLayer,
+        width: u32,
+        height: u32,
+        root_scale: f32,
+    ) -> Result<(), String> {
+        let z_range = layer.z_start..layer.z_end;
+
+        let layer_shapes: Vec<&DrawShape> = shapes
+            .iter()
+            .filter(|shape| z_range.contains(&shape.z_index))
+            .collect();
+        let layer_images: Vec<&ImageDraw> = images
+            .iter()
+            .filter(|image| z_range.contains(&image.z_index))
+            .collect();
+        let layer_texts: Vec<&TextDraw> = texts
+            .iter()
+            .filter(|text| z_range.contains(&text.z_index))
+            .collect();
+
+        if layer_shapes.is_empty() && layer_images.is_empty() && layer_texts.is_empty() {
+            return Ok(());
+        }
+
+        let source = self
+            .effect_renderer
+            .offscreen_pool
+            .acquire(&self.device, width, height);
+
+        let mut has_content = false;
+        if !layer_shapes.is_empty() {
+            self.render_shapes_to_offscreen(
+                &source.view,
+                &layer_shapes,
+                width,
+                height,
+                root_scale,
+                has_content,
+            );
+            has_content = true;
+        }
+        if !layer_images.is_empty() {
+            self.render_images_to_offscreen(
+                &source.view,
+                &layer_images,
+                width,
+                height,
+                root_scale,
+                has_content,
+            )?;
+            has_content = true;
+        }
+        if !layer_texts.is_empty() {
+            self.render_text_to_offscreen(
+                &source.view,
+                &layer_texts,
+                width,
+                height,
+                root_scale,
+                has_content,
+            )?;
+        }
+
+        let dest = self
+            .effect_renderer
+            .offscreen_pool
+            .acquire(&self.device, width, height);
+
+        let layer_pixel_rect = [
+            layer.rect.x * root_scale,
+            layer.rect.y * root_scale,
+            layer.rect.width * root_scale,
+            layer.rect.height * root_scale,
+        ];
+
+        self.effect_renderer.apply_effect(
+            &self.device,
+            &self.queue,
+            &source,
+            &dest.view,
+            &layer.effect,
+            layer_pixel_rect,
+        );
+
+        self.effect_renderer.composite_to_view(
+            &self.device,
+            &self.queue,
+            &dest,
+            target_view,
+            wgpu::LoadOp::Load,
+        );
+
+        self.effect_renderer.offscreen_pool.release(source);
+        self.effect_renderer.offscreen_pool.release(dest);
+
+        Ok(())
+    }
+
+    fn apply_backdrop_layer_to_target(
+        &mut self,
+        target: &OffscreenTarget,
+        layer: &BackdropLayer,
+        width: u32,
+        height: u32,
+        root_scale: f32,
+    ) -> Result<(), String> {
+        let Some(scissor) = scissor_rect_for_rect(layer.rect, root_scale, width, height) else {
+            return Ok(());
+        };
+
+        let snapshot = self
+            .effect_renderer
+            .offscreen_pool
+            .acquire(&self.device, width, height);
+        self.effect_renderer.composite_to_view(
+            &self.device,
+            &self.queue,
+            target,
+            &snapshot.view,
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+        );
+
+        let dest = self
+            .effect_renderer
+            .offscreen_pool
+            .acquire(&self.device, width, height);
+        let layer_pixel_rect = [
+            layer.rect.x * root_scale,
+            layer.rect.y * root_scale,
+            layer.rect.width * root_scale,
+            layer.rect.height * root_scale,
+        ];
+        self.effect_renderer.apply_effect(
+            &self.device,
+            &self.queue,
+            &snapshot,
+            &dest.view,
+            &layer.effect,
+            layer_pixel_rect,
+        );
+
+        self.effect_renderer.composite_to_view_scissored(
+            &self.device,
+            &self.queue,
+            &dest,
+            &target.view,
+            wgpu::LoadOp::Load,
+            Some(scissor),
+        );
+
+        self.effect_renderer.offscreen_pool.release(snapshot);
+        self.effect_renderer.offscreen_pool.release(dest);
+
+        Ok(())
+    }
+
+    fn clear_target_view(&self, target_view: &wgpu::TextureView, color: wgpu::Color) {
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Layer Event Clear Encoder"),
+            });
+        {
+            let _clear_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Layer Event Clear Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(color),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+    }
+
     /// Render effect layers: for each layer, render its shapes, images, and text
     /// to an offscreen target, apply the effect, then composite onto the surface.
     #[allow(clippy::too_many_arguments)]
@@ -2194,6 +2630,64 @@ impl GpuRenderer {
 
         Ok(())
     }
+}
+
+fn is_in_effect_range(z_index: usize, effect_z_ranges: &[Range<usize>]) -> bool {
+    effect_z_ranges.iter().any(|range| range.contains(&z_index))
+}
+
+fn scene_end_z(
+    shapes: &[DrawShape],
+    images: &[ImageDraw],
+    texts: &[TextDraw],
+    effect_layers: &[EffectLayer],
+    backdrop_layers: &[BackdropLayer],
+) -> usize {
+    let mut end = 0usize;
+    if let Some(shape) = shapes.last() {
+        end = end.max(shape.z_index.saturating_add(1));
+    }
+    if let Some(image) = images.last() {
+        end = end.max(image.z_index.saturating_add(1));
+    }
+    if let Some(text) = texts.last() {
+        end = end.max(text.z_index.saturating_add(1));
+    }
+    if let Some(layer) = effect_layers.iter().max_by_key(|layer| layer.z_end) {
+        end = end.max(layer.z_end);
+    }
+    if let Some(layer) = backdrop_layers.iter().max_by_key(|layer| layer.z_index) {
+        end = end.max(layer.z_index.saturating_add(1));
+    }
+    end
+}
+
+fn scissor_rect_for_rect(
+    rect: cranpose_ui_graphics::Rect,
+    root_scale: f32,
+    width: u32,
+    height: u32,
+) -> Option<(u32, u32, u32, u32)> {
+    let mut left = rect.x * root_scale;
+    let mut top = rect.y * root_scale;
+    let mut right = (rect.x + rect.width) * root_scale;
+    let mut bottom = (rect.y + rect.height) * root_scale;
+
+    left = left.max(0.0).min(width as f32).floor();
+    top = top.max(0.0).min(height as f32).floor();
+    right = right.max(0.0).min(width as f32).ceil();
+    bottom = bottom.max(0.0).min(height as f32).ceil();
+
+    if right <= left || bottom <= top {
+        return None;
+    }
+
+    Some((
+        left as u32,
+        top as u32,
+        (right - left) as u32,
+        (bottom - top) as u32,
+    ))
 }
 
 fn tint_for_image(color_filter: Option<ColorFilter>, alpha: f32) -> [f32; 4] {

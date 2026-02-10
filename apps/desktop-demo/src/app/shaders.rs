@@ -110,25 +110,60 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
-/// Build a rect-masked blur RenderEffect from position, size, and blur radius.
-fn rect_blur_effect(
-    pos: Point,
-    width: f32,
-    height: f32,
-    corner_radius: f32,
-    blur_radius: f32,
-    area_width: f32,
-    area_height: f32,
-) -> RenderEffect {
+/// Build a rect-masked blur RenderEffect in local layer coordinates.
+fn rect_blur_effect(width: f32, height: f32, corner_radius: f32, blur_radius: f32) -> RenderEffect {
     let mut shader = RuntimeShader::new(RECT_BLUR_WGSL);
-    let cx = pos.x + width * 0.5;
-    let cy = pos.y + height * 0.5;
-    shader.set_float2(0, area_width, area_height);
-    shader.set_float2(2, cx, cy);
+    // Backdrop effects are rendered in effect-local coordinates. Keep uniforms
+    // local to the composable bounds so movement is driven only by layer translation.
+    shader.set_float2(0, width, height);
+    shader.set_float2(2, width * 0.5, height * 0.5);
     shader.set_float2(4, width, height);
     shader.set_float(6, corner_radius);
     shader.set_float(7, blur_radius);
     RenderEffect::runtime_shader(shader)
+}
+
+/// Build a local liquid-glass effect sized to the composable bounds.
+fn liquid_glass_local_effect(width: f32, height: f32, corner: f32) -> RenderEffect {
+    let glass_rect = LiquidGlassRect {
+        left: 0.0,
+        top: 0.0,
+        width,
+        height,
+        tint_color: Color(0.6, 0.8, 1.0, 0.12),
+    };
+    liquid_glass_effect(
+        &glass_rect,
+        &LiquidGlassSpec {
+            corner_radius: corner,
+            // Tilt simulates viewing angle for refraction on desktop
+            tilt_angle: 0.5,
+            tilt_pitch: 0.3,
+            ..LiquidGlassSpec::default()
+        },
+        width,
+        height,
+    )
+}
+
+fn clamped_drag_position(
+    global_position: Point,
+    drag_offset: (f32, f32),
+    area_w: f32,
+    area_h: f32,
+    width: f32,
+    height: f32,
+) -> Point {
+    Point {
+        x: (global_position.x - drag_offset.0).clamp(0.0, area_w - width),
+        y: (global_position.y - drag_offset.1).clamp(0.0, area_h - height),
+    }
+}
+
+fn apply_drag_position(pos: &cranpose_core::MutableState<Point>, next: Point) {
+    pos.set(next);
+    // Lazy graphics-layer reads happen at render time, so dragging must request redraw.
+    cranpose_ui::request_render_invalidation();
 }
 
 // ── Composables ─────────────────────────────────────────────────────────────
@@ -243,35 +278,8 @@ fn InteractiveEffectsDemo() {
                 TextStyle::default(),
             );
 
-            // Build combined backdrop effect from both draggable rect positions.
-            // Each shader naturally masks to its own rect region and passes
-            // through elsewhere, so chaining them works correctly.
-            let bp = blur_pos.get();
-            let gp = glass_pos.get();
-
-            let blur_fx = rect_blur_effect(bp, rect_w, rect_h, corner, 12.0, area_w, area_h);
-
-            let glass_rect = LiquidGlassRect {
-                left: gp.x,
-                top: gp.y,
-                width: rect_w,
-                height: rect_h,
-                tint_color: Color(0.6, 0.8, 1.0, 0.12),
-            };
-            let glass_fx = liquid_glass_effect(
-                &glass_rect,
-                &LiquidGlassSpec {
-                    corner_radius: corner,
-                    // Tilt simulates viewing angle for refraction on desktop
-                    tilt_angle: 0.5,
-                    tilt_pitch: 0.3,
-                    ..LiquidGlassSpec::default()
-                },
-                area_w,
-                area_h,
-            );
-
-            let combined = blur_fx.then(glass_fx);
+            let blur_fx = rect_blur_effect(rect_w, rect_h, corner, 12.0);
+            let glass_fx = liquid_glass_local_effect(rect_w, rect_h, corner);
 
             let checkerboard: ImageBitmap =
                 cranpose_core::remember(|| generate_chessboard_bitmap(24, 17)).with(|b| b.clone());
@@ -283,16 +291,8 @@ fn InteractiveEffectsDemo() {
                     .rounded_corners(16.0),
                 BoxSpec::default(),
                 move || {
-                    // ── Background with combined effect ──────────────────
-                    // The effect layer captures this entire subtree (image +
-                    // colored rows) and applies the rect-blur + glass chain.
                     Box(
-                        Modifier::empty()
-                            .size_points(area_w, area_h)
-                            .graphics_layer(GraphicsLayer {
-                                render_effect: Some(combined.clone()),
-                                ..Default::default()
-                            }),
+                        Modifier::empty().size_points(area_w, area_h),
                         BoxSpec::default(),
                         {
                             let board = checkerboard.clone();
@@ -352,6 +352,7 @@ fn InteractiveEffectsDemo() {
                     // by the blur/glass effects.
                     DraggableOverlay(
                         blur_pos,
+                        blur_fx.clone(),
                         rect_w,
                         rect_h,
                         corner,
@@ -362,6 +363,7 @@ fn InteractiveEffectsDemo() {
                     );
                     DraggableOverlay(
                         glass_pos,
+                        glass_fx.clone(),
                         rect_w,
                         rect_h,
                         corner,
@@ -393,6 +395,7 @@ fn InteractiveEffectsDemo() {
 #[allow(clippy::too_many_arguments)]
 fn DraggableOverlay(
     pos: cranpose_core::MutableState<Point>,
+    backdrop_effect: RenderEffect,
     width: f32,
     height: f32,
     corner: f32,
@@ -401,12 +404,15 @@ fn DraggableOverlay(
     area_w: f32,
     area_h: f32,
 ) {
-    let current = pos.get();
-
     Box(
         Modifier::empty()
             .size_points(width, height)
-            .absolute_offset(current.x, current.y)
+            .graphics_layer_lazy(move || GraphicsLayer {
+                translation_x: pos.get().x,
+                translation_y: pos.get().y,
+                ..Default::default()
+            })
+            .backdrop_effect(backdrop_effect)
             .draw_behind(move |scope| {
                 // Rounded border to show the rect boundary
                 scope.draw_round_rect(Brush::solid(border_color), CornerRadii::uniform(corner));
@@ -441,11 +447,15 @@ fn DraggableOverlay(
                                             continue;
                                         }
                                         if let Some((ox, oy)) = drag_offset {
-                                            let new_x = (event.global_position.x - ox)
-                                                .clamp(0.0, area_w - width);
-                                            let new_y = (event.global_position.y - oy)
-                                                .clamp(0.0, area_h - height);
-                                            pos.set(Point { x: new_x, y: new_y });
+                                            let next = clamped_drag_position(
+                                                event.global_position,
+                                                (ox, oy),
+                                                area_w,
+                                                area_h,
+                                                width,
+                                                height,
+                                            );
+                                            apply_drag_position(&pos, next);
                                         }
                                         event.consume();
                                     }
@@ -475,4 +485,72 @@ fn DraggableOverlay(
             );
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn rect_blur_effect_uses_local_layer_space() {
+        let effect = rect_blur_effect(140.0, 100.0, 20.0, 12.0);
+        let RenderEffect::Shader { shader } = effect else {
+            panic!("expected shader effect");
+        };
+        let u = shader.uniforms();
+
+        assert_eq!(u[0], 140.0);
+        assert_eq!(u[1], 100.0);
+        assert_eq!(u[2], 70.0);
+        assert_eq!(u[3], 50.0);
+        assert_eq!(u[4], 140.0);
+        assert_eq!(u[5], 100.0);
+        assert_eq!(u[6], 20.0);
+        assert_eq!(u[7], 12.0);
+    }
+
+    #[test]
+    fn liquid_glass_local_effect_uses_local_layer_space() {
+        let effect = liquid_glass_local_effect(140.0, 100.0, 20.0);
+        let RenderEffect::Shader { shader } = effect else {
+            panic!("expected shader effect");
+        };
+        let u = shader.uniforms();
+
+        assert_eq!(u[0], 140.0);
+        assert_eq!(u[1], 100.0);
+        assert_eq!(u[2], 70.0);
+        assert_eq!(u[3], 50.0);
+        assert_eq!(u[4], 140.0);
+        assert_eq!(u[5], 100.0);
+        assert_eq!(u[6], 20.0);
+    }
+
+    #[test]
+    fn clamped_drag_position_stays_within_bounds() {
+        let next = clamped_drag_position(
+            Point::new(999.0, -10.0),
+            (10.0, 15.0),
+            320.0,
+            240.0,
+            140.0,
+            100.0,
+        );
+        assert_eq!(next, Point::new(180.0, 0.0));
+    }
+
+    #[test]
+    fn apply_drag_position_updates_state_and_requests_render() {
+        let runtime = cranpose_core::runtime::Runtime::new(Arc::new(
+            cranpose_core::runtime::DefaultScheduler,
+        ));
+        let pos = cranpose_core::MutableState::with_runtime(Point::ZERO, runtime.handle());
+
+        let _ = cranpose_ui::take_render_invalidation();
+        apply_drag_position(&pos, Point::new(42.0, 24.0));
+
+        assert_eq!(pos.get(), Point::new(42.0, 24.0));
+        assert!(cranpose_ui::take_render_invalidation());
+    }
 }

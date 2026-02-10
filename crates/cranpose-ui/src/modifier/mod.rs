@@ -38,7 +38,8 @@ pub use cranpose_foundation::{
     PointerEventKind, SemanticsConfiguration,
 };
 pub use cranpose_ui_graphics::{
-    Brush, Color, CornerRadii, EdgeInsets, GraphicsLayer, Point, Rect, RoundedCornerShape, Size,
+    Brush, Color, CornerRadii, EdgeInsets, GraphicsLayer, Point, Rect, RenderEffect,
+    RoundedCornerShape, RuntimeShader, Size,
 };
 use cranpose_ui_layout::{Alignment, HorizontalAlignment, IntrinsicSize, VerticalAlignment};
 #[allow(unused_imports)]

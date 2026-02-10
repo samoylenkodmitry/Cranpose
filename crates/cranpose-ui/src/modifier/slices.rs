@@ -28,6 +28,7 @@ pub struct ModifierNodeSlices {
     text_content: Option<Rc<str>>,
     text_style: Option<TextStyle>,
     graphics_layer: Option<GraphicsLayer>,
+    graphics_layer_resolver: Option<Rc<dyn Fn() -> GraphicsLayer>>,
     chain_guard: Option<Rc<ChainGuard>>,
 }
 
@@ -45,8 +46,22 @@ impl Clone for ModifierNodeSlices {
             text_content: self.text_content.clone(),
             text_style: self.text_style.clone(),
             graphics_layer: self.graphics_layer.clone(),
+            graphics_layer_resolver: self.graphics_layer_resolver.clone(),
             chain_guard: self.chain_guard.clone(),
         }
+    }
+}
+
+fn merge_graphics_layers(base: GraphicsLayer, overlay: GraphicsLayer) -> GraphicsLayer {
+    GraphicsLayer {
+        alpha: (base.alpha * overlay.alpha).clamp(0.0, 1.0),
+        scale: base.scale * overlay.scale,
+        translation_x: base.translation_x + overlay.translation_x,
+        translation_y: base.translation_y + overlay.translation_y,
+        // Keep the most recent explicitly specified effect while preserving
+        // previously configured effects when the new layer leaves them unset.
+        render_effect: overlay.render_effect.or(base.render_effect),
+        backdrop_effect: overlay.backdrop_effect.or(base.backdrop_effect),
     }
 }
 
@@ -80,7 +95,44 @@ impl ModifierNodeSlices {
     }
 
     pub fn graphics_layer(&self) -> Option<GraphicsLayer> {
-        self.graphics_layer.clone()
+        if let Some(resolve) = &self.graphics_layer_resolver {
+            Some(resolve())
+        } else {
+            self.graphics_layer.clone()
+        }
+    }
+
+    fn push_graphics_layer(
+        &mut self,
+        layer: GraphicsLayer,
+        resolver: Option<Rc<dyn Fn() -> GraphicsLayer>>,
+    ) {
+        let existing_snapshot = self.graphics_layer();
+        let next_snapshot = existing_snapshot
+            .as_ref()
+            .map(|current| merge_graphics_layers(current.clone(), layer.clone()))
+            .unwrap_or_else(|| layer.clone());
+        let existing_resolver = self.graphics_layer_resolver.clone();
+
+        self.graphics_layer = Some(next_snapshot);
+        self.graphics_layer_resolver = match (existing_resolver, resolver) {
+            (None, None) => None,
+            (Some(current_resolver), None) => {
+                let layer = layer.clone();
+                Some(Rc::new(move || {
+                    merge_graphics_layers(current_resolver(), layer.clone())
+                }))
+            }
+            (None, Some(next_resolver)) => {
+                let base = existing_snapshot.unwrap_or_default();
+                Some(Rc::new(move || {
+                    merge_graphics_layers(base.clone(), next_resolver())
+                }))
+            }
+            (Some(current_resolver), Some(next_resolver)) => Some(Rc::new(move || {
+                merge_graphics_layers(current_resolver(), next_resolver())
+            })),
+        };
     }
 
     pub fn with_chain_guard(mut self, handle: ModifierChainHandle) -> Self {
@@ -97,6 +149,7 @@ impl ModifierNodeSlices {
         self.text_content = None;
         self.text_style = None;
         self.graphics_layer = None;
+        self.graphics_layer_resolver = None;
         self.chain_guard = None;
     }
 }
@@ -111,6 +164,10 @@ impl fmt::Debug for ModifierNodeSlices {
             .field("text_content", &self.text_content)
             .field("text_style", &self.text_style)
             .field("graphics_layer", &self.graphics_layer)
+            .field(
+                "graphics_layer_resolver",
+                &self.graphics_layer_resolver.is_some(),
+            )
             .finish()
     }
 }
@@ -195,7 +252,7 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
 
         // Collect graphics layer from GraphicsLayerNode
         if let Some(layer_node) = any.downcast_ref::<GraphicsLayerNode>() {
-            slices.graphics_layer = Some(layer_node.layer());
+            slices.push_graphics_layer(layer_node.layer(), layer_node.layer_resolver());
         }
 
         if any.is::<ClipToBoundsNode>() {

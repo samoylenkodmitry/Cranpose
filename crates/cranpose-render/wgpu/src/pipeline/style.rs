@@ -50,10 +50,13 @@ pub(crate) fn combine_layers(
             translation_y: current.translation_y + layer.translation_y,
             // render_effect is NOT inherited — it applies only to this layer's subtree
             render_effect: layer.render_effect,
+            // backdrop_effect is NOT inherited — it applies only to this node's backdrop.
+            backdrop_effect: layer.backdrop_effect,
         }
     } else {
         GraphicsLayer {
             render_effect: None,
+            backdrop_effect: None,
             ..current
         }
     }

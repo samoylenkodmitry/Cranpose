@@ -92,6 +92,8 @@ fn hash_graphics_layer<H: Hasher>(state: &mut H, layer: &GraphicsLayer) {
     hash_f32_value(state, layer.scale);
     hash_f32_value(state, layer.translation_x);
     hash_f32_value(state, layer.translation_y);
+    state.write_u8(layer.render_effect.is_some() as u8);
+    state.write_u8(layer.backdrop_effect.is_some() as u8);
 }
 
 fn hash_horizontal_alignment<H: Hasher>(state: &mut H, alignment: HorizontalAlignment) {
@@ -539,9 +541,9 @@ impl ModifierNodeElement for CornerShapeElement {
 // ============================================================================
 
 /// Node that stores graphics layer state for resolved modifiers.
-#[derive(Debug)]
 pub struct GraphicsLayerNode {
     layer: GraphicsLayer,
+    layer_resolver: Option<Rc<dyn Fn() -> GraphicsLayer>>,
     state: NodeState,
 }
 
@@ -549,12 +551,40 @@ impl GraphicsLayerNode {
     pub fn new(layer: GraphicsLayer) -> Self {
         Self {
             layer,
+            layer_resolver: None,
+            state: NodeState::new(),
+        }
+    }
+
+    pub fn new_lazy(layer_resolver: Rc<dyn Fn() -> GraphicsLayer>) -> Self {
+        let layer = layer_resolver();
+        Self {
+            layer,
+            layer_resolver: Some(layer_resolver),
             state: NodeState::new(),
         }
     }
 
     pub fn layer(&self) -> GraphicsLayer {
-        self.layer.clone()
+        if let Some(resolve) = &self.layer_resolver {
+            resolve()
+        } else {
+            self.layer.clone()
+        }
+    }
+
+    pub fn layer_resolver(&self) -> Option<Rc<dyn Fn() -> GraphicsLayer>> {
+        self.layer_resolver.clone()
+    }
+
+    fn set_static(&mut self, layer: GraphicsLayer) {
+        self.layer = layer;
+        self.layer_resolver = None;
+    }
+
+    fn set_lazy(&mut self, layer_resolver: Rc<dyn Fn() -> GraphicsLayer>) {
+        self.layer = layer_resolver();
+        self.layer_resolver = Some(layer_resolver);
     }
 }
 
@@ -567,6 +597,15 @@ impl DelegatableNode for GraphicsLayerNode {
 impl ModifierNode for GraphicsLayerNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
         context.invalidate(cranpose_foundation::InvalidationKind::Draw);
+    }
+}
+
+impl std::fmt::Debug for GraphicsLayerNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GraphicsLayerNode")
+            .field("layer", &self.layer)
+            .field("lazy", &self.layer_resolver.is_some())
+            .finish()
     }
 }
 
@@ -596,13 +635,66 @@ impl ModifierNodeElement for GraphicsLayerElement {
     }
 
     fn update(&self, node: &mut Self::Node) {
-        if node.layer != self.layer {
-            node.layer = self.layer.clone();
-        }
+        node.set_static(self.layer.clone());
     }
 
     fn capabilities(&self) -> NodeCapabilities {
         NodeCapabilities::DRAW
+    }
+}
+
+/// Element that evaluates a graphics layer lazily during render data collection.
+#[derive(Clone)]
+pub struct LazyGraphicsLayerElement {
+    layer_resolver: Rc<dyn Fn() -> GraphicsLayer>,
+}
+
+impl LazyGraphicsLayerElement {
+    pub fn new(layer_resolver: Rc<dyn Fn() -> GraphicsLayer>) -> Self {
+        Self { layer_resolver }
+    }
+}
+
+impl std::fmt::Debug for LazyGraphicsLayerElement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LazyGraphicsLayerElement")
+            .field("resolver", &"<closure>")
+            .finish()
+    }
+}
+
+impl PartialEq for LazyGraphicsLayerElement {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.layer_resolver, &other.layer_resolver)
+    }
+}
+
+impl Eq for LazyGraphicsLayerElement {}
+
+impl Hash for LazyGraphicsLayerElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let ptr = Rc::as_ptr(&self.layer_resolver) as *const ();
+        ptr.hash(state);
+    }
+}
+
+impl ModifierNodeElement for LazyGraphicsLayerElement {
+    type Node = GraphicsLayerNode;
+
+    fn create(&self) -> Self::Node {
+        GraphicsLayerNode::new_lazy(self.layer_resolver.clone())
+    }
+
+    fn update(&self, node: &mut Self::Node) {
+        node.set_lazy(self.layer_resolver.clone());
+    }
+
+    fn capabilities(&self) -> NodeCapabilities {
+        NodeCapabilities::DRAW
+    }
+
+    fn always_update(&self) -> bool {
+        true
     }
 }
 
