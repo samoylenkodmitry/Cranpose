@@ -3,7 +3,8 @@ use std::rc::Rc;
 use cranpose_foundation::PointerEvent;
 use cranpose_ui::{Brush, DrawCommand, LayoutNodeData, ModifierNodeSlices};
 use cranpose_ui_graphics::{
-    Color, CornerRadii, DrawPrimitive, GraphicsLayer, Point, Rect, RoundedCornerShape, Size,
+    Color, ColorFilter, CornerRadii, DrawPrimitive, GraphicsLayer, Point, Rect, RoundedCornerShape,
+    Size,
 };
 
 use crate::scene::Scene;
@@ -50,6 +51,7 @@ pub(crate) fn combine_layers(
             scale: current.scale * layer.scale,
             translation_x: current.translation_x + layer.translation_x,
             translation_y: current.translation_y + layer.translation_y,
+            color_filter: compose_color_filters(current.color_filter, layer.color_filter),
             // Effects are local to this modifier layer and are not inherited.
             render_effect: layer.render_effect,
             backdrop_effect: layer.backdrop_effect,
@@ -75,12 +77,43 @@ pub(crate) fn apply_layer_to_rect(rect: Rect, origin: (f32, f32), layer: &Graphi
 }
 
 pub(crate) fn apply_layer_to_color(color: Color, layer: &GraphicsLayer) -> Color {
-    Color(
-        color.0,
-        color.1,
-        color.2,
-        (color.3 * layer.alpha).clamp(0.0, 1.0),
+    apply_color_filter_to_color(
+        Color(
+            color.0,
+            color.1,
+            color.2,
+            (color.3 * layer.alpha).clamp(0.0, 1.0),
+        ),
+        layer.color_filter,
     )
+}
+
+fn apply_color_filter_to_color(color: Color, filter: Option<ColorFilter>) -> Color {
+    match filter {
+        Some(ColorFilter::Tint(tint)) => Color(
+            (color.0 * tint.r()).clamp(0.0, 1.0),
+            (color.1 * tint.g()).clamp(0.0, 1.0),
+            (color.2 * tint.b()).clamp(0.0, 1.0),
+            (color.3 * tint.a()).clamp(0.0, 1.0),
+        ),
+        None => color,
+    }
+}
+
+fn compose_color_filters(
+    base: Option<ColorFilter>,
+    overlay: Option<ColorFilter>,
+) -> Option<ColorFilter> {
+    match (base, overlay) {
+        (None, None) => None,
+        (Some(filter), None) | (None, Some(filter)) => Some(filter),
+        (Some(ColorFilter::Tint(a)), Some(ColorFilter::Tint(b))) => Some(ColorFilter::Tint(Color(
+            (a.r() * b.r()).clamp(0.0, 1.0),
+            (a.g() * b.g()).clamp(0.0, 1.0),
+            (a.b() * b.b()).clamp(0.0, 1.0),
+            (a.a() * b.a()).clamp(0.0, 1.0),
+        ))),
+    }
 }
 
 pub(crate) fn apply_layer_to_brush(brush: Brush, layer: &GraphicsLayer) -> Brush {
@@ -188,11 +221,12 @@ pub(crate) fn apply_draw_commands(
                     let draw_rect = local_rect.translate(rect.x, rect.y);
                     let transformed = apply_layer_to_rect(draw_rect, origin, layer);
                     let combined_alpha = (alpha * layer.alpha).clamp(0.0, 1.0);
+                    let combined_filter = compose_color_filters(color_filter, layer.color_filter);
                     scene.push_image(
                         transformed,
                         image,
                         combined_alpha,
-                        color_filter,
+                        combined_filter,
                         clip,
                         src_rect,
                     );
@@ -260,6 +294,7 @@ mod tests {
             scale: 1.2,
             translation_x: 4.0,
             translation_y: 6.0,
+            color_filter: None,
             render_effect: Some(RenderEffect::blur(4.0)),
             backdrop_effect: Some(RenderEffect::blur(2.0)),
         };
@@ -288,5 +323,26 @@ mod tests {
         let combined = combine_layers(parent, Some(local.clone()));
         assert_eq!(combined.render_effect, local.render_effect);
         assert_eq!(combined.backdrop_effect, local.backdrop_effect);
+    }
+
+    #[test]
+    fn combine_layers_multiplies_tint_filters() {
+        let parent = GraphicsLayer {
+            color_filter: Some(ColorFilter::tint(Color::from_rgba_u8(255, 128, 128, 255))),
+            ..Default::default()
+        };
+        let local = GraphicsLayer {
+            color_filter: Some(ColorFilter::tint(Color::from_rgba_u8(128, 255, 64, 128))),
+            ..Default::default()
+        };
+
+        let combined = combine_layers(parent, Some(local));
+        let Some(ColorFilter::Tint(tint)) = combined.color_filter else {
+            panic!("expected tint filter");
+        };
+        assert!((tint.r() - (128.0 / 255.0)).abs() < 1e-6);
+        assert!((tint.g() - (128.0 / 255.0)).abs() < 1e-6);
+        assert!((tint.b() - (64.0 / 255.0 * 128.0 / 255.0)).abs() < 1e-6);
+        assert!((tint.a() - (128.0 / 255.0)).abs() < 1e-6);
     }
 }

@@ -218,6 +218,7 @@ pub struct GraphicsLayer {
     pub scale: f32,
     pub translation_x: f32,
     pub translation_y: f32,
+    pub color_filter: Option<ColorFilter>,
     pub render_effect: Option<crate::render_effect::RenderEffect>,
     pub backdrop_effect: Option<crate::render_effect::RenderEffect>,
 }
@@ -229,6 +230,7 @@ impl Default for GraphicsLayer {
             scale: 1.0,
             translation_x: 0.0,
             translation_y: 0.0,
+            color_filter: None,
             render_effect: None,
             backdrop_effect: None,
         }
@@ -464,6 +466,7 @@ mod tests {
         let layer = GraphicsLayer {
             render_effect: Some(RenderEffect::blur(10.0)),
             backdrop_effect: Some(RenderEffect::blur(6.0)),
+            color_filter: Some(ColorFilter::tint(Color::from_rgba_u8(128, 200, 255, 255))),
             alpha: 0.5,
             ..Default::default()
         };
@@ -471,6 +474,7 @@ mod tests {
         assert_eq!(cloned.alpha, 0.5);
         assert!(cloned.render_effect.is_some());
         assert!(cloned.backdrop_effect.is_some());
+        assert_eq!(layer.color_filter, cloned.color_filter);
         assert_eq!(layer.render_effect, cloned.render_effect);
         assert_eq!(layer.backdrop_effect, cloned.backdrop_effect);
     }
@@ -478,6 +482,7 @@ mod tests {
     #[test]
     fn graphics_layer_default_has_no_effect() {
         let layer = GraphicsLayer::default();
+        assert!(layer.color_filter.is_none());
         assert!(layer.render_effect.is_none());
         assert!(layer.backdrop_effect.is_none());
         assert_eq!(layer.alpha, 1.0);

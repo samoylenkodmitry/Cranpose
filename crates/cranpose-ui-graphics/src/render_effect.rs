@@ -10,9 +10,9 @@ use std::sync::Arc;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum TileMode {
     /// Clamp to the edge pixel color.
+    #[default]
     Clamp,
     /// Treat pixels outside the boundary as transparent.
-    #[default]
     Decal,
 }
 
@@ -29,6 +29,9 @@ pub enum TileMode {
 /// as `u[index / 4][index % 4]` for individual floats, or `u[index / 4].xy`
 /// for vec2, etc. User uniforms may use indices `0..248`; slots `248..256`
 /// are reserved for renderer metadata.
+///
+/// RuntimeShader pipelines operate on premultiplied-alpha textures. Custom
+/// shaders should preserve premultiplied output semantics.
 #[derive(Clone, Debug)]
 pub struct RuntimeShader {
     source: Arc<str>,
@@ -252,7 +255,7 @@ mod tests {
             } => {
                 assert_eq!(radius_x, 15.0);
                 assert_eq!(radius_y, 15.0);
-                assert_eq!(edge_treatment, TileMode::Decal);
+                assert_eq!(edge_treatment, TileMode::Clamp);
             }
             _ => panic!("expected Blur"),
         }

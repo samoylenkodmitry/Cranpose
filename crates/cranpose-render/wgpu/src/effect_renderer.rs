@@ -15,13 +15,15 @@ pub(crate) struct EffectRenderer {
 
     // Blur pipeline (compiled once)
     blur_pipeline: wgpu::RenderPipeline,
-    blur_uniform_buffer: wgpu::Buffer,
-    blur_uniform_bind_group_layout: wgpu::BindGroupLayout,
+    blur_uniform_buffer_horizontal: wgpu::Buffer,
+    blur_uniform_buffer_vertical: wgpu::Buffer,
+    blur_uniform_bind_group_horizontal: wgpu::BindGroup,
+    blur_uniform_bind_group_vertical: wgpu::BindGroup,
 
     // Offset pipeline (compiled once)
     offset_pipeline: wgpu::RenderPipeline,
     offset_uniform_buffer: wgpu::Buffer,
-    offset_uniform_bind_group_layout: wgpu::BindGroupLayout,
+    offset_uniform_bind_group: wgpu::BindGroup,
 
     // Blit pipeline for compositing offscreen targets to the surface
     blit_pipeline: wgpu::RenderPipeline,
@@ -32,6 +34,7 @@ pub(crate) struct EffectRenderer {
 
     // Shared effect uniform buffer for RuntimeShader (64 vec4s = 1024 bytes)
     pub effect_uniform_buffer: wgpu::Buffer,
+    effect_uniform_bind_group: wgpu::BindGroup,
 
     // Sampler for effect textures
     pub effect_sampler: wgpu::Sampler,
@@ -125,7 +128,7 @@ impl EffectRenderer {
                 entry_point: Some("blur_fs"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
@@ -173,7 +176,7 @@ impl EffectRenderer {
                 entry_point: Some("offset_fs"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
@@ -217,7 +220,7 @@ impl EffectRenderer {
                 entry_point: Some("blit_fs"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
@@ -235,9 +238,17 @@ impl EffectRenderer {
             cache: None,
         });
 
-        // Create uniform buffers
-        let blur_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Blur Uniform Buffer"),
+        // Create uniform buffers.
+        // Blur keeps independent horizontal/vertical buffers so both writes can
+        // happen before a single submit without staging collisions.
+        let blur_uniform_buffer_horizontal = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Blur Horizontal Uniform Buffer"),
+            size: std::mem::size_of::<BlurUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let blur_uniform_buffer_vertical = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Blur Vertical Uniform Buffer"),
             size: std::mem::size_of::<BlurUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -257,6 +268,41 @@ impl EffectRenderer {
             mapped_at_creation: false,
         });
 
+        let blur_uniform_bind_group_horizontal =
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Blur Horizontal Uniform Bind Group"),
+                layout: &blur_uniform_bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: blur_uniform_buffer_horizontal.as_entire_binding(),
+                }],
+            });
+        let blur_uniform_bind_group_vertical =
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Blur Vertical Uniform Bind Group"),
+                layout: &blur_uniform_bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: blur_uniform_buffer_vertical.as_entire_binding(),
+                }],
+            });
+        let offset_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Offset Uniform Bind Group"),
+            layout: &offset_uniform_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: offset_uniform_buffer.as_entire_binding(),
+            }],
+        });
+        let effect_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Effect Uniform Bind Group"),
+            layout: &effect_uniform_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: effect_uniform_buffer.as_entire_binding(),
+            }],
+        });
+
         let effect_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("Effect Sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -270,15 +316,18 @@ impl EffectRenderer {
             offscreen_pool: OffscreenPool::new(surface_format),
             shader_cache: ShaderPipelineCache::new(),
             blur_pipeline,
-            blur_uniform_buffer,
-            blur_uniform_bind_group_layout,
+            blur_uniform_buffer_horizontal,
+            blur_uniform_buffer_vertical,
+            blur_uniform_bind_group_horizontal,
+            blur_uniform_bind_group_vertical,
             offset_pipeline,
             offset_uniform_buffer,
-            offset_uniform_bind_group_layout,
+            offset_uniform_bind_group,
             blit_pipeline,
             effect_texture_bind_group_layout,
             effect_uniform_bind_group_layout,
             effect_uniform_buffer,
+            effect_uniform_bind_group,
             effect_sampler,
             surface_format,
         }
@@ -287,9 +336,8 @@ impl EffectRenderer {
     /// Apply a two-pass separable Gaussian blur to a source texture, writing
     /// the result to the destination texture view.
     ///
-    /// Uses an intermediate offscreen target for the horizontal pass.
-    /// Each pass is submitted separately to avoid the `queue.write_buffer`
-    /// staging bug where the second uniform write overwrites the first.
+    /// Uses an intermediate offscreen target for the horizontal pass and
+    /// submits both passes together for lower command submission overhead.
     #[allow(clippy::too_many_arguments)]
     pub fn apply_blur(
         &mut self,
@@ -305,113 +353,101 @@ impl EffectRenderer {
         let height = source.height;
         let tile_mode_value = tile_mode_uniform_value(tile_mode);
 
+        if radius_x <= 0.0 && radius_y <= 0.0 {
+            self.composite_to_view(
+                device,
+                queue,
+                source,
+                dest_view,
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            );
+            return;
+        }
+
         // Acquire intermediate target for horizontal pass
         let intermediate = self.offscreen_pool.acquire(device, width, height);
 
-        // === Horizontal blur pass (source → intermediate) ===
-        // Each pass gets its own encoder+submit so uniform writes don't conflict.
-        // queue.write_buffer is staged and only the last write to a given offset
-        // survives until submission, so we must submit between passes.
+        // Upload both pass uniforms up front and execute both passes in a single submit.
+        let horizontal_uniforms = BlurUniforms {
+            direction: [1.0, 0.0],
+            radius: [radius_x, radius_y],
+            texture_size: [width as f32, height as f32],
+            tile_mode: tile_mode_value,
+            _padding: 0.0,
+        };
+        let vertical_uniforms = BlurUniforms {
+            direction: [0.0, 1.0],
+            radius: [radius_x, radius_y],
+            texture_size: [width as f32, height as f32],
+            tile_mode: tile_mode_value,
+            _padding: 0.0,
+        };
+        queue.write_buffer(
+            &self.blur_uniform_buffer_horizontal,
+            0,
+            bytemuck::bytes_of(&horizontal_uniforms),
+        );
+        queue.write_buffer(
+            &self.blur_uniform_buffer_vertical,
+            0,
+            bytemuck::bytes_of(&vertical_uniforms),
+        );
+
+        let source_texture_bind_group = OffscreenPool::create_texture_bind_group(
+            device,
+            &self.effect_texture_bind_group_layout,
+            source,
+            &self.effect_sampler,
+        );
+        let intermediate_texture_bind_group = OffscreenPool::create_texture_bind_group(
+            device,
+            &self.effect_texture_bind_group_layout,
+            &intermediate,
+            &self.effect_sampler,
+        );
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Blur Effect Encoder"),
+        });
         {
-            let uniforms = BlurUniforms {
-                direction: [1.0, 0.0],
-                radius: [radius_x, radius_y],
-                texture_size: [width as f32, height as f32],
-                tile_mode: tile_mode_value,
-                _padding: 0.0,
-            };
-            queue.write_buffer(&self.blur_uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
-
-            let texture_bind_group = OffscreenPool::create_texture_bind_group(
-                device,
-                &self.effect_texture_bind_group_layout,
-                source,
-                &self.effect_sampler,
-            );
-            let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Blur H Uniform Bind Group"),
-                layout: &self.blur_uniform_bind_group_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.blur_uniform_buffer.as_entire_binding(),
-                }],
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Blur Horizontal Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &intermediate.view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                ..Default::default()
             });
-
-            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Blur Horizontal Encoder"),
-            });
-            {
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Blur Horizontal Pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &intermediate.view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    ..Default::default()
-                });
-                pass.set_pipeline(&self.blur_pipeline);
-                pass.set_bind_group(0, &texture_bind_group, &[]);
-                pass.set_bind_group(1, &uniform_bind_group, &[]);
-                pass.draw(0..4, 0..1);
-            }
-            queue.submit(std::iter::once(encoder.finish()));
+            pass.set_pipeline(&self.blur_pipeline);
+            pass.set_bind_group(0, &source_texture_bind_group, &[]);
+            pass.set_bind_group(1, &self.blur_uniform_bind_group_horizontal, &[]);
+            pass.draw(0..4, 0..1);
         }
-
-        // === Vertical blur pass (intermediate → dest) ===
         {
-            let uniforms = BlurUniforms {
-                direction: [0.0, 1.0],
-                radius: [radius_x, radius_y],
-                texture_size: [width as f32, height as f32],
-                tile_mode: tile_mode_value,
-                _padding: 0.0,
-            };
-            queue.write_buffer(&self.blur_uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
-
-            let texture_bind_group = OffscreenPool::create_texture_bind_group(
-                device,
-                &self.effect_texture_bind_group_layout,
-                &intermediate,
-                &self.effect_sampler,
-            );
-            let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Blur V Uniform Bind Group"),
-                layout: &self.blur_uniform_bind_group_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.blur_uniform_buffer.as_entire_binding(),
-                }],
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Blur Vertical Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: dest_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                ..Default::default()
             });
-
-            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Blur Vertical Encoder"),
-            });
-            {
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Blur Vertical Pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: dest_view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    ..Default::default()
-                });
-                pass.set_pipeline(&self.blur_pipeline);
-                pass.set_bind_group(0, &texture_bind_group, &[]);
-                pass.set_bind_group(1, &uniform_bind_group, &[]);
-                pass.draw(0..4, 0..1);
-            }
-            queue.submit(std::iter::once(encoder.finish()));
+            pass.set_pipeline(&self.blur_pipeline);
+            pass.set_bind_group(0, &intermediate_texture_bind_group, &[]);
+            pass.set_bind_group(1, &self.blur_uniform_bind_group_vertical, &[]);
+            pass.draw(0..4, 0..1);
         }
+        queue.submit(std::iter::once(encoder.finish()));
 
         // Return intermediate to pool
         self.offscreen_pool.release(intermediate);
@@ -443,14 +479,6 @@ impl EffectRenderer {
             source,
             &self.effect_sampler,
         );
-        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Offset Uniform Bind Group"),
-            layout: &self.offset_uniform_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: self.offset_uniform_buffer.as_entire_binding(),
-            }],
-        });
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Offset Effect Encoder"),
@@ -472,7 +500,7 @@ impl EffectRenderer {
 
             pass.set_pipeline(&self.offset_pipeline);
             pass.set_bind_group(0, &texture_bind_group, &[]);
-            pass.set_bind_group(1, &uniform_bind_group, &[]);
+            pass.set_bind_group(1, &self.offset_uniform_bind_group, &[]);
             pass.draw(0..4, 0..1);
         }
         queue.submit(std::iter::once(encoder.finish()));
@@ -535,15 +563,6 @@ impl EffectRenderer {
             &self.effect_sampler,
         );
 
-        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Effect Uniform Bind Group"),
-            layout: &self.effect_uniform_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: self.effect_uniform_buffer.as_entire_binding(),
-            }],
-        });
-
         // Render pass
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Shader Effect Encoder"),
@@ -565,7 +584,7 @@ impl EffectRenderer {
 
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &texture_bind_group, &[]);
-            pass.set_bind_group(1, &uniform_bind_group, &[]);
+            pass.set_bind_group(1, &self.effect_uniform_bind_group, &[]);
             pass.draw(0..4, 0..1);
         }
         queue.submit(std::iter::once(encoder.finish()));
@@ -635,7 +654,7 @@ impl EffectRenderer {
         }
     }
 
-    /// Composite an offscreen target onto a destination view using alpha blending.
+    /// Composite an offscreen target onto a destination view using premultiplied alpha blending.
     ///
     /// Uses a fullscreen quad blit with the blit pipeline. The load_op controls
     /// whether existing content is preserved (Load) or cleared (Clear).
@@ -650,7 +669,7 @@ impl EffectRenderer {
         self.composite_to_view_scissored(device, queue, source, dest_view, load_op, None);
     }
 
-    /// Composite an offscreen target onto a destination view using alpha blending
+    /// Composite an offscreen target onto a destination view using premultiplied alpha blending
     /// with an optional scissor region.
     pub fn composite_to_view_scissored(
         &self,

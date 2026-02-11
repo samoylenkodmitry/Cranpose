@@ -28,6 +28,7 @@ pub(crate) fn render_layout_tree_with_scale(root: &LayoutBox, scene: &mut Scene,
         scale,
         translation_x: 0.0,
         translation_y: 0.0,
+        color_filter: None,
         render_effect: None,
         backdrop_effect: None,
     };
@@ -312,6 +313,7 @@ pub(crate) fn render_from_applier(
         scale,
         translation_x: 0.0,
         translation_y: 0.0,
+        color_filter: None,
         render_effect: None,
         backdrop_effect: None,
     };

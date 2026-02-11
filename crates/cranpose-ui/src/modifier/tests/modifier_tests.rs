@@ -6,6 +6,7 @@ use super::{
 use cranpose_foundation::{
     DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState,
 };
+use cranpose_ui_graphics::ColorFilter;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -241,6 +242,52 @@ fn shader_background_wraps_runtime_shader_as_backdrop_effect() {
         found_shader,
         "Expected shader_background to configure backdrop shader"
     );
+}
+
+#[test]
+fn color_filter_modifier_sets_graphics_layer_filter() {
+    use crate::modifier_nodes::GraphicsLayerNode;
+
+    let filter = ColorFilter::tint(Color::from_rgba_u8(128, 200, 255, 128));
+    let modifier = Modifier::empty().color_filter(filter);
+    let mut handle = ModifierChainHandle::new();
+    let _ = handle.update(&modifier);
+
+    let chain = handle.chain();
+    let mut observed = None;
+    chain.for_each_node_with_capability(
+        cranpose_foundation::NodeCapabilities::DRAW,
+        |_ref, node| {
+            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+                observed = layer_node.layer().color_filter;
+            }
+        },
+    );
+
+    assert_eq!(observed, Some(filter));
+}
+
+#[test]
+fn tint_modifier_is_color_filter_tint_alias() {
+    use crate::modifier_nodes::GraphicsLayerNode;
+
+    let tint = Color::from_rgba_u8(10, 20, 30, 200);
+    let modifier = Modifier::empty().tint(tint);
+    let mut handle = ModifierChainHandle::new();
+    let _ = handle.update(&modifier);
+
+    let chain = handle.chain();
+    let mut observed = None;
+    chain.for_each_node_with_capability(
+        cranpose_foundation::NodeCapabilities::DRAW,
+        |_ref, node| {
+            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+                observed = layer_node.layer().color_filter;
+            }
+        },
+    );
+
+    assert_eq!(observed, Some(ColorFilter::tint(tint)));
 }
 
 #[test]

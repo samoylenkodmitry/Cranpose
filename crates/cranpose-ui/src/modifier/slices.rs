@@ -2,7 +2,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use cranpose_foundation::{ModifierNodeChain, NodeCapabilities, PointerEvent};
-use cranpose_ui_graphics::GraphicsLayer;
+use cranpose_ui_graphics::{Color, ColorFilter, GraphicsLayer};
 
 use crate::draw::DrawCommand;
 use crate::modifier::Modifier;
@@ -58,10 +58,27 @@ fn merge_graphics_layers(base: GraphicsLayer, overlay: GraphicsLayer) -> Graphic
         scale: base.scale * overlay.scale,
         translation_x: base.translation_x + overlay.translation_x,
         translation_y: base.translation_y + overlay.translation_y,
+        color_filter: compose_color_filters(base.color_filter, overlay.color_filter),
         // Keep the most recent explicitly specified effect while preserving
         // previously configured effects when the new layer leaves them unset.
         render_effect: overlay.render_effect.or(base.render_effect),
         backdrop_effect: overlay.backdrop_effect.or(base.backdrop_effect),
+    }
+}
+
+fn compose_color_filters(
+    base: Option<ColorFilter>,
+    overlay: Option<ColorFilter>,
+) -> Option<ColorFilter> {
+    match (base, overlay) {
+        (None, None) => None,
+        (Some(filter), None) | (None, Some(filter)) => Some(filter),
+        (Some(ColorFilter::Tint(a)), Some(ColorFilter::Tint(b))) => Some(ColorFilter::Tint(Color(
+            (a.r() * b.r()).clamp(0.0, 1.0),
+            (a.g() * b.g()).clamp(0.0, 1.0),
+            (a.b() * b.b()).clamp(0.0, 1.0),
+            (a.a() * b.a()).clamp(0.0, 1.0),
+        ))),
     }
 }
 

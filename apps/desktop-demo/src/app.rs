@@ -1335,6 +1335,7 @@ fn counter_app() {
                                             scale: 0.85 + wave_value * 0.3,
                                             translation_x: 0.0,
                                             translation_y: (wave_value - 0.5) * 12.0,
+                                            color_filter: None,
                                             render_effect: None,
                                             backdrop_effect: None,
                                         }),

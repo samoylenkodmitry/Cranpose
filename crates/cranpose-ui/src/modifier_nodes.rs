@@ -72,7 +72,9 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::draw::DrawCommand;
-use crate::modifier::{Color, EdgeInsets, GraphicsLayer, LayoutWeight, Point, RoundedCornerShape};
+use crate::modifier::{
+    Color, ColorFilter, EdgeInsets, GraphicsLayer, LayoutWeight, Point, RoundedCornerShape,
+};
 
 fn hash_f32_value<H: Hasher>(state: &mut H, value: f32) {
     state.write_u32(value.to_bits());
@@ -93,6 +95,16 @@ fn hash_graphics_layer<H: Hasher>(state: &mut H, layer: &GraphicsLayer) {
     hash_f32_value(state, layer.scale);
     hash_f32_value(state, layer.translation_x);
     hash_f32_value(state, layer.translation_y);
+    match layer.color_filter {
+        Some(ColorFilter::Tint(color)) => {
+            state.write_u8(1);
+            hash_f32_value(state, color.r());
+            hash_f32_value(state, color.g());
+            hash_f32_value(state, color.b());
+            hash_f32_value(state, color.a());
+        }
+        None => state.write_u8(0),
+    }
     state.write_u8(layer.render_effect.is_some() as u8);
     state.write_u8(layer.backdrop_effect.is_some() as u8);
 }

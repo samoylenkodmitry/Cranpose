@@ -1,6 +1,6 @@
 use super::{inspector_metadata, GraphicsLayer, Modifier};
 use crate::modifier_nodes::{GraphicsLayerElement, LazyGraphicsLayerElement};
-use cranpose_ui_graphics::{RenderEffect, RuntimeShader};
+use cranpose_ui_graphics::{Color, ColorFilter, RenderEffect, RuntimeShader};
 use std::rc::Rc;
 
 impl Modifier {
@@ -15,6 +15,9 @@ impl Modifier {
                 info.add_property("scale", inspector_values.scale.to_string());
                 info.add_property("translationX", inspector_values.translation_x.to_string());
                 info.add_property("translationY", inspector_values.translation_y.to_string());
+                if let Some(filter) = inspector_values.color_filter {
+                    info.add_property("colorFilter", format!("{filter:?}"));
+                }
             }));
         self.then(modifier)
     }
@@ -47,5 +50,25 @@ impl Modifier {
     /// Convenience alias for applying a backdrop shader effect.
     pub fn shader_background(self, shader: RuntimeShader) -> Self {
         self.backdrop_effect(RenderEffect::runtime_shader(shader))
+    }
+
+    /// Apply a color filter to this composable's graphics layer output.
+    ///
+    /// This mirrors Compose's `graphicsLayer(colorFilter = ...)` capability.
+    pub fn color_filter(self, filter: ColorFilter) -> Self {
+        let layer = GraphicsLayer {
+            color_filter: Some(filter),
+            ..Default::default()
+        };
+        let modifier = Self::with_element(GraphicsLayerElement::new(layer))
+            .with_inspector_metadata(inspector_metadata("colorFilter", |info| {
+                info.add_property("enabled", "true");
+            }));
+        self.then(modifier)
+    }
+
+    /// Convenience color filter that tints layer output.
+    pub fn tint(self, tint: Color) -> Self {
+        self.color_filter(ColorFilter::tint(tint))
     }
 }

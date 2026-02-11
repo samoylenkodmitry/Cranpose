@@ -382,7 +382,7 @@ fn offset_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 
 /// Simple fullscreen blit shader for compositing offscreen targets to the surface.
 ///
-/// Renders the entire offscreen texture as a fullscreen quad with alpha blending.
+/// Renders the entire offscreen texture as a fullscreen quad with premultiplied alpha blending.
 /// Transparent regions contribute nothing, so only the effect-processed content
 /// is composited onto the existing surface.
 pub const BLIT_SHADER: &str = r#"

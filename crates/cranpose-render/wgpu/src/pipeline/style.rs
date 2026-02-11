@@ -3,7 +3,8 @@ use std::rc::Rc;
 use cranpose_foundation::PointerEvent;
 use cranpose_ui::{Brush, DrawCommand, LayoutNodeData, ModifierNodeSlices};
 use cranpose_ui_graphics::{
-    Color, CornerRadii, DrawPrimitive, GraphicsLayer, Point, Rect, RoundedCornerShape, Size,
+    Color, ColorFilter, CornerRadii, DrawPrimitive, GraphicsLayer, Point, Rect, RoundedCornerShape,
+    Size,
 };
 
 use crate::scene::Scene;
@@ -48,6 +49,7 @@ pub(crate) fn combine_layers(
             scale: current.scale * layer.scale,
             translation_x: current.translation_x + layer.translation_x,
             translation_y: current.translation_y + layer.translation_y,
+            color_filter: compose_color_filters(current.color_filter, layer.color_filter),
             // render_effect is NOT inherited — it applies only to this layer's subtree
             render_effect: layer.render_effect,
             // backdrop_effect is NOT inherited — it applies only to this node's backdrop.
@@ -74,12 +76,43 @@ pub(crate) fn apply_layer_to_rect(rect: Rect, origin: (f32, f32), layer: &Graphi
 }
 
 pub(crate) fn apply_layer_to_color(color: Color, layer: &GraphicsLayer) -> Color {
-    Color(
-        color.0,
-        color.1,
-        color.2,
-        (color.3 * layer.alpha).clamp(0.0, 1.0),
+    apply_color_filter_to_color(
+        Color(
+            color.0,
+            color.1,
+            color.2,
+            (color.3 * layer.alpha).clamp(0.0, 1.0),
+        ),
+        layer.color_filter,
     )
+}
+
+fn apply_color_filter_to_color(color: Color, filter: Option<ColorFilter>) -> Color {
+    match filter {
+        Some(ColorFilter::Tint(tint)) => Color(
+            (color.0 * tint.r()).clamp(0.0, 1.0),
+            (color.1 * tint.g()).clamp(0.0, 1.0),
+            (color.2 * tint.b()).clamp(0.0, 1.0),
+            (color.3 * tint.a()).clamp(0.0, 1.0),
+        ),
+        None => color,
+    }
+}
+
+fn compose_color_filters(
+    base: Option<ColorFilter>,
+    overlay: Option<ColorFilter>,
+) -> Option<ColorFilter> {
+    match (base, overlay) {
+        (None, None) => None,
+        (Some(filter), None) | (None, Some(filter)) => Some(filter),
+        (Some(ColorFilter::Tint(a)), Some(ColorFilter::Tint(b))) => Some(ColorFilter::Tint(Color(
+            (a.r() * b.r()).clamp(0.0, 1.0),
+            (a.g() * b.g()).clamp(0.0, 1.0),
+            (a.b() * b.b()).clamp(0.0, 1.0),
+            (a.a() * b.a()).clamp(0.0, 1.0),
+        ))),
+    }
 }
 
 pub(crate) fn apply_layer_to_brush(brush: Brush, layer: &GraphicsLayer) -> Brush {
@@ -187,11 +220,12 @@ pub(crate) fn apply_draw_commands(
                     let draw_rect = local_rect.translate(rect.x, rect.y);
                     let transformed = apply_layer_to_rect(draw_rect, origin, layer);
                     let combined_alpha = (alpha * layer.alpha).clamp(0.0, 1.0);
+                    let combined_filter = compose_color_filters(color_filter, layer.color_filter);
                     scene.push_image(
                         transformed,
                         image,
                         combined_alpha,
-                        color_filter,
+                        combined_filter,
                         clip,
                         src_rect,
                     );

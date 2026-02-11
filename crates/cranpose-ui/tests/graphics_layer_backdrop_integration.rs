@@ -1,4 +1,6 @@
-use cranpose_ui::{collect_slices_from_modifier, GraphicsLayer, Modifier, RenderEffect};
+use cranpose_ui::{
+    collect_slices_from_modifier, Color, ColorFilter, GraphicsLayer, Modifier, RenderEffect,
+};
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -46,6 +48,23 @@ fn stacked_lazy_translation_and_backdrop_effect_are_both_preserved() {
     assert!((layer.translation_x - 64.0).abs() < 1e-6);
     assert!((layer.translation_y - 48.0).abs() < 1e-6);
     assert!(layer.backdrop_effect.is_some());
+}
+
+#[test]
+fn stacked_tint_modifiers_compose_in_graphics_layer() {
+    let modifier = Modifier::empty()
+        .tint(Color::from_rgba_u8(255, 128, 128, 255))
+        .tint(Color::from_rgba_u8(128, 255, 64, 128));
+    let slices = collect_slices_from_modifier(&modifier);
+    let layer = slices.graphics_layer().expect("layer expected");
+
+    let Some(ColorFilter::Tint(tint)) = layer.color_filter else {
+        panic!("expected composed tint");
+    };
+    assert!((tint.r() - (128.0 / 255.0)).abs() < 1e-6);
+    assert!((tint.g() - (128.0 / 255.0)).abs() < 1e-6);
+    assert!((tint.b() - (64.0 / 255.0 * 128.0 / 255.0)).abs() < 1e-6);
+    assert!((tint.a() - (128.0 / 255.0)).abs() < 1e-6);
 }
 
 #[test]
