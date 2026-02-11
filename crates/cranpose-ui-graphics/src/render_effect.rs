@@ -27,7 +27,8 @@ pub enum TileMode {
 ///
 /// Float uniforms are packed linearly into the `u` array. Access them in WGSL
 /// as `u[index / 4][index % 4]` for individual floats, or `u[index / 4].xy`
-/// for vec2, etc.
+/// for vec2, etc. User uniforms may use indices `0..248`; slots `248..256`
+/// are reserved for renderer metadata.
 #[derive(Clone, Debug)]
 pub struct RuntimeShader {
     source: Arc<str>,
@@ -35,8 +36,14 @@ pub struct RuntimeShader {
 }
 
 impl RuntimeShader {
-    /// Maximum number of float uniforms (64 vec4s = 256 floats).
+    /// Total uniform storage size in floats (64 vec4s = 256 floats).
+    ///
+    /// The final slots are reserved for renderer-managed data.
     pub const MAX_UNIFORMS: usize = 256;
+    /// First renderer-reserved uniform slot.
+    pub const RESERVED_UNIFORM_START: usize = 248;
+    /// Maximum user-addressable uniform count.
+    pub const MAX_USER_UNIFORMS: usize = Self::RESERVED_UNIFORM_START;
 
     /// Create a new RuntimeShader from WGSL source code.
     pub fn new(wgsl_source: &str) -> Self {
@@ -95,9 +102,11 @@ impl RuntimeShader {
 
     fn ensure_capacity(&mut self, min_len: usize) {
         assert!(
-            min_len <= Self::MAX_UNIFORMS,
-            "uniform index {} exceeds maximum {}",
+            min_len <= Self::MAX_USER_UNIFORMS,
+            "uniform index {} exceeds user maximum {}; slots {}..{} are reserved for renderer data",
             min_len - 1,
+            Self::MAX_USER_UNIFORMS - 1,
+            Self::RESERVED_UNIFORM_START,
             Self::MAX_UNIFORMS - 1
         );
         if self.uniforms.len() < min_len {
@@ -205,10 +214,17 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "uniform index 256 exceeds maximum 255")]
+    #[should_panic(expected = "uniform index 256 exceeds user maximum 247")]
     fn runtime_shader_overflow() {
         let mut shader = RuntimeShader::new("// test");
         shader.set_float(256, 1.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "reserved for renderer data")]
+    fn runtime_shader_rejects_reserved_uniform_slots() {
+        let mut shader = RuntimeShader::new("// test");
+        shader.set_float(RuntimeShader::RESERVED_UNIFORM_START, 1.0);
     }
 
     #[test]

@@ -492,12 +492,13 @@ impl EffectRenderer {
         shader: &RuntimeShader,
         layer_pixel_rect: [f32; 4],
     ) {
-        // Upload uniforms with injected effect layer rect at slot 62
+        // Upload uniforms with injected effect layer rect at slot 62.
         let mut padded = shader.uniforms_padded();
-        padded[248] = layer_pixel_rect[0];
-        padded[249] = layer_pixel_rect[1];
-        padded[250] = layer_pixel_rect[2];
-        padded[251] = layer_pixel_rect[3];
+        let slot = RuntimeShader::RESERVED_UNIFORM_START;
+        padded[slot] = layer_pixel_rect[0];
+        padded[slot + 1] = layer_pixel_rect[1];
+        padded[slot + 2] = layer_pixel_rect[2];
+        padded[slot + 3] = layer_pixel_rect[3];
         queue.write_buffer(
             &self.effect_uniform_buffer,
             0,

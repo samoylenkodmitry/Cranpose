@@ -92,14 +92,13 @@ struct LayerEvent {
 }
 
 impl LayerEvent {
-    fn sort_key(self) -> (usize, u8) {
-        let kind_order = match self.kind {
+    fn kind_order(self) -> u8 {
+        match self.kind {
             // Backdrop must run before same-z content/effects so it samples only
             // already-rendered background.
             LayerEventKind::Backdrop(_) => 0,
             LayerEventKind::Effect(_) => 1,
-        };
-        (self.z_index, kind_order)
+        }
     }
 }
 
@@ -2698,7 +2697,30 @@ fn collect_layer_events(
             });
         }
     }
-    events.sort_by_key(|event| event.sort_key());
+    events.sort_by(|a, b| {
+        // Primary key: z-index ascending.
+        let z_cmp = a.z_index.cmp(&b.z_index);
+        if z_cmp != std::cmp::Ordering::Equal {
+            return z_cmp;
+        }
+
+        // Secondary key: backdrop before effect at same z-index.
+        let kind_cmp = a.kind_order().cmp(&b.kind_order());
+        if kind_cmp != std::cmp::Ordering::Equal {
+            return kind_cmp;
+        }
+
+        // Tertiary key for same-z effects: outer-most (largest z_end) first.
+        // If ranges are identical, prefer later insertion index (parents are
+        // emitted after children during scene collection).
+        match (a.kind, b.kind) {
+            (LayerEventKind::Effect(ai), LayerEventKind::Effect(bi)) => effect_layers[bi]
+                .z_end
+                .cmp(&effect_layers[ai].z_end)
+                .then_with(|| bi.cmp(&ai)),
+            _ => std::cmp::Ordering::Equal,
+        }
+    });
     events
 }
 
@@ -2929,6 +2951,40 @@ mod tests {
         match events[1].kind {
             LayerEventKind::Effect(_) => {}
             LayerEventKind::Backdrop(_) => panic!("expected effect as second event"),
+        }
+    }
+
+    #[test]
+    fn collect_layer_events_prefers_outer_effect_when_same_start_z() {
+        // Child emitted before parent (matching scene collection order where a
+        // parent effect is recorded after recursively processing children).
+        let effects = vec![effect_layer(10, 20), effect_layer(10, 40)];
+        let events = collect_layer_events(&effects, &[], 0, 50, None);
+
+        assert_eq!(events.len(), 2);
+        match events[0].kind {
+            LayerEventKind::Effect(index) => assert_eq!(index, 1),
+            LayerEventKind::Backdrop(_) => panic!("expected outer effect first"),
+        }
+        match events[1].kind {
+            LayerEventKind::Effect(index) => assert_eq!(index, 0),
+            LayerEventKind::Backdrop(_) => panic!("expected child effect second"),
+        }
+    }
+
+    #[test]
+    fn collect_layer_events_prefers_later_effect_when_ranges_match() {
+        let effects = vec![effect_layer(10, 20), effect_layer(10, 20)];
+        let events = collect_layer_events(&effects, &[], 0, 30, None);
+
+        assert_eq!(events.len(), 2);
+        match events[0].kind {
+            LayerEventKind::Effect(index) => assert_eq!(index, 1),
+            LayerEventKind::Backdrop(_) => panic!("expected later effect first"),
+        }
+        match events[1].kind {
+            LayerEventKind::Effect(index) => assert_eq!(index, 0),
+            LayerEventKind::Backdrop(_) => panic!("expected earlier effect second"),
         }
     }
 }
