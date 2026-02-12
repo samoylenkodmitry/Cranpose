@@ -182,6 +182,51 @@ fn destination_rect(
     }
 }
 
+fn crop_source_rect(src_size: Size, dst_size: Size, alignment: Alignment) -> Rect {
+    if src_size.width <= 0.0
+        || src_size.height <= 0.0
+        || dst_size.width <= 0.0
+        || dst_size.height <= 0.0
+    {
+        return Rect::from_size(Size::ZERO);
+    }
+
+    let src_aspect = src_size.width / src_size.height;
+    let dst_aspect = dst_size.width / dst_size.height;
+
+    if (src_aspect - dst_aspect).abs() <= f32::EPSILON {
+        return Rect::from_origin_size(crate::modifier::Point::ZERO, src_size);
+    }
+
+    if src_aspect > dst_aspect {
+        // Source is wider than destination: crop width.
+        let crop_width = src_size.height * dst_aspect;
+        let x = alignment
+            .horizontal
+            .align(src_size.width, crop_width)
+            .clamp(0.0, (src_size.width - crop_width).max(0.0));
+        Rect {
+            x,
+            y: 0.0,
+            width: crop_width,
+            height: src_size.height,
+        }
+    } else {
+        // Source is taller than destination: crop height.
+        let crop_height = src_size.width / dst_aspect;
+        let y = alignment
+            .vertical
+            .align(src_size.height, crop_height)
+            .clamp(0.0, (src_size.height - crop_height).max(0.0));
+        Rect {
+            x: 0.0,
+            y,
+            width: src_size.width,
+            height: crop_height,
+        }
+    }
+}
+
 #[composable]
 pub fn Image<P>(
     painter: P,
@@ -212,25 +257,45 @@ where
         Modifier::empty()
     };
 
-    let image_modifier = modifier
-        .then(semantics_modifier)
-        .clip_to_bounds()
-        .draw_behind(move |scope: &mut dyn DrawScope| {
-            if draw_alpha <= 0.0 {
-                return;
-            }
-            let container_size = scope.size();
-            let rect = destination_rect(intrinsic_dp, container_size, alignment, content_scale);
-            if rect.width <= 0.0 || rect.height <= 0.0 {
-                return;
-            }
-            scope.draw_image_at(
-                rect,
-                draw_painter.bitmap().clone(),
-                draw_alpha,
-                color_filter,
-            );
-        });
+    let image_modifier =
+        modifier
+            .then(semantics_modifier)
+            .draw_behind(move |scope: &mut dyn DrawScope| {
+                if draw_alpha <= 0.0 {
+                    return;
+                }
+                let container_size = scope.size();
+                if container_size.width <= 0.0 || container_size.height <= 0.0 {
+                    return;
+                }
+                if content_scale == ContentScale::Crop {
+                    // For Crop, sample the centered/biased source sub-rect directly so
+                    // we don't require a clip-to-bounds modifier (which clips shadows).
+                    let src_rect = crop_source_rect(intrinsic_dp, container_size, alignment);
+                    if src_rect.width <= 0.0 || src_rect.height <= 0.0 {
+                        return;
+                    }
+                    scope.draw_image_src(
+                        draw_painter.bitmap().clone(),
+                        src_rect,
+                        Rect::from_size(container_size),
+                        draw_alpha,
+                        color_filter,
+                    );
+                } else {
+                    let rect =
+                        destination_rect(intrinsic_dp, container_size, alignment, content_scale);
+                    if rect.width <= 0.0 || rect.height <= 0.0 {
+                        return;
+                    }
+                    scope.draw_image_at(
+                        rect,
+                        draw_painter.bitmap().clone(),
+                        draw_alpha,
+                        color_filter,
+                    );
+                }
+            });
 
     Layout(
         image_modifier,
@@ -286,6 +351,38 @@ mod tests {
                 y: 75.0,
                 width: 300.0,
                 height: 150.0,
+            }
+        );
+    }
+
+    #[test]
+    fn crop_source_rect_is_centered_for_wide_source() {
+        let src = Size::new(200.0, 100.0);
+        let dst = Size::new(100.0, 100.0);
+        let rect = crop_source_rect(src, dst, Alignment::CENTER);
+        assert_eq!(
+            rect,
+            Rect {
+                x: 50.0,
+                y: 0.0,
+                width: 100.0,
+                height: 100.0,
+            }
+        );
+    }
+
+    #[test]
+    fn crop_source_rect_honors_start_alignment() {
+        let src = Size::new(200.0, 100.0);
+        let dst = Size::new(100.0, 100.0);
+        let rect = crop_source_rect(src, dst, Alignment::TOP_START);
+        assert_eq!(
+            rect,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 100.0,
             }
         );
     }

@@ -148,9 +148,12 @@ pub(crate) fn AnimationsTab() {
                 {
                     let section_style = section_style.clone();
                     move || {
-                        Text("Scale + Fade", Modifier::empty(), section_style.clone());
-                        let scale_factor = 0.85 + 0.3 * scale.value.value();
-                        let alpha = 0.4 + 0.6 * scale.value.value();
+                        Text(
+                            "Scale + Fade (layer lambda)",
+                            Modifier::empty(),
+                            section_style.clone(),
+                        );
+                        let scale_for_layer = scale.value;
                         Row(
                             Modifier::empty()
                                 .fill_max_width()
@@ -162,10 +165,16 @@ pub(crate) fn AnimationsTab() {
                             move || {
                                 Row(
                                     Modifier::empty()
-                                        .graphics_layer(GraphicsLayer {
-                                            alpha,
-                                            scale: scale_factor,
-                                            ..Default::default()
+                                        .graphics_layer({
+                                            let scale_state = scale_for_layer;
+                                            move || {
+                                                let progress = scale_state.value();
+                                                GraphicsLayer {
+                                                    alpha: 0.4 + 0.6 * progress,
+                                                    scale: 0.85 + 0.3 * progress,
+                                                    ..Default::default()
+                                                }
+                                            }
                                         })
                                         .width(36.0)
                                         .height(36.0)
@@ -179,7 +188,7 @@ pub(crate) fn AnimationsTab() {
                                     height: 0.0,
                                 });
                                 Text(
-                                    format!("Scale {:.2}", scale_factor),
+                                    "Animation sampled inside graphics_layer",
                                     Modifier::empty(),
                                     TextStyle {
                                         color: Some(Color(0.2, 0.2, 0.2, 1.0)),

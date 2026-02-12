@@ -1,12 +1,14 @@
 use super::{
-    inspector_metadata, Alignment, Color, DimensionConstraint, EdgeInsets, GraphicsLayer,
-    HorizontalAlignment, Modifier, ModifierChainHandle, Point, RenderEffect, RuntimeShader,
-    SemanticsConfiguration, Size, VerticalAlignment,
+    inspector_metadata, Alignment, BlendMode, Color, CompositingStrategy, CutDirection,
+    DimensionConstraint, DpOffset, DrawCommand, EdgeInsets, GradientCutMaskSpec,
+    GradientFadeMaskSpec, GraphicsLayer, HorizontalAlignment, LayerShape, Modifier,
+    ModifierChainHandle, Point, RenderEffect, RoundedCornerShape, RuntimeShader,
+    SemanticsConfiguration, Shadow, Size, TransformOrigin, VerticalAlignment,
 };
 use cranpose_foundation::{
     DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState,
 };
-use cranpose_ui_graphics::ColorFilter;
+use cranpose_ui_graphics::{Brush, ColorFilter, Dp, DrawPrimitive, ShadowPrimitive};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -124,7 +126,7 @@ fn graphics_layer_modifier_creates_node() {
         alpha: 0.5,
         ..Default::default()
     };
-    let modifier = Modifier::empty().graphics_layer(layer);
+    let modifier = Modifier::empty().graphics_layer(move || layer.clone());
 
     // Graphics layer is now tracked in the modifier node chain, not ResolvedModifiers
     let mut handle = ModifierChainHandle::new();
@@ -171,11 +173,11 @@ fn backdrop_effect_modifier_creates_graphics_layer_with_backdrop_effect() {
 }
 
 #[test]
-fn graphics_layer_lazy_reads_latest_value_without_recomposition() {
+fn graphics_layer_reads_latest_value_without_recomposition() {
     use crate::modifier_nodes::GraphicsLayerNode;
 
     let alpha = Rc::new(Cell::new(0.25f32));
-    let modifier = Modifier::empty().graphics_layer_lazy({
+    let modifier = Modifier::empty().graphics_layer({
         let alpha = alpha.clone();
         move || GraphicsLayer {
             alpha: alpha.get(),
@@ -288,6 +290,756 @@ fn tint_modifier_is_color_filter_tint_alias() {
     );
 
     assert_eq!(observed, Some(ColorFilter::tint(tint)));
+}
+
+#[test]
+fn compositing_strategy_modifier_sets_graphics_layer_strategy() {
+    use crate::modifier_nodes::GraphicsLayerNode;
+
+    let modifier = Modifier::empty().compositing_strategy(CompositingStrategy::Offscreen);
+    let mut handle = ModifierChainHandle::new();
+    let _ = handle.update(&modifier);
+
+    let chain = handle.chain();
+    let mut observed = None;
+    chain.for_each_node_with_capability(
+        cranpose_foundation::NodeCapabilities::DRAW,
+        |_ref, node| {
+            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+                observed = Some(layer_node.layer().compositing_strategy);
+            }
+        },
+    );
+
+    assert_eq!(observed, Some(CompositingStrategy::Offscreen));
+}
+
+#[test]
+fn layer_blend_mode_modifier_sets_graphics_layer_mode() {
+    use crate::modifier_nodes::GraphicsLayerNode;
+
+    let modifier = Modifier::empty().layer_blend_mode(BlendMode::DstOut);
+    let mut handle = ModifierChainHandle::new();
+    let _ = handle.update(&modifier);
+
+    let chain = handle.chain();
+    let mut observed = None;
+    chain.for_each_node_with_capability(
+        cranpose_foundation::NodeCapabilities::DRAW,
+        |_ref, node| {
+            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+                observed = Some(layer_node.layer().blend_mode);
+            }
+        },
+    );
+
+    assert_eq!(observed, Some(BlendMode::DstOut));
+}
+
+#[test]
+fn graphics_layer_params_sets_scale_axes_and_alpha() {
+    use crate::modifier_nodes::GraphicsLayerNode;
+
+    let modifier = Modifier::empty().graphics_layer_params(
+        1.25,
+        0.75,
+        0.6,
+        8.0,
+        -3.0,
+        5.0,
+        2.0,
+        4.0,
+        6.0,
+        10.0,
+        TransformOrigin::new(0.25, 0.8),
+        LayerShape::Rounded(RoundedCornerShape::uniform(12.0)),
+        true,
+        Some(RenderEffect::blur(4.0)),
+        Color::from_rgba_u8(40, 60, 80, 255),
+        Color::from_rgba_u8(120, 140, 160, 255),
+        CompositingStrategy::Auto,
+        BlendMode::SrcOver,
+        Some(ColorFilter::tint(Color::from_rgba_u8(220, 200, 255, 128))),
+    );
+    let mut handle = ModifierChainHandle::new();
+    let _ = handle.update(&modifier);
+
+    let chain = handle.chain();
+    let mut observed = None;
+    chain.for_each_node_with_capability(
+        cranpose_foundation::NodeCapabilities::DRAW,
+        |_ref, node| {
+            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+                observed = Some(layer_node.layer());
+            }
+        },
+    );
+
+    let layer = observed.expect("graphics layer");
+    assert!((layer.scale_x - 1.25).abs() < 1e-6);
+    assert!((layer.scale_y - 0.75).abs() < 1e-6);
+    assert!((layer.alpha - 0.6).abs() < 1e-6);
+    assert!((layer.translation_x - 8.0).abs() < 1e-6);
+    assert!((layer.translation_y + 3.0).abs() < 1e-6);
+    assert!((layer.shadow_elevation - 5.0).abs() < 1e-6);
+    assert!((layer.rotation_x - 2.0).abs() < 1e-6);
+    assert!((layer.rotation_y - 4.0).abs() < 1e-6);
+    assert!((layer.rotation_z - 6.0).abs() < 1e-6);
+    assert!((layer.camera_distance - 10.0).abs() < 1e-6);
+    assert_eq!(layer.transform_origin, TransformOrigin::new(0.25, 0.8));
+    assert_eq!(
+        layer.shape,
+        LayerShape::Rounded(RoundedCornerShape::uniform(12.0))
+    );
+    assert!(layer.clip);
+    assert_eq!(
+        layer.ambient_shadow_color,
+        Color::from_rgba_u8(40, 60, 80, 255)
+    );
+    assert_eq!(
+        layer.spot_shadow_color,
+        Color::from_rgba_u8(120, 140, 160, 255)
+    );
+    assert!(layer.render_effect.is_some());
+    assert!(layer.color_filter.is_some());
+}
+
+#[test]
+fn graphics_layer_block_applies_configuration() {
+    use crate::modifier_nodes::GraphicsLayerNode;
+
+    let modifier = Modifier::empty().graphics_layer_block(|layer| {
+        layer.alpha = 0.42;
+        layer.scale_x = 1.4;
+        layer.scale_y = 1.1;
+        layer.translation_x = 12.0;
+        layer.rotation_z = 18.0;
+        layer.clip = true;
+        layer.shape = LayerShape::Rounded(RoundedCornerShape::uniform(10.0));
+        layer.transform_origin = TransformOrigin::new(0.3, 0.7);
+    });
+    let mut handle = ModifierChainHandle::new();
+    let _ = handle.update(&modifier);
+
+    let chain = handle.chain();
+    let mut observed = None;
+    chain.for_each_node_with_capability(
+        cranpose_foundation::NodeCapabilities::DRAW,
+        |_ref, node| {
+            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+                observed = Some(layer_node.layer());
+            }
+        },
+    );
+
+    let layer = observed.expect("graphics layer");
+    assert!((layer.alpha - 0.42).abs() < 1e-6);
+    assert!((layer.scale_x - 1.4).abs() < 1e-6);
+    assert!((layer.scale_y - 1.1).abs() < 1e-6);
+    assert!((layer.translation_x - 12.0).abs() < 1e-6);
+    assert!((layer.rotation_z - 18.0).abs() < 1e-6);
+    assert!(layer.clip);
+    assert_eq!(
+        layer.shape,
+        LayerShape::Rounded(RoundedCornerShape::uniform(10.0))
+    );
+    assert_eq!(layer.transform_origin, TransformOrigin::new(0.3, 0.7));
+}
+
+#[test]
+fn graphics_layer_block_tracks_state_changes_without_recomposition() {
+    let elevation = Rc::new(Cell::new(2.0f32));
+    let modifier = Modifier::empty().graphics_layer_block({
+        let elevation = elevation.clone();
+        move |layer| {
+            layer.shadow_elevation = elevation.get();
+        }
+    });
+
+    let slices = super::collect_slices_from_modifier(&modifier);
+    assert!((slices.graphics_layer().expect("layer").shadow_elevation - 2.0).abs() < 1e-6);
+
+    elevation.set(9.0);
+    assert!((slices.graphics_layer().expect("layer").shadow_elevation - 9.0).abs() < 1e-6);
+}
+
+#[test]
+fn shadow_defaults_match_compose_behavior() {
+    let modifier = Modifier::empty().shadow(6.0);
+    let slices = super::collect_slices_from_modifier(&modifier);
+    let layer = slices
+        .graphics_layer()
+        .expect("shadow should install layer");
+
+    assert!((layer.shadow_elevation - 6.0).abs() < 1e-6);
+    assert_eq!(layer.shape, LayerShape::Rectangle);
+    assert!(layer.clip, "positive elevation defaults clip=true");
+    assert_eq!(layer.ambient_shadow_color, Color::BLACK);
+    assert_eq!(layer.spot_shadow_color, Color::BLACK);
+}
+
+#[test]
+fn shadow_with_allows_zero_elevation_clipping_and_custom_colors() {
+    let modifier = Modifier::empty().shadow_with(
+        0.0,
+        LayerShape::Rounded(RoundedCornerShape::uniform(11.0)),
+        true,
+        Color::from_rgba_u8(20, 30, 40, 200),
+        Color::from_rgba_u8(60, 70, 80, 210),
+    );
+    let slices = super::collect_slices_from_modifier(&modifier);
+    let layer = slices
+        .graphics_layer()
+        .expect("clip-only shadow should keep layer");
+
+    assert!((layer.shadow_elevation - 0.0).abs() < 1e-6);
+    assert_eq!(
+        layer.shape,
+        LayerShape::Rounded(RoundedCornerShape::uniform(11.0))
+    );
+    assert!(layer.clip);
+    assert_eq!(
+        layer.ambient_shadow_color,
+        Color::from_rgba_u8(20, 30, 40, 200)
+    );
+    assert_eq!(
+        layer.spot_shadow_color,
+        Color::from_rgba_u8(60, 70, 80, 210)
+    );
+}
+
+#[test]
+fn shadow_with_zero_elevation_and_no_clip_is_noop() {
+    let modifier = Modifier::empty().shadow_with(
+        0.0,
+        LayerShape::Rectangle,
+        false,
+        Color::BLACK,
+        Color::BLACK,
+    );
+    let slices = super::collect_slices_from_modifier(&modifier);
+    assert!(
+        slices.graphics_layer().is_none(),
+        "zero elevation + clip=false should not install a layer"
+    );
+}
+
+fn primitive_rect(primitive: &DrawPrimitive) -> Option<cranpose_ui_graphics::Rect> {
+    match primitive {
+        DrawPrimitive::Rect { rect, .. }
+        | DrawPrimitive::RoundRect { rect, .. }
+        | DrawPrimitive::Image { rect, .. } => Some(*rect),
+        DrawPrimitive::Blend { primitive, .. } => primitive_rect(primitive),
+        DrawPrimitive::Shadow(ShadowPrimitive::Drop { shape, .. }) => primitive_rect(shape),
+        DrawPrimitive::Shadow(ShadowPrimitive::Inner { fill, .. }) => primitive_rect(fill),
+        DrawPrimitive::Content => None,
+    }
+}
+
+fn contains_blend_mode(primitives: &[DrawPrimitive], mode: BlendMode) -> bool {
+    primitives.iter().any(|primitive| match primitive {
+        DrawPrimitive::Blend {
+            primitive,
+            blend_mode,
+        } => *blend_mode == mode || contains_blend_mode(std::slice::from_ref(primitive), mode),
+        DrawPrimitive::Shadow(ShadowPrimitive::Drop {
+            shape, blend_mode, ..
+        }) => *blend_mode == mode || contains_blend_mode(std::slice::from_ref(shape), mode),
+        DrawPrimitive::Shadow(ShadowPrimitive::Inner {
+            fill,
+            cutout,
+            blend_mode,
+            ..
+        }) => {
+            *blend_mode == mode
+                || mode == BlendMode::DstOut
+                || contains_blend_mode(std::slice::from_ref(fill), mode)
+                || contains_blend_mode(std::slice::from_ref(cutout), mode)
+        }
+        _ => false,
+    })
+}
+
+fn brush_max_alpha(brush: &Brush) -> f32 {
+    match brush {
+        Brush::Solid(color) => color.a(),
+        Brush::LinearGradient { colors, .. }
+        | Brush::RadialGradient { colors, .. }
+        | Brush::SweepGradient { colors, .. } => {
+            colors.iter().map(|color| color.a()).fold(0.0f32, f32::max)
+        }
+    }
+}
+
+fn collect_dst_out_alphas(primitives: &[DrawPrimitive], out: &mut Vec<f32>) {
+    for primitive in primitives {
+        match primitive {
+            DrawPrimitive::Blend {
+                primitive,
+                blend_mode,
+            } => {
+                if *blend_mode == BlendMode::DstOut {
+                    match primitive.as_ref() {
+                        DrawPrimitive::Rect { brush, .. }
+                        | DrawPrimitive::RoundRect { brush, .. } => {
+                            out.push(brush_max_alpha(brush));
+                        }
+                        _ => {}
+                    }
+                }
+                collect_dst_out_alphas(std::slice::from_ref(primitive), out);
+            }
+            DrawPrimitive::Shadow(ShadowPrimitive::Drop { shape, .. }) => {
+                collect_dst_out_alphas(std::slice::from_ref(shape), out);
+            }
+            DrawPrimitive::Shadow(ShadowPrimitive::Inner { fill, cutout, .. }) => {
+                collect_dst_out_alphas(std::slice::from_ref(fill), out);
+                match cutout.as_ref() {
+                    DrawPrimitive::Rect { brush, .. } | DrawPrimitive::RoundRect { brush, .. } => {
+                        out.push(brush_max_alpha(brush));
+                    }
+                    _ => collect_dst_out_alphas(std::slice::from_ref(cutout), out),
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn max_primitive_width(primitives: &[DrawPrimitive]) -> f32 {
+    primitives
+        .iter()
+        .filter_map(primitive_rect)
+        .map(|rect| rect.width)
+        .fold(0.0f32, f32::max)
+}
+
+fn first_inner_cutout_x(primitives: &[DrawPrimitive]) -> Option<f32> {
+    primitives.iter().find_map(|primitive| match primitive {
+        DrawPrimitive::Shadow(ShadowPrimitive::Inner { cutout, .. }) => {
+            primitive_rect(cutout).map(|rect| rect.x)
+        }
+        DrawPrimitive::Blend { primitive, .. } => {
+            first_inner_cutout_x(std::slice::from_ref(primitive))
+        }
+        _ => None,
+    })
+}
+
+#[test]
+fn drop_shadow_static_emits_behind_primitives() {
+    let modifier = Modifier::empty().drop_shadow_value(
+        LayerShape::Rounded(RoundedCornerShape::uniform(8.0)),
+        Shadow {
+            radius: Dp(12.0),
+            spread: Dp(4.0),
+            offset: DpOffset::new(Dp(6.0), Dp(3.0)),
+            alpha: 0.8,
+            ..Default::default()
+        },
+    );
+    let slices = super::collect_slices_from_modifier(&modifier);
+    let commands = slices.draw_commands();
+
+    assert_eq!(commands.len(), 1);
+    let DrawCommand::Behind(draw) = &commands[0] else {
+        panic!("drop_shadow should emit a behind draw command");
+    };
+    let primitives = draw(Size {
+        width: 60.0,
+        height: 32.0,
+    });
+    assert!(
+        !primitives.is_empty(),
+        "drop shadow should produce visible primitives"
+    );
+    assert!(
+        max_primitive_width(&primitives) > 60.0,
+        "shadow footprint should expand beyond base bounds"
+    );
+}
+
+#[test]
+fn drop_shadow_closure_tracks_runtime_values() {
+    let spread = Rc::new(Cell::new(0.0f32));
+    let modifier = Modifier::empty().drop_shadow(LayerShape::Rectangle, {
+        let spread = spread.clone();
+        move |scope| {
+            scope.radius = 10.0;
+            scope.spread = spread.get();
+        }
+    });
+    let slices = super::collect_slices_from_modifier(&modifier);
+    let commands = slices.draw_commands();
+
+    let DrawCommand::Behind(draw) = &commands[0] else {
+        panic!("drop_shadow(block) should emit a behind draw command");
+    };
+    let before = draw(Size {
+        width: 40.0,
+        height: 24.0,
+    });
+    spread.set(18.0);
+    let after = draw(Size {
+        width: 40.0,
+        height: 24.0,
+    });
+
+    assert!(
+        max_primitive_width(&after) > max_primitive_width(&before),
+        "increasing spread should increase shadow footprint"
+    );
+}
+
+#[test]
+fn drop_shadow_high_radius_emits_single_blurred_shadow_primitive() {
+    let modifier = Modifier::empty().drop_shadow(LayerShape::Rectangle, |scope| {
+        scope.radius = 40.0;
+        scope.alpha = 0.85;
+    });
+    let slices = super::collect_slices_from_modifier(&modifier);
+    let DrawCommand::Behind(draw) = &slices.draw_commands()[0] else {
+        panic!("drop_shadow should emit a behind draw command");
+    };
+    let primitives = draw(Size {
+        width: 80.0,
+        height: 50.0,
+    });
+    assert_eq!(
+        primitives.len(),
+        1,
+        "shadow API should emit one shadow primitive"
+    );
+    match &primitives[0] {
+        DrawPrimitive::Shadow(ShadowPrimitive::Drop { blur_radius, .. }) => {
+            assert!((*blur_radius - 40.0).abs() < f32::EPSILON);
+        }
+        other => panic!("expected drop shadow primitive, got {other:?}"),
+    }
+}
+
+#[test]
+fn inner_shadow_emits_overlay_with_dst_out_cutout() {
+    let modifier = Modifier::empty().inner_shadow(LayerShape::Rectangle, |scope| {
+        scope.radius = 14.0;
+        scope.offset = Point::new(5.0, -3.0);
+    });
+    let slices = super::collect_slices_from_modifier(&modifier);
+    let commands = slices.draw_commands();
+
+    assert_eq!(commands.len(), 1);
+    let DrawCommand::Overlay(draw) = &commands[0] else {
+        panic!("inner_shadow should emit an overlay draw command");
+    };
+    let primitives = draw(Size {
+        width: 64.0,
+        height: 40.0,
+    });
+
+    assert!(
+        contains_blend_mode(&primitives, BlendMode::DstOut),
+        "inner shadow should carve interior with DstOut"
+    );
+}
+
+#[test]
+fn inner_shadow_large_radius_keeps_fill_and_cutout_pairs_balanced() {
+    let modifier = Modifier::empty().inner_shadow(
+        LayerShape::Rounded(RoundedCornerShape::uniform(10.0)),
+        |scope| {
+            scope.radius = 34.0;
+            scope.spread = 14.0;
+            scope.offset = Point::new(8.0, 6.0);
+            scope.alpha = 0.9;
+        },
+    );
+    let slices = super::collect_slices_from_modifier(&modifier);
+    let DrawCommand::Overlay(draw) = &slices.draw_commands()[0] else {
+        panic!("inner_shadow should emit an overlay draw command");
+    };
+    let primitives = draw(Size {
+        width: 50.0,
+        height: 42.0,
+    });
+    assert_eq!(
+        primitives.len(),
+        1,
+        "inner shadow should emit one shadow primitive"
+    );
+    match &primitives[0] {
+        DrawPrimitive::Shadow(ShadowPrimitive::Inner {
+            fill,
+            cutout,
+            blur_radius,
+            ..
+        }) => {
+            assert!((*blur_radius - 34.0).abs() < f32::EPSILON);
+            let fill_rect = primitive_rect(fill).expect("inner fill should provide a shape rect");
+            let cutout_rect =
+                primitive_rect(cutout).expect("inner cutout should provide a shape rect");
+            assert!(
+                cutout_rect.width < fill_rect.width,
+                "positive spread should shrink inner cutout geometry"
+            );
+            assert!(
+                cutout_rect.height < fill_rect.height,
+                "positive spread should shrink inner cutout geometry"
+            );
+        }
+        other => panic!("expected inner shadow primitive, got {other:?}"),
+    }
+}
+
+#[test]
+fn inner_shadow_static_uses_density_for_dp_offset() {
+    struct DensityGuard(f32);
+    impl Drop for DensityGuard {
+        fn drop(&mut self) {
+            crate::set_density(self.0);
+        }
+    }
+
+    let guard = DensityGuard(crate::current_density());
+    crate::set_density(2.0);
+
+    let modifier = Modifier::empty().inner_shadow_value(
+        LayerShape::Rectangle,
+        Shadow {
+            radius: Dp(0.0),
+            spread: Dp(0.0),
+            offset: DpOffset::new(Dp(2.0), Dp(0.0)),
+            ..Default::default()
+        },
+    );
+    let slices = super::collect_slices_from_modifier(&modifier);
+    let commands = slices.draw_commands();
+    let DrawCommand::Overlay(draw) = &commands[0] else {
+        panic!("inner_shadow should emit an overlay draw command");
+    };
+    let primitives = draw(Size {
+        width: 40.0,
+        height: 20.0,
+    });
+
+    let cutout_x = first_inner_cutout_x(&primitives);
+    assert_eq!(cutout_x, Some(4.0));
+
+    drop(guard);
+}
+
+#[test]
+fn inner_shadow_cutout_alpha_remains_opaque_for_hole_mask() {
+    let modifier = Modifier::empty().inner_shadow(LayerShape::Rectangle, |scope| {
+        scope.radius = 12.0;
+        scope.offset = Point::new(4.0, 3.0);
+        scope.alpha = 0.2;
+    });
+    let slices = super::collect_slices_from_modifier(&modifier);
+    let DrawCommand::Overlay(draw) = &slices.draw_commands()[0] else {
+        panic!("inner_shadow should emit an overlay draw command");
+    };
+    let primitives = draw(Size {
+        width: 48.0,
+        height: 30.0,
+    });
+    let mut dst_out_alphas = Vec::new();
+    collect_dst_out_alphas(&primitives, &mut dst_out_alphas);
+
+    assert!(
+        !dst_out_alphas.is_empty(),
+        "inner shadow should emit dst-out cutouts"
+    );
+    assert!(
+        dst_out_alphas
+            .iter()
+            .all(|alpha| (*alpha - 1.0).abs() <= 1e-6),
+        "dst-out cutout alpha should stay opaque so low alpha does not flood-fill the interior"
+    );
+}
+
+#[test]
+fn drop_shadow_block_alias_emits_primitives() {
+    let modifier = Modifier::empty().drop_shadow_block(LayerShape::Rectangle, |scope| {
+        scope.radius = 8.0;
+        scope.spread = 2.0;
+    });
+    let slices = super::collect_slices_from_modifier(&modifier);
+    let DrawCommand::Behind(draw) = &slices.draw_commands()[0] else {
+        panic!("drop_shadow_block alias should emit a behind draw command");
+    };
+    let primitives = draw(Size {
+        width: 32.0,
+        height: 18.0,
+    });
+    assert!(
+        !primitives.is_empty(),
+        "drop_shadow_block alias should draw"
+    );
+}
+
+#[test]
+fn drop_shadow_value_alias_uses_static_shadow() {
+    let modifier = Modifier::empty().drop_shadow_value(
+        LayerShape::Rectangle,
+        Shadow {
+            radius: Dp(6.0),
+            spread: Dp(2.0),
+            alpha: 0.7,
+            ..Default::default()
+        },
+    );
+    let slices = super::collect_slices_from_modifier(&modifier);
+    let DrawCommand::Behind(draw) = &slices.draw_commands()[0] else {
+        panic!("drop_shadow_value alias should emit a behind draw command");
+    };
+    let primitives = draw(Size {
+        width: 32.0,
+        height: 18.0,
+    });
+    assert!(
+        !primitives.is_empty(),
+        "drop_shadow_value alias should draw"
+    );
+}
+
+#[test]
+fn inner_shadow_block_alias_emits_primitives() {
+    let modifier = Modifier::empty().inner_shadow_block(LayerShape::Rectangle, |scope| {
+        scope.radius = 10.0;
+        scope.offset = Point::new(3.0, 1.0);
+    });
+    let slices = super::collect_slices_from_modifier(&modifier);
+    let DrawCommand::Overlay(draw) = &slices.draw_commands()[0] else {
+        panic!("inner_shadow_block alias should emit an overlay draw command");
+    };
+    let primitives = draw(Size {
+        width: 32.0,
+        height: 18.0,
+    });
+    assert!(
+        !primitives.is_empty(),
+        "inner_shadow_block alias should draw"
+    );
+}
+
+#[test]
+fn inner_shadow_value_alias_uses_static_shadow() {
+    let modifier = Modifier::empty().inner_shadow_value(
+        LayerShape::Rectangle,
+        Shadow {
+            radius: Dp(6.0),
+            spread: Dp(2.0),
+            offset: DpOffset::new(Dp(2.0), Dp(1.0)),
+            ..Default::default()
+        },
+    );
+    let slices = super::collect_slices_from_modifier(&modifier);
+    let DrawCommand::Overlay(draw) = &slices.draw_commands()[0] else {
+        panic!("inner_shadow_value alias should emit an overlay draw command");
+    };
+    let primitives = draw(Size {
+        width: 32.0,
+        height: 18.0,
+    });
+    assert!(
+        !primitives.is_empty(),
+        "inner_shadow_value alias should draw"
+    );
+}
+
+#[test]
+fn gradient_cut_mask_modifier_sets_render_effect_shader() {
+    use crate::modifier_nodes::GraphicsLayerNode;
+
+    let spec = GradientCutMaskSpec {
+        progress: 0.5,
+        feather: 20.0,
+        corner_radius: 12.0,
+        direction: CutDirection::TopToBottom,
+    };
+    let modifier = Modifier::empty().gradient_cut_mask(300.0, 180.0, spec);
+    let mut handle = ModifierChainHandle::new();
+    let _ = handle.update(&modifier);
+
+    let chain = handle.chain();
+    let mut found_shader = false;
+    chain.for_each_node_with_capability(
+        cranpose_foundation::NodeCapabilities::DRAW,
+        |_ref, node| {
+            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+                found_shader = matches!(
+                    layer_node.layer().render_effect,
+                    Some(RenderEffect::Shader { .. })
+                );
+            }
+        },
+    );
+
+    assert!(
+        found_shader,
+        "Expected gradient_cut_mask to configure shader"
+    );
+}
+
+#[test]
+fn rounded_alpha_mask_modifier_sets_render_effect_shader() {
+    use crate::modifier_nodes::GraphicsLayerNode;
+
+    let modifier = Modifier::empty().rounded_alpha_mask(280.0, 120.0, 14.0, 8.0);
+    let mut handle = ModifierChainHandle::new();
+    let _ = handle.update(&modifier);
+
+    let chain = handle.chain();
+    let mut found_shader = false;
+    chain.for_each_node_with_capability(
+        cranpose_foundation::NodeCapabilities::DRAW,
+        |_ref, node| {
+            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+                found_shader = matches!(
+                    layer_node.layer().render_effect,
+                    Some(RenderEffect::Shader { .. })
+                );
+            }
+        },
+    );
+
+    assert!(
+        found_shader,
+        "Expected rounded_alpha_mask to configure shader"
+    );
+}
+
+#[test]
+fn gradient_fade_dst_out_modifier_sets_render_effect_shader() {
+    use crate::modifier_nodes::GraphicsLayerNode;
+
+    let spec = GradientFadeMaskSpec {
+        start: 18.0,
+        end: 42.0,
+        direction: CutDirection::TopToBottom,
+    };
+    let modifier = Modifier::empty().gradient_fade_dst_out(260.0, 120.0, spec);
+    let mut handle = ModifierChainHandle::new();
+    let _ = handle.update(&modifier);
+
+    let chain = handle.chain();
+    let mut found_shader = false;
+    chain.for_each_node_with_capability(
+        cranpose_foundation::NodeCapabilities::DRAW,
+        |_ref, node| {
+            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+                found_shader = matches!(
+                    layer_node.layer().render_effect,
+                    Some(RenderEffect::Shader { .. })
+                );
+            }
+        },
+    );
+
+    assert!(
+        found_shader,
+        "Expected gradient_fade_dst_out to configure shader"
+    );
 }
 
 #[test]

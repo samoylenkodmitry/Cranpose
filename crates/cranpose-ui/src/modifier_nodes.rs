@@ -73,7 +73,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::draw::DrawCommand;
 use crate::modifier::{
-    Color, ColorFilter, EdgeInsets, GraphicsLayer, LayoutWeight, Point, RoundedCornerShape,
+    BlendMode, Color, ColorFilter, CompositingStrategy, EdgeInsets, GraphicsLayer, LayoutWeight,
+    Point, RoundedCornerShape,
 };
 
 fn hash_f32_value<H: Hasher>(state: &mut H, value: f32) {
@@ -93,8 +94,39 @@ fn hash_option_f32<H: Hasher>(state: &mut H, value: Option<f32>) {
 fn hash_graphics_layer<H: Hasher>(state: &mut H, layer: &GraphicsLayer) {
     hash_f32_value(state, layer.alpha);
     hash_f32_value(state, layer.scale);
+    hash_f32_value(state, layer.scale_x);
+    hash_f32_value(state, layer.scale_y);
+    hash_f32_value(state, layer.rotation_x);
+    hash_f32_value(state, layer.rotation_y);
+    hash_f32_value(state, layer.rotation_z);
+    hash_f32_value(state, layer.camera_distance);
+    hash_f32_value(state, layer.transform_origin.pivot_fraction_x);
+    hash_f32_value(state, layer.transform_origin.pivot_fraction_y);
     hash_f32_value(state, layer.translation_x);
     hash_f32_value(state, layer.translation_y);
+    hash_f32_value(state, layer.shadow_elevation);
+    hash_f32_value(state, layer.ambient_shadow_color.r());
+    hash_f32_value(state, layer.ambient_shadow_color.g());
+    hash_f32_value(state, layer.ambient_shadow_color.b());
+    hash_f32_value(state, layer.ambient_shadow_color.a());
+    hash_f32_value(state, layer.spot_shadow_color.r());
+    hash_f32_value(state, layer.spot_shadow_color.g());
+    hash_f32_value(state, layer.spot_shadow_color.b());
+    hash_f32_value(state, layer.spot_shadow_color.a());
+    match layer.shape {
+        crate::modifier::LayerShape::Rectangle => {
+            state.write_u8(0);
+        }
+        crate::modifier::LayerShape::Rounded(shape) => {
+            state.write_u8(1);
+            let radii = shape.radii();
+            hash_f32_value(state, radii.top_left);
+            hash_f32_value(state, radii.top_right);
+            hash_f32_value(state, radii.bottom_right);
+            hash_f32_value(state, radii.bottom_left);
+        }
+    }
+    state.write_u8(layer.clip as u8);
     match layer.color_filter {
         Some(ColorFilter::Tint(color)) => {
             state.write_u8(1);
@@ -107,6 +139,44 @@ fn hash_graphics_layer<H: Hasher>(state: &mut H, layer: &GraphicsLayer) {
     }
     state.write_u8(layer.render_effect.is_some() as u8);
     state.write_u8(layer.backdrop_effect.is_some() as u8);
+    let compositing_tag = match layer.compositing_strategy {
+        CompositingStrategy::Auto => 0,
+        CompositingStrategy::Offscreen => 1,
+        CompositingStrategy::ModulateAlpha => 2,
+    };
+    state.write_u8(compositing_tag);
+    let blend_tag = match layer.blend_mode {
+        BlendMode::Clear => 0,
+        BlendMode::Src => 1,
+        BlendMode::Dst => 2,
+        BlendMode::SrcOver => 3,
+        BlendMode::DstOver => 4,
+        BlendMode::SrcIn => 5,
+        BlendMode::DstIn => 6,
+        BlendMode::SrcOut => 7,
+        BlendMode::DstOut => 8,
+        BlendMode::SrcAtop => 9,
+        BlendMode::DstAtop => 10,
+        BlendMode::Xor => 11,
+        BlendMode::Plus => 12,
+        BlendMode::Modulate => 13,
+        BlendMode::Screen => 14,
+        BlendMode::Overlay => 15,
+        BlendMode::Darken => 16,
+        BlendMode::Lighten => 17,
+        BlendMode::ColorDodge => 18,
+        BlendMode::ColorBurn => 19,
+        BlendMode::HardLight => 20,
+        BlendMode::SoftLight => 21,
+        BlendMode::Difference => 22,
+        BlendMode::Exclusion => 23,
+        BlendMode::Multiply => 24,
+        BlendMode::Hue => 25,
+        BlendMode::Saturation => 26,
+        BlendMode::Color => 27,
+        BlendMode::Luminosity => 28,
+    };
+    state.write_u8(blend_tag);
 }
 
 fn hash_horizontal_alignment<H: Hasher>(state: &mut H, alignment: HorizontalAlignment) {
@@ -1903,7 +1973,8 @@ impl DrawModifierNode for DrawCommandNode {
 fn draw_command_tag(cmd: &DrawCommand) -> u8 {
     match cmd {
         DrawCommand::Behind(_) => 0,
-        DrawCommand::Overlay(_) => 1,
+        DrawCommand::WithContent(_) => 1,
+        DrawCommand::Overlay(_) => 2,
     }
 }
 

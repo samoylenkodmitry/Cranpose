@@ -5,10 +5,11 @@ use std::borrow::Borrow;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use cranpose_ui::{Brush, TextMeasurer, TextMetrics};
-use cranpose_ui_graphics::{Color, ColorFilter, Rect};
+use cranpose_ui_graphics::{BlendMode, Color, ColorFilter, Rect, TileMode};
 
 use crate::scene::{ImageDraw, Scene, TextDraw};
 use crate::style::point_in_resolved_rounded_rect;
@@ -20,6 +21,11 @@ static FONT: Lazy<Font<'static>> = Lazy::new(|| {
     .expect("font");
     f
 });
+static REPORTED_UNSUPPORTED_PIXELS_BLEND_MODES: AtomicBool = AtomicBool::new(false);
+
+fn is_blend_mode_supported(mode: BlendMode) -> bool {
+    matches!(mode, BlendMode::SrcOver | BlendMode::DstOut)
+}
 
 pub struct CachedRusttypeTextMeasurer {
     cache: Mutex<TextMetricsCache>,
@@ -445,7 +451,7 @@ fn draw_shape(frame: &mut [u8], width: u32, height: u32, draw: &crate::scene::Dr
                 continue;
             }
             let idx = ((py as u32 * width + px as u32) * 4) as usize;
-            blend_pixel(&mut frame[idx..idx + 4], sample);
+            blend_pixel(&mut frame[idx..idx + 4], sample, draw.blend_mode);
         }
     }
 }
@@ -502,7 +508,7 @@ fn draw_image(frame: &mut [u8], width: u32, height: u32, draw: &ImageDraw) {
             }
 
             let dst_idx = ((py as u32 * width + px as u32) * 4) as usize;
-            blend_pixel(&mut frame[dst_idx..dst_idx + 4], sample);
+            blend_pixel(&mut frame[dst_idx..dst_idx + 4], sample, draw.blend_mode);
         }
     }
 }
@@ -546,13 +552,25 @@ fn draw_text(frame: &mut [u8], width: u32, height: u32, draw: &TextDraw) {
                 blend_pixel(
                     &mut frame[idx..idx + 4],
                     [color[0], color[1], color[2], value],
+                    BlendMode::SrcOver,
                 );
             });
         }
     }
 }
 
-fn blend_pixel(dst: &mut [u8], src: [f32; 4]) {
+fn blend_pixel(dst: &mut [u8], src: [f32; 4], blend_mode: BlendMode) {
+    let resolved_blend_mode = if is_blend_mode_supported(blend_mode) {
+        blend_mode
+    } else {
+        if !REPORTED_UNSUPPORTED_PIXELS_BLEND_MODES.swap(true, Ordering::Relaxed) {
+            log::warn!(
+                "Pixels renderer currently supports BlendMode::SrcOver and BlendMode::DstOut; falling back to SrcOver for unsupported modes"
+            );
+        }
+        BlendMode::SrcOver
+    };
+
     let src_alpha = src[3].clamp(0.0, 1.0);
     if src_alpha <= 0.0 {
         return;
@@ -562,10 +580,19 @@ fn blend_pixel(dst: &mut [u8], src: [f32; 4]) {
     let dst_b = dst[2] as f32 / 255.0;
     let dst_a = dst[3] as f32 / 255.0;
 
-    let out_r = src[0].clamp(0.0, 1.0) * src_alpha + dst_r * (1.0 - src_alpha);
-    let out_g = src[1].clamp(0.0, 1.0) * src_alpha + dst_g * (1.0 - src_alpha);
-    let out_b = src[2].clamp(0.0, 1.0) * src_alpha + dst_b * (1.0 - src_alpha);
-    let out_a = src_alpha + dst_a * (1.0 - src_alpha);
+    let (out_r, out_g, out_b, out_a) = match resolved_blend_mode {
+        BlendMode::DstOut => {
+            let keep = 1.0 - src_alpha;
+            (dst_r * keep, dst_g * keep, dst_b * keep, dst_a * keep)
+        }
+        BlendMode::SrcOver => (
+            src[0].clamp(0.0, 1.0) * src_alpha + dst_r * (1.0 - src_alpha),
+            src[1].clamp(0.0, 1.0) * src_alpha + dst_g * (1.0 - src_alpha),
+            src[2].clamp(0.0, 1.0) * src_alpha + dst_b * (1.0 - src_alpha),
+            src_alpha + dst_a * (1.0 - src_alpha),
+        ),
+        _ => unreachable!("unsupported blend modes are resolved before blending"),
+    };
 
     dst[0] = (out_r.clamp(0.0, 1.0) * 255.0).round() as u8;
     dst[1] = (out_g.clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -596,18 +623,34 @@ fn color_to_rgba(color: Color) -> [f32; 4] {
 fn sample_brush(brush: &Brush, rect: Rect, x: f32, y: f32) -> [f32; 4] {
     match brush {
         Brush::Solid(color) => color_to_rgba(*color),
-        Brush::LinearGradient(colors) => {
-            let t = if rect.height.abs() <= f32::EPSILON {
-                0.0
-            } else {
-                ((y - rect.y) / rect.height).clamp(0.0, 1.0)
-            };
-            color_to_rgba(interpolate_colors(colors, t))
+        Brush::LinearGradient {
+            colors,
+            stops,
+            start,
+            end,
+            tile_mode,
+        } => {
+            let sx = resolve_gradient_point(rect.x, rect.width, start.x);
+            let sy = resolve_gradient_point(rect.y, rect.height, start.y);
+            let ex = resolve_gradient_point(rect.x, rect.width, end.x);
+            let ey = resolve_gradient_point(rect.y, rect.height, end.y);
+            let dx = ex - sx;
+            let dy = ey - sy;
+            let denom = (dx * dx + dy * dy).max(f32::EPSILON);
+            let t = ((x - sx) * dx + (y - sy) * dy) / denom;
+            match normalize_gradient_t(t, *tile_mode) {
+                Some(sample_t) => {
+                    color_to_rgba(interpolate_colors(colors, stops.as_deref(), sample_t))
+                }
+                None => [0.0, 0.0, 0.0, 0.0],
+            }
         }
         Brush::RadialGradient {
             colors,
+            stops,
             center,
             radius,
+            tile_mode,
         } => {
             let cx = rect.x + center.x;
             let cy = rect.y + center.y;
@@ -615,10 +658,19 @@ fn sample_brush(brush: &Brush, rect: Rect, x: f32, y: f32) -> [f32; 4] {
             let dx = x - cx;
             let dy = y - cy;
             let distance = (dx * dx + dy * dy).sqrt();
-            let t = (distance / radius).clamp(0.0, 1.0);
-            color_to_rgba(interpolate_colors(colors, t))
+            let t = distance / radius;
+            match normalize_gradient_t(t, *tile_mode) {
+                Some(sample_t) => {
+                    color_to_rgba(interpolate_colors(colors, stops.as_deref(), sample_t))
+                }
+                None => [0.0, 0.0, 0.0, 0.0],
+            }
         }
-        Brush::SweepGradient { colors, center } => {
+        Brush::SweepGradient {
+            colors,
+            stops,
+            center,
+        } => {
             let cx = rect.x + center.x;
             let cy = rect.y + center.y;
             let dx = x - cx;
@@ -626,12 +678,44 @@ fn sample_brush(brush: &Brush, rect: Rect, x: f32, y: f32) -> [f32; 4] {
             let angle = dy.atan2(dx);
             // Map [-PI, PI] to [0, 1]
             let t = (angle / std::f32::consts::TAU + 0.5).clamp(0.0, 1.0);
-            color_to_rgba(interpolate_colors(colors, t))
+            color_to_rgba(interpolate_colors(colors, stops.as_deref(), t))
         }
     }
 }
 
-fn interpolate_colors(colors: &[Color], t: f32) -> Color {
+fn resolve_gradient_point(origin: f32, extent: f32, value: f32) -> f32 {
+    if value.is_finite() {
+        origin + value
+    } else if value.is_sign_positive() {
+        origin + extent
+    } else {
+        origin
+    }
+}
+
+fn normalize_gradient_t(t: f32, tile_mode: TileMode) -> Option<f32> {
+    match tile_mode {
+        TileMode::Clamp => Some(t.clamp(0.0, 1.0)),
+        TileMode::Decal => {
+            if (0.0..=1.0).contains(&t) {
+                Some(t)
+            } else {
+                None
+            }
+        }
+        TileMode::Repeated => Some(t.rem_euclid(1.0)),
+        TileMode::Mirror => {
+            let wrapped = t.rem_euclid(2.0);
+            if wrapped <= 1.0 {
+                Some(wrapped)
+            } else {
+                Some(2.0 - wrapped)
+            }
+        }
+    }
+}
+
+fn interpolate_colors(colors: &[Color], stops: Option<&[f32]>, t: f32) -> Color {
     if colors.is_empty() {
         return Color(0.0, 0.0, 0.0, 0.0);
     }
@@ -639,6 +723,25 @@ fn interpolate_colors(colors: &[Color], t: f32) -> Color {
         return colors[0];
     }
     let clamped = t.clamp(0.0, 1.0);
+
+    if let Some(stops) = stops {
+        if stops.len() == colors.len() {
+            if clamped <= stops[0] {
+                return colors[0];
+            }
+            for index in 0..(stops.len() - 1) {
+                let start = stops[index];
+                let end = stops[index + 1];
+                if clamped <= end {
+                    let span = (end - start).max(f32::EPSILON);
+                    let frac = ((clamped - start) / span).clamp(0.0, 1.0);
+                    return lerp_color(colors[index], colors[index + 1], frac);
+                }
+            }
+            return *colors.last().unwrap_or(&colors[0]);
+        }
+    }
+
     let segments = (colors.len() - 1) as f32;
     let scaled = clamped * segments;
     let index = scaled.floor() as usize;
@@ -657,4 +760,23 @@ fn lerp_color(a: Color, b: Color, t: f32) -> Color {
         lerp(a.2, b.2),
         lerp(a.3, b.3),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blend_mode_support_matrix_is_explicit() {
+        assert!(is_blend_mode_supported(BlendMode::SrcOver));
+        assert!(is_blend_mode_supported(BlendMode::DstOut));
+        assert!(!is_blend_mode_supported(BlendMode::Clear));
+        assert!(!is_blend_mode_supported(BlendMode::Multiply));
+    }
+
+    #[test]
+    fn mirror_tile_mode_reflects_second_interval() {
+        assert_eq!(normalize_gradient_t(1.25, TileMode::Mirror), Some(0.75));
+        assert_eq!(normalize_gradient_t(1.75, TileMode::Mirror), Some(0.25));
+    }
 }

@@ -25,6 +25,7 @@ mod padding;
 mod pointer_input;
 mod scroll;
 mod semantics;
+mod shadow;
 mod size;
 mod slices;
 mod weight;
@@ -37,9 +38,11 @@ pub use cranpose_foundation::{
     modifier_element, AnyModifierElement, DynModifierElement, FocusState, PointerEvent,
     PointerEventKind, SemanticsConfiguration,
 };
+#[allow(unused_imports)]
 pub use cranpose_ui_graphics::{
-    Brush, Color, ColorFilter, CornerRadii, EdgeInsets, GraphicsLayer, Point, Rect, RenderEffect,
-    RoundedCornerShape, RuntimeShader, Size,
+    BlendMode, Brush, Color, ColorFilter, CompositingStrategy, CornerRadii, CutDirection, DpOffset,
+    EdgeInsets, GradientCutMaskSpec, GradientFadeMaskSpec, GraphicsLayer, LayerShape, Point, Rect,
+    RenderEffect, RoundedCornerShape, RuntimeShader, Shadow, ShadowScope, Size, TransformOrigin,
 };
 use cranpose_ui_layout::{Alignment, HorizontalAlignment, IntrinsicSize, VerticalAlignment};
 #[allow(unused_imports)]

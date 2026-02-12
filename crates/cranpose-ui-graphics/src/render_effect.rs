@@ -12,6 +12,10 @@ pub enum TileMode {
     /// Clamp to the edge pixel color.
     #[default]
     Clamp,
+    /// Repeat the gradient/effect from start to end.
+    Repeated,
+    /// Mirror the gradient/effect every other repetition.
+    Mirror,
     /// Treat pixels outside the boundary as transparent.
     Decal,
 }

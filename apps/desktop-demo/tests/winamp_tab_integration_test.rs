@@ -14,7 +14,7 @@ fn winamp_tab_label_is_stable() {
 
     let labels = demo_tab_labels();
     assert!(
-        labels.iter().any(|label| *label == "Winamp"),
+        labels.contains(&"Winamp"),
         "Winamp label should be discoverable from demo_tab_labels()"
     );
 }

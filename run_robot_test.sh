@@ -138,6 +138,9 @@ run_test() {
         robot_lazy_list_after_modifiers|robot_tab_navigation)
             timeout_secs=120
             ;;
+        robot_shader_backdrop_drag)
+            timeout_secs=120
+            ;;
         robot_double_click|robot_multiline_click|robot_multiline_nav)
             timeout_secs=90
             ;;

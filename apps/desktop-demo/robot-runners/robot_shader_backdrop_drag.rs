@@ -3,9 +3,15 @@
 //! Validates that "Blur" and "Glass" overlays produce visible pixel movement after drag.
 
 use cranpose::AppLauncher;
-use cranpose_testing::{capture_screenshot, find_button_in_semantics, find_text_in_semantics};
+use cranpose_testing::{
+    capture_screenshot, find_button_in_semantics, find_text_by_prefix_in_semantics,
+    find_text_in_semantics, root_bounds,
+};
 use desktop_app::app;
 use std::time::Duration;
+
+const EFFECT_SLIDER_WIDTH: f32 = 220.0;
+const EFFECT_SLIDER_TOUCH_OFFSET_Y: f32 = 9.0;
 
 fn center(bounds: (f32, f32, f32, f32)) -> (f32, f32) {
     (bounds.0 + bounds.2 * 0.5, bounds.1 + bounds.3 * 0.5)
@@ -77,6 +83,72 @@ fn changed_pixel_count_in_region(
     changed
 }
 
+fn parse_slider_value(text: &str) -> Option<f32> {
+    text.split_once(':')
+        .and_then(|(_, value)| value.trim().parse::<f32>().ok())
+}
+
+fn scroll_down(robot: &cranpose::Robot) {
+    let _ = robot.drag(620.0, 720.0, 620.0, 220.0);
+    std::thread::sleep(Duration::from_millis(180));
+    let _ = robot.wait_for_idle();
+}
+
+fn scroll_up(robot: &cranpose::Robot) {
+    let _ = robot.drag(620.0, 220.0, 620.0, 720.0);
+    std::thread::sleep(Duration::from_millis(180));
+    let _ = robot.wait_for_idle();
+}
+
+fn y_is_visible(robot: &cranpose::Robot, y: f32) -> bool {
+    let Some((_, root_y, _, root_h)) = root_bounds(robot) else {
+        return true;
+    };
+    let top = root_y + 28.0;
+    let bottom = root_y + root_h - 28.0;
+    y >= top && y <= bottom
+}
+
+fn scroll_prefix_into_view(
+    robot: &cranpose::Robot,
+    prefix: &str,
+    max_attempts: usize,
+) -> Option<(f32, f32, f32, f32, String)> {
+    for _ in 0..max_attempts {
+        if let Some(bounds) = find_text_by_prefix_in_semantics(robot, prefix) {
+            let center_y = bounds.1 + bounds.3 * 0.5;
+            if y_is_visible(robot, center_y) {
+                return Some(bounds);
+            }
+            let Some((_, root_y, _, root_h)) = root_bounds(robot) else {
+                return Some(bounds);
+            };
+            let viewport_mid = root_y + root_h * 0.5;
+            if center_y > viewport_mid {
+                scroll_down(robot);
+            } else {
+                scroll_up(robot);
+            }
+        } else {
+            scroll_down(robot);
+        }
+    }
+    None
+}
+
+fn set_slider_fraction(robot: &cranpose::Robot, prefix: &str, fraction: f32) -> Option<f32> {
+    let (x, y, _w, h, _) = scroll_prefix_into_view(robot, prefix, 18)?;
+    let slider_y = y + h + EFFECT_SLIDER_TOUCH_OFFSET_Y;
+    let left_x = x + 2.0;
+    let target_x = x + EFFECT_SLIDER_WIDTH * fraction.clamp(0.0, 1.0);
+    let _ = robot.drag(left_x, slider_y, target_x, slider_y);
+    std::thread::sleep(Duration::from_millis(120));
+    let _ = robot.wait_for_idle();
+
+    find_text_by_prefix_in_semantics(robot, prefix)
+        .and_then(|(_, _, _, _, t)| parse_slider_value(&t))
+}
+
 fn main() {
     env_logger::init();
     println!("=== Robot Shader Backdrop Drag Test ===");
@@ -119,6 +191,89 @@ fn main() {
             if find_text_in_semantics(&robot, "Blur Decal").is_none() {
                 println!("✗ Missing 'Blur Decal' semantics demo card");
                 std::process::exit(1);
+            }
+            if find_text_in_semantics(&robot, "Cut / Opacity Mask APIs").is_none() {
+                println!("✗ Missing 'Cut / Opacity Mask APIs' demo block");
+                std::process::exit(1);
+            }
+            if find_text_in_semantics(&robot, "Half screen cut").is_none() {
+                println!("✗ Missing 'Half screen cut' mask preview card");
+                std::process::exit(1);
+            }
+            if find_text_in_semantics(&robot, "DstOut vertical fade").is_none() {
+                println!("✗ Missing 'DstOut vertical fade' mask preview card");
+                std::process::exit(1);
+            }
+
+            // Regression: nested child backdrop blur must visibly affect pixels.
+            let nested_parent = set_slider_fraction(&robot, "nested_parent_blur", 0.0);
+            let nested_child_off = set_slider_fraction(&robot, "nested_child_backdrop_blur", 0.0);
+            println!(
+                "Nested sliders (off): parent={:?} child={:?}",
+                nested_parent, nested_child_off
+            );
+
+            let Some((label_x, label_y, label_w, label_h)) = find_text_in_semantics(&robot, "Child backdrop")
+            else {
+                println!("✗ Could not find 'Child backdrop' label");
+                std::process::exit(1);
+            };
+            let nested_region = (
+                (label_x - 56.0).max(0.0),
+                (label_y - 30.0).max(0.0),
+                label_w + 112.0,
+                label_h + 62.0,
+            );
+
+            let Some(nested_base_a) = capture_screenshot(&robot) else {
+                println!("✗ Could not capture nested backdrop baseline screenshot A");
+                std::process::exit(1);
+            };
+            std::thread::sleep(Duration::from_millis(120));
+            let _ = robot.wait_for_idle();
+            let Some(nested_base_b) = capture_screenshot(&robot) else {
+                println!("✗ Could not capture nested backdrop baseline screenshot B");
+                std::process::exit(1);
+            };
+            let nested_baseline_noise = changed_pixel_count_in_region(
+                &nested_base_a,
+                &nested_base_b,
+                nested_region,
+                10,
+            );
+
+            let nested_child_on = set_slider_fraction(&robot, "nested_child_backdrop_blur", 1.0);
+            println!("Nested child slider (on): {:?}", nested_child_on);
+            let _ = robot.click(24.0, 24.0);
+            std::thread::sleep(Duration::from_millis(100));
+            let _ = robot.wait_for_idle();
+
+            let Some(nested_after) = capture_screenshot(&robot) else {
+                println!("✗ Could not capture nested backdrop screenshot after slider");
+                std::process::exit(1);
+            };
+            let nested_raw = changed_pixel_count_in_region(
+                &nested_base_b,
+                &nested_after,
+                nested_region,
+                10,
+            );
+            let nested_net = nested_raw.saturating_sub(nested_baseline_noise);
+            println!(
+                "Nested child backdrop diff: raw={} baseline={} net={}",
+                nested_raw, nested_baseline_noise, nested_net
+            );
+            if nested_net < 90 {
+                println!(
+                    "✗ nested_child_backdrop_blur did not produce visible changes (net={})",
+                    nested_net
+                );
+                std::process::exit(1);
+            }
+
+            // Return to the upper area for the draggable Blur/Glass regression checks.
+            for _ in 0..4 {
+                scroll_up(&robot);
             }
 
             let Some(blur_before) = find_text_in_semantics(&robot, "Blur") else {

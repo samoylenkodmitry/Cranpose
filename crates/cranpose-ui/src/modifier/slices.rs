@@ -2,7 +2,9 @@ use std::fmt;
 use std::rc::Rc;
 
 use cranpose_foundation::{ModifierNodeChain, NodeCapabilities, PointerEvent};
-use cranpose_ui_graphics::{Color, ColorFilter, GraphicsLayer};
+use cranpose_ui_graphics::{
+    BlendMode, Color, ColorFilter, CompositingStrategy, GraphicsLayer, RenderEffect,
+};
 
 use crate::draw::DrawCommand;
 use crate::modifier::Modifier;
@@ -56,13 +58,75 @@ fn merge_graphics_layers(base: GraphicsLayer, overlay: GraphicsLayer) -> Graphic
     GraphicsLayer {
         alpha: (base.alpha * overlay.alpha).clamp(0.0, 1.0),
         scale: base.scale * overlay.scale,
+        scale_x: base.scale_x * overlay.scale_x,
+        scale_y: base.scale_y * overlay.scale_y,
+        rotation_x: base.rotation_x + overlay.rotation_x,
+        rotation_y: base.rotation_y + overlay.rotation_y,
+        rotation_z: base.rotation_z + overlay.rotation_z,
+        camera_distance: if (overlay.camera_distance - 8.0).abs() > f32::EPSILON {
+            overlay.camera_distance
+        } else {
+            base.camera_distance
+        },
+        transform_origin: if overlay.transform_origin
+            != cranpose_ui_graphics::TransformOrigin::CENTER
+        {
+            overlay.transform_origin
+        } else {
+            base.transform_origin
+        },
         translation_x: base.translation_x + overlay.translation_x,
         translation_y: base.translation_y + overlay.translation_y,
+        shadow_elevation: if overlay.shadow_elevation > 0.0 {
+            overlay.shadow_elevation
+        } else {
+            base.shadow_elevation
+        },
+        ambient_shadow_color: if overlay.ambient_shadow_color != cranpose_ui_graphics::Color::BLACK
+        {
+            overlay.ambient_shadow_color
+        } else {
+            base.ambient_shadow_color
+        },
+        spot_shadow_color: if overlay.spot_shadow_color != cranpose_ui_graphics::Color::BLACK {
+            overlay.spot_shadow_color
+        } else {
+            base.spot_shadow_color
+        },
+        shape: if overlay.shape != cranpose_ui_graphics::LayerShape::Rectangle {
+            overlay.shape
+        } else {
+            base.shape
+        },
+        clip: base.clip || overlay.clip,
+        compositing_strategy: if overlay.compositing_strategy == CompositingStrategy::Auto {
+            base.compositing_strategy
+        } else {
+            overlay.compositing_strategy
+        },
+        blend_mode: if overlay.blend_mode == BlendMode::SrcOver {
+            base.blend_mode
+        } else {
+            overlay.blend_mode
+        },
         color_filter: compose_color_filters(base.color_filter, overlay.color_filter),
-        // Keep the most recent explicitly specified effect while preserving
-        // previously configured effects when the new layer leaves them unset.
-        render_effect: overlay.render_effect.or(base.render_effect),
+        // Modifiers are traversed outer -> inner. Layer effects therefore compose
+        // inner-first, then outer, matching nested layer rendering semantics.
+        render_effect: compose_render_effects(base.render_effect, overlay.render_effect),
+        // Backdrop effects cannot be represented as a deterministic chain on a
+        // flattened single layer, so keep the most local explicit backdrop.
         backdrop_effect: overlay.backdrop_effect.or(base.backdrop_effect),
+    }
+}
+
+fn compose_render_effects(
+    outer: Option<RenderEffect>,
+    inner: Option<RenderEffect>,
+) -> Option<RenderEffect> {
+    match (outer, inner) {
+        (None, None) => None,
+        (Some(effect), None) | (None, Some(effect)) => Some(effect),
+        (Some(outer_effect), Some(inner_effect)) => Some(inner_effect.then(outer_effect)),
     }
 }
 
@@ -217,6 +281,7 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
 
     // Track background and shape to combine them in draw commands
     let background_color = RefCell::new(None);
+    let background_insert_index = RefCell::new(None::<usize>);
     let corner_shape = RefCell::new(None);
 
     chain.for_each_node_with_capability(NodeCapabilities::DRAW, |_ref, node| {
@@ -225,6 +290,7 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
         // Collect background color from BackgroundNode
         if let Some(bg_node) = any.downcast_ref::<BackgroundNode>() {
             *background_color.borrow_mut() = Some(bg_node.color());
+            *background_insert_index.borrow_mut() = Some(slices.draw_commands.len());
             // Note: BackgroundNode can have an optional shape, but we primarily track
             // shape via CornerShapeNode for flexibility
             if bg_node.shape().is_some() {
@@ -336,9 +402,13 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
             }
         });
 
+        let insert_index = background_insert_index
+            .into_inner()
+            .unwrap_or(0)
+            .min(slices.draw_commands.len());
         slices
             .draw_commands
-            .insert(0, DrawCommand::Behind(draw_cmd));
+            .insert(insert_index, DrawCommand::Behind(draw_cmd));
     }
 }
 

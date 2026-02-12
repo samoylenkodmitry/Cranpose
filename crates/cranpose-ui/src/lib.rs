@@ -56,10 +56,11 @@ pub use layout::{
     SemanticsTree,
 };
 pub use modifier::{
-    collect_modifier_slices, collect_slices_from_modifier, Brush, Color, CornerRadii, EdgeInsets,
-    GraphicsLayer, Modifier, ModifierNodeSlices, Point, PointerEvent, PointerEventKind,
-    PointerInputScope, Rect, RenderEffect, ResolvedBackground, ResolvedModifiers,
-    RoundedCornerShape, RuntimeShader, Size,
+    collect_modifier_slices, collect_slices_from_modifier, BlendMode, Brush, Color,
+    CompositingStrategy, CornerRadii, DpOffset, EdgeInsets, GraphicsLayer, LayerShape, Modifier,
+    ModifierNodeSlices, Point, PointerEvent, PointerEventKind, PointerInputScope, Rect,
+    RenderEffect, ResolvedBackground, ResolvedModifiers, RoundedCornerShape, RuntimeShader, Shadow,
+    ShadowScope, Size, TransformOrigin,
 };
 pub use modifier_nodes::{
     AlphaElement, AlphaNode, BackgroundElement, BackgroundNode, ClickableElement, ClickableNode,

@@ -27,6 +27,8 @@ pub(crate) struct EffectRenderer {
 
     // Blit pipeline for compositing offscreen targets to the surface
     blit_pipeline: wgpu::RenderPipeline,
+    blit_uniform_buffer: wgpu::Buffer,
+    blit_uniform_bind_group: wgpu::BindGroup,
 
     // Shared bind group layouts for effect texture + uniform access
     pub effect_texture_bind_group_layout: wgpu::BindGroupLayout,
@@ -61,6 +63,25 @@ struct OffsetUniforms {
     _padding: [f32; 2],
 }
 
+/// Blit uniform data matching the WGSL `BlitUniforms` struct.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct BlitUniforms {
+    alpha: [f32; 4],
+    mask_rect: [f32; 4],
+    mask_radii: [f32; 4],
+    mask_enabled: [f32; 4],
+}
+
+/// Optional rounded-rectangle clip mask applied during fullscreen blit.
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct RoundedCompositeMask {
+    /// Clip rect in destination pixel coordinates: x, y, width, height.
+    pub rect: [f32; 4],
+    /// Corner radii in pixels: top_left, top_right, bottom_left, bottom_right.
+    pub radii: [f32; 4],
+}
+
 impl EffectRenderer {
     pub fn new(device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
         // Create shared bind group layouts
@@ -87,6 +108,22 @@ impl EffectRenderer {
         let offset_uniform_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Offset Uniform Bind Group Layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+
+        // Blit-specific uniform layout
+        let blit_uniform_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Blit Uniform Bind Group Layout"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -202,7 +239,10 @@ impl EffectRenderer {
 
         let blit_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Blit Pipeline Layout"),
-            bind_group_layouts: &[&effect_texture_bind_group_layout],
+            bind_group_layouts: &[
+                &effect_texture_bind_group_layout,
+                &blit_uniform_bind_group_layout,
+            ],
             push_constant_ranges: &[],
         });
 
@@ -260,6 +300,12 @@ impl EffectRenderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let blit_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Blit Uniform Buffer"),
+            size: std::mem::size_of::<BlitUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
         let effect_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Effect Uniform Buffer"),
@@ -294,6 +340,14 @@ impl EffectRenderer {
                 resource: offset_uniform_buffer.as_entire_binding(),
             }],
         });
+        let blit_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Blit Uniform Bind Group"),
+            layout: &blit_uniform_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: blit_uniform_buffer.as_entire_binding(),
+            }],
+        });
         let effect_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Effect Uniform Bind Group"),
             layout: &effect_uniform_bind_group_layout,
@@ -324,6 +378,8 @@ impl EffectRenderer {
             offset_uniform_buffer,
             offset_uniform_bind_group,
             blit_pipeline,
+            blit_uniform_buffer,
+            blit_uniform_bind_group,
             effect_texture_bind_group_layout,
             effect_uniform_bind_group_layout,
             effect_uniform_buffer,
@@ -348,6 +404,25 @@ impl EffectRenderer {
         radius_x: f32,
         radius_y: f32,
         tile_mode: TileMode,
+    ) {
+        self.apply_blur_scissored(
+            device, queue, source, dest_view, radius_x, radius_y, tile_mode, None,
+        );
+    }
+
+    /// Apply a two-pass separable Gaussian blur to a source texture with an
+    /// optional processing scissor in destination pixel coordinates.
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_blur_scissored(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        source: &OffscreenTarget,
+        dest_view: &wgpu::TextureView,
+        radius_x: f32,
+        radius_y: f32,
+        tile_mode: TileMode,
+        scissor: Option<(u32, u32, u32, u32)>,
     ) {
         let width = source.width;
         let height = source.height;
@@ -426,6 +501,9 @@ impl EffectRenderer {
             pass.set_pipeline(&self.blur_pipeline);
             pass.set_bind_group(0, &source_texture_bind_group, &[]);
             pass.set_bind_group(1, &self.blur_uniform_bind_group_horizontal, &[]);
+            if let Some((x, y, w, h)) = scissor {
+                pass.set_scissor_rect(x, y, w, h);
+            }
             pass.draw(0..4, 0..1);
         }
         {
@@ -445,6 +523,9 @@ impl EffectRenderer {
             pass.set_pipeline(&self.blur_pipeline);
             pass.set_bind_group(0, &intermediate_texture_bind_group, &[]);
             pass.set_bind_group(1, &self.blur_uniform_bind_group_vertical, &[]);
+            if let Some((x, y, w, h)) = scissor {
+                pass.set_scissor_rect(x, y, w, h);
+            }
             pass.draw(0..4, 0..1);
         }
         queue.submit(std::iter::once(encoder.finish()));
@@ -666,7 +747,22 @@ impl EffectRenderer {
         dest_view: &wgpu::TextureView,
         load_op: wgpu::LoadOp<wgpu::Color>,
     ) {
-        self.composite_to_view_scissored(device, queue, source, dest_view, load_op, None);
+        self.composite_to_view_with_alpha(device, queue, source, dest_view, 1.0, load_op);
+    }
+
+    /// Composite an offscreen target with explicit alpha multiplication.
+    pub fn composite_to_view_with_alpha(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        source: &OffscreenTarget,
+        dest_view: &wgpu::TextureView,
+        alpha: f32,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+    ) {
+        self.composite_to_view_scissored_with_alpha(
+            device, queue, source, dest_view, alpha, load_op, None,
+        );
     }
 
     /// Composite an offscreen target onto a destination view using premultiplied alpha blending
@@ -680,6 +776,60 @@ impl EffectRenderer {
         load_op: wgpu::LoadOp<wgpu::Color>,
         scissor: Option<(u32, u32, u32, u32)>,
     ) {
+        self.composite_to_view_scissored_with_alpha(
+            device, queue, source, dest_view, 1.0, load_op, scissor,
+        );
+    }
+
+    /// Composite an offscreen target onto a destination view with an optional scissor region
+    /// and explicit alpha multiplication.
+    #[allow(clippy::too_many_arguments)]
+    pub fn composite_to_view_scissored_with_alpha(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        source: &OffscreenTarget,
+        dest_view: &wgpu::TextureView,
+        alpha: f32,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        scissor: Option<(u32, u32, u32, u32)>,
+    ) {
+        self.composite_to_view_scissored_with_alpha_and_mask(
+            device, queue, source, dest_view, alpha, load_op, scissor, None,
+        );
+    }
+
+    /// Composite an offscreen target onto a destination view with optional
+    /// scissor and optional rounded-rectangle clip mask.
+    #[allow(clippy::too_many_arguments)]
+    pub fn composite_to_view_scissored_with_alpha_and_mask(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        source: &OffscreenTarget,
+        dest_view: &wgpu::TextureView,
+        alpha: f32,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        scissor: Option<(u32, u32, u32, u32)>,
+        rounded_mask: Option<RoundedCompositeMask>,
+    ) {
+        let (mask_rect, mask_radii, mask_enabled) = if let Some(mask) = rounded_mask {
+            (mask.rect, mask.radii, [1.0, 0.0, 0.0, 0.0])
+        } else {
+            (
+                [0.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 0.0],
+            )
+        };
+        let uniforms = BlitUniforms {
+            alpha: [alpha.clamp(0.0, 1.0), 0.0, 0.0, 0.0],
+            mask_rect,
+            mask_radii,
+            mask_enabled,
+        };
+        queue.write_buffer(&self.blit_uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+
         let texture_bind_group = OffscreenPool::create_texture_bind_group(
             device,
             &self.effect_texture_bind_group_layout,
@@ -707,6 +857,7 @@ impl EffectRenderer {
 
             pass.set_pipeline(&self.blit_pipeline);
             pass.set_bind_group(0, &texture_bind_group, &[]);
+            pass.set_bind_group(1, &self.blit_uniform_bind_group, &[]);
             if let Some((x, y, w, h)) = scissor {
                 pass.set_scissor_rect(x, y, w, h);
             }
@@ -719,6 +870,8 @@ impl EffectRenderer {
 fn tile_mode_uniform_value(tile_mode: TileMode) -> f32 {
     match tile_mode {
         TileMode::Clamp => 0.0,
-        TileMode::Decal => 1.0,
+        TileMode::Repeated => 1.0,
+        TileMode::Mirror => 2.0,
+        TileMode::Decal => 3.0,
     }
 }

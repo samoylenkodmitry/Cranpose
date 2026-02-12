@@ -4,7 +4,11 @@ use cranpose_ui_graphics::{DrawScope, DrawScopeDefault};
 use std::rc::Rc;
 
 impl Modifier {
-    /// Draw content with overlay.
+    /// Draw around content.
+    ///
+    /// `draw_content()` splits drawing into behind (before) and overlay (after)
+    /// phases. If `draw_content()` is never called, primitives are treated as
+    /// overlay for backward compatibility.
     ///
     /// Example: `Modifier::empty().draw_with_content(|scope| { ... })`
     pub fn draw_with_content(self, f: impl Fn(&mut dyn DrawScope) + 'static) -> Self {
@@ -13,8 +17,9 @@ impl Modifier {
             f(&mut scope);
             scope.into_primitives()
         });
-        let modifier =
-            Self::with_element(DrawCommandElement::new(DrawCommand::Overlay(func.clone())));
+        let modifier = Self::with_element(DrawCommandElement::new(DrawCommand::WithContent(
+            func.clone(),
+        )));
         self.then(modifier)
     }
 

@@ -1254,8 +1254,9 @@ fn counter_app() {
                 .padding(32.0)
                 .rounded_corners(24.0)
                 .draw_behind({
-                    let phase = wave_state.value();
+                    let wave_for_background = wave_state;
                     move |scope| {
+                        let phase = wave_for_background.value();
                         scope.draw_round_rect(
                             Brush::linear_gradient(vec![
                                 Color(0.12 + phase * 0.2, 0.10, 0.24 + (1.0 - phase) * 0.3, 1.0),
@@ -1307,9 +1308,8 @@ fn counter_app() {
                             .vertical_alignment(VerticalAlignment::CenterVertically),
                         {
                             let counter_display = counter;
-                            let wave_value = wave;
+                            let wave_layer_state = wave;
                             move || {
-                                let wave_value = wave_value.value();
                                 Text(
                                     format!("Counter: {}", counter_display.get()),
                                     Modifier::empty()
@@ -1322,7 +1322,7 @@ fn counter_app() {
                                     TextStyle::default(),
                                 );
                                 Text(
-                                    format!("Wave {:.2}", wave_value),
+                                    "Wave layer-only animation",
                                     Modifier::empty()
                                         .padding(8.0)
                                         .then(
@@ -1330,14 +1330,17 @@ fn counter_app() {
                                                 .background(Color(0.35, 0.55, 0.9, 0.5)),
                                         )
                                         .rounded_corners(12.0)
-                                        .graphics_layer(GraphicsLayer {
-                                            alpha: 0.7 + wave_value * 0.3,
-                                            scale: 0.85 + wave_value * 0.3,
-                                            translation_x: 0.0,
-                                            translation_y: (wave_value - 0.5) * 12.0,
-                                            color_filter: None,
-                                            render_effect: None,
-                                            backdrop_effect: None,
+                                        .graphics_layer({
+                                            let wave_for_layer = wave_layer_state;
+                                            move || {
+                                                let wave_value = wave_for_layer.value();
+                                                GraphicsLayer {
+                                                    alpha: 0.7 + wave_value * 0.3,
+                                                    scale: 0.85 + wave_value * 0.3,
+                                                    translation_y: (wave_value - 0.5) * 12.0,
+                                                    ..Default::default()
+                                                }
+                                            }
                                         }),
                                     TextStyle::default(),
                                 );

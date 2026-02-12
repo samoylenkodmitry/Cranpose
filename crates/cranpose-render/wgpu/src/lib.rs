@@ -38,6 +38,14 @@ pub enum WgpuRendererError {
     Wgpu(String),
 }
 
+/// CPU-readable RGBA frame captured from the renderer output.
+#[derive(Debug, Clone)]
+pub struct CapturedFrame {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<u8>,
+}
+
 /// Unified hash key for text caching - shared between measurement and rendering.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) enum TextKey {
@@ -299,6 +307,7 @@ impl WgpuRenderer {
                     &self.scene.shapes,
                     &self.scene.images,
                     &self.scene.texts,
+                    &self.scene.shadow_draws,
                     &self.scene.effect_layers,
                     &self.scene.backdrop_layers,
                     width,
@@ -306,6 +315,50 @@ impl WgpuRenderer {
                     self.root_scale,
                 )
                 .map_err(WgpuRendererError::Wgpu)
+        } else {
+            Err(WgpuRendererError::Wgpu(
+                "GPU renderer not initialized. Call init_gpu() first.".to_string(),
+            ))
+        }
+    }
+
+    /// Render the current scene into an RGBA pixel buffer for robot tests.
+    ///
+    /// Uses the renderer's configured root scale.
+    pub fn capture_frame(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> Result<CapturedFrame, WgpuRendererError> {
+        self.capture_frame_with_scale(width, height, self.root_scale)
+    }
+
+    /// Render the current scene into an RGBA pixel buffer with an explicit scale.
+    pub fn capture_frame_with_scale(
+        &mut self,
+        width: u32,
+        height: u32,
+        root_scale: f32,
+    ) -> Result<CapturedFrame, WgpuRendererError> {
+        if let Some(gpu_renderer) = &mut self.gpu_renderer {
+            let pixels = gpu_renderer
+                .render_to_rgba_pixels(
+                    &self.scene.shapes,
+                    &self.scene.images,
+                    &self.scene.texts,
+                    &self.scene.shadow_draws,
+                    &self.scene.effect_layers,
+                    &self.scene.backdrop_layers,
+                    width,
+                    height,
+                    root_scale,
+                )
+                .map_err(WgpuRendererError::Wgpu)?;
+            Ok(CapturedFrame {
+                width,
+                height,
+                pixels,
+            })
         } else {
             Err(WgpuRendererError::Wgpu(
                 "GPU renderer not initialized. Call init_gpu() first.".to_string(),
@@ -365,7 +418,7 @@ impl Renderer for WgpuRenderer {
     }
 
     fn draw_dev_overlay(&mut self, text: &str, viewport: Size) {
-        use cranpose_ui_graphics::{Brush, Color, Rect, RoundedCornerShape};
+        use cranpose_ui_graphics::{BlendMode, Brush, Color, Rect, RoundedCornerShape};
 
         // Draw FPS text in top-right corner with semi-transparent background
         // Position: 8px from right edge, 8px from top
@@ -392,6 +445,7 @@ impl Renderer for WgpuRenderer {
             Brush::Solid(Color(0.0, 0.0, 0.0, 0.7)),
             Some(RoundedCornerShape::uniform(4.0)),
             None,
+            BlendMode::SrcOver,
         );
 
         // Add text (green color for visibility)
