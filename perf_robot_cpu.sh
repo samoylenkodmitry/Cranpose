@@ -7,6 +7,7 @@ DURATION_SECS="10"
 OUTPUT="perf_report.txt"
 MEM_VALIDATE="${CRANPOSE_MEM_VALIDATE:-1}"
 PRESENT_MODE="${CRANPOSE_PRESENT_MODE:-immediate}"
+HEADLESS="${CRANPOSE_HEADLESS:-0}"
 
 usage() {
     cat <<EOF
@@ -80,7 +81,8 @@ fi
 CRANPOSE_PERF_DURATION_SECS="$DURATION_SECS" \
 CRANPOSE_MEM_VALIDATE="$MEM_VALIDATE" \
 CRANPOSE_PRESENT_MODE="$PRESENT_MODE" \
-perf record -g --call-graph dwarf -o perf.data -- "$BIN"
+CRANPOSE_HEADLESS="$HEADLESS" \
+perf record -F 997 -g --call-graph fp -o perf.data -- "$BIN"
 
 perf report --stdio --percent-limit 1 --sort symbol,dso > "$OUTPUT"
 

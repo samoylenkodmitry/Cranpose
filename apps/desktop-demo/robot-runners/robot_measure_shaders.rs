@@ -20,13 +20,29 @@ use cranpose_ui::Point;
 use desktop_app::app;
 use std::time::{Duration, Instant};
 
+fn env_u64(key: &str, default: u64) -> u64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(default)
+}
+
+fn env_bool(key: &str, default: bool) -> bool {
+    std::env::var(key)
+        .ok()
+        .map(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(default)
+}
+
 fn main() {
     env_logger::init();
     println!("=== Shaders Performance Profiling Robot ===");
 
-    // Configuration
-    let headless = true; // Set to false for visual debugging
-    let duration = Duration::from_secs(20); // Run for 20 seconds
+    // Configuration — driven by env vars so perf scripts can control behavior
+    let headless = env_bool("CRANPOSE_HEADLESS", false);
+    let duration_secs = env_u64("CRANPOSE_PERF_DURATION_SECS", 20);
+    let duration = Duration::from_secs(duration_secs);
+    println!("  headless={}, duration={}s", headless, duration_secs);
 
     let scroll_steps = 10;
 

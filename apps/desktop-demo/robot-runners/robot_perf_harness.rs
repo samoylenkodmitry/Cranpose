@@ -254,7 +254,7 @@ fn main() {
     AppLauncher::new()
         .with_title("Robot Perf Harness")
         .with_size(900, 700)
-        .with_headless(true)
+        .with_headless(env_bool("CRANPOSE_HEADLESS", true))
         .with_test_driver(move |robot| {
             let timeout_secs = duration_secs + warmup_secs + 20;
             std::thread::spawn(move || {
