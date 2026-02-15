@@ -200,24 +200,7 @@ pub(crate) fn apply_layer_to_rect(rect: Rect, layer_bounds: Rect, layer: &Graphi
     quad_bounds(apply_layer_to_quad(rect, layer_bounds, layer))
 }
 
-fn intersect_rects(a: Rect, b: Rect) -> Option<Rect> {
-    let left = a.x.max(b.x);
-    let top = a.y.max(b.y);
-    let right = (a.x + a.width).min(b.x + b.width);
-    let bottom = (a.y + a.height).min(b.y + b.height);
-    let width = right - left;
-    let height = bottom - top;
-    if width > 0.0 && height > 0.0 {
-        Some(Rect {
-            x: left,
-            y: top,
-            width,
-            height,
-        })
-    } else {
-        None
-    }
-}
+
 
 pub(crate) fn apply_layer_to_color(color: Color, layer: &GraphicsLayer) -> Color {
     apply_color_filter_to_color(

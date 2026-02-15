@@ -10,6 +10,10 @@ use cranpose_testing::{
 use desktop_app::app;
 use std::time::Duration;
 
+#[path = "robot_helpers.rs"]
+mod robot_helpers;
+use robot_helpers::{changed_pixel_count, changed_pixel_count_in_region};
+
 const EFFECT_SLIDER_WIDTH: f32 = 220.0;
 const EFFECT_SLIDER_TOUCH_OFFSET_Y: f32 = 9.0;
 
@@ -23,130 +27,28 @@ fn moved_enough(before: (f32, f32, f32, f32), after: (f32, f32, f32, f32), min_d
     dx >= min_delta || dy >= min_delta
 }
 
-fn changed_pixel_count(
-    before: &cranpose::RobotScreenshot,
-    after: &cranpose::RobotScreenshot,
-    channel_threshold: u8,
-) -> usize {
-    if before.width != after.width || before.height != after.height {
-        return usize::MAX;
-    }
-
-    before
-        .pixels
-        .chunks_exact(4)
-        .zip(after.pixels.chunks_exact(4))
-        .filter(|(a, b)| {
-            a[0].abs_diff(b[0]) > channel_threshold
-                || a[1].abs_diff(b[1]) > channel_threshold
-                || a[2].abs_diff(b[2]) > channel_threshold
-                || a[3].abs_diff(b[3]) > channel_threshold
-        })
-        .count()
-}
-
-fn changed_pixel_count_in_region(
-    before: &cranpose::RobotScreenshot,
-    after: &cranpose::RobotScreenshot,
-    region: (f32, f32, f32, f32),
-    channel_threshold: u8,
-) -> usize {
-    if before.width != after.width || before.height != after.height {
-        return usize::MAX;
-    }
-
-    let left = region.0.max(0.0).floor() as u32;
-    let top = region.1.max(0.0).floor() as u32;
-    let right = (region.0 + region.2).min(before.width as f32).ceil() as u32;
-    let bottom = (region.1 + region.3).min(before.height as f32).ceil() as u32;
-
-    if right <= left || bottom <= top {
-        return 0;
-    }
-
-    let width = before.width as usize;
-    let mut changed = 0usize;
-
-    for y in top..bottom {
-        for x in left..right {
-            let idx = ((y as usize) * width + x as usize) * 4;
-            if before.pixels[idx].abs_diff(after.pixels[idx]) > channel_threshold
-                || before.pixels[idx + 1].abs_diff(after.pixels[idx + 1]) > channel_threshold
-                || before.pixels[idx + 2].abs_diff(after.pixels[idx + 2]) > channel_threshold
-                || before.pixels[idx + 3].abs_diff(after.pixels[idx + 3]) > channel_threshold
-            {
-                changed += 1;
-            }
-        }
-    }
-
-    changed
-}
-
-fn parse_slider_value(text: &str) -> Option<f32> {
-    text.split_once(':')
-        .and_then(|(_, value)| value.trim().parse::<f32>().ok())
-}
-
 fn scroll_down(robot: &cranpose::Robot) {
-    let _ = robot.drag(620.0, 720.0, 620.0, 220.0);
-    std::thread::sleep(Duration::from_millis(180));
-    let _ = robot.wait_for_idle();
+    robot_helpers::scroll_down(robot, 620.0, 720.0, 220.0);
 }
 
 fn scroll_up(robot: &cranpose::Robot) {
-    let _ = robot.drag(620.0, 220.0, 620.0, 720.0);
-    std::thread::sleep(Duration::from_millis(180));
-    let _ = robot.wait_for_idle();
-}
-
-fn y_is_visible(robot: &cranpose::Robot, y: f32) -> bool {
-    let Some((_, root_y, _, root_h)) = root_bounds(robot) else {
-        return true;
-    };
-    let top = root_y + 28.0;
-    let bottom = root_y + root_h - 28.0;
-    y >= top && y <= bottom
-}
-
-fn scroll_prefix_into_view(
-    robot: &cranpose::Robot,
-    prefix: &str,
-    max_attempts: usize,
-) -> Option<(f32, f32, f32, f32, String)> {
-    for _ in 0..max_attempts {
-        if let Some(bounds) = find_text_by_prefix_in_semantics(robot, prefix) {
-            let center_y = bounds.1 + bounds.3 * 0.5;
-            if y_is_visible(robot, center_y) {
-                return Some(bounds);
-            }
-            let Some((_, root_y, _, root_h)) = root_bounds(robot) else {
-                return Some(bounds);
-            };
-            let viewport_mid = root_y + root_h * 0.5;
-            if center_y > viewport_mid {
-                scroll_down(robot);
-            } else {
-                scroll_up(robot);
-            }
-        } else {
-            scroll_down(robot);
-        }
-    }
-    None
+    robot_helpers::scroll_up(robot, 620.0, 220.0, 720.0);
 }
 
 fn set_slider_fraction(robot: &cranpose::Robot, prefix: &str, fraction: f32) -> Option<f32> {
-    let (x, y, _w, h, _) = scroll_prefix_into_view(robot, prefix, 18)?;
-    let slider_y = y + h + EFFECT_SLIDER_TOUCH_OFFSET_Y;
-    let left_x = x + 2.0;
-    let target_x = x + EFFECT_SLIDER_WIDTH * fraction.clamp(0.0, 1.0);
-    let _ = robot.drag(left_x, slider_y, target_x, slider_y);
-    std::thread::sleep(Duration::from_millis(120));
-    let _ = robot.wait_for_idle();
-
-    find_text_by_prefix_in_semantics(robot, prefix)
-        .and_then(|(_, _, _, _, t)| parse_slider_value(&t))
+    robot_helpers::set_slider_fraction(
+        robot,
+        prefix,
+        fraction,
+        EFFECT_SLIDER_WIDTH,
+        EFFECT_SLIDER_TOUCH_OFFSET_Y,
+        620.0,
+        720.0,
+        220.0, // scroll down params
+        620.0,
+        220.0,
+        720.0, // scroll up params (center_x reused)
+    )
 }
 
 fn main() {

@@ -410,28 +410,9 @@ fn render_button(
     );
 }
 
-fn intersect_rect(a: Rect, b: Rect) -> Option<Rect> {
-    let left = a.x.max(b.x);
-    let top = a.y.max(b.y);
-    let right = (a.x + a.width).min(b.x + b.width);
-    let bottom = (a.y + a.height).min(b.y + b.height);
-    let width = right - left;
-    let height = bottom - top;
-    if width <= 0.0 || height <= 0.0 {
-        None
-    } else {
-        Some(Rect {
-            x: left,
-            y: top,
-            width,
-            height,
-        })
-    }
-}
-
 fn resolve_clip(parent_clip: Option<Rect>, requested_clip: Option<Rect>) -> Option<Rect> {
     match (parent_clip, requested_clip) {
-        (Some(parent), Some(current)) => intersect_rect(parent, current),
+        (Some(parent), Some(current)) => parent.intersect(current),
         (Some(parent), None) => Some(parent),
         (None, Some(current)) => Some(current),
         (None, None) => None,

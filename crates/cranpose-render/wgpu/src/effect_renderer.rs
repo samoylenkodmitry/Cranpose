@@ -140,7 +140,7 @@ impl EffectRenderer {
         // Compile blur pipeline
         let blur_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Blur Shader"),
-            source: wgpu::ShaderSource::Wgsl(shaders::BLUR_SHADER.into()),
+            source: wgpu::ShaderSource::Wgsl(shaders::blur_shader().into()),
         });
 
         let blur_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -187,7 +187,7 @@ impl EffectRenderer {
         // Compile offset pipeline
         let offset_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Offset Shader"),
-            source: wgpu::ShaderSource::Wgsl(shaders::OFFSET_SHADER.into()),
+            source: wgpu::ShaderSource::Wgsl(shaders::offset_shader().into()),
         });
 
         let offset_pipeline_layout =
@@ -235,7 +235,7 @@ impl EffectRenderer {
         // Compile blit pipeline
         let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Blit Shader"),
-            source: wgpu::ShaderSource::Wgsl(shaders::BLIT_SHADER.into()),
+            source: wgpu::ShaderSource::Wgsl(shaders::blit_shader().into()),
         });
 
         let blit_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {

@@ -73,6 +73,26 @@ impl Rect {
     pub fn contains(&self, x: f32, y: f32) -> bool {
         x >= self.x && y >= self.y && x <= self.x + self.width && y <= self.y + self.height
     }
+
+    /// Returns the intersection of two rectangles, or `None` if they don't overlap.
+    pub fn intersect(&self, other: Rect) -> Option<Rect> {
+        let left = self.x.max(other.x);
+        let top = self.y.max(other.y);
+        let right = (self.x + self.width).min(other.x + other.width);
+        let bottom = (self.y + self.height).min(other.y + other.height);
+        let width = right - left;
+        let height = bottom - top;
+        if width <= 0.0 || height <= 0.0 {
+            None
+        } else {
+            Some(Rect {
+                x: left,
+                y: top,
+                width,
+                height,
+            })
+        }
+    }
 }
 
 /// Padding values for each edge of a rectangle.

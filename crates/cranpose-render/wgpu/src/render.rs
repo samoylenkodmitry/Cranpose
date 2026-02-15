@@ -1296,7 +1296,7 @@ impl GpuRenderer {
                 width: clip.width + blur_margin * 2.0,
                 height: clip.height + blur_margin * 2.0,
             };
-            let Some(intersection) = intersect_rect(blur_bounds, clip_expanded) else {
+            let Some(intersection) = blur_bounds.intersect(clip_expanded) else {
                 return;
             };
             blur_bounds = intersection;
@@ -2547,29 +2547,11 @@ fn scissor_rect_for_layer(
     height: u32,
 ) -> Option<(u32, u32, u32, u32)> {
     let clipped_rect = match clip {
-        Some(clip_rect) => intersect_rect(rect, clip_rect)?,
+        Some(clip_rect) => rect.intersect(clip_rect)?,
         None => rect,
     };
 
     scissor_rect_for_rect(clipped_rect, root_scale, width, height)
-}
-
-fn intersect_rect(a: Rect, b: Rect) -> Option<Rect> {
-    let left = a.x.max(b.x);
-    let top = a.y.max(b.y);
-    let right = (a.x + a.width).min(b.x + b.width);
-    let bottom = (a.y + a.height).min(b.y + b.height);
-
-    if right <= left || bottom <= top {
-        return None;
-    }
-
-    Some(Rect {
-        x: left,
-        y: top,
-        width: right - left,
-        height: bottom - top,
-    })
 }
 
 fn tint_for_image(
@@ -2622,33 +2604,7 @@ fn scissor_rect_for_image(
     width: u32,
     height: u32,
 ) -> Option<(u32, u32, u32, u32)> {
-    let mut left = image.rect.x * root_scale;
-    let mut top = image.rect.y * root_scale;
-    let mut right = (image.rect.x + image.rect.width) * root_scale;
-    let mut bottom = (image.rect.y + image.rect.height) * root_scale;
-
-    if let Some(clip) = image.clip {
-        left = left.max(clip.x * root_scale);
-        top = top.max(clip.y * root_scale);
-        right = right.min((clip.x + clip.width) * root_scale);
-        bottom = bottom.min((clip.y + clip.height) * root_scale);
-    }
-
-    left = left.max(0.0).min(width as f32).floor();
-    top = top.max(0.0).min(height as f32).floor();
-    right = right.max(0.0).min(width as f32).ceil();
-    bottom = bottom.max(0.0).min(height as f32).ceil();
-
-    if right <= left || bottom <= top {
-        return None;
-    }
-
-    Some((
-        left as u32,
-        top as u32,
-        (right - left) as u32,
-        (bottom - top) as u32,
-    ))
+    scissor_rect_for_layer(image.rect, image.clip, root_scale, width, height)
 }
 
 fn inner_shadow_composite_mask(

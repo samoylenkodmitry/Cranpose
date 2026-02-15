@@ -143,7 +143,7 @@ pub(crate) fn apply_draw_commands(
                     };
                     let transformed_clip = apply_layer_to_rect(abs_clip, layer_bounds, layer);
                     let shadow_clip = clip.map_or(Some(transformed_clip), |parent_clip| {
-                        intersect_rects(parent_clip, transformed_clip)
+                        parent_clip.intersect(transformed_clip)
                     });
                     emit_primitive(
                         *fill,

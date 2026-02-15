@@ -227,25 +227,6 @@ fn crop_source_rect(src_size: Size, dst_size: Size, alignment: Alignment) -> Rec
     }
 }
 
-fn intersect_rect(a: Rect, b: Rect) -> Option<Rect> {
-    let left = a.x.max(b.x);
-    let top = a.y.max(b.y);
-    let right = (a.x + a.width).min(b.x + b.width);
-    let bottom = (a.y + a.height).min(b.y + b.height);
-    let width = right - left;
-    let height = bottom - top;
-    if width <= 0.0 || height <= 0.0 {
-        None
-    } else {
-        Some(Rect {
-            x: left,
-            y: top,
-            width,
-            height,
-        })
-    }
-}
-
 fn map_destination_clip_to_source(
     src_rect: Rect,
     dst_rect: Rect,
@@ -356,7 +337,7 @@ where
                         return;
                     }
                     let container_rect = Rect::from_size(container_size);
-                    let Some(clipped_dst_rect) = intersect_rect(dst_rect, container_rect) else {
+                    let Some(clipped_dst_rect) = dst_rect.intersect(container_rect) else {
                         return;
                     };
                     let full_src_rect = Rect::from_size(intrinsic_dp);
@@ -467,23 +448,6 @@ mod tests {
 
     fn approx_eq(left: f32, right: f32) {
         assert!((left - right).abs() < 1e-4, "left={left}, right={right}");
-    }
-
-    #[test]
-    fn intersect_rect_returns_none_when_disjoint() {
-        let a = Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 10.0,
-            height: 10.0,
-        };
-        let b = Rect {
-            x: 20.0,
-            y: 20.0,
-            width: 10.0,
-            height: 10.0,
-        };
-        assert_eq!(intersect_rect(a, b), None);
     }
 
     #[test]

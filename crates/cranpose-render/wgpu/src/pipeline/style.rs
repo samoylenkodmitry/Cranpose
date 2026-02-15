@@ -229,7 +229,7 @@ pub(crate) fn apply_draw_commands(
                     shapes: vec![fill_pair, cutout_pair],
                     blur_radius,
                     clip: clip.map_or(Some(transformed_clip), |parent_clip| {
-                        intersect_rects(parent_clip, transformed_clip)
+                        parent_clip.intersect(transformed_clip)
                     }),
                     z_index: 0,
                 });

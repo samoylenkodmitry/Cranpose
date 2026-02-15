@@ -284,11 +284,15 @@ fn image_fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
-#[allow(dead_code)] // Available for external use by custom shaders
-/// Fullscreen quad vertex shader shared by all post-process effects.
+// ═══════════════════════════════════════════════════════════════════════════
+// Shared WGSL snippets for post-process effects
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Fullscreen quad vertex shader preamble shared by all post-process effects.
 ///
-/// Generates a full-screen triangle pair from vertex ID (no vertex buffer needed).
-/// Output UV covers [0,1]x[0,1].
+/// Declares `VertexOutput` and `fullscreen_vs` — a vertex shader that generates
+/// a full-screen triangle pair from vertex ID (no vertex buffer needed).
+/// Output UV covers [0,1]×[0,1].
 pub const FULLSCREEN_QUAD_VS: &str = r#"
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -308,6 +312,29 @@ fn fullscreen_vs(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 }
 "#;
 
+/// SDF rounded-rectangle function shared by the main shape shader and blit shader.
+pub const SDF_ROUNDED_RECT_FN: &str = r#"
+fn sdf_rounded_rect(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
+    var radius = r.x;
+    if (p.x > 0.0) {
+        radius = r.y;
+    }
+    if (p.y > 0.0) {
+        if (p.x > 0.0) {
+            radius = r.w;
+        } else {
+            radius = r.z;
+        }
+    }
+    let q = abs(p) - b + radius;
+    return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0, 0.0))) - radius;
+}
+"#;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Composed post-process shaders
+// ═══════════════════════════════════════════════════════════════════════════
+
 /// Two-pass separable Gaussian blur post-process shader.
 ///
 /// Uniforms (via push-style uniform buffer):
@@ -315,22 +342,10 @@ fn fullscreen_vs(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 /// - radius: vec2<f32> — blur radius in pixels (x,y)
 /// - texture_size: vec2<f32> — input texture dimensions in pixels
 /// - tile_mode: f32 — 0.0 = Clamp, 1.0 = Repeated, 2.0 = Mirror, 3.0 = Decal
-pub const BLUR_SHADER: &str = r#"
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
-
-@vertex
-fn fullscreen_vs(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
-    var output: VertexOutput;
-    let x = f32(i32(vertex_index & 1u) * 2 - 1);
-    let y = f32(i32(vertex_index >> 1u) * 2 - 1);
-    output.uv = vec2<f32>(x * 0.5 + 0.5, 1.0 - (y * 0.5 + 0.5));
-    output.position = vec4<f32>(x, y, 0.0, 1.0);
-    return output;
-}
-
+pub fn blur_shader() -> String {
+    format!(
+        "{FULLSCREEN_QUAD_VS}{}",
+        r#"
 struct BlurUniforms {
     direction: vec2<f32>,   // (1,0) horizontal, (0,1) vertical
     radius: vec2<f32>,      // blur radius in pixels
@@ -427,28 +442,18 @@ fn blur_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 
     return color / total_weight;
 }
-"#;
+"#
+    )
+}
 
 /// Offset post-process shader.
 ///
 /// Translates the source texture by the provided pixel offset. Pixels shifted
 /// outside the source texture become transparent.
-pub const OFFSET_SHADER: &str = r#"
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
-
-@vertex
-fn fullscreen_vs(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
-    var output: VertexOutput;
-    let x = f32(i32(vertex_index & 1u) * 2 - 1);
-    let y = f32(i32(vertex_index >> 1u) * 2 - 1);
-    output.uv = vec2<f32>(x * 0.5 + 0.5, 1.0 - (y * 0.5 + 0.5));
-    output.position = vec4<f32>(x, y, 0.0, 1.0);
-    return output;
-}
-
+pub fn offset_shader() -> String {
+    format!(
+        "{FULLSCREEN_QUAD_VS}{}",
+        r#"
 struct OffsetUniforms {
     offset: vec2<f32>, // in pixels
     _padding: vec2<f32>,
@@ -469,29 +474,19 @@ fn offset_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 
     return textureSample(input_texture, input_sampler, shifted_uv);
 }
-"#;
+"#
+    )
+}
 
 /// Simple fullscreen blit shader for compositing offscreen targets to the surface.
 ///
 /// Renders the entire offscreen texture as a fullscreen quad with premultiplied alpha blending.
 /// Transparent regions contribute nothing, so only the effect-processed content
 /// is composited onto the existing surface.
-pub const BLIT_SHADER: &str = r#"
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
-
-@vertex
-fn fullscreen_vs(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
-    var output: VertexOutput;
-    let x = f32(i32(vertex_index & 1u) * 2 - 1);
-    let y = f32(i32(vertex_index >> 1u) * 2 - 1);
-    output.uv = vec2<f32>(x * 0.5 + 0.5, 1.0 - (y * 0.5 + 0.5));
-    output.position = vec4<f32>(x, y, 0.0, 1.0);
-    return output;
-}
-
+pub fn blit_shader() -> String {
+    format!(
+        "{FULLSCREEN_QUAD_VS}{SDF_ROUNDED_RECT_FN}{}",
+        r#"
 @group(0) @binding(0) var input_texture: texture_2d<f32>;
 @group(0) @binding(1) var input_sampler: sampler;
 struct BlitUniforms {
@@ -501,22 +496,6 @@ struct BlitUniforms {
     mask_enabled: vec4<f32>, // x > 0 => apply rounded mask
 }
 @group(1) @binding(0) var<uniform> blit: BlitUniforms;
-
-fn sdf_rounded_rect(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
-    var radius = r.x;
-    if (p.x > 0.0) {
-        radius = r.y;
-    }
-    if (p.y > 0.0) {
-        if (p.x > 0.0) {
-            radius = r.w;
-        } else {
-            radius = r.z;
-        }
-    }
-    let q = abs(p) - b + radius;
-    return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0, 0.0))) - radius;
-}
 
 @fragment
 fn blit_fs(input: VertexOutput) -> @location(0) vec4<f32> {
@@ -547,27 +526,6 @@ fn blit_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     }
     return sampled * coverage;
 }
-"#;
-
-#[allow(dead_code)] // Available for external use by custom shaders
-/// Default vertex shader preamble for RuntimeShader effects.
-///
-/// RuntimeShader WGSL modules must include their own fullscreen vertex shader.
-/// This constant provides the standard one they can copy or the framework
-/// can prepend automatically.
-pub const EFFECT_VS_PREAMBLE: &str = r#"
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
+"#
+    )
 }
-
-@vertex
-fn fullscreen_vs(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
-    var output: VertexOutput;
-    let x = f32(i32(vertex_index & 1u) * 2 - 1);
-    let y = f32(i32(vertex_index >> 1u) * 2 - 1);
-    output.uv = vec2<f32>(x * 0.5 + 0.5, 1.0 - (y * 0.5 + 0.5));
-    output.position = vec4<f32>(x, y, 0.0, 1.0);
-    return output;
-}
-"#;
