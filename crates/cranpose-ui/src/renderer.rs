@@ -138,9 +138,9 @@ fn collect_primitives_from_commands(
     layer: PaintLayer,
 ) -> Vec<RenderOp> {
     let split_with_content = |primitives: Vec<DrawPrimitive>, layer| {
-        let Some(content_idx) = primitives
+        let Some(last_content_idx) = primitives
             .iter()
-            .position(|primitive| matches!(primitive, DrawPrimitive::Content))
+            .rposition(|primitive| matches!(primitive, DrawPrimitive::Content))
         else {
             return if layer == PaintLayer::Overlay {
                 primitives
@@ -159,7 +159,7 @@ fn collect_primitives_from_commands(
                 if matches!(primitive, DrawPrimitive::Content) {
                     return None;
                 }
-                let is_before = index < content_idx;
+                let is_before = index < last_content_idx;
                 match layer {
                     PaintLayer::Behind if is_before => Some(primitive),
                     PaintLayer::Overlay if !is_before => Some(primitive),

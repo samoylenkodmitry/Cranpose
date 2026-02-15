@@ -253,6 +253,59 @@ fn draw_with_content_splits_before_and_after_draw_content() {
 }
 
 #[test]
+fn draw_with_content_multiple_markers_keep_only_trailing_overlay() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let key = location_key(file!(), line!(), column!());
+    composition
+        .render(key, || {
+            Text(
+                "Layered".to_string(),
+                Modifier::empty().draw_with_content(|scope| {
+                    scope.draw_rect(Brush::solid(Color(1.0, 0.0, 0.0, 1.0)));
+                    scope.draw_content();
+                    scope.draw_rect(Brush::solid(Color(0.0, 1.0, 0.0, 1.0)));
+                    scope.draw_content();
+                    scope.draw_rect(Brush::solid(Color(0.0, 0.0, 1.0, 1.0)));
+                }),
+                TextStyle::default(),
+            );
+        })
+        .expect("initial render");
+
+    let root = composition.root().expect("text root");
+    let layout = compute_layout(&mut composition, root);
+    let renderer = HeadlessRenderer::new();
+    let scene = renderer.render(&layout);
+
+    let behind: Vec<_> = scene.primitives_for(PaintLayer::Behind).collect();
+    let overlay: Vec<_> = scene.primitives_for(PaintLayer::Overlay).collect();
+    assert_eq!(behind.len(), 2);
+    assert_eq!(overlay.len(), 1);
+
+    match behind[0] {
+        DrawPrimitive::Rect {
+            brush: Brush::Solid(color),
+            ..
+        } => assert_eq!(*color, Color(1.0, 0.0, 0.0, 1.0)),
+        other => panic!("expected red behind rect, got {other:?}"),
+    }
+    match behind[1] {
+        DrawPrimitive::Rect {
+            brush: Brush::Solid(color),
+            ..
+        } => assert_eq!(*color, Color(0.0, 1.0, 0.0, 1.0)),
+        other => panic!("expected green behind rect, got {other:?}"),
+    }
+    match overlay[0] {
+        DrawPrimitive::Rect {
+            brush: Brush::Solid(color),
+            ..
+        } => assert_eq!(*color, Color(0.0, 0.0, 1.0, 1.0)),
+        other => panic!("expected blue overlay rect, got {other:?}"),
+    }
+}
+
+#[test]
 fn renderer_renders_subcompose_background() {
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());

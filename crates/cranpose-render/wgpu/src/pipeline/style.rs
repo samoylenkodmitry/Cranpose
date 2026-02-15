@@ -4,7 +4,7 @@ use cranpose_foundation::PointerEvent;
 use cranpose_ui::{Brush, DrawCommand, LayoutNodeData, ModifierNodeSlices};
 use cranpose_ui_graphics::{
     BlendMode, Color, ColorFilter, CompositingStrategy, CornerRadii, DrawPrimitive, GraphicsLayer,
-    LayerShape, Point, Rect, RoundedCornerShape, ShadowPrimitive, Size, TransformOrigin,
+    Point, Rect, RoundedCornerShape, ShadowPrimitive, Size,
 };
 
 use crate::scene::{DrawShape, Scene, ShadowDraw};
@@ -73,7 +73,7 @@ pub(crate) fn apply_draw_commands(
                 let local_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
                 let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
                 let transformed = quad_bounds(quad);
-                let scaled_radii = scale_corner_radii(radii, layer.scale);
+                let scaled_radii = scale_corner_radii(radii, layer_uniform_scale(layer));
                 let shape = RoundedCornerShape::with_radii(scaled_radii);
                 let brush = apply_layer_to_brush(brush, layer);
                 scene.push_shape_with_geometry(
@@ -163,7 +163,7 @@ pub(crate) fn apply_draw_commands(
                     let local_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
                     let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
                     let transformed = quad_bounds(quad);
-                    let scaled_radii = scale_corner_radii(radii, layer.scale);
+                    let scaled_radii = scale_corner_radii(radii, layer_uniform_scale(layer));
                     let shape = RoundedCornerShape::with_radii(scaled_radii);
                     let brush = apply_layer_to_brush(brush, layer);
                     Some((
@@ -301,6 +301,9 @@ pub(crate) fn point_in_resolved_rounded_rect(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scene::Scene;
+    use cranpose_ui_graphics::TransformOrigin;
+    use std::rc::Rc;
 
     #[test]
     fn apply_layer_to_rect_rotates_around_center() {
@@ -365,5 +368,54 @@ mod tests {
             + (near.width - far.width).abs()
             + (near.height - far.height).abs();
         assert!(delta > 0.05);
+    }
+
+    #[test]
+    fn apply_draw_commands_scales_round_rect_radii_with_uniform_axis_scale() {
+        let command = DrawCommand::Behind(Rc::new(|_size| {
+            vec![DrawPrimitive::RoundRect {
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 80.0,
+                    height: 40.0,
+                },
+                brush: Brush::solid(Color::BLACK),
+                radii: CornerRadii::uniform(10.0),
+            }]
+        }));
+
+        let layer = GraphicsLayer {
+            scale: 1.0,
+            scale_x: 2.0,
+            scale_y: 0.5,
+            ..Default::default()
+        };
+        let mut scene = Scene::new();
+        let bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 80.0,
+            height: 40.0,
+        };
+        apply_draw_commands(
+            &[command],
+            DrawPlacement::Behind,
+            bounds,
+            Size {
+                width: 80.0,
+                height: 40.0,
+            },
+            &layer,
+            None,
+            &mut scene,
+        );
+
+        let shape = scene.shapes[0].shape.expect("rounded shape");
+        let radii = shape.radii();
+        assert!((radii.top_left - 5.0).abs() < 1e-6);
+        assert!((radii.top_right - 5.0).abs() < 1e-6);
+        assert!((radii.bottom_right - 5.0).abs() < 1e-6);
+        assert!((radii.bottom_left - 5.0).abs() < 1e-6);
     }
 }

@@ -1954,11 +1954,6 @@ impl GpuRenderer {
         root_scale: f32,
         has_prior_content: bool,
     ) -> Result<(), String> {
-        // Ensure all images are cached
-        for image_draw in layer_images {
-            self.ensure_image_cached(&image_draw.image)?;
-        }
-
         // Build vertices and draw commands (same batching approach as main render)
         struct ImageDrawCmd {
             index_start: u32,
@@ -1975,10 +1970,17 @@ impl GpuRenderer {
                 continue;
             }
 
-            let tint = tint_for_image(image_draw.color_filter, image_draw.alpha);
+            let (tint, cpu_filter) = tint_for_image(image_draw.color_filter, image_draw.alpha);
             if tint[3] <= 0.0 {
                 continue;
             }
+
+            let prepared_image = if let Some(filter) = cpu_filter {
+                apply_filter_to_bitmap(&image_draw.image, filter)?
+            } else {
+                image_draw.image.clone()
+            };
+            self.ensure_image_cached(&prepared_image)?;
 
             let scissor = scissor_rect_for_image(image_draw, root_scale, width, height);
             let Some(scissor) = scissor else {
@@ -2046,7 +2048,7 @@ impl GpuRenderer {
             image_cmds.push(ImageDrawCmd {
                 index_start,
                 scissor,
-                image_id: image_draw.image.id(),
+                image_id: prepared_image.id(),
             });
         }
 
@@ -2570,17 +2572,48 @@ fn intersect_rect(a: Rect, b: Rect) -> Option<Rect> {
     })
 }
 
-fn tint_for_image(color_filter: Option<ColorFilter>, alpha: f32) -> [f32; 4] {
+fn tint_for_image(
+    color_filter: Option<ColorFilter>,
+    alpha: f32,
+) -> ([f32; 4], Option<ColorFilter>) {
     let alpha = alpha.clamp(0.0, 1.0);
     match color_filter {
-        Some(ColorFilter::Tint(tint)) => [
-            tint.r().clamp(0.0, 1.0),
-            tint.g().clamp(0.0, 1.0),
-            tint.b().clamp(0.0, 1.0),
-            (tint.a() * alpha).clamp(0.0, 1.0),
-        ],
-        None => [1.0, 1.0, 1.0, alpha],
+        Some(filter) if filter.supports_gpu_vertex_modulation() => {
+            let Some(tint) = filter.gpu_vertex_tint() else {
+                return ([1.0, 1.0, 1.0, alpha], Some(filter));
+            };
+            (
+                [
+                    tint[0].clamp(0.0, 1.0),
+                    tint[1].clamp(0.0, 1.0),
+                    tint[2].clamp(0.0, 1.0),
+                    (tint[3] * alpha).clamp(0.0, 1.0),
+                ],
+                None,
+            )
+        }
+        Some(filter) => ([1.0, 1.0, 1.0, alpha], Some(filter)),
+        None => ([1.0, 1.0, 1.0, alpha], None),
     }
+}
+
+fn apply_filter_to_bitmap(image: &ImageBitmap, filter: ColorFilter) -> Result<ImageBitmap, String> {
+    let mut filtered = Vec::with_capacity(image.pixels().len());
+    for pixel in image.pixels().chunks_exact(4) {
+        let rgba = [
+            pixel[0] as f32 / 255.0,
+            pixel[1] as f32 / 255.0,
+            pixel[2] as f32 / 255.0,
+            pixel[3] as f32 / 255.0,
+        ];
+        let out = filter.apply_rgba(rgba);
+        filtered.push((out[0].clamp(0.0, 1.0) * 255.0).round() as u8);
+        filtered.push((out[1].clamp(0.0, 1.0) * 255.0).round() as u8);
+        filtered.push((out[2].clamp(0.0, 1.0) * 255.0).round() as u8);
+        filtered.push((out[3].clamp(0.0, 1.0) * 255.0).round() as u8);
+    }
+    ImageBitmap::from_rgba8(image.width(), image.height(), filtered)
+        .map_err(|error| format!("failed to build filtered bitmap: {error}"))
 }
 
 fn scissor_rect_for_image(

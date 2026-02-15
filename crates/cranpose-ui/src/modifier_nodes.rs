@@ -135,6 +135,19 @@ fn hash_graphics_layer<H: Hasher>(state: &mut H, layer: &GraphicsLayer) {
             hash_f32_value(state, color.b());
             hash_f32_value(state, color.a());
         }
+        Some(ColorFilter::Modulate(color)) => {
+            state.write_u8(2);
+            hash_f32_value(state, color.r());
+            hash_f32_value(state, color.g());
+            hash_f32_value(state, color.b());
+            hash_f32_value(state, color.a());
+        }
+        Some(ColorFilter::Matrix(matrix)) => {
+            state.write_u8(3);
+            for value in matrix {
+                hash_f32_value(state, value);
+            }
+        }
         None => state.write_u8(0),
     }
     state.write_u8(layer.render_effect.is_some() as u8);

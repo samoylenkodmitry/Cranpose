@@ -3,6 +3,7 @@
 //! Matches the Jetpack Compose `RenderEffect` API with extensions for custom
 //! WGSL shaders (`RuntimeShader`).
 
+use crate::LayerShape;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -18,6 +19,53 @@ pub enum TileMode {
     Mirror,
     /// Treat pixels outside the boundary as transparent.
     Decal,
+}
+
+/// Controls blur behavior outside source bounds.
+///
+/// This mirrors Compose's `BlurredEdgeTreatment`:
+/// - bounded treatment (`shape != None`) clips blur output and uses `TileMode::Clamp`
+/// - unbounded treatment (`shape == None`) does not clip and uses `TileMode::Decal`
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BlurredEdgeTreatment {
+    shape: Option<LayerShape>,
+}
+
+impl BlurredEdgeTreatment {
+    /// Bounded treatment that clips to a rectangle.
+    pub const RECTANGLE: Self = Self {
+        shape: Some(LayerShape::Rectangle),
+    };
+
+    /// Unbounded treatment that does not clip blurred output.
+    pub const UNBOUNDED: Self = Self { shape: None };
+
+    /// Bounded treatment with a specific clip shape.
+    pub const fn with_shape(shape: LayerShape) -> Self {
+        Self { shape: Some(shape) }
+    }
+
+    pub fn shape(self) -> Option<LayerShape> {
+        self.shape
+    }
+
+    pub fn clip(self) -> bool {
+        self.shape.is_some()
+    }
+
+    pub fn tile_mode(self) -> TileMode {
+        if self.clip() {
+            TileMode::Clamp
+        } else {
+            TileMode::Decal
+        }
+    }
+}
+
+impl Default for BlurredEdgeTreatment {
+    fn default() -> Self {
+        Self::RECTANGLE
+    }
 }
 
 /// A custom WGSL shader effect, analogous to Android's `RuntimeShader`.
@@ -198,6 +246,7 @@ impl RenderEffect {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RoundedCornerShape;
 
     #[test]
     fn runtime_shader_set_uniforms() {
@@ -331,5 +380,30 @@ mod tests {
         s1.set_float(0, 1.0);
         s2.set_float(0, 1.0);
         assert_eq!(s1, s2);
+    }
+
+    #[test]
+    fn blurred_edge_treatment_defaults_to_bounded_rectangle() {
+        let treatment = BlurredEdgeTreatment::default();
+        assert_eq!(treatment.shape(), Some(LayerShape::Rectangle));
+        assert!(treatment.clip());
+        assert_eq!(treatment.tile_mode(), TileMode::Clamp);
+    }
+
+    #[test]
+    fn blurred_edge_treatment_unbounded_uses_decal_and_no_clip() {
+        let treatment = BlurredEdgeTreatment::UNBOUNDED;
+        assert_eq!(treatment.shape(), None);
+        assert!(!treatment.clip());
+        assert_eq!(treatment.tile_mode(), TileMode::Decal);
+    }
+
+    #[test]
+    fn blurred_edge_treatment_with_shape_uses_bounded_mode() {
+        let rounded = LayerShape::Rounded(RoundedCornerShape::uniform(8.0));
+        let treatment = BlurredEdgeTreatment::with_shape(rounded);
+        assert_eq!(treatment.shape(), Some(rounded));
+        assert!(treatment.clip());
+        assert_eq!(treatment.tile_mode(), TileMode::Clamp);
     }
 }

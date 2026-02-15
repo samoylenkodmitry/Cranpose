@@ -601,14 +601,7 @@ fn blend_pixel(dst: &mut [u8], src: [f32; 4], blend_mode: BlendMode) {
 }
 
 fn apply_color_filter(sample: [f32; 4], filter: ColorFilter) -> [f32; 4] {
-    match filter {
-        ColorFilter::Tint(tint) => [
-            sample[0] * tint.r(),
-            sample[1] * tint.g(),
-            sample[2] * tint.b(),
-            sample[3] * tint.a(),
-        ],
-    }
+    filter.apply_rgba(sample)
 }
 
 fn color_to_rgba(color: Color) -> [f32; 4] {

@@ -53,19 +53,20 @@ fn stacked_lazy_translation_and_backdrop_effect_are_both_preserved() {
 
 #[test]
 fn stacked_tint_modifiers_compose_in_graphics_layer() {
-    let modifier = Modifier::empty()
-        .tint(Color::from_rgba_u8(255, 128, 128, 255))
-        .tint(Color::from_rgba_u8(128, 255, 64, 128));
+    let outer = Color::from_rgba_u8(255, 128, 128, 255);
+    let inner = Color::from_rgba_u8(128, 255, 64, 128);
+    let modifier = Modifier::empty().tint(outer).tint(inner);
     let slices = collect_slices_from_modifier(&modifier);
     let layer = slices.graphics_layer().expect("layer expected");
 
-    let Some(ColorFilter::Tint(tint)) = layer.color_filter else {
-        panic!("expected composed tint");
-    };
-    assert!((tint.r() - (128.0 / 255.0)).abs() < 1e-6);
-    assert!((tint.g() - (128.0 / 255.0)).abs() < 1e-6);
-    assert!((tint.b() - (64.0 / 255.0 * 128.0 / 255.0)).abs() < 1e-6);
-    assert!((tint.a() - (128.0 / 255.0)).abs() < 1e-6);
+    let filter = layer.color_filter.expect("expected composed filter");
+    let source = [0.6, 0.2, 0.8, 0.5];
+    let expected = ColorFilter::tint(inner).apply_rgba(ColorFilter::tint(outer).apply_rgba(source));
+    let observed = filter.apply_rgba(source);
+    assert!((observed[0] - expected[0]).abs() < 1e-6);
+    assert!((observed[1] - expected[1]).abs() < 1e-6);
+    assert!((observed[2] - expected[2]).abs() < 1e-6);
+    assert!((observed[3] - expected[3]).abs() < 1e-6);
 }
 
 #[test]
@@ -164,4 +165,36 @@ fn stacked_graphics_layers_merge_new_transform_fields() {
         LayerShape::Rounded(RoundedCornerShape::uniform(9.0))
     );
     assert!(layer.clip);
+}
+
+#[test]
+fn inner_default_graphics_layer_resets_parent_local_fields() {
+    let modifier = Modifier::empty()
+        .graphics_layer_value(GraphicsLayer {
+            camera_distance: 24.0,
+            transform_origin: TransformOrigin::new(0.1, 0.9),
+            shadow_elevation: 7.0,
+            ambient_shadow_color: Color::from_rgba_u8(32, 48, 64, 255),
+            spot_shadow_color: Color::from_rgba_u8(96, 112, 128, 255),
+            shape: LayerShape::Rounded(RoundedCornerShape::uniform(10.0)),
+            compositing_strategy: cranpose_ui::CompositingStrategy::Offscreen,
+            blend_mode: cranpose_ui::BlendMode::DstOut,
+            ..Default::default()
+        })
+        .graphics_layer_value(GraphicsLayer::default());
+
+    let slices = collect_slices_from_modifier(&modifier);
+    let layer = slices.graphics_layer().expect("layer expected");
+
+    assert!((layer.camera_distance - 8.0).abs() < 1e-6);
+    assert_eq!(layer.transform_origin, TransformOrigin::CENTER);
+    assert!((layer.shadow_elevation - 0.0).abs() < 1e-6);
+    assert_eq!(layer.ambient_shadow_color, Color::BLACK);
+    assert_eq!(layer.spot_shadow_color, Color::BLACK);
+    assert_eq!(layer.shape, LayerShape::Rectangle);
+    assert_eq!(
+        layer.compositing_strategy,
+        cranpose_ui::CompositingStrategy::Auto
+    );
+    assert_eq!(layer.blend_mode, cranpose_ui::BlendMode::SrcOver);
 }

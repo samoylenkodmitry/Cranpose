@@ -8,7 +8,9 @@ use super::{
 use cranpose_foundation::{
     DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState,
 };
-use cranpose_ui_graphics::{Brush, ColorFilter, Dp, DrawPrimitive, ShadowPrimitive, TileMode};
+use cranpose_ui_graphics::{
+    BlurredEdgeTreatment, Brush, ColorFilter, Dp, DrawPrimitive, ShadowPrimitive, TileMode,
+};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -340,7 +342,8 @@ fn layer_blend_mode_modifier_sets_graphics_layer_mode() {
 fn blur_with_edge_treatment_sets_expected_render_effect() {
     use crate::modifier_nodes::GraphicsLayerNode;
 
-    let modifier = Modifier::empty().blur_with_edge_treatment(6.0, TileMode::Decal);
+    let modifier =
+        Modifier::empty().blur_with_edge_treatment(Dp(6.0), BlurredEdgeTreatment::UNBOUNDED);
     let mut handle = ModifierChainHandle::new();
     let _ = handle.update(&modifier);
 
@@ -350,15 +353,51 @@ fn blur_with_edge_treatment_sets_expected_render_effect() {
         cranpose_foundation::NodeCapabilities::DRAW,
         |_ref, node| {
             if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
-                observed = layer_node.layer().render_effect.clone();
+                observed = Some(layer_node.layer());
             }
         },
     );
 
+    let layer = observed.expect("blur layer");
     assert_eq!(
-        observed,
+        layer.render_effect,
         Some(RenderEffect::blur_with_edge_treatment(6.0, TileMode::Decal))
     );
+    assert_eq!(layer.shape, LayerShape::Rectangle);
+    assert!(!layer.clip);
+}
+
+#[test]
+fn blur_with_default_edge_treatment_enables_rect_clip() {
+    use crate::modifier_nodes::GraphicsLayerNode;
+
+    let modifier = Modifier::empty().blur(Dp(0.0));
+    let mut handle = ModifierChainHandle::new();
+    let _ = handle.update(&modifier);
+
+    let chain = handle.chain();
+    let mut observed = None;
+    chain.for_each_node_with_capability(
+        cranpose_foundation::NodeCapabilities::DRAW,
+        |_ref, node| {
+            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+                observed = Some(layer_node.layer());
+            }
+        },
+    );
+
+    let layer = observed.expect("blur layer");
+    assert_eq!(layer.render_effect, None);
+    assert_eq!(layer.shape, LayerShape::Rectangle);
+    assert!(layer.clip);
+}
+
+#[test]
+fn blur_unbounded_zero_radius_is_noop() {
+    let modifier =
+        Modifier::empty().blur_with_edge_treatment(Dp(0.0), BlurredEdgeTreatment::UNBOUNDED);
+    let slices = super::collect_slices_from_modifier(&modifier);
+    assert!(slices.graphics_layer().is_none());
 }
 
 #[test]

@@ -4,7 +4,7 @@ use cranpose_foundation::PointerEvent;
 use cranpose_ui::{Brush, DrawCommand, LayoutNodeData, ModifierNodeSlices};
 use cranpose_ui_graphics::{
     BlendMode, Color, ColorFilter, CompositingStrategy, CornerRadii, DrawPrimitive, GraphicsLayer,
-    LayerShape, Point, Rect, RoundedCornerShape, ShadowPrimitive, Size, TransformOrigin,
+    Point, Rect, RoundedCornerShape, ShadowPrimitive, Size,
 };
 
 use crate::scene::Scene;
@@ -73,7 +73,7 @@ pub(crate) fn apply_draw_commands(
                 let local_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
                 let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
                 let transformed = quad_bounds(quad);
-                let scaled_radii = scale_corner_radii(radii, layer.scale);
+                let scaled_radii = scale_corner_radii(radii, layer_uniform_scale(layer));
                 let shape = RoundedCornerShape::with_radii(scaled_radii);
                 let brush = apply_layer_to_brush(brush, layer);
                 scene.push_shape_with_geometry(
@@ -267,24 +267,27 @@ mod tests {
     }
 
     #[test]
-    fn combine_layers_multiplies_tint_filters() {
+    fn combine_layers_composes_color_filters_in_order() {
+        let parent_filter = ColorFilter::modulate(Color::from_rgba_u8(255, 128, 128, 255));
         let parent = GraphicsLayer {
-            color_filter: Some(ColorFilter::tint(Color::from_rgba_u8(255, 128, 128, 255))),
+            color_filter: Some(parent_filter),
             ..Default::default()
         };
+        let local_filter = ColorFilter::tint(Color::from_rgba_u8(128, 255, 64, 128));
         let local = GraphicsLayer {
-            color_filter: Some(ColorFilter::tint(Color::from_rgba_u8(128, 255, 64, 128))),
+            color_filter: Some(local_filter),
             ..Default::default()
         };
 
         let combined = combine_layers(parent, Some(local));
-        let Some(ColorFilter::Tint(tint)) = combined.color_filter else {
-            panic!("expected tint filter");
-        };
-        assert!((tint.r() - (128.0 / 255.0)).abs() < 1e-6);
-        assert!((tint.g() - (128.0 / 255.0)).abs() < 1e-6);
-        assert!((tint.b() - (64.0 / 255.0 * 128.0 / 255.0)).abs() < 1e-6);
-        assert!((tint.a() - (128.0 / 255.0)).abs() < 1e-6);
+        let filter = combined.color_filter.expect("composed filter");
+        let source = [0.8, 0.5, 0.2, 0.75];
+        let expected = local_filter.apply_rgba(parent_filter.apply_rgba(source));
+        let observed = filter.apply_rgba(source);
+        assert!((observed[0] - expected[0]).abs() < 1e-6);
+        assert!((observed[1] - expected[1]).abs() < 1e-6);
+        assert!((observed[2] - expected[2]).abs() < 1e-6);
+        assert!((observed[3] - expected[3]).abs() < 1e-6);
     }
 
     #[test]
@@ -357,5 +360,137 @@ mod tests {
             LayerShape::Rounded(RoundedCornerShape::uniform(8.0))
         );
         assert!(combined.clip);
+    }
+
+    #[test]
+    fn combine_layers_local_defaults_reset_parent_local_fields() {
+        let parent = GraphicsLayer {
+            camera_distance: 24.0,
+            transform_origin: TransformOrigin::new(0.1, 0.9),
+            shadow_elevation: 6.0,
+            ambient_shadow_color: Color::from_rgba_u8(20, 40, 60, 255),
+            spot_shadow_color: Color::from_rgba_u8(80, 100, 120, 255),
+            shape: LayerShape::Rounded(RoundedCornerShape::uniform(9.0)),
+            compositing_strategy: CompositingStrategy::Offscreen,
+            blend_mode: BlendMode::DstOut,
+            ..Default::default()
+        };
+
+        let combined = combine_layers(parent, Some(GraphicsLayer::default()));
+
+        assert!((combined.camera_distance - 8.0).abs() < 1e-6);
+        assert_eq!(combined.transform_origin, TransformOrigin::CENTER);
+        assert!((combined.shadow_elevation - 0.0).abs() < 1e-6);
+        assert_eq!(combined.ambient_shadow_color, Color::BLACK);
+        assert_eq!(combined.spot_shadow_color, Color::BLACK);
+        assert_eq!(combined.shape, LayerShape::Rectangle);
+        assert_eq!(combined.compositing_strategy, CompositingStrategy::Auto);
+        assert_eq!(combined.blend_mode, BlendMode::SrcOver);
+    }
+
+    #[test]
+    fn apply_draw_commands_scales_round_rect_radii_with_uniform_axis_scale() {
+        let command = DrawCommand::Behind(std::rc::Rc::new(|_size| {
+            vec![DrawPrimitive::RoundRect {
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 80.0,
+                    height: 40.0,
+                },
+                brush: Brush::solid(Color::BLACK),
+                radii: CornerRadii::uniform(10.0),
+            }]
+        }));
+
+        let layer = GraphicsLayer {
+            scale: 1.0,
+            scale_x: 2.0,
+            scale_y: 0.5,
+            ..Default::default()
+        };
+        let mut scene = Scene::new();
+        let bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 80.0,
+            height: 40.0,
+        };
+        apply_draw_commands(
+            &[command],
+            DrawPlacement::Behind,
+            bounds,
+            Size {
+                width: 80.0,
+                height: 40.0,
+            },
+            &layer,
+            None,
+            &mut scene,
+        );
+
+        let shape = scene.shapes[0].shape.expect("rounded shape");
+        let radii = shape.radii();
+        assert!((radii.top_left - 5.0).abs() < 1e-6);
+        assert!((radii.top_right - 5.0).abs() < 1e-6);
+        assert!((radii.bottom_right - 5.0).abs() < 1e-6);
+        assert!((radii.bottom_left - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn primitives_for_placement_uses_last_content_marker() {
+        let command = DrawCommand::WithContent(std::rc::Rc::new(|_size| {
+            vec![
+                DrawPrimitive::Rect {
+                    rect: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 10.0,
+                        height: 10.0,
+                    },
+                    brush: Brush::solid(Color::from_rgba_u8(255, 0, 0, 255)),
+                },
+                DrawPrimitive::Content,
+                DrawPrimitive::Rect {
+                    rect: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 10.0,
+                        height: 10.0,
+                    },
+                    brush: Brush::solid(Color::from_rgba_u8(0, 255, 0, 255)),
+                },
+                DrawPrimitive::Content,
+                DrawPrimitive::Rect {
+                    rect: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 10.0,
+                        height: 10.0,
+                    },
+                    brush: Brush::solid(Color::from_rgba_u8(0, 0, 255, 255)),
+                },
+            ]
+        }));
+
+        let behind = primitives_for_placement(
+            &command,
+            DrawPlacement::Behind,
+            Size {
+                width: 10.0,
+                height: 10.0,
+            },
+        );
+        let overlay = primitives_for_placement(
+            &command,
+            DrawPlacement::Overlay,
+            Size {
+                width: 10.0,
+                height: 10.0,
+            },
+        );
+
+        assert_eq!(behind.len(), 2);
+        assert_eq!(overlay.len(), 1);
     }
 }

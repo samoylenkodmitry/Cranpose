@@ -40,9 +40,10 @@ pub use cranpose_foundation::{
 use cranpose_foundation::{ModifierNodeElement, NodeCapabilities};
 #[allow(unused_imports)]
 pub use cranpose_ui_graphics::{
-    BlendMode, Brush, Color, ColorFilter, CompositingStrategy, CornerRadii, CutDirection, DpOffset,
-    EdgeInsets, GradientCutMaskSpec, GradientFadeMaskSpec, GraphicsLayer, LayerShape, Point, Rect,
-    RenderEffect, RoundedCornerShape, RuntimeShader, Shadow, ShadowScope, Size, TransformOrigin,
+    BlendMode, BlurredEdgeTreatment, Brush, Color, ColorFilter, CompositingStrategy, CornerRadii,
+    CutDirection, Dp, DpOffset, EdgeInsets, GradientCutMaskSpec, GradientFadeMaskSpec,
+    GraphicsLayer, LayerShape, Point, Rect, RenderEffect, RoundedCornerShape, RuntimeShader,
+    Shadow, ShadowScope, Size, TransformOrigin,
 };
 use cranpose_ui_layout::{Alignment, HorizontalAlignment, IntrinsicSize, VerticalAlignment};
 #[allow(unused_imports)]

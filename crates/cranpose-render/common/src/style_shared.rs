@@ -41,38 +41,14 @@ pub(crate) fn combine_layers(
             rotation_x: current.rotation_x + layer.rotation_x,
             rotation_y: current.rotation_y + layer.rotation_y,
             rotation_z: current.rotation_z + layer.rotation_z,
-            camera_distance: if (layer.camera_distance - 8.0).abs() > f32::EPSILON {
-                layer.camera_distance
-            } else {
-                current.camera_distance
-            },
-            transform_origin: if layer.transform_origin != TransformOrigin::CENTER {
-                layer.transform_origin
-            } else {
-                current.transform_origin
-            },
+            camera_distance: layer.camera_distance,
+            transform_origin: layer.transform_origin,
             translation_x: current.translation_x + layer.translation_x,
             translation_y: current.translation_y + layer.translation_y,
-            shadow_elevation: if layer.shadow_elevation > 0.0 {
-                layer.shadow_elevation
-            } else {
-                current.shadow_elevation
-            },
-            ambient_shadow_color: if layer.ambient_shadow_color != Color::BLACK {
-                layer.ambient_shadow_color
-            } else {
-                current.ambient_shadow_color
-            },
-            spot_shadow_color: if layer.spot_shadow_color != Color::BLACK {
-                layer.spot_shadow_color
-            } else {
-                current.spot_shadow_color
-            },
-            shape: if layer.shape != LayerShape::Rectangle {
-                layer.shape
-            } else {
-                current.shape
-            },
+            shadow_elevation: layer.shadow_elevation,
+            ambient_shadow_color: layer.ambient_shadow_color,
+            spot_shadow_color: layer.spot_shadow_color,
+            shape: layer.shape,
             clip: current.clip || layer.clip,
             color_filter: compose_color_filters(current.color_filter, layer.color_filter),
             compositing_strategy: layer.compositing_strategy,
@@ -257,12 +233,10 @@ pub(crate) fn apply_layer_to_color(color: Color, layer: &GraphicsLayer) -> Color
 
 fn apply_color_filter_to_color(color: Color, filter: Option<ColorFilter>) -> Color {
     match filter {
-        Some(ColorFilter::Tint(tint)) => Color(
-            (color.0 * tint.r()).clamp(0.0, 1.0),
-            (color.1 * tint.g()).clamp(0.0, 1.0),
-            (color.2 * tint.b()).clamp(0.0, 1.0),
-            (color.3 * tint.a()).clamp(0.0, 1.0),
-        ),
+        Some(filter) => {
+            let [r, g, b, a] = filter.apply_rgba([color.0, color.1, color.2, color.3]);
+            Color(r, g, b, a)
+        }
         None => color,
     }
 }
@@ -274,12 +248,7 @@ fn compose_color_filters(
     match (base, overlay) {
         (None, None) => None,
         (Some(filter), None) | (None, Some(filter)) => Some(filter),
-        (Some(ColorFilter::Tint(a)), Some(ColorFilter::Tint(b))) => Some(ColorFilter::Tint(Color(
-            (a.r() * b.r()).clamp(0.0, 1.0),
-            (a.g() * b.g()).clamp(0.0, 1.0),
-            (a.b() * b.b()).clamp(0.0, 1.0),
-            (a.a() * b.a()).clamp(0.0, 1.0),
-        ))),
+        (Some(filter), Some(next)) => Some(filter.compose(next)),
     }
 }
 
@@ -373,9 +342,9 @@ fn primitives_for_placement(
     size: Size,
 ) -> Vec<DrawPrimitive> {
     let split_with_content = |primitives: Vec<DrawPrimitive>, placement| {
-        let Some(content_idx) = primitives
+        let Some(last_content_idx) = primitives
             .iter()
-            .position(|primitive| matches!(primitive, DrawPrimitive::Content))
+            .rposition(|primitive| matches!(primitive, DrawPrimitive::Content))
         else {
             return if matches!(placement, DrawPlacement::Overlay) {
                 primitives
@@ -394,7 +363,7 @@ fn primitives_for_placement(
                 if matches!(primitive, DrawPrimitive::Content) {
                     return None;
                 }
-                let is_before = index < content_idx;
+                let is_before = index < last_content_idx;
                 match placement {
                     DrawPlacement::Behind if is_before => Some(primitive),
                     DrawPlacement::Overlay if !is_before => Some(primitive),

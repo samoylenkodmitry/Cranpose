@@ -2,9 +2,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use cranpose_foundation::{ModifierNodeChain, NodeCapabilities, PointerEvent};
-use cranpose_ui_graphics::{
-    BlendMode, Color, ColorFilter, CompositingStrategy, GraphicsLayer, RenderEffect,
-};
+use cranpose_ui_graphics::{ColorFilter, GraphicsLayer, RenderEffect};
 
 use crate::draw::DrawCommand;
 use crate::modifier::Modifier;
@@ -77,52 +75,17 @@ fn merge_graphics_layers(base: GraphicsLayer, overlay: GraphicsLayer) -> Graphic
         rotation_x: base.rotation_x + overlay.rotation_x,
         rotation_y: base.rotation_y + overlay.rotation_y,
         rotation_z: base.rotation_z + overlay.rotation_z,
-        camera_distance: if (overlay.camera_distance - 8.0).abs() > f32::EPSILON {
-            overlay.camera_distance
-        } else {
-            base.camera_distance
-        },
-        transform_origin: if overlay.transform_origin
-            != cranpose_ui_graphics::TransformOrigin::CENTER
-        {
-            overlay.transform_origin
-        } else {
-            base.transform_origin
-        },
+        camera_distance: overlay.camera_distance,
+        transform_origin: overlay.transform_origin,
         translation_x: base.translation_x + overlay.translation_x,
         translation_y: base.translation_y + overlay.translation_y,
-        shadow_elevation: if overlay.shadow_elevation > 0.0 {
-            overlay.shadow_elevation
-        } else {
-            base.shadow_elevation
-        },
-        ambient_shadow_color: if overlay.ambient_shadow_color != cranpose_ui_graphics::Color::BLACK
-        {
-            overlay.ambient_shadow_color
-        } else {
-            base.ambient_shadow_color
-        },
-        spot_shadow_color: if overlay.spot_shadow_color != cranpose_ui_graphics::Color::BLACK {
-            overlay.spot_shadow_color
-        } else {
-            base.spot_shadow_color
-        },
-        shape: if overlay.shape != cranpose_ui_graphics::LayerShape::Rectangle {
-            overlay.shape
-        } else {
-            base.shape
-        },
+        shadow_elevation: overlay.shadow_elevation,
+        ambient_shadow_color: overlay.ambient_shadow_color,
+        spot_shadow_color: overlay.spot_shadow_color,
+        shape: overlay.shape,
         clip: base.clip || overlay.clip,
-        compositing_strategy: if overlay.compositing_strategy == CompositingStrategy::Auto {
-            base.compositing_strategy
-        } else {
-            overlay.compositing_strategy
-        },
-        blend_mode: if overlay.blend_mode == BlendMode::SrcOver {
-            base.blend_mode
-        } else {
-            overlay.blend_mode
-        },
+        compositing_strategy: overlay.compositing_strategy,
+        blend_mode: overlay.blend_mode,
         color_filter: compose_color_filters(base.color_filter, overlay.color_filter),
         // Modifiers are traversed outer -> inner. Layer effects therefore compose
         // inner-first, then outer, matching nested layer rendering semantics.
@@ -151,12 +114,7 @@ fn compose_color_filters(
     match (base, overlay) {
         (None, None) => None,
         (Some(filter), None) | (None, Some(filter)) => Some(filter),
-        (Some(ColorFilter::Tint(a)), Some(ColorFilter::Tint(b))) => Some(ColorFilter::Tint(Color(
-            (a.r() * b.r()).clamp(0.0, 1.0),
-            (a.g() * b.g()).clamp(0.0, 1.0),
-            (a.b() * b.b()).clamp(0.0, 1.0),
-            (a.a() * b.a()).clamp(0.0, 1.0),
-        ))),
+        (Some(filter), Some(next)) => Some(filter.compose(next)),
     }
 }
 
