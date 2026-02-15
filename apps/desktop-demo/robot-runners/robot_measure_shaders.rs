@@ -13,6 +13,7 @@
 //! ```
 
 use cranpose::AppLauncher;
+use cranpose::fps_stats;
 use cranpose_testing::{
     find_button_in_semantics, find_in_semantics, find_text_exact, print_semantics_with_bounds,
 };
@@ -149,7 +150,13 @@ fn main() {
                 let _ = robot.wait_for_idle();
             }
 
+            // Print FPS summary
+            let stats = fps_stats();
             println!("=== Profiling Run Complete ===");
+            println!("  FPS: {:.1}", stats.fps);
+            println!("  Avg frame time: {:.2}ms", stats.avg_ms);
+            println!("  Total frames: {}", stats.frame_count);
+            println!("  Recompositions: {} ({}/s)", stats.recompositions, stats.recomps_per_second);
             robot.exit().expect("Failed to exit");
         })
         .run(|| {

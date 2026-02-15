@@ -10,6 +10,7 @@
 //! ```
 
 use cranpose::AppLauncher;
+use cranpose::fps_stats;
 use cranpose_core::useState;
 use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
 use cranpose_foundation::text::TextFieldState;
@@ -399,6 +400,14 @@ fn main() {
                     println!("RSS unavailable - memory validation skipped");
                 }
             }
+
+            // Print FPS summary
+            let stats = fps_stats();
+            println!("=== FPS Summary ===");
+            println!("  FPS: {:.1}", stats.fps);
+            println!("  Avg frame time: {:.2}ms", stats.avg_ms);
+            println!("  Total frames: {}", stats.frame_count);
+            println!("  Recompositions: {} ({}/s)", stats.recompositions, stats.recomps_per_second);
 
             robot.exit().ok();
         })
