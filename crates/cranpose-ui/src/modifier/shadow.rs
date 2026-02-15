@@ -10,6 +10,9 @@ impl Modifier {
     /// Draws a drop shadow behind the current content.
     ///
     /// This mirrors Compose 1.9's `dropShadow(shape) { ... }`.
+    ///
+    /// Backend note: the `pixels` renderer currently draws the shadow geometry
+    /// without Gaussian blur; `wgpu` applies the requested blur radius.
     pub fn drop_shadow(
         self,
         shape: LayerShape,
@@ -27,15 +30,6 @@ impl Modifier {
                 info.add_property("shadowKind", "block");
             }));
         self.then(modifier)
-    }
-
-    /// Explicit alias for `drop_shadow(shape, block)`.
-    pub fn drop_shadow_block(
-        self,
-        shape: LayerShape,
-        block: impl Fn(&mut ShadowScope) + 'static,
-    ) -> Self {
-        self.drop_shadow(shape, block)
     }
 
     /// Static shadow configuration variant mirroring Compose's `dropShadow(shape, shadow)`.
@@ -56,6 +50,9 @@ impl Modifier {
     /// Draws an inner shadow on top of current content.
     ///
     /// This mirrors Compose 1.9's `innerShadow(shape) { ... }`.
+    ///
+    /// Backend note: the `pixels` renderer currently draws the shadow geometry
+    /// without Gaussian blur; `wgpu` applies the requested blur radius.
     pub fn inner_shadow(
         self,
         shape: LayerShape,
@@ -73,15 +70,6 @@ impl Modifier {
                 info.add_property("shadowKind", "block");
             }));
         self.then(modifier)
-    }
-
-    /// Explicit alias for `inner_shadow(shape, block)`.
-    pub fn inner_shadow_block(
-        self,
-        shape: LayerShape,
-        block: impl Fn(&mut ShadowScope) + 'static,
-    ) -> Self {
-        self.inner_shadow(shape, block)
     }
 
     /// Static shadow configuration variant mirroring Compose's `innerShadow(shape, shadow)`.

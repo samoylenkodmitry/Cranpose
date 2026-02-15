@@ -32,6 +32,7 @@ fn layer_requires_effect_fallback(layer: &GraphicsLayer) -> bool {
             .as_ref()
             .is_some_and(|effect| !is_render_effect_supported(effect))
         || layer.compositing_strategy == CompositingStrategy::Offscreen
+        || layer.blend_mode != BlendMode::SrcOver
 }
 
 fn report_unsupported_effects(layer: &GraphicsLayer) {
@@ -39,7 +40,7 @@ fn report_unsupported_effects(layer: &GraphicsLayer) {
         && !REPORTED_UNSUPPORTED_PIXELS_EFFECTS.swap(true, Ordering::Relaxed)
     {
         log::warn!(
-            "Pixels renderer does not support render/backdrop effects or offscreen compositing yet; falling back to base layer rendering"
+            "Pixels renderer does not support render/backdrop effects, offscreen compositing, or non-SrcOver layer blend modes; falling back to base layer rendering"
         );
     }
 }

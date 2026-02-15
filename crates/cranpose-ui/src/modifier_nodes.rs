@@ -1978,6 +1978,14 @@ fn draw_command_tag(cmd: &DrawCommand) -> u8 {
     }
 }
 
+fn draw_command_closure_identity(cmd: &DrawCommand) -> *const () {
+    match cmd {
+        DrawCommand::Behind(f) | DrawCommand::WithContent(f) | DrawCommand::Overlay(f) => {
+            Rc::as_ptr(f) as *const ()
+        }
+    }
+}
+
 /// Element that wires draw commands into the modifier node chain.
 #[derive(Clone)]
 pub struct DrawCommandElement {
@@ -2006,16 +2014,16 @@ impl std::fmt::Debug for DrawCommandElement {
 
 impl PartialEq for DrawCommandElement {
     fn eq(&self, other: &Self) -> bool {
-        // Type-based matching: compare command count and types, not function pointers
-        // This matches JC behavior where nodes are updated via update() method,
-        // preventing unnecessary modifier chain recreation
         if self.commands.len() != other.commands.len() {
             return false;
         }
         self.commands
             .iter()
             .zip(other.commands.iter())
-            .all(|(a, b)| draw_command_tag(a) == draw_command_tag(b))
+            .all(|(a, b)| {
+                draw_command_tag(a) == draw_command_tag(b)
+                    && draw_command_closure_identity(a) == draw_command_closure_identity(b)
+            })
     }
 }
 
@@ -2023,11 +2031,11 @@ impl Eq for DrawCommandElement {}
 
 impl std::hash::Hash for DrawCommandElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        // Consistent hash based on command types, not function pointers
         "draw_commands".hash(state);
         self.commands.len().hash(state);
         for command in &self.commands {
             draw_command_tag(command).hash(state);
+            (draw_command_closure_identity(command) as usize).hash(state);
         }
     }
 }
@@ -2045,11 +2053,6 @@ impl ModifierNodeElement for DrawCommandElement {
 
     fn capabilities(&self) -> NodeCapabilities {
         NodeCapabilities::DRAW
-    }
-
-    fn always_update(&self) -> bool {
-        // Draw commands might have different closures even if types match
-        true
     }
 }
 

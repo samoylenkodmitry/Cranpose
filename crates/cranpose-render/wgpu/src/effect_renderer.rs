@@ -6,7 +6,7 @@
 use crate::offscreen::{OffscreenPool, OffscreenTarget};
 use crate::shader_cache::ShaderPipelineCache;
 use crate::shaders;
-use cranpose_ui_graphics::{RenderEffect, RuntimeShader, TileMode};
+use cranpose_ui_graphics::{BlendMode, RenderEffect, RuntimeShader, TileMode};
 
 /// Manages GPU resources for applying render effects (blur, custom shaders).
 pub(crate) struct EffectRenderer {
@@ -25,8 +25,9 @@ pub(crate) struct EffectRenderer {
     offset_uniform_buffer: wgpu::Buffer,
     offset_uniform_bind_group: wgpu::BindGroup,
 
-    // Blit pipeline for compositing offscreen targets to the surface
+    // Blit pipelines for compositing offscreen targets to the surface
     blit_pipeline: wgpu::RenderPipeline,
+    blit_pipeline_dst_out: wgpu::RenderPipeline,
     blit_uniform_buffer: wgpu::Buffer,
     blit_uniform_bind_group: wgpu::BindGroup,
 
@@ -277,6 +278,49 @@ impl EffectRenderer {
             multiview: None,
             cache: None,
         });
+        let blit_pipeline_dst_out =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Blit Pipeline DstOut"),
+                layout: Some(&blit_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &blit_shader,
+                    entry_point: Some("fullscreen_vs"),
+                    buffers: &[],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &blit_shader,
+                    entry_point: Some("blit_fs"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: surface_format,
+                        blend: Some(wgpu::BlendState {
+                            color: wgpu::BlendComponent {
+                                src_factor: wgpu::BlendFactor::Zero,
+                                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                                operation: wgpu::BlendOperation::Add,
+                            },
+                            alpha: wgpu::BlendComponent {
+                                src_factor: wgpu::BlendFactor::Zero,
+                                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                                operation: wgpu::BlendOperation::Add,
+                            },
+                        }),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            });
 
         // Create uniform buffers.
         // Blur keeps independent horizontal/vertical buffers so both writes can
@@ -378,6 +422,7 @@ impl EffectRenderer {
             offset_uniform_buffer,
             offset_uniform_bind_group,
             blit_pipeline,
+            blit_pipeline_dst_out,
             blit_uniform_buffer,
             blit_uniform_bind_group,
             effect_texture_bind_group_layout,
@@ -813,6 +858,34 @@ impl EffectRenderer {
         scissor: Option<(u32, u32, u32, u32)>,
         rounded_mask: Option<RoundedCompositeMask>,
     ) {
+        self.composite_to_view_scissored_with_alpha_and_mask_and_blend_mode(
+            device,
+            queue,
+            source,
+            dest_view,
+            alpha,
+            load_op,
+            scissor,
+            rounded_mask,
+            BlendMode::SrcOver,
+        );
+    }
+
+    /// Composite an offscreen target onto a destination view with optional
+    /// scissor and optional rounded-rectangle clip mask using an explicit blend mode.
+    #[allow(clippy::too_many_arguments)]
+    pub fn composite_to_view_scissored_with_alpha_and_mask_and_blend_mode(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        source: &OffscreenTarget,
+        dest_view: &wgpu::TextureView,
+        alpha: f32,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        scissor: Option<(u32, u32, u32, u32)>,
+        rounded_mask: Option<RoundedCompositeMask>,
+        blend_mode: BlendMode,
+    ) {
         let (mask_rect, mask_radii, mask_enabled) = if let Some(mask) = rounded_mask {
             (mask.rect, mask.radii, [1.0, 0.0, 0.0, 0.0])
         } else {
@@ -855,7 +928,10 @@ impl EffectRenderer {
                 ..Default::default()
             });
 
-            pass.set_pipeline(&self.blit_pipeline);
+            pass.set_pipeline(match blend_mode {
+                BlendMode::DstOut => &self.blit_pipeline_dst_out,
+                _ => &self.blit_pipeline,
+            });
             pass.set_bind_group(0, &texture_bind_group, &[]);
             pass.set_bind_group(1, &self.blit_uniform_bind_group, &[]);
             if let Some((x, y, w, h)) = scissor {

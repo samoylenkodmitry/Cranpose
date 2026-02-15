@@ -227,6 +227,74 @@ fn crop_source_rect(src_size: Size, dst_size: Size, alignment: Alignment) -> Rec
     }
 }
 
+fn intersect_rect(a: Rect, b: Rect) -> Option<Rect> {
+    let left = a.x.max(b.x);
+    let top = a.y.max(b.y);
+    let right = (a.x + a.width).min(b.x + b.width);
+    let bottom = (a.y + a.height).min(b.y + b.height);
+    let width = right - left;
+    let height = bottom - top;
+    if width <= 0.0 || height <= 0.0 {
+        None
+    } else {
+        Some(Rect {
+            x: left,
+            y: top,
+            width,
+            height,
+        })
+    }
+}
+
+fn map_destination_clip_to_source(
+    src_rect: Rect,
+    dst_rect: Rect,
+    clipped_dst_rect: Rect,
+) -> Option<Rect> {
+    if src_rect.width <= 0.0
+        || src_rect.height <= 0.0
+        || dst_rect.width <= 0.0
+        || dst_rect.height <= 0.0
+        || clipped_dst_rect.width <= 0.0
+        || clipped_dst_rect.height <= 0.0
+    {
+        return None;
+    }
+
+    let scale_x = src_rect.width / dst_rect.width;
+    let scale_y = src_rect.height / dst_rect.height;
+
+    let src_min_x = src_rect.x;
+    let src_min_y = src_rect.y;
+    let src_max_x = src_rect.x + src_rect.width;
+    let src_max_y = src_rect.y + src_rect.height;
+
+    let raw_left = src_rect.x + (clipped_dst_rect.x - dst_rect.x) * scale_x;
+    let raw_top = src_rect.y + (clipped_dst_rect.y - dst_rect.y) * scale_y;
+    let raw_right =
+        src_rect.x + ((clipped_dst_rect.x + clipped_dst_rect.width) - dst_rect.x) * scale_x;
+    let raw_bottom =
+        src_rect.y + ((clipped_dst_rect.y + clipped_dst_rect.height) - dst_rect.y) * scale_y;
+
+    let left = raw_left.clamp(src_min_x, src_max_x);
+    let top = raw_top.clamp(src_min_y, src_max_y);
+    let right = raw_right.clamp(src_min_x, src_max_x);
+    let bottom = raw_bottom.clamp(src_min_y, src_max_y);
+    let width = right - left;
+    let height = bottom - top;
+
+    if width <= 0.0 || height <= 0.0 {
+        None
+    } else {
+        Some(Rect {
+            x: left,
+            y: top,
+            width,
+            height,
+        })
+    }
+}
+
 #[composable]
 pub fn Image<P>(
     painter: P,
@@ -269,8 +337,7 @@ where
                     return;
                 }
                 if content_scale == ContentScale::Crop {
-                    // For Crop, sample the centered/biased source sub-rect directly so
-                    // we don't require a clip-to-bounds modifier (which clips shadows).
+                    // For Crop, sample the centered/biased source sub-rect directly.
                     let src_rect = crop_source_rect(intrinsic_dp, container_size, alignment);
                     if src_rect.width <= 0.0 || src_rect.height <= 0.0 {
                         return;
@@ -283,14 +350,25 @@ where
                         color_filter,
                     );
                 } else {
-                    let rect =
+                    let dst_rect =
                         destination_rect(intrinsic_dp, container_size, alignment, content_scale);
-                    if rect.width <= 0.0 || rect.height <= 0.0 {
+                    if dst_rect.width <= 0.0 || dst_rect.height <= 0.0 {
                         return;
                     }
-                    scope.draw_image_at(
-                        rect,
+                    let container_rect = Rect::from_size(container_size);
+                    let Some(clipped_dst_rect) = intersect_rect(dst_rect, container_rect) else {
+                        return;
+                    };
+                    let full_src_rect = Rect::from_size(intrinsic_dp);
+                    let Some(clipped_src_rect) =
+                        map_destination_clip_to_source(full_src_rect, dst_rect, clipped_dst_rect)
+                    else {
+                        return;
+                    };
+                    scope.draw_image_src(
                         draw_painter.bitmap().clone(),
+                        clipped_src_rect,
+                        clipped_dst_rect,
                         draw_alpha,
                         color_filter,
                     );
@@ -385,6 +463,75 @@ mod tests {
                 height: 100.0,
             }
         );
+    }
+
+    fn approx_eq(left: f32, right: f32) {
+        assert!((left - right).abs() < 1e-4, "left={left}, right={right}");
+    }
+
+    #[test]
+    fn intersect_rect_returns_none_when_disjoint() {
+        let a = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        };
+        let b = Rect {
+            x: 20.0,
+            y: 20.0,
+            width: 10.0,
+            height: 10.0,
+        };
+        assert_eq!(intersect_rect(a, b), None);
+    }
+
+    #[test]
+    fn map_destination_clip_to_source_scales_proportionally() {
+        let src = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        let dst = Rect {
+            x: -50.0,
+            y: 0.0,
+            width: 200.0,
+            height: 100.0,
+        };
+        let clipped_dst = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        let mapped = map_destination_clip_to_source(src, dst, clipped_dst).expect("mapped");
+        approx_eq(mapped.x, 25.0);
+        approx_eq(mapped.y, 0.0);
+        approx_eq(mapped.width, 50.0);
+        approx_eq(mapped.height, 100.0);
+    }
+
+    #[test]
+    fn map_destination_clip_to_source_returns_full_source_without_clipping() {
+        let src = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 120.0,
+            height: 80.0,
+        };
+        let dst = Rect {
+            x: 10.0,
+            y: 5.0,
+            width: 60.0,
+            height: 40.0,
+        };
+        let mapped = map_destination_clip_to_source(src, dst, dst).expect("mapped");
+        approx_eq(mapped.x, src.x);
+        approx_eq(mapped.y, src.y);
+        approx_eq(mapped.width, src.width);
+        approx_eq(mapped.height, src.height);
     }
 
     // --- ImageMeasurePolicy tests ---

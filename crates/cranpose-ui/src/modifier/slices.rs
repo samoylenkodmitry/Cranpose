@@ -54,6 +54,20 @@ impl Clone for ModifierNodeSlices {
     }
 }
 
+/// Compose two nested graphics layers (`base` outer, `overlay` inner) into one
+/// flattened layer snapshot used by render pipelines.
+///
+/// Composition rules follow how nested transforms/effects behave visually:
+/// - Multiplicative: `alpha`, `scale`, `scale_x`, `scale_y`
+/// - Additive: `rotation_*`, `translation_*`
+/// - Boolean OR: `clip`
+/// - Overlay-wins when explicitly set: camera distance, transform origin,
+///   shadow elevation/colors, shape, compositing strategy, blend mode
+/// - Filters/effects are composed in draw order:
+///   - color filters are multiplied where possible
+///   - render effects chain inner-first then outer (`inner.then(outer)`)
+/// - Backdrop effect keeps the most local explicit backdrop effect because
+///   backdrop sampling cannot be safely flattened as a deterministic chain.
 fn merge_graphics_layers(base: GraphicsLayer, overlay: GraphicsLayer) -> GraphicsLayer {
     GraphicsLayer {
         alpha: (base.alpha * overlay.alpha).clamp(0.0, 1.0),

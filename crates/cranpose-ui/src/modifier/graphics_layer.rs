@@ -228,6 +228,9 @@ impl Modifier {
     }
 
     /// Configures blend mode for this layer output.
+    ///
+    /// Runtime support is backend-dependent. Current renderers fully support
+    /// `SrcOver` and `DstOut`; unsupported modes fall back to `SrcOver`.
     pub fn layer_blend_mode(self, blend_mode: BlendMode) -> Self {
         self.graphics_layer_value(GraphicsLayer {
             blend_mode,

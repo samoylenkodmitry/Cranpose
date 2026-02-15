@@ -32,3 +32,6 @@
 - all tests should pass, its never *not yours*
 - zero warnings on all build/clippy/test commands, never *was pre-existing*
 - the #[cfg(feature = "robot-app")] is forbidden 
+- reference JC kt repo /media/huge/composerepo/
+- perf scripts are perf*.sh at project root
+- e2e robot headless tests is ./run_robot_test.sh (should all pass)

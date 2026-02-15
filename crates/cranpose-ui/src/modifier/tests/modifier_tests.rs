@@ -8,7 +8,7 @@ use super::{
 use cranpose_foundation::{
     DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState,
 };
-use cranpose_ui_graphics::{Brush, ColorFilter, Dp, DrawPrimitive, ShadowPrimitive};
+use cranpose_ui_graphics::{Brush, ColorFilter, Dp, DrawPrimitive, ShadowPrimitive, TileMode};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -334,6 +334,31 @@ fn layer_blend_mode_modifier_sets_graphics_layer_mode() {
     );
 
     assert_eq!(observed, Some(BlendMode::DstOut));
+}
+
+#[test]
+fn blur_with_edge_treatment_sets_expected_render_effect() {
+    use crate::modifier_nodes::GraphicsLayerNode;
+
+    let modifier = Modifier::empty().blur_with_edge_treatment(6.0, TileMode::Decal);
+    let mut handle = ModifierChainHandle::new();
+    let _ = handle.update(&modifier);
+
+    let chain = handle.chain();
+    let mut observed = None;
+    chain.for_each_node_with_capability(
+        cranpose_foundation::NodeCapabilities::DRAW,
+        |_ref, node| {
+            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
+                observed = layer_node.layer().render_effect.clone();
+            }
+        },
+    );
+
+    assert_eq!(
+        observed,
+        Some(RenderEffect::blur_with_edge_treatment(6.0, TileMode::Decal))
+    );
 }
 
 #[test]
@@ -858,23 +883,20 @@ fn inner_shadow_cutout_alpha_remains_opaque_for_hole_mask() {
 }
 
 #[test]
-fn drop_shadow_block_alias_emits_primitives() {
-    let modifier = Modifier::empty().drop_shadow_block(LayerShape::Rectangle, |scope| {
+fn drop_shadow_emits_primitives() {
+    let modifier = Modifier::empty().drop_shadow(LayerShape::Rectangle, |scope| {
         scope.radius = 8.0;
         scope.spread = 2.0;
     });
     let slices = super::collect_slices_from_modifier(&modifier);
     let DrawCommand::Behind(draw) = &slices.draw_commands()[0] else {
-        panic!("drop_shadow_block alias should emit a behind draw command");
+        panic!("drop_shadow should emit a behind draw command");
     };
     let primitives = draw(Size {
         width: 32.0,
         height: 18.0,
     });
-    assert!(
-        !primitives.is_empty(),
-        "drop_shadow_block alias should draw"
-    );
+    assert!(!primitives.is_empty(), "drop_shadow should draw");
 }
 
 #[test]
@@ -903,23 +925,20 @@ fn drop_shadow_value_alias_uses_static_shadow() {
 }
 
 #[test]
-fn inner_shadow_block_alias_emits_primitives() {
-    let modifier = Modifier::empty().inner_shadow_block(LayerShape::Rectangle, |scope| {
+fn inner_shadow_emits_primitives() {
+    let modifier = Modifier::empty().inner_shadow(LayerShape::Rectangle, |scope| {
         scope.radius = 10.0;
         scope.offset = Point::new(3.0, 1.0);
     });
     let slices = super::collect_slices_from_modifier(&modifier);
     let DrawCommand::Overlay(draw) = &slices.draw_commands()[0] else {
-        panic!("inner_shadow_block alias should emit an overlay draw command");
+        panic!("inner_shadow should emit an overlay draw command");
     };
     let primitives = draw(Size {
         width: 32.0,
         height: 18.0,
     });
-    assert!(
-        !primitives.is_empty(),
-        "inner_shadow_block alias should draw"
-    );
+    assert!(!primitives.is_empty(), "inner_shadow should draw");
 }
 
 #[test]

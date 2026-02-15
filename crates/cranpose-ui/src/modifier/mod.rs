@@ -33,11 +33,11 @@ mod weight;
 pub use crate::draw::{DrawCacheBuilder, DrawCommand};
 #[allow(unused_imports)]
 pub use chain::{ModifierChainHandle, ModifierChainInspectorNode, ModifierLocalsHandle};
-use cranpose_foundation::ModifierNodeElement;
 pub use cranpose_foundation::{
     modifier_element, AnyModifierElement, DynModifierElement, FocusState, PointerEvent,
     PointerEventKind, SemanticsConfiguration,
 };
+use cranpose_foundation::{ModifierNodeElement, NodeCapabilities};
 #[allow(unused_imports)]
 pub use cranpose_ui_graphics::{
     BlendMode, Brush, Color, ColorFilter, CompositingStrategy, CornerRadii, CutDirection, DpOffset,
@@ -766,6 +766,17 @@ impl Modifier {
                 }
 
                 for (a, b) in e1.iter().zip(e2.iter()) {
+                    // structural_eq() is used for layout decisions, so draw-only
+                    // elements of the same type are considered structurally equal
+                    // even when their draw-time payload differs.
+                    if !consider_always_update
+                        && a.element_type() == b.element_type()
+                        && a.capabilities() == NodeCapabilities::DRAW
+                        && b.capabilities() == NodeCapabilities::DRAW
+                    {
+                        continue;
+                    }
+
                     if consider_always_update && (a.requires_update() || b.requires_update()) {
                         if !Rc::ptr_eq(a, b) {
                             return false;

@@ -10,10 +10,20 @@ impl Modifier {
     ///
     /// Example: `Modifier::empty().blur(10.0)`
     pub fn blur(self, radius: f32) -> Self {
-        self.blur_xy(radius, radius, TileMode::default())
+        self.blur_with_edge_treatment(radius, TileMode::default())
+    }
+
+    /// Apply an isotropic Gaussian blur with explicit edge treatment.
+    ///
+    /// Example: `Modifier::empty().blur_with_edge_treatment(10.0, TileMode::Decal)`
+    pub fn blur_with_edge_treatment(self, radius: f32, edge_treatment: TileMode) -> Self {
+        self.blur_xy(radius, radius, edge_treatment)
     }
 
     /// Apply a Gaussian blur effect with separate horizontal and vertical radii.
+    ///
+    /// `edge_treatment` uses shader tile sampling semantics (`TileMode`) for
+    /// out-of-bounds samples.
     ///
     /// Example: `Modifier::empty().blur_xy(10.0, 5.0, TileMode::Clamp)`
     pub fn blur_xy(self, radius_x: f32, radius_y: f32, edge_treatment: TileMode) -> Self {

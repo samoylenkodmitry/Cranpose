@@ -154,10 +154,16 @@ pub enum RenderEffect {
 impl RenderEffect {
     /// Create a blur effect with equal radius in both directions.
     pub fn blur(radius: f32) -> Self {
+        Self::blur_with_edge_treatment(radius, TileMode::default())
+    }
+
+    /// Create a blur effect with equal radius in both directions and explicit
+    /// edge treatment semantics.
+    pub fn blur_with_edge_treatment(radius: f32, edge_treatment: TileMode) -> Self {
         Self::Blur {
             radius_x: radius,
             radius_y: radius,
-            edge_treatment: TileMode::default(),
+            edge_treatment,
         }
     }
 
@@ -260,6 +266,23 @@ mod tests {
                 assert_eq!(radius_x, 15.0);
                 assert_eq!(radius_y, 15.0);
                 assert_eq!(edge_treatment, TileMode::Clamp);
+            }
+            _ => panic!("expected Blur"),
+        }
+    }
+
+    #[test]
+    fn blur_with_edge_treatment_uses_explicit_mode() {
+        let effect = RenderEffect::blur_with_edge_treatment(6.0, TileMode::Decal);
+        match effect {
+            RenderEffect::Blur {
+                radius_x,
+                radius_y,
+                edge_treatment,
+            } => {
+                assert_eq!(radius_x, 6.0);
+                assert_eq!(radius_y, 6.0);
+                assert_eq!(edge_treatment, TileMode::Decal);
             }
             _ => panic!("expected Blur"),
         }

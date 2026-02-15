@@ -24,15 +24,17 @@ use style::{
 #[derive(Clone)]
 struct LayerIsolation {
     effect: Option<RenderEffect>,
+    blend_mode: BlendMode,
     composite_alpha: f32,
 }
 
 fn effective_layer_isolation(layer: &GraphicsLayer) -> Option<LayerIsolation> {
     let has_effect = layer.render_effect.is_some();
+    let has_layer_blend = layer.blend_mode != BlendMode::SrcOver;
     let requires_isolation = match layer.compositing_strategy {
         CompositingStrategy::Offscreen => true,
-        CompositingStrategy::Auto => has_effect || layer.alpha < 1.0,
-        CompositingStrategy::ModulateAlpha => has_effect,
+        CompositingStrategy::Auto => has_effect || has_layer_blend || layer.alpha < 1.0,
+        CompositingStrategy::ModulateAlpha => has_effect || has_layer_blend,
     };
 
     if !requires_isolation {
@@ -47,6 +49,7 @@ fn effective_layer_isolation(layer: &GraphicsLayer) -> Option<LayerIsolation> {
 
     Some(LayerIsolation {
         effect: layer.render_effect.clone(),
+        blend_mode: layer.blend_mode,
         composite_alpha,
     })
 }
@@ -388,6 +391,7 @@ fn render_container(
             rect: transformed_rect,
             clip: visual_clip,
             effect: isolation.effect,
+            blend_mode: isolation.blend_mode,
             composite_alpha: isolation.composite_alpha,
             z_start,
             z_end: scene.next_z,
@@ -717,6 +721,7 @@ fn render_node_from_applier(
             rect: transformed_rect,
             clip: visual_clip,
             effect: isolation.effect,
+            blend_mode: isolation.blend_mode,
             composite_alpha: isolation.composite_alpha,
             z_start,
             z_end: scene.next_z,
@@ -751,6 +756,18 @@ mod tests {
             ..Default::default()
         };
         assert!(effective_layer_isolation(&layer).is_none());
+    }
+
+    #[test]
+    fn non_src_over_layer_blend_triggers_isolation() {
+        let layer = GraphicsLayer {
+            blend_mode: BlendMode::DstOut,
+            compositing_strategy: CompositingStrategy::Auto,
+            ..Default::default()
+        };
+        let isolation = effective_layer_isolation(&layer).expect("expected blend isolation");
+        assert_eq!(isolation.blend_mode, BlendMode::DstOut);
+        assert!((isolation.composite_alpha - 1.0).abs() < 1e-6);
     }
 
     #[test]

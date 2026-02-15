@@ -148,6 +148,8 @@ pub struct EffectLayer {
     /// Optional effect to apply to the offscreen subtree.
     /// `None` means isolate/composite only (no post-effect shader).
     pub effect: Option<RenderEffect>,
+    /// Blend mode used when compositing the offscreen subtree back to the parent.
+    pub blend_mode: BlendMode,
     /// Alpha applied when compositing the offscreen subtree back to the parent.
     pub composite_alpha: f32,
     /// Z-index of the first draw item in this effect layer's subtree.
