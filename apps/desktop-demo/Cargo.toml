@@ -472,3 +472,8 @@ required-features = ["robot-app"]
 name = "robot_shadow_fields"
 path = "robot-runners/robot_shadow_fields.rs"
 required-features = ["robot-app"]
+
+[[example]]
+name = "robot_measure_shaders"
+path = "robot-runners/robot_measure_shaders.rs"
+required-features = ["robot-app"]
