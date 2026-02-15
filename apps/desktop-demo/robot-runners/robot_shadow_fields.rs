@@ -5,18 +5,14 @@
 
 use cranpose::AppLauncher;
 use cranpose_testing::{
-    capture_screenshot, find_bounds_by_text, find_button_in_semantics,
-    find_text_by_prefix_in_semantics, root_bounds,
+    capture_screenshot, changed_pixel_count, changed_pixel_count_in_region, find_bounds_by_text,
+    find_button_in_semantics, find_text_by_prefix_in_semantics, root_bounds,
 };
 use desktop_app::app;
 use image::{ImageBuffer, Rgba, RgbaImage};
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
-
-#[path = "robot_helpers.rs"]
-mod robot_helpers;
-use robot_helpers::{changed_pixel_count, changed_pixel_count_in_region};
 
 const WINDOW_WIDTH: u32 = 1280;
 const WINDOW_HEIGHT: u32 = 900;
@@ -153,15 +149,15 @@ fn shadow_rect_from_label(shadow_label_bounds: (f32, f32, f32, f32)) -> (f32, f3
 }
 
 fn scroll_down(robot: &cranpose::Robot) {
-    robot_helpers::scroll_down(robot, 620.0, 760.0, 220.0);
+    cranpose_testing::scroll_down(robot, 620.0, 760.0, 220.0);
 }
 
 fn scroll_up(robot: &cranpose::Robot) {
-    robot_helpers::scroll_up(robot, 620.0, 220.0, 760.0);
+    cranpose_testing::scroll_up(robot, 620.0, 220.0, 760.0);
 }
 
 fn y_is_visible(robot: &cranpose::Robot, y: f32) -> bool {
-    robot_helpers::y_is_visible(robot, y)
+    cranpose_testing::y_is_visible(robot, y)
 }
 
 fn scroll_text_into_view(
@@ -227,22 +223,23 @@ fn scroll_prefix_into_view(
 }
 
 fn parse_slider_value(text: &str) -> Option<f32> {
-    robot_helpers::parse_slider_value(text)
+    cranpose_testing::parse_slider_value(text)
 }
 
 fn set_slider_fraction(robot: &cranpose::Robot, prefix: &str, fraction: f32) -> Option<f32> {
-    robot_helpers::set_slider_fraction(
+    cranpose_testing::set_slider_fraction(
         robot,
         prefix,
         fraction,
         SHADOW_SLIDER_WIDTH,
         SLIDER_TOUCH_OFFSET_Y,
-        620.0,
-        760.0,
-        220.0,
-        620.0,
-        220.0,
-        760.0,
+        cranpose_testing::ScrollConfig {
+            center_x: 620.0,
+            down_from_y: 760.0,
+            down_to_y: 220.0,
+            up_from_y: 220.0,
+            up_to_y: 760.0,
+        },
     )
 }
 

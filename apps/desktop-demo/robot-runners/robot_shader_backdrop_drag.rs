@@ -4,15 +4,12 @@
 
 use cranpose::AppLauncher;
 use cranpose_testing::{
-    capture_screenshot, find_button_in_semantics, find_text_by_prefix_in_semantics,
-    find_text_in_semantics, root_bounds,
+    capture_screenshot, changed_pixel_count, changed_pixel_count_in_region,
+    find_button_in_semantics, find_text_by_prefix_in_semantics, find_text_in_semantics,
+    root_bounds,
 };
 use desktop_app::app;
 use std::time::Duration;
-
-#[path = "robot_helpers.rs"]
-mod robot_helpers;
-use robot_helpers::{changed_pixel_count, changed_pixel_count_in_region};
 
 const EFFECT_SLIDER_WIDTH: f32 = 220.0;
 const EFFECT_SLIDER_TOUCH_OFFSET_Y: f32 = 9.0;
@@ -28,26 +25,27 @@ fn moved_enough(before: (f32, f32, f32, f32), after: (f32, f32, f32, f32), min_d
 }
 
 fn scroll_down(robot: &cranpose::Robot) {
-    robot_helpers::scroll_down(robot, 620.0, 720.0, 220.0);
+    cranpose_testing::scroll_down(robot, 620.0, 720.0, 220.0);
 }
 
 fn scroll_up(robot: &cranpose::Robot) {
-    robot_helpers::scroll_up(robot, 620.0, 220.0, 720.0);
+    cranpose_testing::scroll_up(robot, 620.0, 220.0, 720.0);
 }
 
 fn set_slider_fraction(robot: &cranpose::Robot, prefix: &str, fraction: f32) -> Option<f32> {
-    robot_helpers::set_slider_fraction(
+    cranpose_testing::set_slider_fraction(
         robot,
         prefix,
         fraction,
         EFFECT_SLIDER_WIDTH,
         EFFECT_SLIDER_TOUCH_OFFSET_Y,
-        620.0,
-        720.0,
-        220.0, // scroll down params
-        620.0,
-        220.0,
-        720.0, // scroll up params (center_x reused)
+        cranpose_testing::ScrollConfig {
+            center_x: 620.0,
+            down_from_y: 720.0,
+            down_to_y: 220.0,
+            up_from_y: 220.0,
+            up_to_y: 720.0,
+        },
     )
 }
 
