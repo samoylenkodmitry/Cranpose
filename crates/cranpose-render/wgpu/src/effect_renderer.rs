@@ -513,16 +513,14 @@ impl EffectRenderer {
             bytemuck::bytes_of(&vertical_uniforms),
         );
 
-        let source_texture_bind_group = OffscreenPool::create_texture_bind_group(
+        let source_bind_group = source.get_or_create_bind_group(
             device,
             &self.effect_texture_bind_group_layout,
-            source,
             &self.effect_sampler,
         );
-        let intermediate_texture_bind_group = OffscreenPool::create_texture_bind_group(
+        let intermediate_bind_group = intermediate.get_or_create_bind_group(
             device,
             &self.effect_texture_bind_group_layout,
-            &intermediate,
             &self.effect_sampler,
         );
 
@@ -544,7 +542,7 @@ impl EffectRenderer {
                 ..Default::default()
             });
             pass.set_pipeline(&self.blur_pipeline);
-            pass.set_bind_group(0, &source_texture_bind_group, &[]);
+            pass.set_bind_group(0, &*source_bind_group, &[]);
             pass.set_bind_group(1, &self.blur_uniform_bind_group_horizontal, &[]);
             if let Some((x, y, w, h)) = scissor {
                 pass.set_scissor_rect(x, y, w, h);
@@ -566,13 +564,15 @@ impl EffectRenderer {
                 ..Default::default()
             });
             pass.set_pipeline(&self.blur_pipeline);
-            pass.set_bind_group(0, &intermediate_texture_bind_group, &[]);
+            pass.set_bind_group(0, &*intermediate_bind_group, &[]);
             pass.set_bind_group(1, &self.blur_uniform_bind_group_vertical, &[]);
             if let Some((x, y, w, h)) = scissor {
                 pass.set_scissor_rect(x, y, w, h);
             }
             pass.draw(0..4, 0..1);
         }
+        drop(source_bind_group);
+        drop(intermediate_bind_group);
         queue.submit(std::iter::once(encoder.finish()));
 
         // Return intermediate to pool
@@ -599,10 +599,9 @@ impl EffectRenderer {
             bytemuck::bytes_of(&uniforms),
         );
 
-        let texture_bind_group = OffscreenPool::create_texture_bind_group(
+        let texture_bind_group = source.get_or_create_bind_group(
             device,
             &self.effect_texture_bind_group_layout,
-            source,
             &self.effect_sampler,
         );
 
@@ -625,7 +624,7 @@ impl EffectRenderer {
             });
 
             pass.set_pipeline(&self.offset_pipeline);
-            pass.set_bind_group(0, &texture_bind_group, &[]);
+            pass.set_bind_group(0, &*texture_bind_group, &[]);
             pass.set_bind_group(1, &self.offset_uniform_bind_group, &[]);
             pass.draw(0..4, 0..1);
         }
@@ -681,11 +680,10 @@ impl EffectRenderer {
             return;
         };
 
-        // Create bind groups
-        let texture_bind_group = OffscreenPool::create_texture_bind_group(
+        // Use cached bind group
+        let texture_bind_group = source.get_or_create_bind_group(
             device,
             &self.effect_texture_bind_group_layout,
-            source,
             &self.effect_sampler,
         );
 
@@ -709,7 +707,7 @@ impl EffectRenderer {
             });
 
             pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, &texture_bind_group, &[]);
+            pass.set_bind_group(0, &*texture_bind_group, &[]);
             pass.set_bind_group(1, &self.effect_uniform_bind_group, &[]);
             pass.draw(0..4, 0..1);
         }
@@ -903,10 +901,9 @@ impl EffectRenderer {
         };
         queue.write_buffer(&self.blit_uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
-        let texture_bind_group = OffscreenPool::create_texture_bind_group(
+        let texture_bind_group = source.get_or_create_bind_group(
             device,
             &self.effect_texture_bind_group_layout,
-            source,
             &self.effect_sampler,
         );
 
@@ -932,7 +929,7 @@ impl EffectRenderer {
                 BlendMode::DstOut => &self.blit_pipeline_dst_out,
                 _ => &self.blit_pipeline,
             });
-            pass.set_bind_group(0, &texture_bind_group, &[]);
+            pass.set_bind_group(0, &*texture_bind_group, &[]);
             pass.set_bind_group(1, &self.blit_uniform_bind_group, &[]);
             if let Some((x, y, w, h)) = scissor {
                 pass.set_scissor_rect(x, y, w, h);

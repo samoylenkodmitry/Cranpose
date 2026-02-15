@@ -13,8 +13,10 @@
 //! ```
 
 use cranpose::AppLauncher;
+use cranpose_testing::{
+    find_button_in_semantics, find_in_semantics, find_text_exact, print_semantics_with_bounds,
+};
 use cranpose_ui::Point;
-use cranpose_testing::{find_button_in_semantics, find_in_semantics, find_text_exact, print_semantics_with_bounds};
 use desktop_app::app;
 use std::time::{Duration, Instant};
 
@@ -47,12 +49,12 @@ fn main() {
             };
 
             let find_center = |text: &str| -> Option<Point> {
-                 find_in_semantics(&robot, |elem| find_text_exact(elem, text)).map(|(x, y, w, h)| {
+                find_in_semantics(&robot, |elem| find_text_exact(elem, text)).map(|(x, y, w, h)| {
                     Point {
                         x: x + w / 2.0,
-                        y: y + h / 2.0
+                        y: y + h / 2.0,
                     }
-                 })
+                })
             };
 
             // 1. Navigate to Shaders tab
@@ -67,20 +69,27 @@ fn main() {
                 std::process::exit(1);
             }
             println!("  ✓ Entered Shaders tab");
-            
+
             // Wait for content
             let start_time = Instant::now();
             let mut loops = 0;
 
             while start_time.elapsed() < duration {
                 loops += 1;
-                println!("  Loop #{} (elapsed: {:.1}s)", loops, start_time.elapsed().as_secs_f32());
+                println!(
+                    "  Loop #{} (elapsed: {:.1}s)",
+                    loops,
+                    start_time.elapsed().as_secs_f32()
+                );
 
                 // 2. Drag Blurred Rect
                 if let Some(center) = find_center("Blur") {
                     let p1 = center;
-                    let p2 = Point { x: p1.x + 100.0, y: p1.y };
-                    
+                    let p2 = Point {
+                        x: p1.x + 100.0,
+                        y: p1.y,
+                    };
+
                     robot.drag(p1.x, p1.y, p2.x, p2.y).ok();
                     let _ = robot.wait_for_idle();
                 } else {
@@ -90,31 +99,38 @@ fn main() {
                 // 3. Drag Glass Rect
                 if let Some(center) = find_center("Glass") {
                     let p1 = center;
-                    let p2 = Point { x: p1.x - 50.0, y: p1.y + 50.0 };
-                     robot.drag(p1.x, p1.y, p2.x, p2.y).ok();
-                     let _ = robot.wait_for_idle();
+                    let p2 = Point {
+                        x: p1.x - 50.0,
+                        y: p1.y + 50.0,
+                    };
+                    robot.drag(p1.x, p1.y, p2.x, p2.y).ok();
+                    let _ = robot.wait_for_idle();
                 } else {
-                     println!("  ⚠ 'Glass' rect not found");
+                    println!("  ⚠ 'Glass' rect not found");
                 }
-                
+
                 // 4. Scroll Page
                 let window_w = 1200.0;
                 let window_h = 800.0;
                 let scroll_x = window_w / 2.0;
-                
+
                 // Scroll Down (drag up)
                 for _ in 0..scroll_steps {
-                    robot.drag(scroll_x, window_h * 0.8, scroll_x, window_h * 0.2).ok();
+                    robot
+                        .drag(scroll_x, window_h * 0.8, scroll_x, window_h * 0.2)
+                        .ok();
                     std::thread::sleep(Duration::from_millis(100));
                 }
                 let _ = robot.wait_for_idle();
-                
+
                 // Scroll Up (drag down)
-                 for _ in 0..scroll_steps {
-                    robot.drag(scroll_x, window_h * 0.2, scroll_x, window_h * 0.8).ok();
+                for _ in 0..scroll_steps {
+                    robot
+                        .drag(scroll_x, window_h * 0.2, scroll_x, window_h * 0.8)
+                        .ok();
                     std::thread::sleep(Duration::from_millis(100));
                 }
-                 let _ = robot.wait_for_idle();
+                let _ = robot.wait_for_idle();
             }
 
             println!("=== Profiling Run Complete ===");

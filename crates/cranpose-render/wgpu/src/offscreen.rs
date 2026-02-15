@@ -4,6 +4,8 @@
 //! attachment) and sampled from (as a texture binding). Used by blur and
 //! custom shader effects that need to capture a subtree's rendered output.
 
+use std::cell::RefCell;
+
 /// A GPU texture that can serve as both a render target and a texture source.
 pub(crate) struct OffscreenTarget {
     // Texture kept alive for the view's lifetime; the view borrows from it implicitly.
@@ -11,6 +13,9 @@ pub(crate) struct OffscreenTarget {
     pub view: wgpu::TextureView,
     pub width: u32,
     pub height: u32,
+    /// Lazily-cached bind group for sampling this target as a texture.
+    /// Valid as long as the underlying texture is alive (i.e. while this target exists).
+    cached_bind_group: RefCell<Option<wgpu::BindGroup>>,
 }
 
 impl OffscreenTarget {
@@ -35,6 +40,7 @@ impl OffscreenTarget {
             view,
             width,
             height,
+            cached_bind_group: RefCell::new(None),
         }
     }
 
@@ -44,6 +50,42 @@ impl OffscreenTarget {
     /// coordinates, so larger pooled textures are not considered compatible.
     fn matches_size(&self, width: u32, height: u32) -> bool {
         self.width == width && self.height == height
+    }
+
+    /// Get the cached texture bind group, creating it on first access.
+    ///
+    /// The bind group binds this target's texture view and the provided sampler
+    /// for use in effect fragment shaders. Since the underlying texture never
+    /// changes while this target is alive, the bind group is valid for reuse.
+    pub fn get_or_create_bind_group(
+        &self,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+    ) -> std::cell::Ref<'_, wgpu::BindGroup> {
+        // Populate if empty
+        {
+            let mut slot = self.cached_bind_group.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Offscreen Texture Bind Group (cached)"),
+                    layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&self.view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(sampler),
+                        },
+                    ],
+                }));
+            }
+        }
+        std::cell::Ref::map(self.cached_bind_group.borrow(), |opt| {
+            opt.as_ref().expect("bind group was just populated")
+        })
     }
 }
 
@@ -83,29 +125,6 @@ impl OffscreenPool {
     /// Return a target to the pool for future reuse.
     pub fn release(&mut self, target: OffscreenTarget) {
         self.available.push(target);
-    }
-
-    /// Create a bind group for sampling an offscreen target as a texture.
-    pub fn create_texture_bind_group(
-        device: &wgpu::Device,
-        layout: &wgpu::BindGroupLayout,
-        target: &OffscreenTarget,
-        sampler: &wgpu::Sampler,
-    ) -> wgpu::BindGroup {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Offscreen Texture Bind Group"),
-            layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&target.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                },
-            ],
-        })
     }
 
     /// The bind group layout for sampling offscreen textures.
