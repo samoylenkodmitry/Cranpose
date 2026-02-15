@@ -747,6 +747,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         }
 
         let snapshot = active_snapshot();
+        let mut written_state: Option<Arc<dyn StateObject>> = None;
         if let Some(state) = self
             .weak_self
             .lock()
@@ -755,7 +756,8 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
             .and_then(|weak| weak.upgrade())
         {
             let trait_object: Arc<dyn StateObject> = state.clone();
-            snapshot.record_write(trait_object);
+            snapshot.record_write(trait_object.clone());
+            written_state = Some(trait_object);
         }
         mark_update_write(self.id);
 
@@ -790,6 +792,13 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
                         cursor = node.next();
                     }
                     self.assert_chain_integrity("set(global-tombstone)", Some(snapshot_id));
+                }
+
+                if let Some(modified) = written_state.as_ref() {
+                    crate::snapshot_v2::notify_apply_observers(
+                        std::slice::from_ref(modified),
+                        new_id,
+                    );
                 }
             }
             AnySnapshot::Mutable(_)

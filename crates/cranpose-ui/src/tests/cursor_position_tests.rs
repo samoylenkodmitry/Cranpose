@@ -71,6 +71,7 @@ fn cursor_x_position_matches_text_width() {
         // Get the first Overlay command and execute it
         let primitives = match &draw_commands[0] {
             crate::DrawCommand::Overlay(func) => func(size),
+            crate::DrawCommand::WithContent(func) => func(size),
             _ => panic!("Expected Overlay draw command for cursor"),
         };
 
@@ -110,6 +111,7 @@ fn cursor_at_start_for_empty_text() {
 
         let primitives = match &slices.draw_commands()[0] {
             crate::DrawCommand::Overlay(func) => func(size),
+            crate::DrawCommand::WithContent(func) => func(size),
             _ => panic!("Expected Overlay"),
         };
 
@@ -151,6 +153,7 @@ fn selection_draw_command_created_when_selected() {
         let primitives = match &draw_commands[0] {
             crate::DrawCommand::Behind(func) => func(size),
             crate::DrawCommand::Overlay(func) => func(size),
+            crate::DrawCommand::WithContent(func) => func(size),
         };
 
         assert!(!primitives.is_empty(), "Expected selection primitive");
@@ -193,6 +196,7 @@ fn cursor_y_position_at_zero_without_padding() {
         let cursor_cmd = slices.draw_commands().last().unwrap();
         let primitives = match cursor_cmd {
             crate::DrawCommand::Overlay(func) => func(size),
+            crate::DrawCommand::WithContent(func) => func(size),
             _ => panic!("Expected Overlay for cursor"),
         };
 

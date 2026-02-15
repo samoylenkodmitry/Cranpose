@@ -21,6 +21,7 @@ mod hacker_news;
 mod images;
 pub mod lazy_list;
 mod mineswapper2;
+mod shaders;
 mod web_fetch;
 mod winamp;
 mod xkcd;
@@ -29,6 +30,7 @@ use animations::AnimationsTab;
 use hacker_news::hacker_news_tab;
 use images::images_tab;
 use lazy_list::lazy_list_example;
+use shaders::ShadersTab;
 use web_fetch::web_fetch_example;
 use winamp::WinampTab;
 use xkcd::xkcd_tab;
@@ -54,6 +56,7 @@ pub enum DemoTab {
     Images,
     Winamp,
     Xkcd,
+    Shaders,
 }
 
 impl DemoTab {
@@ -73,11 +76,12 @@ impl DemoTab {
             DemoTab::Images => "Images",
             DemoTab::Winamp => "Winamp",
             DemoTab::Xkcd => "XKCD",
+            DemoTab::Shaders => "Shaders",
         }
     }
 }
 
-pub const DEMO_TABS: [DemoTab; 14] = [
+pub const DEMO_TABS: [DemoTab; 15] = [
     DemoTab::Counter,
     DemoTab::CompositionLocal,
     DemoTab::Async,
@@ -92,6 +96,7 @@ pub const DEMO_TABS: [DemoTab; 14] = [
     DemoTab::Images,
     DemoTab::Winamp,
     DemoTab::Xkcd,
+    DemoTab::Shaders,
 ];
 
 pub fn demo_tab_labels() -> Vec<&'static str> {
@@ -286,6 +291,7 @@ fn render_active_tab(active: DemoTab) {
         DemoTab::Images => images_tab(),
         DemoTab::Winamp => WinampTab(),
         DemoTab::Xkcd => xkcd_tab(),
+        DemoTab::Shaders => ShadersTab(),
     }
 }
 
@@ -1248,8 +1254,9 @@ fn counter_app() {
                 .padding(32.0)
                 .rounded_corners(24.0)
                 .draw_behind({
-                    let phase = wave_state.value();
+                    let wave_for_background = wave_state;
                     move |scope| {
+                        let phase = wave_for_background.value();
                         scope.draw_round_rect(
                             Brush::linear_gradient(vec![
                                 Color(0.12 + phase * 0.2, 0.10, 0.24 + (1.0 - phase) * 0.3, 1.0),
@@ -1301,9 +1308,8 @@ fn counter_app() {
                             .vertical_alignment(VerticalAlignment::CenterVertically),
                         {
                             let counter_display = counter;
-                            let wave_value = wave;
+                            let wave_layer_state = wave;
                             move || {
-                                let wave_value = wave_value.value();
                                 Text(
                                     format!("Counter: {}", counter_display.get()),
                                     Modifier::empty()
@@ -1316,7 +1322,7 @@ fn counter_app() {
                                     TextStyle::default(),
                                 );
                                 Text(
-                                    format!("Wave {:.2}", wave_value),
+                                    "Wave layer-only animation",
                                     Modifier::empty()
                                         .padding(8.0)
                                         .then(
@@ -1324,11 +1330,17 @@ fn counter_app() {
                                                 .background(Color(0.35, 0.55, 0.9, 0.5)),
                                         )
                                         .rounded_corners(12.0)
-                                        .graphics_layer(GraphicsLayer {
-                                            alpha: 0.7 + wave_value * 0.3,
-                                            scale: 0.85 + wave_value * 0.3,
-                                            translation_x: 0.0,
-                                            translation_y: (wave_value - 0.5) * 12.0,
+                                        .graphics_layer({
+                                            let wave_for_layer = wave_layer_state;
+                                            move || {
+                                                let wave_value = wave_for_layer.value();
+                                                GraphicsLayer {
+                                                    alpha: 0.7 + wave_value * 0.3,
+                                                    scale: 0.85 + wave_value * 0.3,
+                                                    translation_y: (wave_value - 0.5) * 12.0,
+                                                    ..Default::default()
+                                                }
+                                            }
                                         }),
                                     TextStyle::default(),
                                 );

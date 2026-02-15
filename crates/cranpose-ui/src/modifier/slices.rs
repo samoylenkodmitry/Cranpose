@@ -2,7 +2,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use cranpose_foundation::{ModifierNodeChain, NodeCapabilities, PointerEvent};
-use cranpose_ui_graphics::GraphicsLayer;
+use cranpose_ui_graphics::{ColorFilter, GraphicsLayer, RenderEffect};
 
 use crate::draw::DrawCommand;
 use crate::modifier::Modifier;
@@ -28,6 +28,7 @@ pub struct ModifierNodeSlices {
     text_content: Option<Rc<str>>,
     text_style: Option<TextStyle>,
     graphics_layer: Option<GraphicsLayer>,
+    graphics_layer_resolver: Option<Rc<dyn Fn() -> GraphicsLayer>>,
     chain_guard: Option<Rc<ChainGuard>>,
 }
 
@@ -44,9 +45,76 @@ impl Clone for ModifierNodeSlices {
             clip_to_bounds: self.clip_to_bounds,
             text_content: self.text_content.clone(),
             text_style: self.text_style.clone(),
-            graphics_layer: self.graphics_layer,
+            graphics_layer: self.graphics_layer.clone(),
+            graphics_layer_resolver: self.graphics_layer_resolver.clone(),
             chain_guard: self.chain_guard.clone(),
         }
+    }
+}
+
+/// Compose two nested graphics layers (`base` outer, `overlay` inner) into one
+/// flattened layer snapshot used by render pipelines.
+///
+/// Composition rules follow how nested transforms/effects behave visually:
+/// - Multiplicative: `alpha`, `scale`, `scale_x`, `scale_y`
+/// - Additive: `rotation_*`, `translation_*`
+/// - Boolean OR: `clip`
+/// - Overlay-wins when explicitly set: camera distance, transform origin,
+///   shadow elevation/colors, shape, compositing strategy, blend mode
+/// - Filters/effects are composed in draw order:
+///   - color filters are multiplied where possible
+///   - render effects chain inner-first then outer (`inner.then(outer)`)
+/// - Backdrop effect keeps the most local explicit backdrop effect because
+///   backdrop sampling cannot be safely flattened as a deterministic chain.
+fn merge_graphics_layers(base: GraphicsLayer, overlay: GraphicsLayer) -> GraphicsLayer {
+    GraphicsLayer {
+        alpha: (base.alpha * overlay.alpha).clamp(0.0, 1.0),
+        scale: base.scale * overlay.scale,
+        scale_x: base.scale_x * overlay.scale_x,
+        scale_y: base.scale_y * overlay.scale_y,
+        rotation_x: base.rotation_x + overlay.rotation_x,
+        rotation_y: base.rotation_y + overlay.rotation_y,
+        rotation_z: base.rotation_z + overlay.rotation_z,
+        camera_distance: overlay.camera_distance,
+        transform_origin: overlay.transform_origin,
+        translation_x: base.translation_x + overlay.translation_x,
+        translation_y: base.translation_y + overlay.translation_y,
+        shadow_elevation: overlay.shadow_elevation,
+        ambient_shadow_color: overlay.ambient_shadow_color,
+        spot_shadow_color: overlay.spot_shadow_color,
+        shape: overlay.shape,
+        clip: base.clip || overlay.clip,
+        compositing_strategy: overlay.compositing_strategy,
+        blend_mode: overlay.blend_mode,
+        color_filter: compose_color_filters(base.color_filter, overlay.color_filter),
+        // Modifiers are traversed outer -> inner. Layer effects therefore compose
+        // inner-first, then outer, matching nested layer rendering semantics.
+        render_effect: compose_render_effects(base.render_effect, overlay.render_effect),
+        // Backdrop effects cannot be represented as a deterministic chain on a
+        // flattened single layer, so keep the most local explicit backdrop.
+        backdrop_effect: overlay.backdrop_effect.or(base.backdrop_effect),
+    }
+}
+
+fn compose_render_effects(
+    outer: Option<RenderEffect>,
+    inner: Option<RenderEffect>,
+) -> Option<RenderEffect> {
+    match (outer, inner) {
+        (None, None) => None,
+        (Some(effect), None) | (None, Some(effect)) => Some(effect),
+        (Some(outer_effect), Some(inner_effect)) => Some(inner_effect.then(outer_effect)),
+    }
+}
+
+fn compose_color_filters(
+    base: Option<ColorFilter>,
+    overlay: Option<ColorFilter>,
+) -> Option<ColorFilter> {
+    match (base, overlay) {
+        (None, None) => None,
+        (Some(filter), None) | (None, Some(filter)) => Some(filter),
+        (Some(filter), Some(next)) => Some(filter.compose(next)),
     }
 }
 
@@ -80,7 +148,44 @@ impl ModifierNodeSlices {
     }
 
     pub fn graphics_layer(&self) -> Option<GraphicsLayer> {
-        self.graphics_layer
+        if let Some(resolve) = &self.graphics_layer_resolver {
+            Some(resolve())
+        } else {
+            self.graphics_layer.clone()
+        }
+    }
+
+    fn push_graphics_layer(
+        &mut self,
+        layer: GraphicsLayer,
+        resolver: Option<Rc<dyn Fn() -> GraphicsLayer>>,
+    ) {
+        let existing_snapshot = self.graphics_layer();
+        let next_snapshot = existing_snapshot
+            .as_ref()
+            .map(|current| merge_graphics_layers(current.clone(), layer.clone()))
+            .unwrap_or_else(|| layer.clone());
+        let existing_resolver = self.graphics_layer_resolver.clone();
+
+        self.graphics_layer = Some(next_snapshot);
+        self.graphics_layer_resolver = match (existing_resolver, resolver) {
+            (None, None) => None,
+            (Some(current_resolver), None) => {
+                let layer = layer.clone();
+                Some(Rc::new(move || {
+                    merge_graphics_layers(current_resolver(), layer.clone())
+                }))
+            }
+            (None, Some(next_resolver)) => {
+                let base = existing_snapshot.unwrap_or_default();
+                Some(Rc::new(move || {
+                    merge_graphics_layers(base.clone(), next_resolver())
+                }))
+            }
+            (Some(current_resolver), Some(next_resolver)) => Some(Rc::new(move || {
+                merge_graphics_layers(current_resolver(), next_resolver())
+            })),
+        };
     }
 
     pub fn with_chain_guard(mut self, handle: ModifierChainHandle) -> Self {
@@ -97,6 +202,7 @@ impl ModifierNodeSlices {
         self.text_content = None;
         self.text_style = None;
         self.graphics_layer = None;
+        self.graphics_layer_resolver = None;
         self.chain_guard = None;
     }
 }
@@ -111,6 +217,10 @@ impl fmt::Debug for ModifierNodeSlices {
             .field("text_content", &self.text_content)
             .field("text_style", &self.text_style)
             .field("graphics_layer", &self.graphics_layer)
+            .field(
+                "graphics_layer_resolver",
+                &self.graphics_layer_resolver.is_some(),
+            )
             .finish()
     }
 }
@@ -143,6 +253,7 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
 
     // Track background and shape to combine them in draw commands
     let background_color = RefCell::new(None);
+    let background_insert_index = RefCell::new(None::<usize>);
     let corner_shape = RefCell::new(None);
 
     chain.for_each_node_with_capability(NodeCapabilities::DRAW, |_ref, node| {
@@ -151,6 +262,7 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
         // Collect background color from BackgroundNode
         if let Some(bg_node) = any.downcast_ref::<BackgroundNode>() {
             *background_color.borrow_mut() = Some(bg_node.color());
+            *background_insert_index.borrow_mut() = Some(slices.draw_commands.len());
             // Note: BackgroundNode can have an optional shape, but we primarily track
             // shape via CornerShapeNode for flexibility
             if bg_node.shape().is_some() {
@@ -195,7 +307,7 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
 
         // Collect graphics layer from GraphicsLayerNode
         if let Some(layer_node) = any.downcast_ref::<GraphicsLayerNode>() {
-            slices.graphics_layer = Some(layer_node.layer());
+            slices.push_graphics_layer(layer_node.layer(), layer_node.layer_resolver());
         }
 
         if any.is::<ClipToBoundsNode>() {
@@ -262,9 +374,13 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
             }
         });
 
+        let insert_index = background_insert_index
+            .into_inner()
+            .unwrap_or(0)
+            .min(slices.draw_commands.len());
         slices
             .draw_commands
-            .insert(0, DrawCommand::Behind(draw_cmd));
+            .insert(insert_index, DrawCommand::Behind(draw_cmd));
     }
 }
 

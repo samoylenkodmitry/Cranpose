@@ -6,16 +6,165 @@ use std::rc::Rc;
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::Brush;
 use cranpose_ui::{measure_text, LayoutBox, LayoutNode, LayoutNodeKind, SubcomposeLayoutNode};
-use cranpose_ui_graphics::{Color, GraphicsLayer, Point, Rect, RoundedCornerShape, Size};
+use cranpose_ui_graphics::{
+    BlendMode, Color, CompositingStrategy, GraphicsLayer, LayerShape, Point, Rect, RenderEffect,
+    RoundedCornerShape, Size,
+};
 
-use crate::scene::{ClickAction, Scene};
+use crate::scene::{BackdropLayer, ClickAction, DrawShape, EffectLayer, Scene, ShadowDraw};
 
 // Re-use style functions from a local copy
 mod style;
 use style::{
-    apply_draw_commands, apply_layer_to_brush, apply_layer_to_color, apply_layer_to_rect,
-    combine_layers, scale_corner_radii, DrawPlacement, NodeStyle,
+    apply_draw_commands, apply_layer_affine_to_rect, apply_layer_to_brush, apply_layer_to_color,
+    apply_layer_to_quad, apply_layer_to_rect, combine_layers, layer_uniform_scale, quad_bounds,
+    scale_corner_radii, DrawPlacement, NodeStyle,
 };
+
+#[derive(Clone)]
+struct LayerIsolation {
+    effect: Option<RenderEffect>,
+    blend_mode: BlendMode,
+    composite_alpha: f32,
+}
+
+fn effective_layer_isolation(layer: &GraphicsLayer) -> Option<LayerIsolation> {
+    let has_effect = layer.render_effect.is_some();
+    let has_layer_blend = layer.blend_mode != BlendMode::SrcOver;
+    let requires_isolation = match layer.compositing_strategy {
+        CompositingStrategy::Offscreen => true,
+        CompositingStrategy::Auto => has_effect || has_layer_blend || layer.alpha < 1.0,
+        CompositingStrategy::ModulateAlpha => has_effect || has_layer_blend,
+    };
+
+    if !requires_isolation {
+        return None;
+    }
+
+    let composite_alpha = if layer.compositing_strategy == CompositingStrategy::ModulateAlpha {
+        1.0
+    } else {
+        layer.alpha.clamp(0.0, 1.0)
+    };
+
+    Some(LayerIsolation {
+        effect: layer.render_effect.clone(),
+        blend_mode: layer.blend_mode,
+        composite_alpha,
+    })
+}
+
+fn layer_for_content(layer: &GraphicsLayer, isolation: Option<&LayerIsolation>) -> GraphicsLayer {
+    let mut content = layer.clone();
+    if isolation.is_some() && layer.compositing_strategy != CompositingStrategy::ModulateAlpha {
+        content.alpha = 1.0;
+    }
+    content
+}
+
+fn rect_to_quad(rect: Rect) -> [[f32; 2]; 4] {
+    [
+        [rect.x, rect.y],
+        [rect.x + rect.width, rect.y],
+        [rect.x, rect.y + rect.height],
+        [rect.x + rect.width, rect.y + rect.height],
+    ]
+}
+
+fn shadow_shape(
+    rect: Rect,
+    color: Color,
+    shape: Option<RoundedCornerShape>,
+) -> (DrawShape, BlendMode) {
+    (
+        DrawShape {
+            rect,
+            local_rect: rect,
+            quad: rect_to_quad(rect),
+            brush: Brush::solid(color),
+            shape,
+            z_index: 0, // populated by Scene::push_shadow_draw()
+            clip: None,
+            blend_mode: BlendMode::SrcOver,
+        },
+        BlendMode::SrcOver,
+    )
+}
+
+fn push_layer_shadow(
+    scene: &mut Scene,
+    layer: &GraphicsLayer,
+    layer_bounds: Rect,
+    transformed_bounds: Rect,
+    clip: Option<Rect>,
+) {
+    if layer.shadow_elevation <= 0.0 {
+        return;
+    }
+
+    let scale = layer_uniform_scale(layer).max(0.1);
+    let elevation = layer.shadow_elevation * scale;
+    let spread = (elevation * 0.24).max(0.8);
+    let spot_offset_x = elevation * 0.18;
+    let spot_offset_y = elevation * 0.62;
+    let ambient_blur_radius = (elevation * 0.95).max(0.5);
+    let spot_blur_radius = (elevation * 0.72).max(0.5);
+
+    let resolved_shape = match layer.shape {
+        LayerShape::Rectangle => None,
+        LayerShape::Rounded(shape) => {
+            let resolved = shape.resolve(layer_bounds.width, layer_bounds.height);
+            Some(RoundedCornerShape::with_radii(scale_corner_radii(
+                resolved, scale,
+            )))
+        }
+    };
+
+    let ambient_alpha = (layer.ambient_shadow_color.a() * 0.44).clamp(0.0, 1.0);
+    if ambient_alpha > f32::EPSILON {
+        let ambient = Color(
+            layer.ambient_shadow_color.r(),
+            layer.ambient_shadow_color.g(),
+            layer.ambient_shadow_color.b(),
+            ambient_alpha,
+        );
+        let ambient_rect = Rect {
+            x: transformed_bounds.x - spread,
+            y: transformed_bounds.y - spread,
+            width: transformed_bounds.width + spread * 2.0,
+            height: transformed_bounds.height + spread * 2.0,
+        };
+        scene.push_shadow_draw(ShadowDraw {
+            shapes: vec![shadow_shape(ambient_rect, ambient, resolved_shape)],
+            blur_radius: ambient_blur_radius,
+            clip,
+            z_index: 0, // populated by Scene::push_shadow_draw()
+        });
+    }
+
+    let spot_alpha = (layer.spot_shadow_color.a() * 0.62).clamp(0.0, 1.0);
+    if spot_alpha > f32::EPSILON {
+        let spot = Color(
+            layer.spot_shadow_color.r(),
+            layer.spot_shadow_color.g(),
+            layer.spot_shadow_color.b(),
+            spot_alpha,
+        );
+        let spot_spread = spread * 0.72;
+        let spot_rect = Rect {
+            x: transformed_bounds.x + spot_offset_x - spot_spread,
+            y: transformed_bounds.y + spot_offset_y - spot_spread,
+            width: transformed_bounds.width + spot_spread * 2.0,
+            height: transformed_bounds.height + spot_spread * 2.0,
+        };
+        scene.push_shadow_draw(ShadowDraw {
+            shapes: vec![shadow_shape(spot_rect, spot, resolved_shape)],
+            blur_radius: spot_blur_radius,
+            clip,
+            z_index: 0, // populated by Scene::push_shadow_draw()
+        });
+    }
+}
 
 #[allow(dead_code)]
 pub(crate) fn render_layout_tree(root: &LayoutBox, scene: &mut Scene) {
@@ -24,10 +173,8 @@ pub(crate) fn render_layout_tree(root: &LayoutBox, scene: &mut Scene) {
 
 pub(crate) fn render_layout_tree_with_scale(root: &LayoutBox, scene: &mut Scene, scale: f32) {
     let root_layer = GraphicsLayer {
-        alpha: 1.0,
         scale,
-        translation_x: 0.0,
-        translation_y: 0.0,
+        ..Default::default()
     };
     render_layout_node(root, root_layer, scene, None, None);
 }
@@ -82,57 +229,88 @@ fn render_container(
 ) {
     let style = NodeStyle::from_layout_node(&layout.node_data);
     let node_layer = combine_layers(parent_layer, style.graphics_layer);
+    let layer_isolation = effective_layer_isolation(&node_layer);
+    let content_layer = layer_for_content(&node_layer, layer_isolation.as_ref());
     let rect = layout.rect;
     let size = Size {
         width: rect.width,
         height: rect.height,
     };
-    let origin = (rect.x, rect.y);
-    let transformed_rect = apply_layer_to_rect(rect, origin, node_layer);
+    let transformed_rect = apply_layer_to_rect(rect, rect, &node_layer);
 
     if transformed_rect.width <= 0.0 || transformed_rect.height <= 0.0 {
         return;
     }
 
-    let requested_visual_clip = style.clip_to_bounds.then_some(transformed_rect);
-    let visual_clip = match (parent_visual_clip, requested_visual_clip) {
-        (Some(parent), Some(current)) => intersect_rect(parent, current),
-        (Some(parent), None) => Some(parent),
-        (None, Some(current)) => Some(current),
-        (None, None) => None,
-    };
+    let content_clip_to_bounds = style.clip_to_bounds || node_layer.clip;
+    let visual_clip = resolve_clip(
+        parent_visual_clip,
+        content_clip_to_bounds.then_some(transformed_rect),
+    );
 
-    if style.clip_to_bounds && visual_clip.is_none() {
+    if content_clip_to_bounds && visual_clip.is_none() {
         return;
     }
 
-    let requested_hit_clip = style.clip_to_bounds.then_some(transformed_rect);
-    let hit_clip = match (parent_hit_clip, requested_hit_clip) {
-        (Some(parent), Some(current)) => intersect_rect(parent, current),
-        (Some(parent), None) => Some(parent),
-        (None, Some(current)) => Some(current),
-        (None, None) => None,
-    };
+    let hit_clip = resolve_clip(
+        parent_hit_clip,
+        content_clip_to_bounds.then_some(transformed_rect),
+    );
+
+    // Track z_start for layer events emitted by this node.
+    let has_backdrop = node_layer.backdrop_effect.is_some();
+    let z_start = scene.next_z;
+
+    if has_backdrop {
+        if let Some(effect) = &node_layer.backdrop_effect {
+            scene.backdrop_layers.push(BackdropLayer {
+                rect: transformed_rect,
+                clip: visual_clip,
+                effect: effect.clone(),
+                z_index: z_start,
+            });
+        }
+    }
+
+    // GraphicsLayer clipping clips content, but should not clip its own shadow.
+    // Explicit clip-to-bounds modifiers still clip both.
+    let shadow_clip = resolve_clip(
+        parent_visual_clip,
+        style.clip_to_bounds.then_some(transformed_rect),
+    );
+    push_layer_shadow(scene, &node_layer, rect, transformed_rect, shadow_clip);
 
     apply_draw_commands(
         &style.draw_commands,
         DrawPlacement::Behind,
         rect,
-        origin,
         size,
-        node_layer,
+        &content_layer,
         visual_clip,
         scene,
     );
 
     let scaled_shape = style.shape.map(|shape| {
         let resolved = shape.resolve(rect.width, rect.height);
-        RoundedCornerShape::with_radii(scale_corner_radii(resolved, node_layer.scale))
+        RoundedCornerShape::with_radii(scale_corner_radii(
+            resolved,
+            layer_uniform_scale(&content_layer),
+        ))
     });
 
     if let Some(color) = style.background {
-        let brush = apply_layer_to_brush(Brush::solid(color), node_layer);
-        scene.push_shape(transformed_rect, brush, scaled_shape, visual_clip);
+        let brush = apply_layer_to_brush(Brush::solid(color), &content_layer);
+        let local_rect = apply_layer_affine_to_rect(rect, rect, &content_layer);
+        let quad = apply_layer_to_quad(rect, rect, &content_layer);
+        scene.push_shape_with_geometry(
+            quad_bounds(quad),
+            local_rect,
+            quad,
+            brush,
+            scaled_shape,
+            visual_clip,
+            BlendMode::SrcOver,
+        );
     }
 
     // Render text content if present in modifier slices.
@@ -153,7 +331,7 @@ fn render_container(
             width: metrics.width,
             height: metrics.height,
         };
-        let transformed_text_rect = apply_layer_to_rect(text_rect, origin, node_layer);
+        let transformed_text_rect = apply_layer_to_rect(text_rect, rect, &content_layer);
 
         // Extract color and font size from text style or default
         let text_color = text_style_ref.color.unwrap_or(Color(1.0, 1.0, 1.0, 1.0));
@@ -167,9 +345,9 @@ fn render_container(
             layout.node_id,
             transformed_text_rect,
             value,
-            apply_layer_to_color(text_color, node_layer),
+            apply_layer_to_color(text_color, &content_layer),
             font_size,
-            node_layer.scale,
+            layer_uniform_scale(&content_layer),
             visual_clip,
         );
     }
@@ -188,19 +366,37 @@ fn render_container(
     );
 
     for child_layout in &layout.children {
-        render_layout_node(child_layout, node_layer, scene, visual_clip, hit_clip);
+        render_layout_node(
+            child_layout,
+            content_layer.clone(),
+            scene,
+            visual_clip,
+            hit_clip,
+        );
     }
 
     apply_draw_commands(
         &style.draw_commands,
         DrawPlacement::Overlay,
         rect,
-        origin,
         size,
-        node_layer,
+        &content_layer,
         visual_clip,
         scene,
     );
+
+    // Record isolation layer if this node requires offscreen composition.
+    if let Some(isolation) = layer_isolation {
+        scene.effect_layers.push(EffectLayer {
+            rect: transformed_rect,
+            clip: visual_clip,
+            effect: isolation.effect,
+            blend_mode: isolation.blend_mode,
+            composite_alpha: isolation.composite_alpha,
+            z_start,
+            z_end: scene.next_z,
+        });
+    }
 }
 
 fn render_spacer(
@@ -258,6 +454,15 @@ fn intersect_rect(a: Rect, b: Rect) -> Option<Rect> {
     }
 }
 
+fn resolve_clip(parent_clip: Option<Rect>, requested_clip: Option<Rect>) -> Option<Rect> {
+    match (parent_clip, requested_clip) {
+        (Some(parent), Some(current)) => intersect_rect(parent, current),
+        (Some(parent), None) => Some(parent),
+        (None, Some(current)) => Some(current),
+        (None, None) => None,
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // New Architecture: Direct LayoutNode Tree Rendering
 // ═══════════════════════════════════════════════════════════════════════════
@@ -271,10 +476,8 @@ pub(crate) fn render_from_applier(
     scale: f32,
 ) {
     let root_layer = GraphicsLayer {
-        alpha: 1.0,
         scale,
-        translation_x: 0.0,
-        translation_y: 0.0,
+        ..Default::default()
     };
     render_node_from_applier(
         applier,
@@ -350,57 +553,88 @@ fn render_node_from_applier(
     };
 
     let node_layer = combine_layers(parent_layer, style.graphics_layer);
+    let layer_isolation = effective_layer_isolation(&node_layer);
+    let content_layer = layer_for_content(&node_layer, layer_isolation.as_ref());
     let size = Size {
         width: rect.width,
         height: rect.height,
     };
-    let origin = (rect.x, rect.y);
-    let transformed_rect = apply_layer_to_rect(rect, origin, node_layer);
+    let transformed_rect = apply_layer_to_rect(rect, rect, &node_layer);
 
     if transformed_rect.width <= 0.0 || transformed_rect.height <= 0.0 {
         return;
     }
 
-    let requested_visual_clip = style.clip_to_bounds.then_some(transformed_rect);
-    let visual_clip = match (parent_visual_clip, requested_visual_clip) {
-        (Some(parent), Some(current)) => intersect_rect(parent, current),
-        (Some(parent), None) => Some(parent),
-        (None, Some(current)) => Some(current),
-        (None, None) => None,
-    };
+    let content_clip_to_bounds = style.clip_to_bounds || node_layer.clip;
+    let visual_clip = resolve_clip(
+        parent_visual_clip,
+        content_clip_to_bounds.then_some(transformed_rect),
+    );
 
-    if style.clip_to_bounds && visual_clip.is_none() {
+    if content_clip_to_bounds && visual_clip.is_none() {
         return;
     }
 
-    let requested_hit_clip = style.clip_to_bounds.then_some(transformed_rect);
-    let hit_clip = match (parent_hit_clip, requested_hit_clip) {
-        (Some(parent), Some(current)) => intersect_rect(parent, current),
-        (Some(parent), None) => Some(parent),
-        (None, Some(current)) => Some(current),
-        (None, None) => None,
-    };
+    let hit_clip = resolve_clip(
+        parent_hit_clip,
+        content_clip_to_bounds.then_some(transformed_rect),
+    );
+
+    // Track z_start for layer events emitted by this node.
+    let has_backdrop = node_layer.backdrop_effect.is_some();
+    let z_start = scene.next_z;
+
+    if has_backdrop {
+        if let Some(effect) = &node_layer.backdrop_effect {
+            scene.backdrop_layers.push(BackdropLayer {
+                rect: transformed_rect,
+                clip: visual_clip,
+                effect: effect.clone(),
+                z_index: z_start,
+            });
+        }
+    }
+
+    // GraphicsLayer clipping clips content, but should not clip its own shadow.
+    // Explicit clip-to-bounds modifiers still clip both.
+    let shadow_clip = resolve_clip(
+        parent_visual_clip,
+        style.clip_to_bounds.then_some(transformed_rect),
+    );
+    push_layer_shadow(scene, &node_layer, rect, transformed_rect, shadow_clip);
 
     // Draw behind layer
     apply_draw_commands(
         &style.draw_commands,
         DrawPlacement::Behind,
         rect,
-        origin,
         size,
-        node_layer,
+        &content_layer,
         visual_clip,
         scene,
     );
 
     let scaled_shape = style.shape.map(|shape| {
         let resolved = shape.resolve(rect.width, rect.height);
-        RoundedCornerShape::with_radii(scale_corner_radii(resolved, node_layer.scale))
+        RoundedCornerShape::with_radii(scale_corner_radii(
+            resolved,
+            layer_uniform_scale(&content_layer),
+        ))
     });
 
     if let Some(color) = style.background {
-        let brush = apply_layer_to_brush(Brush::solid(color), node_layer);
-        scene.push_shape(transformed_rect, brush, scaled_shape, visual_clip);
+        let brush = apply_layer_to_brush(Brush::solid(color), &content_layer);
+        let local_rect = apply_layer_affine_to_rect(rect, rect, &content_layer);
+        let quad = apply_layer_to_quad(rect, rect, &content_layer);
+        scene.push_shape_with_geometry(
+            quad_bounds(quad),
+            local_rect,
+            quad,
+            brush,
+            scaled_shape,
+            visual_clip,
+            BlendMode::SrcOver,
+        );
     }
 
     // Render text content if present
@@ -416,7 +650,7 @@ fn render_node_from_applier(
             width: metrics.width,
             height: metrics.height,
         };
-        let transformed_text_rect = apply_layer_to_rect(text_rect, origin, node_layer);
+        let transformed_text_rect = apply_layer_to_rect(text_rect, rect, &content_layer);
 
         // Extract color and font size
         let text_color = text_style_ref.color.unwrap_or(Color(1.0, 1.0, 1.0, 1.0));
@@ -430,9 +664,9 @@ fn render_node_from_applier(
             node_id,
             transformed_text_rect,
             value,
-            apply_layer_to_color(text_color, node_layer),
+            apply_layer_to_color(text_color, &content_layer),
             font_size,
-            node_layer.scale,
+            layer_uniform_scale(&content_layer),
             visual_clip,
         );
     }
@@ -462,7 +696,7 @@ fn render_node_from_applier(
         render_node_from_applier(
             applier,
             child_id,
-            node_layer,
+            content_layer.clone(),
             scene,
             visual_clip,
             hit_clip,
@@ -475,10 +709,197 @@ fn render_node_from_applier(
         &style.draw_commands,
         DrawPlacement::Overlay,
         rect,
-        origin,
         size,
-        node_layer,
+        &content_layer,
         visual_clip,
         scene,
     );
+
+    // Record isolation layer if this node requires offscreen composition.
+    if let Some(isolation) = layer_isolation {
+        scene.effect_layers.push(EffectLayer {
+            rect: transformed_rect,
+            clip: visual_clip,
+            effect: isolation.effect,
+            blend_mode: isolation.blend_mode,
+            composite_alpha: isolation.composite_alpha,
+            z_start,
+            z_end: scene.next_z,
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_alpha_triggers_isolation_with_composite_alpha() {
+        let layer = GraphicsLayer {
+            alpha: 0.5,
+            compositing_strategy: CompositingStrategy::Auto,
+            ..Default::default()
+        };
+        let isolation = effective_layer_isolation(&layer).expect("expected isolation");
+        assert!(isolation.effect.is_none());
+        assert!((isolation.composite_alpha - 0.5).abs() < 1e-6);
+
+        let content = layer_for_content(&layer, Some(&isolation));
+        assert!((content.alpha - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn modulate_alpha_keeps_in_place_alpha_without_offscreen() {
+        let layer = GraphicsLayer {
+            alpha: 0.5,
+            compositing_strategy: CompositingStrategy::ModulateAlpha,
+            ..Default::default()
+        };
+        assert!(effective_layer_isolation(&layer).is_none());
+    }
+
+    #[test]
+    fn non_src_over_layer_blend_triggers_isolation() {
+        let layer = GraphicsLayer {
+            blend_mode: BlendMode::DstOut,
+            compositing_strategy: CompositingStrategy::Auto,
+            ..Default::default()
+        };
+        let isolation = effective_layer_isolation(&layer).expect("expected blend isolation");
+        assert_eq!(isolation.blend_mode, BlendMode::DstOut);
+        assert!((isolation.composite_alpha - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn offscreen_isolation_has_no_effect_payload() {
+        let layer = GraphicsLayer {
+            alpha: 1.0,
+            compositing_strategy: CompositingStrategy::Offscreen,
+            ..Default::default()
+        };
+        let isolation = effective_layer_isolation(&layer).expect("expected isolation");
+        assert!(isolation.effect.is_none());
+        assert!((isolation.composite_alpha - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn render_effect_forces_isolation_even_with_modulate_alpha() {
+        let layer = GraphicsLayer {
+            alpha: 0.4,
+            compositing_strategy: CompositingStrategy::ModulateAlpha,
+            render_effect: Some(RenderEffect::blur(4.0)),
+            ..Default::default()
+        };
+        let isolation = effective_layer_isolation(&layer).expect("expected effect isolation");
+        assert!(isolation.effect.is_some());
+        // ModulateAlpha keeps alpha modulation in-content.
+        assert!((isolation.composite_alpha - 1.0).abs() < 1e-6);
+        let content = layer_for_content(&layer, Some(&isolation));
+        assert!((content.alpha - layer.alpha).abs() < 1e-6);
+    }
+
+    #[test]
+    fn shadow_geometry_has_visible_expansion_and_offsets() {
+        let mut scene = Scene::new();
+        let layer = GraphicsLayer {
+            shadow_elevation: 10.0,
+            ambient_shadow_color: Color(0.2, 0.3, 0.4, 0.8),
+            spot_shadow_color: Color(0.7, 0.6, 0.5, 0.9),
+            shape: LayerShape::Rounded(RoundedCornerShape::uniform(8.0)),
+            ..Default::default()
+        };
+        let bounds = Rect {
+            x: 20.0,
+            y: 30.0,
+            width: 40.0,
+            height: 24.0,
+        };
+
+        push_layer_shadow(&mut scene, &layer, bounds, bounds, None);
+
+        assert!(
+            scene.shadow_draws.len() >= 2,
+            "elevation shadow should emit ambient + spot blur draws"
+        );
+
+        let ambient = &scene.shadow_draws[0];
+        assert!(
+            ambient.blur_radius > 0.0,
+            "ambient shadow should have a blur radius"
+        );
+        let ambient_shape = &ambient.shapes[0].0;
+        assert!(
+            ambient_shape.rect.x <= bounds.x - 2.0,
+            "ambient shadow should clearly expand left"
+        );
+        assert!(
+            ambient_shape.rect.width > bounds.width,
+            "ambient shadow should clearly expand width"
+        );
+        let ambient_peak_alpha = match &ambient_shape.brush {
+            Brush::Solid(color) => color.a(),
+            _ => 0.0,
+        };
+        assert!(
+            ambient_peak_alpha > 0.02,
+            "ambient alpha should remain visible"
+        );
+
+        let spot = &scene.shadow_draws[1];
+        assert!(spot.blur_radius > 0.0, "spot shadow should have blur");
+        let spot_shape = &spot.shapes[0].0;
+        assert!(
+            spot_shape.rect.y > bounds.y,
+            "spot shadow should be offset downward from source bounds"
+        );
+        let Brush::Solid(spot_color) = &spot_shape.brush else {
+            panic!("spot shadow must use solid color");
+        };
+        assert!(spot_color.a() > 0.02, "spot alpha should remain visible");
+    }
+
+    #[test]
+    fn graphics_layer_clip_is_not_reused_for_shadow_clip() {
+        let bounds = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 30.0,
+            height: 18.0,
+        };
+        let content_clip = resolve_clip(None, Some(bounds));
+        let shadow_clip = resolve_clip(None, None);
+        assert_eq!(content_clip, Some(bounds));
+        assert_eq!(
+            shadow_clip, None,
+            "graphics-layer clip should not clip layer shadow geometry"
+        );
+    }
+
+    #[test]
+    fn clip_to_bounds_clips_shadow_and_content() {
+        let parent = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 40.0,
+            height: 40.0,
+        };
+        let bounds = Rect {
+            x: 20.0,
+            y: 20.0,
+            width: 30.0,
+            height: 30.0,
+        };
+        let content_clip = resolve_clip(Some(parent), Some(bounds)).expect("content clip");
+        let shadow_clip = resolve_clip(Some(parent), Some(bounds)).expect("shadow clip");
+        assert_eq!(content_clip, shadow_clip);
+        assert_eq!(
+            content_clip,
+            Rect {
+                x: 20.0,
+                y: 20.0,
+                width: 20.0,
+                height: 20.0,
+            }
+        );
+    }
 }

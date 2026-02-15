@@ -3,183 +3,244 @@ use std::rc::Rc;
 use cranpose_foundation::PointerEvent;
 use cranpose_ui::{Brush, DrawCommand, LayoutNodeData, ModifierNodeSlices};
 use cranpose_ui_graphics::{
-    Color, CornerRadii, DrawPrimitive, GraphicsLayer, Point, Rect, RoundedCornerShape, Size,
+    BlendMode, Color, ColorFilter, CompositingStrategy, CornerRadii, DrawPrimitive, GraphicsLayer,
+    Point, Rect, RoundedCornerShape, ShadowPrimitive, Size,
 };
 
-use crate::scene::Scene;
+use crate::scene::{DrawShape, Scene, ShadowDraw};
 
-pub(crate) struct NodeStyle {
-    pub padding: cranpose_ui_graphics::EdgeInsets,
-    pub background: Option<Color>,
-    pub click_actions: Vec<Rc<dyn Fn(Point)>>,
-    pub shape: Option<RoundedCornerShape>,
-    pub pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
-    pub draw_commands: Vec<DrawCommand>,
-    pub graphics_layer: Option<GraphicsLayer>,
-    pub clip_to_bounds: bool,
-}
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../common/src/style_shared.rs"
+));
 
-impl NodeStyle {
-    pub fn from_layout_node(data: &LayoutNodeData) -> Self {
-        let resolved = data.resolved_modifiers;
-        let slices: &ModifierNodeSlices = data.modifier_slices();
-        let pointer_inputs = slices.pointer_inputs().to_vec();
-
-        // Visual properties (background, shape) are now encoded in draw commands within modifier
-        // slices. Graphics layer is extracted directly from the slices for coordinate transformations.
-        Self {
-            padding: resolved.padding(),
-            background: None, // Now rendered via draw commands
-            click_actions: slices.click_handlers().to_vec(),
-            shape: None, // Now encoded in draw command round rects
-            pointer_inputs,
-            draw_commands: slices.draw_commands().to_vec(),
-            graphics_layer: slices.graphics_layer(), // Extracted from GraphicsLayerNode
-            clip_to_bounds: slices.clip_to_bounds(),
-        }
-    }
-}
-
-pub(crate) fn combine_layers(
-    current: GraphicsLayer,
-    modifier_layer: Option<GraphicsLayer>,
-) -> GraphicsLayer {
-    if let Some(layer) = modifier_layer {
-        GraphicsLayer {
-            alpha: (current.alpha * layer.alpha).clamp(0.0, 1.0),
-            scale: current.scale * layer.scale,
-            translation_x: current.translation_x + layer.translation_x,
-            translation_y: current.translation_y + layer.translation_y,
-        }
-    } else {
-        current
-    }
-}
-
-pub(crate) fn apply_layer_to_rect(rect: Rect, origin: (f32, f32), layer: GraphicsLayer) -> Rect {
-    let offset_x = rect.x - origin.0;
-    let offset_y = rect.y - origin.1;
-    Rect {
-        x: origin.0 + offset_x * layer.scale + layer.translation_x,
-        y: origin.1 + offset_y * layer.scale + layer.translation_y,
-        width: rect.width * layer.scale,
-        height: rect.height * layer.scale,
-    }
-}
-
-pub(crate) fn apply_layer_to_color(color: Color, layer: GraphicsLayer) -> Color {
-    Color(
-        color.0,
-        color.1,
-        color.2,
-        (color.3 * layer.alpha).clamp(0.0, 1.0),
-    )
-}
-
-pub(crate) fn apply_layer_to_brush(brush: Brush, layer: GraphicsLayer) -> Brush {
-    match brush {
-        Brush::Solid(color) => Brush::solid(apply_layer_to_color(color, layer)),
-        Brush::LinearGradient(colors) => Brush::LinearGradient(
-            colors
-                .into_iter()
-                .map(|c| apply_layer_to_color(c, layer))
-                .collect(),
-        ),
-        Brush::RadialGradient {
-            colors,
-            mut center,
-            mut radius,
-        } => {
-            center.x *= layer.scale;
-            center.y *= layer.scale;
-            radius *= layer.scale;
-            Brush::RadialGradient {
-                colors: colors
-                    .into_iter()
-                    .map(|c| apply_layer_to_color(c, layer))
-                    .collect(),
-                center,
-                radius,
-            }
-        }
-    }
-}
-
-pub(crate) fn scale_corner_radii(radii: CornerRadii, scale: f32) -> CornerRadii {
-    CornerRadii {
-        top_left: radii.top_left * scale,
-        top_right: radii.top_right * scale,
-        bottom_right: radii.bottom_right * scale,
-        bottom_left: radii.bottom_left * scale,
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum DrawPlacement {
-    Behind,
-    Overlay,
-}
-
-#[allow(clippy::too_many_arguments)] // Render operations need all style and placement parameters
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_draw_commands(
     commands: &[DrawCommand],
     placement: DrawPlacement,
     rect: Rect,
-    origin: (f32, f32),
     size: Size,
-    layer: GraphicsLayer,
+    layer: &GraphicsLayer,
     clip: Option<Rect>,
     scene: &mut Scene,
 ) {
-    for command in commands {
-        let primitives = match (placement, command) {
-            (DrawPlacement::Behind, DrawCommand::Behind(func)) => func(size),
-            (DrawPlacement::Overlay, DrawCommand::Overlay(func)) => func(size),
-            _ => continue,
-        };
-        for primitive in primitives {
-            match primitive {
+    fn emit_primitive(
+        primitive: DrawPrimitive,
+        layer_bounds: Rect,
+        layer: &GraphicsLayer,
+        clip: Option<Rect>,
+        scene: &mut Scene,
+        blend_mode: Option<BlendMode>,
+    ) {
+        match primitive {
+            DrawPrimitive::Content => {}
+            DrawPrimitive::Blend {
+                primitive,
+                blend_mode: nested,
+            } => emit_primitive(
+                *primitive,
+                layer_bounds,
+                layer,
+                clip,
+                scene,
+                blend_mode.or(Some(nested)),
+            ),
+            DrawPrimitive::Rect {
+                rect: local_rect,
+                brush,
+            } => {
+                let draw_rect = local_rect.translate(layer_bounds.x, layer_bounds.y);
+                let local_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
+                let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
+                let transformed = quad_bounds(quad);
+                let brush = apply_layer_to_brush(brush, layer);
+                scene.push_shape_with_geometry(
+                    transformed,
+                    local_rect,
+                    quad,
+                    brush,
+                    None,
+                    clip,
+                    blend_mode.unwrap_or(BlendMode::SrcOver),
+                );
+            }
+            DrawPrimitive::RoundRect {
+                rect: local_rect,
+                brush,
+                radii,
+            } => {
+                let draw_rect = local_rect.translate(layer_bounds.x, layer_bounds.y);
+                let local_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
+                let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
+                let transformed = quad_bounds(quad);
+                let scaled_radii = scale_corner_radii(radii, layer_uniform_scale(layer));
+                let shape = RoundedCornerShape::with_radii(scaled_radii);
+                let brush = apply_layer_to_brush(brush, layer);
+                scene.push_shape_with_geometry(
+                    transformed,
+                    local_rect,
+                    quad,
+                    brush,
+                    Some(shape),
+                    clip,
+                    blend_mode.unwrap_or(BlendMode::SrcOver),
+                );
+            }
+            DrawPrimitive::Image {
+                rect: local_rect,
+                image,
+                alpha,
+                color_filter,
+                src_rect,
+            } => {
+                let draw_rect = local_rect.translate(layer_bounds.x, layer_bounds.y);
+                let local_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
+                let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
+                let transformed = quad_bounds(quad);
+                let combined_alpha = (alpha * layer.alpha).clamp(0.0, 1.0);
+                let combined_filter = compose_color_filters(color_filter, layer.color_filter);
+                scene.push_image_with_geometry(
+                    transformed,
+                    local_rect,
+                    quad,
+                    image,
+                    combined_alpha,
+                    combined_filter,
+                    clip,
+                    src_rect,
+                    blend_mode.unwrap_or(BlendMode::SrcOver),
+                );
+            }
+            DrawPrimitive::Shadow(shadow_prim) => {
+                emit_shadow(shadow_prim, layer_bounds, layer, clip, scene);
+            }
+        }
+    }
+
+    fn emit_shadow(
+        shadow_prim: ShadowPrimitive,
+        layer_bounds: Rect,
+        layer: &GraphicsLayer,
+        clip: Option<Rect>,
+        scene: &mut Scene,
+    ) {
+        fn prim_to_draw_shape(
+            prim: DrawPrimitive,
+            layer_bounds: Rect,
+            layer: &GraphicsLayer,
+            blend_mode: BlendMode,
+        ) -> Option<(DrawShape, BlendMode)> {
+            match prim {
                 DrawPrimitive::Rect {
                     rect: local_rect,
                     brush,
                 } => {
-                    let draw_rect = local_rect.translate(rect.x, rect.y);
-                    let transformed = apply_layer_to_rect(draw_rect, origin, layer);
+                    let draw_rect = local_rect.translate(layer_bounds.x, layer_bounds.y);
+                    let local_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
+                    let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
+                    let transformed = quad_bounds(quad);
                     let brush = apply_layer_to_brush(brush, layer);
-                    scene.push_shape(transformed, brush, None, clip);
+                    Some((
+                        DrawShape {
+                            rect: transformed,
+                            local_rect,
+                            quad,
+                            brush,
+                            shape: None,
+                            z_index: 0, // set by push_shadow_draw
+                            clip: None,
+                            blend_mode,
+                        },
+                        blend_mode,
+                    ))
                 }
                 DrawPrimitive::RoundRect {
                     rect: local_rect,
                     brush,
                     radii,
                 } => {
-                    let draw_rect = local_rect.translate(rect.x, rect.y);
-                    let transformed = apply_layer_to_rect(draw_rect, origin, layer);
-                    let scaled_radii = scale_corner_radii(radii, layer.scale);
+                    let draw_rect = local_rect.translate(layer_bounds.x, layer_bounds.y);
+                    let local_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
+                    let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
+                    let transformed = quad_bounds(quad);
+                    let scaled_radii = scale_corner_radii(radii, layer_uniform_scale(layer));
                     let shape = RoundedCornerShape::with_radii(scaled_radii);
                     let brush = apply_layer_to_brush(brush, layer);
-                    scene.push_shape(transformed, brush, Some(shape), clip);
+                    Some((
+                        DrawShape {
+                            rect: transformed,
+                            local_rect,
+                            quad,
+                            brush,
+                            shape: Some(shape),
+                            z_index: 0,
+                            clip: None,
+                            blend_mode,
+                        },
+                        blend_mode,
+                    ))
                 }
-                DrawPrimitive::Image {
-                    rect: local_rect,
-                    image,
-                    alpha,
-                    color_filter,
-                    src_rect,
-                } => {
-                    let draw_rect = local_rect.translate(rect.x, rect.y);
-                    let transformed = apply_layer_to_rect(draw_rect, origin, layer);
-                    let combined_alpha = (alpha * layer.alpha).clamp(0.0, 1.0);
-                    scene.push_image(
-                        transformed,
-                        image,
-                        combined_alpha,
-                        color_filter,
-                        clip,
-                        src_rect,
-                    );
-                }
+                _ => None,
             }
+        }
+
+        match shadow_prim {
+            ShadowPrimitive::Drop {
+                shape,
+                blur_radius,
+                blend_mode,
+            } => {
+                let Some(shape_pair) = prim_to_draw_shape(*shape, layer_bounds, layer, blend_mode)
+                else {
+                    return;
+                };
+                scene.push_shadow_draw(ShadowDraw {
+                    shapes: vec![shape_pair],
+                    blur_radius,
+                    clip,
+                    z_index: 0,
+                });
+            }
+            ShadowPrimitive::Inner {
+                fill,
+                cutout,
+                blur_radius,
+                blend_mode,
+                clip_rect,
+            } => {
+                let Some(fill_pair) = prim_to_draw_shape(*fill, layer_bounds, layer, blend_mode)
+                else {
+                    return;
+                };
+                let Some(cutout_pair) =
+                    prim_to_draw_shape(*cutout, layer_bounds, layer, BlendMode::DstOut)
+                else {
+                    return;
+                };
+                // Transform the clip rect to screen coordinates
+                let abs_clip = Rect {
+                    x: clip_rect.x + layer_bounds.x,
+                    y: clip_rect.y + layer_bounds.y,
+                    width: clip_rect.width,
+                    height: clip_rect.height,
+                };
+                let transformed_clip = apply_layer_to_rect(abs_clip, layer_bounds, layer);
+                scene.push_shadow_draw(ShadowDraw {
+                    shapes: vec![fill_pair, cutout_pair],
+                    blur_radius,
+                    clip: clip.map_or(Some(transformed_clip), |parent_clip| {
+                        parent_clip.intersect(transformed_clip)
+                    }),
+                    z_index: 0,
+                });
+            }
+        }
+    }
+
+    for command in commands {
+        let primitives = primitives_for_placement(command, placement, size);
+        for primitive in primitives {
+            emit_primitive(primitive, rect, layer, clip, scene, None);
         }
     }
 }
@@ -235,4 +296,126 @@ pub(crate) fn point_in_resolved_rounded_rect(
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::Scene;
+    use cranpose_ui_graphics::TransformOrigin;
+    use std::rc::Rc;
+
+    #[test]
+    fn apply_layer_to_rect_rotates_around_center() {
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 40.0,
+        };
+        let layer = GraphicsLayer {
+            rotation_z: 90.0,
+            ..Default::default()
+        };
+
+        let transformed = apply_layer_to_rect(rect, rect, &layer);
+        assert!((transformed.width - 40.0).abs() < 0.01);
+        assert!((transformed.height - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn apply_layer_to_rect_honors_transform_origin() {
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 40.0,
+        };
+        let layer = GraphicsLayer {
+            rotation_z: 90.0,
+            transform_origin: TransformOrigin::new(0.0, 0.0),
+            ..Default::default()
+        };
+
+        let transformed = apply_layer_to_rect(rect, rect, &layer);
+        assert!((transformed.x + 40.0).abs() < 0.01);
+        assert!((transformed.y - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn apply_layer_to_rect_camera_distance_changes_projection() {
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 60.0,
+        };
+        let near_camera = GraphicsLayer {
+            rotation_y: 25.0,
+            camera_distance: 8.0,
+            ..Default::default()
+        };
+        let far_camera = GraphicsLayer {
+            rotation_y: 25.0,
+            camera_distance: 24.0,
+            ..Default::default()
+        };
+
+        let near = apply_layer_to_rect(rect, rect, &near_camera);
+        let far = apply_layer_to_rect(rect, rect, &far_camera);
+        let delta = (near.x - far.x).abs()
+            + (near.y - far.y).abs()
+            + (near.width - far.width).abs()
+            + (near.height - far.height).abs();
+        assert!(delta > 0.05);
+    }
+
+    #[test]
+    fn apply_draw_commands_scales_round_rect_radii_with_uniform_axis_scale() {
+        let command = DrawCommand::Behind(Rc::new(|_size| {
+            vec![DrawPrimitive::RoundRect {
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 80.0,
+                    height: 40.0,
+                },
+                brush: Brush::solid(Color::BLACK),
+                radii: CornerRadii::uniform(10.0),
+            }]
+        }));
+
+        let layer = GraphicsLayer {
+            scale: 1.0,
+            scale_x: 2.0,
+            scale_y: 0.5,
+            ..Default::default()
+        };
+        let mut scene = Scene::new();
+        let bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 80.0,
+            height: 40.0,
+        };
+        apply_draw_commands(
+            &[command],
+            DrawPlacement::Behind,
+            bounds,
+            Size {
+                width: 80.0,
+                height: 40.0,
+            },
+            &layer,
+            None,
+            &mut scene,
+        );
+
+        let shape = scene.shapes[0].shape.expect("rounded shape");
+        let radii = shape.radii();
+        assert!((radii.top_left - 5.0).abs() < 1e-6);
+        assert!((radii.top_right - 5.0).abs() < 1e-6);
+        assert!((radii.bottom_right - 5.0).abs() < 1e-6);
+        assert!((radii.bottom_left - 5.0).abs() < 1e-6);
+    }
 }

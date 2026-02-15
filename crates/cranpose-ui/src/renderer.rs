@@ -108,44 +108,104 @@ fn evaluate_modifier(
     data: &LayoutNodeData,
     rect: Rect,
 ) -> (Vec<RenderOp>, Vec<RenderOp>) {
-    let mut behind = Vec::new();
-    let mut overlay = Vec::new();
-
     let size = Size {
         width: rect.width,
         height: rect.height,
     };
 
-    // Render via modifier slices - all drawing now goes through draw commands
-    // collected from the modifier node chain, including backgrounds, borders, etc.
-    for command in data.modifier_slices().draw_commands() {
-        match command {
-            ModifierDrawCommand::Behind(func) => {
-                for primitive in func(size) {
-                    behind.push(RenderOp::Primitive {
-                        node_id,
-                        layer: PaintLayer::Behind,
-                        primitive: translate_primitive(primitive, rect.x, rect.y),
-                    });
+    let behind = collect_primitives_from_commands(
+        node_id,
+        rect,
+        size,
+        data.modifier_slices().draw_commands(),
+        PaintLayer::Behind,
+    );
+    let overlay = collect_primitives_from_commands(
+        node_id,
+        rect,
+        size,
+        data.modifier_slices().draw_commands(),
+        PaintLayer::Overlay,
+    );
+    (behind, overlay)
+}
+
+fn collect_primitives_from_commands(
+    node_id: NodeId,
+    rect: Rect,
+    size: Size,
+    commands: &[ModifierDrawCommand],
+    layer: PaintLayer,
+) -> Vec<RenderOp> {
+    let split_with_content = |primitives: Vec<DrawPrimitive>, layer| {
+        let Some(last_content_idx) = primitives
+            .iter()
+            .rposition(|primitive| matches!(primitive, DrawPrimitive::Content))
+        else {
+            return if layer == PaintLayer::Overlay {
+                primitives
+                    .into_iter()
+                    .filter(|primitive| !matches!(primitive, DrawPrimitive::Content))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+        };
+
+        primitives
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, primitive)| {
+                if matches!(primitive, DrawPrimitive::Content) {
+                    return None;
                 }
-            }
-            ModifierDrawCommand::Overlay(func) => {
-                for primitive in func(size) {
-                    overlay.push(RenderOp::Primitive {
-                        node_id,
-                        layer: PaintLayer::Overlay,
-                        primitive: translate_primitive(primitive, rect.x, rect.y),
-                    });
+                let is_before = index < last_content_idx;
+                match layer {
+                    PaintLayer::Behind if is_before => Some(primitive),
+                    PaintLayer::Overlay if !is_before => Some(primitive),
+                    _ => None,
                 }
+            })
+            .collect()
+    };
+
+    let mut ops = Vec::new();
+    for command in commands {
+        let primitives = match (layer, command) {
+            (PaintLayer::Behind, ModifierDrawCommand::Behind(func)) => func(size)
+                .into_iter()
+                .filter(|primitive| !matches!(primitive, DrawPrimitive::Content))
+                .collect(),
+            (PaintLayer::Overlay, ModifierDrawCommand::Overlay(func)) => func(size)
+                .into_iter()
+                .filter(|primitive| !matches!(primitive, DrawPrimitive::Content))
+                .collect(),
+            (PaintLayer::Behind | PaintLayer::Overlay, ModifierDrawCommand::WithContent(func)) => {
+                split_with_content(func(size), layer)
             }
+            _ => Vec::new(),
+        };
+        for primitive in primitives {
+            ops.push(RenderOp::Primitive {
+                node_id,
+                layer,
+                primitive: translate_primitive(primitive, rect.x, rect.y),
+            });
         }
     }
-
-    (behind, overlay)
+    ops
 }
 
 fn translate_primitive(primitive: DrawPrimitive, dx: f32, dy: f32) -> DrawPrimitive {
     match primitive {
+        DrawPrimitive::Content => DrawPrimitive::Content,
+        DrawPrimitive::Blend {
+            primitive,
+            blend_mode,
+        } => DrawPrimitive::Blend {
+            primitive: Box::new(translate_primitive(*primitive, dx, dy)),
+            blend_mode,
+        },
         DrawPrimitive::Rect { rect, brush } => DrawPrimitive::Rect {
             rect: rect.translate(dx, dy),
             brush,
@@ -168,6 +228,33 @@ fn translate_primitive(primitive: DrawPrimitive, dx: f32, dy: f32) -> DrawPrimit
             color_filter,
             src_rect,
         },
+        DrawPrimitive::Shadow(shadow) => {
+            use cranpose_ui_graphics::ShadowPrimitive;
+            DrawPrimitive::Shadow(match shadow {
+                ShadowPrimitive::Drop {
+                    shape,
+                    blur_radius,
+                    blend_mode,
+                } => ShadowPrimitive::Drop {
+                    shape: Box::new(translate_primitive(*shape, dx, dy)),
+                    blur_radius,
+                    blend_mode,
+                },
+                ShadowPrimitive::Inner {
+                    fill,
+                    cutout,
+                    blur_radius,
+                    blend_mode,
+                    clip_rect,
+                } => ShadowPrimitive::Inner {
+                    fill: Box::new(translate_primitive(*fill, dx, dy)),
+                    cutout: Box::new(translate_primitive(*cutout, dx, dy)),
+                    blur_radius,
+                    blend_mode,
+                    clip_rect: clip_rect.translate(dx, dy),
+                },
+            })
+        }
     }
 }
 
@@ -233,29 +320,20 @@ impl HeadlessRenderer {
         // Collect draw commands from modifier slices
         let mut behind = Vec::new();
         let mut overlay = Vec::new();
-
-        for command in modifier_slices.draw_commands() {
-            match command {
-                ModifierDrawCommand::Behind(func) => {
-                    for primitive in func(size) {
-                        behind.push(RenderOp::Primitive {
-                            node_id,
-                            layer: PaintLayer::Behind,
-                            primitive: translate_primitive(primitive, rect.x, rect.y),
-                        });
-                    }
-                }
-                ModifierDrawCommand::Overlay(func) => {
-                    for primitive in func(size) {
-                        overlay.push(RenderOp::Primitive {
-                            node_id,
-                            layer: PaintLayer::Overlay,
-                            primitive: translate_primitive(primitive, rect.x, rect.y),
-                        });
-                    }
-                }
-            }
-        }
+        behind.extend(collect_primitives_from_commands(
+            node_id,
+            rect,
+            size,
+            modifier_slices.draw_commands(),
+            PaintLayer::Behind,
+        ));
+        overlay.extend(collect_primitives_from_commands(
+            node_id,
+            rect,
+            size,
+            modifier_slices.draw_commands(),
+            PaintLayer::Overlay,
+        ));
 
         operations.append(&mut behind);
 

@@ -12,6 +12,7 @@ use std::rc::Rc;
 
 mod alignment;
 mod background;
+mod blur;
 mod chain;
 mod clickable;
 mod draw_cache;
@@ -24,6 +25,7 @@ mod padding;
 mod pointer_input;
 mod scroll;
 mod semantics;
+mod shadow;
 mod size;
 mod slices;
 mod weight;
@@ -31,13 +33,17 @@ mod weight;
 pub use crate::draw::{DrawCacheBuilder, DrawCommand};
 #[allow(unused_imports)]
 pub use chain::{ModifierChainHandle, ModifierChainInspectorNode, ModifierLocalsHandle};
-use cranpose_foundation::ModifierNodeElement;
 pub use cranpose_foundation::{
     modifier_element, AnyModifierElement, DynModifierElement, FocusState, PointerEvent,
     PointerEventKind, SemanticsConfiguration,
 };
+use cranpose_foundation::{ModifierNodeElement, NodeCapabilities};
+#[allow(unused_imports)]
 pub use cranpose_ui_graphics::{
-    Brush, Color, CornerRadii, EdgeInsets, GraphicsLayer, Point, Rect, RoundedCornerShape, Size,
+    BlendMode, BlurredEdgeTreatment, Brush, Color, ColorFilter, CompositingStrategy, CornerRadii,
+    CutDirection, Dp, DpOffset, EdgeInsets, GradientCutMaskSpec, GradientFadeMaskSpec,
+    GraphicsLayer, LayerShape, Point, Rect, RenderEffect, RoundedCornerShape, RuntimeShader,
+    Shadow, ShadowScope, Size, TransformOrigin,
 };
 use cranpose_ui_layout::{Alignment, HorizontalAlignment, IntrinsicSize, VerticalAlignment};
 #[allow(unused_imports)]
@@ -761,6 +767,17 @@ impl Modifier {
                 }
 
                 for (a, b) in e1.iter().zip(e2.iter()) {
+                    // structural_eq() is used for layout decisions, so draw-only
+                    // elements of the same type are considered structurally equal
+                    // even when their draw-time payload differs.
+                    if !consider_always_update
+                        && a.element_type() == b.element_type()
+                        && a.capabilities() == NodeCapabilities::DRAW
+                        && b.capabilities() == NodeCapabilities::DRAW
+                    {
+                        continue;
+                    }
+
                     if consider_always_update && (a.requires_update() || b.requires_update()) {
                         if !Rc::ptr_eq(a, b) {
                             return false;

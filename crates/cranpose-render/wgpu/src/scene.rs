@@ -4,7 +4,8 @@ use cranpose_core::NodeId;
 use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_render_common::{HitTestTarget, RenderScene};
 use cranpose_ui_graphics::{
-    Brush, Color, ColorFilter, ImageBitmap, Point, Rect, RoundedCornerShape,
+    BlendMode, Brush, Color, ColorFilter, ImageBitmap, Point, Rect, RenderEffect,
+    RoundedCornerShape,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -31,10 +32,13 @@ impl ClickAction {
 #[derive(Clone)]
 pub struct DrawShape {
     pub rect: Rect,
+    pub local_rect: Rect,
+    pub quad: [[f32; 2]; 4],
     pub brush: Brush,
     pub shape: Option<RoundedCornerShape>,
     pub z_index: usize,
     pub clip: Option<Rect>,
+    pub blend_mode: BlendMode,
 }
 
 #[derive(Clone)]
@@ -52,11 +56,14 @@ pub struct TextDraw {
 #[derive(Clone)]
 pub struct ImageDraw {
     pub rect: Rect,
+    pub local_rect: Rect,
+    pub quad: [[f32; 2]; 4],
     pub image: ImageBitmap,
     pub alpha: f32,
     pub color_filter: Option<ColorFilter>,
     pub z_index: usize,
     pub clip: Option<Rect>,
+    pub blend_mode: BlendMode,
     /// Source sub-region in image-pixel coordinates. `None` means full image.
     pub src_rect: Option<Rect>,
 }
@@ -119,11 +126,56 @@ impl HitTestTarget for HitRegion {
     }
 }
 
+/// A shadow that requires GPU blur processing.
+#[derive(Clone)]
+pub struct ShadowDraw {
+    /// Shapes to render to offscreen target before blur.
+    /// Each shape carries its own blend mode (SrcOver for fill, DstOut for cutout).
+    pub shapes: Vec<(DrawShape, BlendMode)>,
+    /// Gaussian blur radius in pixels.
+    pub blur_radius: f32,
+    /// Optional clip rect applied when compositing (inner shadows clip to element bounds).
+    pub clip: Option<Rect>,
+    /// Z-index for correct draw ordering.
+    pub z_index: usize,
+}
+
+/// A subtree that should be rendered offscreen and processed by a RenderEffect.
+#[derive(Clone)]
+pub struct EffectLayer {
+    pub rect: Rect,
+    pub clip: Option<Rect>,
+    /// Optional effect to apply to the offscreen subtree.
+    /// `None` means isolate/composite only (no post-effect shader).
+    pub effect: Option<RenderEffect>,
+    /// Blend mode used when compositing the offscreen subtree back to the parent.
+    pub blend_mode: BlendMode,
+    /// Alpha applied when compositing the offscreen subtree back to the parent.
+    pub composite_alpha: f32,
+    /// Z-index of the first draw item in this effect layer's subtree.
+    pub z_start: usize,
+    /// Z-index one past the last draw item in this effect layer's subtree.
+    pub z_end: usize,
+}
+
+/// A backdrop effect applied to already-rendered content behind a node.
+#[derive(Clone)]
+pub struct BackdropLayer {
+    pub rect: Rect,
+    pub clip: Option<Rect>,
+    pub effect: RenderEffect,
+    /// Z-index at which this backdrop effect should be applied.
+    pub z_index: usize,
+}
+
 pub struct Scene {
     pub shapes: Vec<DrawShape>,
     pub images: Vec<ImageDraw>,
     pub texts: Vec<TextDraw>,
+    pub shadow_draws: Vec<ShadowDraw>,
     pub hits: Vec<HitRegion>,
+    pub effect_layers: Vec<EffectLayer>,
+    pub backdrop_layers: Vec<BackdropLayer>,
     pub next_z: usize,
     pub node_index: HashMap<NodeId, HitRegion>,
 }
@@ -134,7 +186,10 @@ impl Scene {
             shapes: Vec::new(),
             images: Vec::new(),
             texts: Vec::new(),
+            shadow_draws: Vec::new(),
             hits: Vec::new(),
+            effect_layers: Vec::new(),
+            backdrop_layers: Vec::new(),
             next_z: 0,
             node_index: HashMap::new(),
         }
@@ -146,18 +201,45 @@ impl Scene {
         brush: Brush,
         shape: Option<RoundedCornerShape>,
         clip: Option<Rect>,
+        blend_mode: BlendMode,
+    ) {
+        self.push_shape_with_geometry(
+            rect,
+            rect,
+            rect_to_quad(rect),
+            brush,
+            shape,
+            clip,
+            blend_mode,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn push_shape_with_geometry(
+        &mut self,
+        rect: Rect,
+        local_rect: Rect,
+        quad: [[f32; 2]; 4],
+        brush: Brush,
+        shape: Option<RoundedCornerShape>,
+        clip: Option<Rect>,
+        blend_mode: BlendMode,
     ) {
         let z_index = self.next_z;
         self.next_z += 1;
         self.shapes.push(DrawShape {
             rect,
+            local_rect,
+            quad,
             brush,
             shape,
             z_index,
             clip,
+            blend_mode,
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn push_image(
         &mut self,
         rect: Rect,
@@ -166,16 +248,46 @@ impl Scene {
         color_filter: Option<ColorFilter>,
         clip: Option<Rect>,
         src_rect: Option<Rect>,
+        blend_mode: BlendMode,
+    ) {
+        self.push_image_with_geometry(
+            rect,
+            rect,
+            rect_to_quad(rect),
+            image,
+            alpha,
+            color_filter,
+            clip,
+            src_rect,
+            blend_mode,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn push_image_with_geometry(
+        &mut self,
+        rect: Rect,
+        local_rect: Rect,
+        quad: [[f32; 2]; 4],
+        image: ImageBitmap,
+        alpha: f32,
+        color_filter: Option<ColorFilter>,
+        clip: Option<Rect>,
+        src_rect: Option<Rect>,
+        blend_mode: BlendMode,
     ) {
         let z_index = self.next_z;
         self.next_z += 1;
         self.images.push(ImageDraw {
             rect,
+            local_rect,
+            quad,
             image,
             alpha: alpha.clamp(0.0, 1.0),
             color_filter,
             z_index,
             clip,
+            blend_mode,
             src_rect,
         });
     }
@@ -232,12 +344,28 @@ impl Scene {
         self.node_index.insert(node_id, hit_region.clone());
         self.hits.push(hit_region);
     }
+
+    pub fn push_shadow_draw(&mut self, mut draw: ShadowDraw) {
+        let z_index = self.next_z;
+        self.next_z += 1;
+        draw.z_index = z_index;
+        self.shadow_draws.push(draw);
+    }
 }
 
 impl Default for Scene {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn rect_to_quad(rect: Rect) -> [[f32; 2]; 4] {
+    [
+        [rect.x, rect.y],
+        [rect.x + rect.width, rect.y],
+        [rect.x, rect.y + rect.height],
+        [rect.x + rect.width, rect.y + rect.height],
+    ]
 }
 
 impl RenderScene for Scene {
@@ -247,7 +375,10 @@ impl RenderScene for Scene {
         self.shapes.clear();
         self.images.clear();
         self.texts.clear();
+        self.shadow_draws.clear();
         self.hits.clear();
+        self.effect_layers.clear();
+        self.backdrop_layers.clear();
         self.node_index.clear();
         self.next_z = 0;
     }

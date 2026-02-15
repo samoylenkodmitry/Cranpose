@@ -37,7 +37,7 @@ pub use cursor_animation::{
     stop_cursor_blink, tick_cursor_blink,
 };
 
-pub use cranpose_ui_graphics::{ColorFilter, Dp, ImageBitmap};
+pub use cranpose_ui_graphics::{BlurredEdgeTreatment, ColorFilter, Dp, ImageBitmap};
 pub use cranpose_ui_layout::IntrinsicSize;
 pub use draw::{execute_draw_commands, DrawCacheBuilder, DrawCommand};
 pub use focus_dispatch::{
@@ -56,9 +56,11 @@ pub use layout::{
     SemanticsTree,
 };
 pub use modifier::{
-    collect_modifier_slices, collect_slices_from_modifier, Brush, Color, CornerRadii, EdgeInsets,
-    GraphicsLayer, Modifier, ModifierNodeSlices, Point, PointerEvent, PointerEventKind,
-    PointerInputScope, Rect, ResolvedBackground, ResolvedModifiers, RoundedCornerShape, Size,
+    collect_modifier_slices, collect_slices_from_modifier, BlendMode, Brush, Color,
+    CompositingStrategy, CornerRadii, DpOffset, EdgeInsets, GraphicsLayer, LayerShape, Modifier,
+    ModifierNodeSlices, Point, PointerEvent, PointerEventKind, PointerInputScope, Rect,
+    RenderEffect, ResolvedBackground, ResolvedModifiers, RoundedCornerShape, RuntimeShader, Shadow,
+    ShadowScope, Size, TransformOrigin,
 };
 pub use modifier_nodes::{
     AlphaElement, AlphaNode, BackgroundElement, BackgroundNode, ClickableElement, ClickableNode,

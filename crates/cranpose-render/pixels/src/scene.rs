@@ -6,7 +6,7 @@ use cranpose_core::NodeId;
 use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_render_common::{HitTestTarget, RenderScene};
 use cranpose_ui_graphics::{
-    Brush, Color, ColorFilter, ImageBitmap, Point, Rect, RoundedCornerShape,
+    BlendMode, Brush, Color, ColorFilter, ImageBitmap, Point, Rect, RoundedCornerShape,
 };
 
 #[derive(Clone)]
@@ -30,10 +30,13 @@ impl ClickAction {
 #[derive(Clone)]
 pub struct DrawShape {
     pub rect: Rect,
+    pub local_rect: Rect,
+    pub quad: [[f32; 2]; 4],
     pub brush: Brush,
     pub shape: Option<RoundedCornerShape>,
     pub z_index: usize,
     pub clip: Option<Rect>,
+    pub blend_mode: BlendMode,
 }
 
 #[derive(Clone)]
@@ -51,11 +54,14 @@ pub struct TextDraw {
 #[derive(Clone)]
 pub struct ImageDraw {
     pub rect: Rect,
+    pub local_rect: Rect,
+    pub quad: [[f32; 2]; 4],
     pub image: ImageBitmap,
     pub alpha: f32,
     pub color_filter: Option<ColorFilter>,
     pub z_index: usize,
     pub clip: Option<Rect>,
+    pub blend_mode: BlendMode,
     /// Source sub-region in image-pixel coordinates. `None` means full image.
     pub src_rect: Option<Rect>,
 }
@@ -145,18 +151,45 @@ impl Scene {
         brush: Brush,
         shape: Option<RoundedCornerShape>,
         clip: Option<Rect>,
+        blend_mode: BlendMode,
+    ) {
+        self.push_shape_with_geometry(
+            rect,
+            rect,
+            rect_to_quad(rect),
+            brush,
+            shape,
+            clip,
+            blend_mode,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn push_shape_with_geometry(
+        &mut self,
+        rect: Rect,
+        local_rect: Rect,
+        quad: [[f32; 2]; 4],
+        brush: Brush,
+        shape: Option<RoundedCornerShape>,
+        clip: Option<Rect>,
+        blend_mode: BlendMode,
     ) {
         let z_index = self.next_z;
         self.next_z += 1;
         self.shapes.push(DrawShape {
             rect,
+            local_rect,
+            quad,
             brush,
             shape,
             z_index,
             clip,
+            blend_mode,
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn push_image(
         &mut self,
         rect: Rect,
@@ -165,16 +198,46 @@ impl Scene {
         color_filter: Option<ColorFilter>,
         clip: Option<Rect>,
         src_rect: Option<Rect>,
+        blend_mode: BlendMode,
+    ) {
+        self.push_image_with_geometry(
+            rect,
+            rect,
+            rect_to_quad(rect),
+            image,
+            alpha,
+            color_filter,
+            clip,
+            src_rect,
+            blend_mode,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn push_image_with_geometry(
+        &mut self,
+        rect: Rect,
+        local_rect: Rect,
+        quad: [[f32; 2]; 4],
+        image: ImageBitmap,
+        alpha: f32,
+        color_filter: Option<ColorFilter>,
+        clip: Option<Rect>,
+        src_rect: Option<Rect>,
+        blend_mode: BlendMode,
     ) {
         let z_index = self.next_z;
         self.next_z += 1;
         self.images.push(ImageDraw {
             rect,
+            local_rect,
+            quad,
             image,
             alpha: alpha.clamp(0.0, 1.0),
             color_filter,
             z_index,
             clip,
+            blend_mode,
             src_rect,
         });
     }
@@ -237,6 +300,15 @@ impl Default for Scene {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn rect_to_quad(rect: Rect) -> [[f32; 2]; 4] {
+    [
+        [rect.x, rect.y],
+        [rect.x + rect.width, rect.y],
+        [rect.x, rect.y + rect.height],
+        [rect.x + rect.width, rect.y + rect.height],
+    ]
 }
 
 impl RenderScene for Scene {

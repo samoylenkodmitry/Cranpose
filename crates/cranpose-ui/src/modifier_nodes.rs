@@ -69,9 +69,13 @@ use cranpose_ui_layout::{Alignment, HorizontalAlignment, IntrinsicSize, Vertical
 
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::draw::DrawCommand;
-use crate::modifier::{Color, EdgeInsets, GraphicsLayer, LayoutWeight, Point, RoundedCornerShape};
+use crate::modifier::{
+    BlendMode, Color, ColorFilter, CompositingStrategy, EdgeInsets, GraphicsLayer, LayoutWeight,
+    Point, RoundedCornerShape,
+};
 
 fn hash_f32_value<H: Hasher>(state: &mut H, value: f32) {
     state.write_u32(value.to_bits());
@@ -87,11 +91,105 @@ fn hash_option_f32<H: Hasher>(state: &mut H, value: Option<f32>) {
     }
 }
 
-fn hash_graphics_layer<H: Hasher>(state: &mut H, layer: GraphicsLayer) {
+fn hash_graphics_layer<H: Hasher>(state: &mut H, layer: &GraphicsLayer) {
     hash_f32_value(state, layer.alpha);
     hash_f32_value(state, layer.scale);
+    hash_f32_value(state, layer.scale_x);
+    hash_f32_value(state, layer.scale_y);
+    hash_f32_value(state, layer.rotation_x);
+    hash_f32_value(state, layer.rotation_y);
+    hash_f32_value(state, layer.rotation_z);
+    hash_f32_value(state, layer.camera_distance);
+    hash_f32_value(state, layer.transform_origin.pivot_fraction_x);
+    hash_f32_value(state, layer.transform_origin.pivot_fraction_y);
     hash_f32_value(state, layer.translation_x);
     hash_f32_value(state, layer.translation_y);
+    hash_f32_value(state, layer.shadow_elevation);
+    hash_f32_value(state, layer.ambient_shadow_color.r());
+    hash_f32_value(state, layer.ambient_shadow_color.g());
+    hash_f32_value(state, layer.ambient_shadow_color.b());
+    hash_f32_value(state, layer.ambient_shadow_color.a());
+    hash_f32_value(state, layer.spot_shadow_color.r());
+    hash_f32_value(state, layer.spot_shadow_color.g());
+    hash_f32_value(state, layer.spot_shadow_color.b());
+    hash_f32_value(state, layer.spot_shadow_color.a());
+    match layer.shape {
+        crate::modifier::LayerShape::Rectangle => {
+            state.write_u8(0);
+        }
+        crate::modifier::LayerShape::Rounded(shape) => {
+            state.write_u8(1);
+            let radii = shape.radii();
+            hash_f32_value(state, radii.top_left);
+            hash_f32_value(state, radii.top_right);
+            hash_f32_value(state, radii.bottom_right);
+            hash_f32_value(state, radii.bottom_left);
+        }
+    }
+    state.write_u8(layer.clip as u8);
+    match layer.color_filter {
+        Some(ColorFilter::Tint(color)) => {
+            state.write_u8(1);
+            hash_f32_value(state, color.r());
+            hash_f32_value(state, color.g());
+            hash_f32_value(state, color.b());
+            hash_f32_value(state, color.a());
+        }
+        Some(ColorFilter::Modulate(color)) => {
+            state.write_u8(2);
+            hash_f32_value(state, color.r());
+            hash_f32_value(state, color.g());
+            hash_f32_value(state, color.b());
+            hash_f32_value(state, color.a());
+        }
+        Some(ColorFilter::Matrix(matrix)) => {
+            state.write_u8(3);
+            for value in matrix {
+                hash_f32_value(state, value);
+            }
+        }
+        None => state.write_u8(0),
+    }
+    state.write_u8(layer.render_effect.is_some() as u8);
+    state.write_u8(layer.backdrop_effect.is_some() as u8);
+    let compositing_tag = match layer.compositing_strategy {
+        CompositingStrategy::Auto => 0,
+        CompositingStrategy::Offscreen => 1,
+        CompositingStrategy::ModulateAlpha => 2,
+    };
+    state.write_u8(compositing_tag);
+    let blend_tag = match layer.blend_mode {
+        BlendMode::Clear => 0,
+        BlendMode::Src => 1,
+        BlendMode::Dst => 2,
+        BlendMode::SrcOver => 3,
+        BlendMode::DstOver => 4,
+        BlendMode::SrcIn => 5,
+        BlendMode::DstIn => 6,
+        BlendMode::SrcOut => 7,
+        BlendMode::DstOut => 8,
+        BlendMode::SrcAtop => 9,
+        BlendMode::DstAtop => 10,
+        BlendMode::Xor => 11,
+        BlendMode::Plus => 12,
+        BlendMode::Modulate => 13,
+        BlendMode::Screen => 14,
+        BlendMode::Overlay => 15,
+        BlendMode::Darken => 16,
+        BlendMode::Lighten => 17,
+        BlendMode::ColorDodge => 18,
+        BlendMode::ColorBurn => 19,
+        BlendMode::HardLight => 20,
+        BlendMode::SoftLight => 21,
+        BlendMode::Difference => 22,
+        BlendMode::Exclusion => 23,
+        BlendMode::Multiply => 24,
+        BlendMode::Hue => 25,
+        BlendMode::Saturation => 26,
+        BlendMode::Color => 27,
+        BlendMode::Luminosity => 28,
+    };
+    state.write_u8(blend_tag);
 }
 
 fn hash_horizontal_alignment<H: Hasher>(state: &mut H, alignment: HorizontalAlignment) {
@@ -115,6 +213,12 @@ fn hash_vertical_alignment<H: Hasher>(state: &mut H, alignment: VerticalAlignmen
 fn hash_alignment<H: Hasher>(state: &mut H, alignment: Alignment) {
     hash_horizontal_alignment(state, alignment.horizontal);
     hash_vertical_alignment(state, alignment.vertical);
+}
+
+static NEXT_LAZY_GRAPHICS_LAYER_SCOPE_ID: AtomicUsize = AtomicUsize::new(1);
+
+fn next_lazy_graphics_layer_scope_id() -> usize {
+    NEXT_LAZY_GRAPHICS_LAYER_SCOPE_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 // ============================================================================
@@ -539,9 +643,11 @@ impl ModifierNodeElement for CornerShapeElement {
 // ============================================================================
 
 /// Node that stores graphics layer state for resolved modifiers.
-#[derive(Debug)]
 pub struct GraphicsLayerNode {
     layer: GraphicsLayer,
+    layer_resolver: Option<Rc<dyn Fn() -> GraphicsLayer>>,
+    lazy_scope_id: Option<usize>,
+    lazy_observer: Option<cranpose_core::SnapshotStateObserver>,
     state: NodeState,
 }
 
@@ -549,12 +655,88 @@ impl GraphicsLayerNode {
     pub fn new(layer: GraphicsLayer) -> Self {
         Self {
             layer,
+            layer_resolver: None,
+            lazy_scope_id: None,
+            lazy_observer: None,
             state: NodeState::new(),
         }
     }
 
+    pub fn new_lazy(layer_resolver: Rc<dyn Fn() -> GraphicsLayer>) -> Self {
+        let mut node = Self {
+            layer: GraphicsLayer::default(),
+            layer_resolver: Some(layer_resolver),
+            lazy_scope_id: None,
+            lazy_observer: None,
+            state: NodeState::new(),
+        };
+        node.ensure_lazy_observation();
+        if let Some(resolve) = node.layer_resolver() {
+            node.layer = resolve();
+        }
+        node
+    }
+
     pub fn layer(&self) -> GraphicsLayer {
-        self.layer
+        if let Some(resolve) = self.layer_resolver() {
+            resolve()
+        } else {
+            self.layer.clone()
+        }
+    }
+
+    pub fn layer_resolver(&self) -> Option<Rc<dyn Fn() -> GraphicsLayer>> {
+        self.layer_resolver.as_ref().map(|resolve| {
+            let resolve = resolve.clone();
+            match (&self.lazy_observer, self.lazy_scope_id) {
+                (Some(observer), Some(scope_id)) => {
+                    let observer = observer.clone();
+                    Rc::new(move || {
+                        observer.observe_reads(
+                            scope_id,
+                            |_| crate::request_render_invalidation(),
+                            || resolve(),
+                        )
+                    }) as Rc<dyn Fn() -> GraphicsLayer>
+                }
+                _ => resolve,
+            }
+        })
+    }
+
+    fn set_static(&mut self, layer: GraphicsLayer) {
+        self.layer = layer;
+        self.layer_resolver = None;
+        self.clear_lazy_observation();
+    }
+
+    fn set_lazy(&mut self, layer_resolver: Rc<dyn Fn() -> GraphicsLayer>) {
+        self.layer_resolver = Some(layer_resolver);
+        self.ensure_lazy_observation();
+        if let Some(resolve) = self.layer_resolver() {
+            self.layer = resolve();
+        }
+    }
+
+    fn ensure_lazy_observation(&mut self) {
+        if self.layer_resolver.is_none() {
+            self.clear_lazy_observation();
+            return;
+        }
+        if self.lazy_observer.is_some() {
+            return;
+        }
+        let observer = cranpose_core::SnapshotStateObserver::new(|callback| callback());
+        observer.start();
+        self.lazy_scope_id = Some(next_lazy_graphics_layer_scope_id());
+        self.lazy_observer = Some(observer);
+    }
+
+    fn clear_lazy_observation(&mut self) {
+        if let Some(observer) = self.lazy_observer.take() {
+            observer.stop();
+        }
+        self.lazy_scope_id = None;
     }
 }
 
@@ -567,6 +749,19 @@ impl DelegatableNode for GraphicsLayerNode {
 impl ModifierNode for GraphicsLayerNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
         context.invalidate(cranpose_foundation::InvalidationKind::Draw);
+    }
+
+    fn on_detach(&mut self) {
+        self.clear_lazy_observation();
+    }
+}
+
+impl std::fmt::Debug for GraphicsLayerNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GraphicsLayerNode")
+            .field("layer", &self.layer)
+            .field("lazy", &self.layer_resolver.is_some())
+            .finish()
     }
 }
 
@@ -584,7 +779,7 @@ impl GraphicsLayerElement {
 
 impl Hash for GraphicsLayerElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        hash_graphics_layer(state, self.layer);
+        hash_graphics_layer(state, &self.layer);
     }
 }
 
@@ -592,17 +787,70 @@ impl ModifierNodeElement for GraphicsLayerElement {
     type Node = GraphicsLayerNode;
 
     fn create(&self) -> Self::Node {
-        GraphicsLayerNode::new(self.layer)
+        GraphicsLayerNode::new(self.layer.clone())
     }
 
     fn update(&self, node: &mut Self::Node) {
-        if node.layer != self.layer {
-            node.layer = self.layer;
-        }
+        node.set_static(self.layer.clone());
     }
 
     fn capabilities(&self) -> NodeCapabilities {
         NodeCapabilities::DRAW
+    }
+}
+
+/// Element that evaluates a graphics layer lazily during render data collection.
+#[derive(Clone)]
+pub struct LazyGraphicsLayerElement {
+    layer_resolver: Rc<dyn Fn() -> GraphicsLayer>,
+}
+
+impl LazyGraphicsLayerElement {
+    pub fn new(layer_resolver: Rc<dyn Fn() -> GraphicsLayer>) -> Self {
+        Self { layer_resolver }
+    }
+}
+
+impl std::fmt::Debug for LazyGraphicsLayerElement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LazyGraphicsLayerElement")
+            .field("resolver", &"<closure>")
+            .finish()
+    }
+}
+
+impl PartialEq for LazyGraphicsLayerElement {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.layer_resolver, &other.layer_resolver)
+    }
+}
+
+impl Eq for LazyGraphicsLayerElement {}
+
+impl Hash for LazyGraphicsLayerElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let ptr = Rc::as_ptr(&self.layer_resolver) as *const ();
+        ptr.hash(state);
+    }
+}
+
+impl ModifierNodeElement for LazyGraphicsLayerElement {
+    type Node = GraphicsLayerNode;
+
+    fn create(&self) -> Self::Node {
+        GraphicsLayerNode::new_lazy(self.layer_resolver.clone())
+    }
+
+    fn update(&self, node: &mut Self::Node) {
+        node.set_lazy(self.layer_resolver.clone());
+    }
+
+    fn capabilities(&self) -> NodeCapabilities {
+        NodeCapabilities::DRAW
+    }
+
+    fn always_update(&self) -> bool {
+        true
     }
 }
 
@@ -1738,7 +1986,16 @@ impl DrawModifierNode for DrawCommandNode {
 fn draw_command_tag(cmd: &DrawCommand) -> u8 {
     match cmd {
         DrawCommand::Behind(_) => 0,
-        DrawCommand::Overlay(_) => 1,
+        DrawCommand::WithContent(_) => 1,
+        DrawCommand::Overlay(_) => 2,
+    }
+}
+
+fn draw_command_closure_identity(cmd: &DrawCommand) -> *const () {
+    match cmd {
+        DrawCommand::Behind(f) | DrawCommand::WithContent(f) | DrawCommand::Overlay(f) => {
+            Rc::as_ptr(f) as *const ()
+        }
     }
 }
 
@@ -1770,16 +2027,16 @@ impl std::fmt::Debug for DrawCommandElement {
 
 impl PartialEq for DrawCommandElement {
     fn eq(&self, other: &Self) -> bool {
-        // Type-based matching: compare command count and types, not function pointers
-        // This matches JC behavior where nodes are updated via update() method,
-        // preventing unnecessary modifier chain recreation
         if self.commands.len() != other.commands.len() {
             return false;
         }
         self.commands
             .iter()
             .zip(other.commands.iter())
-            .all(|(a, b)| draw_command_tag(a) == draw_command_tag(b))
+            .all(|(a, b)| {
+                draw_command_tag(a) == draw_command_tag(b)
+                    && draw_command_closure_identity(a) == draw_command_closure_identity(b)
+            })
     }
 }
 
@@ -1787,11 +2044,11 @@ impl Eq for DrawCommandElement {}
 
 impl std::hash::Hash for DrawCommandElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        // Consistent hash based on command types, not function pointers
         "draw_commands".hash(state);
         self.commands.len().hash(state);
         for command in &self.commands {
             draw_command_tag(command).hash(state);
+            (draw_command_closure_identity(command) as usize).hash(state);
         }
     }
 }
@@ -1809,11 +2066,6 @@ impl ModifierNodeElement for DrawCommandElement {
 
     fn capabilities(&self) -> NodeCapabilities {
         NodeCapabilities::DRAW
-    }
-
-    fn always_update(&self) -> bool {
-        // Draw commands might have different closures even if types match
-        true
     }
 }
 

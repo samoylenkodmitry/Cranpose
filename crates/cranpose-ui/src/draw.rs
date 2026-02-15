@@ -8,12 +8,14 @@ pub type DrawCommandFn = Rc<dyn Fn(Size) -> Vec<DrawPrimitive>>;
 #[derive(Clone)]
 pub enum DrawCommand {
     Behind(DrawCommandFn),
+    WithContent(DrawCommandFn),
     Overlay(DrawCommandFn),
 }
 
 #[derive(Default, Clone)]
 pub struct DrawCacheBuilder {
     behind: Vec<DrawCommandFn>,
+    with_content: Vec<DrawCommandFn>,
     overlay: Vec<DrawCommandFn>,
 }
 
@@ -33,12 +35,13 @@ impl DrawCacheBuilder {
             f(&mut scope);
             scope.into_primitives()
         });
-        self.overlay.push(func);
+        self.with_content.push(func);
     }
 
     pub fn finish(self) -> Vec<DrawCommand> {
         let mut commands = Vec::new();
         commands.extend(self.behind.into_iter().map(DrawCommand::Behind));
+        commands.extend(self.with_content.into_iter().map(DrawCommand::WithContent));
         commands.extend(self.overlay.into_iter().map(DrawCommand::Overlay));
         commands
     }
@@ -48,7 +51,7 @@ pub fn execute_draw_commands(commands: &[DrawCommand], size: Size) -> Vec<DrawPr
     let mut primitives = Vec::new();
     for command in commands {
         match command {
-            DrawCommand::Behind(f) | DrawCommand::Overlay(f) => {
+            DrawCommand::Behind(f) | DrawCommand::WithContent(f) | DrawCommand::Overlay(f) => {
                 primitives.extend(f(size).into_iter());
             }
         }
