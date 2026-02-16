@@ -1,18 +1,15 @@
-use std::rc::Rc;
-
-use cranpose_foundation::PointerEvent;
-use cranpose_ui::{Brush, DrawCommand, LayoutNodeData, ModifierNodeSlices};
+pub(crate) use cranpose_render_common::style_shared::{
+    apply_layer_affine_to_rect, apply_layer_to_brush, apply_layer_to_color, apply_layer_to_quad,
+    apply_layer_to_rect, combine_layers, compose_color_filters, layer_uniform_scale,
+    primitives_for_placement, quad_bounds, scale_corner_radii, DrawPlacement, NodeStyle,
+};
+use cranpose_ui::DrawCommand;
 use cranpose_ui_graphics::{
-    BlendMode, Color, ColorFilter, CompositingStrategy, CornerRadii, DrawPrimitive, GraphicsLayer,
-    Point, Rect, RoundedCornerShape, ShadowPrimitive, Size,
+    BlendMode, CornerRadii, DrawPrimitive, GraphicsLayer, Rect, RoundedCornerShape,
+    ShadowPrimitive, Size,
 };
 
 use crate::scene::Scene;
-
-include!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../common/src/style_shared.rs"
-));
 
 #[allow(clippy::too_many_arguments)] // Render operations need all style and placement parameters
 pub(crate) fn apply_draw_commands(
@@ -223,7 +220,12 @@ pub(crate) fn point_in_resolved_rounded_rect(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cranpose_ui_graphics::{LayerShape, RenderEffect, RoundedCornerShape, TransformOrigin};
+    use cranpose_ui::Brush;
+    use cranpose_ui_graphics::{
+        Color, ColorFilter, CompositingStrategy, LayerShape, RenderEffect, RoundedCornerShape,
+        TransformOrigin,
+    };
+    use std::rc::Rc;
 
     #[test]
     fn combine_layers_clears_effects_without_new_layer() {

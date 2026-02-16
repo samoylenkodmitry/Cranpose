@@ -12,8 +12,8 @@
 //! cargo run --package desktop-app --example robot_measure_shaders --features robot-app
 //! ```
 
-use cranpose::AppLauncher;
 use cranpose::fps_stats;
+use cranpose::AppLauncher;
 use cranpose_testing::{
     find_button_in_semantics, find_in_semantics, find_text_exact, print_semantics_with_bounds,
 };
@@ -156,7 +156,10 @@ fn main() {
             println!("  FPS: {:.1}", stats.fps);
             println!("  Avg frame time: {:.2}ms", stats.avg_ms);
             println!("  Total frames: {}", stats.frame_count);
-            println!("  Recompositions: {} ({}/s)", stats.recompositions, stats.recomps_per_second);
+            println!(
+                "  Recompositions: {} ({}/s)",
+                stats.recompositions, stats.recomps_per_second
+            );
             robot.exit().expect("Failed to exit");
         })
         .run(|| {

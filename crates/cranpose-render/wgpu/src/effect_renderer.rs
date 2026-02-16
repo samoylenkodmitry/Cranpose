@@ -866,11 +866,17 @@ impl EffectRenderer {
             scissor,
             rounded_mask,
             BlendMode::SrcOver,
+            None,
         );
     }
 
     /// Composite an offscreen target onto a destination view with optional
     /// scissor and optional rounded-rectangle clip mask using an explicit blend mode.
+    ///
+    /// When `dest_viewport` is `Some((x, y, w, h))`, the fullscreen blit quad is
+    /// mapped to that sub-region of the destination instead of covering the entire
+    /// surface.  This allows a small source texture to be placed at the correct
+    /// position in a larger destination.
     #[allow(clippy::too_many_arguments)]
     pub fn composite_to_view_scissored_with_alpha_and_mask_and_blend_mode(
         &self,
@@ -883,6 +889,7 @@ impl EffectRenderer {
         scissor: Option<(u32, u32, u32, u32)>,
         rounded_mask: Option<RoundedCompositeMask>,
         blend_mode: BlendMode,
+        dest_viewport: Option<(f32, f32, f32, f32)>,
     ) {
         let (mask_rect, mask_radii, mask_enabled) = if let Some(mask) = rounded_mask {
             (mask.rect, mask.radii, [1.0, 0.0, 0.0, 0.0])
@@ -931,6 +938,9 @@ impl EffectRenderer {
             });
             pass.set_bind_group(0, &*texture_bind_group, &[]);
             pass.set_bind_group(1, &self.blit_uniform_bind_group, &[]);
+            if let Some((x, y, w, h)) = dest_viewport {
+                pass.set_viewport(x, y, w, h, 0.0, 1.0);
+            }
             if let Some((x, y, w, h)) = scissor {
                 pass.set_scissor_rect(x, y, w, h);
             }

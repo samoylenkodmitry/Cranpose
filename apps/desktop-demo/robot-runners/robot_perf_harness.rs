@@ -9,8 +9,8 @@
 //! CRANPOSE_PERF_DURATION_SECS=15 cargo run --package desktop-app --example robot_perf_harness --features robot-app
 //! ```
 
-use cranpose::AppLauncher;
 use cranpose::fps_stats;
+use cranpose::AppLauncher;
 use cranpose_core::useState;
 use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
 use cranpose_foundation::text::TextFieldState;

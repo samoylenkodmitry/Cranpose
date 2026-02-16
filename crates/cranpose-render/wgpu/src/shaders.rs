@@ -18,7 +18,7 @@ struct VertexOutput {
 
 struct Uniforms {
     viewport: vec2<f32>,
-    _padding: vec2<f32>,
+    viewport_offset: vec2<f32>,
 }
 
 @group(0) @binding(0)
@@ -29,9 +29,10 @@ var<uniform> uniforms: Uniforms;
 fn vs_main(input: VertexInput, @builtin(vertex_index) vertex_idx: u32) -> VertexOutput {
     var output: VertexOutput;
 
-    // Convert from pixel coordinates to clip space
-    let x = (input.position.x / uniforms.viewport.x) * 2.0 - 1.0;
-    let y = 1.0 - (input.position.y / uniforms.viewport.y) * 2.0;
+    // Convert from pixel coordinates to clip space (viewport_offset shifts the origin
+    // so that a sub-region of the viewport maps to the full NDC range)
+    let x = ((input.position.x - uniforms.viewport_offset.x) / uniforms.viewport.x) * 2.0 - 1.0;
+    let y = 1.0 - ((input.position.y - uniforms.viewport_offset.y) / uniforms.viewport.y) * 2.0;
 
     output.clip_position = vec4<f32>(x, y, 0.0, 1.0);
     output.color = input.color;
@@ -254,7 +255,7 @@ struct VertexOutput {
 
 struct Uniforms {
     viewport: vec2<f32>,
-    _padding: vec2<f32>,
+    viewport_offset: vec2<f32>,
 }
 
 @group(0) @binding(0)
@@ -269,8 +270,8 @@ var image_sampler: sampler;
 @vertex
 fn image_vs_main(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
-    let x = (input.position.x / uniforms.viewport.x) * 2.0 - 1.0;
-    let y = 1.0 - (input.position.y / uniforms.viewport.y) * 2.0;
+    let x = ((input.position.x - uniforms.viewport_offset.x) / uniforms.viewport.x) * 2.0 - 1.0;
+    let y = 1.0 - ((input.position.y - uniforms.viewport_offset.y) / uniforms.viewport.y) * 2.0;
     output.clip_position = vec4<f32>(x, y, 0.0, 1.0);
     output.color = input.color;
     output.uv = input.uv;

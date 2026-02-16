@@ -1,5 +1,7 @@
 //! Common rendering contracts shared between renderer backends.
 
+pub mod style_shared;
+
 use cranpose_foundation::nodes::input::PointerEvent;
 use cranpose_ui::LayoutTree;
 use cranpose_ui_graphics::Size;

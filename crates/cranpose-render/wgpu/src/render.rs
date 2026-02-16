@@ -239,7 +239,7 @@ impl Vertex {
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct Uniforms {
     viewport: [f32; 2],
-    _padding: [f32; 2],
+    viewport_offset: [f32; 2],
 }
 
 #[repr(C)]
@@ -967,41 +967,64 @@ impl GpuRenderer {
             backdrop_layers,
         );
 
-        // Double-buffer path: accumulate everything into an intermediate texture.
-        let accum = self
-            .effect_renderer
-            .offscreen_pool
-            .acquire(&self.device, width, height);
-        self.clear_target_view(&accum.view, CLEAR_COLOR);
+        if effect_layers.is_empty() && backdrop_layers.is_empty() {
+            // Fast path: no effect/backdrop layers — render directly to the surface
+            // without allocating an accumulation buffer or performing the final blit.
+            self.clear_target_view(surface_view, CLEAR_COLOR);
+            self.render_non_effect_segment(
+                surface_view,
+                shapes,
+                images,
+                texts,
+                shadow_draws,
+                0,
+                scene_end,
+                &[],
+                width,
+                height,
+                root_scale,
+            )?;
+        } else {
+            // Double-buffer path: accumulate everything into an intermediate texture.
+            let accum = self
+                .effect_renderer
+                .offscreen_pool
+                .acquire(&self.device, width, height);
+            self.clear_target_view(&accum.view, CLEAR_COLOR);
 
-        self.render_range_with_layer_events_to_target(
-            &accum,
-            shapes,
-            images,
-            texts,
-            shadow_draws,
-            effect_layers,
-            backdrop_layers,
-            0,
-            scene_end,
-            None,
-            None,
-            width,
-            height,
-            root_scale,
-        )?;
+            self.render_range_with_layer_events_to_target(
+                &accum,
+                shapes,
+                images,
+                texts,
+                shadow_draws,
+                effect_layers,
+                backdrop_layers,
+                0,
+                scene_end,
+                None,
+                None,
+                width,
+                height,
+                root_scale,
+            )?;
 
-        self.effect_renderer.composite_to_view(
-            &self.device,
-            &self.queue,
-            &accum,
-            surface_view,
-            wgpu::LoadOp::Clear(CLEAR_COLOR),
-        );
-        self.effect_renderer.offscreen_pool.release(accum);
+            self.effect_renderer.composite_to_view(
+                &self.device,
+                &self.queue,
+                &accum,
+                surface_view,
+                wgpu::LoadOp::Clear(CLEAR_COLOR),
+            );
+            self.effect_renderer.offscreen_pool.release(accum);
+        }
 
         let mut text_cache = self.text_cache.lock().unwrap();
         crate::trim_text_cache(&mut text_cache);
+
+        // Trim the GPU text atlas to reclaim space for glyphs no longer in use.
+        // Without this, the atlas grows monotonically and eventually hits AtlasFull.
+        self.text_atlas.trim();
 
         Ok(())
     }
@@ -1176,6 +1199,7 @@ impl GpuRenderer {
                         height,
                         root_scale,
                         true,
+                        [0.0, 0.0],
                     );
                 }
                 SegmentDrawItem::Image(index) => {
@@ -1317,36 +1341,49 @@ impl GpuRenderer {
                     height,
                     root_scale,
                     true,
+                    [0.0, 0.0],
                 );
             }
             return;
         }
 
-        // 1. Acquire offscreen source (full viewport for coordinate alignment).
+        // Compute pixel-space bounds for the offscreen textures, clamped to viewport.
+        let bounds_x = (blur_bounds.x * root_scale).max(0.0);
+        let bounds_y = (blur_bounds.y * root_scale).max(0.0);
+        let bounds_r = ((blur_bounds.x + blur_bounds.width) * root_scale).min(width as f32);
+        let bounds_b = ((blur_bounds.y + blur_bounds.height) * root_scale).min(height as f32);
+        let bounds_w = (bounds_r - bounds_x).ceil().max(1.0) as u32;
+        let bounds_h = (bounds_b - bounds_y).ceil().max(1.0) as u32;
+
+        // 1. Acquire bounds-sized offscreen source.
         let source = self
             .effect_renderer
             .offscreen_pool
-            .acquire(&self.device, width, height);
+            .acquire(&self.device, bounds_w, bounds_h);
         self.clear_target_view(&source.view, wgpu::Color::TRANSPARENT);
 
-        // 2. Render shadow shapes to offscreen, preserving per-shape blend modes.
+        // 2. Render shadow shapes to bounds-sized offscreen.
+        //    The viewport_offset shifts the coordinate origin so that shapes
+        //    at absolute viewport positions render into the small texture.
+        let viewport_offset = [bounds_x.floor(), bounds_y.floor()];
         for (shape, blend_mode) in &shadow.shapes {
             self.render_shapes_to_offscreen(
                 &source.view,
                 &[shape],
                 *blend_mode,
-                width,
-                height,
+                bounds_w,
+                bounds_h,
                 root_scale,
                 true,
+                viewport_offset,
             );
         }
 
-        // 3. Apply Gaussian blur.
+        // 3. Apply Gaussian blur on the bounds-sized textures.
         let dest = self
             .effect_renderer
             .offscreen_pool
-            .acquire(&self.device, width, height);
+            .acquire(&self.device, bounds_w, bounds_h);
         let pixel_radius = shadow.blur_radius * root_scale;
         self.effect_renderer.apply_blur_scissored(
             &self.device,
@@ -1356,18 +1393,30 @@ impl GpuRenderer {
             pixel_radius,
             pixel_radius,
             TileMode::Decal,
-            processing_scissor,
+            None, // No scissor needed — the texture is already bounds-sized
         );
         self.effect_renderer.offscreen_pool.release(source);
 
-        // 4. Composite blurred result onto target with optional clip.
+        // 4. Composite blurred result onto target at the correct position.
         let clip_scissor = shadow
             .clip
             .and_then(|clip| scissor_rect_for_rect(clip, root_scale, width, height));
         let scissor = clip_scissor.or(processing_scissor);
-        let rounded_mask = inner_shadow_composite_mask(shadow, root_scale);
+        let rounded_mask = inner_shadow_composite_mask(shadow, root_scale).map(|mut mask| {
+            // Adjust mask coordinates from viewport-space to texture-local space,
+            // since the blit shader computes world_pos = uv * tex_size.
+            mask.rect[0] -= viewport_offset[0];
+            mask.rect[1] -= viewport_offset[1];
+            mask
+        });
+        let dest_viewport = Some((
+            viewport_offset[0],
+            viewport_offset[1],
+            bounds_w as f32,
+            bounds_h as f32,
+        ));
         self.effect_renderer
-            .composite_to_view_scissored_with_alpha_and_mask(
+            .composite_to_view_scissored_with_alpha_and_mask_and_blend_mode(
                 &self.device,
                 &self.queue,
                 &dest,
@@ -1376,8 +1425,19 @@ impl GpuRenderer {
                 wgpu::LoadOp::Load,
                 scissor,
                 rounded_mask,
+                BlendMode::SrcOver,
+                dest_viewport,
             );
         self.effect_renderer.offscreen_pool.release(dest);
+
+        // Restore viewport uniform to full size so subsequent image/text rendering
+        // (which shares the uniform_buffer but doesn't write to it) works correctly.
+        let uniforms = Uniforms {
+            viewport: [width as f32, height as f32],
+            viewport_offset: [0.0, 0.0],
+        };
+        self.queue
+            .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1528,6 +1588,7 @@ impl GpuRenderer {
                 Some(scissor),
                 None,
                 layer_blend_mode,
+                None,
             );
 
         self.effect_renderer.offscreen_pool.release(source);
@@ -1654,15 +1715,17 @@ impl GpuRenderer {
         height: u32,
         root_scale: f32,
         has_prior_content: bool,
+        viewport_offset: [f32; 2],
     ) {
         if layer_shapes.is_empty() {
             return;
         }
 
-        // Update viewport uniforms (should already be set, but ensure correctness)
+        // Update viewport uniforms (viewport_offset shifts the origin so that
+        // a sub-region of scene space maps to the full render target)
         let uniforms = Uniforms {
             viewport: [width as f32, height as f32],
-            _padding: [0.0, 0.0],
+            viewport_offset,
         };
         self.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));

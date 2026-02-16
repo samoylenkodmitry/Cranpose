@@ -1,4 +1,13 @@
-pub(crate) struct NodeStyle {
+use std::rc::Rc;
+
+use cranpose_foundation::PointerEvent;
+use cranpose_ui::{Brush, DrawCommand, LayoutNodeData, ModifierNodeSlices};
+use cranpose_ui_graphics::{
+    BlendMode, Color, ColorFilter, CompositingStrategy, CornerRadii, DrawPrimitive, GraphicsLayer,
+    Point, Rect, RoundedCornerShape, Size,
+};
+
+pub struct NodeStyle {
     pub padding: cranpose_ui_graphics::EdgeInsets,
     pub background: Option<Color>,
     pub click_actions: Vec<Rc<dyn Fn(Point)>>,
@@ -28,7 +37,7 @@ impl NodeStyle {
     }
 }
 
-pub(crate) fn combine_layers(
+pub fn combine_layers(
     current: GraphicsLayer,
     modifier_layer: Option<GraphicsLayer>,
 ) -> GraphicsLayer {
@@ -77,15 +86,11 @@ fn layer_scale_y(layer: &GraphicsLayer) -> f32 {
     layer.scale * layer.scale_y
 }
 
-pub(crate) fn layer_uniform_scale(layer: &GraphicsLayer) -> f32 {
+pub fn layer_uniform_scale(layer: &GraphicsLayer) -> f32 {
     layer_scale_x(layer).min(layer_scale_y(layer))
 }
 
-pub(crate) fn apply_layer_affine_to_rect(
-    rect: Rect,
-    layer_bounds: Rect,
-    layer: &GraphicsLayer,
-) -> Rect {
+pub fn apply_layer_affine_to_rect(rect: Rect, layer_bounds: Rect, layer: &GraphicsLayer) -> Rect {
     let offset_x = rect.x - layer_bounds.x;
     let offset_y = rect.y - layer_bounds.y;
     let scale_x = layer_scale_x(layer);
@@ -154,11 +159,7 @@ fn apply_rotation_and_perspective(
     [pivot.0 + x * perspective, pivot.1 + y * perspective]
 }
 
-pub(crate) fn apply_layer_to_quad(
-    rect: Rect,
-    layer_bounds: Rect,
-    layer: &GraphicsLayer,
-) -> [[f32; 2]; 4] {
+pub fn apply_layer_to_quad(rect: Rect, layer_bounds: Rect, layer: &GraphicsLayer) -> [[f32; 2]; 4] {
     let affine_rect = apply_layer_affine_to_rect(rect, layer_bounds, layer);
     let affine_layer_bounds = apply_layer_affine_to_rect(layer_bounds, layer_bounds, layer);
     let pivot = layer_rotation_pivot(affine_layer_bounds, layer);
@@ -175,7 +176,7 @@ pub(crate) fn apply_layer_to_quad(
     quad.map(|point| apply_rotation_and_perspective(point, pivot, layer))
 }
 
-pub(crate) fn quad_bounds(quad: [[f32; 2]; 4]) -> Rect {
+pub fn quad_bounds(quad: [[f32; 2]; 4]) -> Rect {
     let mut min_x = f32::INFINITY;
     let mut min_y = f32::INFINITY;
     let mut max_x = f32::NEG_INFINITY;
@@ -196,13 +197,11 @@ pub(crate) fn quad_bounds(quad: [[f32; 2]; 4]) -> Rect {
     }
 }
 
-pub(crate) fn apply_layer_to_rect(rect: Rect, layer_bounds: Rect, layer: &GraphicsLayer) -> Rect {
+pub fn apply_layer_to_rect(rect: Rect, layer_bounds: Rect, layer: &GraphicsLayer) -> Rect {
     quad_bounds(apply_layer_to_quad(rect, layer_bounds, layer))
 }
 
-
-
-pub(crate) fn apply_layer_to_color(color: Color, layer: &GraphicsLayer) -> Color {
+pub fn apply_layer_to_color(color: Color, layer: &GraphicsLayer) -> Color {
     apply_color_filter_to_color(
         Color(
             color.0,
@@ -224,7 +223,7 @@ fn apply_color_filter_to_color(color: Color, filter: Option<ColorFilter>) -> Col
     }
 }
 
-fn compose_color_filters(
+pub fn compose_color_filters(
     base: Option<ColorFilter>,
     overlay: Option<ColorFilter>,
 ) -> Option<ColorFilter> {
@@ -235,7 +234,7 @@ fn compose_color_filters(
     }
 }
 
-pub(crate) fn apply_layer_to_brush(brush: Brush, layer: &GraphicsLayer) -> Brush {
+pub fn apply_layer_to_brush(brush: Brush, layer: &GraphicsLayer) -> Brush {
     let scale_x = layer_scale_x(layer);
     let scale_y = layer_scale_y(layer);
     let uniform_scale = layer_uniform_scale(layer);
@@ -304,7 +303,7 @@ pub(crate) fn apply_layer_to_brush(brush: Brush, layer: &GraphicsLayer) -> Brush
     }
 }
 
-pub(crate) fn scale_corner_radii(radii: CornerRadii, scale: f32) -> CornerRadii {
+pub fn scale_corner_radii(radii: CornerRadii, scale: f32) -> CornerRadii {
     CornerRadii {
         top_left: radii.top_left * scale,
         top_right: radii.top_right * scale,
@@ -314,12 +313,12 @@ pub(crate) fn scale_corner_radii(radii: CornerRadii, scale: f32) -> CornerRadii 
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum DrawPlacement {
+pub enum DrawPlacement {
     Behind,
     Overlay,
 }
 
-fn primitives_for_placement(
+pub fn primitives_for_placement(
     command: &DrawCommand,
     placement: DrawPlacement,
     size: Size,
