@@ -35,3 +35,4 @@
 - reference JC kt repo /media/huge/composerepo/
 - perf scripts are perf*.sh at project root
 - e2e robot headless tests is ./run_robot_test.sh (should all pass)
+- do not use big models as subagents (opus, codex xhigh thinking, etc), only small fast & cheap to not waste tokens

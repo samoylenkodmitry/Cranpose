@@ -4,6 +4,7 @@
 //! attachment) and sampled from (as a texture binding). Used by blur and
 //! custom shader effects that need to capture a subtree's rendered output.
 
+use crate::gpu_stats::FrameStats;
 use std::cell::RefCell;
 
 /// A GPU texture that can serve as both a render target and a texture source.
@@ -110,14 +111,26 @@ impl OffscreenPool {
     ///
     /// Returns a pooled target when dimensions exactly match, otherwise creates
     /// a new target for the requested size.
-    pub fn acquire(&mut self, device: &wgpu::Device, width: u32, height: u32) -> OffscreenTarget {
+    pub fn acquire(
+        &mut self,
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        stats: Option<&FrameStats>,
+    ) -> OffscreenTarget {
         if let Some(idx) = self
             .available
             .iter()
             .position(|t| t.matches_size(width, height))
         {
+            if let Some(s) = stats {
+                s.record_offscreen_acquire(width, height, false);
+            }
             self.available.swap_remove(idx)
         } else {
+            if let Some(s) = stats {
+                s.record_offscreen_acquire(width, height, true);
+            }
             OffscreenTarget::new(device, self.format, width, height)
         }
     }

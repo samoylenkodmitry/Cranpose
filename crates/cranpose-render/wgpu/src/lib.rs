@@ -4,6 +4,7 @@
 //! desktop (Windows/Mac/Linux), web (WebGPU), and mobile (Android/iOS).
 
 mod effect_renderer;
+pub(crate) mod gpu_stats;
 mod offscreen;
 mod pipeline;
 mod render;

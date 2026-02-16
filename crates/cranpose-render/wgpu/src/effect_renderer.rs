@@ -8,7 +8,9 @@ use crate::shader_cache::ShaderPipelineCache;
 use crate::shaders;
 use cranpose_ui_graphics::{BlendMode, RenderEffect, RuntimeShader, TileMode};
 
-/// Manages GPU resources for applying render effects (blur, custom shaders).
+use crate::gpu_stats::FrameStats;
+use std::cell::Cell;
+
 pub(crate) struct EffectRenderer {
     pub offscreen_pool: OffscreenPool,
     pub shader_cache: ShaderPipelineCache,
@@ -43,6 +45,12 @@ pub(crate) struct EffectRenderer {
     pub effect_sampler: wgpu::Sampler,
 
     surface_format: wgpu::TextureFormat,
+
+    // Debug counters (reset each frame by GpuRenderer)
+    pub(crate) debug_submits: Cell<u32>,
+    pub(crate) debug_blurs: Cell<u32>,
+    pub(crate) debug_composites: Cell<u32>,
+    pub(crate) debug_effects: Cell<u32>,
 }
 
 /// Blur uniform data matching the WGSL `BlurUniforms` struct.
@@ -431,7 +439,30 @@ impl EffectRenderer {
             effect_uniform_bind_group,
             effect_sampler,
             surface_format,
+            debug_submits: Cell::new(0),
+            debug_blurs: Cell::new(0),
+            debug_composites: Cell::new(0),
+            debug_effects: Cell::new(0),
         }
+    }
+
+    pub(crate) fn merge_and_reset_debug_counters(&self, stats: &FrameStats) {
+        stats
+            .submits
+            .set(stats.submits.get() + self.debug_submits.get());
+        stats
+            .blur_passes
+            .set(stats.blur_passes.get() + self.debug_blurs.get());
+        stats
+            .composite_passes
+            .set(stats.composite_passes.get() + self.debug_composites.get());
+        stats
+            .effect_applies
+            .set(stats.effect_applies.get() + self.debug_effects.get());
+        self.debug_submits.set(0);
+        self.debug_blurs.set(0);
+        self.debug_composites.set(0);
+        self.debug_effects.set(0);
     }
 
     /// Apply a two-pass separable Gaussian blur to a source texture, writing
@@ -485,7 +516,7 @@ impl EffectRenderer {
         }
 
         // Acquire intermediate target for horizontal pass
-        let intermediate = self.offscreen_pool.acquire(device, width, height);
+        let intermediate = self.offscreen_pool.acquire(device, width, height, None);
 
         // Upload both pass uniforms up front and execute both passes in a single submit.
         let horizontal_uniforms = BlurUniforms {
@@ -574,6 +605,8 @@ impl EffectRenderer {
         drop(source_bind_group);
         drop(intermediate_bind_group);
         queue.submit(std::iter::once(encoder.finish()));
+        self.debug_submits.set(self.debug_submits.get() + 1);
+        self.debug_blurs.set(self.debug_blurs.get() + 1);
 
         // Return intermediate to pool
         self.offscreen_pool.release(intermediate);
@@ -629,6 +662,8 @@ impl EffectRenderer {
             pass.draw(0..4, 0..1);
         }
         queue.submit(std::iter::once(encoder.finish()));
+        self.debug_submits.set(self.debug_submits.get() + 1);
+        self.debug_effects.set(self.debug_effects.get() + 1);
     }
 
     /// Apply a custom RuntimeShader effect to a source texture.
@@ -712,6 +747,8 @@ impl EffectRenderer {
             pass.draw(0..4, 0..1);
         }
         queue.submit(std::iter::once(encoder.finish()));
+        self.debug_submits.set(self.debug_submits.get() + 1);
+        self.debug_effects.set(self.debug_effects.get() + 1);
     }
 
     /// Recursively apply a RenderEffect chain.
@@ -753,7 +790,7 @@ impl EffectRenderer {
                 // Apply first effect: source → intermediate
                 let width = source.width;
                 let height = source.height;
-                let intermediate = self.offscreen_pool.acquire(device, width, height);
+                let intermediate = self.offscreen_pool.acquire(device, width, height, None);
                 self.apply_effect(
                     device,
                     queue,
@@ -947,6 +984,8 @@ impl EffectRenderer {
             pass.draw(0..4, 0..1);
         }
         queue.submit(std::iter::once(encoder.finish()));
+        self.debug_submits.set(self.debug_submits.get() + 1);
+        self.debug_composites.set(self.debug_composites.get() + 1);
     }
 }
 

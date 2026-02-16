@@ -20,6 +20,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
+use crate::gpu_stats;
+use crate::gpu_stats::gpu_stats_enabled;
+
 // Chunked rendering constants for robustness with large scenes
 // Note: Limited to 256 for WebGL compatibility (uniform buffer size limit)
 // WebGL guarantees 16KB uniform buffers, ShapeData is 64 bytes = 256 max shapes
@@ -507,6 +510,9 @@ pub struct GpuRenderer {
     scratch_effect_ranges: Vec<Range<usize>>,
     scratch_layer_events: Vec<LayerEvent>,
     effect_renderer: EffectRenderer,
+    frame_stats: gpu_stats::FrameStats,
+    frame_count: u64,
+    gpu_stats_enabled: bool,
 }
 
 impl GpuRenderer {
@@ -715,6 +721,9 @@ impl GpuRenderer {
             scratch_effect_ranges: Vec::new(),
             scratch_layer_events: Vec::new(),
             effect_renderer,
+            frame_stats: gpu_stats::FrameStats::default(),
+            frame_count: 0,
+            gpu_stats_enabled: gpu_stats_enabled(),
         }
     }
 
@@ -777,6 +786,19 @@ impl GpuRenderer {
         Ok(())
     }
 
+    /// Acquire an offscreen target from the pool with stats tracking.
+    /// Uses split borrows to avoid conflicting borrows on self.
+    fn acquire_offscreen(&mut self, width: u32, height: u32) -> OffscreenTarget {
+        let stats = if self.gpu_stats_enabled {
+            Some(&self.frame_stats)
+        } else {
+            None
+        };
+        self.effect_renderer
+            .offscreen_pool
+            .acquire(&self.device, width, height, stats)
+    }
+
     #[allow(clippy::too_many_arguments)] // Render path needs explicit scene slices and target metadata.
     pub fn render(
         &mut self,
@@ -828,7 +850,7 @@ impl GpuRenderer {
             "shadow draws must be added in z-index order"
         );
 
-        self.render_with_layer_events(
+        let result = self.render_with_layer_events(
             view,
             shapes,
             images,
@@ -839,7 +861,13 @@ impl GpuRenderer {
             width,
             height,
             root_scale,
-        )
+        );
+        if self.gpu_stats_enabled {
+            self.effect_renderer
+                .merge_and_reset_debug_counters(&self.frame_stats);
+            self.frame_stats.print_and_reset(&mut self.frame_count);
+        }
+        result
     }
 
     #[allow(clippy::too_many_arguments)] // Mirrors render() call site and scene inputs.
@@ -1006,10 +1034,7 @@ impl GpuRenderer {
         } else {
             // Double-buffer path: accumulate everything into an intermediate texture.
             // The clear is folded into the first render pass via initial_load_op.
-            let accum = self
-                .effect_renderer
-                .offscreen_pool
-                .acquire(&self.device, width, height);
+            let accum = self.acquire_offscreen(width, height);
 
             self.render_range_with_layer_events_to_target(
                 &accum,
@@ -1274,6 +1299,7 @@ impl GpuRenderer {
                     // Shape buffers would be overwritten — flush first.
                     if shape_buffer_used && encoder_has_work {
                         self.queue.submit(std::iter::once(encoder.finish()));
+                        self.frame_stats.bump_submits();
                         encoder =
                             self.device
                                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1323,6 +1349,7 @@ impl GpuRenderer {
                     // Image buffers would be overwritten — flush first.
                     if image_buffer_used && encoder_has_work {
                         self.queue.submit(std::iter::once(encoder.finish()));
+                        self.frame_stats.bump_submits();
                         encoder =
                             self.device
                                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1408,6 +1435,7 @@ impl GpuRenderer {
                     }
                     if encoder_has_work {
                         self.queue.submit(std::iter::once(encoder.finish()));
+                        self.frame_stats.bump_submits();
                         encoder =
                             self.device
                                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1432,6 +1460,7 @@ impl GpuRenderer {
         // Submit any remaining work.
         if encoder_has_work {
             self.queue.submit(std::iter::once(encoder.finish()));
+            self.frame_stats.bump_submits();
         }
 
         self.scratch_segment_items = ordered_items;
@@ -1515,10 +1544,7 @@ impl GpuRenderer {
         let bounds_h = (bounds_b - bounds_y).ceil().max(1.0) as u32;
 
         // 1. Acquire bounds-sized offscreen source.
-        let source = self
-            .effect_renderer
-            .offscreen_pool
-            .acquire(&self.device, bounds_w, bounds_h);
+        let source = self.acquire_offscreen(bounds_w, bounds_h);
 
         // 2. Render shadow shapes to bounds-sized offscreen.
         //    The viewport_offset shifts the coordinate origin so that shapes
@@ -1547,10 +1573,7 @@ impl GpuRenderer {
         }
 
         // 3. Apply Gaussian blur on the bounds-sized textures.
-        let dest = self
-            .effect_renderer
-            .offscreen_pool
-            .acquire(&self.device, bounds_w, bounds_h);
+        let dest = self.acquire_offscreen(bounds_w, bounds_h);
         let pixel_radius = shadow.blur_radius * root_scale;
         self.effect_renderer.apply_blur_scissored(
             &self.device,
@@ -1633,10 +1656,7 @@ impl GpuRenderer {
             return Ok(());
         };
 
-        let source = self
-            .effect_renderer
-            .offscreen_pool
-            .acquire(&self.device, width, height);
+        let source = self.acquire_offscreen(width, height);
         // The clear is folded into render_range_with_layer_events_to_target's
         // initial_load_op below, avoiding a standalone clear submit.
 
@@ -1645,10 +1665,7 @@ impl GpuRenderer {
         let has_nested_backdrop =
             has_backdrop_layer_in_range(backdrop_layers, layer.z_start, layer.z_end);
         let layer_underlay = if has_nested_backdrop {
-            let underlay = self
-                .effect_renderer
-                .offscreen_pool
-                .acquire(&self.device, width, height);
+            let underlay = self.acquire_offscreen(width, height);
 
             if let Some(existing_underlay) = backdrop_underlay {
                 self.effect_renderer.composite_to_view(
@@ -1703,10 +1720,7 @@ impl GpuRenderer {
 
         render_result?;
 
-        let dest = self
-            .effect_renderer
-            .offscreen_pool
-            .acquire(&self.device, width, height);
+        let dest = self.acquire_offscreen(width, height);
 
         let layer_pixel_rect = [
             layer.rect.x * root_scale,
@@ -1781,10 +1795,7 @@ impl GpuRenderer {
             return Ok(());
         };
 
-        let snapshot = self
-            .effect_renderer
-            .offscreen_pool
-            .acquire(&self.device, width, height);
+        let snapshot = self.acquire_offscreen(width, height);
         if let Some(underlay) = backdrop_underlay {
             self.effect_renderer.composite_to_view(
                 &self.device,
@@ -1810,10 +1821,7 @@ impl GpuRenderer {
             );
         }
 
-        let dest = self
-            .effect_renderer
-            .offscreen_pool
-            .acquire(&self.device, width, height);
+        let dest = self.acquire_offscreen(width, height);
         let layer_pixel_rect = [
             layer.rect.x * root_scale,
             layer.rect.y * root_scale,
@@ -1871,6 +1879,7 @@ impl GpuRenderer {
             });
         }
         self.queue.submit(std::iter::once(encoder.finish()));
+        self.frame_stats.bump_submits();
     }
 
     /// Render a subset of shapes to a target view.
@@ -1906,6 +1915,7 @@ impl GpuRenderer {
             viewport_offset,
         );
         self.queue.submit(std::iter::once(encoder.finish()));
+        self.frame_stats.bump_submits();
     }
 
     /// Stage shape buffer writes and record a shape render pass onto the
@@ -1926,6 +1936,7 @@ impl GpuRenderer {
         if layer_shapes.is_empty() {
             return;
         }
+        self.frame_stats.bump_shapes();
 
         // Update viewport uniforms (viewport_offset shifts the origin so that
         // a sub-region of scene space maps to the full render target)
@@ -2213,6 +2224,7 @@ impl GpuRenderer {
         if image_cmds.is_empty() {
             return Ok(());
         }
+        self.frame_stats.bump_images();
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Image Pass"),
@@ -2533,6 +2545,7 @@ impl GpuRenderer {
         target_view: &wgpu::TextureView,
         load_op: wgpu::LoadOp<wgpu::Color>,
     ) -> Result<(), String> {
+        self.frame_stats.bump_text();
         {
             let mut text_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Text Pass"),
