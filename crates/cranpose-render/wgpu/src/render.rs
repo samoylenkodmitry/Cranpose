@@ -266,6 +266,12 @@ struct CachedImageTexture {
     bind_group: wgpu::BindGroup,
 }
 
+struct ImageDrawCmd {
+    index_start: u32,
+    scissor: (u32, u32, u32, u32),
+    image_id: u64,
+}
+
 #[derive(Clone, Copy)]
 enum LayerEventKind {
     Backdrop(usize),
@@ -494,6 +500,12 @@ pub struct GpuRenderer {
     scratch_gradients: Vec<GradientStop>,
     scratch_vertices: Vec<Vertex>,
     scratch_indices: Vec<u32>,
+    scratch_image_vertices: Vec<Vertex>,
+    scratch_image_indices: Vec<u32>,
+    scratch_image_cmds: Vec<ImageDrawCmd>,
+    scratch_segment_items: Vec<(usize, SegmentDrawItem)>,
+    scratch_effect_ranges: Vec<Range<usize>>,
+    scratch_layer_events: Vec<LayerEvent>,
     effect_renderer: EffectRenderer,
 }
 
@@ -696,6 +708,12 @@ impl GpuRenderer {
             scratch_gradients: Vec::new(),
             scratch_vertices: Vec::new(),
             scratch_indices: Vec::new(),
+            scratch_image_vertices: Vec::new(),
+            scratch_image_indices: Vec::new(),
+            scratch_image_cmds: Vec::new(),
+            scratch_segment_items: Vec::new(),
+            scratch_effect_ranges: Vec::new(),
+            scratch_layer_events: Vec::new(),
             effect_renderer,
         }
     }
@@ -970,7 +988,7 @@ impl GpuRenderer {
         if effect_layers.is_empty() && backdrop_layers.is_empty() {
             // Fast path: no effect/backdrop layers — render directly to the surface
             // without allocating an accumulation buffer or performing the final blit.
-            self.clear_target_view(surface_view, CLEAR_COLOR);
+            // The clear is folded into the first render pass's LoadOp::Clear.
             self.render_non_effect_segment(
                 surface_view,
                 shapes,
@@ -983,14 +1001,15 @@ impl GpuRenderer {
                 width,
                 height,
                 root_scale,
+                wgpu::LoadOp::Clear(CLEAR_COLOR),
             )?;
         } else {
             // Double-buffer path: accumulate everything into an intermediate texture.
+            // The clear is folded into the first render pass via initial_load_op.
             let accum = self
                 .effect_renderer
                 .offscreen_pool
                 .acquire(&self.device, width, height);
-            self.clear_target_view(&accum.view, CLEAR_COLOR);
 
             self.render_range_with_layer_events_to_target(
                 &accum,
@@ -1007,6 +1026,7 @@ impl GpuRenderer {
                 width,
                 height,
                 root_scale,
+                wgpu::LoadOp::Clear(CLEAR_COLOR),
             )?;
 
             self.effect_renderer.composite_to_view(
@@ -1046,23 +1066,42 @@ impl GpuRenderer {
         width: u32,
         height: u32,
         root_scale: f32,
+        initial_load_op: wgpu::LoadOp<wgpu::Color>,
     ) -> Result<(), String> {
         if z_start >= z_end {
+            // Even if there's nothing to render, the caller may expect the
+            // target to be cleared (e.g. freshly-acquired offscreen).
+            if matches!(initial_load_op, wgpu::LoadOp::Clear(_)) {
+                self.clear_target_view_with_load_op(&target.view, initial_load_op);
+            }
             return Ok(());
         }
 
-        let effect_z_ranges =
-            collect_effect_ranges(effect_layers, z_start, z_end, excluded_effect_layer);
-        let events = collect_layer_events(
+        let mut effect_z_ranges = std::mem::take(&mut self.scratch_effect_ranges);
+        collect_effect_ranges(
+            effect_layers,
+            z_start,
+            z_end,
+            excluded_effect_layer,
+            &mut effect_z_ranges,
+        );
+        let mut events = std::mem::take(&mut self.scratch_layer_events);
+        collect_layer_events(
             effect_layers,
             backdrop_layers,
             z_start,
             z_end,
             excluded_effect_layer,
+            &mut events,
         );
 
+        // The first render_non_effect_segment uses the caller's load_op
+        // (which may be Clear to fold a standalone clear).  After the first
+        // segment or any layer event, subsequent segments use Load.
+        let mut next_load_op = initial_load_op;
+
         let mut cursor_z = z_start;
-        for event in events {
+        for event in &events {
             if event.z_index > cursor_z {
                 self.render_non_effect_segment(
                     &target.view,
@@ -1076,11 +1115,20 @@ impl GpuRenderer {
                     width,
                     height,
                     root_scale,
+                    next_load_op,
                 )?;
+                next_load_op = wgpu::LoadOp::Load;
                 cursor_z = event.z_index;
             } else if event.z_index < cursor_z {
                 // Already consumed by a previously composited effect range.
                 continue;
+            }
+
+            // Backdrop/effect events composite onto the target, so it must
+            // be initialized first.
+            if matches!(next_load_op, wgpu::LoadOp::Clear(_)) {
+                self.clear_target_view_with_load_op(&target.view, next_load_op);
+                next_load_op = wgpu::LoadOp::Load;
             }
 
             match event.kind {
@@ -1131,9 +1179,16 @@ impl GpuRenderer {
                 width,
                 height,
                 root_scale,
+                next_load_op,
             )?;
+        } else if matches!(next_load_op, wgpu::LoadOp::Clear(_)) {
+            // All content was consumed by events but the target was never
+            // cleared — do it now so the caller sees a clean target.
+            self.clear_target_view_with_load_op(&target.view, next_load_op);
         }
 
+        self.scratch_effect_ranges = effect_z_ranges;
+        self.scratch_layer_events = events;
         Ok(())
     }
 
@@ -1151,8 +1206,10 @@ impl GpuRenderer {
         width: u32,
         height: u32,
         root_scale: f32,
+        initial_load_op: wgpu::LoadOp<wgpu::Color>,
     ) -> Result<(), String> {
-        let ordered_items = collect_non_effect_segment_items(
+        let mut ordered_items = std::mem::take(&mut self.scratch_segment_items);
+        collect_non_effect_segment_items(
             shapes,
             images,
             texts,
@@ -1160,20 +1217,50 @@ impl GpuRenderer {
             z_start,
             z_end,
             effect_z_ranges,
+            &mut ordered_items,
         );
         if ordered_items.is_empty() {
+            if matches!(initial_load_op, wgpu::LoadOp::Clear(_)) {
+                self.clear_target_view_with_load_op(target_view, initial_load_op);
+            }
             return Ok(());
         }
 
+        // Batch render passes into a shared encoder to reduce queue.submit()
+        // calls.  Buffer conflict tracking ensures we flush before rewriting
+        // the same GPU buffers (shapes share shape_buffers, images share
+        // image_buffers).  Text uses the atlas, which is independent.
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Segment Encoder"),
+            });
+        let mut encoder_has_work = false;
+        let mut shape_buffer_used = false;
+        let mut image_buffer_used = false;
+
+        // The first batch uses the caller's load op (which may be Clear to
+        // fold a standalone clear into this segment).  Subsequent batches
+        // always use Load to preserve prior content.
+        let mut first_batch = true;
+        let load_op_for_batch = |first: &mut bool| -> wgpu::LoadOp<wgpu::Color> {
+            if *first {
+                *first = false;
+                initial_load_op
+            } else {
+                wgpu::LoadOp::Load
+            }
+        };
+
         let mut cursor = 0usize;
         while cursor < ordered_items.len() {
-            match ordered_items[cursor] {
+            match ordered_items[cursor].1 {
                 SegmentDrawItem::Shape(index) => {
                     let blend_mode = supported_blend_mode(shapes[index].blend_mode);
                     let start = cursor;
                     cursor += 1;
                     while cursor < ordered_items.len() {
-                        match ordered_items[cursor] {
+                        match ordered_items[cursor].1 {
                             SegmentDrawItem::Shape(next_index)
                                 if supported_blend_mode(shapes[next_index].blend_mode)
                                     == blend_mode =>
@@ -1184,30 +1271,45 @@ impl GpuRenderer {
                         }
                     }
 
+                    // Shape buffers would be overwritten — flush first.
+                    if shape_buffer_used && encoder_has_work {
+                        self.queue.submit(std::iter::once(encoder.finish()));
+                        encoder =
+                            self.device
+                                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                    label: Some("Segment Encoder"),
+                                });
+                        image_buffer_used = false;
+                    }
+
                     let shape_batch: Vec<&DrawShape> = ordered_items[start..cursor]
                         .iter()
-                        .map(|item| match item {
+                        .map(|(_, item)| match item {
                             SegmentDrawItem::Shape(shape_index) => &shapes[*shape_index],
                             _ => unreachable!("shape batch contains only shape items"),
                         })
                         .collect();
-                    self.render_shapes_to_offscreen(
+                    let load_op = load_op_for_batch(&mut first_batch);
+                    self.encode_shapes_pass(
+                        &mut encoder,
                         target_view,
                         &shape_batch,
                         blend_mode,
                         width,
                         height,
                         root_scale,
-                        true,
+                        load_op,
                         [0.0, 0.0],
                     );
+                    shape_buffer_used = true;
+                    encoder_has_work = true;
                 }
                 SegmentDrawItem::Image(index) => {
                     let blend_mode = supported_blend_mode(images[index].blend_mode);
                     let start = cursor;
                     cursor += 1;
                     while cursor < ordered_items.len() {
-                        match ordered_items[cursor] {
+                        match ordered_items[cursor].1 {
                             SegmentDrawItem::Image(next_index)
                                 if supported_blend_mode(images[next_index].blend_mode)
                                     == blend_mode =>
@@ -1218,28 +1320,44 @@ impl GpuRenderer {
                         }
                     }
 
+                    // Image buffers would be overwritten — flush first.
+                    if image_buffer_used && encoder_has_work {
+                        self.queue.submit(std::iter::once(encoder.finish()));
+                        encoder =
+                            self.device
+                                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                    label: Some("Segment Encoder"),
+                                });
+                        shape_buffer_used = false;
+                    }
+
+                    // Prepare image draw commands (ensure cached, build verts)
                     let image_batch: Vec<&ImageDraw> = ordered_items[start..cursor]
                         .iter()
-                        .map(|item| match item {
+                        .map(|(_, item)| match item {
                             SegmentDrawItem::Image(image_index) => &images[*image_index],
                             _ => unreachable!("image batch contains only image items"),
                         })
                         .collect();
-                    self.render_images_to_offscreen(
+                    let load_op = load_op_for_batch(&mut first_batch);
+                    let image_cmds =
+                        self.prepare_image_draw_cmds(&image_batch, width, height, root_scale)?;
+                    self.encode_images_pass(
+                        &mut encoder,
                         target_view,
-                        &image_batch,
+                        &image_cmds,
                         blend_mode,
-                        width,
-                        height,
-                        root_scale,
-                        true,
+                        load_op,
                     )?;
+                    self.scratch_image_cmds = image_cmds;
+                    image_buffer_used = true;
+                    encoder_has_work = true;
                 }
                 SegmentDrawItem::Text(_) => {
                     let start = cursor;
                     cursor += 1;
                     while cursor < ordered_items.len() {
-                        match ordered_items[cursor] {
+                        match ordered_items[cursor].1 {
                             SegmentDrawItem::Text(_) => {
                                 cursor += 1;
                             }
@@ -1249,21 +1367,56 @@ impl GpuRenderer {
 
                     let text_batch: Vec<&TextDraw> = ordered_items[start..cursor]
                         .iter()
-                        .map(|item| match item {
+                        .map(|(_, item)| match item {
                             SegmentDrawItem::Text(text_index) => &texts[*text_index],
                             _ => unreachable!("text batch contains only text items"),
                         })
                         .collect();
-                    self.render_text_to_offscreen(
-                        target_view,
-                        &text_batch,
-                        width,
-                        height,
-                        root_scale,
-                        true,
-                    )?;
+                    let load_op = load_op_for_batch(&mut first_batch);
+                    // Text prepare (shaping, atlas upload) must happen before
+                    // we record the pass.
+                    self.prepare_text_for_render(&text_batch, width, height, root_scale)?;
+                    self.encode_text_pass(&mut encoder, target_view, load_op)?;
+                    encoder_has_work = true;
+                    // Text uses its own atlas buffers — no conflict with
+                    // shape/image buffers, so no flag to set.
                 }
                 SegmentDrawItem::Shadow(index) => {
+                    // Shadows involve effect_renderer calls with their own
+                    // submits — flush our encoder first.
+                    if first_batch && matches!(initial_load_op, wgpu::LoadOp::Clear(_)) {
+                        // Record a clear pass so the shadow composites onto
+                        // initialized content.
+                        {
+                            let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("Shadow Pre-Clear"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: target_view,
+                                    resolve_target: None,
+                                    ops: wgpu::Operations {
+                                        load: initial_load_op,
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                })],
+                                depth_stencil_attachment: None,
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                            });
+                        }
+                        first_batch = false;
+                        encoder_has_work = true;
+                    }
+                    if encoder_has_work {
+                        self.queue.submit(std::iter::once(encoder.finish()));
+                        encoder =
+                            self.device
+                                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                    label: Some("Segment Encoder"),
+                                });
+                        encoder_has_work = false;
+                        shape_buffer_used = false;
+                        image_buffer_used = false;
+                    }
                     cursor += 1;
                     self.render_shadow_draw(
                         target_view,
@@ -1276,6 +1429,12 @@ impl GpuRenderer {
             }
         }
 
+        // Submit any remaining work.
+        if encoder_has_work {
+            self.queue.submit(std::iter::once(encoder.finish()));
+        }
+
+        self.scratch_segment_items = ordered_items;
         Ok(())
     }
 
@@ -1340,7 +1499,7 @@ impl GpuRenderer {
                     width,
                     height,
                     root_scale,
-                    true,
+                    wgpu::LoadOp::Load,
                     [0.0, 0.0],
                 );
             }
@@ -1360,13 +1519,21 @@ impl GpuRenderer {
             .effect_renderer
             .offscreen_pool
             .acquire(&self.device, bounds_w, bounds_h);
-        self.clear_target_view(&source.view, wgpu::Color::TRANSPARENT);
 
         // 2. Render shadow shapes to bounds-sized offscreen.
         //    The viewport_offset shifts the coordinate origin so that shapes
         //    at absolute viewport positions render into the small texture.
+        //    The first shape gets LoadOp::Clear to initialize the texture;
+        //    subsequent shapes use LoadOp::Load.
         let viewport_offset = [bounds_x.floor(), bounds_y.floor()];
+        let mut first_shadow_shape = true;
         for (shape, blend_mode) in &shadow.shapes {
+            let load = if first_shadow_shape {
+                first_shadow_shape = false;
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+            } else {
+                wgpu::LoadOp::Load
+            };
             self.render_shapes_to_offscreen(
                 &source.view,
                 &[shape],
@@ -1374,7 +1541,7 @@ impl GpuRenderer {
                 bounds_w,
                 bounds_h,
                 root_scale,
-                true,
+                load,
                 viewport_offset,
             );
         }
@@ -1470,7 +1637,8 @@ impl GpuRenderer {
             .effect_renderer
             .offscreen_pool
             .acquire(&self.device, width, height);
-        self.clear_target_view(&source.view, wgpu::Color::TRANSPARENT);
+        // The clear is folded into render_range_with_layer_events_to_target's
+        // initial_load_op below, avoiding a standalone clear submit.
 
         // Nested backdrop layers inside this effect-isolated subtree should still
         // be able to sample the true scene content behind the subtree.
@@ -1526,6 +1694,7 @@ impl GpuRenderer {
             width,
             height,
             root_scale,
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
         );
 
         if let Some(underlay) = layer_underlay {
@@ -1675,7 +1844,11 @@ impl GpuRenderer {
         Ok(())
     }
 
-    fn clear_target_view(&self, target_view: &wgpu::TextureView, color: wgpu::Color) {
+    fn clear_target_view_with_load_op(
+        &self,
+        target_view: &wgpu::TextureView,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+    ) {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1688,7 +1861,7 @@ impl GpuRenderer {
                     view: target_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(color),
+                        load: load_op,
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -1703,8 +1876,7 @@ impl GpuRenderer {
     /// Render a subset of shapes to a target view.
     ///
     /// Uses the same shape pipeline and uniforms as the main render path.
-    /// When `has_prior_content` is false, clears to transparent first;
-    /// when true, preserves existing content (LoadOp::Load).
+    /// The `load_op` controls whether to clear or preserve existing content.
     #[allow(clippy::too_many_arguments)]
     fn render_shapes_to_offscreen(
         &mut self,
@@ -1714,7 +1886,41 @@ impl GpuRenderer {
         width: u32,
         height: u32,
         root_scale: f32,
-        has_prior_content: bool,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        viewport_offset: [f32; 2],
+    ) {
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Shape Encoder"),
+            });
+        self.encode_shapes_pass(
+            &mut encoder,
+            target_view,
+            layer_shapes,
+            blend_mode,
+            width,
+            height,
+            root_scale,
+            load_op,
+            viewport_offset,
+        );
+        self.queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    /// Stage shape buffer writes and record a shape render pass onto the
+    /// provided encoder.  The caller is responsible for submitting.
+    #[allow(clippy::too_many_arguments)]
+    fn encode_shapes_pass(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        target_view: &wgpu::TextureView,
+        layer_shapes: &[&DrawShape],
+        blend_mode: BlendMode,
+        width: u32,
+        height: u32,
+        root_scale: f32,
+        load_op: wgpu::LoadOp<wgpu::Color>,
         viewport_offset: [f32; 2],
     ) {
         if layer_shapes.is_empty() {
@@ -1963,24 +2169,15 @@ impl GpuRenderer {
             );
         }
 
-        // Create render pass targeting the view
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Effect Layer Shape Encoder"),
-            });
+        // Record render pass on the provided encoder
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Effect Layer Shape Pass"),
+                label: Some("Shape Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: if has_prior_content {
-                            wgpu::LoadOp::Load
-                        } else {
-                            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
-                        },
+                        load: load_op,
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -2002,30 +2199,75 @@ impl GpuRenderer {
             );
             render_pass.draw_indexed(0..(shape_count as u32 * 6), 0, 0..1);
         }
-        self.queue.submit(std::iter::once(encoder.finish()));
     }
 
-    /// Render a subset of images to an offscreen target view.
-    #[allow(clippy::too_many_arguments)]
-    fn render_images_to_offscreen(
+    /// Record an image render pass onto the provided encoder.
+    fn encode_images_pass(
         &mut self,
+        encoder: &mut wgpu::CommandEncoder,
         target_view: &wgpu::TextureView,
-        layer_images: &[&ImageDraw],
+        image_cmds: &[ImageDrawCmd],
         blend_mode: BlendMode,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+    ) -> Result<(), String> {
+        if image_cmds.is_empty() {
+            return Ok(());
+        }
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Image Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: load_op,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            render_pass.set_pipeline(match blend_mode {
+                BlendMode::DstOut => &self.image_pipeline_dst_out,
+                _ => &self.image_pipeline,
+            });
+            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            render_pass
+                .set_index_buffer(self.image_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            render_pass.set_vertex_buffer(0, self.image_vertex_buffer.slice(..));
+
+            for cmd in image_cmds {
+                let (sx, sy, sw, sh) = cmd.scissor;
+                render_pass.set_scissor_rect(sx, sy, sw, sh);
+
+                let cached = self
+                    .image_texture_cache
+                    .get(&cmd.image_id)
+                    .ok_or_else(|| "image texture missing from cache".to_string())?;
+                render_pass.set_bind_group(1, &cached.bind_group, &[]);
+                render_pass.draw_indexed(cmd.index_start..(cmd.index_start + 6), 0, 0..1);
+            }
+        }
+        Ok(())
+    }
+
+    /// Prepare image vertices, indices, ensure caching, and write to GPU buffers.
+    /// Returns the draw commands needed by `encode_images_pass`.
+    fn prepare_image_draw_cmds(
+        &mut self,
+        layer_images: &[&ImageDraw],
         width: u32,
         height: u32,
         root_scale: f32,
-        has_prior_content: bool,
-    ) -> Result<(), String> {
-        // Build vertices and draw commands (same batching approach as main render)
-        struct ImageDrawCmd {
-            index_start: u32,
-            scissor: (u32, u32, u32, u32),
-            image_id: u64,
-        }
-        let mut image_vertices: Vec<Vertex> = Vec::with_capacity(layer_images.len() * 4);
-        let mut image_indices: Vec<u32> = Vec::with_capacity(layer_images.len() * 6);
-        let mut image_cmds: Vec<ImageDrawCmd> = Vec::with_capacity(layer_images.len());
+    ) -> Result<Vec<ImageDrawCmd>, String> {
+        let mut image_vertices = std::mem::take(&mut self.scratch_image_vertices);
+        let mut image_indices = std::mem::take(&mut self.scratch_image_indices);
+        let mut image_cmds = std::mem::take(&mut self.scratch_image_cmds);
+        image_vertices.clear();
+        image_indices.clear();
+        image_cmds.clear();
 
         for image_draw in layer_images {
             let rect = image_draw.rect;
@@ -2116,7 +2358,7 @@ impl GpuRenderer {
         }
 
         if image_cmds.is_empty() {
-            return Ok(());
+            return Ok(image_cmds);
         }
 
         // Resize buffers if needed
@@ -2150,72 +2392,25 @@ impl GpuRenderer {
             bytemuck::cast_slice(&image_indices),
         );
 
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Effect Layer Image Encoder"),
-            });
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Effect Layer Image Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: if has_prior_content {
-                            wgpu::LoadOp::Load
-                        } else {
-                            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
-                        },
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-
-            render_pass.set_pipeline(match blend_mode {
-                BlendMode::DstOut => &self.image_pipeline_dst_out,
-                _ => &self.image_pipeline,
-            });
-            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-            render_pass
-                .set_index_buffer(self.image_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            render_pass.set_vertex_buffer(0, self.image_vertex_buffer.slice(..));
-
-            for cmd in &image_cmds {
-                let (sx, sy, sw, sh) = cmd.scissor;
-                render_pass.set_scissor_rect(sx, sy, sw, sh);
-
-                let cached = self
-                    .image_texture_cache
-                    .get(&cmd.image_id)
-                    .ok_or_else(|| "image texture missing from cache".to_string())?;
-                render_pass.set_bind_group(1, &cached.bind_group, &[]);
-                render_pass.draw_indexed(cmd.index_start..(cmd.index_start + 6), 0, 0..1);
-            }
-        }
-        self.queue.submit(std::iter::once(encoder.finish()));
-
-        Ok(())
+        self.scratch_image_vertices = image_vertices;
+        self.scratch_image_indices = image_indices;
+        // image_cmds is returned to the caller; it will NOT be returned to
+        // scratch_image_cmds here. The caller must not hold it across calls.
+        Ok(image_cmds)
     }
 
-    /// Render a subset of text to an offscreen target view.
-    #[allow(clippy::too_many_arguments)]
-    fn render_text_to_offscreen(
+    /// Prepare text shaping and atlas uploads for the given text batch.
+    /// After calling this, `encode_text_pass` can record the render pass.
+    fn prepare_text_for_render(
         &mut self,
-        target_view: &wgpu::TextureView,
         layer_texts: &[&TextDraw],
         width: u32,
         height: u32,
         root_scale: f32,
-        has_prior_content: bool,
     ) -> Result<(), String> {
         let mut font_system = self.font_system.lock().unwrap();
         let mut text_cache = self.text_cache.lock().unwrap();
 
-        // Prepare text buffers for this subset
         let mut text_keys: Vec<TextCacheKey> = Vec::with_capacity(layer_texts.len());
 
         for text_draw in layer_texts {
@@ -2313,7 +2508,6 @@ impl GpuRenderer {
             return Ok(());
         }
 
-        // Prepare and render text to offscreen target
         self.text_viewport
             .update(&self.queue, Resolution { width, height });
         self.text_renderer
@@ -2326,28 +2520,27 @@ impl GpuRenderer {
                 text_areas.iter().cloned(),
                 &mut self.swash_cache,
             )
-            .map_err(|e| format!("Effect text prepare error: {:?}", e))?;
+            .map_err(|e| format!("Text prepare error: {:?}", e))?;
 
-        drop(font_system);
-        drop(text_cache);
+        Ok(())
+    }
 
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Effect Layer Text Encoder"),
-            });
+    /// Record a text render pass onto the provided encoder.
+    /// Must be called after `text_renderer.prepare()`.
+    fn encode_text_pass(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        target_view: &wgpu::TextureView,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+    ) -> Result<(), String> {
         {
             let mut text_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Effect Layer Text Pass"),
+                label: Some("Text Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: if has_prior_content {
-                            wgpu::LoadOp::Load
-                        } else {
-                            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
-                        },
+                        load: load_op,
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -2360,8 +2553,6 @@ impl GpuRenderer {
                 .render(&self.text_atlas, &self.text_viewport, &mut text_pass)
                 .map_err(|e| format!("Effect text render error: {:?}", e))?;
         }
-        self.queue.submit(std::iter::once(encoder.finish()));
-
         Ok(())
     }
 }
@@ -2400,6 +2591,7 @@ enum SegmentDrawItem {
     Shadow(usize),
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_non_effect_segment_items(
     shapes: &[DrawShape],
     images: &[ImageDraw],
@@ -2408,16 +2600,16 @@ fn collect_non_effect_segment_items(
     z_start: usize,
     z_end: usize,
     effect_z_ranges: &[Range<usize>],
-) -> Vec<SegmentDrawItem> {
-    let mut ordered_items =
-        Vec::with_capacity(shapes.len() + images.len() + texts.len() + shadow_draws.len());
+    scratch: &mut Vec<(usize, SegmentDrawItem)>,
+) {
+    scratch.clear();
 
     for (index, shape) in shapes.iter().enumerate() {
         if shape.z_index >= z_start
             && shape.z_index < z_end
             && !is_in_effect_range(shape.z_index, effect_z_ranges)
         {
-            ordered_items.push((shape.z_index, SegmentDrawItem::Shape(index)));
+            scratch.push((shape.z_index, SegmentDrawItem::Shape(index)));
         }
     }
 
@@ -2426,7 +2618,7 @@ fn collect_non_effect_segment_items(
             && image.z_index < z_end
             && !is_in_effect_range(image.z_index, effect_z_ranges)
         {
-            ordered_items.push((image.z_index, SegmentDrawItem::Image(index)));
+            scratch.push((image.z_index, SegmentDrawItem::Image(index)));
         }
     }
 
@@ -2435,7 +2627,7 @@ fn collect_non_effect_segment_items(
             && text.z_index < z_end
             && !is_in_effect_range(text.z_index, effect_z_ranges)
         {
-            ordered_items.push((text.z_index, SegmentDrawItem::Text(index)));
+            scratch.push((text.z_index, SegmentDrawItem::Text(index)));
         }
     }
 
@@ -2444,12 +2636,11 @@ fn collect_non_effect_segment_items(
             && shadow.z_index < z_end
             && !is_in_effect_range(shadow.z_index, effect_z_ranges)
         {
-            ordered_items.push((shadow.z_index, SegmentDrawItem::Shadow(index)));
+            scratch.push((shadow.z_index, SegmentDrawItem::Shadow(index)));
         }
     }
 
-    ordered_items.sort_by_key(|(z_index, _)| *z_index);
-    ordered_items.into_iter().map(|(_, item)| item).collect()
+    scratch.sort_by_key(|(z_index, _)| *z_index);
 }
 
 fn effect_layer_in_range(layer: &EffectLayer, z_start: usize, z_end: usize) -> bool {
@@ -2461,23 +2652,18 @@ fn collect_effect_ranges(
     z_start: usize,
     z_end: usize,
     excluded_effect_layer: Option<usize>,
-) -> Vec<Range<usize>> {
-    let mut ranges: Vec<Range<usize>> = effect_layers
-        .iter()
-        .enumerate()
-        .filter_map(|(index, layer)| {
-            if Some(index) == excluded_effect_layer {
-                return None;
-            }
-            if effect_layer_in_range(layer, z_start, z_end) {
-                Some(layer.z_start..layer.z_end)
-            } else {
-                None
-            }
-        })
-        .collect();
-    ranges.sort_by_key(|range| range.start);
-    ranges
+    out: &mut Vec<Range<usize>>,
+) {
+    out.clear();
+    for (index, layer) in effect_layers.iter().enumerate() {
+        if Some(index) == excluded_effect_layer {
+            continue;
+        }
+        if effect_layer_in_range(layer, z_start, z_end) {
+            out.push(layer.z_start..layer.z_end);
+        }
+    }
+    out.sort_by_key(|range| range.start);
 }
 
 fn collect_layer_events(
@@ -2486,11 +2672,12 @@ fn collect_layer_events(
     z_start: usize,
     z_end: usize,
     excluded_effect_layer: Option<usize>,
-) -> Vec<LayerEvent> {
-    let mut events = Vec::with_capacity(effect_layers.len() + backdrop_layers.len());
+    out: &mut Vec<LayerEvent>,
+) {
+    out.clear();
     for (index, layer) in backdrop_layers.iter().enumerate() {
         if layer.z_index >= z_start && layer.z_index < z_end {
-            events.push(LayerEvent {
+            out.push(LayerEvent {
                 z_index: layer.z_index,
                 kind: LayerEventKind::Backdrop(index),
             });
@@ -2501,13 +2688,13 @@ fn collect_layer_events(
             continue;
         }
         if effect_layer_in_range(layer, z_start, z_end) {
-            events.push(LayerEvent {
+            out.push(LayerEvent {
                 z_index: layer.z_start,
                 kind: LayerEventKind::Effect(index),
             });
         }
     }
-    events.sort_by(|a, b| {
+    out.sort_by(|a, b| {
         // Primary key: z-index ascending.
         let z_cmp = a.z_index.cmp(&b.z_index);
         if z_cmp != std::cmp::Ordering::Equal {
@@ -2531,7 +2718,6 @@ fn collect_layer_events(
             _ => std::cmp::Ordering::Equal,
         }
     });
-    events
 }
 
 fn has_backdrop_layer_in_range(
@@ -2841,7 +3027,8 @@ mod tests {
     #[test]
     fn collect_effect_ranges_respects_excluded_effect() {
         let layers = vec![effect_layer(10, 40), effect_layer(20, 30)];
-        let ranges = collect_effect_ranges(&layers, 10, 40, Some(0));
+        let mut ranges = Vec::new();
+        collect_effect_ranges(&layers, 10, 40, Some(0), &mut ranges);
         assert_eq!(ranges.len(), 1);
         assert_eq!(ranges[0], 20..30);
     }
@@ -2850,7 +3037,8 @@ mod tests {
     fn collect_layer_events_includes_nested_when_parent_excluded() {
         let effects = vec![effect_layer(10, 40), effect_layer(20, 30)];
         let backdrops = vec![backdrop_layer(25)];
-        let events = collect_layer_events(&effects, &backdrops, 10, 40, Some(0));
+        let mut events = Vec::new();
+        collect_layer_events(&effects, &backdrops, 10, 40, Some(0), &mut events);
         assert_eq!(events.len(), 2);
 
         match events[0].kind {
@@ -2867,7 +3055,8 @@ mod tests {
     fn collect_layer_events_sorts_backdrop_before_effect_at_same_z() {
         let effects = vec![effect_layer(10, 20)];
         let backdrops = vec![backdrop_layer(10)];
-        let events = collect_layer_events(&effects, &backdrops, 0, 30, None);
+        let mut events = Vec::new();
+        collect_layer_events(&effects, &backdrops, 0, 30, None, &mut events);
         assert_eq!(events.len(), 2);
 
         match events[0].kind {
@@ -2885,7 +3074,8 @@ mod tests {
         // Child emitted before parent (matching scene collection order where a
         // parent effect is recorded after recursively processing children).
         let effects = vec![effect_layer(10, 20), effect_layer(10, 40)];
-        let events = collect_layer_events(&effects, &[], 0, 50, None);
+        let mut events = Vec::new();
+        collect_layer_events(&effects, &[], 0, 50, None, &mut events);
 
         assert_eq!(events.len(), 2);
         match events[0].kind {
@@ -2901,7 +3091,8 @@ mod tests {
     #[test]
     fn collect_layer_events_prefers_later_effect_when_ranges_match() {
         let effects = vec![effect_layer(10, 20), effect_layer(10, 20)];
-        let events = collect_layer_events(&effects, &[], 0, 30, None);
+        let mut events = Vec::new();
+        collect_layer_events(&effects, &[], 0, 30, None, &mut events);
 
         assert_eq!(events.len(), 2);
         match events[0].kind {
@@ -2940,7 +3131,18 @@ mod tests {
         let texts = vec![test_text(0)];
         let shadows: Vec<ShadowDraw> = Vec::new();
 
-        let items = collect_non_effect_segment_items(&shapes, &images, &texts, &shadows, 0, 4, &[]);
+        let mut scratch = Vec::new();
+        collect_non_effect_segment_items(
+            &shapes,
+            &images,
+            &texts,
+            &shadows,
+            0,
+            4,
+            &[],
+            &mut scratch,
+        );
+        let items: Vec<_> = scratch.iter().map(|(_, item)| *item).collect();
         assert_eq!(
             items,
             vec![
@@ -2963,7 +3165,8 @@ mod tests {
         let shadows: Vec<ShadowDraw> = Vec::new();
         let effect_ranges = [std::ops::Range { start: 2, end: 4 }];
 
-        let items = collect_non_effect_segment_items(
+        let mut scratch = Vec::new();
+        collect_non_effect_segment_items(
             &shapes,
             &images,
             &texts,
@@ -2971,7 +3174,9 @@ mod tests {
             0,
             5,
             &effect_ranges,
+            &mut scratch,
         );
+        let items: Vec<_> = scratch.iter().map(|(_, item)| *item).collect();
         assert_eq!(
             items,
             vec![SegmentDrawItem::Shape(0), SegmentDrawItem::Text(0)]
