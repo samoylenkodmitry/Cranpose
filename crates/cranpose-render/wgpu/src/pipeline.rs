@@ -369,11 +369,7 @@ fn render_container(
             height: (rect.height - padding.top - padding.bottom).max(0.0),
         };
         let transformed_text_bounds = apply_layer_to_rect(text_bounds_rect, rect, &content_layer);
-        let text_clip = if options.overflow == TextOverflow::Visible {
-            visual_clip
-        } else {
-            resolve_clip(visual_clip, Some(pad_clip_rect(transformed_text_bounds)))
-        };
+        let text_clip = resolve_text_clip(options.overflow, visual_clip, transformed_text_bounds);
 
         // Extract color and font size from text style or default
         let text_color = text_style_ref.color.unwrap_or(Color(1.0, 1.0, 1.0, 1.0));
@@ -383,17 +379,19 @@ fn render_container(
             cranpose_ui::text::TextUnit::Unspecified => 14.0,
         };
 
-        scene.push_text(
-            layout.node_id,
-            transformed_text_rect,
-            Rc::from(prepared.text),
-            apply_layer_to_color(text_color, &content_layer),
-            text_style_ref.clone(),
-            font_size,
-            layer_uniform_scale(&content_layer),
-            options,
-            text_clip,
-        );
+        if let Some(text_clip) = text_clip {
+            scene.push_text(
+                layout.node_id,
+                transformed_text_rect,
+                Rc::from(prepared.text),
+                apply_layer_to_color(text_color, &content_layer),
+                text_style_ref.clone(),
+                font_size,
+                layer_uniform_scale(&content_layer),
+                options,
+                text_clip,
+            );
+        }
     }
 
     for handler in &style.click_actions {
@@ -505,6 +503,19 @@ fn resolve_clip(parent_clip: Option<Rect>, requested_clip: Option<Rect>) -> Opti
         (None, Some(current)) => Some(current),
         (None, None) => None,
     }
+}
+
+fn resolve_text_clip(
+    overflow: TextOverflow,
+    visual_clip: Option<Rect>,
+    transformed_text_bounds: Rect,
+) -> Option<Option<Rect>> {
+    if overflow == TextOverflow::Visible {
+        return Some(visual_clip);
+    }
+    // Non-visible overflow requires a concrete clip intersection.
+    // If empty, skip drawing rather than treating `None` as unbounded clip.
+    resolve_clip(visual_clip, Some(pad_clip_rect(transformed_text_bounds))).map(Some)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -717,11 +728,7 @@ fn render_node_from_applier(
             height: (rect.height - padding.top - padding.bottom).max(0.0),
         };
         let transformed_text_bounds = apply_layer_to_rect(text_bounds_rect, rect, &content_layer);
-        let text_clip = if options.overflow == TextOverflow::Visible {
-            visual_clip
-        } else {
-            resolve_clip(visual_clip, Some(pad_clip_rect(transformed_text_bounds)))
-        };
+        let text_clip = resolve_text_clip(options.overflow, visual_clip, transformed_text_bounds);
 
         // Extract color and font size
         let text_color = text_style_ref.color.unwrap_or(Color(1.0, 1.0, 1.0, 1.0));
@@ -731,17 +738,19 @@ fn render_node_from_applier(
             cranpose_ui::text::TextUnit::Unspecified => 14.0,
         };
 
-        scene.push_text(
-            node_id,
-            transformed_text_rect,
-            Rc::from(prepared.text),
-            apply_layer_to_color(text_color, &content_layer),
-            text_style_ref.clone(),
-            font_size,
-            layer_uniform_scale(&content_layer),
-            options,
-            text_clip,
-        );
+        if let Some(text_clip) = text_clip {
+            scene.push_text(
+                node_id,
+                transformed_text_rect,
+                Rc::from(prepared.text),
+                apply_layer_to_color(text_color, &content_layer),
+                text_style_ref.clone(),
+                font_size,
+                layer_uniform_scale(&content_layer),
+                options,
+                text_clip,
+            );
+        }
     }
 
     // Collect click actions
@@ -973,6 +982,40 @@ mod tests {
                 width: 20.0,
                 height: 20.0,
             }
+        );
+    }
+
+    #[test]
+    fn resolve_text_clip_skips_when_intersection_is_empty() {
+        let visual_clip = Some(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        });
+        let text_bounds = Rect {
+            x: 20.0,
+            y: 20.0,
+            width: 5.0,
+            height: 5.0,
+        };
+        assert_eq!(
+            resolve_text_clip(TextOverflow::Clip, visual_clip, text_bounds),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_text_clip_visible_keeps_unbounded_draw() {
+        let text_bounds = Rect {
+            x: 20.0,
+            y: 20.0,
+            width: 5.0,
+            height: 5.0,
+        };
+        assert_eq!(
+            resolve_text_clip(TextOverflow::Visible, None, text_bounds),
+            Some(None)
         );
     }
 }
