@@ -10,8 +10,9 @@ use cranpose_ui_graphics::{
     BlendMode, Brush, Color, ColorFilter, ImageBitmap, Rect, RenderEffect, TileMode,
 };
 use glyphon::{
-    Attrs, Cache, Color as GlyphonColor, FontSystem, Metrics, Resolution, SwashCache, TextArea,
-    TextAtlas, TextBounds, TextRenderer, Viewport,
+    Attrs, Cache, Color as GlyphonColor, Family, FontSystem, Metrics, Resolution,
+    Style as GlyphonStyle, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
+    Weight as GlyphonWeight,
 };
 use lru::LruCache;
 use std::num::NonZeroUsize;
@@ -36,6 +37,43 @@ const CLEAR_COLOR: wgpu::Color = wgpu::Color {
 const MAX_TEXTURE_CACHE_ITEMS: usize = 256;
 static REPORTED_UNSUPPORTED_WGPU_BLEND_MODES: AtomicBool = AtomicBool::new(false);
 static REPORTED_UNSUPPORTED_WGPU_EFFECTS: AtomicBool = AtomicBool::new(false);
+
+fn attrs_from_text_style<'a>(style: &'a cranpose_ui::TextStyle, font_size: f32) -> Attrs<'a> {
+    let mut attrs = Attrs::new();
+
+    if let Some(font_family) = &style.font_family {
+        attrs = attrs.family(match font_family.name.as_str() {
+            "SansSerif" | "sans-serif" => Family::SansSerif,
+            "Serif" | "serif" => Family::Serif,
+            "Monospace" | "monospace" => Family::Monospace,
+            "Cursive" | "cursive" => Family::Cursive,
+            "Fantasy" | "fantasy" => Family::Fantasy,
+            "Default" | "" => Family::SansSerif,
+            name => Family::Name(name),
+        });
+    }
+
+    if let Some(font_weight) = style.font_weight {
+        attrs = attrs.weight(GlyphonWeight(font_weight.0));
+    }
+
+    if let Some(font_style) = style.font_style {
+        attrs = attrs.style(match font_style {
+            cranpose_ui::text::FontStyle::Normal => GlyphonStyle::Normal,
+            cranpose_ui::text::FontStyle::Italic => GlyphonStyle::Italic,
+        });
+    }
+
+    attrs = match style.letter_spacing {
+        cranpose_ui::text::TextUnit::Em(value) => attrs.letter_spacing(value),
+        cranpose_ui::text::TextUnit::Sp(value) if font_size > 0.0 => {
+            attrs.letter_spacing(value / font_size)
+        }
+        _ => attrs,
+    };
+
+    attrs
+}
 
 fn is_blend_mode_supported(mode: BlendMode) -> bool {
     matches!(mode, BlendMode::SrcOver | BlendMode::DstOut)
@@ -2470,7 +2508,7 @@ impl GpuRenderer {
                 &mut font_system,
                 text_draw.text.as_ref(),
                 font_size_px,
-                Attrs::new(),
+                attrs_from_text_style(&text_draw.text_style, text_draw.font_size),
             );
 
             text_keys.push(key);
@@ -2503,23 +2541,9 @@ impl GpuRenderer {
             let left_px = text_draw.rect.x * root_scale;
             let top_px = text_draw.rect.y * root_scale;
 
-            let bounds = TextBounds {
-                left: text_draw
-                    .clip
-                    .map(|c| (c.x * root_scale) as i32)
-                    .unwrap_or(0),
-                top: text_draw
-                    .clip
-                    .map(|c| (c.y * root_scale) as i32)
-                    .unwrap_or(0),
-                right: text_draw
-                    .clip
-                    .map(|c| ((c.x + c.width) * root_scale) as i32)
-                    .unwrap_or(width as i32),
-                bottom: text_draw
-                    .clip
-                    .map(|c| ((c.y + c.height) * root_scale) as i32)
-                    .unwrap_or(height as i32),
+            let Some(bounds) = text_bounds_for_clip(text_draw.clip, root_scale, width, height)
+            else {
+                continue;
             };
 
             text_areas.push(TextArea {
@@ -2875,6 +2899,43 @@ fn scissor_rect_for_layer(
     scissor_rect_for_rect(clipped_rect, root_scale, width, height)
 }
 
+fn text_bounds_for_clip(
+    clip: Option<Rect>,
+    root_scale: f32,
+    width: u32,
+    height: u32,
+) -> Option<TextBounds> {
+    let viewport = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: width as f32,
+        height: height as f32,
+    };
+    let clipped = match clip {
+        Some(clip_rect) => clip_rect.intersect(viewport)?,
+        None => viewport,
+    };
+
+    let left = (clipped.x * root_scale).floor();
+    let top = (clipped.y * root_scale).floor();
+    let right = ((clipped.x + clipped.width) * root_scale).ceil();
+    let bottom = ((clipped.y + clipped.height) * root_scale).ceil();
+
+    if !(left.is_finite() && top.is_finite() && right.is_finite() && bottom.is_finite()) {
+        return None;
+    }
+    if right <= left || bottom <= top {
+        return None;
+    }
+
+    Some(TextBounds {
+        left: left as i32,
+        top: top as i32,
+        right: right as i32,
+        bottom: bottom as i32,
+    })
+}
+
 fn tint_for_image(
     color_filter: Option<ColorFilter>,
     alpha: f32,
@@ -3070,8 +3131,10 @@ mod tests {
             },
             text: std::rc::Rc::<str>::from("t"),
             color: Color::WHITE,
+            text_style: cranpose_ui::TextStyle::default(),
             font_size: 12.0,
             scale: 1.0,
+            layout_options: cranpose_ui::TextLayoutOptions::default(),
             z_index,
             clip: None,
         }
@@ -3094,6 +3157,47 @@ mod tests {
 
         let scissor = scissor_rect_for_layer(rect, Some(clip), 1.0, 200, 200);
         assert_eq!(scissor, Some((20, 15, 20, 15)));
+    }
+
+    #[test]
+    fn text_bounds_for_clip_rounds_outward_and_clamps() {
+        let clip = Rect {
+            x: 10.2,
+            y: 5.4,
+            width: 20.1,
+            height: 9.3,
+        };
+        let bounds = text_bounds_for_clip(Some(clip), 1.0, 200, 120).expect("bounds");
+        assert_eq!(bounds.left, 10);
+        assert_eq!(bounds.top, 5);
+        assert_eq!(bounds.right, 31);
+        assert_eq!(bounds.bottom, 15);
+    }
+
+    #[test]
+    fn text_bounds_for_clip_returns_none_when_intersection_is_empty() {
+        let clip = Rect {
+            x: 220.0,
+            y: 10.0,
+            width: 40.0,
+            height: 20.0,
+        };
+        assert!(text_bounds_for_clip(Some(clip), 1.0, 200, 120).is_none());
+    }
+
+    #[test]
+    fn text_bounds_for_clip_scales_to_physical_pixels() {
+        let clip = Rect {
+            x: 1.25,
+            y: 2.5,
+            width: 6.0,
+            height: 4.0,
+        };
+        let bounds = text_bounds_for_clip(Some(clip), 2.0, 200, 120).expect("bounds");
+        assert_eq!(bounds.left, 2);
+        assert_eq!(bounds.top, 5);
+        assert_eq!(bounds.right, 15);
+        assert_eq!(bounds.bottom, 13);
     }
 
     #[test]

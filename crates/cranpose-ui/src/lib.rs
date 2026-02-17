@@ -72,7 +72,7 @@ pub use pointer_dispatch::{
     schedule_pointer_repass,
 };
 pub use primitives::{
-    BasicTextField, BasicTextFieldOptions, BitmapPainter, Box, BoxScope, BoxSpec,
+    BasicText, BasicTextField, BasicTextFieldOptions, BitmapPainter, Box, BoxScope, BoxSpec,
     BoxWithConstraints, BoxWithConstraintsScope, BoxWithConstraintsScopeImpl, Button, Canvas,
     Column, ColumnSpec, ContentScale, ForEach, Image, Layout, LayoutNode, Painter, Row, RowSpec,
     Spacer, SubcomposeLayout, Text, DEFAULT_ALPHA,
@@ -99,8 +99,9 @@ pub use subcompose_layout::{
     SubcomposeMeasureScope, SubcomposeMeasureScopeImpl,
 };
 pub use text::{
-    get_cursor_x_for_offset, get_offset_for_position, layout_text, measure_text, set_text_measurer,
-    TextMeasurer, TextMetrics, TextStyle,
+    get_cursor_x_for_offset, get_offset_for_position, layout_text, measure_text,
+    measure_text_with_options, prepare_text_layout, set_text_measurer, PreparedTextLayout,
+    TextLayoutOptions, TextMeasurer, TextMetrics, TextOverflow, TextStyle,
 };
 pub use text_field_modifier_node::{TextFieldElement, TextFieldModifierNode};
 pub use text_modifier_node::{TextModifierElement, TextModifierNode};

@@ -19,7 +19,7 @@
 //! This follows the principle that `MeasurePolicy` is for child layout, while modifier nodes
 //! handle content rendering and measurement.
 
-use crate::text::TextStyle;
+use crate::text::{TextLayoutOptions, TextStyle};
 use cranpose_foundation::{
     Constraints, DelegatableNode, DrawModifierNode, DrawScope, InvalidationKind,
     LayoutModifierNode, Measurable, MeasurementProxy, ModifierNode, ModifierNodeContext,
@@ -41,14 +41,16 @@ use std::rc::Rc;
 pub struct TextModifierNode {
     text: Rc<str>,
     style: TextStyle,
+    options: TextLayoutOptions,
     state: NodeState,
 }
 
 impl TextModifierNode {
-    pub fn new(text: Rc<str>, style: TextStyle) -> Self {
+    pub fn new(text: Rc<str>, style: TextStyle, options: TextLayoutOptions) -> Self {
         Self {
             text,
             style,
+            options: options.normalized(),
             state: NodeState::new(),
         }
     }
@@ -65,8 +67,17 @@ impl TextModifierNode {
         &self.style
     }
 
-    fn measure_text_content(&self) -> Size {
-        let metrics = crate::text::measure_text(&self.text, &self.style);
+    pub fn options(&self) -> TextLayoutOptions {
+        self.options
+    }
+
+    fn measure_text_content(&self, max_width: Option<f32>) -> Size {
+        let metrics = crate::text::measure_text_with_options(
+            &self.text,
+            &self.style,
+            self.options,
+            max_width,
+        );
         Size {
             width: metrics.width,
             height: metrics.height,
@@ -121,7 +132,11 @@ impl LayoutModifierNode for TextModifierNode {
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
         // Measure the text content
-        let text_size = self.measure_text_content();
+        let max_width = constraints
+            .max_width
+            .is_finite()
+            .then_some(constraints.max_width);
+        let text_size = self.measure_text_content(max_width);
 
         // Constrain text size to the provided constraints
         let width = text_size
@@ -138,25 +153,28 @@ impl LayoutModifierNode for TextModifierNode {
     }
 
     fn min_intrinsic_width(&self, _measurable: &dyn Measurable, _height: f32) -> f32 {
-        self.measure_text_content().width
+        self.measure_text_content(None).width
     }
 
     fn max_intrinsic_width(&self, _measurable: &dyn Measurable, _height: f32) -> f32 {
-        self.measure_text_content().width
+        self.measure_text_content(None).width
     }
 
     fn min_intrinsic_height(&self, _measurable: &dyn Measurable, _width: f32) -> f32 {
-        self.measure_text_content().height
+        self.measure_text_content(Some(_width).filter(|w| w.is_finite() && *w > 0.0))
+            .height
     }
 
     fn max_intrinsic_height(&self, _measurable: &dyn Measurable, _width: f32) -> f32 {
-        self.measure_text_content().height
+        self.measure_text_content(Some(_width).filter(|w| w.is_finite() && *w > 0.0))
+            .height
     }
 
     fn create_measurement_proxy(&self) -> Option<Box<dyn MeasurementProxy>> {
         Some(Box::new(TextMeasurementProxy {
             text: self.text.clone(),
-            style: self.style.clone(), // Add style
+            style: self.style.clone(),
+            options: self.options,
         }))
     }
 }
@@ -167,14 +185,20 @@ impl LayoutModifierNode for TextModifierNode {
 /// directly implements measurement logic using the snapshotted text content.
 struct TextMeasurementProxy {
     text: Rc<str>,
-    style: TextStyle, // Add style
+    style: TextStyle,
+    options: TextLayoutOptions,
 }
 
 impl TextMeasurementProxy {
     /// Measure the text content dimensions.
     /// Matches TextModifierNode::measure_text_content() logic.
-    fn measure_text_content(&self) -> Size {
-        let metrics = crate::text::measure_text(&self.text, &self.style);
+    fn measure_text_content(&self, max_width: Option<f32>) -> Size {
+        let metrics = crate::text::measure_text_with_options(
+            &self.text,
+            &self.style,
+            self.options,
+            max_width,
+        );
         Size {
             width: metrics.width,
             height: metrics.height,
@@ -190,7 +214,11 @@ impl MeasurementProxy for TextMeasurementProxy {
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
         // Directly implement text measurement logic (no node reconstruction)
-        let text_size = self.measure_text_content();
+        let max_width = constraints
+            .max_width
+            .is_finite()
+            .then_some(constraints.max_width);
+        let text_size = self.measure_text_content(max_width);
 
         // Constrain text size to the provided constraints
         let width = text_size
@@ -205,19 +233,21 @@ impl MeasurementProxy for TextMeasurementProxy {
     }
 
     fn min_intrinsic_width_proxy(&self, _measurable: &dyn Measurable, _height: f32) -> f32 {
-        self.measure_text_content().width
+        self.measure_text_content(None).width
     }
 
     fn max_intrinsic_width_proxy(&self, _measurable: &dyn Measurable, _height: f32) -> f32 {
-        self.measure_text_content().width
+        self.measure_text_content(None).width
     }
 
     fn min_intrinsic_height_proxy(&self, _measurable: &dyn Measurable, _width: f32) -> f32 {
-        self.measure_text_content().height
+        self.measure_text_content(Some(_width).filter(|w| w.is_finite() && *w > 0.0))
+            .height
     }
 
     fn max_intrinsic_height_proxy(&self, _measurable: &dyn Measurable, _width: f32) -> f32 {
-        self.measure_text_content().height
+        self.measure_text_content(Some(_width).filter(|w| w.is_finite() && *w > 0.0))
+            .height
     }
 }
 
@@ -253,11 +283,16 @@ impl SemanticsNode for TextModifierNode {
 pub struct TextModifierElement {
     text: Rc<str>,
     style: TextStyle,
+    options: TextLayoutOptions,
 }
 
 impl TextModifierElement {
-    pub fn new(text: Rc<str>, style: TextStyle) -> Self {
-        Self { text, style }
+    pub fn new(text: Rc<str>, style: TextStyle, options: TextLayoutOptions) -> Self {
+        Self {
+            text,
+            style,
+            options: options.normalized(),
+        }
     }
 }
 
@@ -349,12 +384,15 @@ fn hash_text_style<H: Hasher>(style: &TextStyle, state: &mut H) {
     style.text_direction.hash(state);
     hash_text_unit(style.line_height, state);
     hash_option_text_indent(&style.text_indent, state);
+    style.line_break.hash(state);
+    style.hyphens.hash(state);
 }
 
 impl Hash for TextModifierElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.text.hash(state);
         hash_text_style(&self.style, state);
+        self.options.hash(state);
     }
 }
 
@@ -362,7 +400,7 @@ impl ModifierNodeElement for TextModifierElement {
     type Node = TextModifierNode;
 
     fn create(&self) -> Self::Node {
-        TextModifierNode::new(self.text.clone(), self.style.clone())
+        TextModifierNode::new(self.text.clone(), self.style.clone(), self.options)
     }
 
     fn update(&self, node: &mut Self::Node) {
@@ -373,6 +411,10 @@ impl ModifierNodeElement for TextModifierElement {
         }
         if node.style != self.style {
             node.style = self.style.clone();
+            changed = true;
+        }
+        if node.options != self.options {
+            node.options = self.options;
             changed = true;
         }
 
@@ -406,12 +448,16 @@ mod tests {
     #[test]
     fn hash_changes_when_style_changes() {
         let text = Rc::<str>::from("Hello");
-        let element_a = TextModifierElement::new(text.clone(), TextStyle::default());
+        let element_a = TextModifierElement::new(
+            text.clone(),
+            TextStyle::default(),
+            TextLayoutOptions::default(),
+        );
         let style_b = TextStyle {
             font_size: TextUnit::Sp(18.0),
             ..Default::default()
         };
-        let element_b = TextModifierElement::new(text, style_b);
+        let element_b = TextModifierElement::new(text, style_b, TextLayoutOptions::default());
 
         assert_ne!(element_a, element_b);
         assert_ne!(hash_of(&element_a), hash_of(&element_b));
@@ -424,8 +470,10 @@ mod tests {
             letter_spacing: TextUnit::Em(0.1),
             ..Default::default()
         };
-        let element_a = TextModifierElement::new(Rc::<str>::from("Hash me"), style.clone());
-        let element_b = TextModifierElement::new(Rc::<str>::from("Hash me"), style);
+        let options = TextLayoutOptions::default();
+        let element_a =
+            TextModifierElement::new(Rc::<str>::from("Hash me"), style.clone(), options);
+        let element_b = TextModifierElement::new(Rc::<str>::from("Hash me"), style, options);
 
         assert_eq!(element_a, element_b);
         assert_eq!(hash_of(&element_a), hash_of(&element_b));

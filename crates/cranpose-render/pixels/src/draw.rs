@@ -528,33 +528,42 @@ fn draw_text(frame: &mut [u8], width: u32, height: u32, draw: &TextDraw) {
     let scale = Scale::uniform(draw.font_size * text_scale);
     let font = &*FONT;
     let v_metrics = font.v_metrics(scale);
-    let offset = point(draw.rect.x, draw.rect.y + v_metrics.ascent);
-    for glyph in font.layout(&draw.text, scale, offset) {
-        if let Some(bb) = glyph.pixel_bounding_box() {
-            if let Some((min_x, min_y, max_x, max_y)) = clip_limits {
-                if bb.max.x <= min_x || bb.min.x >= max_x || bb.max.y <= min_y || bb.min.y >= max_y
-                {
-                    continue;
-                }
-            }
-            glyph.draw(|gx, gy, value| {
-                let px = bb.min.x + gx as i32;
-                let py = bb.min.y + gy as i32;
+    let line_height = (v_metrics.ascent - v_metrics.descent).ceil().max(1.0);
+
+    for (line_idx, line) in draw.text.split('\n').enumerate() {
+        let baseline_y = draw.rect.y + v_metrics.ascent + line_idx as f32 * line_height;
+        let offset = point(draw.rect.x, baseline_y);
+
+        for glyph in font.layout(line, scale, offset) {
+            if let Some(bb) = glyph.pixel_bounding_box() {
                 if let Some((min_x, min_y, max_x, max_y)) = clip_limits {
-                    if px < min_x || px >= max_x || py < min_y || py >= max_y {
-                        return;
+                    if bb.max.x <= min_x
+                        || bb.min.x >= max_x
+                        || bb.max.y <= min_y
+                        || bb.min.y >= max_y
+                    {
+                        continue;
                     }
                 }
-                if px < 0 || py < 0 || px as u32 >= width || py as u32 >= height {
-                    return;
-                }
-                let idx = ((py as u32 * width + px as u32) * 4) as usize;
-                blend_pixel(
-                    &mut frame[idx..idx + 4],
-                    [color[0], color[1], color[2], value],
-                    BlendMode::SrcOver,
-                );
-            });
+                glyph.draw(|gx, gy, value| {
+                    let px = bb.min.x + gx as i32;
+                    let py = bb.min.y + gy as i32;
+                    if let Some((min_x, min_y, max_x, max_y)) = clip_limits {
+                        if px < min_x || px >= max_x || py < min_y || py >= max_y {
+                            return;
+                        }
+                    }
+                    if px < 0 || py < 0 || px as u32 >= width || py as u32 >= height {
+                        return;
+                    }
+                    let idx = ((py as u32 * width + px as u32) * 4) as usize;
+                    blend_pixel(
+                        &mut frame[idx..idx + 4],
+                        [color[0], color[1], color[2], value],
+                        BlendMode::SrcOver,
+                    );
+                });
+            }
         }
     }
 }
@@ -759,6 +768,25 @@ fn lerp_color(a: Color, b: Color, t: f32) -> Color {
 mod tests {
     use super::*;
 
+    fn count_non_background_pixels_in_band(
+        frame: &[u8],
+        width: u32,
+        y_min_inclusive: u32,
+        y_max_exclusive: u32,
+    ) -> usize {
+        let mut count = 0usize;
+        for y in y_min_inclusive..y_max_exclusive {
+            for x in 0..width {
+                let idx = ((y * width + x) * 4) as usize;
+                let px = &frame[idx..idx + 4];
+                if px != [18, 18, 24, 255] {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
     #[test]
     fn blend_mode_support_matrix_is_explicit() {
         assert!(is_blend_mode_supported(BlendMode::SrcOver));
@@ -771,5 +799,76 @@ mod tests {
     fn mirror_tile_mode_reflects_second_interval() {
         assert_eq!(normalize_gradient_t(1.25, TileMode::Mirror), Some(0.75));
         assert_eq!(normalize_gradient_t(1.75, TileMode::Mirror), Some(0.25));
+    }
+
+    #[test]
+    fn multiline_text_renders_second_line_pixels() {
+        let mut scene = Scene::new();
+        scene.push_text(
+            1,
+            Rect {
+                x: 8.0,
+                y: 8.0,
+                width: 180.0,
+                height: 80.0,
+            },
+            Rc::from("Dynamic\nModifiers"),
+            Color::WHITE,
+            cranpose_ui::TextStyle::default(),
+            14.0,
+            1.0,
+            cranpose_ui::TextLayoutOptions::default(),
+            None,
+        );
+
+        let width = 220;
+        let height = 100;
+        let mut frame = vec![0u8; (width * height * 4) as usize];
+        draw_scene(&mut frame, width, height, &scene);
+
+        let first_line_ink = count_non_background_pixels_in_band(&frame, width, 8, 32);
+        let second_line_ink = count_non_background_pixels_in_band(&frame, width, 32, 64);
+        assert!(first_line_ink > 50, "expected first line to render");
+        assert!(
+            second_line_ink > 50,
+            "expected second line ink, got {second_line_ink}"
+        );
+    }
+
+    #[test]
+    fn text_clip_bounds_prevent_drawing_outside_scroll_window() {
+        let mut scene = Scene::new();
+        scene.push_text(
+            2,
+            Rect {
+                x: 8.0,
+                y: 40.0,
+                width: 180.0,
+                height: 24.0,
+            },
+            Rc::from("Clipped Text"),
+            Color::WHITE,
+            cranpose_ui::TextStyle::default(),
+            14.0,
+            1.0,
+            cranpose_ui::TextLayoutOptions::default(),
+            Some(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 220.0,
+                height: 20.0,
+            }),
+        );
+
+        let width = 220;
+        let height = 100;
+        let mut frame = vec![0u8; (width * height * 4) as usize];
+        draw_scene(&mut frame, width, height, &scene);
+
+        let total_ink = count_non_background_pixels_in_band(&frame, width, 0, height);
+        assert_eq!(
+            total_ink, 0,
+            "text should be fully clipped but rendered {total_ink} ink pixels"
+        );
     }
 }

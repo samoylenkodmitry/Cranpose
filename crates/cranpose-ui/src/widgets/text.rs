@@ -10,7 +10,7 @@
 use crate::composable;
 use crate::layout::policies::EmptyMeasurePolicy;
 use crate::modifier::Modifier;
-use crate::text::TextStyle;
+use crate::text::{TextLayoutOptions, TextOverflow, TextStyle};
 use crate::text_modifier_node::TextModifierElement;
 use crate::widgets::Layout;
 use cranpose_core::{MutableState, NodeId, State};
@@ -129,15 +129,30 @@ impl IntoTextSource for DynamicTextSource {
 /// Text("Hello World", Modifier::padding(16.0), TextStyle::default());
 /// ```
 #[composable]
-pub fn Text<S>(value: S, modifier: Modifier, style: TextStyle) -> NodeId
+pub fn BasicText<S>(
+    text: S,
+    modifier: Modifier,
+    style: TextStyle,
+    overflow: TextOverflow,
+    soft_wrap: bool,
+    max_lines: usize,
+    min_lines: usize,
+) -> NodeId
 where
     S: IntoTextSource + Clone + PartialEq + 'static,
 {
-    let current = value.into_text_source().resolve();
+    let current = text.into_text_source().resolve();
+    let options = TextLayoutOptions {
+        overflow,
+        soft_wrap,
+        max_lines,
+        min_lines,
+    }
+    .normalized();
 
     // Create a text modifier element that will add TextModifierNode to the chain
     // TextModifierNode handles measurement, drawing, and semantics
-    let text_element = modifier_element(TextModifierElement::new(current, style));
+    let text_element = modifier_element(TextModifierElement::new(current, style, options));
     let final_modifier = Modifier::from_parts(vec![text_element]);
     let combined_modifier = modifier.then(final_modifier);
 
@@ -147,4 +162,43 @@ where
         EmptyMeasurePolicy,
         || {}, // No children
     )
+}
+
+#[composable]
+pub fn Text<S>(value: S, modifier: Modifier, style: TextStyle) -> NodeId
+where
+    S: IntoTextSource + Clone + PartialEq + 'static,
+{
+    BasicText(
+        value,
+        modifier,
+        style,
+        TextOverflow::Clip,
+        true,
+        usize::MAX,
+        1,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::run_test_composition;
+
+    #[test]
+    fn basic_text_creates_node() {
+        let composition = run_test_composition(|| {
+            BasicText(
+                "Hello",
+                Modifier::empty(),
+                TextStyle::default(),
+                TextOverflow::Clip,
+                true,
+                usize::MAX,
+                1,
+            );
+        });
+
+        assert!(composition.root().is_some());
+    }
 }

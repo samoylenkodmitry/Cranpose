@@ -3,6 +3,7 @@
 use cranpose_core::NodeId;
 use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_render_common::{HitTestTarget, RenderScene};
+use cranpose_ui::{TextLayoutOptions, TextStyle};
 use cranpose_ui_graphics::{
     BlendMode, Brush, Color, ColorFilter, ImageBitmap, Point, Rect, RenderEffect,
     RoundedCornerShape,
@@ -47,8 +48,10 @@ pub struct TextDraw {
     pub rect: Rect,
     pub text: Rc<str>,
     pub color: Color,
+    pub text_style: TextStyle,
     pub font_size: f32,
     pub scale: f32,
+    pub layout_options: TextLayoutOptions,
     pub z_index: usize,
     pub clip: Option<Rect>,
 }
@@ -299,8 +302,10 @@ impl Scene {
         rect: Rect,
         text: Rc<str>,
         color: Color,
+        text_style: TextStyle,
         font_size: f32,
         scale: f32,
+        layout_options: TextLayoutOptions,
         clip: Option<Rect>,
     ) {
         let z_index = self.next_z;
@@ -310,8 +315,10 @@ impl Scene {
             rect,
             text,
             color,
+            text_style,
             font_size,
             scale,
+            layout_options,
             z_index,
             clip,
         });

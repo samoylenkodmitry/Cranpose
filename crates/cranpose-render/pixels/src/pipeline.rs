@@ -3,7 +3,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::Brush;
-use cranpose_ui::{measure_text, LayoutBox, LayoutNode, LayoutNodeKind, SubcomposeLayoutNode};
+use cranpose_ui::{
+    prepare_text_layout, LayoutBox, LayoutNode, LayoutNodeKind, SubcomposeLayoutNode, TextOverflow,
+};
 use cranpose_ui_graphics::{
     BlendMode, Color, CompositingStrategy, GraphicsLayer, LayerShape, Point, Rect, RenderEffect,
     RoundedCornerShape, Size,
@@ -15,6 +17,17 @@ use crate::style::{
     apply_layer_to_quad, apply_layer_to_rect, combine_layers, layer_uniform_scale, quad_bounds,
     scale_corner_radii, DrawPlacement, NodeStyle,
 };
+
+const TEXT_CLIP_PAD: f32 = 1.0;
+
+fn pad_clip_rect(rect: Rect) -> Rect {
+    Rect {
+        x: rect.x - TEXT_CLIP_PAD,
+        y: rect.y - TEXT_CLIP_PAD,
+        width: (rect.width + TEXT_CLIP_PAD * 2.0).max(0.0),
+        height: (rect.height + TEXT_CLIP_PAD * 2.0).max(0.0),
+    }
+}
 
 static REPORTED_UNSUPPORTED_PIXELS_EFFECTS: AtomicBool = AtomicBool::new(false);
 
@@ -311,15 +324,44 @@ fn render_container(
             .text_style()
             .unwrap_or(&default_text_style);
 
-        let metrics = measure_text(value.as_ref(), text_style_ref);
+        let options = layout
+            .node_data
+            .modifier_slices()
+            .text_layout_options()
+            .unwrap_or_default()
+            .normalized();
         let padding = style.padding;
+        let max_width = (rect.width - padding.left - padding.right).max(0.0);
+        let prepared = prepare_text_layout(
+            value.as_ref(),
+            text_style_ref,
+            options,
+            Some(max_width).filter(|w| w.is_finite() && *w > 0.0),
+        );
+        let draw_width = if options.overflow == TextOverflow::Visible {
+            prepared.metrics.width
+        } else {
+            max_width
+        };
         let text_rect = Rect {
             x: rect.x + padding.left,
             y: rect.y + padding.top,
-            width: metrics.width,
-            height: metrics.height,
+            width: draw_width,
+            height: prepared.metrics.height,
         };
         let transformed_text_rect = apply_layer_to_rect(text_rect, rect, &node_layer);
+        let text_bounds_rect = Rect {
+            x: rect.x + padding.left,
+            y: rect.y + padding.top,
+            width: max_width,
+            height: (rect.height - padding.top - padding.bottom).max(0.0),
+        };
+        let transformed_text_bounds = apply_layer_to_rect(text_bounds_rect, rect, &node_layer);
+        let text_clip = if options.overflow == TextOverflow::Visible {
+            visual_clip
+        } else {
+            resolve_clip(visual_clip, Some(pad_clip_rect(transformed_text_bounds)))
+        };
 
         // Extract color and font size from text style or default
         let text_color = text_style_ref.color.unwrap_or(Color(1.0, 1.0, 1.0, 1.0));
@@ -332,11 +374,13 @@ fn render_container(
         scene.push_text(
             layout.node_id,
             transformed_text_rect,
-            value,
+            Rc::from(prepared.text),
             apply_layer_to_color(text_color, &node_layer),
+            text_style_ref.clone(),
             font_size,
             layer_uniform_scale(&node_layer),
-            visual_clip,
+            options,
+            text_clip,
         );
     }
 
@@ -574,15 +618,42 @@ fn render_node_from_applier(
         let default_text_style = cranpose_ui::text::TextStyle::default();
         let text_style_ref = modifier_slices.text_style().unwrap_or(&default_text_style);
 
-        let metrics = measure_text(value.as_ref(), text_style_ref);
+        let options = modifier_slices
+            .text_layout_options()
+            .unwrap_or_default()
+            .normalized();
         let padding = style.padding;
+        let max_width = (rect.width - padding.left - padding.right).max(0.0);
+        let prepared = prepare_text_layout(
+            value.as_ref(),
+            text_style_ref,
+            options,
+            Some(max_width).filter(|w| w.is_finite() && *w > 0.0),
+        );
+        let draw_width = if options.overflow == TextOverflow::Visible {
+            prepared.metrics.width
+        } else {
+            max_width
+        };
         let text_rect = Rect {
             x: rect.x + padding.left,
             y: rect.y + padding.top,
-            width: metrics.width,
-            height: metrics.height,
+            width: draw_width,
+            height: prepared.metrics.height,
         };
         let transformed_text_rect = apply_layer_to_rect(text_rect, rect, &node_layer);
+        let text_bounds_rect = Rect {
+            x: rect.x + padding.left,
+            y: rect.y + padding.top,
+            width: max_width,
+            height: (rect.height - padding.top - padding.bottom).max(0.0),
+        };
+        let transformed_text_bounds = apply_layer_to_rect(text_bounds_rect, rect, &node_layer);
+        let text_clip = if options.overflow == TextOverflow::Visible {
+            visual_clip
+        } else {
+            resolve_clip(visual_clip, Some(pad_clip_rect(transformed_text_bounds)))
+        };
 
         // Extract color and font size
         let text_color = text_style_ref.color.unwrap_or(Color(1.0, 1.0, 1.0, 1.0));
@@ -595,11 +666,13 @@ fn render_node_from_applier(
         scene.push_text(
             node_id,
             transformed_text_rect,
-            value,
+            Rc::from(prepared.text),
             apply_layer_to_color(text_color, &node_layer),
+            text_style_ref.clone(),
             font_size,
             layer_uniform_scale(&node_layer),
-            visual_clip,
+            options,
+            text_clip,
         );
     }
 

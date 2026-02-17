@@ -18,7 +18,10 @@ use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::{RenderScene, Renderer};
 use cranpose_ui::{set_text_measurer, LayoutTree, TextMeasurer};
 use cranpose_ui_graphics::Size;
-use glyphon::{Attrs, Buffer, FontSystem, Metrics, Shaping};
+use glyphon::{
+    Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Style as GlyphonStyle,
+    Weight as GlyphonWeight,
+};
 use lru::LruCache;
 use render::GpuRenderer;
 use rustc_hash::FxHasher;
@@ -461,8 +464,10 @@ impl Renderer for WgpuRenderer {
             text_rect,
             Rc::from(text),
             Color(0.0, 1.0, 0.0, 1.0), // Green
+            cranpose_ui::TextStyle::default(),
             font_size,
             1.0,
+            cranpose_ui::TextLayoutOptions::default(),
             None,
         );
     }
@@ -474,6 +479,43 @@ fn resolve_font_size(style: &cranpose_ui::text::TextStyle) -> f32 {
         cranpose_ui::text::TextUnit::Em(v) => v * 14.0,
         cranpose_ui::text::TextUnit::Unspecified => 14.0,
     }
+}
+
+fn attrs_from_text_style<'a>(style: &'a cranpose_ui::text::TextStyle, font_size: f32) -> Attrs<'a> {
+    let mut attrs = Attrs::new();
+
+    if let Some(font_family) = &style.font_family {
+        attrs = attrs.family(match font_family.name.as_str() {
+            "SansSerif" | "sans-serif" => Family::SansSerif,
+            "Serif" | "serif" => Family::Serif,
+            "Monospace" | "monospace" => Family::Monospace,
+            "Cursive" | "cursive" => Family::Cursive,
+            "Fantasy" | "fantasy" => Family::Fantasy,
+            "Default" | "" => Family::SansSerif,
+            name => Family::Name(name),
+        });
+    }
+
+    if let Some(font_weight) = style.font_weight {
+        attrs = attrs.weight(GlyphonWeight(font_weight.0));
+    }
+
+    if let Some(font_style) = style.font_style {
+        attrs = attrs.style(match font_style {
+            cranpose_ui::text::FontStyle::Normal => GlyphonStyle::Normal,
+            cranpose_ui::text::FontStyle::Italic => GlyphonStyle::Italic,
+        });
+    }
+
+    attrs = match style.letter_spacing {
+        cranpose_ui::text::TextUnit::Em(value) => attrs.letter_spacing(value),
+        cranpose_ui::text::TextUnit::Sp(value) if font_size > 0.0 => {
+            attrs.letter_spacing(value / font_size)
+        }
+        _ => attrs,
+    };
+
+    attrs
 }
 
 // Text measurer implementation for WGPU
@@ -552,7 +594,12 @@ impl TextMeasurer for WgpuTextMeasurer {
             });
 
             // Ensure buffer has the correct text
-            buffer.ensure(&mut font_system, text, font_size, Attrs::new());
+            buffer.ensure(
+                &mut font_system,
+                text,
+                font_size,
+                attrs_from_text_style(style, font_size),
+            );
 
             // Calculate size if not cached
             buffer.size(font_size)
@@ -628,7 +675,12 @@ impl TextMeasurer for WgpuTextMeasurer {
             }
         });
 
-        buffer.ensure(&mut font_system, line_text, font_size, Attrs::new());
+        buffer.ensure(
+            &mut font_system,
+            line_text,
+            font_size,
+            attrs_from_text_style(style, font_size),
+        );
 
         // Find closest glyph position using layout runs
         let mut best_offset = 0;
@@ -701,7 +753,12 @@ impl TextMeasurer for WgpuTextMeasurer {
                 cached_size: None,
             }
         });
-        buffer.ensure(&mut font_system, text, font_size, Attrs::new());
+        buffer.ensure(
+            &mut font_system,
+            text,
+            font_size,
+            attrs_from_text_style(style, font_size),
+        );
 
         // Extract glyph positions from layout runs
         let mut glyph_x_positions = Vec::new();

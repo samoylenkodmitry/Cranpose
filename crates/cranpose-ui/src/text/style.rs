@@ -1,6 +1,6 @@
 use super::decoration::{Shadow, TextDecoration};
 use super::font::{FontFamily, FontStyle, FontSynthesis, FontWeight};
-use super::paragraph::{TextAlign, TextDirection, TextIndent};
+use super::paragraph::{Hyphens, LineBreak, TextAlign, TextDirection, TextIndent};
 use super::unit::TextUnit;
 use crate::modifier::Color;
 
@@ -24,6 +24,8 @@ pub struct TextStyle {
     pub text_direction: Option<TextDirection>,
     pub line_height: TextUnit,
     pub text_indent: Option<TextIndent>,
+    pub line_break: LineBreak,
+    pub hyphens: Hyphens,
 }
 
 impl Default for TextStyle {
@@ -47,6 +49,8 @@ impl Default for TextStyle {
             text_direction: None,
             line_height: TextUnit::Unspecified,
             text_indent: None,
+            line_break: LineBreak::Unspecified,
+            hyphens: Hyphens::Unspecified,
         }
     }
 }
