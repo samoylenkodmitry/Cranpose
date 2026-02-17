@@ -9,8 +9,8 @@ use cranpose_ui::{
     prepare_text_layout, LayoutBox, LayoutNode, LayoutNodeKind, SubcomposeLayoutNode, TextOverflow,
 };
 use cranpose_ui_graphics::{
-    BlendMode, Color, CompositingStrategy, GraphicsLayer, LayerShape, Point, Rect, RenderEffect,
-    RoundedCornerShape, Size,
+    BlendMode, Color, CompositingStrategy, EdgeInsets, GraphicsLayer, LayerShape, Point, Rect,
+    RenderEffect, RoundedCornerShape, Size,
 };
 
 use crate::scene::{BackdropLayer, ClickAction, DrawShape, EffectLayer, Scene, ShadowDraw};
@@ -343,17 +343,18 @@ fn render_container(
             .unwrap_or_default()
             .normalized();
         let padding = style.padding;
-        let max_width = (rect.width - padding.left - padding.right).max(0.0);
+        let content_width = (rect.width - padding.left - padding.right).max(0.0);
+        let measure_width = resolve_text_measure_width(content_width, padding, None);
         let prepared = prepare_text_layout(
             value.as_ref(),
             text_style_ref,
             options,
-            Some(max_width).filter(|w| w.is_finite() && *w > 0.0),
+            Some(measure_width).filter(|w| w.is_finite() && *w > 0.0),
         );
         let draw_width = if options.overflow == TextOverflow::Visible {
             prepared.metrics.width
         } else {
-            max_width
+            content_width
         };
         let text_rect = Rect {
             x: rect.x + padding.left,
@@ -365,7 +366,7 @@ fn render_container(
         let text_bounds_rect = Rect {
             x: rect.x + padding.left,
             y: rect.y + padding.top,
-            width: max_width,
+            width: content_width,
             height: (rect.height - padding.top - padding.bottom).max(0.0),
         };
         let transformed_text_bounds = apply_layer_to_rect(text_bounds_rect, rect, &content_layer);
@@ -516,6 +517,19 @@ fn resolve_text_clip(
     // Non-visible overflow requires a concrete clip intersection.
     // If empty, skip drawing rather than treating `None` as unbounded clip.
     resolve_clip(visual_clip, Some(pad_clip_rect(transformed_text_bounds))).map(Some)
+}
+
+fn resolve_text_measure_width(
+    content_width: f32,
+    padding: EdgeInsets,
+    measured_max_width: Option<f32>,
+) -> f32 {
+    let mut width = content_width.max(0.0);
+    if let Some(max_width) = measured_max_width.filter(|w| w.is_finite() && *w > 0.0) {
+        let measured_content_width = (max_width - padding.left - padding.right).max(0.0);
+        width = width.max(measured_content_width);
+    }
+    width
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -702,17 +716,23 @@ fn render_node_from_applier(
             .unwrap_or_default()
             .normalized();
         let padding = style.padding;
-        let max_width = (rect.width - padding.left - padding.right).max(0.0);
+        let content_width = (rect.width - padding.left - padding.right).max(0.0);
+        let measured_max_width = layout_state
+            .measurement_constraints
+            .max_width
+            .is_finite()
+            .then_some(layout_state.measurement_constraints.max_width);
+        let measure_width = resolve_text_measure_width(content_width, padding, measured_max_width);
         let prepared = prepare_text_layout(
             value.as_ref(),
             text_style_ref,
             options,
-            Some(max_width).filter(|w| w.is_finite() && *w > 0.0),
+            Some(measure_width).filter(|w| w.is_finite() && *w > 0.0),
         );
         let draw_width = if options.overflow == TextOverflow::Visible {
             prepared.metrics.width
         } else {
-            max_width
+            content_width
         };
         let text_rect = Rect {
             x: rect.x + padding.left,
@@ -724,7 +744,7 @@ fn render_node_from_applier(
         let text_bounds_rect = Rect {
             x: rect.x + padding.left,
             y: rect.y + padding.top,
-            width: max_width,
+            width: content_width,
             height: (rect.height - padding.top - padding.bottom).max(0.0),
         };
         let transformed_text_bounds = apply_layer_to_rect(text_bounds_rect, rect, &content_layer);
@@ -1016,6 +1036,59 @@ mod tests {
         assert_eq!(
             resolve_text_clip(TextOverflow::Visible, None, text_bounds),
             Some(None)
+        );
+    }
+
+    #[test]
+    fn resolve_text_measure_width_prefers_measurement_constraint_width() {
+        let padding = EdgeInsets {
+            left: 4.0,
+            top: 0.0,
+            right: 4.0,
+            bottom: 0.0,
+        };
+        let width = resolve_text_measure_width(130.0, padding, Some(180.0));
+        assert!((width - 172.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn resolve_text_measure_width_falls_back_to_content_width_without_constraint() {
+        let padding = EdgeInsets {
+            left: 4.0,
+            top: 0.0,
+            right: 4.0,
+            bottom: 0.0,
+        };
+        let width = resolve_text_measure_width(130.0, padding, None);
+        assert!((width - 130.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn measurement_constraint_width_prevents_spurious_wrap() {
+        let padding = EdgeInsets {
+            left: 4.0,
+            top: 0.0,
+            right: 4.0,
+            bottom: 0.0,
+        };
+        let text = "Dynamic Modifiers";
+        let style = cranpose_ui::TextStyle::default();
+        let options = cranpose_ui::TextLayoutOptions::default();
+        let content_width = 130.0;
+
+        let wrapped_by_content =
+            prepare_text_layout(text, &style, options, Some(content_width)).text;
+        assert!(
+            wrapped_by_content.contains('\n'),
+            "control check expected wrapping at content width: {wrapped_by_content:?}"
+        );
+
+        let measure_width = resolve_text_measure_width(content_width, padding, Some(180.0));
+        let prepared = prepare_text_layout(text, &style, options, Some(measure_width));
+        assert!(
+            !prepared.text.contains('\n'),
+            "measurement width should prevent synthetic wrap: {:?}",
+            prepared.text
         );
     }
 }
