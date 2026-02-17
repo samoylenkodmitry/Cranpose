@@ -5,8 +5,7 @@
 use cranpose::AppLauncher;
 use cranpose_testing::{
     capture_screenshot, changed_pixel_count, changed_pixel_count_in_region,
-    find_button_in_semantics, find_text_by_prefix_in_semantics, find_text_in_semantics,
-    root_bounds,
+    find_button_in_semantics, find_text_in_semantics,
 };
 use desktop_app::app;
 use std::time::Duration;
@@ -22,10 +21,6 @@ fn moved_enough(before: (f32, f32, f32, f32), after: (f32, f32, f32, f32), min_d
     let dx = (after.0 - before.0).abs();
     let dy = (after.1 - before.1).abs();
     dx >= min_delta || dy >= min_delta
-}
-
-fn scroll_down(robot: &cranpose::Robot) {
-    cranpose_testing::scroll_down(robot, 620.0, 720.0, 220.0);
 }
 
 fn scroll_up(robot: &cranpose::Robot) {

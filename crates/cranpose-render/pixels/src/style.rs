@@ -225,7 +225,6 @@ mod tests {
         Color, ColorFilter, CompositingStrategy, LayerShape, RenderEffect, RoundedCornerShape,
         TransformOrigin,
     };
-    use std::rc::Rc;
 
     #[test]
     fn combine_layers_clears_effects_without_new_layer() {

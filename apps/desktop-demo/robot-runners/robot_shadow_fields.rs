@@ -222,10 +222,6 @@ fn scroll_prefix_into_view(
     None
 }
 
-fn parse_slider_value(text: &str) -> Option<f32> {
-    cranpose_testing::parse_slider_value(text)
-}
-
 fn set_slider_fraction(robot: &cranpose::Robot, prefix: &str, fraction: f32) -> Option<f32> {
     cranpose_testing::set_slider_fraction(
         robot,

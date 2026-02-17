@@ -1252,17 +1252,16 @@ impl GpuRenderer {
         }
 
         // Batch render passes into a shared encoder to reduce queue.submit()
-        // calls.  Buffer conflict tracking ensures we flush before rewriting
+        // calls. Buffer conflict tracking ensures we flush before rewriting
         // the same GPU buffers (shapes share shape_buffers, images share
-        // image_buffers).  Text uses the atlas, which is independent.
+        // image_buffers, and glyphon text prepare() reuses shared buffers).
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Segment Encoder"),
             });
         let mut encoder_has_work = false;
-        let mut shape_buffer_used = false;
-        let mut image_buffer_used = false;
+        let mut encoder_buffer_usage = EncoderBufferUsage::default();
 
         // The first batch uses the caller's load op (which may be Clear to
         // fold a standalone clear into this segment).  Subsequent batches
@@ -1297,7 +1296,9 @@ impl GpuRenderer {
                     }
 
                     // Shape buffers would be overwritten — flush first.
-                    if shape_buffer_used && encoder_has_work {
+                    if encoder_buffer_usage
+                        .requires_flush_for_batch(BatchKind::Shape, encoder_has_work)
+                    {
                         self.queue.submit(std::iter::once(encoder.finish()));
                         self.frame_stats.bump_submits();
                         encoder =
@@ -1305,7 +1306,7 @@ impl GpuRenderer {
                                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                                     label: Some("Segment Encoder"),
                                 });
-                        image_buffer_used = false;
+                        encoder_buffer_usage.reset();
                     }
 
                     let shape_batch: Vec<&DrawShape> = ordered_items[start..cursor]
@@ -1327,7 +1328,7 @@ impl GpuRenderer {
                         load_op,
                         [0.0, 0.0],
                     );
-                    shape_buffer_used = true;
+                    encoder_buffer_usage.mark_batch(BatchKind::Shape);
                     encoder_has_work = true;
                 }
                 SegmentDrawItem::Image(index) => {
@@ -1347,7 +1348,9 @@ impl GpuRenderer {
                     }
 
                     // Image buffers would be overwritten — flush first.
-                    if image_buffer_used && encoder_has_work {
+                    if encoder_buffer_usage
+                        .requires_flush_for_batch(BatchKind::Image, encoder_has_work)
+                    {
                         self.queue.submit(std::iter::once(encoder.finish()));
                         self.frame_stats.bump_submits();
                         encoder =
@@ -1355,7 +1358,7 @@ impl GpuRenderer {
                                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                                     label: Some("Segment Encoder"),
                                 });
-                        shape_buffer_used = false;
+                        encoder_buffer_usage.reset();
                     }
 
                     // Prepare image draw commands (ensure cached, build verts)
@@ -1377,7 +1380,7 @@ impl GpuRenderer {
                         load_op,
                     )?;
                     self.scratch_image_cmds = image_cmds;
-                    image_buffer_used = true;
+                    encoder_buffer_usage.mark_batch(BatchKind::Image);
                     encoder_has_work = true;
                 }
                 SegmentDrawItem::Text(_) => {
@@ -1390,6 +1393,22 @@ impl GpuRenderer {
                             }
                             _ => break,
                         }
+                    }
+
+                    // Glyphon text prepare uploads into shared GPU buffers.
+                    // A second text batch in the same encoder would overwrite
+                    // already-recorded text pass data before submission.
+                    if encoder_buffer_usage
+                        .requires_flush_for_batch(BatchKind::Text, encoder_has_work)
+                    {
+                        self.queue.submit(std::iter::once(encoder.finish()));
+                        self.frame_stats.bump_submits();
+                        encoder =
+                            self.device
+                                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                    label: Some("Segment Encoder"),
+                                });
+                        encoder_buffer_usage.reset();
                     }
 
                     let text_batch: Vec<&TextDraw> = ordered_items[start..cursor]
@@ -1405,8 +1424,7 @@ impl GpuRenderer {
                     self.prepare_text_for_render(&text_batch, width, height, root_scale)?;
                     self.encode_text_pass(&mut encoder, target_view, load_op)?;
                     encoder_has_work = true;
-                    // Text uses its own atlas buffers — no conflict with
-                    // shape/image buffers, so no flag to set.
+                    encoder_buffer_usage.mark_batch(BatchKind::Text);
                 }
                 SegmentDrawItem::Shadow(index) => {
                     // Shadows involve effect_renderer calls with their own
@@ -1442,8 +1460,7 @@ impl GpuRenderer {
                                     label: Some("Segment Encoder"),
                                 });
                         encoder_has_work = false;
-                        shape_buffer_used = false;
-                        image_buffer_used = false;
+                        encoder_buffer_usage.reset();
                     }
                     cursor += 1;
                     self.render_shadow_draw(
@@ -2604,6 +2621,48 @@ enum SegmentDrawItem {
     Shadow(usize),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BatchKind {
+    Shape,
+    Image,
+    Text,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct EncoderBufferUsage {
+    shape: bool,
+    image: bool,
+    text: bool,
+}
+
+impl EncoderBufferUsage {
+    fn requires_flush_for_batch(self, kind: BatchKind, encoder_has_work: bool) -> bool {
+        if !encoder_has_work {
+            return false;
+        }
+        match kind {
+            BatchKind::Shape => self.shape,
+            BatchKind::Image => self.image,
+            // Glyphon reuses shared GPU buffers across prepare() calls.
+            // A second text batch in the same encoder would overwrite
+            // the first batch's vertex data before submission.
+            BatchKind::Text => self.text,
+        }
+    }
+
+    fn mark_batch(&mut self, kind: BatchKind) {
+        match kind {
+            BatchKind::Shape => self.shape = true,
+            BatchKind::Image => self.image = true,
+            BatchKind::Text => self.text = true,
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn collect_non_effect_segment_items(
     shapes: &[DrawShape],
@@ -3194,6 +3253,44 @@ mod tests {
             items,
             vec![SegmentDrawItem::Shape(0), SegmentDrawItem::Text(0)]
         );
+    }
+
+    #[test]
+    fn encoder_buffer_usage_does_not_flush_when_encoder_is_empty() {
+        let usage = EncoderBufferUsage::default();
+        assert!(!usage.requires_flush_for_batch(BatchKind::Shape, false));
+        assert!(!usage.requires_flush_for_batch(BatchKind::Image, false));
+        assert!(!usage.requires_flush_for_batch(BatchKind::Text, false));
+    }
+
+    #[test]
+    fn encoder_buffer_usage_tracks_conflicts_per_batch_kind() {
+        let mut usage = EncoderBufferUsage::default();
+        usage.mark_batch(BatchKind::Text);
+
+        // Text prepare rewrites shared glyph buffers, so repeated text work
+        // in one encoder must flush first.
+        assert!(usage.requires_flush_for_batch(BatchKind::Text, true));
+        assert!(!usage.requires_flush_for_batch(BatchKind::Shape, true));
+        assert!(!usage.requires_flush_for_batch(BatchKind::Image, true));
+
+        usage.mark_batch(BatchKind::Shape);
+        assert!(usage.requires_flush_for_batch(BatchKind::Shape, true));
+        assert!(!usage.requires_flush_for_batch(BatchKind::Image, true));
+        assert!(usage.requires_flush_for_batch(BatchKind::Text, true));
+    }
+
+    #[test]
+    fn encoder_buffer_usage_reset_clears_all_conflicts() {
+        let mut usage = EncoderBufferUsage::default();
+        usage.mark_batch(BatchKind::Shape);
+        usage.mark_batch(BatchKind::Image);
+        usage.mark_batch(BatchKind::Text);
+        usage.reset();
+
+        assert!(!usage.requires_flush_for_batch(BatchKind::Shape, true));
+        assert!(!usage.requires_flush_for_batch(BatchKind::Image, true));
+        assert!(!usage.requires_flush_for_batch(BatchKind::Text, true));
     }
 
     #[test]
