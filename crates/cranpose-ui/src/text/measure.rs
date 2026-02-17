@@ -63,12 +63,13 @@ impl MonospacedTextMeasurer {
     const CHAR_WIDTH_RATIO: f32 = 0.6; // Width is 0.6 of Height
 
     fn get_metrics(style: &TextStyle) -> (f32, f32) {
-        let size = match style.font_size {
-            super::unit::TextUnit::Sp(v) => v,
-            super::unit::TextUnit::Em(v) => v * Self::DEFAULT_SIZE,
-            super::unit::TextUnit::Unspecified => Self::DEFAULT_SIZE,
-        };
-        (size * Self::CHAR_WIDTH_RATIO, size) // (width, height)
+        let font_size = style.resolve_font_size(Self::DEFAULT_SIZE);
+        let line_height = style.resolve_line_height(Self::DEFAULT_SIZE, font_size);
+        let letter_spacing = style.resolve_letter_spacing(Self::DEFAULT_SIZE).max(0.0);
+        (
+            (font_size * Self::CHAR_WIDTH_RATIO) + letter_spacing,
+            line_height,
+        )
     }
 }
 
@@ -550,7 +551,10 @@ mod tests {
     #[test]
     fn text_layout_options_wraps_and_limits_lines() {
         let style = TextStyle {
-            font_size: TextUnit::Sp(10.0),
+            span_style: crate::text::SpanStyle {
+                font_size: TextUnit::Sp(10.0),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let options = TextLayoutOptions {
@@ -574,7 +578,10 @@ mod tests {
     #[test]
     fn text_layout_options_end_ellipsis_applies() {
         let style = TextStyle {
-            font_size: TextUnit::Sp(10.0),
+            span_style: crate::text::SpanStyle {
+                font_size: TextUnit::Sp(10.0),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let options = TextLayoutOptions {
@@ -592,7 +599,10 @@ mod tests {
     #[test]
     fn text_layout_options_visible_keeps_full_text() {
         let style = TextStyle {
-            font_size: TextUnit::Sp(10.0),
+            span_style: crate::text::SpanStyle {
+                font_size: TextUnit::Sp(10.0),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let options = TextLayoutOptions {
@@ -610,7 +620,10 @@ mod tests {
     #[test]
     fn text_layout_options_respects_min_lines() {
         let style = TextStyle {
-            font_size: TextUnit::Sp(10.0),
+            span_style: crate::text::SpanStyle {
+                font_size: TextUnit::Sp(10.0),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let options = TextLayoutOptions {
@@ -627,7 +640,10 @@ mod tests {
     #[test]
     fn text_layout_options_middle_ellipsis_for_single_line() {
         let style = TextStyle {
-            font_size: TextUnit::Sp(10.0),
+            span_style: crate::text::SpanStyle {
+                font_size: TextUnit::Sp(10.0),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let options = TextLayoutOptions {
@@ -645,7 +661,10 @@ mod tests {
     #[test]
     fn text_layout_options_does_not_wrap_on_tiny_width_delta() {
         let style = TextStyle {
-            font_size: TextUnit::Sp(10.0),
+            span_style: crate::text::SpanStyle {
+                font_size: TextUnit::Sp(10.0),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let options = TextLayoutOptions {

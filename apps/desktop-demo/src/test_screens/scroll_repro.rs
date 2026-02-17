@@ -1,6 +1,7 @@
 use cranpose_foundation::{lazy::LazyListScope, SemanticsConfiguration};
 use cranpose_ui::{
     composable,
+    text::SpanStyle,
     widgets::{LazyColumn, LazyColumnSpec},
     Color, Column, ColumnSpec, LinearArrangement, Modifier, Row, RowSpec, Size, Spacer, Text,
     TextStyle, VerticalAlignment,
@@ -78,7 +79,10 @@ fn ReproItem(rank: usize) {
                 format!("{}.", rank),
                 Modifier::empty().padding(4.0),
                 TextStyle {
-                    color: Some(Color(0.5, 0.5, 0.5, 1.0)),
+                    span_style: SpanStyle {
+                        color: Some(Color(0.5, 0.5, 0.5, 1.0)),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
             );
@@ -94,7 +98,10 @@ fn ReproItem(rank: usize) {
                         format!("Fake Title for Item {}", rank),
                         Modifier::empty().padding(2.0),
                         TextStyle {
-                            color: Some(Color(0.0, 0.0, 0.0, 0.87)),
+                            span_style: SpanStyle {
+                                color: Some(Color(0.0, 0.0, 0.0, 0.87)),
+                                ..Default::default()
+                            },
                             ..Default::default()
                         },
                     );
@@ -107,7 +114,10 @@ fn ReproItem(rank: usize) {
                                 "100 points by user | 50 comments".to_string(),
                                 Modifier::empty().padding(2.0),
                                 TextStyle {
-                                    color: Some(Color(0.5, 0.5, 0.5, 1.0)),
+                                    span_style: SpanStyle {
+                                        color: Some(Color(0.5, 0.5, 0.5, 1.0)),
+                                        ..Default::default()
+                                    },
                                     ..Default::default()
                                 },
                             );

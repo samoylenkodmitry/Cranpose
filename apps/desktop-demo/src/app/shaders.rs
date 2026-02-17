@@ -5,10 +5,10 @@
 use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
 use cranpose_foundation::PointerButton;
 use cranpose_ui::{
-    composable, Alignment, Box, BoxSpec, Brush, Color, Column, ColumnSpec, ContentScale,
-    CornerRadii, GraphicsLayer, Image, ImageBitmap, LayerShape, LazyColumn, LazyColumnSpec,
-    LinearArrangement, Modifier, Point, PointerEventKind, PointerInputScope, RoundedCornerShape,
-    Text, TextStyle, TransformOrigin,
+    composable, text::SpanStyle, Alignment, Box, BoxSpec, Brush, Color, Column, ColumnSpec,
+    ContentScale, CornerRadii, GraphicsLayer, Image, ImageBitmap, LayerShape, LazyColumn,
+    LazyColumnSpec, LinearArrangement, Modifier, Point, PointerEventKind, PointerInputScope,
+    RoundedCornerShape, Text, TextStyle, TransformOrigin,
 };
 use cranpose_ui_graphics::{
     gradient_cut_mask_effect, liquid_glass_effect, rounded_alpha_mask_effect, BlendMode,
@@ -166,7 +166,10 @@ fn ValueSlider(
                 format!("{label}: {current:.2}"),
                 Modifier::empty(),
                 TextStyle {
-                    color: Some(Color(0.86, 0.9, 0.98, 0.95)),
+                    span_style: SpanStyle {
+                        color: Some(Color(0.86, 0.9, 0.98, 0.95)),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
             );
@@ -417,7 +420,10 @@ fn InteractiveEffectsDemo() {
                                                     }
                                                 }),
                                                 TextStyle {
-                                                    color: Some(color),
+                                                    span_style: SpanStyle {
+                                                        color: Some(color),
+                                                        ..Default::default()
+                                                    },
                                                     ..Default::default()
                                                 },
                                             );
@@ -570,10 +576,7 @@ fn EffectSemanticsDemo() {
                         CornerRadii::uniform(8.0),
                     );
                 }),
-                TextStyle {
-                    color: Some(Color(0.9, 0.9, 1.0, 0.75)),
-                    ..Default::default()
-                },
+                TextStyle { span_style: SpanStyle { color: Some(Color(0.9, 0.9, 1.0, 0.75)), ..Default::default() }, ..Default::default() },
             );
         },
     );
@@ -668,7 +671,10 @@ fn RotationAndTransformOriginCard(checkerboard: ImageBitmap, preview_w: f32, pre
                                     );
                                 }),
                             TextStyle {
-                                color: Some(Color(0.92, 0.95, 1.0, 1.0)),
+                                span_style: SpanStyle {
+                                    color: Some(Color(0.92, 0.95, 1.0, 1.0)),
+                                    ..Default::default()
+                                },
                                 ..Default::default()
                             },
                         );
@@ -708,7 +714,10 @@ fn RotationAndTransformOriginCard(checkerboard: ImageBitmap, preview_w: f32, pre
                                     );
                                 }),
                             TextStyle {
-                                color: Some(Color(1.0, 1.0, 1.0, 0.95)),
+                                span_style: SpanStyle {
+                                    color: Some(Color(1.0, 1.0, 1.0, 0.95)),
+                                    ..Default::default()
+                                },
                                 ..Default::default()
                             },
                         );
@@ -723,7 +732,10 @@ fn RotationAndTransformOriginCard(checkerboard: ImageBitmap, preview_w: f32, pre
                         "Rotation Z + Transform Origin",
                         Modifier::empty(),
                         TextStyle {
-                            color: Some(Color(0.95, 0.95, 1.0, 1.0)),
+                            span_style: SpanStyle {
+                                color: Some(Color(0.95, 0.95, 1.0, 1.0)),
+                                ..Default::default()
+                            },
                             ..Default::default()
                         },
                     );
@@ -732,10 +744,7 @@ fn RotationAndTransformOriginCard(checkerboard: ImageBitmap, preview_w: f32, pre
                             "GraphicsLayer{{ rotation_z={rotation_z_value:.1}, transform_origin=({origin_x_value:.2},{origin_y_value:.2}) }}"
                         ),
                         Modifier::empty(),
-                        TextStyle {
-                            color: Some(Color(0.75, 0.82, 0.95, 0.95)),
-                            ..Default::default()
-                        },
+                        TextStyle { span_style: SpanStyle { color: Some(Color(0.75, 0.82, 0.95, 0.95)), ..Default::default() }, ..Default::default() },
                     );
                     ValueSlider("rotation_z", rotation_z_outer, -180.0, 180.0, 196.0);
                     ValueSlider("origin_x", origin_x_outer, 0.0, 1.0, 196.0);
@@ -833,7 +842,10 @@ fn RotationAndCameraDistanceCard(checkerboard: ImageBitmap, preview_w: f32, prev
                                     );
                                 }),
                             TextStyle {
-                                color: Some(Color(1.0, 1.0, 1.0, 0.95)),
+                                span_style: SpanStyle {
+                                    color: Some(Color(1.0, 1.0, 1.0, 0.95)),
+                                    ..Default::default()
+                                },
                                 ..Default::default()
                             },
                         );
@@ -871,7 +883,10 @@ fn RotationAndCameraDistanceCard(checkerboard: ImageBitmap, preview_w: f32, prev
                                     );
                                 }),
                             TextStyle {
-                                color: Some(Color(1.0, 1.0, 1.0, 0.95)),
+                                span_style: SpanStyle {
+                                    color: Some(Color(1.0, 1.0, 1.0, 0.95)),
+                                    ..Default::default()
+                                },
                                 ..Default::default()
                             },
                         );
@@ -886,7 +901,10 @@ fn RotationAndCameraDistanceCard(checkerboard: ImageBitmap, preview_w: f32, prev
                         "Rotation X/Y + Camera Distance",
                         Modifier::empty(),
                         TextStyle {
-                            color: Some(Color(0.95, 0.95, 1.0, 1.0)),
+                            span_style: SpanStyle {
+                                color: Some(Color(0.95, 0.95, 1.0, 1.0)),
+                                ..Default::default()
+                            },
                             ..Default::default()
                         },
                     );
@@ -894,7 +912,10 @@ fn RotationAndCameraDistanceCard(checkerboard: ImageBitmap, preview_w: f32, prev
                         "Same rotation_x/y, different camera_distance values.",
                         Modifier::empty(),
                         TextStyle {
-                            color: Some(Color(0.75, 0.82, 0.95, 0.95)),
+                            span_style: SpanStyle {
+                                color: Some(Color(0.75, 0.82, 0.95, 0.95)),
+                                ..Default::default()
+                            },
                             ..Default::default()
                         },
                     );
@@ -1006,7 +1027,10 @@ fn ShapeAndClipCard(checkerboard: ImageBitmap, preview_w: f32, preview_h: f32) {
                                         "clip=false",
                                         Modifier::empty().absolute_offset(6.0, 4.0),
                                         TextStyle {
-                                            color: Some(Color(0.05, 0.15, 0.08, 0.98)),
+                                            span_style: SpanStyle {
+                                                color: Some(Color(0.05, 0.15, 0.08, 0.98)),
+                                                ..Default::default()
+                                            },
                                             ..Default::default()
                                         },
                                     );
@@ -1014,7 +1038,10 @@ fn ShapeAndClipCard(checkerboard: ImageBitmap, preview_w: f32, preview_h: f32) {
                                         "overflow",
                                         Modifier::empty().absolute_offset(50.0, 38.0),
                                         TextStyle {
-                                            color: Some(Color(1.0, 1.0, 1.0, 1.0)),
+                                            span_style: SpanStyle {
+                                                color: Some(Color(1.0, 1.0, 1.0, 1.0)),
+                                                ..Default::default()
+                                            },
                                             ..Default::default()
                                         },
                                     );
@@ -1067,7 +1094,10 @@ fn ShapeAndClipCard(checkerboard: ImageBitmap, preview_w: f32, preview_h: f32) {
                                         "clip=true",
                                         Modifier::empty().absolute_offset(8.0, 4.0),
                                         TextStyle {
-                                            color: Some(Color(0.05, 0.15, 0.08, 0.98)),
+                                            span_style: SpanStyle {
+                                                color: Some(Color(0.05, 0.15, 0.08, 0.98)),
+                                                ..Default::default()
+                                            },
                                             ..Default::default()
                                         },
                                     );
@@ -1075,7 +1105,10 @@ fn ShapeAndClipCard(checkerboard: ImageBitmap, preview_w: f32, preview_h: f32) {
                                         "overflow",
                                         Modifier::empty().absolute_offset(50.0, 38.0),
                                         TextStyle {
-                                            color: Some(Color(1.0, 1.0, 1.0, 1.0)),
+                                            span_style: SpanStyle {
+                                                color: Some(Color(1.0, 1.0, 1.0, 1.0)),
+                                                ..Default::default()
+                                            },
                                             ..Default::default()
                                         },
                                     );
@@ -1093,7 +1126,10 @@ fn ShapeAndClipCard(checkerboard: ImageBitmap, preview_w: f32, preview_h: f32) {
                         "Shape + Clip",
                         Modifier::empty(),
                         TextStyle {
-                            color: Some(Color(0.95, 0.95, 1.0, 1.0)),
+                            span_style: SpanStyle {
+                                color: Some(Color(0.95, 0.95, 1.0, 1.0)),
+                                ..Default::default()
+                            },
                             ..Default::default()
                         },
                     );
@@ -1101,7 +1137,10 @@ fn ShapeAndClipCard(checkerboard: ImageBitmap, preview_w: f32, preview_h: f32) {
                         "Rounded shape + clip toggle. Move overflow to inspect clipping.",
                         Modifier::empty(),
                         TextStyle {
-                            color: Some(Color(0.75, 0.82, 0.95, 0.95)),
+                            span_style: SpanStyle {
+                                color: Some(Color(0.75, 0.82, 0.95, 0.95)),
+                                ..Default::default()
+                            },
                             ..Default::default()
                         },
                     );
@@ -1189,7 +1228,10 @@ fn ShadowFieldsCard(checkerboard: ImageBitmap, preview_w: f32, preview_h: f32) {
                             "none",
                             Modifier::empty().absolute_offset(34.0, 38.0),
                             TextStyle {
-                                color: Some(Color(1.0, 1.0, 1.0, 0.95)),
+                                span_style: SpanStyle {
+                                    color: Some(Color(1.0, 1.0, 1.0, 0.95)),
+                                    ..Default::default()
+                                },
                                 ..Default::default()
                             },
                         );
@@ -1229,7 +1271,10 @@ fn ShadowFieldsCard(checkerboard: ImageBitmap, preview_w: f32, preview_h: f32) {
                             "shadow",
                             Modifier::empty().absolute_offset(120.0, 38.0),
                             TextStyle {
-                                color: Some(Color(1.0, 1.0, 1.0, 0.95)),
+                                span_style: SpanStyle {
+                                    color: Some(Color(1.0, 1.0, 1.0, 0.95)),
+                                    ..Default::default()
+                                },
                                 ..Default::default()
                             },
                         );
@@ -1244,7 +1289,10 @@ fn ShadowFieldsCard(checkerboard: ImageBitmap, preview_w: f32, preview_h: f32) {
                         "Shadow Fields",
                         Modifier::empty(),
                         TextStyle {
-                            color: Some(Color(0.95, 0.95, 1.0, 1.0)),
+                            span_style: SpanStyle {
+                                color: Some(Color(0.95, 0.95, 1.0, 1.0)),
+                                ..Default::default()
+                            },
                             ..Default::default()
                         },
                     );
@@ -1252,7 +1300,10 @@ fn ShadowFieldsCard(checkerboard: ImageBitmap, preview_w: f32, preview_h: f32) {
                         "shadow_elevation + ambient/spot colors + rounded shape",
                         Modifier::empty(),
                         TextStyle {
-                            color: Some(Color(0.75, 0.82, 0.95, 0.95)),
+                            span_style: SpanStyle {
+                                color: Some(Color(0.75, 0.82, 0.95, 0.95)),
+                                ..Default::default()
+                            },
                             ..Default::default()
                         },
                     );
@@ -1389,7 +1440,10 @@ fn ComposeShadowApiCard(preview_w: f32, preview_h: f32) {
                         "drop",
                         Modifier::empty().absolute_offset(20.0, 70.0),
                         TextStyle {
-                            color: Some(Color(0.92, 0.95, 1.0, 0.95)),
+                            span_style: SpanStyle {
+                                color: Some(Color(0.92, 0.95, 1.0, 0.95)),
+                                ..Default::default()
+                            },
                             ..Default::default()
                         },
                     );
@@ -1442,7 +1496,10 @@ fn ComposeShadowApiCard(preview_w: f32, preview_h: f32) {
                         "inner",
                         Modifier::empty().absolute_offset(79.0, 70.0),
                         TextStyle {
-                            color: Some(Color(0.92, 0.95, 1.0, 0.95)),
+                            span_style: SpanStyle {
+                                color: Some(Color(0.92, 0.95, 1.0, 0.95)),
+                                ..Default::default()
+                            },
                             ..Default::default()
                         },
                     );
@@ -1482,7 +1539,10 @@ fn ComposeShadowApiCard(preview_w: f32, preview_h: f32) {
                         "static(dp)",
                         Modifier::empty().absolute_offset(136.0, 70.0),
                         TextStyle {
-                            color: Some(Color(0.92, 0.95, 1.0, 0.95)),
+                            span_style: SpanStyle {
+                                color: Some(Color(0.92, 0.95, 1.0, 0.95)),
+                                ..Default::default()
+                            },
                             ..Default::default()
                         },
                     );
@@ -1509,7 +1569,10 @@ fn ComposeShadowApiCard(preview_w: f32, preview_h: f32) {
                             "Compose 1.9 Shadow API",
                             Modifier::empty(),
                             TextStyle {
-                                color: Some(Color(0.95, 0.95, 1.0, 1.0)),
+                                span_style: SpanStyle {
+                                    color: Some(Color(0.95, 0.95, 1.0, 1.0)),
+                                    ..Default::default()
+                                },
                                 ..Default::default()
                             },
                         );
@@ -1519,7 +1582,10 @@ fn ComposeShadowApiCard(preview_w: f32, preview_h: f32) {
                             "radius/spread/offset/alpha/color/brush/blend + static Shadow(dp)",
                             Modifier::empty(),
                             TextStyle {
-                                color: Some(Color(0.75, 0.82, 0.95, 0.95)),
+                                span_style: SpanStyle {
+                                    color: Some(Color(0.75, 0.82, 0.95, 0.95)),
+                                    ..Default::default()
+                                },
                                 ..Default::default()
                             },
                         );
@@ -1568,7 +1634,10 @@ fn ComposeShadowApiCard(preview_w: f32, preview_h: f32) {
                             ),
                             Modifier::empty(),
                             TextStyle {
-                                color: Some(Color(0.75, 0.82, 0.95, 0.95)),
+                                span_style: SpanStyle {
+                                    color: Some(Color(0.75, 0.82, 0.95, 0.95)),
+                                    ..Default::default()
+                                },
                                 ..Default::default()
                             },
                         );
@@ -1617,7 +1686,10 @@ fn ComposeShadowApiCard(preview_w: f32, preview_h: f32) {
                             ),
                             Modifier::empty(),
                             TextStyle {
-                                color: Some(Color(0.75, 0.82, 0.95, 0.95)),
+                                span_style: SpanStyle {
+                                    color: Some(Color(0.75, 0.82, 0.95, 0.95)),
+                                    ..Default::default()
+                                },
                                 ..Default::default()
                             },
                         );
@@ -1783,7 +1855,10 @@ fn MaskPreviewCard(
                                     );
                                 }),
                             TextStyle {
-                                color: Some(Color(1.0, 1.0, 1.0, 0.95)),
+                                span_style: SpanStyle {
+                                    color: Some(Color(1.0, 1.0, 1.0, 0.95)),
+                                    ..Default::default()
+                                },
                                 ..Default::default()
                             },
                         );
@@ -1798,7 +1873,10 @@ fn MaskPreviewCard(
                         title,
                         Modifier::empty(),
                         TextStyle {
-                            color: Some(Color(0.95, 0.95, 1.0, 1.0)),
+                            span_style: SpanStyle {
+                                color: Some(Color(0.95, 0.95, 1.0, 1.0)),
+                                ..Default::default()
+                            },
                             ..Default::default()
                         },
                     );
@@ -1806,7 +1884,10 @@ fn MaskPreviewCard(
                         subtitle,
                         Modifier::empty(),
                         TextStyle {
-                            color: Some(Color(0.75, 0.82, 0.95, 0.95)),
+                            span_style: SpanStyle {
+                                color: Some(Color(0.75, 0.82, 0.95, 0.95)),
+                                ..Default::default()
+                            },
                             ..Default::default()
                         },
                     );
@@ -1863,7 +1944,10 @@ fn DstOutDrawWithContentCard(
                                 );
                             }),
                         TextStyle {
-                            color: Some(Color(1.0, 0.95, 0.75, 1.0)),
+                            span_style: SpanStyle {
+                                color: Some(Color(1.0, 0.95, 0.75, 1.0)),
+                                ..Default::default()
+                            },
                             ..Default::default()
                         },
                     );
@@ -1878,7 +1962,10 @@ fn DstOutDrawWithContentCard(
                                 );
                             }),
                         TextStyle {
-                            color: Some(Color(0.95, 0.95, 1.0, 1.0)),
+                            span_style: SpanStyle {
+                                color: Some(Color(0.95, 0.95, 1.0, 1.0)),
+                                ..Default::default()
+                            },
                             ..Default::default()
                         },
                     );
@@ -1947,7 +2034,10 @@ fn DstOutDrawWithContentCard(
                                     );
                                 }),
                             TextStyle {
-                                color: Some(Color(1.0, 1.0, 1.0, 0.95)),
+                                span_style: SpanStyle {
+                                    color: Some(Color(1.0, 1.0, 1.0, 0.95)),
+                                    ..Default::default()
+                                },
                                 ..Default::default()
                             },
                         );
@@ -1965,27 +2055,24 @@ fn DstOutDrawWithContentCard(
                         "DstOut vertical fade",
                         Modifier::empty(),
                         TextStyle {
-                            color: Some(Color(0.95, 0.95, 1.0, 1.0)),
+                            span_style: SpanStyle {
+                                color: Some(Color(0.95, 0.95, 1.0, 1.0)),
+                                ..Default::default()
+                            },
                             ..Default::default()
                         },
                     );
                     Text(
                         "graphics_layer(Offscreen) + draw_with_content + DstOut over visible underlay",
                         Modifier::empty(),
-                        TextStyle {
-                            color: Some(Color(0.75, 0.82, 0.95, 0.95)),
-                            ..Default::default()
-                        },
+                        TextStyle { span_style: SpanStyle { color: Some(Color(0.75, 0.82, 0.95, 0.95)), ..Default::default() }, ..Default::default() },
                     );
                     Text(
                         format!(
                             "alpha={preview_alpha_value:.2}, fade=[{fade_start_value:.1}..{fade_end_value:.1}]"
                         ),
                         Modifier::empty(),
-                        TextStyle {
-                            color: Some(Color(0.82, 0.88, 0.98, 0.92)),
-                            ..Default::default()
-                        },
+                        TextStyle { span_style: SpanStyle { color: Some(Color(0.82, 0.88, 0.98, 0.92)), ..Default::default() }, ..Default::default() },
                     );
                     ValueSlider("preview_alpha", preview_alpha, 0.0, 1.0, 156.0);
                     ValueSlider("fade_start", fade_start, 0.0, preview_h - 4.0, 156.0);
@@ -2052,7 +2139,10 @@ fn EffectPreviewCard(
                                     );
                                 }),
                             TextStyle {
-                                color: Some(Color(1.0, 0.9, 0.2, 1.0)),
+                                span_style: SpanStyle {
+                                    color: Some(Color(1.0, 0.9, 0.2, 1.0)),
+                                    ..Default::default()
+                                },
                                 ..Default::default()
                             },
                         );
@@ -2067,7 +2157,10 @@ fn EffectPreviewCard(
                                     );
                                 }),
                             TextStyle {
-                                color: Some(Color(0.6, 1.0, 0.9, 1.0)),
+                                span_style: SpanStyle {
+                                    color: Some(Color(0.6, 1.0, 0.9, 1.0)),
+                                    ..Default::default()
+                                },
                                 ..Default::default()
                             },
                         );
@@ -2083,7 +2176,10 @@ fn EffectPreviewCard(
                         title,
                         Modifier::empty(),
                         TextStyle {
-                            color: Some(Color(0.95, 0.95, 1.0, 1.0)),
+                            span_style: SpanStyle {
+                                color: Some(Color(0.95, 0.95, 1.0, 1.0)),
+                                ..Default::default()
+                            },
                             ..Default::default()
                         },
                     );
@@ -2091,7 +2187,10 @@ fn EffectPreviewCard(
                         subtitle,
                         Modifier::empty(),
                         TextStyle {
-                            color: Some(Color(0.75, 0.82, 0.95, 0.95)),
+                            span_style: SpanStyle {
+                                color: Some(Color(0.75, 0.82, 0.95, 0.95)),
+                                ..Default::default()
+                            },
                             ..Default::default()
                         },
                     );
@@ -2147,7 +2246,10 @@ fn NestedLayerEventDemo(
                             );
                         }),
                     TextStyle {
-                        color: Some(Color(0.9, 0.95, 1.0, 0.95)),
+                        span_style: SpanStyle {
+                            color: Some(Color(0.9, 0.95, 1.0, 0.95)),
+                            ..Default::default()
+                        },
                         ..Default::default()
                     },
                 );
@@ -2186,7 +2288,10 @@ fn NestedLayerEventDemo(
                                     );
                                 }),
                             TextStyle {
-                                color: Some(Color(1.0, 1.0, 1.0, 0.95)),
+                                span_style: SpanStyle {
+                                    color: Some(Color(1.0, 1.0, 1.0, 0.95)),
+                                    ..Default::default()
+                                },
                                 ..Default::default()
                             },
                         );
@@ -2215,7 +2320,10 @@ fn NestedLayerEventDemo(
                                         );
                                     }),
                                     TextStyle {
-                                        color: Some(Color(1.0, 1.0, 1.0, 0.95)),
+                                        span_style: SpanStyle {
+                                            color: Some(Color(1.0, 1.0, 1.0, 0.95)),
+                                            ..Default::default()
+                                        },
                                         ..Default::default()
                                     },
                                 );
@@ -2318,7 +2426,10 @@ fn DraggableOverlay(
                     );
                 }),
                 TextStyle {
-                    color: Some(Color(1.0, 1.0, 1.0, 0.9)),
+                    span_style: SpanStyle {
+                        color: Some(Color(1.0, 1.0, 1.0, 0.9)),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
             );

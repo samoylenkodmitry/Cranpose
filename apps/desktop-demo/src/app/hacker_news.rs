@@ -6,7 +6,7 @@ use cranpose_foundation::{lazy::LazyListScope, SemanticsConfiguration};
 use cranpose_services::{local_http_client, local_uri_handler, HttpClientRef};
 use cranpose_ui::{
     composable,
-    text::FontWeight,
+    text::{FontWeight, SpanStyle},
     widgets::{LazyColumn, LazyColumnSpec},
     Brush, Button, Color, Column, ColumnSpec, CornerRadii, LinearArrangement, Modifier, Row,
     RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
@@ -275,7 +275,10 @@ pub fn hacker_news_tab() {
                                         "Hacker News",
                                         Modifier::empty().padding(4.0),
                                         TextStyle {
-                                            color: Some(Color(1.0, 1.0, 1.0, 1.0)),
+                                            span_style: SpanStyle {
+                                                color: Some(Color(1.0, 1.0, 1.0, 1.0)),
+                                                ..Default::default()
+                                            },
                                             ..Default::default()
                                         },
                                     );
@@ -301,7 +304,10 @@ pub fn hacker_news_tab() {
                                         "Refresh",
                                         Modifier::empty().padding(2.0),
                                         TextStyle {
-                                            color: Some(Color(1.0, 1.0, 1.0, 1.0)),
+                                            span_style: SpanStyle {
+                                                color: Some(Color(1.0, 1.0, 1.0, 1.0)),
+                                                ..Default::default()
+                                            },
                                             ..Default::default()
                                         },
                                     );
@@ -324,7 +330,10 @@ pub fn hacker_news_tab() {
                             "Status: Idle",
                             Modifier::empty().padding(8.0),
                             TextStyle {
-                                color: Some(Color(0.2, 0.2, 0.2, 1.0)),
+                                span_style: SpanStyle {
+                                    color: Some(Color(0.2, 0.2, 0.2, 1.0)),
+                                    ..Default::default()
+                                },
                                 ..Default::default()
                             },
                         );
@@ -342,7 +351,10 @@ pub fn hacker_news_tab() {
                                     "Loading stories...",
                                     Modifier::empty().padding(8.0),
                                     TextStyle {
-                                        color: Some(Color(0.2, 0.2, 0.2, 1.0)),
+                                        span_style: SpanStyle {
+                                            color: Some(Color(0.2, 0.2, 0.2, 1.0)),
+                                            ..Default::default()
+                                        },
                                         ..Default::default()
                                     },
                                 );
@@ -350,7 +362,10 @@ pub fn hacker_news_tab() {
                                     "(... fetching from API ...)",
                                     Modifier::empty().padding(4.0),
                                     TextStyle {
-                                        color: Some(Color(0.5, 0.5, 0.5, 1.0)),
+                                        span_style: SpanStyle {
+                                            color: Some(Color(0.5, 0.5, 0.5, 1.0)),
+                                            ..Default::default()
+                                        },
                                         ..Default::default()
                                     },
                                 );
@@ -367,7 +382,10 @@ pub fn hacker_news_tab() {
                                 .padding(8.0)
                                 .background(Color(1.0, 0.8, 0.8, 1.0)),
                             TextStyle {
-                                color: Some(Color(0.8, 0.0, 0.0, 1.0)),
+                                span_style: SpanStyle {
+                                    color: Some(Color(0.8, 0.0, 0.0, 1.0)),
+                                    ..Default::default()
+                                },
                                 ..Default::default()
                             },
                         );
@@ -423,7 +441,10 @@ pub fn hacker_news_tab() {
                                         ),
                                         Modifier::empty().padding(8.0),
                                         TextStyle {
-                                            color: Some(Color(0.5, 0.5, 0.5, 1.0)),
+                                            span_style: SpanStyle {
+                                                color: Some(Color(0.5, 0.5, 0.5, 1.0)),
+                                                ..Default::default()
+                                            },
                                             ..Default::default()
                                         },
                                     );
@@ -433,7 +454,10 @@ pub fn hacker_news_tab() {
                                     "No more stories.",
                                     Modifier::empty().padding(8.0),
                                     TextStyle {
-                                        color: Some(Color(0.5, 0.5, 0.5, 1.0)),
+                                        span_style: SpanStyle {
+                                            color: Some(Color(0.5, 0.5, 0.5, 1.0)),
+                                            ..Default::default()
+                                        },
                                         ..Default::default()
                                     },
                                 );
@@ -509,7 +533,10 @@ fn loading_stub_item() {
                 "Loading more",
                 Modifier::empty().padding(2.0),
                 TextStyle {
-                    color: Some(Color(0.25, 0.25, 0.25, alpha)),
+                    span_style: SpanStyle {
+                        color: Some(Color(0.25, 0.25, 0.25, alpha)),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
             );
@@ -517,7 +544,10 @@ fn loading_stub_item() {
                 "···",
                 Modifier::empty().padding(2.0),
                 TextStyle {
-                    color: Some(Color(0.25, 0.25, 0.25, alpha)),
+                    span_style: SpanStyle {
+                        color: Some(Color(0.25, 0.25, 0.25, alpha)),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
             );
@@ -550,7 +580,10 @@ fn story_item(story: Story, rank: usize) {
                 format!("{}.", rank),
                 Modifier::empty().padding(4.0),
                 TextStyle {
-                    color: Some(Color(0.5, 0.5, 0.5, 1.0)),
+                    span_style: SpanStyle {
+                        color: Some(Color(0.5, 0.5, 0.5, 1.0)),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
             );
@@ -579,8 +612,11 @@ fn story_item(story: Story, rank: usize) {
                             }
                         }),
                         TextStyle {
-                            color: Some(Color(0.0, 0.0, 0.0, 0.87)),
-                            font_weight: Some(FontWeight::BOLD),
+                            span_style: SpanStyle {
+                                color: Some(Color(0.0, 0.0, 0.0, 0.87)),
+                                font_weight: Some(FontWeight::BOLD),
+                                ..Default::default()
+                            },
                             ..Default::default()
                         },
                     );
@@ -597,7 +633,10 @@ fn story_item(story: Story, rank: usize) {
                                     format!("{} points by {} |", score, by),
                                     Modifier::empty().padding(2.0),
                                     TextStyle {
-                                        color: Some(Color(0.5, 0.5, 0.5, 1.0)),
+                                        span_style: SpanStyle {
+                                            color: Some(Color(0.5, 0.5, 0.5, 1.0)),
+                                            ..Default::default()
+                                        },
                                         ..Default::default()
                                     },
                                 );
@@ -617,7 +656,10 @@ fn story_item(story: Story, rank: usize) {
                                         }
                                     }),
                                     TextStyle {
-                                        color: Some(Color(0.1, 0.45, 0.85, 1.0)),
+                                        span_style: SpanStyle {
+                                            color: Some(Color(0.1, 0.45, 0.85, 1.0)),
+                                            ..Default::default()
+                                        },
                                         ..Default::default()
                                     },
                                 );

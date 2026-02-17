@@ -100,8 +100,9 @@ pub use subcompose_layout::{
 };
 pub use text::{
     get_cursor_x_for_offset, get_offset_for_position, layout_text, measure_text,
-    measure_text_with_options, prepare_text_layout, set_text_measurer, PreparedTextLayout,
-    TextLayoutOptions, TextMeasurer, TextMetrics, TextOverflow, TextStyle,
+    measure_text_with_options, prepare_text_layout, set_text_measurer, ParagraphStyle,
+    PreparedTextLayout, SpanStyle, TextLayoutOptions, TextMeasurer, TextMetrics, TextOverflow,
+    TextStyle,
 };
 pub use text_field_modifier_node::{TextFieldElement, TextFieldModifierNode};
 pub use text_modifier_node::{TextModifierElement, TextModifierNode};

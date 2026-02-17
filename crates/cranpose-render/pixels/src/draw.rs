@@ -35,12 +35,14 @@ pub struct CachedRusttypeTextMeasurer {
 struct TextKey {
     text: Rc<str>,
     font_size_bits: u32,
+    style_hash: u64,
 }
 
 impl PartialEq for TextKey {
     fn eq(&self, other: &Self) -> bool {
         (Rc::ptr_eq(&self.text, &other.text) || *self.text == *other.text)
             && self.font_size_bits == other.font_size_bits
+            && self.style_hash == other.style_hash
     }
 }
 
@@ -50,6 +52,7 @@ impl Hash for TextKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.text.hash(state);
         self.font_size_bits.hash(state);
+        self.style_hash.hash(state);
     }
 }
 
@@ -72,7 +75,13 @@ impl TextMetricsCache {
         }
     }
 
-    fn get_or_measure<F>(&mut self, text: &str, font_size: f32, measure: F) -> TextMetrics
+    fn get_or_measure<F>(
+        &mut self,
+        text: &str,
+        font_size: f32,
+        style_hash: u64,
+        measure: F,
+    ) -> TextMetrics
     where
         F: FnOnce(&str, f32) -> TextMetrics,
     {
@@ -81,6 +90,7 @@ impl TextMetricsCache {
         let key = TextKey {
             text: Rc::from(text),
             font_size_bits: font_size.to_bits(),
+            style_hash,
         };
 
         if let Some(metrics) = self.map.get(&key).copied() {
@@ -164,20 +174,28 @@ fn clip_bounds_from_clip(clip: Option<Rect>, width: u32, height: u32) -> Option<
 
 // Helper to resolve font size from style
 fn resolve_font_size(style: &cranpose_ui::text::TextStyle) -> f32 {
-    match style.font_size {
-        cranpose_ui::text::TextUnit::Sp(v) => v,
-        cranpose_ui::text::TextUnit::Em(v) => v * 14.0,
-        cranpose_ui::text::TextUnit::Unspecified => 14.0, // Default to 14.0
-    }
+    style.resolve_font_size(14.0)
+}
+
+fn resolve_line_height(style: &cranpose_ui::text::TextStyle, font_size: f32) -> f32 {
+    style.resolve_line_height(14.0, font_size)
+}
+
+fn resolve_letter_spacing(style: &cranpose_ui::text::TextStyle, font_size: f32) -> f32 {
+    let _ = font_size;
+    style.resolve_letter_spacing(14.0)
 }
 
 impl TextMeasurer for CachedRusttypeTextMeasurer {
     fn measure(&self, text: &str, style: &cranpose_ui::text::TextStyle) -> TextMetrics {
         let font_size = resolve_font_size(style);
+        let style_hash = style.measurement_hash();
         self.cache
             .lock()
             .expect("text metrics cache poisoned")
-            .get_or_measure(text, font_size, measure_text_impl)
+            .get_or_measure(text, font_size, style_hash, |value, size| {
+                measure_text_impl(value, style, size)
+            })
     }
 
     fn get_offset_for_position(
@@ -196,15 +214,30 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
         let font = &*FONT;
         let v_metrics = font.v_metrics(scale);
         let origin = point(0.0, v_metrics.ascent);
+        let line_height = resolve_line_height(style, (v_metrics.ascent - v_metrics.descent).ceil());
+
+        let line_index = (_y / line_height).floor().max(0.0) as usize;
+        let lines: Vec<&str> = text.split('\n').collect();
+        let target_line = line_index.min(lines.len().saturating_sub(1));
+
+        let mut line_start_byte = 0;
+        for line in lines.iter().take(target_line) {
+            line_start_byte += line.len() + 1;
+        }
+
+        let line_text = lines.get(target_line).unwrap_or(&"");
+        if line_text.is_empty() {
+            return line_start_byte;
+        }
 
         // Find the glyph whose center is closest to x
         let mut best_offset = 0;
         let mut best_distance = f32::INFINITY;
         let mut current_byte_offset = 0;
 
-        for c in text.chars() {
+        for c in line_text.chars() {
             // Get glyph position for this character
-            let prefix = &text[..current_byte_offset];
+            let prefix = &line_text[..current_byte_offset];
             let mut glyph_x = 0.0f32;
 
             // Measure prefix width to get glyph start position
@@ -215,7 +248,7 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
             }
 
             // Get width of current character to find center
-            let char_str = &text[current_byte_offset..current_byte_offset + c.len_utf8()];
+            let char_str = &line_text[current_byte_offset..current_byte_offset + c.len_utf8()];
             let char_width = {
                 let mut w = 0.0f32;
                 for glyph in font.layout(char_str, scale, origin) {
@@ -245,13 +278,13 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
         }
 
         // Also check end of text
-        let total_width = measure_text_impl(text, font_size).width;
+        let total_width = measure_text_impl(line_text, style, font_size).width;
         let end_dist = (x - total_width).abs();
         if end_dist < best_distance {
-            best_offset = text.len();
+            best_offset = line_text.len();
         }
 
-        best_offset
+        line_start_byte + best_offset.min(line_text.len())
     }
 
     fn get_cursor_x_for_offset(
@@ -268,7 +301,7 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
         let font_size = resolve_font_size(style);
         // Measure text up to offset
         let prefix = &text[..clamped_offset];
-        measure_text_impl(prefix, font_size).width
+        measure_text_impl(prefix, style, font_size).width
     }
 
     fn layout(
@@ -282,7 +315,9 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
         let scale = Scale::uniform(font_size);
         let font = &*FONT;
         let v_metrics = font.v_metrics(scale);
-        let line_height = (v_metrics.ascent - v_metrics.descent).ceil();
+        let natural_line_height = (v_metrics.ascent - v_metrics.descent).ceil();
+        let line_height = resolve_line_height(style, natural_line_height);
+        let letter_spacing = resolve_letter_spacing(style, font_size);
         let _origin = point(0.0, v_metrics.ascent);
 
         let mut glyph_x_positions = Vec::new();
@@ -293,7 +328,8 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
         let mut y = 0.0f32;
 
         // Build glyph positions
-        for (byte_offset, c) in text.char_indices() {
+        let mut iter = text.char_indices().peekable();
+        while let Some((byte_offset, c)) = iter.next() {
             glyph_x_positions.push(current_x);
             char_to_byte.push(byte_offset);
 
@@ -311,6 +347,11 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
                 // Get glyph advance
                 let glyph = font.glyph(c).scaled(scale);
                 current_x += glyph.h_metrics().advance_width;
+                if let Some((_, next)) = iter.peek() {
+                    if *next != '\n' {
+                        current_x += letter_spacing;
+                    }
+                }
             }
         }
 
@@ -326,7 +367,7 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
             height: line_height,
         });
 
-        let metrics = measure_text_impl(text, font_size);
+        let metrics = measure_text_impl(text, style, font_size);
         TextLayoutResult::new(
             metrics.width,
             metrics.height,
@@ -339,11 +380,17 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
     }
 }
 
-fn measure_text_impl(text: &str, font_size: f32) -> TextMetrics {
+fn measure_text_impl(
+    text: &str,
+    style: &cranpose_ui::text::TextStyle,
+    font_size: f32,
+) -> TextMetrics {
     let scale = Scale::uniform(font_size);
     let font = &*FONT;
     let v_metrics = font.v_metrics(scale);
-    let line_height = (v_metrics.ascent - v_metrics.descent).ceil();
+    let natural_line_height = (v_metrics.ascent - v_metrics.descent).ceil();
+    let line_height = resolve_line_height(style, natural_line_height);
+    let letter_spacing = resolve_letter_spacing(style, font_size);
 
     // Split by newlines for multiline support
     let lines: Vec<&str> = text.split('\n').collect();
@@ -372,6 +419,8 @@ fn measure_text_impl(text: &str, font_size: f32) -> TextMetrics {
         } else {
             (line_max_x - min_x).max(0.0)
         };
+        let char_spacing = (line.chars().count().saturating_sub(1) as f32) * letter_spacing;
+        let line_width = (line_width + char_spacing).max(0.0);
         max_width = max_width.max(line_width);
     }
 
@@ -528,7 +577,11 @@ fn draw_text(frame: &mut [u8], width: u32, height: u32, draw: &TextDraw) {
     let scale = Scale::uniform(draw.font_size * text_scale);
     let font = &*FONT;
     let v_metrics = font.v_metrics(scale);
-    let line_height = (v_metrics.ascent - v_metrics.descent).ceil().max(1.0);
+    let line_height = resolve_line_height(
+        &draw.text_style,
+        (v_metrics.ascent - v_metrics.descent).ceil(),
+    )
+    .max(1.0);
 
     for (line_idx, line) in draw.text.split('\n').enumerate() {
         let baseline_y = draw.rect.y + v_metrics.ascent + line_idx as f32 * line_height;

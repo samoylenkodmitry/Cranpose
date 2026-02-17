@@ -331,11 +331,28 @@ fn hash_option_color<H: Hasher>(color: &Option<crate::modifier::Color>, state: &
     }
 }
 
-fn hash_option_f32<H: Hasher>(value: Option<f32>, state: &mut H) {
-    match value {
-        Some(value) => {
+fn hash_option_baseline_shift<H: Hasher>(
+    baseline_shift: &Option<crate::text::BaselineShift>,
+    state: &mut H,
+) {
+    match baseline_shift {
+        Some(shift) => {
             1u8.hash(state);
-            hash_f32_bits(value, state);
+            hash_f32_bits(shift.0, state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
+fn hash_option_text_geometric_transform<H: Hasher>(
+    transform: &Option<crate::text::TextGeometricTransform>,
+    state: &mut H,
+) {
+    match transform {
+        Some(transform) => {
+            1u8.hash(state);
+            hash_f32_bits(transform.scale_x, state);
+            hash_f32_bits(transform.skew_x, state);
         }
         None => 0u8.hash(state),
     }
@@ -366,26 +383,32 @@ fn hash_option_text_indent<H: Hasher>(indent: &Option<crate::text::TextIndent>, 
 }
 
 fn hash_text_style<H: Hasher>(style: &TextStyle, state: &mut H) {
-    hash_option_color(&style.color, state);
-    hash_text_unit(style.font_size, state);
-    style.font_weight.hash(state);
-    style.font_style.hash(state);
-    style.font_synthesis.hash(state);
-    style.font_family.hash(state);
-    style.font_feature_settings.hash(state);
-    hash_text_unit(style.letter_spacing, state);
-    hash_option_f32(style.baseline_shift, state);
-    style.text_geometric_transform.is_some().hash(state);
-    style.locale_list.is_some().hash(state);
-    hash_option_color(&style.background, state);
-    style.text_decoration.hash(state);
-    hash_option_shadow(&style.shadow, state);
-    style.text_align.hash(state);
-    style.text_direction.hash(state);
-    hash_text_unit(style.line_height, state);
-    hash_option_text_indent(&style.text_indent, state);
-    style.line_break.hash(state);
-    style.hyphens.hash(state);
+    let span = &style.span_style;
+    let paragraph = &style.paragraph_style;
+
+    hash_option_color(&span.color, state);
+    hash_text_unit(span.font_size, state);
+    span.font_weight.hash(state);
+    span.font_style.hash(state);
+    span.font_synthesis.hash(state);
+    span.font_family.hash(state);
+    span.font_feature_settings.hash(state);
+    hash_text_unit(span.letter_spacing, state);
+    hash_option_baseline_shift(&span.baseline_shift, state);
+    hash_option_text_geometric_transform(&span.text_geometric_transform, state);
+    span.locale_list.hash(state);
+    hash_option_color(&span.background, state);
+    span.text_decoration.hash(state);
+    hash_option_shadow(&span.shadow, state);
+
+    paragraph.text_align.hash(state);
+    paragraph.text_direction.hash(state);
+    hash_text_unit(paragraph.line_height, state);
+    hash_option_text_indent(&paragraph.text_indent, state);
+    paragraph.line_height_style.hash(state);
+    paragraph.line_break.hash(state);
+    paragraph.hyphens.hash(state);
+    paragraph.text_motion.hash(state);
 }
 
 impl Hash for TextModifierElement {
@@ -454,7 +477,10 @@ mod tests {
             TextLayoutOptions::default(),
         );
         let style_b = TextStyle {
-            font_size: TextUnit::Sp(18.0),
+            span_style: crate::text::SpanStyle {
+                font_size: TextUnit::Sp(18.0),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let element_b = TextModifierElement::new(text, style_b, TextLayoutOptions::default());
@@ -466,8 +492,11 @@ mod tests {
     #[test]
     fn hash_matches_for_equal_elements() {
         let style = TextStyle {
-            font_size: TextUnit::Sp(14.0),
-            letter_spacing: TextUnit::Em(0.1),
+            span_style: crate::text::SpanStyle {
+                font_size: TextUnit::Sp(14.0),
+                letter_spacing: TextUnit::Em(0.1),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let options = TextLayoutOptions::default();

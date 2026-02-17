@@ -32,9 +32,9 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 /// Size-only cache for ultra-fast text measurement lookups.
-/// Key: (text_hash, font_size_fixed_point)
+/// Key: (text_hash, font_size_fixed_point, style_hash)
 /// Value: (text_content, size) - text stored to handle hash collisions
-type TextSizeCache = Arc<Mutex<LruCache<(u64, i32), (String, Size)>>>;
+type TextSizeCache = Arc<Mutex<LruCache<(u64, i32, u64), (String, Size)>>>;
 
 #[derive(Debug)]
 pub enum WgpuRendererError {
@@ -61,20 +61,23 @@ pub(crate) enum TextKey {
 pub(crate) struct TextCacheKey {
     key: TextKey,
     scale_bits: u32, // f32 as bits for hashing
+    style_hash: u64,
 }
 
 impl TextCacheKey {
-    fn new(text: &str, font_size: f32) -> Self {
+    fn new(text: &str, font_size: f32, style_hash: u64) -> Self {
         Self {
             key: TextKey::Content(text.to_string()),
             scale_bits: font_size.to_bits(),
+            style_hash,
         }
     }
 
-    fn for_node(node_id: NodeId, font_size: f32) -> Self {
+    fn for_node(node_id: NodeId, font_size: f32, style_hash: u64) -> Self {
         Self {
             key: TextKey::Node(node_id),
             scale_bits: font_size.to_bits(),
+            style_hash,
         }
     }
 }
@@ -83,6 +86,7 @@ impl Hash for TextCacheKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.key.hash(state);
         self.scale_bits.hash(state);
+        self.style_hash.hash(state);
     }
 }
 
@@ -91,6 +95,8 @@ pub(crate) struct SharedTextBuffer {
     pub(crate) buffer: Buffer,
     text: String,
     font_size: f32,
+    line_height: f32,
+    style_hash: u64,
     /// Cached size to avoid recalculating on every access
     cached_size: Option<Size>,
 }
@@ -102,18 +108,22 @@ impl SharedTextBuffer {
         font_system: &mut FontSystem,
         text: &str,
         font_size: f32,
+        line_height: f32,
+        style_hash: u64,
         attrs: Attrs,
     ) {
         let text_changed = self.text != text;
         let font_changed = (self.font_size - font_size).abs() > 0.1;
+        let line_height_changed = (self.line_height - line_height).abs() > 0.1;
+        let style_changed = self.style_hash != style_hash;
 
         // Only reshape if something actually changed
-        if !text_changed && !font_changed {
+        if !text_changed && !font_changed && !line_height_changed && !style_changed {
             return; // Nothing changed, skip reshape
         }
 
         // Set metrics and size for unlimited layout
-        let metrics = Metrics::new(font_size, font_size * 1.4);
+        let metrics = Metrics::new(font_size, line_height);
         self.buffer.set_metrics(font_system, metrics);
         self.buffer
             .set_size(font_system, Some(f32::MAX), Some(f32::MAX));
@@ -127,11 +137,13 @@ impl SharedTextBuffer {
         self.text.clear();
         self.text.push_str(text);
         self.font_size = font_size;
+        self.line_height = line_height;
+        self.style_hash = style_hash;
         self.cached_size = None; // Invalidate size cache
     }
 
     /// Get or calculate the size of the shaped text
-    pub(crate) fn size(&mut self, font_size: f32) -> Size {
+    pub(crate) fn size(&mut self) -> Size {
         if let Some(size) = self.cached_size {
             return size;
         }
@@ -142,7 +154,7 @@ impl SharedTextBuffer {
         for run in layout_runs {
             max_width = max_width.max(run.line_w);
         }
-        let total_height = self.buffer.lines.len() as f32 * font_size * 1.4;
+        let total_height = self.buffer.lines.len() as f32 * self.line_height.max(0.0);
 
         let size = Size {
             width: max_width,
@@ -474,40 +486,50 @@ impl Renderer for WgpuRenderer {
 }
 
 fn resolve_font_size(style: &cranpose_ui::text::TextStyle) -> f32 {
-    match style.font_size {
-        cranpose_ui::text::TextUnit::Sp(v) => v,
-        cranpose_ui::text::TextUnit::Em(v) => v * 14.0,
-        cranpose_ui::text::TextUnit::Unspecified => 14.0,
+    style.resolve_font_size(14.0)
+}
+
+fn resolve_line_height(style: &cranpose_ui::text::TextStyle, font_size: f32) -> f32 {
+    style.resolve_line_height(14.0, font_size * 1.4)
+}
+
+fn glyphon_family_from_font_family(font_family: &cranpose_ui::text::FontFamily) -> Family<'_> {
+    match font_family {
+        cranpose_ui::text::FontFamily::Default | cranpose_ui::text::FontFamily::SansSerif => {
+            Family::SansSerif
+        }
+        cranpose_ui::text::FontFamily::Serif => Family::Serif,
+        cranpose_ui::text::FontFamily::Monospace => Family::Monospace,
+        cranpose_ui::text::FontFamily::Cursive => Family::Cursive,
+        cranpose_ui::text::FontFamily::Fantasy => Family::Fantasy,
+        cranpose_ui::text::FontFamily::Named(name) => Family::Name(name.as_str()),
     }
 }
 
 fn attrs_from_text_style<'a>(style: &'a cranpose_ui::text::TextStyle, font_size: f32) -> Attrs<'a> {
     let mut attrs = Attrs::new();
+    let span_style = &style.span_style;
+    let font_family = span_style.font_family.as_ref();
+    let font_weight = span_style.font_weight;
+    let font_style = span_style.font_style;
+    let letter_spacing = span_style.letter_spacing;
 
-    if let Some(font_family) = &style.font_family {
-        attrs = attrs.family(match font_family.name.as_str() {
-            "SansSerif" | "sans-serif" => Family::SansSerif,
-            "Serif" | "serif" => Family::Serif,
-            "Monospace" | "monospace" => Family::Monospace,
-            "Cursive" | "cursive" => Family::Cursive,
-            "Fantasy" | "fantasy" => Family::Fantasy,
-            "Default" | "" => Family::SansSerif,
-            name => Family::Name(name),
-        });
+    if let Some(font_family) = font_family {
+        attrs = attrs.family(glyphon_family_from_font_family(font_family));
     }
 
-    if let Some(font_weight) = style.font_weight {
+    if let Some(font_weight) = font_weight {
         attrs = attrs.weight(GlyphonWeight(font_weight.0));
     }
 
-    if let Some(font_style) = style.font_style {
+    if let Some(font_style) = font_style {
         attrs = attrs.style(match font_style {
             cranpose_ui::text::FontStyle::Normal => GlyphonStyle::Normal,
             cranpose_ui::text::FontStyle::Italic => GlyphonStyle::Italic,
         });
     }
 
-    attrs = match style.letter_spacing {
+    attrs = match letter_spacing {
         cranpose_ui::text::TextUnit::Em(value) => attrs.letter_spacing(value),
         cranpose_ui::text::TextUnit::Sp(value) if font_size > 0.0 => {
             attrs.letter_spacing(value / font_size)
@@ -550,6 +572,8 @@ impl TextMeasurer for WgpuTextMeasurer {
         style: &cranpose_ui::text::TextStyle,
     ) -> cranpose_ui::TextMetrics {
         let font_size = resolve_font_size(style);
+        let line_height = resolve_line_height(style, font_size);
+        let style_hash = style.measurement_hash();
         let size_int = (font_size * 100.0) as i32;
 
         // Calculate hash to avoid allocating String for lookup
@@ -557,7 +581,7 @@ impl TextMeasurer for WgpuTextMeasurer {
         let mut hasher = FxHasher::default();
         text.hash(&mut hasher);
         let text_hash = hasher.finish();
-        let cache_key = (text_hash, size_int);
+        let cache_key = (text_hash, size_int, style_hash);
 
         // Check size cache first (fastest path)
         {
@@ -565,30 +589,32 @@ impl TextMeasurer for WgpuTextMeasurer {
             if let Some((cached_text, size)) = cache.get(&cache_key) {
                 // Verify partial collision
                 if cached_text == text {
+                    let line_count = text.split('\n').count().max(1);
                     return cranpose_ui::TextMetrics {
                         width: size.width,
                         height: size.height,
-                        line_height: font_size * 1.4,
-                        line_count: 1, // Cached entries are single-line simplified
+                        line_height,
+                        line_count,
                     };
                 }
             }
         }
 
         // Get or create text buffer
-        let text_buffer_key = TextCacheKey::new(text, font_size);
+        let text_buffer_key = TextCacheKey::new(text, font_size, style_hash);
         let mut font_system = self.font_system.lock().unwrap();
         let mut text_cache = self.text_cache.lock().unwrap();
 
         // Get or create buffer and calculate size
         let size = {
             let buffer = text_cache.entry(text_buffer_key).or_insert_with(|| {
-                let buffer =
-                    Buffer::new(&mut font_system, Metrics::new(font_size, font_size * 1.4));
+                let buffer = Buffer::new(&mut font_system, Metrics::new(font_size, line_height));
                 SharedTextBuffer {
                     buffer,
                     text: String::new(),
                     font_size: 0.0,
+                    line_height: 0.0,
+                    style_hash: 0,
                     cached_size: None,
                 }
             });
@@ -598,11 +624,13 @@ impl TextMeasurer for WgpuTextMeasurer {
                 &mut font_system,
                 text,
                 font_size,
+                line_height,
+                style_hash,
                 attrs_from_text_style(style, font_size),
             );
 
             // Calculate size if not cached
-            buffer.size(font_size)
+            buffer.size()
         };
 
         // Trim cache if needed (after we're done with buffer reference)
@@ -617,7 +645,6 @@ impl TextMeasurer for WgpuTextMeasurer {
         size_cache.put(cache_key, (text.to_string(), size));
 
         // Calculate line info for multiline support
-        let line_height = font_size * 1.4;
         let line_count = text.split('\n').count().max(1);
 
         cranpose_ui::TextMetrics {
@@ -636,11 +663,11 @@ impl TextMeasurer for WgpuTextMeasurer {
         y: f32,
     ) -> usize {
         let font_size = resolve_font_size(style);
+        let line_height = resolve_line_height(style, font_size);
+        let style_hash = style.measurement_hash();
         if text.is_empty() {
             return 0;
         }
-
-        let line_height = font_size * 1.4;
 
         // Calculate which line was clicked based on Y coordinate
         let line_index = (y / line_height).floor().max(0.0) as usize;
@@ -661,16 +688,18 @@ impl TextMeasurer for WgpuTextMeasurer {
         }
 
         // Use glyphon's hit testing for the specific line
-        let cache_key = TextCacheKey::new(line_text, font_size);
+        let cache_key = TextCacheKey::new(line_text, font_size, style_hash);
         let mut font_system = self.font_system.lock().unwrap();
         let mut text_cache = self.text_cache.lock().unwrap();
 
         let buffer = text_cache.entry(cache_key).or_insert_with(|| {
-            let buffer = Buffer::new(&mut font_system, Metrics::new(font_size, font_size * 1.4));
+            let buffer = Buffer::new(&mut font_system, Metrics::new(font_size, line_height));
             SharedTextBuffer {
                 buffer,
                 text: String::new(),
                 font_size: 0.0,
+                line_height: 0.0,
+                style_hash: 0,
                 cached_size: None,
             }
         });
@@ -679,6 +708,8 @@ impl TextMeasurer for WgpuTextMeasurer {
             &mut font_system,
             line_text,
             font_size,
+            line_height,
+            style_hash,
             attrs_from_text_style(style, font_size),
         );
 
@@ -737,10 +768,11 @@ impl TextMeasurer for WgpuTextMeasurer {
         use cranpose_ui::text_layout_result::{LineLayout, TextLayoutResult};
 
         let font_size = resolve_font_size(style);
-        let line_height = font_size * 1.4;
+        let line_height = resolve_line_height(style, font_size);
+        let style_hash = style.measurement_hash();
 
         // Get buffer to extract glyph positions
-        let cache_key = TextCacheKey::new(text, font_size);
+        let cache_key = TextCacheKey::new(text, font_size, style_hash);
         let mut font_system = self.font_system.lock().unwrap();
         let mut text_cache = self.text_cache.lock().unwrap();
 
@@ -750,6 +782,8 @@ impl TextMeasurer for WgpuTextMeasurer {
                 buffer,
                 text: String::new(),
                 font_size: 0.0,
+                line_height: 0.0,
+                style_hash: 0,
                 cached_size: None,
             }
         });
@@ -757,6 +791,8 @@ impl TextMeasurer for WgpuTextMeasurer {
             &mut font_system,
             text,
             font_size,
+            line_height,
+            style_hash,
             attrs_from_text_style(style, font_size),
         );
 

@@ -14,6 +14,12 @@ pub use measure::{
     measure_text_with_options, prepare_text_layout, set_text_measurer, PreparedTextLayout,
     TextMeasurer, TextMetrics,
 };
-pub use paragraph::{Hyphens, LineBreak, TextAlign, TextDirection, TextIndent};
-pub use style::TextStyle;
+pub use paragraph::{
+    resolve_text_direction, Hyphens, LineBreak, ResolvedTextDirection, TextAlign, TextDirection,
+    TextIndent,
+};
+pub use style::{
+    BaselineShift, LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim,
+    LocaleList, ParagraphStyle, SpanStyle, TextGeometricTransform, TextMotion, TextStyle,
+};
 pub use unit::TextUnit;

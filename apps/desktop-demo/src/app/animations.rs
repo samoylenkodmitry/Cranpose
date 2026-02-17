@@ -5,8 +5,10 @@ use cranpose_animation::{
 };
 use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
 use cranpose_ui::{
-    composable, text::FontWeight, Color, Column, ColumnSpec, GraphicsLayer, LinearArrangement,
-    Modifier, Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
+    composable,
+    text::{FontWeight, SpanStyle},
+    Color, Column, ColumnSpec, GraphicsLayer, LinearArrangement, Modifier, Row, RowSpec, Size,
+    Spacer, Text, TextStyle, VerticalAlignment,
 };
 use cranpose_ui::{LazyColumn, LazyColumnSpec};
 
@@ -47,14 +49,20 @@ pub(crate) fn AnimationsTab() {
     let scale = PulseModel(700, "scale_bounce");
 
     let header_style = TextStyle {
-        color: Some(Color(0.05, 0.05, 0.05, 1.0)),
-        font_weight: Some(FontWeight::BOLD),
+        span_style: SpanStyle {
+            color: Some(Color(0.05, 0.05, 0.05, 1.0)),
+            font_weight: Some(FontWeight::BOLD),
+            ..Default::default()
+        },
         ..Default::default()
     };
 
     let section_style = TextStyle {
-        color: Some(Color(0.2, 0.2, 0.2, 1.0)),
-        font_weight: Some(FontWeight::BOLD),
+        span_style: SpanStyle {
+            color: Some(Color(0.2, 0.2, 0.2, 1.0)),
+            font_weight: Some(FontWeight::BOLD),
+            ..Default::default()
+        },
         ..Default::default()
     };
 
@@ -88,7 +96,10 @@ pub(crate) fn AnimationsTab() {
                                     format!("Alpha {:.2}", alpha),
                                     Modifier::empty(),
                                     TextStyle {
-                                        color: Some(Color(1.0, 1.0, 1.0, 1.0)),
+                                        span_style: SpanStyle {
+                                            color: Some(Color(1.0, 1.0, 1.0, 1.0)),
+                                            ..Default::default()
+                                        },
                                         ..Default::default()
                                     },
                                 );
@@ -132,7 +143,10 @@ pub(crate) fn AnimationsTab() {
                                     format!("Offset {:.1}", offset_x),
                                     Modifier::empty(),
                                     TextStyle {
-                                        color: Some(Color(0.2, 0.2, 0.2, 1.0)),
+                                        span_style: SpanStyle {
+                                            color: Some(Color(0.2, 0.2, 0.2, 1.0)),
+                                            ..Default::default()
+                                        },
                                         ..Default::default()
                                     },
                                 );
@@ -191,7 +205,10 @@ pub(crate) fn AnimationsTab() {
                                     "Animation sampled inside graphics_layer",
                                     Modifier::empty(),
                                     TextStyle {
-                                        color: Some(Color(0.2, 0.2, 0.2, 1.0)),
+                                        span_style: SpanStyle {
+                                            color: Some(Color(0.2, 0.2, 0.2, 1.0)),
+                                            ..Default::default()
+                                        },
                                         ..Default::default()
                                     },
                                 );
@@ -230,7 +247,10 @@ pub(crate) fn AnimationsTab() {
                                         "Static item: ready",
                                         Modifier::empty(),
                                         TextStyle {
-                                            color: Some(Color(0.35, 0.35, 0.35, 1.0)),
+                                            span_style: SpanStyle {
+                                                color: Some(Color(0.35, 0.35, 0.35, 1.0)),
+                                                ..Default::default()
+                                            },
                                             ..Default::default()
                                         },
                                     );
@@ -243,8 +263,11 @@ pub(crate) fn AnimationsTab() {
                                         format!("Lazy Pulse: {}", display),
                                         Modifier::empty(),
                                         TextStyle {
-                                            color: Some(Color(0.15, 0.2, 0.3, 1.0)),
-                                            font_weight: Some(FontWeight::BOLD),
+                                            span_style: SpanStyle {
+                                                color: Some(Color(0.15, 0.2, 0.3, 1.0)),
+                                                font_weight: Some(FontWeight::BOLD),
+                                                ..Default::default()
+                                            },
                                             ..Default::default()
                                         },
                                     );
@@ -255,7 +278,10 @@ pub(crate) fn AnimationsTab() {
                                         "Static item: complete",
                                         Modifier::empty(),
                                         TextStyle {
-                                            color: Some(Color(0.35, 0.35, 0.35, 1.0)),
+                                            span_style: SpanStyle {
+                                                color: Some(Color(0.35, 0.35, 0.35, 1.0)),
+                                                ..Default::default()
+                                            },
                                             ..Default::default()
                                         },
                                     );

@@ -40,31 +40,37 @@ static REPORTED_UNSUPPORTED_WGPU_EFFECTS: AtomicBool = AtomicBool::new(false);
 
 fn attrs_from_text_style<'a>(style: &'a cranpose_ui::TextStyle, font_size: f32) -> Attrs<'a> {
     let mut attrs = Attrs::new();
+    let span_style = &style.span_style;
+    let font_family = span_style.font_family.as_ref();
+    let font_weight = span_style.font_weight;
+    let font_style = span_style.font_style;
+    let letter_spacing = span_style.letter_spacing;
 
-    if let Some(font_family) = &style.font_family {
-        attrs = attrs.family(match font_family.name.as_str() {
-            "SansSerif" | "sans-serif" => Family::SansSerif,
-            "Serif" | "serif" => Family::Serif,
-            "Monospace" | "monospace" => Family::Monospace,
-            "Cursive" | "cursive" => Family::Cursive,
-            "Fantasy" | "fantasy" => Family::Fantasy,
-            "Default" | "" => Family::SansSerif,
-            name => Family::Name(name),
+    if let Some(font_family) = font_family {
+        attrs = attrs.family(match font_family {
+            cranpose_ui::text::FontFamily::Default | cranpose_ui::text::FontFamily::SansSerif => {
+                Family::SansSerif
+            }
+            cranpose_ui::text::FontFamily::Serif => Family::Serif,
+            cranpose_ui::text::FontFamily::Monospace => Family::Monospace,
+            cranpose_ui::text::FontFamily::Cursive => Family::Cursive,
+            cranpose_ui::text::FontFamily::Fantasy => Family::Fantasy,
+            cranpose_ui::text::FontFamily::Named(name) => Family::Name(name.as_str()),
         });
     }
 
-    if let Some(font_weight) = style.font_weight {
+    if let Some(font_weight) = font_weight {
         attrs = attrs.weight(GlyphonWeight(font_weight.0));
     }
 
-    if let Some(font_style) = style.font_style {
+    if let Some(font_style) = font_style {
         attrs = attrs.style(match font_style {
             cranpose_ui::text::FontStyle::Normal => GlyphonStyle::Normal,
             cranpose_ui::text::FontStyle::Italic => GlyphonStyle::Italic,
         });
     }
 
-    attrs = match style.letter_spacing {
+    attrs = match letter_spacing {
         cranpose_ui::text::TextUnit::Em(value) => attrs.letter_spacing(value),
         cranpose_ui::text::TextUnit::Sp(value) if font_size > 0.0 => {
             attrs.letter_spacing(value / font_size)
@@ -73,6 +79,10 @@ fn attrs_from_text_style<'a>(style: &'a cranpose_ui::TextStyle, font_size: f32) 
     };
 
     attrs
+}
+
+fn resolve_line_height(style: &cranpose_ui::TextStyle, font_size: f32) -> f32 {
+    style.resolve_line_height(14.0, font_size * 1.4)
 }
 
 fn is_blend_mode_supported(mode: BlendMode) -> bool {
@@ -2489,17 +2499,21 @@ impl GpuRenderer {
             }
 
             let font_size_px = text_draw.font_size * text_draw.scale * root_scale;
-            let key = TextCacheKey::for_node(text_draw.node_id, font_size_px);
+            let style_hash = text_draw.text_style.measurement_hash();
+            let line_height_px = resolve_line_height(&text_draw.text_style, font_size_px);
+            let key = TextCacheKey::for_node(text_draw.node_id, font_size_px, style_hash);
 
             let buffer = text_cache.entry(key.clone()).or_insert_with(|| {
                 let buffer = glyphon::Buffer::new(
                     &mut font_system,
-                    Metrics::new(font_size_px, font_size_px * 1.4),
+                    Metrics::new(font_size_px, line_height_px),
                 );
                 SharedTextBuffer {
                     buffer,
                     text: String::new(),
                     font_size: 0.0,
+                    line_height: 0.0,
+                    style_hash: 0,
                     cached_size: None,
                 }
             });
@@ -2508,7 +2522,9 @@ impl GpuRenderer {
                 &mut font_system,
                 text_draw.text.as_ref(),
                 font_size_px,
-                attrs_from_text_style(&text_draw.text_style, text_draw.font_size),
+                line_height_px,
+                style_hash,
+                attrs_from_text_style(&text_draw.text_style, font_size_px),
             );
 
             text_keys.push(key);

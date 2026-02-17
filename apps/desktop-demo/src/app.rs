@@ -22,6 +22,7 @@ mod images;
 pub mod lazy_list;
 mod mineswapper2;
 mod shaders;
+mod text_showcase;
 mod web_fetch;
 mod winamp;
 mod xkcd;
@@ -31,6 +32,7 @@ use hacker_news::hacker_news_tab;
 use images::images_tab;
 use lazy_list::lazy_list_example;
 use shaders::ShadersTab;
+use text_showcase::TextShowcaseTab;
 use web_fetch::web_fetch_example;
 use winamp::WinampTab;
 use xkcd::xkcd_tab;
@@ -54,6 +56,7 @@ pub enum DemoTab {
     Mineswapper2,
     HackerNews,
     Images,
+    Text,
     Winamp,
     Xkcd,
     Shaders,
@@ -74,6 +77,7 @@ impl DemoTab {
             DemoTab::Mineswapper2 => "Mineswapper2",
             DemoTab::HackerNews => "Hacker News",
             DemoTab::Images => "Images",
+            DemoTab::Text => "Text",
             DemoTab::Winamp => "Winamp",
             DemoTab::Xkcd => "XKCD",
             DemoTab::Shaders => "Shaders",
@@ -81,7 +85,7 @@ impl DemoTab {
     }
 }
 
-pub const DEMO_TABS: [DemoTab; 15] = [
+pub const DEMO_TABS: [DemoTab; 16] = [
     DemoTab::Counter,
     DemoTab::CompositionLocal,
     DemoTab::Async,
@@ -94,6 +98,7 @@ pub const DEMO_TABS: [DemoTab; 15] = [
     DemoTab::Mineswapper2,
     DemoTab::HackerNews,
     DemoTab::Images,
+    DemoTab::Text,
     DemoTab::Winamp,
     DemoTab::Xkcd,
     DemoTab::Shaders,
@@ -289,6 +294,7 @@ fn render_active_tab(active: DemoTab) {
         DemoTab::Mineswapper2 => mineswapper2::mineswapper2_tab(),
         DemoTab::HackerNews => hacker_news_tab(),
         DemoTab::Images => images_tab(),
+        DemoTab::Text => TextShowcaseTab(),
         DemoTab::Winamp => WinampTab(),
         DemoTab::Xkcd => xkcd_tab(),
         DemoTab::Shaders => ShadersTab(),

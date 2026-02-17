@@ -5,6 +5,7 @@ use std::rc::Rc;
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::Brush;
+use cranpose_ui::text::{resolve_text_direction, ResolvedTextDirection, TextAlign, TextStyle};
 use cranpose_ui::{
     prepare_text_layout, LayoutBox, LayoutNode, LayoutNodeKind, SubcomposeLayoutNode, TextOverflow,
 };
@@ -356,8 +357,14 @@ fn render_container(
         } else {
             content_width
         };
+        let alignment_offset = resolve_text_horizontal_offset(
+            text_style_ref,
+            value.as_ref(),
+            content_width,
+            prepared.metrics.width,
+        );
         let text_rect = Rect {
-            x: rect.x + padding.left,
+            x: rect.x + padding.left + alignment_offset,
             y: rect.y + padding.top,
             width: draw_width,
             height: prepared.metrics.height,
@@ -373,12 +380,11 @@ fn render_container(
         let text_clip = resolve_text_clip(options.overflow, visual_clip, transformed_text_bounds);
 
         // Extract color and font size from text style or default
-        let text_color = text_style_ref.color.unwrap_or(Color(1.0, 1.0, 1.0, 1.0));
-        let font_size = match text_style_ref.font_size {
-            cranpose_ui::text::TextUnit::Sp(v) => v,
-            cranpose_ui::text::TextUnit::Em(v) => v * 14.0, // basic Em support
-            cranpose_ui::text::TextUnit::Unspecified => 14.0,
-        };
+        let text_color = text_style_ref
+            .span_style
+            .color
+            .unwrap_or(Color(1.0, 1.0, 1.0, 1.0));
+        let font_size = text_style_ref.resolve_font_size(14.0);
 
         if let Some(text_clip) = text_clip {
             scene.push_text(
@@ -530,6 +536,33 @@ fn resolve_text_measure_width(
         width = width.max(measured_content_width);
     }
     width
+}
+
+fn resolve_text_horizontal_offset(
+    style: &TextStyle,
+    text: &str,
+    content_width: f32,
+    measured_width: f32,
+) -> f32 {
+    let available_width = content_width.max(0.0);
+    let remaining = (available_width - measured_width.max(0.0)).max(0.0);
+    let paragraph_style = &style.paragraph_style;
+    let direction = resolve_text_direction(text, Some(paragraph_style.text_direction));
+    match paragraph_style.text_align {
+        TextAlign::Left => 0.0,
+        TextAlign::Right => remaining,
+        TextAlign::Center => remaining * 0.5,
+        TextAlign::Justify => 0.0,
+        TextAlign::Start => match direction {
+            ResolvedTextDirection::Ltr => 0.0,
+            ResolvedTextDirection::Rtl => remaining,
+        },
+        TextAlign::End => match direction {
+            ResolvedTextDirection::Ltr => remaining,
+            ResolvedTextDirection::Rtl => 0.0,
+        },
+        TextAlign::Unspecified => 0.0,
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -734,8 +767,14 @@ fn render_node_from_applier(
         } else {
             content_width
         };
+        let alignment_offset = resolve_text_horizontal_offset(
+            text_style_ref,
+            value.as_ref(),
+            content_width,
+            prepared.metrics.width,
+        );
         let text_rect = Rect {
-            x: rect.x + padding.left,
+            x: rect.x + padding.left + alignment_offset,
             y: rect.y + padding.top,
             width: draw_width,
             height: prepared.metrics.height,
@@ -751,12 +790,11 @@ fn render_node_from_applier(
         let text_clip = resolve_text_clip(options.overflow, visual_clip, transformed_text_bounds);
 
         // Extract color and font size
-        let text_color = text_style_ref.color.unwrap_or(Color(1.0, 1.0, 1.0, 1.0));
-        let font_size = match text_style_ref.font_size {
-            cranpose_ui::text::TextUnit::Sp(v) => v,
-            cranpose_ui::text::TextUnit::Em(v) => v * 14.0,
-            cranpose_ui::text::TextUnit::Unspecified => 14.0,
-        };
+        let text_color = text_style_ref
+            .span_style
+            .color
+            .unwrap_or(Color(1.0, 1.0, 1.0, 1.0));
+        let font_size = text_style_ref.resolve_font_size(14.0);
 
         if let Some(text_clip) = text_clip {
             scene.push_text(
@@ -1061,6 +1099,33 @@ mod tests {
         };
         let width = resolve_text_measure_width(130.0, padding, None);
         assert!((width - 130.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn resolve_text_horizontal_offset_centers_text() {
+        let style = cranpose_ui::TextStyle {
+            paragraph_style: cranpose_ui::ParagraphStyle {
+                text_align: cranpose_ui::text::TextAlign::Center,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let offset = resolve_text_horizontal_offset(&style, "hello", 120.0, 80.0);
+        assert!((offset - 20.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn resolve_text_horizontal_offset_uses_rtl_start() {
+        let style = cranpose_ui::TextStyle {
+            paragraph_style: cranpose_ui::ParagraphStyle {
+                text_align: cranpose_ui::text::TextAlign::Start,
+                text_direction: cranpose_ui::text::TextDirection::Rtl,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let offset = resolve_text_horizontal_offset(&style, "hello", 120.0, 80.0);
+        assert!((offset - 40.0).abs() < f32::EPSILON);
     }
 
     #[test]
