@@ -38,9 +38,9 @@ Cranpose implementation anchors:
 | `FontWeight` range and named constants | ALIGNED | Range validation and constants (`W100..W900`, aliases) implemented. |
 | `TextAlign` values (`Left`, `Right`, `Center`, `Justify`, `Start`, `End`, `Unspecified`) | ALIGNED | Implemented in `paragraph.rs`. |
 | `TextDirection` values (`Ltr`, `Rtl`, `Content`, `ContentOrLtr`, `ContentOrRtl`, `Unspecified`) | ALIGNED | Implemented with resolver helper and content heuristic. |
-| `SpanStyle` structure | PARTIAL | Core fields implemented (`color`, font attrs, `letterSpacing`, `baselineShift`, `textGeometricTransform`, `localeList`, `background`, `textDecoration`, `shadow`). Compose fields not yet modeled: brush/alpha foreground style, platform style, draw style. |
-| `ParagraphStyle` structure | PARTIAL | Core fields implemented (`textAlign`, `textDirection`, `lineHeight`, `textIndent`, `lineHeightStyle`, `lineBreak`, `hyphens`, `textMotion`). Platform paragraph style not yet modeled. |
-| `TextStyle` combining span + paragraph | PARTIAL | `TextStyle { span_style, paragraph_style }` exists with merge and resolve helpers. Full Compose constructor/copy/saver overload surface is not fully mirrored. |
+| `SpanStyle` structure | PARTIAL | Core and stable fields are modeled, including foreground variants (`color` / `brush` + `alpha`), platform style, and draw style. Renderer behavior for non-solid brush/draw-style text is still limited. |
+| `ParagraphStyle` structure | ALIGNED | Core and stable fields are modeled, including platform paragraph style. |
+| `TextStyle` combining span + paragraph | PARTIAL | `TextStyle { span_style, paragraph_style }` plus merge/plus/from/to/platform-style helper APIs are implemented. Full Compose constructor/copy/saver overload surface is not fully mirrored. |
 | `TextStyle` API shape parity (no flattened fields) | ALIGNED | Cranpose now only exposes `TextStyle { span_style, paragraph_style }` for Compose-like API structure. |
 
 ## Behavior Parity Status
@@ -49,7 +49,7 @@ Cranpose implementation anchors:
 |---|---|---|
 | Direction-aware `Start`/`End` alignment in layout pipeline | ALIGNED | Implemented in both pixels and wgpu pipelines. |
 | Style-aware text measurement caching | ALIGNED | Cache keys include style hash (not only text/font size). |
-| Overflow handling (`Clip`, `Ellipsis`, `StartEllipsis`, `MiddleEllipsis`, `Visible`) | PARTIAL | Implemented in fallback measurer/path, but parity with platform line-breaking engines is not exact. |
+| Overflow handling (`Clip`, `Ellipsis`, `StartEllipsis`, `MiddleEllipsis`, `Visible`) | PARTIAL | Implemented in fallback measurer/path and now width-clamped to content bounds in render pipelines; parity with platform line-breaking engines is not exact. |
 | Multiline cursor/offset mapping | PARTIAL | Fixed in pixels measurer for Y-based line selection; broader shaping-cluster parity still pending. |
 | Font fallback/resolver behavior | GAP | Compose resolver and fallback chain behavior not fully replicated. |
 | Glyph shaping and bidi parity | GAP | Current backend behavior is good but not yet a strict equivalent of Compose/Skia text shaping behavior in all scripts. |

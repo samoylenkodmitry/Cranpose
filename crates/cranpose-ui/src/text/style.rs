@@ -2,7 +2,7 @@ use super::decoration::{Shadow, TextDecoration};
 use super::font::{FontFamily, FontStyle, FontSynthesis, FontWeight};
 use super::paragraph::{Hyphens, LineBreak, TextAlign, TextDirection, TextIndent};
 use super::unit::TextUnit;
-use crate::modifier::Color;
+use crate::modifier::{Brush, Color};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -114,9 +114,37 @@ pub enum TextMotion {
     Animated,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub struct PlatformSpanStyle;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub struct PlatformParagraphStyle {
+    pub include_font_padding: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub struct PlatformTextStyle {
+    pub span_style: Option<PlatformSpanStyle>,
+    pub paragraph_style: Option<PlatformParagraphStyle>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TextDrawStyle {
+    Fill,
+    Stroke { width: f32 },
+}
+
+impl Default for TextDrawStyle {
+    fn default() -> Self {
+        Self::Fill
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SpanStyle {
     pub color: Option<Color>,
+    pub brush: Option<Brush>,
+    pub alpha: Option<f32>,
     pub font_size: TextUnit,
     pub font_weight: Option<FontWeight>,
     pub font_style: Option<FontStyle>,
@@ -130,12 +158,16 @@ pub struct SpanStyle {
     pub background: Option<Color>,
     pub text_decoration: Option<TextDecoration>,
     pub shadow: Option<Shadow>,
+    pub platform_style: Option<PlatformSpanStyle>,
+    pub draw_style: Option<TextDrawStyle>,
 }
 
 impl Default for SpanStyle {
     fn default() -> Self {
         Self {
             color: None,
+            brush: None,
+            alpha: None,
             font_size: TextUnit::Unspecified,
             font_weight: None,
             font_style: None,
@@ -149,14 +181,19 @@ impl Default for SpanStyle {
             background: None,
             text_decoration: None,
             shadow: None,
+            platform_style: None,
+            draw_style: None,
         }
     }
 }
 
 impl SpanStyle {
     pub fn merge(&self, other: &SpanStyle) -> SpanStyle {
+        let (merged_color, merged_brush) = merge_foreground_style(self, other);
         SpanStyle {
-            color: other.color.or(self.color),
+            color: merged_color,
+            brush: merged_brush,
+            alpha: other.alpha.or(self.alpha),
             font_size: merge_text_unit(self.font_size, other.font_size),
             font_weight: other.font_weight.or(self.font_weight),
             font_style: other.font_style.or(self.font_style),
@@ -175,7 +212,13 @@ impl SpanStyle {
             background: other.background.or(self.background),
             text_decoration: other.text_decoration.or(self.text_decoration),
             shadow: other.shadow.or(self.shadow),
+            platform_style: other.platform_style.or(self.platform_style),
+            draw_style: other.draw_style.or(self.draw_style),
         }
+    }
+
+    pub fn plus(&self, other: &SpanStyle) -> SpanStyle {
+        self.merge(other)
     }
 
     pub fn resolve_font_size(&self, default_size: f32) -> f32 {
@@ -190,6 +233,17 @@ impl SpanStyle {
             _ => fallback,
         }
     }
+
+    pub fn resolve_foreground_color(&self, default_color: Color) -> Color {
+        let mut color = self
+            .color
+            .or_else(|| solid_brush_color(self.brush.as_ref()))
+            .unwrap_or(default_color);
+        if let Some(alpha) = self.alpha {
+            color.3 *= alpha.clamp(0.0, 1.0);
+        }
+        color
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -198,6 +252,7 @@ pub struct ParagraphStyle {
     pub text_direction: TextDirection,
     pub line_height: TextUnit,
     pub text_indent: Option<TextIndent>,
+    pub platform_style: Option<PlatformParagraphStyle>,
     pub line_height_style: Option<LineHeightStyle>,
     pub line_break: LineBreak,
     pub hyphens: Hyphens,
@@ -211,6 +266,7 @@ impl Default for ParagraphStyle {
             text_direction: TextDirection::Unspecified,
             line_height: TextUnit::Unspecified,
             text_indent: None,
+            platform_style: None,
             line_height_style: None,
             line_break: LineBreak::Unspecified,
             hyphens: Hyphens::Unspecified,
@@ -226,11 +282,16 @@ impl ParagraphStyle {
             text_direction: merge_text_direction(self.text_direction, other.text_direction),
             line_height: merge_text_unit(self.line_height, other.line_height),
             text_indent: other.text_indent.or(self.text_indent),
+            platform_style: other.platform_style.or(self.platform_style),
             line_height_style: other.line_height_style.or(self.line_height_style),
             line_break: merge_line_break(self.line_break, other.line_break),
             hyphens: merge_hyphens(self.hyphens, other.hyphens),
             text_motion: other.text_motion.or(self.text_motion),
         }
+    }
+
+    pub fn plus(&self, other: &ParagraphStyle) -> ParagraphStyle {
+        self.merge(other)
     }
 }
 
@@ -248,11 +309,46 @@ impl TextStyle {
         }
     }
 
+    pub fn from_span_style(span_style: SpanStyle) -> Self {
+        Self::new(span_style, ParagraphStyle::default())
+    }
+
+    pub fn from_paragraph_style(paragraph_style: ParagraphStyle) -> Self {
+        Self::new(SpanStyle::default(), paragraph_style)
+    }
+
     pub fn merge(&self, other: &TextStyle) -> TextStyle {
         TextStyle {
             span_style: self.span_style.merge(&other.span_style),
             paragraph_style: self.paragraph_style.merge(&other.paragraph_style),
         }
+    }
+
+    pub fn plus(&self, other: &TextStyle) -> TextStyle {
+        self.merge(other)
+    }
+
+    pub fn to_span_style(&self) -> SpanStyle {
+        self.span_style.clone()
+    }
+
+    pub fn to_paragraph_style(&self) -> ParagraphStyle {
+        self.paragraph_style.clone()
+    }
+
+    pub fn platform_style(&self) -> Option<PlatformTextStyle> {
+        create_platform_text_style(
+            None,
+            self.span_style.platform_style,
+            self.paragraph_style.platform_style,
+        )
+    }
+
+    pub fn with_platform_style(mut self, platform_style: Option<PlatformTextStyle>) -> Self {
+        self.span_style.platform_style = platform_style.and_then(|style| style.span_style);
+        self.paragraph_style.platform_style =
+            platform_style.and_then(|style| style.paragraph_style);
+        self
     }
 
     pub fn resolve_font_size(&self, default_size: f32) -> f32 {
@@ -283,6 +379,10 @@ impl TextStyle {
         }
     }
 
+    pub fn resolve_text_color(&self, default_color: Color) -> Color {
+        self.span_style.resolve_foreground_color(default_color)
+    }
+
     pub fn measurement_hash(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
         let span = &self.span_style;
@@ -298,17 +398,58 @@ impl TextStyle {
         hash_option_baseline_shift(&span.baseline_shift, &mut hasher);
         hash_option_geometric_transform(&span.text_geometric_transform, &mut hasher);
         span.locale_list.hash(&mut hasher);
+        span.platform_style.hash(&mut hasher);
 
         paragraph.text_align.hash(&mut hasher);
         paragraph.text_direction.hash(&mut hasher);
         hash_text_unit(paragraph.line_height, &mut hasher);
         hash_option_text_indent(&paragraph.text_indent, &mut hasher);
+        paragraph.platform_style.hash(&mut hasher);
         paragraph.line_height_style.hash(&mut hasher);
         paragraph.line_break.hash(&mut hasher);
         paragraph.hyphens.hash(&mut hasher);
         paragraph.text_motion.hash(&mut hasher);
 
         hasher.finish()
+    }
+}
+
+fn merge_foreground_style(
+    current: &SpanStyle,
+    incoming: &SpanStyle,
+) -> (Option<Color>, Option<Brush>) {
+    if let Some(brush) = incoming.brush.clone() {
+        return (None, Some(brush));
+    }
+    if let Some(color) = incoming.color {
+        return (Some(color), None);
+    }
+    (current.color, current.brush.clone())
+}
+
+fn solid_brush_color(brush: Option<&Brush>) -> Option<Color> {
+    match brush {
+        Some(Brush::Solid(color)) => Some(*color),
+        _ => None,
+    }
+}
+
+fn create_platform_text_style(
+    explicit: Option<PlatformTextStyle>,
+    span_style: Option<PlatformSpanStyle>,
+    paragraph_style: Option<PlatformParagraphStyle>,
+) -> Option<PlatformTextStyle> {
+    let explicit_span = explicit.and_then(|style| style.span_style);
+    let explicit_paragraph = explicit.and_then(|style| style.paragraph_style);
+    let span = span_style.or(explicit_span);
+    let paragraph = paragraph_style.or(explicit_paragraph);
+    if span.is_none() && paragraph.is_none() {
+        None
+    } else {
+        Some(PlatformTextStyle {
+            span_style: span,
+            paragraph_style: paragraph,
+        })
     }
 }
 
@@ -408,6 +549,7 @@ fn hash_option_text_indent<H: Hasher>(indent: &Option<TextIndent>, state: &mut H
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modifier::Brush;
     use crate::text::{FontFamily, TextDirection};
 
     #[test]
@@ -442,6 +584,35 @@ mod tests {
     }
 
     #[test]
+    fn span_style_merge_switches_foreground_kind() {
+        let base = SpanStyle {
+            color: Some(Color(1.0, 0.0, 0.0, 1.0)),
+            ..Default::default()
+        };
+        let incoming = SpanStyle {
+            brush: Some(Brush::solid(Color(0.0, 1.0, 0.0, 1.0))),
+            ..Default::default()
+        };
+
+        let merged = base.merge(&incoming);
+        assert_eq!(merged.color, None);
+        assert_eq!(merged.brush, incoming.brush);
+    }
+
+    #[test]
+    fn span_style_plus_matches_merge() {
+        let base = SpanStyle {
+            font_size: TextUnit::Sp(12.0),
+            ..Default::default()
+        };
+        let incoming = SpanStyle {
+            letter_spacing: TextUnit::Em(0.2),
+            ..Default::default()
+        };
+        assert_eq!(base.plus(&incoming), base.merge(&incoming));
+    }
+
+    #[test]
     fn paragraph_style_merge_prefers_specified_values() {
         let base = ParagraphStyle {
             text_direction: TextDirection::Ltr,
@@ -457,6 +628,19 @@ mod tests {
         let merged = base.merge(&incoming);
         assert_eq!(merged.text_direction, TextDirection::Ltr);
         assert_eq!(merged.line_height, TextUnit::Em(1.4));
+    }
+
+    #[test]
+    fn paragraph_style_plus_matches_merge() {
+        let base = ParagraphStyle {
+            text_align: TextAlign::Start,
+            ..Default::default()
+        };
+        let incoming = ParagraphStyle {
+            text_direction: TextDirection::Rtl,
+            ..Default::default()
+        };
+        assert_eq!(base.plus(&incoming), base.merge(&incoming));
     }
 
     #[test]
@@ -499,6 +683,19 @@ mod tests {
     }
 
     #[test]
+    fn resolve_foreground_color_supports_solid_brush_with_alpha() {
+        let style = SpanStyle {
+            brush: Some(Brush::solid(Color(0.2, 0.4, 0.6, 1.0))),
+            alpha: Some(0.5),
+            ..Default::default()
+        };
+        assert_eq!(
+            style.resolve_foreground_color(Color(1.0, 1.0, 1.0, 1.0)),
+            Color(0.2, 0.4, 0.6, 0.5)
+        );
+    }
+
+    #[test]
     fn text_style_merge_combines_span_and_paragraph() {
         let base = TextStyle::new(
             SpanStyle {
@@ -529,6 +726,55 @@ mod tests {
     }
 
     #[test]
+    fn text_style_from_and_to_style_helpers_work() {
+        let span_style = SpanStyle {
+            font_size: TextUnit::Sp(12.0),
+            ..Default::default()
+        };
+        let from_span = TextStyle::from_span_style(span_style.clone());
+        assert_eq!(from_span.to_span_style(), span_style);
+
+        let paragraph_style = ParagraphStyle {
+            text_direction: TextDirection::Rtl,
+            ..Default::default()
+        };
+        let from_paragraph = TextStyle::from_paragraph_style(paragraph_style.clone());
+        assert_eq!(from_paragraph.to_paragraph_style(), paragraph_style);
+    }
+
+    #[test]
+    fn text_style_plus_matches_merge() {
+        let base = TextStyle::from_span_style(SpanStyle {
+            font_size: TextUnit::Sp(10.0),
+            ..Default::default()
+        });
+        let incoming = TextStyle::from_paragraph_style(ParagraphStyle {
+            text_direction: TextDirection::Ltr,
+            ..Default::default()
+        });
+        assert_eq!(base.plus(&incoming), base.merge(&incoming));
+    }
+
+    #[test]
+    fn text_style_platform_style_helpers_roundtrip() {
+        let style = TextStyle::default().with_platform_style(Some(PlatformTextStyle {
+            span_style: Some(PlatformSpanStyle),
+            paragraph_style: Some(PlatformParagraphStyle {
+                include_font_padding: Some(false),
+            }),
+        }));
+        assert_eq!(
+            style.platform_style(),
+            Some(PlatformTextStyle {
+                span_style: Some(PlatformSpanStyle),
+                paragraph_style: Some(PlatformParagraphStyle {
+                    include_font_padding: Some(false),
+                }),
+            })
+        );
+    }
+
+    #[test]
     fn measurement_hash_changes_when_measurement_attributes_change() {
         let style_a = TextStyle::default();
         let style_b = TextStyle::new(
@@ -542,6 +788,19 @@ mod tests {
             },
         );
 
+        assert_ne!(style_a.measurement_hash(), style_b.measurement_hash());
+    }
+
+    #[test]
+    fn measurement_hash_includes_platform_style() {
+        let style_a = TextStyle::default();
+        let style_b = TextStyle::new(
+            SpanStyle {
+                platform_style: Some(PlatformSpanStyle),
+                ..Default::default()
+            },
+            ParagraphStyle::default(),
+        );
         assert_ne!(style_a.measurement_hash(), style_b.measurement_hash());
     }
 }

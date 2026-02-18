@@ -331,6 +331,113 @@ fn hash_option_color<H: Hasher>(color: &Option<crate::modifier::Color>, state: &
     }
 }
 
+fn hash_brush<H: Hasher>(brush: &crate::modifier::Brush, state: &mut H) {
+    match brush {
+        crate::modifier::Brush::Solid(color) => {
+            0u8.hash(state);
+            hash_color(*color, state);
+        }
+        crate::modifier::Brush::LinearGradient {
+            colors,
+            stops,
+            start,
+            end,
+            tile_mode,
+        } => {
+            1u8.hash(state);
+            colors.len().hash(state);
+            for color in colors {
+                hash_color(*color, state);
+            }
+            match stops {
+                Some(stops) => {
+                    1u8.hash(state);
+                    stops.len().hash(state);
+                    for stop in stops {
+                        hash_f32_bits(*stop, state);
+                    }
+                }
+                None => 0u8.hash(state),
+            }
+            hash_f32_bits(start.x, state);
+            hash_f32_bits(start.y, state);
+            hash_f32_bits(end.x, state);
+            hash_f32_bits(end.y, state);
+            tile_mode.hash(state);
+        }
+        crate::modifier::Brush::RadialGradient {
+            colors,
+            stops,
+            center,
+            radius,
+            tile_mode,
+        } => {
+            2u8.hash(state);
+            colors.len().hash(state);
+            for color in colors {
+                hash_color(*color, state);
+            }
+            match stops {
+                Some(stops) => {
+                    1u8.hash(state);
+                    stops.len().hash(state);
+                    for stop in stops {
+                        hash_f32_bits(*stop, state);
+                    }
+                }
+                None => 0u8.hash(state),
+            }
+            hash_f32_bits(center.x, state);
+            hash_f32_bits(center.y, state);
+            hash_f32_bits(*radius, state);
+            tile_mode.hash(state);
+        }
+        crate::modifier::Brush::SweepGradient {
+            colors,
+            stops,
+            center,
+        } => {
+            3u8.hash(state);
+            colors.len().hash(state);
+            for color in colors {
+                hash_color(*color, state);
+            }
+            match stops {
+                Some(stops) => {
+                    1u8.hash(state);
+                    stops.len().hash(state);
+                    for stop in stops {
+                        hash_f32_bits(*stop, state);
+                    }
+                }
+                None => 0u8.hash(state),
+            }
+            hash_f32_bits(center.x, state);
+            hash_f32_bits(center.y, state);
+        }
+    }
+}
+
+fn hash_option_brush<H: Hasher>(brush: &Option<crate::modifier::Brush>, state: &mut H) {
+    match brush {
+        Some(brush) => {
+            1u8.hash(state);
+            hash_brush(brush, state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
+fn hash_option_alpha<H: Hasher>(alpha: &Option<f32>, state: &mut H) {
+    match alpha {
+        Some(alpha) => {
+            1u8.hash(state);
+            hash_f32_bits(*alpha, state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
 fn hash_option_baseline_shift<H: Hasher>(
     baseline_shift: &Option<crate::text::BaselineShift>,
     state: &mut H,
@@ -382,11 +489,31 @@ fn hash_option_text_indent<H: Hasher>(indent: &Option<crate::text::TextIndent>, 
     }
 }
 
+fn hash_option_text_draw_style<H: Hasher>(
+    draw_style: &Option<crate::text::TextDrawStyle>,
+    state: &mut H,
+) {
+    match draw_style {
+        Some(crate::text::TextDrawStyle::Fill) => {
+            1u8.hash(state);
+            0u8.hash(state);
+        }
+        Some(crate::text::TextDrawStyle::Stroke { width }) => {
+            1u8.hash(state);
+            1u8.hash(state);
+            hash_f32_bits(*width, state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
 fn hash_text_style<H: Hasher>(style: &TextStyle, state: &mut H) {
     let span = &style.span_style;
     let paragraph = &style.paragraph_style;
 
     hash_option_color(&span.color, state);
+    hash_option_brush(&span.brush, state);
+    hash_option_alpha(&span.alpha, state);
     hash_text_unit(span.font_size, state);
     span.font_weight.hash(state);
     span.font_style.hash(state);
@@ -400,11 +527,14 @@ fn hash_text_style<H: Hasher>(style: &TextStyle, state: &mut H) {
     hash_option_color(&span.background, state);
     span.text_decoration.hash(state);
     hash_option_shadow(&span.shadow, state);
+    span.platform_style.hash(state);
+    hash_option_text_draw_style(&span.draw_style, state);
 
     paragraph.text_align.hash(state);
     paragraph.text_direction.hash(state);
     hash_text_unit(paragraph.line_height, state);
     hash_option_text_indent(&paragraph.text_indent, state);
+    paragraph.platform_style.hash(state);
     paragraph.line_height_style.hash(state);
     paragraph.line_break.hash(state);
     paragraph.hyphens.hash(state);

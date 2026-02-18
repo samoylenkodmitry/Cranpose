@@ -338,6 +338,7 @@ pub(crate) fn TextShowcaseTab() {
                                         line_break: LineBreak::Paragraph,
                                         hyphens: Hyphens::Auto,
                                         text_motion: Some(TextMotion::Animated),
+                                        ..Default::default()
                                     },
                                 },
                                 TextOverflow::Clip,

@@ -20,6 +20,7 @@ pub use paragraph::{
 };
 pub use style::{
     BaselineShift, LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim,
-    LocaleList, ParagraphStyle, SpanStyle, TextGeometricTransform, TextMotion, TextStyle,
+    LocaleList, ParagraphStyle, PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle,
+    SpanStyle, TextDrawStyle, TextGeometricTransform, TextMotion, TextStyle,
 };
 pub use unit::TextUnit;
