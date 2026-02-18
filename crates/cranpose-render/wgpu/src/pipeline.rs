@@ -5,9 +5,11 @@ use std::rc::Rc;
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::Brush;
-use cranpose_ui::text::{resolve_text_direction, ResolvedTextDirection, TextAlign, TextStyle};
+use cranpose_ui::text::{
+    resolve_text_direction, ResolvedTextDirection, TextAlign, TextDecoration, TextStyle,
+};
 use cranpose_ui::{
-    prepare_text_layout, LayoutBox, LayoutNode, LayoutNodeKind, SubcomposeLayoutNode,
+    measure_text, prepare_text_layout, LayoutBox, LayoutNode, LayoutNodeKind, SubcomposeLayoutNode,
     TextLayoutOptions, TextOverflow,
 };
 use cranpose_ui_graphics::{
@@ -370,7 +372,6 @@ fn render_container(
             width: draw_width,
             height: prepared.metrics.height,
         };
-        let transformed_text_rect = apply_layer_to_rect(text_rect, rect, &content_layer);
         let text_bounds_rect = Rect {
             x: rect.x + padding.left,
             y: rect.y + padding.top,
@@ -389,7 +390,6 @@ fn render_container(
                 layout.node_id,
                 rect,
                 text_rect,
-                transformed_text_rect,
                 &content_layer,
                 prepared.text.as_str(),
                 text_style_ref,
@@ -530,7 +530,6 @@ fn push_text_style_draws(
     node_id: NodeId,
     rect: Rect,
     text_rect: Rect,
-    transformed_text_rect: Rect,
     content_layer: &GraphicsLayer,
     text: &str,
     text_style: &TextStyle,
@@ -538,10 +537,24 @@ fn push_text_style_draws(
     options: TextLayoutOptions,
     text_clip: Option<Rect>,
 ) {
+    let baseline_shift_px = text_style
+        .span_style
+        .baseline_shift
+        .filter(|shift| shift.is_specified())
+        .map(|shift| -(shift.0 * font_size))
+        .unwrap_or(0.0);
+    let shifted_text_rect = Rect {
+        x: text_rect.x,
+        y: text_rect.y + baseline_shift_px,
+        width: text_rect.width,
+        height: text_rect.height,
+    };
+    let transformed_shifted_text_rect = apply_layer_to_rect(shifted_text_rect, rect, content_layer);
+
     if let Some(background) = text_style.span_style.background {
         let brush = apply_layer_to_brush(Brush::solid(background), content_layer);
         scene.push_shape(
-            transformed_text_rect,
+            transformed_shifted_text_rect,
             brush,
             None,
             text_clip,
@@ -549,12 +562,14 @@ fn push_text_style_draws(
         );
     }
 
+    let text_color = text_style.resolve_text_color(Color(1.0, 1.0, 1.0, 1.0));
+
     if let Some(shadow) = text_style.span_style.shadow {
         let shadow_rect = Rect {
-            x: text_rect.x + shadow.offset.x,
-            y: text_rect.y + shadow.offset.y,
-            width: text_rect.width,
-            height: text_rect.height,
+            x: shifted_text_rect.x + shadow.offset.x,
+            y: shifted_text_rect.y + shadow.offset.y,
+            width: shifted_text_rect.width,
+            height: shifted_text_rect.height,
         };
         let transformed_shadow_rect = apply_layer_to_rect(shadow_rect, rect, content_layer);
         scene.push_text(
@@ -570,10 +585,20 @@ fn push_text_style_draws(
         );
     }
 
-    let text_color = text_style.resolve_text_color(Color(1.0, 1.0, 1.0, 1.0));
+    push_text_decorations(
+        scene,
+        rect,
+        shifted_text_rect,
+        content_layer,
+        text,
+        text_style,
+        text_color,
+        text_clip,
+    );
+
     scene.push_text(
         node_id,
-        transformed_text_rect,
+        transformed_shifted_text_rect,
         Rc::from(text),
         apply_layer_to_color(text_color, content_layer),
         text_style.clone(),
@@ -582,6 +607,76 @@ fn push_text_style_draws(
         options,
         text_clip,
     );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_text_decorations(
+    scene: &mut Scene,
+    rect: Rect,
+    text_rect: Rect,
+    content_layer: &GraphicsLayer,
+    text: &str,
+    text_style: &TextStyle,
+    text_color: Color,
+    text_clip: Option<Rect>,
+) {
+    let Some(decoration) = text_style.span_style.text_decoration else {
+        return;
+    };
+    if decoration == TextDecoration::NONE {
+        return;
+    }
+
+    let font_size = text_style.resolve_font_size(14.0);
+    let line_height = text_style.resolve_line_height(14.0, font_size).max(1.0);
+    let thickness = (font_size * 0.06).clamp(1.0, line_height * 0.25);
+    let brush = apply_layer_to_brush(Brush::solid(text_color), content_layer);
+
+    for (line_index, line) in text.split('\n').enumerate() {
+        let line_width = measure_text(line, text_style)
+            .width
+            .min(text_rect.width)
+            .max(0.0);
+        if line_width <= 0.0 {
+            continue;
+        }
+
+        let line_top = text_rect.y + line_index as f32 * line_height;
+
+        if decoration.contains(TextDecoration::UNDERLINE) {
+            let underline_rect = Rect {
+                x: text_rect.x,
+                y: line_top + line_height - thickness * 1.35,
+                width: line_width,
+                height: thickness,
+            };
+            let transformed = apply_layer_to_rect(underline_rect, rect, content_layer);
+            scene.push_shape(
+                transformed,
+                brush.clone(),
+                None,
+                text_clip,
+                BlendMode::SrcOver,
+            );
+        }
+
+        if decoration.contains(TextDecoration::LINE_THROUGH) {
+            let strike_rect = Rect {
+                x: text_rect.x,
+                y: line_top + line_height * 0.52 - thickness * 0.5,
+                width: line_width,
+                height: thickness,
+            };
+            let transformed = apply_layer_to_rect(strike_rect, rect, content_layer);
+            scene.push_shape(
+                transformed,
+                brush.clone(),
+                None,
+                text_clip,
+                BlendMode::SrcOver,
+            );
+        }
+    }
 }
 
 fn resolve_text_measure_width(
@@ -629,7 +724,10 @@ fn resolve_text_horizontal_offset(
             ResolvedTextDirection::Ltr => remaining,
             ResolvedTextDirection::Rtl => 0.0,
         },
-        TextAlign::Unspecified => 0.0,
+        TextAlign::Unspecified => match direction {
+            ResolvedTextDirection::Ltr => 0.0,
+            ResolvedTextDirection::Rtl => remaining,
+        },
     }
 }
 
@@ -848,7 +946,6 @@ fn render_node_from_applier(
             width: draw_width,
             height: prepared.metrics.height,
         };
-        let transformed_text_rect = apply_layer_to_rect(text_rect, rect, &content_layer);
         let text_bounds_rect = Rect {
             x: rect.x + padding.left,
             y: rect.y + padding.top,
@@ -867,7 +964,6 @@ fn render_node_from_applier(
                 node_id,
                 rect,
                 text_rect,
-                transformed_text_rect,
                 &content_layer,
                 prepared.text.as_str(),
                 text_style_ref,
@@ -1232,6 +1328,20 @@ mod tests {
     }
 
     #[test]
+    fn resolve_text_horizontal_offset_uses_start_for_unspecified_align() {
+        let style = cranpose_ui::TextStyle {
+            paragraph_style: cranpose_ui::ParagraphStyle {
+                text_align: cranpose_ui::text::TextAlign::Unspecified,
+                text_direction: cranpose_ui::text::TextDirection::Rtl,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let offset = resolve_text_horizontal_offset(&style, "hello", 120.0, 80.0);
+        assert!((offset - 40.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
     fn measurement_constraint_width_prevents_spurious_wrap() {
         let padding = EdgeInsets {
             left: 4.0,
@@ -1295,7 +1405,6 @@ mod tests {
             7 as NodeId,
             rect,
             rect,
-            rect,
             &GraphicsLayer::default(),
             "Decorated shadow text",
             &style,
@@ -1319,6 +1428,82 @@ mod tests {
         assert_eq!(scene.texts[1].color, Color(0.9, 0.95, 1.0, 1.0));
         assert!(scene.texts[0].rect.x > scene.texts[1].rect.x);
         assert!(scene.texts[0].rect.y > scene.texts[1].rect.y);
+    }
+
+    #[test]
+    fn push_text_style_draws_emits_decoration_shapes() {
+        let mut scene = Scene::new();
+        let style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                color: Some(Color(0.9, 0.95, 1.0, 1.0)),
+                text_decoration: Some(
+                    cranpose_ui::text::TextDecoration::UNDERLINE
+                        .combine(cranpose_ui::text::TextDecoration::LINE_THROUGH),
+                ),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let rect = Rect {
+            x: 8.0,
+            y: 10.0,
+            width: 180.0,
+            height: 28.0,
+        };
+
+        push_text_style_draws(
+            &mut scene,
+            7 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            "Decorated",
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        assert_eq!(scene.shapes.len(), 2, "underline + line-through expected");
+        assert_eq!(scene.texts.len(), 1, "main text expected");
+    }
+
+    #[test]
+    fn push_text_style_draws_applies_baseline_shift() {
+        let mut scene = Scene::new();
+        let style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                color: Some(Color(0.9, 0.95, 1.0, 1.0)),
+                baseline_shift: Some(cranpose_ui::text::BaselineShift::SUPERSCRIPT),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let rect = Rect {
+            x: 8.0,
+            y: 20.0,
+            width: 180.0,
+            height: 28.0,
+        };
+
+        push_text_style_draws(
+            &mut scene,
+            7 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            "Shifted",
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        assert_eq!(scene.texts.len(), 1);
+        assert!(
+            scene.texts[0].rect.y < rect.y,
+            "superscript baseline shift should move text up"
+        );
     }
 
     #[test]

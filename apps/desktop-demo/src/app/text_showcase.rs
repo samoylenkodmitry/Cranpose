@@ -3,12 +3,13 @@
 use cranpose_ui::text::{
     BaselineShift, FontFamily, FontStyle, FontSynthesis, FontWeight, Hyphens, LineBreak,
     LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim, LocaleList,
-    ParagraphStyle, Shadow as TextShadow, SpanStyle, TextAlign, TextDecoration, TextDirection,
+    ParagraphStyle, PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle,
+    Shadow as TextShadow, SpanStyle, TextAlign, TextDecoration, TextDirection, TextDrawStyle,
     TextGeometricTransform, TextIndent, TextMotion, TextOverflow, TextUnit,
 };
 use cranpose_ui::{
-    composable, BasicText, Box, BoxSpec, Color, Column, ColumnSpec, LinearArrangement, Modifier,
-    Point, Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
+    composable, BasicText, Box, BoxSpec, Brush, Color, Column, ColumnSpec, LinearArrangement,
+    Modifier, Point, Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
 };
 
 const OVERFLOW_SAMPLE: &str =
@@ -240,6 +241,30 @@ pub(crate) fn TextShowcaseTab() {
                                     );
                                 },
                             );
+
+                            style_chip_label("brush + alpha + draw_style + platform_style");
+                            Text(
+                                "Gradient/alpha/stroke/platform",
+                                Modifier::empty(),
+                                TextStyle {
+                                    span_style: SpanStyle {
+                                        brush: Some(Brush::linear_gradient(vec![
+                                            Color(0.5, 0.95, 1.0, 1.0),
+                                            Color(1.0, 0.72, 0.5, 1.0),
+                                        ])),
+                                        alpha: Some(0.88),
+                                        draw_style: Some(TextDrawStyle::Stroke { width: 1.5 }),
+                                        platform_style: Some(PlatformSpanStyle),
+                                        ..Default::default()
+                                    },
+                                    paragraph_style: ParagraphStyle {
+                                        platform_style: Some(PlatformParagraphStyle {
+                                            include_font_padding: Some(false),
+                                        }),
+                                        ..Default::default()
+                                    },
+                                },
+                            );
                         },
                     );
                 },
@@ -411,6 +436,58 @@ pub(crate) fn TextShowcaseTab() {
                                 ..Default::default()
                             },
                         },
+                    );
+
+                    let composed_span = TextStyle::from_span_style(SpanStyle {
+                        color: Some(Color(0.92, 0.98, 0.82, 1.0)),
+                        font_size: TextUnit::Sp(15.0),
+                        ..Default::default()
+                    });
+                    let composed_paragraph = TextStyle::from_paragraph_style(ParagraphStyle {
+                        text_align: TextAlign::Start,
+                        text_direction: TextDirection::ContentOrLtr,
+                        line_height: TextUnit::Em(1.25),
+                        line_break: LineBreak::Heading,
+                        hyphens: Hyphens::Auto,
+                        text_motion: Some(TextMotion::Animated),
+                        ..Default::default()
+                    });
+                    let merged_style =
+                        composed_span
+                            .merge(&composed_paragraph)
+                            .plus(&TextStyle::new(
+                                SpanStyle {
+                                    font_weight: Some(FontWeight::MEDIUM),
+                                    ..Default::default()
+                                },
+                                ParagraphStyle::default(),
+                            ));
+                    let platform_style =
+                        merged_style
+                            .clone()
+                            .with_platform_style(Some(PlatformTextStyle {
+                                span_style: Some(PlatformSpanStyle),
+                                paragraph_style: Some(PlatformParagraphStyle {
+                                    include_font_padding: Some(false),
+                                }),
+                            }));
+                    Text(
+                        "TextStyle::from_span_style + from_paragraph_style + merge + plus",
+                        Modifier::empty(),
+                        merged_style,
+                    );
+                    let span_has_color = platform_style.to_span_style().color.is_some();
+                    let include_font_padding = platform_style
+                        .to_paragraph_style()
+                        .platform_style
+                        .and_then(|style| style.include_font_padding)
+                        .unwrap_or(true);
+                    Text(
+                        format!(
+                            "TextStyle::with_platform_style + to_span_style + to_paragraph_style (span color: {span_has_color}, include_font_padding: {include_font_padding})"
+                        ),
+                        Modifier::empty(),
+                        platform_style,
                     );
                 },
             );

@@ -237,7 +237,7 @@ impl SpanStyle {
     pub fn resolve_foreground_color(&self, default_color: Color) -> Color {
         let mut color = self
             .color
-            .or_else(|| solid_brush_color(self.brush.as_ref()))
+            .or_else(|| brush_fallback_color(self.brush.as_ref()))
             .unwrap_or(default_color);
         if let Some(alpha) = self.alpha {
             color.3 *= alpha.clamp(0.0, 1.0);
@@ -431,6 +431,18 @@ fn solid_brush_color(brush: Option<&Brush>) -> Option<Color> {
     match brush {
         Some(Brush::Solid(color)) => Some(*color),
         _ => None,
+    }
+}
+
+fn brush_fallback_color(brush: Option<&Brush>) -> Option<Color> {
+    if let Some(solid) = solid_brush_color(brush) {
+        return Some(solid);
+    }
+    match brush {
+        Some(Brush::LinearGradient { colors, .. })
+        | Some(Brush::RadialGradient { colors, .. })
+        | Some(Brush::SweepGradient { colors, .. }) => colors.first().copied(),
+        Some(Brush::Solid(_)) | None => None,
     }
 }
 
@@ -692,6 +704,23 @@ mod tests {
         assert_eq!(
             style.resolve_foreground_color(Color(1.0, 1.0, 1.0, 1.0)),
             Color(0.2, 0.4, 0.6, 0.5)
+        );
+    }
+
+    #[test]
+    fn resolve_foreground_color_uses_gradient_brush_fallback_color() {
+        let style = SpanStyle {
+            brush: Some(Brush::linear_gradient(vec![
+                Color(0.1, 0.2, 0.3, 1.0),
+                Color(0.9, 0.8, 0.7, 1.0),
+            ])),
+            alpha: Some(0.25),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            style.resolve_foreground_color(Color(1.0, 1.0, 1.0, 1.0)),
+            Color(0.1, 0.2, 0.3, 0.25)
         );
     }
 

@@ -73,7 +73,37 @@ impl TextDirection {
             TextDirection::ContentOrRtl => {
                 resolve_content_direction(text, ResolvedTextDirection::Rtl)
             }
-            TextDirection::Unspecified => ResolvedTextDirection::Ltr,
+            TextDirection::Unspecified => {
+                resolve_content_direction(text, ResolvedTextDirection::Ltr)
+            }
+        }
+    }
+}
+
+impl LineBreak {
+    pub fn is_specified(self) -> bool {
+        !matches!(self, Self::Unspecified)
+    }
+
+    pub fn take_or_else(self, fallback: impl FnOnce() -> LineBreak) -> LineBreak {
+        if self.is_specified() {
+            self
+        } else {
+            fallback()
+        }
+    }
+}
+
+impl Hyphens {
+    pub fn is_specified(self) -> bool {
+        !matches!(self, Self::Unspecified)
+    }
+
+    pub fn take_or_else(self, fallback: impl FnOnce() -> Hyphens) -> Hyphens {
+        if self.is_specified() {
+            self
+        } else {
+            fallback()
         }
     }
 }
@@ -142,5 +172,27 @@ mod tests {
             resolve_text_direction("12345", None),
             ResolvedTextDirection::Ltr
         );
+    }
+
+    #[test]
+    fn resolve_text_direction_uses_content_for_unspecified() {
+        assert_eq!(
+            resolve_text_direction("שלום", Some(TextDirection::Unspecified)),
+            ResolvedTextDirection::Rtl
+        );
+    }
+
+    #[test]
+    fn line_break_take_or_else_uses_fallback_for_unspecified() {
+        let value = LineBreak::Unspecified.take_or_else(|| LineBreak::Simple);
+        assert_eq!(value, LineBreak::Simple);
+        assert!(LineBreak::Simple.is_specified());
+    }
+
+    #[test]
+    fn hyphens_take_or_else_uses_fallback_for_unspecified() {
+        let value = Hyphens::Unspecified.take_or_else(|| Hyphens::None);
+        assert_eq!(value, Hyphens::None);
+        assert!(Hyphens::Auto.is_specified());
     }
 }

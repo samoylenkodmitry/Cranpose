@@ -1,6 +1,6 @@
 # Text Parity Tracker
 
-Last Updated: 2026-02-17
+Last Updated: 2026-02-18
 
 This document tracks API and behavior parity between Cranpose text rendering and Jetpack Compose text.
 
@@ -55,7 +55,9 @@ Cranpose implementation anchors:
 | Glyph shaping and bidi parity | GAP | Current backend behavior is good but not yet a strict equivalent of Compose/Skia text shaping behavior in all scripts. |
 | `lineHeightStyle` exact trim/alignment mode semantics | PARTIAL | Modeled and carried through style; full rendering semantics are not fully enforced yet. |
 | `lineBreak`, `hyphens`, `textMotion` rendering impact | PARTIAL | Stored and hashed; backend behavior is not yet feature-complete with Compose. |
-| `baselineShift`, `textGeometricTransform`, `localeList`, `fontFeatureSettings` rendering impact | PARTIAL | API available and hashed; backend application is incomplete/limited depending on renderer path. |
+| `baselineShift`, `textGeometricTransform`, `localeList`, `fontFeatureSettings` rendering impact | PARTIAL | `baselineShift` now affects rendered Y position in both pixels and wgpu pipelines. Other knobs remain partially applied/stored. |
+| `TextDecoration` rendering (`Underline`, `LineThrough`) | PARTIAL | Decoration lines now render in both pipelines. Geometry is Compose-like but still approximate versus platform paragraph engines. |
+| Non-solid brush foreground behavior | PARTIAL | Solid brush is exact; non-solid brushes now resolve a deterministic fallback foreground color instead of defaulting to white. True gradient-filled glyph rendering is still pending. |
 
 ## Demo Coverage
 
@@ -66,7 +68,9 @@ Desktop demo tab added:
 It exercises:
 
 - Span styling: color, size, weight, style, family, synthesis, spacing, decoration, shadow, baseline shift, geometric transform, locale list, feature settings.
+- Span foreground/style extras: brush + alpha + draw_style + platform span style.
 - Paragraph styling: align, direction, line height, indent, line-height style, line break, hyphenation, text motion.
+- TextStyle composition helpers: `from_span_style`, `from_paragraph_style`, `merge`, `plus`, `with_platform_style`, `to_span_style`, `to_paragraph_style`.
 - Overflow modes via `BasicText`.
 
 ## Remaining Work to Reach Strict 1:1
