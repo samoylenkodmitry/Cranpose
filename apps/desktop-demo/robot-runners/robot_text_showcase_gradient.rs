@@ -159,8 +159,25 @@ fn main() {
                 );
             }
 
+            let Some((_p_x, _p_y, _p_w, p_h)) = find_in_semantics(&robot, |elem| {
+                find_text(elem, "This paragraph demonstrates textIndent")
+            }) else {
+                fail(
+                    &robot,
+                    "paragraph sample text not found for multiline-wrap verification",
+                );
+            };
+            if p_h <= 40.0 {
+                fail(
+                    &robot,
+                    &format!(
+                        "expected multiline paragraph sample height, got p_h={p_h:.1} (likely wrapped to a single clipped line)"
+                    ),
+                );
+            }
+
             println!(
-                "PASS: text showcase gradient/stroke sample has colored ink and variation (colored_pixels={colored_pixels}, red_span={red_span:.3}, blue_span={blue_span:.3})"
+                "PASS: text showcase gradient/stroke sample has colored ink and variation (colored_pixels={colored_pixels}, red_span={red_span:.3}, blue_span={blue_span:.3}); paragraph wraps (height={p_h:.1})"
             );
             robot.exit().ok();
         })

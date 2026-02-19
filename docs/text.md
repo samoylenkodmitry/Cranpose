@@ -1,6 +1,6 @@
 # Text Parity Tracker
 
-Last Updated: 2026-02-18
+Last Updated: 2026-02-19
 
 This document tracks API and behavior parity between Cranpose text rendering and Jetpack Compose text.
 
@@ -38,7 +38,7 @@ Cranpose implementation anchors:
 | `FontWeight` range and named constants | ALIGNED | Range validation and constants (`W100..W900`, aliases) implemented. |
 | `TextAlign` values (`Left`, `Right`, `Center`, `Justify`, `Start`, `End`, `Unspecified`) | ALIGNED | Implemented in `paragraph.rs`. |
 | `TextDirection` values (`Ltr`, `Rtl`, `Content`, `ContentOrLtr`, `ContentOrRtl`, `Unspecified`) | ALIGNED | Implemented with resolver helper and content heuristic. |
-| `SpanStyle` structure | PARTIAL | Core and stable fields are modeled, including foreground variants (`color` / `brush` + `alpha`), platform style, and draw style. Both `pixels` and `wgpu` now apply non-solid brush and stroke draw-style text rendering (`wgpu` currently uses a rasterized glyph path backed by renderer-configured fonts and style-aware face selection). |
+| `SpanStyle` structure | PARTIAL | Core and stable fields are modeled, including foreground variants (`color` / `brush` + `alpha`), platform style, and draw style. Both `pixels` and `wgpu` apply non-solid brush and stroke draw-style text rendering through a shared software glyph raster path (`wgpu` uses renderer-configured fonts and style-aware face selection). |
 | `ParagraphStyle` structure | ALIGNED | Core and stable fields are modeled, including platform paragraph style. |
 | `TextStyle` combining span + paragraph | PARTIAL | `TextStyle { span_style, paragraph_style }` plus merge/plus/from/to/platform-style helper APIs are implemented. Full Compose constructor/copy/saver overload surface is not fully mirrored. |
 | `TextStyle` API shape parity (no flattened fields) | ALIGNED | Cranpose now only exposes `TextStyle { span_style, paragraph_style }` for Compose-like API structure. |
@@ -54,10 +54,10 @@ Cranpose implementation anchors:
 | Font fallback/resolver behavior | GAP | Compose resolver and fallback chain behavior not fully replicated. |
 | Glyph shaping and bidi parity | GAP | Current backend behavior is good but not yet a strict equivalent of Compose/Skia text shaping behavior in all scripts. |
 | `lineHeightStyle` exact trim/alignment mode semantics | PARTIAL | Modeled and carried through style; full rendering semantics are not fully enforced yet. |
-| `lineBreak`, `hyphens`, `textMotion` rendering impact | PARTIAL | `lineBreak`/`hyphens` are now resolved and applied in fallback layout, and `textMotion` now affects rendering/placement. Compose-exact mode behavior is still approximate. |
+| `lineBreak`, `hyphens`, `textMotion` rendering impact | PARTIAL | `lineBreak`/`hyphens` are resolved and applied in fallback layout, and `textMotion` affects rendering/placement. Renderer width resolution now keeps constrained wrap behavior when `max_lines` is finite (instead of over-expanding to parent measurement width). Compose-exact mode behavior is still approximate. |
 | `baselineShift`, `textGeometricTransform`, `localeList`, `fontFeatureSettings` rendering impact | PARTIAL | `baselineShift` now affects rendered Y position in both pixels and wgpu pipelines. Other knobs remain partially applied/stored. |
 | `TextDecoration` rendering (`Underline`, `LineThrough`) | PARTIAL | Decoration lines now render in both pipelines. Geometry is Compose-like but still approximate versus platform paragraph engines. |
-| Non-solid brush foreground behavior | PARTIAL | `pixels` uses per-glyph gradient sampling for non-solid brushes. `wgpu` now renders non-solid brush text via rasterized glyph images (instead of first-stop/single-color fallback). |
+| Non-solid brush foreground behavior | PARTIAL | Both backends render non-solid brush text through shared software glyph rasterization with per-glyph gradient sampling. `wgpu` no longer falls back to first-stop/single-color for these cases. |
 
 ## Phase-1 Parity Contract Matrix
 
@@ -113,6 +113,7 @@ Expected behavior is derived from Compose sources under `/media/huge/composerepo
 - `Hyphens.Auto` and `Hyphens.None` must diverge on long tokens in constrained width.
 - `shadow.blur_radius = 0` must still render shadow (not equivalent to no shadow).
 - Brush rendering must not regress to fallback-color output for non-solid brushes.
+- Constrained paragraph layout with finite `max_lines` must preserve wrap points and must not expand measurement width to parent max width.
 
 ## Demo Coverage
 

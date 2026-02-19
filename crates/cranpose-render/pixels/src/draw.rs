@@ -8,8 +8,9 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
+use cranpose_render_common::software_text_raster::rasterize_text_to_image_with_font;
 use cranpose_ui::text::TextMotion;
-use cranpose_ui::{Brush, TextDrawStyle, TextMeasurer, TextMetrics};
+use cranpose_ui::{Brush, TextMeasurer, TextMetrics};
 use cranpose_ui_graphics::{BlendMode, Color, ColorFilter, Rect, TileMode};
 
 use crate::scene::{ImageDraw, Scene, TextDraw};
@@ -167,10 +168,6 @@ fn clip_rect_to_bounds(
         max_x,
         max_y,
     })
-}
-
-fn clip_bounds_from_clip(clip: Option<Rect>, width: u32, height: u32) -> Option<ClipBounds> {
-    clip.and_then(|rect| clip_rect_to_bounds(rect, None, width, height))
 }
 
 // Helper to resolve font size from style
@@ -569,39 +566,6 @@ fn draw_text(frame: &mut [u8], width: u32, height: u32, draw: &TextDraw) {
         return;
     }
 
-    let fallback_brush = Brush::solid(draw.color);
-    let (brush, brush_alpha_multiplier) = match draw.text_style.span_style.brush.as_ref() {
-        Some(brush) => (
-            brush,
-            draw.text_style
-                .span_style
-                .alpha
-                .unwrap_or(1.0)
-                .clamp(0.0, 1.0),
-        ),
-        None => (&fallback_brush, 1.0),
-    };
-    let stroke_radius = match draw
-        .text_style
-        .span_style
-        .draw_style
-        .unwrap_or(TextDrawStyle::Fill)
-    {
-        TextDrawStyle::Fill => 0,
-        TextDrawStyle::Stroke { width } => {
-            if width.is_finite() && width > 0.0 {
-                ((width * text_scale) * 0.5).ceil() as i32
-            } else {
-                0
-            }
-        }
-    };
-    let stroke_offsets = (stroke_radius > 0).then(|| build_stroke_offsets(stroke_radius));
-    let shadow = draw
-        .text_style
-        .span_style
-        .shadow
-        .filter(|shadow| shadow.color.3 > 0.0);
     let static_text_motion = draw
         .text_style
         .paragraph_style
@@ -609,357 +573,77 @@ fn draw_text(frame: &mut [u8], width: u32, height: u32, draw: &TextDraw) {
         .unwrap_or(TextMotion::Static)
         == TextMotion::Static;
 
-    let clip_bounds = clip_bounds_from_clip(draw.clip, width, height);
-    if draw.clip.is_some() && clip_bounds.is_none() {
-        return;
-    }
-    let clip_limits =
-        clip_bounds.map(|bounds| (bounds.min_x, bounds.min_y, bounds.max_x, bounds.max_y));
-    let scale = Scale::uniform(draw.font_size * text_scale);
-    let font = &*FONT;
-    let v_metrics = font.v_metrics(scale);
-    let line_height = resolve_line_height(
+    let raster_rect = if static_text_motion {
+        Rect {
+            x: draw.rect.x.round(),
+            y: draw.rect.y.round(),
+            width: draw.rect.width,
+            height: draw.rect.height,
+        }
+    } else {
+        draw.rect
+    };
+
+    let Some(image) = rasterize_text_to_image_with_font(
+        draw.text.as_ref(),
+        raster_rect,
         &draw.text_style,
-        (v_metrics.ascent - v_metrics.descent).ceil(),
-    )
-    .max(1.0);
+        draw.color,
+        draw.font_size,
+        text_scale,
+        &FONT,
+    ) else {
+        return;
+    };
 
-    for (line_idx, line) in draw.text.split('\n').enumerate() {
-        let baseline_y = draw.rect.y + v_metrics.ascent + line_idx as f32 * line_height;
-        let baseline_y = if static_text_motion {
-            baseline_y.round()
-        } else {
-            baseline_y
-        };
-        let origin_x = if static_text_motion {
-            draw.rect.x.round()
-        } else {
-            draw.rect.x
-        };
-        let offset = point(origin_x, baseline_y);
-
-        for glyph in font.layout(line, scale, offset) {
-            if let Some(bb) = glyph.pixel_bounding_box() {
-                if let Some((min_x, min_y, max_x, max_y)) = clip_limits {
-                    if bb.max.x <= min_x
-                        || bb.min.x >= max_x
-                        || bb.max.y <= min_y
-                        || bb.min.y >= max_y
-                    {
-                        continue;
-                    }
-                }
-
-                if let Some(shadow) = shadow {
-                    draw_shadow_fill_glyph(
-                        frame,
-                        width,
-                        height,
-                        &glyph,
-                        bb,
-                        shadow,
-                        text_scale,
-                        clip_limits,
-                    );
-                }
-
-                if let Some(stroke_offsets) = stroke_offsets.as_deref() {
-                    draw_stroke_glyph(
-                        frame,
-                        width,
-                        height,
-                        &glyph,
-                        bb,
-                        stroke_offsets,
-                        brush,
-                        brush_alpha_multiplier,
-                        draw.rect,
-                        clip_limits,
-                    );
-                    continue;
-                }
-
-                glyph.draw(|gx, gy, value| {
-                    let px = bb.min.x + gx as i32;
-                    let py = bb.min.y + gy as i32;
-                    if let Some((min_x, min_y, max_x, max_y)) = clip_limits {
-                        if px < min_x || px >= max_x || py < min_y || py >= max_y {
-                            return;
-                        }
-                    }
-                    if px < 0 || py < 0 || px as u32 >= width || py as u32 >= height {
-                        return;
-                    }
-                    let sample = sample_brush(brush, draw.rect, px as f32 + 0.5, py as f32 + 0.5);
-                    let alpha = value * sample[3] * brush_alpha_multiplier;
-                    if alpha <= 0.0 {
-                        return;
-                    }
-                    let idx = ((py as u32 * width + px as u32) * 4) as usize;
-                    blend_pixel(
-                        &mut frame[idx..idx + 4],
-                        [sample[0], sample[1], sample[2], alpha],
-                        BlendMode::SrcOver,
-                    );
-                });
-            }
-        }
-    }
+    blit_rasterized_text_image(frame, width, height, raster_rect, draw.clip, &image);
 }
 
-#[allow(clippy::too_many_arguments)]
-fn draw_shadow_fill_glyph(
+fn blit_rasterized_text_image(
     frame: &mut [u8],
     width: u32,
     height: u32,
-    glyph: &rusttype::PositionedGlyph<'_>,
-    bb: rusttype::Rect<i32>,
-    shadow: cranpose_ui::text::Shadow,
-    text_scale: f32,
-    clip_limits: Option<(i32, i32, i32, i32)>,
+    rect: Rect,
+    clip: Option<Rect>,
+    image: &cranpose_ui_graphics::ImageBitmap,
 ) {
-    let mask_width = (bb.max.x - bb.min.x).max(0) as usize;
-    let mask_height = (bb.max.y - bb.min.y).max(0) as usize;
-    if mask_width == 0 || mask_height == 0 {
+    if rect.width <= 0.0 || rect.height <= 0.0 {
         return;
     }
-
-    let mut mask = vec![0.0f32; mask_width * mask_height];
-    glyph.draw(|gx, gy, value| {
-        let idx = gy as usize * mask_width + gx as usize;
-        mask[idx] = value;
-    });
-
-    let shadow_dx = shadow.offset.x * text_scale;
-    let shadow_dy = shadow.offset.y * text_scale;
-    let blur_radius = (shadow.blur_radius * text_scale).max(0.0);
-    let blur_margin = if blur_radius > 0.0 {
-        (blur_radius * 3.0).ceil() as i32
-    } else {
-        0
-    };
-    let padded_width = mask_width + (blur_margin as usize) * 2;
-    let padded_height = mask_height + (blur_margin as usize) * 2;
-    let mut padded_mask = vec![0.0f32; padded_width * padded_height];
-
-    for y in 0..mask_height {
-        let src_offset = y * mask_width;
-        let dst_offset = (y + blur_margin as usize) * padded_width + blur_margin as usize;
-        padded_mask[dst_offset..dst_offset + mask_width]
-            .copy_from_slice(&mask[src_offset..src_offset + mask_width]);
-    }
-
-    let mask = if blur_radius > 0.0 {
-        gaussian_blur_alpha(&padded_mask, padded_width, padded_height, blur_radius)
-    } else {
-        padded_mask
+    let clip_bounds = match clip_rect_to_bounds(rect, clip, width, height) {
+        Some(bounds) => bounds,
+        None => return,
     };
 
-    let shadow_rgba = color_to_rgba(shadow.color);
-    let shadow_origin_x = bb.min.x - blur_margin;
-    let shadow_origin_y = bb.min.y - blur_margin;
-
-    for y in 0..padded_height {
-        for x in 0..padded_width {
-            let alpha = mask[y * padded_width + x] * shadow_rgba[3];
-            if alpha <= 0.0 {
-                continue;
-            }
-
-            let px = (shadow_origin_x as f32 + x as f32 + shadow_dx).round() as i32;
-            let py = (shadow_origin_y as f32 + y as f32 + shadow_dy).round() as i32;
-            if px < 0 || py < 0 || px >= width as i32 || py >= height as i32 {
-                continue;
-            }
-            if let Some((min_x, min_y, max_x, max_y)) = clip_limits {
-                if px < min_x || px >= max_x || py < min_y || py >= max_y {
-                    continue;
-                }
-            }
-
-            let idx = ((py as u32 * width + px as u32) * 4) as usize;
-            blend_pixel(
-                &mut frame[idx..idx + 4],
-                [shadow_rgba[0], shadow_rgba[1], shadow_rgba[2], alpha],
-                BlendMode::SrcOver,
-            );
-        }
-    }
-}
-
-fn gaussian_blur_alpha(src: &[f32], width: usize, height: usize, radius: f32) -> Vec<f32> {
-    let kernel = gaussian_kernel_1d(radius);
-    if kernel.len() == 1 {
-        return src.to_vec();
-    }
-    let half = (kernel.len() / 2) as i32;
-
-    let mut horizontal = vec![0.0f32; src.len()];
-    for y in 0..height {
-        for x in 0..width {
-            let mut sum = 0.0f32;
-            for (index, weight) in kernel.iter().enumerate() {
-                let offset = index as i32 - half;
-                let sample_x = (x as i32 + offset).clamp(0, width as i32 - 1) as usize;
-                sum += src[y * width + sample_x] * *weight;
-            }
-            horizontal[y * width + x] = sum;
-        }
-    }
-
-    let mut output = vec![0.0f32; src.len()];
-    for y in 0..height {
-        for x in 0..width {
-            let mut sum = 0.0f32;
-            for (index, weight) in kernel.iter().enumerate() {
-                let offset = index as i32 - half;
-                let sample_y = (y as i32 + offset).clamp(0, height as i32 - 1) as usize;
-                sum += horizontal[sample_y * width + x] * *weight;
-            }
-            output[y * width + x] = sum;
-        }
-    }
-
-    output
-}
-
-fn gaussian_kernel_1d(radius: f32) -> Vec<f32> {
-    let half = radius.ceil() as i32;
-    if half <= 0 {
-        return vec![1.0];
-    }
-
-    let sigma = (radius * 0.5).max(0.5);
-    let mut kernel = Vec::with_capacity((half * 2 + 1) as usize);
-    let mut sum = 0.0f32;
-    for offset in -half..=half {
-        let distance = offset as f32;
-        let weight = (-0.5 * (distance / sigma).powi(2)).exp();
-        kernel.push(weight);
-        sum += weight;
-    }
-
-    if sum > f32::EPSILON {
-        for weight in &mut kernel {
-            *weight /= sum;
-        }
-    }
-
-    kernel
-}
-
-fn build_stroke_offsets(radius: i32) -> Vec<(i32, i32)> {
-    let mut offsets = Vec::new();
-    let squared_radius = radius * radius;
-    for dy in -radius..=radius {
-        for dx in -radius..=radius {
-            if dx * dx + dy * dy <= squared_radius {
-                offsets.push((dx, dy));
-            }
-        }
-    }
-    if offsets.is_empty() {
-        offsets.push((0, 0));
-    }
-    offsets
-}
-
-#[allow(clippy::too_many_arguments)]
-fn draw_stroke_glyph(
-    frame: &mut [u8],
-    width: u32,
-    height: u32,
-    glyph: &rusttype::PositionedGlyph<'_>,
-    bb: rusttype::Rect<i32>,
-    stroke_offsets: &[(i32, i32)],
-    brush: &Brush,
-    brush_alpha_multiplier: f32,
-    brush_rect: Rect,
-    clip_limits: Option<(i32, i32, i32, i32)>,
-) {
-    let mask_width = (bb.max.x - bb.min.x).max(0) as usize;
-    let mask_height = (bb.max.y - bb.min.y).max(0) as usize;
-    if mask_width == 0 || mask_height == 0 {
+    let img_width = image.width();
+    let img_height = image.height();
+    if img_width == 0 || img_height == 0 {
         return;
     }
+    let src_pixels = image.pixels();
 
-    let mut mask = vec![0.0f32; mask_width * mask_height];
-    glyph.draw(|gx, gy, value| {
-        let idx = gy as usize * mask_width + gx as usize;
-        mask[idx] = value;
-    });
+    for py in clip_bounds.min_y..clip_bounds.max_y {
+        for px in clip_bounds.min_x..clip_bounds.max_x {
+            let sample_x = px as f32 + 0.5;
+            let sample_y = py as f32 + 0.5;
+            let u = ((sample_x - rect.x) / rect.width).clamp(0.0, 1.0);
+            let v = ((sample_y - rect.y) / rect.height).clamp(0.0, 1.0);
 
-    let radius = stroke_offsets
-        .iter()
-        .map(|(dx, dy)| dx.abs().max(dy.abs()))
-        .max()
-        .unwrap_or(0);
-    let min_x = bb.min.x - radius;
-    let min_y = bb.min.y - radius;
-    let max_x = bb.max.x + radius;
-    let max_y = bb.max.y + radius;
-    let mask_width_i32 = mask_width as i32;
-    let mask_height_i32 = mask_height as i32;
-
-    for py in min_y..max_y {
-        if py < 0 || py >= height as i32 {
-            continue;
-        }
-        if let Some((_, min_y, _, max_y)) = clip_limits {
-            if py < min_y || py >= max_y {
+            let src_x = (u * (img_width - 1) as f32).round() as u32;
+            let src_y = (v * (img_height - 1) as f32).round() as u32;
+            let src_idx = ((src_y * img_width + src_x) * 4) as usize;
+            let src = [
+                src_pixels[src_idx] as f32 / 255.0,
+                src_pixels[src_idx + 1] as f32 / 255.0,
+                src_pixels[src_idx + 2] as f32 / 255.0,
+                src_pixels[src_idx + 3] as f32 / 255.0,
+            ];
+            if src[3] <= 0.0 {
                 continue;
             }
-        }
 
-        for px in min_x..max_x {
-            if px < 0 || px >= width as i32 {
-                continue;
-            }
-            if let Some((min_x, _, max_x, _)) = clip_limits {
-                if px < min_x || px >= max_x {
-                    continue;
-                }
-            }
-
-            let ox = px - bb.min.x;
-            let oy = py - bb.min.y;
-            let base_alpha = if ox >= 0 && oy >= 0 && ox < mask_width_i32 && oy < mask_height_i32 {
-                mask[oy as usize * mask_width + ox as usize]
-            } else {
-                0.0
-            };
-
-            let mut dilated_alpha = 0.0f32;
-            for (dx, dy) in stroke_offsets {
-                let sx = ox + dx;
-                let sy = oy + dy;
-                if sx < 0 || sy < 0 || sx >= mask_width_i32 || sy >= mask_height_i32 {
-                    continue;
-                }
-                let sample = mask[sy as usize * mask_width + sx as usize];
-                if sample > dilated_alpha {
-                    dilated_alpha = sample;
-                    if dilated_alpha >= 0.999 {
-                        break;
-                    }
-                }
-            }
-
-            let outline_alpha = (dilated_alpha - base_alpha).max(0.0);
-            if outline_alpha <= 0.0 {
-                continue;
-            }
-            let sample = sample_brush(brush, brush_rect, px as f32 + 0.5, py as f32 + 0.5);
-            let alpha = outline_alpha * sample[3] * brush_alpha_multiplier;
-            if alpha <= 0.0 {
-                continue;
-            }
-            let idx = ((py as u32 * width + px as u32) * 4) as usize;
-            blend_pixel(
-                &mut frame[idx..idx + 4],
-                [sample[0], sample[1], sample[2], alpha],
-                BlendMode::SrcOver,
-            );
+            let dst_idx = ((py as u32 * width + px as u32) * 4) as usize;
+            blend_pixel(&mut frame[dst_idx..dst_idx + 4], src, BlendMode::SrcOver);
         }
     }
 }

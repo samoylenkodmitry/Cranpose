@@ -683,8 +683,9 @@ fn resolve_text_measure_width(
             return measured_content_width;
         }
 
-        let may_expand_to_avoid_synthetic_wrap =
-            options.soft_wrap && options.max_lines > 1 && options.overflow == TextOverflow::Clip;
+        let may_expand_to_avoid_synthetic_wrap = options.soft_wrap
+            && options.max_lines == usize::MAX
+            && options.overflow == TextOverflow::Clip;
         if may_expand_to_avoid_synthetic_wrap {
             return measured_content_width;
         }
@@ -1223,6 +1224,22 @@ mod tests {
     }
 
     #[test]
+    fn resolve_text_measure_width_keeps_content_width_for_finite_max_lines() {
+        let padding = EdgeInsets {
+            left: 4.0,
+            top: 0.0,
+            right: 4.0,
+            bottom: 0.0,
+        };
+        let options = TextLayoutOptions {
+            max_lines: 4,
+            ..TextLayoutOptions::default()
+        };
+        let width = resolve_text_measure_width(130.0, padding, Some(180.0), options);
+        assert!((width - 130.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
     fn resolve_text_horizontal_offset_centers_text() {
         let style = cranpose_ui::TextStyle {
             paragraph_style: cranpose_ui::ParagraphStyle {
@@ -1289,6 +1306,33 @@ mod tests {
         assert!(
             !prepared.text.contains('\n'),
             "measurement width should prevent synthetic wrap: {:?}",
+            prepared.text
+        );
+    }
+
+    #[test]
+    fn finite_max_lines_keeps_wrap_points_under_content_width() {
+        let padding = EdgeInsets {
+            left: 4.0,
+            top: 0.0,
+            right: 4.0,
+            bottom: 0.0,
+        };
+        let text = "This paragraph demonstrates textIndent lineHeight lineBreak";
+        let style = cranpose_ui::TextStyle::default();
+        let options = cranpose_ui::TextLayoutOptions {
+            overflow: TextOverflow::Clip,
+            soft_wrap: true,
+            max_lines: 4,
+            min_lines: 1,
+        };
+        let content_width = 130.0;
+        let measure_width =
+            resolve_text_measure_width(content_width, padding, Some(180.0), options);
+        let prepared = prepare_text_layout(text, &style, options, Some(measure_width));
+        assert!(
+            prepared.text.contains('\n'),
+            "finite max_lines should keep constrained wrapping: {:?}",
             prepared.text
         );
     }

@@ -16,3 +16,4 @@ cranpose-foundation = { workspace = true }
 cranpose-ui-graphics = { workspace = true }
 cranpose-ui = { workspace = true }
 cranpose-core = { workspace = true }
+rusttype = "0.9.3"

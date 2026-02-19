@@ -1,5 +1,6 @@
 //! Common rendering contracts shared between renderer backends.
 
+pub mod software_text_raster;
 pub mod style_shared;
 
 use cranpose_foundation::nodes::input::PointerEvent;

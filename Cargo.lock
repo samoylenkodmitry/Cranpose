@@ -702,6 +702,7 @@ dependencies = [
  "cranpose-foundation",
  "cranpose-ui",
  "cranpose-ui-graphics",
+ "rusttype",
 ]
 
 [[package]]
