@@ -2,6 +2,7 @@ use crate::text_layout_result::TextLayoutResult;
 use std::cell::RefCell;
 
 use super::layout_options::{TextLayoutOptions, TextOverflow};
+use super::paragraph::{Hyphens, LineBreak};
 use super::style::TextStyle;
 
 const ELLIPSIS: &str = "\u{2026}";
@@ -199,12 +200,24 @@ fn prepare_text_layout_fallback<M: TextMeasurer + ?Sized>(
     let wrap_width = (opts.soft_wrap && opts.overflow != TextOverflow::Visible)
         .then_some(max_width)
         .flatten();
+    let line_break_mode = style
+        .paragraph_style
+        .line_break
+        .take_or_else(|| LineBreak::Simple);
+    let hyphens_mode = style.paragraph_style.hyphens.take_or_else(|| Hyphens::None);
 
     let mut lines = split_text_lines(text);
     if let Some(width_limit) = wrap_width {
         let mut wrapped = Vec::with_capacity(lines.len());
         for line in &lines {
-            wrapped.extend(wrap_line_to_width(measurer, line, style, width_limit));
+            wrapped.extend(wrap_line_to_width(
+                measurer,
+                line,
+                style,
+                width_limit,
+                line_break_mode,
+                hyphens_mode,
+            ));
         }
         lines = wrapped;
     }
@@ -296,6 +309,8 @@ fn wrap_line_to_width<M: TextMeasurer + ?Sized>(
     line: &str,
     style: &TextStyle,
     max_width: f32,
+    line_break: LineBreak,
+    hyphens: Hyphens,
 ) -> Vec<String> {
     if line.is_empty() {
         return vec![String::new()];
@@ -325,12 +340,26 @@ fn wrap_line_to_width<M: TextMeasurer + ?Sized>(
             }
         }
 
-        let wrap_idx = if best < boundaries.len() - 1 {
-            find_whitespace_break(line, &boundaries, start_idx, best).unwrap_or(best)
-        } else {
-            best
-        };
+        let wrap_idx = choose_wrap_break(line, &boundaries, start_idx, best, line_break);
+        let mut effective_wrap_idx = wrap_idx;
         let mut segment = line[boundaries[start_idx]..boundaries[wrap_idx]].to_string();
+        let can_hyphenate = hyphens == Hyphens::Auto
+            && wrap_idx == best
+            && best < boundaries.len() - 1
+            && is_break_inside_word(line, &boundaries, wrap_idx);
+        if can_hyphenate {
+            let (hyphenated, hyphen_break_idx) = fit_hyphenated_segment(
+                measurer,
+                line,
+                style,
+                max_width,
+                &boundaries,
+                start_idx,
+                wrap_idx,
+            );
+            segment = hyphenated;
+            effective_wrap_idx = hyphen_break_idx;
+        }
         if wrap_idx != best {
             segment = segment.trim_end().to_string();
         }
@@ -339,7 +368,7 @@ fn wrap_line_to_width<M: TextMeasurer + ?Sized>(
         start_idx = if wrap_idx != best {
             skip_leading_whitespace(line, &boundaries, wrap_idx)
         } else {
-            best
+            effective_wrap_idx
         };
     }
 
@@ -367,6 +396,68 @@ fn find_whitespace_break(
         }
     }
     None
+}
+
+fn find_heading_break(
+    line: &str,
+    boundaries: &[usize],
+    start_idx: usize,
+    end_idx: usize,
+) -> Option<usize> {
+    let primary = find_whitespace_break(line, boundaries, start_idx, end_idx)?;
+    let secondary = find_whitespace_break(line, boundaries, start_idx, primary);
+    secondary.or(Some(primary))
+}
+
+fn choose_wrap_break(
+    line: &str,
+    boundaries: &[usize],
+    start_idx: usize,
+    best: usize,
+    line_break: LineBreak,
+) -> usize {
+    if best >= boundaries.len() - 1 {
+        return best;
+    }
+
+    match line_break {
+        LineBreak::Heading => find_heading_break(line, boundaries, start_idx, best).unwrap_or(best),
+        LineBreak::Simple | LineBreak::Paragraph | LineBreak::Unspecified => {
+            find_whitespace_break(line, boundaries, start_idx, best).unwrap_or(best)
+        }
+    }
+}
+
+fn is_break_inside_word(line: &str, boundaries: &[usize], break_idx: usize) -> bool {
+    if break_idx == 0 || break_idx >= boundaries.len() - 1 {
+        return false;
+    }
+    let prev = &line[boundaries[break_idx - 1]..boundaries[break_idx]];
+    let next = &line[boundaries[break_idx]..boundaries[break_idx + 1]];
+    !prev.chars().all(char::is_whitespace) && !next.chars().all(char::is_whitespace)
+}
+
+fn fit_hyphenated_segment<M: TextMeasurer + ?Sized>(
+    measurer: &M,
+    line: &str,
+    style: &TextStyle,
+    max_width: f32,
+    boundaries: &[usize],
+    start_idx: usize,
+    mut break_idx: usize,
+) -> (String, usize) {
+    while break_idx > start_idx + 1 {
+        let prefix = &line[boundaries[start_idx]..boundaries[break_idx]];
+        let candidate = format!("{prefix}-");
+        if measurer.measure(&candidate, style).width <= max_width + WRAP_EPSILON {
+            return (candidate, break_idx);
+        }
+        break_idx -= 1;
+    }
+    (
+        line[boundaries[start_idx]..boundaries[break_idx]].to_string(),
+        break_idx,
+    )
 }
 
 fn skip_leading_whitespace(line: &str, boundaries: &[usize], mut idx: usize) -> usize {
@@ -546,7 +637,27 @@ fn char_boundaries(text: &str) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::text::TextUnit;
+    use crate::text::{Hyphens, LineBreak, ParagraphStyle, TextUnit};
+
+    fn style_with_line_break(line_break: LineBreak) -> TextStyle {
+        TextStyle {
+            paragraph_style: ParagraphStyle {
+                line_break,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    fn style_with_hyphens(hyphens: Hyphens) -> TextStyle {
+        TextStyle {
+            paragraph_style: ParagraphStyle {
+                hyphens,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
 
     #[test]
     fn text_layout_options_wraps_and_limits_lines() {
@@ -682,6 +793,74 @@ mod tests {
             !prepared.text.contains('\n'),
             "unexpected line split: {:?}",
             prepared.text
+        );
+    }
+
+    #[test]
+    fn line_break_mode_changes_wrap_strategy_contract() {
+        let text = "This is an example text";
+        let options = TextLayoutOptions {
+            overflow: TextOverflow::Clip,
+            soft_wrap: true,
+            max_lines: usize::MAX,
+            min_lines: 1,
+        };
+
+        let simple = prepare_text_layout(
+            text,
+            &style_with_line_break(LineBreak::Simple),
+            options,
+            Some(120.0),
+        );
+        let heading = prepare_text_layout(
+            text,
+            &style_with_line_break(LineBreak::Heading),
+            options,
+            Some(120.0),
+        );
+        let paragraph = prepare_text_layout(
+            text,
+            &style_with_line_break(LineBreak::Paragraph),
+            options,
+            Some(50.0),
+        );
+
+        assert_ne!(
+            simple.text, heading.text,
+            "Compose parity requires Heading and Simple to have distinct wrap behavior"
+        );
+        assert_ne!(
+            simple.text, paragraph.text,
+            "Compose parity requires Paragraph and Simple to have distinct wrap behavior"
+        );
+    }
+
+    #[test]
+    fn hyphens_mode_changes_wrap_strategy_contract() {
+        let text = "Transformation";
+        let options = TextLayoutOptions {
+            overflow: TextOverflow::Clip,
+            soft_wrap: true,
+            max_lines: usize::MAX,
+            min_lines: 1,
+        };
+
+        let auto = prepare_text_layout(
+            text,
+            &style_with_hyphens(Hyphens::Auto),
+            options,
+            Some(30.0),
+        );
+        let none = prepare_text_layout(
+            text,
+            &style_with_hyphens(Hyphens::None),
+            options,
+            Some(30.0),
+        );
+
+        assert_ne!(
+            auto.text, none.text,
+            "Compose parity requires Hyphens.Auto and Hyphens.None to produce different line breaks"
         );
     }
 }

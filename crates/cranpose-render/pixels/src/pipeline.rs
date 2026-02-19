@@ -478,6 +478,21 @@ fn resolve_text_clip(
     resolve_clip(visual_clip, Some(pad_clip_rect(transformed_text_bounds))).map(Some)
 }
 
+fn resolve_text_color_without_gradient_fallback(text_style: &TextStyle, default: Color) -> Color {
+    let mut color = text_style
+        .span_style
+        .color
+        .or(match text_style.span_style.brush.as_ref() {
+            Some(Brush::Solid(color)) => Some(*color),
+            _ => None,
+        })
+        .unwrap_or(default);
+    if let Some(alpha) = text_style.span_style.alpha {
+        color.3 *= alpha.clamp(0.0, 1.0);
+    }
+    color
+}
+
 #[allow(clippy::too_many_arguments)]
 fn push_text_style_draws(
     scene: &mut Scene,
@@ -516,7 +531,21 @@ fn push_text_style_draws(
         );
     }
 
-    let text_color = text_style.resolve_text_color(Color(1.0, 1.0, 1.0, 1.0));
+    let text_color =
+        resolve_text_color_without_gradient_fallback(text_style, Color(1.0, 1.0, 1.0, 1.0));
+    let transformed_text_color = apply_layer_to_color(text_color, node_layer);
+    let mut transformed_text_style = text_style.clone();
+    transformed_text_style.span_style.shadow = None;
+    transformed_text_style.span_style.brush = text_style
+        .span_style
+        .brush
+        .clone()
+        .map(|brush| apply_layer_to_brush(brush, node_layer));
+    let text_brush = transformed_text_style
+        .span_style
+        .brush
+        .clone()
+        .unwrap_or_else(|| Brush::solid(transformed_text_color));
 
     if let Some(shadow) = text_style.span_style.shadow {
         let shadow_rect = Rect {
@@ -526,12 +555,20 @@ fn push_text_style_draws(
             height: shifted_text_rect.height,
         };
         let transformed_shadow_rect = apply_layer_to_rect(shadow_rect, rect, node_layer);
+        let transformed_shadow_color = apply_layer_to_color(shadow.color, node_layer);
+        let mut shadow_text_style = transformed_text_style.clone();
+        shadow_text_style.span_style.brush = None;
+        shadow_text_style.span_style.shadow = Some(cranpose_ui::text::Shadow {
+            color: transformed_shadow_color,
+            offset: Point::new(0.0, 0.0),
+            blur_radius: shadow.blur_radius,
+        });
         scene.push_text(
             node_id,
             transformed_shadow_rect,
             Rc::from(text),
-            apply_layer_to_color(shadow.color, node_layer),
-            text_style.clone(),
+            Color::TRANSPARENT,
+            shadow_text_style,
             font_size,
             layer_uniform_scale(node_layer),
             options,
@@ -546,7 +583,7 @@ fn push_text_style_draws(
         node_layer,
         text,
         text_style,
-        text_color,
+        &text_brush,
         text_clip,
     );
 
@@ -554,8 +591,8 @@ fn push_text_style_draws(
         node_id,
         transformed_shifted_text_rect,
         Rc::from(text),
-        apply_layer_to_color(text_color, node_layer),
-        text_style.clone(),
+        transformed_text_color,
+        transformed_text_style,
         font_size,
         layer_uniform_scale(node_layer),
         options,
@@ -571,7 +608,7 @@ fn push_text_decorations(
     node_layer: &GraphicsLayer,
     text: &str,
     text_style: &TextStyle,
-    text_color: Color,
+    text_brush: &Brush,
     text_clip: Option<Rect>,
 ) {
     let Some(decoration) = text_style.span_style.text_decoration else {
@@ -584,7 +621,7 @@ fn push_text_decorations(
     let font_size = text_style.resolve_font_size(14.0);
     let line_height = text_style.resolve_line_height(14.0, font_size).max(1.0);
     let thickness = (font_size * 0.06).clamp(1.0, line_height * 0.25);
-    let brush = apply_layer_to_brush(Brush::solid(text_color), node_layer);
+    let brush = text_brush.clone();
 
     for (line_index, line) in text.split('\n').enumerate() {
         let line_width = measure_text(line, text_style)
@@ -1309,7 +1346,15 @@ mod tests {
         assert_eq!(*background, Color(0.2, 0.3, 0.52, 0.55));
 
         assert_eq!(scene.texts.len(), 2, "shadow + content text expected");
-        assert_eq!(scene.texts[0].color, Color(0.0, 0.0, 0.0, 0.95));
+        assert_eq!(scene.texts[0].color, Color::TRANSPARENT);
+        let shadow_style = scene.texts[0]
+            .text_style
+            .span_style
+            .shadow
+            .expect("shadow draw should carry style shadow");
+        assert_eq!(shadow_style.color, Color(0.0, 0.0, 0.0, 0.95));
+        assert_eq!(shadow_style.offset, Point::new(0.0, 0.0));
+        assert!((shadow_style.blur_radius - 3.0).abs() < f32::EPSILON);
         assert_eq!(scene.texts[1].color, Color(0.9, 0.95, 1.0, 1.0));
         assert!(scene.texts[0].rect.x > scene.texts[1].rect.x);
         assert!(scene.texts[0].rect.y > scene.texts[1].rect.y);
@@ -1388,6 +1433,48 @@ mod tests {
         assert!(
             scene.texts[0].rect.y < rect.y,
             "superscript baseline shift should move text up"
+        );
+    }
+
+    #[test]
+    fn push_text_style_draws_non_solid_brush_contract_does_not_fallback_to_first_stop() {
+        let mut scene = Scene::new();
+        let first_stop = Color(1.0, 0.0, 0.0, 1.0);
+        let style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                brush: Some(Brush::linear_gradient_range(
+                    vec![first_stop, Color(0.0, 0.0, 1.0, 1.0)],
+                    Point::new(0.0, 0.0),
+                    Point::new(180.0, 0.0),
+                )),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let rect = Rect {
+            x: 8.0,
+            y: 20.0,
+            width: 180.0,
+            height: 28.0,
+        };
+
+        push_text_style_draws(
+            &mut scene,
+            7 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            "Gradient text",
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        assert_eq!(scene.texts.len(), 1);
+        assert_ne!(
+            scene.texts[0].color, first_stop,
+            "non-solid brush text should not degrade to first-stop fallback color"
         );
     }
 

@@ -38,3 +38,4 @@
 - do not use big models as subagents (opus, codex xhigh thinking, etc), only small fast & cheap to not waste tokens
 - no 'backwards compatability' is allowed; we in a pre-alpha
 - no comments in style "now it is like that" - we are not writing history
+- duplicated code (10+ lines) without architecture is forbidden

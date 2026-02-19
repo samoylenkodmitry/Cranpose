@@ -6,7 +6,7 @@ use std::rc::Rc;
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::Brush;
 use cranpose_ui::text::{
-    resolve_text_direction, ResolvedTextDirection, TextAlign, TextDecoration, TextStyle,
+    resolve_text_direction, ResolvedTextDirection, TextAlign, TextDecoration, TextMotion, TextStyle,
 };
 use cranpose_ui::{
     measure_text, prepare_text_layout, LayoutBox, LayoutNode, LayoutNodeKind, SubcomposeLayoutNode,
@@ -18,6 +18,7 @@ use cranpose_ui_graphics::{
 };
 
 use crate::scene::{BackdropLayer, ClickAction, DrawShape, EffectLayer, Scene, ShadowDraw};
+use crate::text_raster::{rasterize_text_to_image, requires_rasterized_glyph_path};
 
 // Re-use style functions from a local copy
 mod style;
@@ -524,6 +525,39 @@ fn resolve_text_clip(
     resolve_clip(visual_clip, Some(pad_clip_rect(transformed_text_bounds))).map(Some)
 }
 
+fn resolve_text_color_without_gradient_fallback(text_style: &TextStyle, default: Color) -> Color {
+    let mut color = text_style
+        .span_style
+        .color
+        .or(match text_style.span_style.brush.as_ref() {
+            Some(Brush::Solid(color)) => Some(*color),
+            _ => None,
+        })
+        .unwrap_or(default);
+    if let Some(alpha) = text_style.span_style.alpha {
+        color.3 *= alpha.clamp(0.0, 1.0);
+    }
+    color
+}
+
+fn snap_text_rect_for_motion(rect: Rect, text_style: &TextStyle) -> Rect {
+    if text_style
+        .paragraph_style
+        .text_motion
+        .unwrap_or(TextMotion::Static)
+        == TextMotion::Static
+    {
+        return Rect {
+            x: rect.x.round(),
+            y: rect.y.round(),
+            width: rect.width,
+            height: rect.height,
+        };
+    }
+
+    rect
+}
+
 #[allow(clippy::too_many_arguments)]
 fn push_text_style_draws(
     scene: &mut Scene,
@@ -537,6 +571,7 @@ fn push_text_style_draws(
     options: TextLayoutOptions,
     text_clip: Option<Rect>,
 ) {
+    let text_scale = layer_uniform_scale(content_layer);
     let baseline_shift_px = text_style
         .span_style
         .baseline_shift
@@ -550,6 +585,8 @@ fn push_text_style_draws(
         height: text_rect.height,
     };
     let transformed_shifted_text_rect = apply_layer_to_rect(shifted_text_rect, rect, content_layer);
+    let snapped_shifted_text_rect =
+        snap_text_rect_for_motion(transformed_shifted_text_rect, text_style);
 
     if let Some(background) = text_style.span_style.background {
         let brush = apply_layer_to_brush(Brush::solid(background), content_layer);
@@ -562,7 +599,21 @@ fn push_text_style_draws(
         );
     }
 
-    let text_color = text_style.resolve_text_color(Color(1.0, 1.0, 1.0, 1.0));
+    let text_color =
+        resolve_text_color_without_gradient_fallback(text_style, Color(1.0, 1.0, 1.0, 1.0));
+    let transformed_text_color = apply_layer_to_color(text_color, content_layer);
+    let mut transformed_text_style = text_style.clone();
+    transformed_text_style.span_style.shadow = None;
+    transformed_text_style.span_style.brush = text_style
+        .span_style
+        .brush
+        .clone()
+        .map(|brush| apply_layer_to_brush(brush, content_layer));
+    let text_brush = transformed_text_style
+        .span_style
+        .brush
+        .clone()
+        .unwrap_or_else(|| Brush::solid(transformed_text_color));
 
     if let Some(shadow) = text_style.span_style.shadow {
         let shadow_rect = Rect {
@@ -571,18 +622,42 @@ fn push_text_style_draws(
             width: shifted_text_rect.width,
             height: shifted_text_rect.height,
         };
-        let transformed_shadow_rect = apply_layer_to_rect(shadow_rect, rect, content_layer);
+        let transformed_shadow_rect = snap_text_rect_for_motion(
+            apply_layer_to_rect(shadow_rect, rect, content_layer),
+            text_style,
+        );
+        let mut shadow_text_style = transformed_text_style.clone();
+        shadow_text_style.span_style.brush = None;
+        let shadow_z_start = scene.next_z;
         scene.push_text(
             node_id,
             transformed_shadow_rect,
             Rc::from(text),
             apply_layer_to_color(shadow.color, content_layer),
-            text_style.clone(),
+            shadow_text_style,
             font_size,
-            layer_uniform_scale(content_layer),
+            text_scale,
             options,
             text_clip,
         );
+        let blur_radius = shadow.blur_radius.max(0.0) * text_scale;
+        if blur_radius > f32::EPSILON {
+            let blur_margin = (blur_radius * 3.0).max(1.0);
+            scene.effect_layers.push(EffectLayer {
+                rect: Rect {
+                    x: transformed_shadow_rect.x - blur_margin,
+                    y: transformed_shadow_rect.y - blur_margin,
+                    width: transformed_shadow_rect.width + blur_margin * 2.0,
+                    height: transformed_shadow_rect.height + blur_margin * 2.0,
+                },
+                clip: text_clip,
+                effect: Some(RenderEffect::blur(blur_radius)),
+                blend_mode: BlendMode::SrcOver,
+                composite_alpha: 1.0,
+                z_start: shadow_z_start,
+                z_end: scene.next_z,
+            });
+        }
     }
 
     push_text_decorations(
@@ -592,18 +667,40 @@ fn push_text_style_draws(
         content_layer,
         text,
         text_style,
-        text_color,
+        &text_brush,
         text_clip,
     );
 
+    if requires_rasterized_glyph_path(&transformed_text_style) {
+        let image = rasterize_text_to_image(
+            text,
+            snapped_shifted_text_rect,
+            &transformed_text_style,
+            transformed_text_color,
+            font_size,
+            text_scale,
+        )
+        .expect("styled text raster path requires configured raster fonts");
+        scene.push_image(
+            snapped_shifted_text_rect,
+            image,
+            1.0,
+            None,
+            text_clip,
+            None,
+            BlendMode::SrcOver,
+        );
+        return;
+    }
+
     scene.push_text(
         node_id,
-        transformed_shifted_text_rect,
+        snapped_shifted_text_rect,
         Rc::from(text),
-        apply_layer_to_color(text_color, content_layer),
-        text_style.clone(),
+        transformed_text_color,
+        transformed_text_style,
         font_size,
-        layer_uniform_scale(content_layer),
+        text_scale,
         options,
         text_clip,
     );
@@ -617,7 +714,7 @@ fn push_text_decorations(
     content_layer: &GraphicsLayer,
     text: &str,
     text_style: &TextStyle,
-    text_color: Color,
+    text_brush: &Brush,
     text_clip: Option<Rect>,
 ) {
     let Some(decoration) = text_style.span_style.text_decoration else {
@@ -630,7 +727,7 @@ fn push_text_decorations(
     let font_size = text_style.resolve_font_size(14.0);
     let line_height = text_style.resolve_line_height(14.0, font_size).max(1.0);
     let thickness = (font_size * 0.06).clamp(1.0, line_height * 0.25);
-    let brush = apply_layer_to_brush(Brush::solid(text_color), content_layer);
+    let brush = text_brush.clone();
 
     for (line_index, line) in text.split('\n').enumerate() {
         let line_width = measure_text(line, text_style)
@@ -1036,6 +1133,12 @@ fn render_node_from_applier(
 mod tests {
     use super::*;
 
+    fn init_test_fonts() {
+        crate::text_raster::configure_raster_fonts(&[include_bytes!(
+            "../../../../apps/desktop-demo/assets/Roboto-Light.ttf"
+        ) as &[u8]]);
+    }
+
     #[test]
     fn auto_alpha_triggers_isolation_with_composite_alpha() {
         let layer = GraphicsLayer {
@@ -1428,6 +1531,68 @@ mod tests {
         assert_eq!(scene.texts[1].color, Color(0.9, 0.95, 1.0, 1.0));
         assert!(scene.texts[0].rect.x > scene.texts[1].rect.x);
         assert!(scene.texts[0].rect.y > scene.texts[1].rect.y);
+        assert_eq!(
+            scene.effect_layers.len(),
+            1,
+            "blurred text shadow uses effect layer"
+        );
+        let effect = scene.effect_layers[0]
+            .effect
+            .as_ref()
+            .expect("shadow effect should be present");
+        assert!(
+            matches!(
+                effect,
+                RenderEffect::Blur {
+                    radius_x,
+                    radius_y,
+                    ..
+                } if (*radius_x - 3.0).abs() < f32::EPSILON && (*radius_y - 3.0).abs() < f32::EPSILON
+            ),
+            "shadow blur radius should map to blur effect: {effect:?}"
+        );
+    }
+
+    #[test]
+    fn push_text_style_draws_hard_shadow_does_not_emit_effect_layer() {
+        let mut scene = Scene::new();
+        let style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                color: Some(Color(0.9, 0.95, 1.0, 1.0)),
+                shadow: Some(cranpose_ui::text::Shadow {
+                    color: Color(0.0, 0.0, 0.0, 0.95),
+                    offset: Point::new(2.0, 2.0),
+                    blur_radius: 0.0,
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let rect = Rect {
+            x: 8.0,
+            y: 10.0,
+            width: 180.0,
+            height: 28.0,
+        };
+
+        push_text_style_draws(
+            &mut scene,
+            7 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            "Hard shadow",
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        assert_eq!(scene.texts.len(), 2, "shadow + content text expected");
+        assert!(
+            scene.effect_layers.is_empty(),
+            "hard shadow should not allocate blur effect layer"
+        );
     }
 
     #[test]
@@ -1504,6 +1669,188 @@ mod tests {
             scene.texts[0].rect.y < rect.y,
             "superscript baseline shift should move text up"
         );
+    }
+
+    #[test]
+    fn push_text_style_draws_non_solid_brush_contract_does_not_fallback_to_first_stop() {
+        init_test_fonts();
+        let mut scene = Scene::new();
+        let first_stop = Color(1.0, 0.0, 0.0, 1.0);
+        let style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                brush: Some(Brush::linear_gradient_range(
+                    vec![first_stop, Color(0.0, 0.0, 1.0, 1.0)],
+                    Point::new(0.0, 0.0),
+                    Point::new(180.0, 0.0),
+                )),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let rect = Rect {
+            x: 8.0,
+            y: 20.0,
+            width: 180.0,
+            height: 28.0,
+        };
+
+        push_text_style_draws(
+            &mut scene,
+            7 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            "Gradient text",
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        assert!(
+            scene.texts.is_empty(),
+            "non-solid brush text should bypass glyphon color-only path"
+        );
+        assert_eq!(
+            scene.images.len(),
+            1,
+            "non-solid brush text should rasterize to an image draw"
+        );
+
+        let image = &scene.images[0].image;
+        let pixels = image.pixels();
+        let mut max_red = 0.0f32;
+        let mut min_red = 1.0f32;
+        let mut max_blue = 0.0f32;
+        let mut min_blue = 1.0f32;
+        let mut ink_count = 0usize;
+        for y in 0..image.height() {
+            for x in 0..image.width() {
+                let idx = ((y * image.width() + x) * 4) as usize;
+                if pixels[idx + 3] == 0 {
+                    continue;
+                }
+                let red = pixels[idx] as f32 / 255.0;
+                let blue = pixels[idx + 2] as f32 / 255.0;
+                max_red = max_red.max(red);
+                min_red = min_red.min(red);
+                max_blue = max_blue.max(blue);
+                min_blue = min_blue.min(blue);
+                ink_count += 1;
+            }
+        }
+        assert!(
+            ink_count > 0,
+            "expected visible glyph pixels in rasterized image"
+        );
+        let red_span = max_red - min_red;
+        let blue_span = max_blue - min_blue;
+        let max_channel_delta = red_span.max(blue_span);
+        assert!(
+            max_channel_delta > 0.12,
+            "gradient raster should vary visible color channels, red_span={red_span:.3}, blue_span={blue_span:.3}"
+        );
+    }
+
+    #[test]
+    fn push_text_style_draws_stroke_contract_rasterizes_to_image() {
+        init_test_fonts();
+        let mut scene = Scene::new();
+        let style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                draw_style: Some(cranpose_ui::text::TextDrawStyle::Stroke { width: 5.0 }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let rect = Rect {
+            x: 8.0,
+            y: 20.0,
+            width: 180.0,
+            height: 32.0,
+        };
+
+        push_text_style_draws(
+            &mut scene,
+            8 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            "Stroke text",
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        assert!(
+            scene.texts.is_empty(),
+            "stroke text should bypass glyphon fill-only path"
+        );
+        assert_eq!(
+            scene.images.len(),
+            1,
+            "stroke text should rasterize to an image draw"
+        );
+    }
+
+    #[test]
+    fn push_text_style_draws_text_motion_static_snaps_position() {
+        let base_rect = Rect {
+            x: 8.25,
+            y: 10.75,
+            width: 180.0,
+            height: 28.0,
+        };
+        let static_style = cranpose_ui::TextStyle {
+            paragraph_style: cranpose_ui::ParagraphStyle {
+                text_motion: Some(cranpose_ui::text::TextMotion::Static),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let animated_style = cranpose_ui::TextStyle {
+            paragraph_style: cranpose_ui::ParagraphStyle {
+                text_motion: Some(cranpose_ui::text::TextMotion::Animated),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let mut static_scene = Scene::new();
+        push_text_style_draws(
+            &mut static_scene,
+            9 as NodeId,
+            base_rect,
+            base_rect,
+            &GraphicsLayer::default(),
+            "Motion",
+            &static_style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        let mut animated_scene = Scene::new();
+        push_text_style_draws(
+            &mut animated_scene,
+            10 as NodeId,
+            base_rect,
+            base_rect,
+            &GraphicsLayer::default(),
+            "Motion",
+            &animated_style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        assert_eq!(static_scene.texts.len(), 1);
+        assert_eq!(animated_scene.texts.len(), 1);
+        assert_eq!(static_scene.texts[0].rect.x, base_rect.x.round());
+        assert_eq!(static_scene.texts[0].rect.y, base_rect.y.round());
+        assert!((animated_scene.texts[0].rect.x - base_rect.x).abs() < f32::EPSILON);
+        assert!((animated_scene.texts[0].rect.y - base_rect.y).abs() < f32::EPSILON);
     }
 
     #[test]

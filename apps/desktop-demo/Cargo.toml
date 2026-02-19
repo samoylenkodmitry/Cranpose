@@ -477,3 +477,8 @@ required-features = ["robot-app"]
 name = "robot_measure_shaders"
 path = "robot-runners/robot_measure_shaders.rs"
 required-features = ["robot-app"]
+
+[[example]]
+name = "robot_text_showcase_gradient"
+path = "robot-runners/robot_text_showcase_gradient.rs"
+required-features = ["robot-app"]

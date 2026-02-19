@@ -734,6 +734,8 @@ dependencies = [
  "lru",
  "naga 25.0.1",
  "rustc-hash 2.1.1",
+ "rusttype",
+ "ttf-parser 0.25.1",
  "wgpu 25.0.2",
 ]
 
