@@ -17,3 +17,4 @@ cranpose-ui-graphics = { workspace = true }
 cranpose-ui = { workspace = true }
 cranpose-core = { workspace = true }
 rusttype = "0.9.3"
+tiny-skia = "0.12.0"

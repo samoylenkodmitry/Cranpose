@@ -7,6 +7,9 @@ use super::style::TextStyle;
 
 const ELLIPSIS: &str = "\u{2026}";
 const WRAP_EPSILON: f32 = 0.5;
+const AUTO_HYPHEN_MIN_SEGMENT_CHARS: usize = 2;
+const AUTO_HYPHEN_MIN_TRAILING_CHARS: usize = 3;
+const AUTO_HYPHEN_PREFERRED_TRAILING_CHARS: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextMetrics {
@@ -316,6 +319,27 @@ fn wrap_line_to_width<M: TextMeasurer + ?Sized>(
         return vec![String::new()];
     }
 
+    if matches!(line_break, LineBreak::Heading | LineBreak::Paragraph)
+        && line.chars().any(char::is_whitespace)
+    {
+        if let Some(balanced) =
+            wrap_line_with_word_balance(measurer, line, style, max_width, line_break)
+        {
+            return balanced;
+        }
+    }
+
+    wrap_line_greedy(measurer, line, style, max_width, line_break, hyphens)
+}
+
+fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
+    measurer: &M,
+    line: &str,
+    style: &TextStyle,
+    max_width: f32,
+    line_break: LineBreak,
+    hyphens: Hyphens,
+) -> Vec<String> {
     let boundaries = char_boundaries(line);
     let mut wrapped = Vec::new();
     let mut start_idx = 0usize;
@@ -342,24 +366,14 @@ fn wrap_line_to_width<M: TextMeasurer + ?Sized>(
 
         let wrap_idx = choose_wrap_break(line, &boundaries, start_idx, best, line_break);
         let mut effective_wrap_idx = wrap_idx;
-        let mut segment = line[boundaries[start_idx]..boundaries[wrap_idx]].to_string();
         let can_hyphenate = hyphens == Hyphens::Auto
             && wrap_idx == best
             && best < boundaries.len() - 1
             && is_break_inside_word(line, &boundaries, wrap_idx);
         if can_hyphenate {
-            let (hyphenated, hyphen_break_idx) = fit_hyphenated_segment(
-                measurer,
-                line,
-                style,
-                max_width,
-                &boundaries,
-                start_idx,
-                wrap_idx,
-            );
-            segment = hyphenated;
-            effective_wrap_idx = hyphen_break_idx;
+            effective_wrap_idx = choose_auto_hyphen_break(&boundaries, start_idx, wrap_idx);
         }
+        let mut segment = line[boundaries[start_idx]..boundaries[effective_wrap_idx]].to_string();
         if wrap_idx != best {
             segment = segment.trim_end().to_string();
         }
@@ -379,34 +393,95 @@ fn wrap_line_to_width<M: TextMeasurer + ?Sized>(
     wrapped
 }
 
-fn find_whitespace_break(
+fn wrap_line_with_word_balance<M: TextMeasurer + ?Sized>(
+    measurer: &M,
     line: &str,
-    boundaries: &[usize],
-    start_idx: usize,
-    end_idx: usize,
-) -> Option<usize> {
-    if end_idx <= start_idx + 1 {
+    style: &TextStyle,
+    max_width: f32,
+    line_break: LineBreak,
+) -> Option<Vec<String>> {
+    let boundaries = char_boundaries(line);
+    let breakpoints = collect_word_breakpoints(line, &boundaries);
+    if breakpoints.len() <= 2 {
         return None;
     }
 
-    for idx in (start_idx + 1..end_idx).rev() {
-        let prev = &line[boundaries[idx - 1]..boundaries[idx]];
-        if prev.chars().all(char::is_whitespace) {
-            return Some(idx);
+    let node_count = breakpoints.len();
+    let mut best_cost = vec![f32::INFINITY; node_count];
+    let mut next_index = vec![None; node_count];
+    best_cost[node_count - 1] = 0.0;
+
+    for start in (0..node_count - 1).rev() {
+        for end in start + 1..node_count {
+            let start_byte = boundaries[breakpoints[start]];
+            let end_byte = boundaries[breakpoints[end]];
+            let segment = line[start_byte..end_byte].trim_end();
+            if segment.is_empty() {
+                continue;
+            }
+            let segment_width = measurer.measure(segment, style).width;
+            if segment_width > max_width + WRAP_EPSILON {
+                continue;
+            }
+            if !best_cost[end].is_finite() {
+                continue;
+            }
+            let slack = (max_width - segment_width).max(0.0);
+            let is_last = end == node_count - 1;
+            let segment_cost = match line_break {
+                LineBreak::Heading => slack * slack,
+                LineBreak::Paragraph => {
+                    if is_last {
+                        slack * slack * 0.16
+                    } else {
+                        slack * slack
+                    }
+                }
+                LineBreak::Simple | LineBreak::Unspecified => slack * slack,
+            };
+            let candidate = segment_cost + best_cost[end];
+            if candidate < best_cost[start] {
+                best_cost[start] = candidate;
+                next_index[start] = Some(end);
+            }
         }
     }
-    None
+
+    let mut wrapped = Vec::new();
+    let mut current = 0usize;
+    while current < node_count - 1 {
+        let next = next_index[current]?;
+        let start_byte = boundaries[breakpoints[current]];
+        let end_byte = boundaries[breakpoints[next]];
+        let segment = line[start_byte..end_byte].trim_end().to_string();
+        if segment.is_empty() {
+            return None;
+        }
+        wrapped.push(segment);
+        current = next;
+    }
+
+    if wrapped.is_empty() {
+        return None;
+    }
+
+    Some(wrapped)
 }
 
-fn find_heading_break(
-    line: &str,
-    boundaries: &[usize],
-    start_idx: usize,
-    end_idx: usize,
-) -> Option<usize> {
-    let primary = find_whitespace_break(line, boundaries, start_idx, end_idx)?;
-    let secondary = find_whitespace_break(line, boundaries, start_idx, primary);
-    secondary.or(Some(primary))
+fn collect_word_breakpoints(line: &str, boundaries: &[usize]) -> Vec<usize> {
+    let mut points = vec![0usize];
+    for idx in 1..boundaries.len() - 1 {
+        let prev = &line[boundaries[idx - 1]..boundaries[idx]];
+        let current = &line[boundaries[idx]..boundaries[idx + 1]];
+        if prev.chars().all(char::is_whitespace) && !current.chars().all(char::is_whitespace) {
+            points.push(idx);
+        }
+    }
+    let end = boundaries.len() - 1;
+    if points.last().copied() != Some(end) {
+        points.push(end);
+    }
+    points
 }
 
 fn choose_wrap_break(
@@ -414,18 +489,23 @@ fn choose_wrap_break(
     boundaries: &[usize],
     start_idx: usize,
     best: usize,
-    line_break: LineBreak,
+    _line_break: LineBreak,
 ) -> usize {
     if best >= boundaries.len() - 1 {
         return best;
     }
 
-    match line_break {
-        LineBreak::Heading => find_heading_break(line, boundaries, start_idx, best).unwrap_or(best),
-        LineBreak::Simple | LineBreak::Paragraph | LineBreak::Unspecified => {
-            find_whitespace_break(line, boundaries, start_idx, best).unwrap_or(best)
+    if best <= start_idx + 1 {
+        return best;
+    }
+
+    for idx in (start_idx + 1..best).rev() {
+        let prev = &line[boundaries[idx - 1]..boundaries[idx]];
+        if prev.chars().all(char::is_whitespace) {
+            return idx;
         }
     }
+    best
 }
 
 fn is_break_inside_word(line: &str, boundaries: &[usize], break_idx: usize) -> bool {
@@ -437,27 +517,43 @@ fn is_break_inside_word(line: &str, boundaries: &[usize], break_idx: usize) -> b
     !prev.chars().all(char::is_whitespace) && !next.chars().all(char::is_whitespace)
 }
 
-fn fit_hyphenated_segment<M: TextMeasurer + ?Sized>(
-    measurer: &M,
-    line: &str,
-    style: &TextStyle,
-    max_width: f32,
-    boundaries: &[usize],
-    start_idx: usize,
-    mut break_idx: usize,
-) -> (String, usize) {
-    while break_idx > start_idx + 1 {
-        let prefix = &line[boundaries[start_idx]..boundaries[break_idx]];
-        let candidate = format!("{prefix}-");
-        if measurer.measure(&candidate, style).width <= max_width + WRAP_EPSILON {
-            return (candidate, break_idx);
-        }
-        break_idx -= 1;
+fn choose_auto_hyphen_break(boundaries: &[usize], start_idx: usize, break_idx: usize) -> usize {
+    let end_idx = boundaries.len().saturating_sub(1);
+    if break_idx >= end_idx {
+        return break_idx;
     }
-    (
-        line[boundaries[start_idx]..boundaries[break_idx]].to_string(),
-        break_idx,
-    )
+    let trailing_len = end_idx.saturating_sub(break_idx);
+    if trailing_len > 2 || break_idx <= start_idx + AUTO_HYPHEN_MIN_SEGMENT_CHARS {
+        return break_idx;
+    }
+
+    let min_break = start_idx + AUTO_HYPHEN_MIN_SEGMENT_CHARS;
+    let max_break = break_idx.saturating_sub(1);
+    if min_break > max_break {
+        return break_idx;
+    }
+
+    let mut best_break = break_idx;
+    let mut best_penalty = usize::MAX;
+    for idx in min_break..=max_break {
+        let candidate_trailing_len = end_idx.saturating_sub(idx);
+        let candidate_prefix_len = idx.saturating_sub(start_idx);
+        if candidate_prefix_len < AUTO_HYPHEN_MIN_SEGMENT_CHARS
+            || candidate_trailing_len < AUTO_HYPHEN_MIN_TRAILING_CHARS
+        {
+            continue;
+        }
+
+        let penalty = candidate_trailing_len.abs_diff(AUTO_HYPHEN_PREFERRED_TRAILING_CHARS);
+        if penalty < best_penalty {
+            best_penalty = penalty;
+            best_break = idx;
+            if penalty == 0 {
+                break;
+            }
+        }
+    }
+    best_break
 }
 
 fn skip_leading_whitespace(line: &str, boundaries: &[usize], mut idx: usize) -> usize {
@@ -641,6 +737,10 @@ mod tests {
 
     fn style_with_line_break(line_break: LineBreak) -> TextStyle {
         TextStyle {
+            span_style: crate::text::SpanStyle {
+                font_size: TextUnit::Sp(10.0),
+                ..Default::default()
+            },
             paragraph_style: ParagraphStyle {
                 line_break,
                 ..Default::default()
@@ -651,6 +751,10 @@ mod tests {
 
     fn style_with_hyphens(hyphens: Hyphens) -> TextStyle {
         TextStyle {
+            span_style: crate::text::SpanStyle {
+                font_size: TextUnit::Sp(10.0),
+                ..Default::default()
+            },
             paragraph_style: ParagraphStyle {
                 hyphens,
                 ..Default::default()
@@ -825,13 +929,17 @@ mod tests {
             Some(50.0),
         );
 
-        assert_ne!(
-            simple.text, heading.text,
-            "Compose parity requires Heading and Simple to have distinct wrap behavior"
+        assert_eq!(
+            simple.text.lines().collect::<Vec<_>>(),
+            vec!["This is an example", "text"]
         );
-        assert_ne!(
-            simple.text, paragraph.text,
-            "Compose parity requires Paragraph and Simple to have distinct wrap behavior"
+        assert_eq!(
+            heading.text.lines().collect::<Vec<_>>(),
+            vec!["This is an", "example text"]
+        );
+        assert_eq!(
+            paragraph.text.lines().collect::<Vec<_>>(),
+            vec!["This", "is an", "example", "text"]
         );
     }
 
@@ -849,18 +957,26 @@ mod tests {
             text,
             &style_with_hyphens(Hyphens::Auto),
             options,
-            Some(30.0),
+            Some(24.0),
         );
         let none = prepare_text_layout(
             text,
             &style_with_hyphens(Hyphens::None),
             options,
-            Some(30.0),
+            Some(24.0),
         );
 
-        assert_ne!(
-            auto.text, none.text,
-            "Compose parity requires Hyphens.Auto and Hyphens.None to produce different line breaks"
+        assert_eq!(
+            auto.text.lines().collect::<Vec<_>>(),
+            vec!["Tran", "sfor", "ma", "tion"]
+        );
+        assert_eq!(
+            none.text.lines().collect::<Vec<_>>(),
+            vec!["Tran", "sfor", "mati", "on"]
+        );
+        assert!(
+            !auto.text.contains('-'),
+            "automatic hyphenation should influence breaks without mutating source text content"
         );
     }
 }

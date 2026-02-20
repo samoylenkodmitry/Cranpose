@@ -761,7 +761,7 @@ impl LayoutBuilderState {
         }
         // If applier was busy (None) or snapshot was None, fall through to fallback
 
-        // No legacy fallbacks - all widgets now use LayoutNode or SubcomposeLayoutNode
+        // No alternate fallbacks - all widgets use LayoutNode or SubcomposeLayoutNode
         // If we reach here, it's an unknown node type (shouldn't happen in normal use)
         Ok(Rc::new(MeasuredNode::new(
             node_id,
@@ -2030,7 +2030,7 @@ fn compute_semantics_for_node(
 
 /// Builds a semantics node from measured tree data and semantics configurations.
 /// Roles and actions are now derived entirely from SemanticsConfiguration, with
-/// metadata consulted only for legacy widget type information.
+/// metadata consulted only for prior widget type information.
 fn build_semantics_node(
     node: &MeasuredNode,
     metadata: &HashMap<NodeId, RuntimeNodeMetadata>,

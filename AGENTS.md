@@ -39,3 +39,4 @@
 - no 'backwards compatability' is allowed; we in a pre-alpha
 - no comments in style "now it is like that" - we are not writing history
 - duplicated code (10+ lines) without architecture is forbidden
+- 'legacy'/'old way' etc allowed. we are in a pre-alpha, everything is fresh, clean, single instance

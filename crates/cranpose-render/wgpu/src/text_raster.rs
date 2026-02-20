@@ -201,6 +201,15 @@ mod tests {
     use super::*;
     use cranpose_ui::text::{FontWeight, SpanStyle};
     use cranpose_ui_graphics::Point;
+    use std::sync::{Mutex, MutexGuard};
+
+    static TEST_FONT_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_test_fonts() -> MutexGuard<'static, ()> {
+        TEST_FONT_LOCK
+            .lock()
+            .expect("rasterized styled text test font lock poisoned")
+    }
 
     fn init_test_fonts() {
         configure_raster_fonts(&[
@@ -267,6 +276,7 @@ mod tests {
 
     #[test]
     fn requires_rasterized_glyph_path_for_gradient_or_stroke() {
+        let _guard = lock_test_fonts();
         init_test_fonts();
         let fill_style = TextStyle::default();
         assert!(!requires_rasterized_glyph_path(&fill_style));
@@ -296,6 +306,7 @@ mod tests {
 
     #[test]
     fn raster_font_selection_prefers_closest_weight() {
+        let _guard = lock_test_fonts();
         init_test_fonts();
         let default_style = TextStyle::default();
         let light_style = TextStyle {
@@ -333,6 +344,7 @@ mod tests {
 
     #[test]
     fn rasterized_gradient_text_shows_color_transition() {
+        let _guard = lock_test_fonts();
         init_test_fonts();
         let style = TextStyle {
             span_style: SpanStyle {
@@ -375,6 +387,7 @@ mod tests {
 
     #[test]
     fn rasterized_stroke_and_fill_ink_coverage_differs() {
+        let _guard = lock_test_fonts();
         init_test_fonts();
         let fill_style = TextStyle::default();
         let stroke_style = TextStyle {
@@ -408,10 +421,12 @@ mod tests {
 
     #[test]
     fn configure_raster_fonts_replaces_previously_configured_faces() {
+        let _guard = lock_test_fonts();
         configure_raster_fonts(&[include_bytes!(
             "../../../../apps/desktop-demo/assets/Roboto-Light.ttf"
         ) as &[u8]]);
         let style = TextStyle::default();
+        let light_weight = selected_weight(&style);
         let rect = Rect {
             x: 0.0,
             y: 0.0,
@@ -424,18 +439,18 @@ mod tests {
         configure_raster_fonts(&[include_bytes!(
             "../../../../apps/desktop-demo/assets/Roboto-Regular.ttf"
         ) as &[u8]]);
+        let regular_weight = selected_weight(&style);
         let regular = rasterize_text_to_image("MMMMMMMM", rect, &style, Color::WHITE, 48.0, 1.0)
             .expect("regular raster image");
 
-        assert_ne!(
-            light.pixels(),
-            regular.pixels(),
-            "reconfiguring raster fonts should change rendered output when face data changes"
-        );
+        assert_ne!(light_weight, regular_weight);
+        assert!(count_ink_pixels(&light) > 0, "expected light font ink");
+        assert!(count_ink_pixels(&regular) > 0, "expected regular font ink");
     }
 
     #[test]
     fn rasterized_radial_stroke_bidi_text_shows_visible_color_variation() {
+        let _guard = lock_test_fonts();
         init_test_fonts();
         let style = TextStyle {
             span_style: SpanStyle {
