@@ -37,6 +37,21 @@ pub trait TextMeasurer: 'static {
 
     fn layout(&self, text: &str, style: &TextStyle) -> TextLayoutResult;
 
+    /// Returns an alternate break boundary for `Hyphens::Auto` when a greedy break
+    /// split lands in the middle of a word.
+    ///
+    /// `segment_start_char` and `measured_break_char` are character-boundary indices
+    /// in `line` (not byte offsets). Return `None` to delegate to fallback behavior.
+    fn choose_auto_hyphen_break(
+        &self,
+        _line: &str,
+        _style: &TextStyle,
+        _segment_start_char: usize,
+        _measured_break_char: usize,
+    ) -> Option<usize> {
+        None
+    }
+
     fn measure_with_options(
         &self,
         text: &str,
@@ -371,7 +386,8 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
             && best < boundaries.len() - 1
             && is_break_inside_word(line, &boundaries, wrap_idx);
         if can_hyphenate {
-            effective_wrap_idx = choose_auto_hyphen_break(&boundaries, start_idx, wrap_idx);
+            effective_wrap_idx =
+                resolve_auto_hyphen_break(measurer, line, style, &boundaries, start_idx, wrap_idx);
         }
         let mut segment = line[boundaries[start_idx]..boundaries[effective_wrap_idx]].to_string();
         if wrap_idx != best {
@@ -517,7 +533,42 @@ fn is_break_inside_word(line: &str, boundaries: &[usize], break_idx: usize) -> b
     !prev.chars().all(char::is_whitespace) && !next.chars().all(char::is_whitespace)
 }
 
-fn choose_auto_hyphen_break(boundaries: &[usize], start_idx: usize, break_idx: usize) -> usize {
+fn resolve_auto_hyphen_break<M: TextMeasurer + ?Sized>(
+    measurer: &M,
+    line: &str,
+    style: &TextStyle,
+    boundaries: &[usize],
+    start_idx: usize,
+    break_idx: usize,
+) -> usize {
+    if let Some(candidate) = measurer.choose_auto_hyphen_break(line, style, start_idx, break_idx) {
+        if is_valid_auto_hyphen_break(line, boundaries, start_idx, break_idx, candidate) {
+            return candidate;
+        }
+    }
+    choose_auto_hyphen_break_fallback(boundaries, start_idx, break_idx)
+}
+
+fn is_valid_auto_hyphen_break(
+    line: &str,
+    boundaries: &[usize],
+    start_idx: usize,
+    break_idx: usize,
+    candidate_idx: usize,
+) -> bool {
+    let end_idx = boundaries.len().saturating_sub(1);
+    candidate_idx > start_idx
+        && candidate_idx < end_idx
+        && candidate_idx <= break_idx
+        && candidate_idx >= start_idx + AUTO_HYPHEN_MIN_SEGMENT_CHARS
+        && is_break_inside_word(line, boundaries, candidate_idx)
+}
+
+fn choose_auto_hyphen_break_fallback(
+    boundaries: &[usize],
+    start_idx: usize,
+    break_idx: usize,
+) -> usize {
     let end_idx = boundaries.len().saturating_sub(1);
     if break_idx >= end_idx {
         return break_idx;
@@ -734,6 +785,39 @@ fn char_boundaries(text: &str) -> Vec<usize> {
 mod tests {
     use super::*;
     use crate::text::{Hyphens, LineBreak, ParagraphStyle, TextUnit};
+    use crate::text_layout_result::TextLayoutResult;
+
+    struct ContractBreakMeasurer {
+        retreat: usize,
+    }
+
+    impl TextMeasurer for ContractBreakMeasurer {
+        fn measure(&self, text: &str, style: &TextStyle) -> TextMetrics {
+            MonospacedTextMeasurer.measure(text, style)
+        }
+
+        fn get_offset_for_position(&self, text: &str, style: &TextStyle, x: f32, y: f32) -> usize {
+            MonospacedTextMeasurer.get_offset_for_position(text, style, x, y)
+        }
+
+        fn get_cursor_x_for_offset(&self, text: &str, style: &TextStyle, offset: usize) -> f32 {
+            MonospacedTextMeasurer.get_cursor_x_for_offset(text, style, offset)
+        }
+
+        fn layout(&self, text: &str, style: &TextStyle) -> TextLayoutResult {
+            MonospacedTextMeasurer.layout(text, style)
+        }
+
+        fn choose_auto_hyphen_break(
+            &self,
+            _line: &str,
+            _style: &TextStyle,
+            _segment_start_char: usize,
+            measured_break_char: usize,
+        ) -> Option<usize> {
+            measured_break_char.checked_sub(self.retreat)
+        }
+    }
 
     fn style_with_line_break(line_break: LineBreak) -> TextStyle {
         TextStyle {
@@ -977,6 +1061,56 @@ mod tests {
         assert!(
             !auto.text.contains('-'),
             "automatic hyphenation should influence breaks without mutating source text content"
+        );
+    }
+
+    #[test]
+    fn hyphens_auto_uses_measurer_hyphen_contract_when_valid() {
+        let text = "Transformation";
+        let style = style_with_hyphens(Hyphens::Auto);
+        let options = TextLayoutOptions {
+            overflow: TextOverflow::Clip,
+            soft_wrap: true,
+            max_lines: usize::MAX,
+            min_lines: 1,
+        };
+
+        let prepared = prepare_text_layout_fallback(
+            &ContractBreakMeasurer { retreat: 1 },
+            text,
+            &style,
+            options,
+            Some(24.0),
+        );
+
+        assert_eq!(
+            prepared.text.lines().collect::<Vec<_>>(),
+            vec!["Tra", "nsf", "orm", "ati", "on"]
+        );
+    }
+
+    #[test]
+    fn hyphens_auto_falls_back_when_measurer_hyphen_contract_is_invalid() {
+        let text = "Transformation";
+        let style = style_with_hyphens(Hyphens::Auto);
+        let options = TextLayoutOptions {
+            overflow: TextOverflow::Clip,
+            soft_wrap: true,
+            max_lines: usize::MAX,
+            min_lines: 1,
+        };
+
+        let prepared = prepare_text_layout_fallback(
+            &ContractBreakMeasurer { retreat: 10 },
+            text,
+            &style,
+            options,
+            Some(24.0),
+        );
+
+        assert_eq!(
+            prepared.text.lines().collect::<Vec<_>>(),
+            vec!["Tran", "sfor", "ma", "tion"]
         );
     }
 }

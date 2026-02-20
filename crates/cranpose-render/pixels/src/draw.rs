@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use cranpose_render_common::software_text_raster::rasterize_text_to_image_with_font;
+use cranpose_render_common::text_hyphenation::choose_auto_hyphen_break as choose_shared_auto_hyphen_break;
 use cranpose_ui::text::TextMotion;
 use cranpose_ui::{Brush, TextMeasurer, TextMetrics};
 use cranpose_ui_graphics::{BlendMode, Color, ColorFilter, Rect, TileMode};
@@ -375,6 +376,16 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
             lines,
             text,
         )
+    }
+
+    fn choose_auto_hyphen_break(
+        &self,
+        line: &str,
+        style: &cranpose_ui::text::TextStyle,
+        segment_start_char: usize,
+        measured_break_char: usize,
+    ) -> Option<usize> {
+        choose_shared_auto_hyphen_break(line, style, segment_start_char, measured_break_char)
     }
 }
 

@@ -16,7 +16,10 @@ mod text_raster;
 pub use scene::{BackdropLayer, ClickAction, DrawShape, HitRegion, ImageDraw, Scene, TextDraw};
 
 use cranpose_core::{MemoryApplier, NodeId};
-use cranpose_render_common::{RenderScene, Renderer};
+use cranpose_render_common::{
+    text_hyphenation::choose_auto_hyphen_break as choose_shared_auto_hyphen_break, RenderScene,
+    Renderer,
+};
 use cranpose_ui::{set_text_measurer, LayoutTree, TextMeasurer};
 use cranpose_ui_graphics::Size;
 use glyphon::{
@@ -761,6 +764,16 @@ impl TextMeasurer for WgpuTextMeasurer {
         // Measure text up to offset
         let prefix = &text[..clamped_offset];
         self.measure(prefix, style).width
+    }
+
+    fn choose_auto_hyphen_break(
+        &self,
+        line: &str,
+        style: &cranpose_ui::text::TextStyle,
+        segment_start_char: usize,
+        measured_break_char: usize,
+    ) -> Option<usize> {
+        choose_shared_auto_hyphen_break(line, style, segment_start_char, measured_break_char)
     }
 
     fn layout(
