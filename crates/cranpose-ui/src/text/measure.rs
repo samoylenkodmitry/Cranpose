@@ -309,10 +309,7 @@ fn prepare_text_layout_fallback<M: TextMeasurer + ?Sized>(
     }
 
     let display_text = visible_lines.join("\n");
-    let line_height = measurer
-        .measure(&crate::text::AnnotatedString::from(""), style)
-        .line_height
-        .max(0.0);
+    let line_height = measurer.measure(text, style).line_height.max(0.0);
     let display_line_count = visible_lines.len().max(1);
     let layout_line_count = display_line_count.max(opts.min_lines);
 
@@ -336,8 +333,7 @@ fn prepare_text_layout_fallback<M: TextMeasurer + ?Sized>(
         measured_width
     };
 
-    let mut display_annotated = text.clone();
-    display_annotated.text = display_text;
+    let display_annotated = remap_annotated_for_display(text, display_text.as_str());
     PreparedTextLayout {
         text: display_annotated,
         metrics: TextMetrics {
@@ -355,6 +351,101 @@ fn split_text_lines(text: &str) -> Vec<String> {
         return vec![String::new()];
     }
     text.split('\n').map(ToString::to_string).collect()
+}
+
+fn remap_annotated_for_display(
+    source: &crate::text::AnnotatedString,
+    display_text: &str,
+) -> crate::text::AnnotatedString {
+    if source.text == display_text {
+        return source.clone();
+    }
+
+    let display_chars = map_display_chars_to_source(source.text.as_str(), display_text);
+    crate::text::AnnotatedString {
+        text: display_text.to_string(),
+        span_styles: remap_range_styles(&source.span_styles, &display_chars),
+        paragraph_styles: remap_range_styles(&source.paragraph_styles, &display_chars),
+    }
+}
+
+#[derive(Clone, Copy)]
+struct DisplayCharMap {
+    display_start: usize,
+    display_end: usize,
+    source_start: Option<usize>,
+}
+
+fn map_display_chars_to_source(source: &str, display: &str) -> Vec<DisplayCharMap> {
+    let source_chars: Vec<(usize, char)> = source.char_indices().collect();
+    let mut source_index = 0usize;
+    let mut maps = Vec::with_capacity(display.chars().count());
+
+    for (display_start, display_char) in display.char_indices() {
+        let display_end = display_start + display_char.len_utf8();
+        let mut source_start = None;
+        while source_index < source_chars.len() {
+            let (candidate_start, candidate_char) = source_chars[source_index];
+            source_index += 1;
+            if candidate_char == display_char {
+                source_start = Some(candidate_start);
+                break;
+            }
+        }
+        maps.push(DisplayCharMap {
+            display_start,
+            display_end,
+            source_start,
+        });
+    }
+
+    maps
+}
+
+fn remap_range_styles<T: Clone>(
+    styles: &[crate::text::RangeStyle<T>],
+    display_chars: &[DisplayCharMap],
+) -> Vec<crate::text::RangeStyle<T>> {
+    let mut remapped = Vec::new();
+
+    for style in styles {
+        let mut range_start = None;
+        let mut range_end = 0usize;
+
+        for map in display_chars {
+            let in_range = map.source_start.is_some_and(|source_start| {
+                source_start >= style.range.start && source_start < style.range.end
+            });
+
+            if in_range {
+                if range_start.is_none() {
+                    range_start = Some(map.display_start);
+                }
+                range_end = map.display_end;
+                continue;
+            }
+
+            if let Some(start) = range_start.take() {
+                if start < range_end {
+                    remapped.push(crate::text::RangeStyle {
+                        item: style.item.clone(),
+                        range: start..range_end,
+                    });
+                }
+            }
+        }
+
+        if let Some(start) = range_start.take() {
+            if start < range_end {
+                remapped.push(crate::text::RangeStyle {
+                    item: style.item.clone(),
+                    range: start..range_end,
+                });
+            }
+        }
+    }
+
+    remapped
 }
 
 fn normalize_max_width(max_width: Option<f32>) -> Option<f32> {
@@ -1246,5 +1337,71 @@ mod tests {
             prepared.text.text.lines().collect::<Vec<_>>(),
             vec!["Tran", "sfor", "ma", "tion"]
         );
+    }
+
+    #[test]
+    fn transformed_text_keeps_span_ranges_within_display_bounds() {
+        let style = TextStyle {
+            span_style: crate::text::SpanStyle {
+                font_size: TextUnit::Sp(10.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let options = TextLayoutOptions {
+            overflow: TextOverflow::Ellipsis,
+            soft_wrap: false,
+            max_lines: 1,
+            min_lines: 1,
+        };
+        let annotated = crate::text::AnnotatedString::builder()
+            .push_style(crate::text::SpanStyle {
+                font_weight: Some(crate::text::FontWeight::BOLD),
+                ..Default::default()
+            })
+            .append("Styled overflow text sample")
+            .pop()
+            .to_annotated_string();
+
+        let prepared = prepare_text_layout(&annotated, &style, options, Some(40.0));
+        assert!(prepared.did_overflow);
+        for span in &prepared.text.span_styles {
+            assert!(span.range.start < span.range.end);
+            assert!(span.range.end <= prepared.text.text.len());
+            assert!(prepared.text.text.is_char_boundary(span.range.start));
+            assert!(prepared.text.text.is_char_boundary(span.range.end));
+        }
+    }
+
+    #[test]
+    fn wrapped_text_splits_styles_around_inserted_newlines() {
+        let style = TextStyle {
+            span_style: crate::text::SpanStyle {
+                font_size: TextUnit::Sp(10.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let options = TextLayoutOptions {
+            overflow: TextOverflow::Clip,
+            soft_wrap: true,
+            max_lines: usize::MAX,
+            min_lines: 1,
+        };
+        let annotated = crate::text::AnnotatedString::builder()
+            .push_style(crate::text::SpanStyle {
+                text_decoration: Some(crate::text::TextDecoration::UNDERLINE),
+                ..Default::default()
+            })
+            .append("Wrapped style text example")
+            .pop()
+            .to_annotated_string();
+
+        let prepared = prepare_text_layout(&annotated, &style, options, Some(32.0));
+        assert!(prepared.text.text.contains('\n'));
+        assert!(!prepared.text.span_styles.is_empty());
+        for span in &prepared.text.span_styles {
+            assert!(span.range.end <= prepared.text.text.len());
+        }
     }
 }

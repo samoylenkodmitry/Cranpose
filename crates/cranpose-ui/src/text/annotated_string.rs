@@ -63,12 +63,14 @@ impl AnnotatedString {
         for span in &self.span_styles {
             hasher.write_usize(span.range.start);
             hasher.write_usize(span.range.end);
-            
+
             // Hash measurement-affecting fields
-            let mut dummy = crate::text::TextStyle::default();
-            dummy.span_style = span.item.clone();
+            let dummy = crate::text::TextStyle {
+                span_style: span.item.clone(),
+                ..Default::default()
+            };
             hasher.write_u64(dummy.measurement_hash());
-            
+
             // Hash visually-affecting fields ignored by measurement
             if let Some(c) = &span.item.color {
                 hasher.write_u32(c.0.to_bits());
@@ -98,7 +100,7 @@ impl AnnotatedString {
 
         let start = range.start.min(self.text.len());
         let end = range.end.max(start).min(self.text.len());
-        
+
         if start == end {
             return Self::new(String::new());
         }

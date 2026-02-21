@@ -4,7 +4,7 @@ use crate::effect_renderer::{EffectRenderer, RoundedCompositeMask};
 use crate::offscreen::OffscreenTarget;
 use crate::scene::{BackdropLayer, DrawShape, EffectLayer, ImageDraw, ShadowDraw, TextDraw};
 use crate::shaders;
-use crate::{SharedTextBuffer, SharedTextCache, TextCacheKey};
+use crate::{EnsureTextBufferParams, SharedTextBuffer, SharedTextCache, TextCacheKey};
 use bytemuck::{Pod, Zeroable};
 use cranpose_ui_graphics::{
     BlendMode, Brush, Color, ColorFilter, ImageBitmap, Rect, RenderEffect, TileMode,
@@ -36,10 +36,6 @@ const CLEAR_COLOR: wgpu::Color = wgpu::Color {
 const MAX_TEXTURE_CACHE_ITEMS: usize = 256;
 static REPORTED_UNSUPPORTED_WGPU_BLEND_MODES: AtomicBool = AtomicBool::new(false);
 static REPORTED_UNSUPPORTED_WGPU_EFFECTS: AtomicBool = AtomicBool::new(false);
-
-fn resolve_line_height(style: &cranpose_ui::TextStyle, font_size: f32) -> f32 {
-    style.resolve_line_height(14.0, font_size * 1.4)
-}
 
 fn is_blend_mode_supported(mode: BlendMode) -> bool {
     matches!(mode, BlendMode::SrcOver | BlendMode::DstOut)
@@ -2534,8 +2530,13 @@ impl GpuRenderer {
             }
 
             let font_size_px = text_draw.font_size * text_draw.scale * root_scale;
-            let style_hash = text_draw.text_style.measurement_hash() ^ text_draw.text.span_styles_hash();
-            let line_height_px = resolve_line_height(&text_draw.text_style, font_size_px);
+            let style_hash =
+                text_draw.text_style.measurement_hash() ^ text_draw.text.span_styles_hash();
+            let line_height_px = crate::resolve_effective_line_height(
+                &text_draw.text_style,
+                &text_draw.text,
+                font_size_px,
+            );
             let key = TextCacheKey::for_node(text_draw.node_id, font_size_px, style_hash);
 
             let buffer = text_cache.entry(key.clone()).or_insert_with(|| {
@@ -2555,12 +2556,14 @@ impl GpuRenderer {
 
             buffer.ensure(
                 &mut font_system,
-                &text_draw.text,
-                font_size_px,
-                line_height_px,
-                style_hash,
-                &text_draw.text_style,
-                text_draw.scale * root_scale,
+                EnsureTextBufferParams {
+                    annotated_text: &text_draw.text,
+                    font_size_px,
+                    line_height_px,
+                    style_hash,
+                    style: &text_draw.text_style,
+                    scale: text_draw.scale * root_scale,
+                },
             );
 
             text_keys.push(key);

@@ -23,24 +23,31 @@ fn test_rich_text_bounds() {
             .pop()
             .to_annotated_string();
 
-        Column(
-            Modifier::empty(),
-            ColumnSpec::new(),
-            move || {
-                Text(
-                    annotated_text.clone(),
-                    Modifier::empty(),
-                    TextStyle::default(),
-                );
-            },
-        );
+        Column(Modifier::empty(), ColumnSpec::new(), move || {
+            Text(
+                annotated_text.clone(),
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+        });
     });
 
-    let bounds = robot.find_by_text("BIG small").bounds().expect("text bounds");
+    let bounds = robot
+        .find_by_text("BIG small")
+        .bounds()
+        .expect("text bounds");
     println!("Text bounds: {:?}", bounds);
-    
+
     // "BIG" is 30sp, "small" is 10sp. Total height should be >=30.
-    assert!(bounds.height >= 30.0, "Height should wrap largest span. Expected >= 30, got {}", bounds.height);
+    assert!(
+        bounds.height >= 30.0,
+        "Height should wrap largest span. Expected >= 30, got {}",
+        bounds.height
+    );
     // Width should not take the whole screen!
-    assert!(bounds.width < 800.0, "Width should not take the full space. Got {}", bounds.width);
+    assert!(
+        bounds.width < 800.0,
+        "Width should not take the full space. Got {}",
+        bounds.width
+    );
 }

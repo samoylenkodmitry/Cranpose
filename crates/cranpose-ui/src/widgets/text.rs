@@ -148,7 +148,7 @@ where
     S: IntoTextSource + Clone + PartialEq + 'static,
 {
     let current = text.into_text_source().resolve();
-    
+
     let options = TextLayoutOptions {
         overflow,
         soft_wrap,

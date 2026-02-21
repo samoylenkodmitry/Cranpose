@@ -580,6 +580,85 @@ fn draw_image(frame: &mut [u8], width: u32, height: u32, draw: &ImageDraw) {
 }
 
 fn draw_text(frame: &mut [u8], width: u32, height: u32, draw: &TextDraw) {
+    if draw.text.span_styles.is_empty() {
+        draw_text_plain(frame, width, height, draw);
+        return;
+    }
+
+    draw_text_with_span_styles(frame, width, height, draw);
+}
+
+fn draw_text_with_span_styles(frame: &mut [u8], width: u32, height: u32, draw: &TextDraw) {
+    let boundaries = draw.text.span_boundaries();
+    let mut cursor_x = draw.rect.x;
+    let mut cursor_y = draw.rect.y;
+    let base_line_height = draw
+        .text_style
+        .resolve_line_height(14.0, draw.font_size)
+        .max(1.0);
+    let mut current_line_height = base_line_height;
+
+    for window in boundaries.windows(2) {
+        let start = window[0];
+        let end = window[1];
+        if start == end {
+            continue;
+        }
+
+        let chunk = &draw.text.text[start..end];
+        let mut merged_span = draw.text_style.span_style.clone();
+        for span in &draw.text.span_styles {
+            if span.range.start <= start && span.range.end >= end {
+                merged_span = merged_span.merge(&span.item);
+            }
+        }
+
+        let mut chunk_style = draw.text_style.clone();
+        chunk_style.span_style = merged_span;
+
+        for part in chunk.split_inclusive('\n') {
+            let has_newline = part.ends_with('\n');
+            let content = if has_newline {
+                &part[..part.len().saturating_sub(1)]
+            } else {
+                part
+            };
+
+            if !content.is_empty() {
+                let segment = cranpose_ui::text::AnnotatedString::from(content);
+                let metrics = cranpose_ui::text::measure_text(&segment, &chunk_style);
+                let segment_draw = TextDraw {
+                    node_id: draw.node_id,
+                    rect: Rect {
+                        x: cursor_x,
+                        y: cursor_y,
+                        width: metrics.width.max(1.0),
+                        height: metrics.height.max(1.0),
+                    },
+                    text: Rc::new(segment),
+                    color: chunk_style.resolve_text_color(draw.color),
+                    text_style: chunk_style.clone(),
+                    font_size: chunk_style.resolve_font_size(draw.font_size),
+                    scale: draw.scale,
+                    layout_options: draw.layout_options,
+                    z_index: draw.z_index,
+                    clip: draw.clip,
+                };
+                draw_text_plain(frame, width, height, &segment_draw);
+                cursor_x += metrics.width;
+                current_line_height = current_line_height.max(metrics.line_height.max(1.0));
+            }
+
+            if has_newline {
+                cursor_x = draw.rect.x;
+                cursor_y += current_line_height;
+                current_line_height = base_line_height;
+            }
+        }
+    }
+}
+
+fn draw_text_plain(frame: &mut [u8], width: u32, height: u32, draw: &TextDraw) {
     let text_scale = draw.scale.max(0.0);
     if text_scale == 0.0 {
         return;

@@ -667,7 +667,7 @@ fn push_text_style_draws(
         text_clip,
     );
 
-    if requires_rasterized_glyph_path(&transformed_text_style) {
+    if text.span_styles.is_empty() && requires_rasterized_glyph_path(&transformed_text_style) {
         let image = rasterize_text_to_image(
             text.text.as_str(),
             snapped_shifted_text_rect,

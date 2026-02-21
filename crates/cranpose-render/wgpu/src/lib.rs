@@ -106,18 +106,28 @@ pub(crate) struct SharedTextBuffer {
     cached_size: Option<Size>,
 }
 
+pub(crate) struct EnsureTextBufferParams<'a> {
+    pub(crate) annotated_text: &'a cranpose_ui::text::AnnotatedString,
+    pub(crate) font_size_px: f32,
+    pub(crate) line_height_px: f32,
+    pub(crate) style_hash: u64,
+    pub(crate) style: &'a cranpose_ui::text::TextStyle,
+    pub(crate) scale: f32,
+}
+
 impl SharedTextBuffer {
     /// Ensure the buffer has the correct text and font_size, only reshaping if needed
     pub(crate) fn ensure(
         &mut self,
         font_system: &mut FontSystem,
-        annotated_text: &cranpose_ui::text::AnnotatedString,
-        font_size_px: f32,
-        line_height_px: f32,
-        style_hash: u64,
-        style: &cranpose_ui::text::TextStyle,
-        scale: f32,
+        params: EnsureTextBufferParams<'_>,
     ) {
+        let annotated_text = params.annotated_text;
+        let font_size_px = params.font_size_px;
+        let line_height_px = params.line_height_px;
+        let style_hash = params.style_hash;
+        let style = params.style;
+        let scale = params.scale;
         let text_str = annotated_text.text.as_str();
         let text_changed = self.text != text_str;
         let font_changed = (self.font_size - font_size_px).abs() > 0.1;
@@ -135,8 +145,11 @@ impl SharedTextBuffer {
         self.buffer
             .set_size(font_system, Some(f32::MAX), Some(f32::MAX));
 
-        let unscaled_base_size = if scale > 0.0 { font_size_px / scale } else { 14.0 };
-
+        let unscaled_base_size = if scale > 0.0 {
+            font_size_px / scale
+        } else {
+            14.0
+        };
 
         // Set text and shape
         if annotated_text.span_styles.is_empty() {
@@ -171,7 +184,8 @@ impl SharedTextBuffer {
                 .map(|(slice, chunk_style)| {
                     let attrs = attrs_from_text_style(chunk_style, unscaled_base_size, scale);
                     (slice, attrs)
-                }).collect();
+                })
+                .collect();
             self.buffer.set_rich_text(
                 font_system,
                 rich_spans,
@@ -551,6 +565,45 @@ fn resolve_line_height(style: &cranpose_ui::text::TextStyle, font_size: f32) -> 
     style.resolve_line_height(14.0, font_size * 1.4)
 }
 
+fn resolve_max_span_font_size(
+    style: &cranpose_ui::text::TextStyle,
+    text: &cranpose_ui::text::AnnotatedString,
+    base_font_size: f32,
+) -> f32 {
+    if text.span_styles.is_empty() {
+        return base_font_size;
+    }
+
+    let mut max_font_size = base_font_size;
+    for window in text.span_boundaries().windows(2) {
+        let start = window[0];
+        let end = window[1];
+        if start == end {
+            continue;
+        }
+
+        let mut merged_span = style.span_style.clone();
+        for span in &text.span_styles {
+            if span.range.start <= start && span.range.end >= end {
+                merged_span = merged_span.merge(&span.item);
+            }
+        }
+        let mut chunk_style = style.clone();
+        chunk_style.span_style = merged_span;
+        max_font_size = max_font_size.max(chunk_style.resolve_font_size(base_font_size));
+    }
+    max_font_size
+}
+
+pub(crate) fn resolve_effective_line_height(
+    style: &cranpose_ui::text::TextStyle,
+    text: &cranpose_ui::text::AnnotatedString,
+    base_font_size: f32,
+) -> f32 {
+    let max_font_size = resolve_max_span_font_size(style, text, base_font_size);
+    resolve_line_height(style, max_font_size)
+}
+
 fn glyphon_family_from_font_family(font_family: &cranpose_ui::text::FontFamily) -> Family<'_> {
     match font_family {
         cranpose_ui::text::FontFamily::Default | cranpose_ui::text::FontFamily::SansSerif => {
@@ -577,8 +630,9 @@ fn attrs_from_text_style<'a>(
     let letter_spacing = span_style.letter_spacing;
 
     let unscaled_font_size = style.resolve_font_size(unscaled_base_font_size);
-    let unscaled_line_height = style.resolve_line_height(unscaled_base_font_size, unscaled_font_size * 1.4);
-    
+    let unscaled_line_height =
+        style.resolve_line_height(unscaled_base_font_size, unscaled_font_size * 1.4);
+
     let font_size_px = unscaled_font_size * scale;
     let line_height_px = unscaled_line_height * scale;
 
@@ -651,47 +705,6 @@ pub fn setup_headless_text_measurer() {
 // Base font size in logical units (dp) - shared between measurement and rendering
 
 impl TextMeasurer for WgpuTextMeasurer {
-    fn measure_with_options(
-        &self,
-        text: &cranpose_ui::text::AnnotatedString,
-        style: &cranpose_ui::text::TextStyle,
-        options: cranpose_ui::TextLayoutOptions,
-        max_width: Option<f32>,
-    ) -> cranpose_ui::TextMetrics {
-        self.prepare_with_options(text, style, options, max_width).metrics
-    }
-
-    fn prepare_with_options(
-        &self,
-        text: &cranpose_ui::text::AnnotatedString,
-        style: &cranpose_ui::text::TextStyle,
-        _options: cranpose_ui::TextLayoutOptions,
-        max_width: Option<f32>,
-    ) -> cranpose_ui::text::PreparedTextLayout {
-        // Retrieve the pre-shaped buffer for this exact rich text configuration.
-        // It's critical we use the unadulterated text object so span bounds aren't stripped.
-        let metrics = self.measure(text, style);
-
-        // Since cosmic-text handles native wrapping during actual draw passes using dynamic bounds, 
-        // we can safely clamp the measurement bounds based on the max_width parameter without destroying string metrics.
-        let clamped_width = if let Some(mw) = max_width {
-            metrics.width.min(mw)
-        } else {
-            metrics.width
-        };
-
-        cranpose_ui::text::PreparedTextLayout {
-            text: text.clone(),
-            metrics: cranpose_ui::TextMetrics {
-                width: clamped_width,
-                height: metrics.height,
-                line_height: metrics.line_height,
-                line_count: metrics.line_count,
-            },
-            did_overflow: max_width.is_some_and(|mw| metrics.width > mw),
-        }
-    }
-
     fn measure(
         &self,
         text: &cranpose_ui::text::AnnotatedString,
@@ -699,7 +712,7 @@ impl TextMeasurer for WgpuTextMeasurer {
     ) -> cranpose_ui::TextMetrics {
         let text_str = text.text.as_str();
         let font_size = resolve_font_size(style);
-        let line_height = resolve_line_height(style, font_size);
+        let line_height = resolve_effective_line_height(style, text, font_size);
         let style_hash = style.measurement_hash() ^ text.span_styles_hash();
         let size_int = (font_size * 100.0) as i32;
 
@@ -749,12 +762,14 @@ impl TextMeasurer for WgpuTextMeasurer {
             // Ensure buffer has the correct text
             buffer.ensure(
                 &mut font_system,
-                text,
-                font_size,
-                line_height,
-                style_hash,
-                style,
-                1.0,
+                EnsureTextBufferParams {
+                    annotated_text: text,
+                    font_size_px: font_size,
+                    line_height_px: line_height,
+                    style_hash,
+                    style,
+                    scale: 1.0,
+                },
             );
 
             // Calculate size if not cached
@@ -792,7 +807,7 @@ impl TextMeasurer for WgpuTextMeasurer {
     ) -> usize {
         let text_str = text.text.as_str();
         let font_size = resolve_font_size(style);
-        let line_height = resolve_line_height(style, font_size);
+        let line_height = resolve_effective_line_height(style, text, font_size);
         let style_hash = style.measurement_hash() ^ text.span_styles_hash();
         if text_str.is_empty() {
             return 0;
@@ -817,44 +832,98 @@ impl TextMeasurer for WgpuTextMeasurer {
 
         buffer.ensure(
             &mut font_system,
-            text,
-            font_size,
-            line_height,
-            style_hash,
-            style,
-            1.0,
+            EnsureTextBufferParams {
+                annotated_text: text,
+                font_size_px: font_size,
+                line_height_px: line_height,
+                style_hash,
+                style,
+                scale: 1.0,
+            },
         );
 
-        let line_index = (y / line_height).floor().max(0.0) as usize;
-        let mut best_offset = 0;
-        let mut best_distance = f32::INFINITY;
-        let mut found_line = false;
+        let line_offsets: Vec<(usize, usize)> = text_str
+            .split('\n')
+            .scan(0usize, |line_start, line| {
+                let start = *line_start;
+                let end = start + line.len();
+                *line_start = end.saturating_add(1);
+                Some((start, end))
+            })
+            .collect();
+
+        let mut target_line = None;
+        let mut best_vertical_distance = f32::INFINITY;
 
         for run in buffer.buffer.layout_runs() {
-            if run.line_i != line_index {
-                continue;
-            }
-            found_line = true;
-            let mut glyph_x = 0.0f32;
+            let mut run_height = run.line_height;
             for glyph in run.glyphs.iter() {
-                let left_dist = (x - glyph_x).abs();
-                if left_dist < best_distance {
-                    best_distance = left_dist;
-                    best_offset = glyph.start;
-                }
+                run_height = run_height.max(glyph.font_size * 1.4);
+            }
 
-                glyph_x += glyph.w;
+            let top = run.line_top;
+            let bottom = top + run_height.max(1.0);
+            let vertical_distance = if y < top {
+                top - y
+            } else if y > bottom {
+                y - bottom
+            } else {
+                0.0
+            };
 
-                let right_dist = (x - glyph_x).abs();
-                if right_dist < best_distance {
-                    best_distance = right_dist;
-                    best_offset = glyph.end;
+            if vertical_distance < best_vertical_distance {
+                best_vertical_distance = vertical_distance;
+                target_line = Some(run.line_i);
+                if vertical_distance == 0.0 {
+                    break;
                 }
             }
         }
 
-        if !found_line {
-            best_offset = text_str.len();
+        let fallback_line = (y / line_height).floor().max(0.0) as usize;
+        let target_line = target_line
+            .unwrap_or(fallback_line)
+            .min(line_offsets.len().saturating_sub(1));
+        let (line_start, line_end) = line_offsets
+            .get(target_line)
+            .copied()
+            .unwrap_or((0, text_str.len()));
+        let line_len = line_end.saturating_sub(line_start);
+
+        let mut best_offset = line_offsets
+            .get(target_line)
+            .map(|(_, end)| *end)
+            .unwrap_or(text_str.len());
+        let mut best_distance = f32::INFINITY;
+        let mut found_glyph = false;
+
+        for run in buffer.buffer.layout_runs() {
+            if run.line_i != target_line {
+                continue;
+            }
+            for glyph in run.glyphs.iter() {
+                found_glyph = true;
+                let glyph_start = line_start.saturating_add(glyph.start.min(line_len));
+                let glyph_end = line_start.saturating_add(glyph.end.min(line_len));
+                let left_dist = (x - glyph.x).abs();
+                if left_dist < best_distance {
+                    best_distance = left_dist;
+                    best_offset = glyph_start;
+                }
+
+                let right_x = glyph.x + glyph.w;
+                let right_dist = (x - right_x).abs();
+                if right_dist < best_distance {
+                    best_distance = right_dist;
+                    best_offset = glyph_end;
+                }
+            }
+        }
+
+        if !found_glyph {
+            if let Some((start, end)) = line_offsets.get(target_line) {
+                best_offset = if x <= 0.0 { *start } else { *end };
+            }
         }
 
         best_offset.min(text_str.len())
@@ -897,7 +966,7 @@ impl TextMeasurer for WgpuTextMeasurer {
         use cranpose_ui::text_layout_result::{LineLayout, TextLayoutResult};
 
         let font_size = resolve_font_size(style);
-        let line_height = resolve_line_height(style, font_size);
+        let line_height = resolve_effective_line_height(style, text, font_size);
         let style_hash = style.measurement_hash() ^ text.span_styles_hash();
 
         let cache_key = TextCacheKey::new(text_str, font_size, style_hash);
@@ -917,18 +986,29 @@ impl TextMeasurer for WgpuTextMeasurer {
         });
         buffer.ensure(
             &mut font_system,
-            text,
-            font_size,
-            line_height,
-            style_hash,
-            style,
-            1.0,
+            EnsureTextBufferParams {
+                annotated_text: text,
+                font_size_px: font_size,
+                line_height_px: line_height,
+                style_hash,
+                style,
+                scale: 1.0,
+            },
         );
 
         // Extract glyph positions from layout runs
         let mut glyph_x_positions = Vec::new();
         let mut char_to_byte = Vec::new();
         let mut lines = Vec::new();
+        let line_offsets: Vec<(usize, usize)> = text_str
+            .split('\n')
+            .scan(0usize, |line_start, line| {
+                let start = *line_start;
+                let end = start + line.len();
+                *line_start = end.saturating_add(1);
+                Some((start, end))
+            })
+            .collect();
 
         let mut current_line_y = 0.0f32;
         let mut line_start_offset = 0usize;
@@ -949,12 +1029,20 @@ impl TextMeasurer for WgpuTextMeasurer {
             }
 
             for glyph in run.glyphs.iter() {
+                let (line_start, line_end) = line_offsets
+                    .get(line_idx)
+                    .copied()
+                    .unwrap_or((0, text_str.len()));
+                let line_len = line_end.saturating_sub(line_start);
+                let glyph_start = line_start.saturating_add(glyph.start.min(line_len));
+                let glyph_end = line_start.saturating_add(glyph.end.min(line_len));
+
                 glyph_x_positions.push(glyph.x);
-                char_to_byte.push(glyph.start);
+                char_to_byte.push(glyph_start);
 
                 // Track line end
-                if glyph.end > line_start_offset {
-                    line_start_offset = glyph.end;
+                if glyph_end > line_start_offset {
+                    line_start_offset = glyph_end;
                 }
             }
         }
