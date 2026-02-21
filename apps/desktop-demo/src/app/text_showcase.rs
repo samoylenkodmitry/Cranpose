@@ -249,7 +249,7 @@ pub(crate) fn TextShowcaseTab() {
                                 TextStyle {
                                     span_style: SpanStyle {
                                         brush: Some(Brush::linear_gradient(vec![
-                                            Color(0.5, 0.95, 1.0, 1.0),
+                                            Color(0.5, 0.95, 1.0, 0.0),
                                             Color(1.0, 0.72, 0.5, 1.0),
                                         ])),
                                         alpha: Some(0.88),

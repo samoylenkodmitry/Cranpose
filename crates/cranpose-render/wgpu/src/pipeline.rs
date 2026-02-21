@@ -383,11 +383,13 @@ fn render_container(
             width: content_width,
             height: (rect.height - padding.top - padding.bottom).max(0.0),
         };
-        let transformed_text_bounds = apply_layer_to_rect(text_bounds_rect, rect, &content_layer);
-        let text_clip = resolve_text_clip(options.overflow, visual_clip, transformed_text_bounds);
-
         // Extract font size from text style or default
         let font_size = text_style_ref.resolve_font_size(14.0);
+        let expanded_text_bounds =
+            expand_text_bounds_for_baseline_shift(text_bounds_rect, text_style_ref, font_size);
+        let transformed_text_bounds =
+            apply_layer_to_rect(expanded_text_bounds, rect, &content_layer);
+        let text_clip = resolve_text_clip(options.overflow, visual_clip, transformed_text_bounds);
 
         if let Some(text_clip) = text_clip {
             push_text_style_draws(
@@ -527,6 +529,38 @@ fn resolve_text_clip(
     // Non-visible overflow requires a concrete clip intersection.
     // If empty, skip drawing rather than treating `None` as unbounded clip.
     resolve_clip(visual_clip, Some(pad_clip_rect(transformed_text_bounds))).map(Some)
+}
+
+fn expand_text_bounds_for_baseline_shift(
+    text_bounds: Rect,
+    text_style: &TextStyle,
+    font_size: f32,
+) -> Rect {
+    let baseline_shift_px = text_style
+        .span_style
+        .baseline_shift
+        .filter(|shift| shift.is_specified())
+        .map(|shift| -(shift.0 * font_size))
+        .unwrap_or(0.0);
+    if baseline_shift_px == 0.0 {
+        return text_bounds;
+    }
+
+    if baseline_shift_px < 0.0 {
+        Rect {
+            x: text_bounds.x,
+            y: text_bounds.y + baseline_shift_px,
+            width: text_bounds.width,
+            height: (text_bounds.height - baseline_shift_px).max(0.0),
+        }
+    } else {
+        Rect {
+            x: text_bounds.x,
+            y: text_bounds.y,
+            width: text_bounds.width,
+            height: (text_bounds.height + baseline_shift_px).max(0.0),
+        }
+    }
 }
 
 fn resolve_text_color_without_gradient_fallback(text_style: &TextStyle, default: Color) -> Color {
@@ -1080,11 +1114,13 @@ fn render_node_from_applier(
             width: content_width,
             height: (rect.height - padding.top - padding.bottom).max(0.0),
         };
-        let transformed_text_bounds = apply_layer_to_rect(text_bounds_rect, rect, &content_layer);
-        let text_clip = resolve_text_clip(options.overflow, visual_clip, transformed_text_bounds);
-
         // Extract font size
         let font_size = text_style_ref.resolve_font_size(14.0);
+        let expanded_text_bounds =
+            expand_text_bounds_for_baseline_shift(text_bounds_rect, text_style_ref, font_size);
+        let transformed_text_bounds =
+            apply_layer_to_rect(expanded_text_bounds, rect, &content_layer);
+        let text_clip = resolve_text_clip(options.overflow, visual_clip, transformed_text_bounds);
 
         if let Some(text_clip) = text_clip {
             push_text_style_draws(
@@ -1371,6 +1407,30 @@ mod tests {
         assert_eq!(
             resolve_text_clip(TextOverflow::Visible, None, text_bounds),
             Some(None)
+        );
+    }
+
+    #[test]
+    fn expand_text_bounds_for_baseline_shift_superscript_extends_top() {
+        let style = TextStyle {
+            span_style: cranpose_ui::text::SpanStyle {
+                baseline_shift: Some(cranpose_ui::text::BaselineShift::SUPERSCRIPT),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let text_bounds = Rect {
+            x: 20.0,
+            y: 20.0,
+            width: 50.0,
+            height: 18.0,
+        };
+        let expanded = expand_text_bounds_for_baseline_shift(text_bounds, &style, 20.0);
+        assert!(expanded.y < text_bounds.y);
+        assert!(expanded.height > text_bounds.height);
+        assert_eq!(
+            expanded.y + expanded.height,
+            text_bounds.y + text_bounds.height
         );
     }
 
