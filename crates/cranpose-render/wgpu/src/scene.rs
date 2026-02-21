@@ -46,7 +46,7 @@ pub struct DrawShape {
 pub struct TextDraw {
     pub node_id: NodeId,
     pub rect: Rect,
-    pub text: Rc<str>,
+    pub text: Rc<cranpose_ui::text::AnnotatedString>,
     pub color: Color,
     pub text_style: TextStyle,
     pub font_size: f32,
@@ -302,7 +302,7 @@ impl Scene {
         &mut self,
         node_id: NodeId,
         rect: Rect,
-        text: Rc<str>,
+        text: Rc<cranpose_ui::text::AnnotatedString>,
         color: Color,
         text_style: TextStyle,
         font_size: f32,

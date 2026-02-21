@@ -23,19 +23,30 @@ pub struct TextMetrics {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PreparedTextLayout {
-    pub text: String,
+    pub text: crate::text::AnnotatedString,
     pub metrics: TextMetrics,
     pub did_overflow: bool,
 }
 
 pub trait TextMeasurer: 'static {
-    fn measure(&self, text: &str, style: &TextStyle) -> TextMetrics;
+    fn measure(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics;
 
-    fn get_offset_for_position(&self, text: &str, style: &TextStyle, x: f32, y: f32) -> usize;
+    fn get_offset_for_position(
+        &self,
+        text: &crate::text::AnnotatedString,
+        style: &TextStyle,
+        x: f32,
+        y: f32,
+    ) -> usize;
 
-    fn get_cursor_x_for_offset(&self, text: &str, style: &TextStyle, offset: usize) -> f32;
+    fn get_cursor_x_for_offset(
+        &self,
+        text: &crate::text::AnnotatedString,
+        style: &TextStyle,
+        offset: usize,
+    ) -> f32;
 
-    fn layout(&self, text: &str, style: &TextStyle) -> TextLayoutResult;
+    fn layout(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextLayoutResult;
 
     /// Returns an alternate break boundary for `Hyphens::Auto` when a greedy break
     /// split lands in the middle of a word.
@@ -54,7 +65,7 @@ pub trait TextMeasurer: 'static {
 
     fn measure_with_options(
         &self,
-        text: &str,
+        text: &crate::text::AnnotatedString,
         style: &TextStyle,
         options: TextLayoutOptions,
         max_width: Option<f32>,
@@ -65,7 +76,7 @@ pub trait TextMeasurer: 'static {
 
     fn prepare_with_options(
         &self,
-        text: &str,
+        text: &crate::text::AnnotatedString,
         style: &TextStyle,
         options: TextLayoutOptions,
         max_width: Option<f32>,
@@ -93,10 +104,10 @@ impl MonospacedTextMeasurer {
 }
 
 impl TextMeasurer for MonospacedTextMeasurer {
-    fn measure(&self, text: &str, style: &TextStyle) -> TextMetrics {
+    fn measure(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
         let (char_width, line_height) = Self::get_metrics(style);
 
-        let lines: Vec<&str> = text.split('\n').collect();
+        let lines: Vec<&str> = text.text.split('\n').collect();
         let line_count = lines.len().max(1);
 
         let width = lines
@@ -112,15 +123,21 @@ impl TextMeasurer for MonospacedTextMeasurer {
         }
     }
 
-    fn get_offset_for_position(&self, text: &str, style: &TextStyle, x: f32, y: f32) -> usize {
+    fn get_offset_for_position(
+        &self,
+        text: &crate::text::AnnotatedString,
+        style: &TextStyle,
+        x: f32,
+        y: f32,
+    ) -> usize {
         let (char_width, line_height) = Self::get_metrics(style);
 
-        if text.is_empty() {
+        if text.text.is_empty() {
             return 0;
         }
 
         let line_index = (y / line_height).floor().max(0.0) as usize;
-        let lines: Vec<&str> = text.split('\n').collect();
+        let lines: Vec<&str> = text.text.split('\n').collect();
         let target_line = line_index.min(lines.len().saturating_sub(1));
 
         let mut line_start_byte = 0;
@@ -142,17 +159,22 @@ impl TextMeasurer for MonospacedTextMeasurer {
         line_start_byte + offset_in_line
     }
 
-    fn get_cursor_x_for_offset(&self, text: &str, style: &TextStyle, offset: usize) -> f32 {
+    fn get_cursor_x_for_offset(
+        &self,
+        text: &crate::text::AnnotatedString,
+        style: &TextStyle,
+        offset: usize,
+    ) -> f32 {
         let (char_width, _) = Self::get_metrics(style);
 
-        let clamped_offset = offset.min(text.len());
-        let char_count = text[..clamped_offset].chars().count();
+        let clamped_offset = offset.min(text.text.len());
+        let char_count = text.text[..clamped_offset].chars().count();
         char_count as f32 * char_width
     }
 
-    fn layout(&self, text: &str, style: &TextStyle) -> TextLayoutResult {
+    fn layout(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextLayoutResult {
         let (char_width, line_height) = Self::get_metrics(style);
-        TextLayoutResult::monospaced(text, char_width, line_height)
+        TextLayoutResult::monospaced(&text.text, char_width, line_height)
     }
 }
 
@@ -166,12 +188,12 @@ pub fn set_text_measurer<M: TextMeasurer>(measurer: M) {
     });
 }
 
-pub fn measure_text(text: &str, style: &TextStyle) -> TextMetrics {
+pub fn measure_text(text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
     TEXT_MEASURER.with(|m| m.borrow().measure(text, style))
 }
 
 pub fn measure_text_with_options(
-    text: &str,
+    text: &crate::text::AnnotatedString,
     style: &TextStyle,
     options: TextLayoutOptions,
     max_width: Option<f32>,
@@ -183,7 +205,7 @@ pub fn measure_text_with_options(
 }
 
 pub fn prepare_text_layout(
-    text: &str,
+    text: &crate::text::AnnotatedString,
     style: &TextStyle,
     options: TextLayoutOptions,
     max_width: Option<f32>,
@@ -194,21 +216,30 @@ pub fn prepare_text_layout(
     })
 }
 
-pub fn get_offset_for_position(text: &str, style: &TextStyle, x: f32, y: f32) -> usize {
+pub fn get_offset_for_position(
+    text: &crate::text::AnnotatedString,
+    style: &TextStyle,
+    x: f32,
+    y: f32,
+) -> usize {
     TEXT_MEASURER.with(|m| m.borrow().get_offset_for_position(text, style, x, y))
 }
 
-pub fn get_cursor_x_for_offset(text: &str, style: &TextStyle, offset: usize) -> f32 {
+pub fn get_cursor_x_for_offset(
+    text: &crate::text::AnnotatedString,
+    style: &TextStyle,
+    offset: usize,
+) -> f32 {
     TEXT_MEASURER.with(|m| m.borrow().get_cursor_x_for_offset(text, style, offset))
 }
 
-pub fn layout_text(text: &str, style: &TextStyle) -> TextLayoutResult {
+pub fn layout_text(text: &crate::text::AnnotatedString, style: &TextStyle) -> TextLayoutResult {
     TEXT_MEASURER.with(|m| m.borrow().layout(text, style))
 }
 
 fn prepare_text_layout_fallback<M: TextMeasurer + ?Sized>(
     measurer: &M,
-    text: &str,
+    text: &crate::text::AnnotatedString,
     style: &TextStyle,
     options: TextLayoutOptions,
     max_width: Option<f32>,
@@ -224,7 +255,7 @@ fn prepare_text_layout_fallback<M: TextMeasurer + ?Sized>(
         .take_or_else(|| LineBreak::Simple);
     let hyphens_mode = style.paragraph_style.hyphens.take_or_else(|| Hyphens::None);
 
-    let mut lines = split_text_lines(text);
+    let mut lines = split_text_lines(text.text.as_str());
     if let Some(width_limit) = wrap_width {
         let mut wrapped = Vec::with_capacity(lines.len());
         for line in &lines {
@@ -256,7 +287,9 @@ fn prepare_text_layout_fallback<M: TextMeasurer + ?Sized>(
         let single_line_ellipsis = opts.max_lines == 1 || !opts.soft_wrap;
         let visible_len = visible_lines.len();
         for (line_index, line) in visible_lines.iter_mut().enumerate() {
-            let width = measurer.measure(line, style).width;
+            let width = measurer
+                .measure(&crate::text::AnnotatedString::from(&*line), style)
+                .width;
             if width > width_limit + WRAP_EPSILON {
                 if opts.overflow == TextOverflow::Visible {
                     continue;
@@ -276,7 +309,10 @@ fn prepare_text_layout_fallback<M: TextMeasurer + ?Sized>(
     }
 
     let display_text = visible_lines.join("\n");
-    let line_height = measurer.measure("", style).line_height.max(0.0);
+    let line_height = measurer
+        .measure(&crate::text::AnnotatedString::from(""), style)
+        .line_height
+        .max(0.0);
     let display_line_count = visible_lines.len().max(1);
     let layout_line_count = display_line_count.max(opts.min_lines);
 
@@ -285,7 +321,11 @@ fn prepare_text_layout_fallback<M: TextMeasurer + ?Sized>(
     } else {
         visible_lines
             .iter()
-            .map(|line| measurer.measure(line, style).width)
+            .map(|line| {
+                measurer
+                    .measure(&crate::text::AnnotatedString::from(line), style)
+                    .width
+            })
             .fold(0.0_f32, f32::max)
     };
     let width = if opts.overflow == TextOverflow::Visible {
@@ -296,8 +336,10 @@ fn prepare_text_layout_fallback<M: TextMeasurer + ?Sized>(
         measured_width
     };
 
+    let mut display_annotated = text.clone();
+    display_annotated.text = display_text;
     PreparedTextLayout {
-        text: display_text,
+        text: display_annotated,
         metrics: TextMetrics {
             width,
             height: layout_line_count as f32 * line_height,
@@ -367,7 +409,9 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
         while low <= high {
             let mid = (low + high) / 2;
             let segment = &line[boundaries[start_idx]..boundaries[mid]];
-            let width = measurer.measure(segment, style).width;
+            let width = measurer
+                .measure(&crate::text::AnnotatedString::from(segment), style)
+                .width;
             if width <= max_width + WRAP_EPSILON || mid == start_idx + 1 {
                 best = mid;
                 low = mid + 1;
@@ -435,7 +479,9 @@ fn wrap_line_with_word_balance<M: TextMeasurer + ?Sized>(
             if segment.is_empty() {
                 continue;
             }
-            let segment_width = measurer.measure(segment, style).width;
+            let segment_width = measurer
+                .measure(&crate::text::AnnotatedString::from(segment), style)
+                .width;
             if segment_width > max_width + WRAP_EPSILON {
                 continue;
             }
@@ -666,11 +712,17 @@ fn fit_end_ellipsis<M: TextMeasurer + ?Sized>(
     style: &TextStyle,
     max_width: f32,
 ) -> String {
-    if measurer.measure(line, style).width <= max_width + WRAP_EPSILON {
+    if measurer
+        .measure(&crate::text::AnnotatedString::from(line), style)
+        .width
+        <= max_width + WRAP_EPSILON
+    {
         return line.to_string();
     }
 
-    let ellipsis_width = measurer.measure(ELLIPSIS, style).width;
+    let ellipsis_width = measurer
+        .measure(&crate::text::AnnotatedString::from(ELLIPSIS), style)
+        .width;
     if ellipsis_width > max_width + WRAP_EPSILON {
         return String::new();
     }
@@ -684,7 +736,12 @@ fn fit_end_ellipsis<M: TextMeasurer + ?Sized>(
         let mid = (low + high) / 2;
         let prefix = &line[..boundaries[mid]];
         let candidate = format!("{prefix}{ELLIPSIS}");
-        let width = measurer.measure(&candidate, style).width;
+        let width = measurer
+            .measure(
+                &crate::text::AnnotatedString::from(candidate.as_str()),
+                style,
+            )
+            .width;
         if width <= max_width + WRAP_EPSILON {
             best = mid;
             low = mid + 1;
@@ -704,11 +761,17 @@ fn fit_start_ellipsis<M: TextMeasurer + ?Sized>(
     style: &TextStyle,
     max_width: f32,
 ) -> String {
-    if measurer.measure(line, style).width <= max_width + WRAP_EPSILON {
+    if measurer
+        .measure(&crate::text::AnnotatedString::from(line), style)
+        .width
+        <= max_width + WRAP_EPSILON
+    {
         return line.to_string();
     }
 
-    let ellipsis_width = measurer.measure(ELLIPSIS, style).width;
+    let ellipsis_width = measurer
+        .measure(&crate::text::AnnotatedString::from(ELLIPSIS), style)
+        .width;
     if ellipsis_width > max_width + WRAP_EPSILON {
         return String::new();
     }
@@ -722,7 +785,12 @@ fn fit_start_ellipsis<M: TextMeasurer + ?Sized>(
         let mid = (low + high) / 2;
         let suffix = &line[boundaries[mid]..];
         let candidate = format!("{ELLIPSIS}{suffix}");
-        let width = measurer.measure(&candidate, style).width;
+        let width = measurer
+            .measure(
+                &crate::text::AnnotatedString::from(candidate.as_str()),
+                style,
+            )
+            .width;
         if width <= max_width + WRAP_EPSILON {
             best = mid;
             if mid == 0 {
@@ -743,11 +811,17 @@ fn fit_middle_ellipsis<M: TextMeasurer + ?Sized>(
     style: &TextStyle,
     max_width: f32,
 ) -> String {
-    if measurer.measure(line, style).width <= max_width + WRAP_EPSILON {
+    if measurer
+        .measure(&crate::text::AnnotatedString::from(line), style)
+        .width
+        <= max_width + WRAP_EPSILON
+    {
         return line.to_string();
     }
 
-    let ellipsis_width = measurer.measure(ELLIPSIS, style).width;
+    let ellipsis_width = measurer
+        .measure(&crate::text::AnnotatedString::from(ELLIPSIS), style)
+        .width;
     if ellipsis_width > max_width + WRAP_EPSILON {
         return String::new();
     }
@@ -761,7 +835,14 @@ fn fit_middle_ellipsis<M: TextMeasurer + ?Sized>(
         let end_start = boundaries[total_chars.saturating_sub(keep_end)];
         let end = &line[end_start..];
         let candidate = format!("{start}{ELLIPSIS}{end}");
-        if measurer.measure(&candidate, style).width <= max_width + WRAP_EPSILON {
+        if measurer
+            .measure(
+                &crate::text::AnnotatedString::from(candidate.as_str()),
+                style,
+            )
+            .width
+            <= max_width + WRAP_EPSILON
+        {
             return candidate;
         }
     }
@@ -792,20 +873,50 @@ mod tests {
     }
 
     impl TextMeasurer for ContractBreakMeasurer {
-        fn measure(&self, text: &str, style: &TextStyle) -> TextMetrics {
-            MonospacedTextMeasurer.measure(text, style)
+        fn measure(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
+            MonospacedTextMeasurer.measure(
+                &crate::text::AnnotatedString::from(text.text.as_str()),
+                style,
+            )
         }
 
-        fn get_offset_for_position(&self, text: &str, style: &TextStyle, x: f32, y: f32) -> usize {
-            MonospacedTextMeasurer.get_offset_for_position(text, style, x, y)
+        fn get_offset_for_position(
+            &self,
+            text: &crate::text::AnnotatedString,
+            style: &TextStyle,
+            x: f32,
+            y: f32,
+        ) -> usize {
+            MonospacedTextMeasurer.get_offset_for_position(
+                &crate::text::AnnotatedString::from(text.text.as_str()),
+                style,
+                x,
+                y,
+            )
         }
 
-        fn get_cursor_x_for_offset(&self, text: &str, style: &TextStyle, offset: usize) -> f32 {
-            MonospacedTextMeasurer.get_cursor_x_for_offset(text, style, offset)
+        fn get_cursor_x_for_offset(
+            &self,
+            text: &crate::text::AnnotatedString,
+            style: &TextStyle,
+            offset: usize,
+        ) -> f32 {
+            MonospacedTextMeasurer.get_cursor_x_for_offset(
+                &crate::text::AnnotatedString::from(text.text.as_str()),
+                style,
+                offset,
+            )
         }
 
-        fn layout(&self, text: &str, style: &TextStyle) -> TextLayoutResult {
-            MonospacedTextMeasurer.layout(text, style)
+        fn layout(
+            &self,
+            text: &crate::text::AnnotatedString,
+            style: &TextStyle,
+        ) -> TextLayoutResult {
+            MonospacedTextMeasurer.layout(
+                &crate::text::AnnotatedString::from(text.text.as_str()),
+                style,
+            )
         }
 
         fn choose_auto_hyphen_break(
@@ -829,7 +940,6 @@ mod tests {
                 line_break,
                 ..Default::default()
             },
-            ..Default::default()
         }
     }
 
@@ -843,7 +953,6 @@ mod tests {
                 hyphens,
                 ..Default::default()
             },
-            ..Default::default()
         }
     }
 
@@ -864,7 +973,7 @@ mod tests {
         };
 
         let prepared = prepare_text_layout(
-            "A B C D E F",
+            &crate::text::AnnotatedString::from("A B C D E F"),
             &style,
             options,
             Some(24.0), // roughly 4 chars in monospaced fallback
@@ -890,9 +999,14 @@ mod tests {
             min_lines: 1,
         };
 
-        let prepared = prepare_text_layout("Long long line", &style, options, Some(20.0));
+        let prepared = prepare_text_layout(
+            &crate::text::AnnotatedString::from("Long long line"),
+            &style,
+            options,
+            Some(20.0),
+        );
         assert!(prepared.did_overflow);
-        assert!(prepared.text.contains(ELLIPSIS));
+        assert!(prepared.text.text.contains(ELLIPSIS));
     }
 
     #[test]
@@ -912,8 +1026,13 @@ mod tests {
         };
 
         let input = "This should remain unchanged";
-        let prepared = prepare_text_layout(input, &style, options, Some(10.0));
-        assert_eq!(prepared.text, input);
+        let prepared = prepare_text_layout(
+            &crate::text::AnnotatedString::from(input),
+            &style,
+            options,
+            Some(10.0),
+        );
+        assert_eq!(prepared.text.text, input);
     }
 
     #[test]
@@ -932,7 +1051,12 @@ mod tests {
             min_lines: 3,
         };
 
-        let prepared = prepare_text_layout("short", &style, options, Some(100.0));
+        let prepared = prepare_text_layout(
+            &crate::text::AnnotatedString::from("short"),
+            &style,
+            options,
+            Some(100.0),
+        );
         assert_eq!(prepared.metrics.line_count, 3);
     }
 
@@ -952,8 +1076,13 @@ mod tests {
             min_lines: 1,
         };
 
-        let prepared = prepare_text_layout("abcdefghijk", &style, options, Some(24.0));
-        assert!(prepared.text.contains(ELLIPSIS));
+        let prepared = prepare_text_layout(
+            &crate::text::AnnotatedString::from("abcdefghijk"),
+            &style,
+            options,
+            Some(24.0),
+        );
+        assert!(prepared.text.text.contains(ELLIPSIS));
         assert!(prepared.did_overflow);
     }
 
@@ -974,11 +1103,16 @@ mod tests {
         };
 
         let text = "if counter % 2 == 0";
-        let exact_width = measure_text(text, &style).width;
-        let prepared = prepare_text_layout(text, &style, options, Some(exact_width - 0.1));
+        let exact_width = measure_text(&crate::text::AnnotatedString::from(text), &style).width;
+        let prepared = prepare_text_layout(
+            &crate::text::AnnotatedString::from(text),
+            &style,
+            options,
+            Some(exact_width - 0.1),
+        );
 
         assert!(
-            !prepared.text.contains('\n'),
+            !prepared.text.text.contains('\n'),
             "unexpected line split: {:?}",
             prepared.text
         );
@@ -995,34 +1129,34 @@ mod tests {
         };
 
         let simple = prepare_text_layout(
-            text,
+            &crate::text::AnnotatedString::from(text),
             &style_with_line_break(LineBreak::Simple),
             options,
             Some(120.0),
         );
         let heading = prepare_text_layout(
-            text,
+            &crate::text::AnnotatedString::from(text),
             &style_with_line_break(LineBreak::Heading),
             options,
             Some(120.0),
         );
         let paragraph = prepare_text_layout(
-            text,
+            &crate::text::AnnotatedString::from(text),
             &style_with_line_break(LineBreak::Paragraph),
             options,
             Some(50.0),
         );
 
         assert_eq!(
-            simple.text.lines().collect::<Vec<_>>(),
+            simple.text.text.lines().collect::<Vec<_>>(),
             vec!["This is an example", "text"]
         );
         assert_eq!(
-            heading.text.lines().collect::<Vec<_>>(),
+            heading.text.text.lines().collect::<Vec<_>>(),
             vec!["This is an", "example text"]
         );
         assert_eq!(
-            paragraph.text.lines().collect::<Vec<_>>(),
+            paragraph.text.text.lines().collect::<Vec<_>>(),
             vec!["This", "is an", "example", "text"]
         );
     }
@@ -1038,28 +1172,28 @@ mod tests {
         };
 
         let auto = prepare_text_layout(
-            text,
+            &crate::text::AnnotatedString::from(text),
             &style_with_hyphens(Hyphens::Auto),
             options,
             Some(24.0),
         );
         let none = prepare_text_layout(
-            text,
+            &crate::text::AnnotatedString::from(text),
             &style_with_hyphens(Hyphens::None),
             options,
             Some(24.0),
         );
 
         assert_eq!(
-            auto.text.lines().collect::<Vec<_>>(),
+            auto.text.text.lines().collect::<Vec<_>>(),
             vec!["Tran", "sfor", "ma", "tion"]
         );
         assert_eq!(
-            none.text.lines().collect::<Vec<_>>(),
+            none.text.text.lines().collect::<Vec<_>>(),
             vec!["Tran", "sfor", "mati", "on"]
         );
         assert!(
-            !auto.text.contains('-'),
+            !auto.text.text.contains('-'),
             "automatic hyphenation should influence breaks without mutating source text content"
         );
     }
@@ -1077,14 +1211,14 @@ mod tests {
 
         let prepared = prepare_text_layout_fallback(
             &ContractBreakMeasurer { retreat: 1 },
-            text,
+            &crate::text::AnnotatedString::from(text),
             &style,
             options,
             Some(24.0),
         );
 
         assert_eq!(
-            prepared.text.lines().collect::<Vec<_>>(),
+            prepared.text.text.lines().collect::<Vec<_>>(),
             vec!["Tra", "nsf", "orm", "ati", "on"]
         );
     }
@@ -1102,14 +1236,14 @@ mod tests {
 
         let prepared = prepare_text_layout_fallback(
             &ContractBreakMeasurer { retreat: 10 },
-            text,
+            &crate::text::AnnotatedString::from(text),
             &style,
             options,
             Some(24.0),
         );
 
         assert_eq!(
-            prepared.text.lines().collect::<Vec<_>>(),
+            prepared.text.text.lines().collect::<Vec<_>>(),
             vec!["Tran", "sfor", "ma", "tion"]
         );
     }

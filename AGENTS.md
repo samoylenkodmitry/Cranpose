@@ -40,3 +40,4 @@
 - no comments in style "now it is like that" - we are not writing history
 - duplicated code (10+ lines) without architecture is forbidden
 - 'legacy'/'old way' etc allowed. we are in a pre-alpha, everything is fresh, clean, single instance
+- be aware of what you've done by looking at git status

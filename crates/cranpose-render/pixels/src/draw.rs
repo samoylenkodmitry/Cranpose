@@ -186,24 +186,30 @@ fn resolve_letter_spacing(style: &cranpose_ui::text::TextStyle, font_size: f32) 
 }
 
 impl TextMeasurer for CachedRusttypeTextMeasurer {
-    fn measure(&self, text: &str, style: &cranpose_ui::text::TextStyle) -> TextMetrics {
+    fn measure(
+        &self,
+        text: &cranpose_ui::text::AnnotatedString,
+        style: &cranpose_ui::text::TextStyle,
+    ) -> TextMetrics {
+        let text_str = text.text.as_str();
         let font_size = resolve_font_size(style);
         let style_hash = style.measurement_hash();
         self.cache
             .lock()
             .expect("text metrics cache poisoned")
-            .get_or_measure(text, font_size, style_hash, |value, size| {
+            .get_or_measure(text_str, font_size, style_hash, |value, size| {
                 measure_text_impl(value, style, size)
             })
     }
 
     fn get_offset_for_position(
         &self,
-        text: &str,
+        text: &cranpose_ui::text::AnnotatedString,
         style: &cranpose_ui::text::TextStyle,
         x: f32,
         _y: f32,
     ) -> usize {
+        let text = text.text.as_str();
         if text.is_empty() {
             return 0;
         }
@@ -288,10 +294,11 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
 
     fn get_cursor_x_for_offset(
         &self,
-        text: &str,
+        text: &cranpose_ui::text::AnnotatedString,
         style: &cranpose_ui::text::TextStyle,
         offset: usize,
     ) -> f32 {
+        let text = text.text.as_str();
         let clamped_offset = offset.min(text.len());
         if clamped_offset == 0 {
             return 0.0;
@@ -305,9 +312,10 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
 
     fn layout(
         &self,
-        text: &str,
+        text: &cranpose_ui::text::AnnotatedString,
         style: &cranpose_ui::text::TextStyle,
     ) -> cranpose_ui::text_layout_result::TextLayoutResult {
+        let text = text.text.as_str();
         use cranpose_ui::text_layout_result::{LineLayout, TextLayoutResult};
 
         let font_size = resolve_font_size(style);
@@ -596,7 +604,7 @@ fn draw_text(frame: &mut [u8], width: u32, height: u32, draw: &TextDraw) {
     };
 
     let Some(image) = rasterize_text_to_image_with_font(
-        draw.text.as_ref(),
+        draw.text.text.as_str(),
         raster_rect,
         &draw.text_style,
         draw.color,
@@ -877,7 +885,7 @@ mod tests {
                 width: 320.0,
                 height: 90.0,
             },
-            Rc::from("MMMMMMMM"),
+            Rc::new(cranpose_ui::text::AnnotatedString::from("MMMMMMMM")),
             color,
             style,
             64.0,
@@ -974,7 +982,9 @@ mod tests {
                 width: 180.0,
                 height: 80.0,
             },
-            Rc::from("Dynamic\nModifiers"),
+            Rc::new(cranpose_ui::text::AnnotatedString::from(
+                "Dynamic\nModifiers",
+            )),
             Color::WHITE,
             cranpose_ui::TextStyle::default(),
             14.0,
@@ -1008,7 +1018,7 @@ mod tests {
                 width: 180.0,
                 height: 24.0,
             },
-            Rc::from("Clipped Text"),
+            Rc::new(cranpose_ui::text::AnnotatedString::from("Clipped Text")),
             Color::WHITE,
             cranpose_ui::TextStyle::default(),
             14.0,

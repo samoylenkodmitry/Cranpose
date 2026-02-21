@@ -10,9 +10,8 @@ use cranpose_ui_graphics::{
     BlendMode, Brush, Color, ColorFilter, ImageBitmap, Rect, RenderEffect, TileMode,
 };
 use glyphon::{
-    Attrs, Cache, Color as GlyphonColor, Family, FontSystem, Metrics, Resolution,
-    Style as GlyphonStyle, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
-    Weight as GlyphonWeight,
+    Cache, Color as GlyphonColor, FontSystem, Metrics, Resolution, SwashCache, TextArea, TextAtlas,
+    TextBounds, TextRenderer, Viewport,
 };
 use lru::LruCache;
 use std::num::NonZeroUsize;
@@ -37,49 +36,6 @@ const CLEAR_COLOR: wgpu::Color = wgpu::Color {
 const MAX_TEXTURE_CACHE_ITEMS: usize = 256;
 static REPORTED_UNSUPPORTED_WGPU_BLEND_MODES: AtomicBool = AtomicBool::new(false);
 static REPORTED_UNSUPPORTED_WGPU_EFFECTS: AtomicBool = AtomicBool::new(false);
-
-fn attrs_from_text_style<'a>(style: &'a cranpose_ui::TextStyle, font_size: f32) -> Attrs<'a> {
-    let mut attrs = Attrs::new();
-    let span_style = &style.span_style;
-    let font_family = span_style.font_family.as_ref();
-    let font_weight = span_style.font_weight;
-    let font_style = span_style.font_style;
-    let letter_spacing = span_style.letter_spacing;
-
-    if let Some(font_family) = font_family {
-        attrs = attrs.family(match font_family {
-            cranpose_ui::text::FontFamily::Default | cranpose_ui::text::FontFamily::SansSerif => {
-                Family::SansSerif
-            }
-            cranpose_ui::text::FontFamily::Serif => Family::Serif,
-            cranpose_ui::text::FontFamily::Monospace => Family::Monospace,
-            cranpose_ui::text::FontFamily::Cursive => Family::Cursive,
-            cranpose_ui::text::FontFamily::Fantasy => Family::Fantasy,
-            cranpose_ui::text::FontFamily::Named(name) => Family::Name(name.as_str()),
-        });
-    }
-
-    if let Some(font_weight) = font_weight {
-        attrs = attrs.weight(GlyphonWeight(font_weight.0));
-    }
-
-    if let Some(font_style) = font_style {
-        attrs = attrs.style(match font_style {
-            cranpose_ui::text::FontStyle::Normal => GlyphonStyle::Normal,
-            cranpose_ui::text::FontStyle::Italic => GlyphonStyle::Italic,
-        });
-    }
-
-    attrs = match letter_spacing {
-        cranpose_ui::text::TextUnit::Em(value) => attrs.letter_spacing(value),
-        cranpose_ui::text::TextUnit::Sp(value) if font_size > 0.0 => {
-            attrs.letter_spacing(value / font_size)
-        }
-        _ => attrs,
-    };
-
-    attrs
-}
 
 fn resolve_line_height(style: &cranpose_ui::TextStyle, font_size: f32) -> f32 {
     style.resolve_line_height(14.0, font_size * 1.4)
@@ -1555,7 +1511,7 @@ impl GpuRenderer {
                 width: (a.x + a.width).max(b.x + b.width) - a.x.min(b.x),
                 height: (a.y + a.height).max(b.y + b.height) - a.y.min(b.y),
             });
-            
+
         let text_bounds_opt = shadow
             .texts
             .iter()
@@ -1566,7 +1522,7 @@ impl GpuRenderer {
                 width: (a.x + a.width).max(b.x + b.width) - a.x.min(b.x),
                 height: (a.y + a.height).max(b.y + b.height) - a.y.min(b.y),
             });
-            
+
         let combined_bounds = match (shape_bounds_opt, text_bounds_opt) {
             (Some(s), Some(t)) => Some(Rect {
                 x: s.x.min(t.x),
@@ -1578,7 +1534,7 @@ impl GpuRenderer {
             (None, Some(t)) => Some(t),
             (None, None) => None,
         };
-        
+
         let Some(shape_bounds) = combined_bounds else {
             return;
         };
@@ -1623,13 +1579,18 @@ impl GpuRenderer {
             }
             if !shadow.texts.is_empty() {
                 let text_refs: Vec<&TextDraw> = shadow.texts.iter().collect();
-                if let Err(e) = self.prepare_text_for_render(&text_refs, width, height, root_scale) {
+                if let Err(e) = self.prepare_text_for_render(&text_refs, width, height, root_scale)
+                {
                     eprintln!("Failed to prepare text for zero-blur shadow: {}", e);
                 } else {
-                    let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("Zero Blur Shadow Text Encoder"),
-                    });
-                    if let Err(e) = self.encode_text_pass(&mut encoder, target_view, wgpu::LoadOp::Load) {
+                    let mut encoder =
+                        self.device
+                            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                label: Some("Zero Blur Shadow Text Encoder"),
+                            });
+                    if let Err(e) =
+                        self.encode_text_pass(&mut encoder, target_view, wgpu::LoadOp::Load)
+                    {
                         eprintln!("Failed to encode text for zero-blur shadow: {}", e);
                     }
                     self.queue.submit(std::iter::once(encoder.finish()));
@@ -1686,21 +1647,23 @@ impl GpuRenderer {
                     clip.y -= viewport_offset[1] / root_scale;
                 }
             }
-            
+
             let load = if first_shadow_item {
-                first_shadow_item = false;
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
             } else {
                 wgpu::LoadOp::Load
             };
-            
+
             let text_refs: Vec<&TextDraw> = shifted_texts.iter().collect();
-            if let Err(e) = self.prepare_text_for_render(&text_refs, bounds_w, bounds_h, root_scale) {
+            if let Err(e) = self.prepare_text_for_render(&text_refs, bounds_w, bounds_h, root_scale)
+            {
                 eprintln!("Failed to prepare text for shadow: {}", e);
             } else {
-                let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Shadow Text Encoder"),
-                });
+                let mut encoder =
+                    self.device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Shadow Text Encoder"),
+                        });
                 if let Err(e) = self.encode_text_pass(&mut encoder, &source.view, load) {
                     eprintln!("Failed to encode text for shadow: {}", e);
                 }
@@ -2571,7 +2534,7 @@ impl GpuRenderer {
             }
 
             let font_size_px = text_draw.font_size * text_draw.scale * root_scale;
-            let style_hash = text_draw.text_style.measurement_hash();
+            let style_hash = text_draw.text_style.measurement_hash() ^ text_draw.text.span_styles_hash();
             let line_height_px = resolve_line_height(&text_draw.text_style, font_size_px);
             let key = TextCacheKey::for_node(text_draw.node_id, font_size_px, style_hash);
 
@@ -2592,11 +2555,12 @@ impl GpuRenderer {
 
             buffer.ensure(
                 &mut font_system,
-                text_draw.text.as_ref(),
+                &text_draw.text,
                 font_size_px,
                 line_height_px,
                 style_hash,
-                attrs_from_text_style(&text_draw.text_style, font_size_px),
+                &text_draw.text_style,
+                text_draw.scale * root_scale,
             );
 
             text_keys.push(key);
@@ -3218,7 +3182,7 @@ mod tests {
                 width: 8.0,
                 height: 8.0,
             },
-            text: std::rc::Rc::<str>::from("t"),
+            text: std::rc::Rc::new(cranpose_ui::text::AnnotatedString::from("t")),
             color: Color::WHITE,
             text_style: cranpose_ui::TextStyle::default(),
             font_size: 12.0,

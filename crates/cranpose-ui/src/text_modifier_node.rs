@@ -19,14 +19,13 @@
 //! This follows the principle that `MeasurePolicy` is for child layout, while modifier nodes
 //! handle content rendering and measurement.
 
-use crate::text::{TextLayoutOptions, TextStyle};
+use crate::text::{AnnotatedString, TextLayoutOptions, TextStyle};
 use cranpose_foundation::{
     Constraints, DelegatableNode, DrawModifierNode, DrawScope, InvalidationKind,
     LayoutModifierNode, Measurable, MeasurementProxy, ModifierNode, ModifierNodeContext,
     ModifierNodeElement, NodeCapabilities, NodeState, SemanticsConfiguration, SemanticsNode, Size,
 };
 use std::hash::{Hash, Hasher};
-use std::rc::Rc;
 
 /// Node that stores text content and handles measurement, drawing, and semantics.
 ///
@@ -39,14 +38,14 @@ use std::rc::Rc;
 /// `compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/modifiers/TextStringSimpleNode.kt`
 #[derive(Debug)]
 pub struct TextModifierNode {
-    text: Rc<str>,
+    text: AnnotatedString,
     style: TextStyle,
     options: TextLayoutOptions,
     state: NodeState,
 }
 
 impl TextModifierNode {
-    pub fn new(text: Rc<str>, style: TextStyle, options: TextLayoutOptions) -> Self {
+    pub fn new(text: AnnotatedString, style: TextStyle, options: TextLayoutOptions) -> Self {
         Self {
             text,
             style,
@@ -56,10 +55,10 @@ impl TextModifierNode {
     }
 
     pub fn text(&self) -> &str {
-        &self.text
+        &self.text.text
     }
 
-    pub fn text_arc(&self) -> Rc<str> {
+    pub fn annotated_string(&self) -> AnnotatedString {
         self.text.clone()
     }
 
@@ -184,7 +183,7 @@ impl LayoutModifierNode for TextModifierNode {
 /// Phase 2: Instead of reconstructing nodes via `TextModifierNode::new()`, this proxy
 /// directly implements measurement logic using the snapshotted text content.
 struct TextMeasurementProxy {
-    text: Rc<str>,
+    text: AnnotatedString,
     style: TextStyle,
     options: TextLayoutOptions,
 }
@@ -267,7 +266,7 @@ impl DrawModifierNode for TextModifierNode {
 impl SemanticsNode for TextModifierNode {
     fn merge_semantics(&self, config: &mut SemanticsConfiguration) {
         // Provide text content for accessibility
-        config.content_description = Some(self.text.to_string());
+        config.content_description = Some(self.text.text.clone());
     }
 }
 
@@ -281,13 +280,13 @@ impl SemanticsNode for TextModifierNode {
 /// Matches Jetpack Compose: `TextStringSimpleElement` in BasicText.kt
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextModifierElement {
-    text: Rc<str>,
+    text: AnnotatedString,
     style: TextStyle,
     options: TextLayoutOptions,
 }
 
 impl TextModifierElement {
-    pub fn new(text: Rc<str>, style: TextStyle, options: TextLayoutOptions) -> Self {
+    pub fn new(text: AnnotatedString, style: TextStyle, options: TextLayoutOptions) -> Self {
         Self {
             text,
             style,
@@ -543,7 +542,7 @@ fn hash_text_style<H: Hasher>(style: &TextStyle, state: &mut H) {
 
 impl Hash for TextModifierElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.text.hash(state);
+        self.text.text.hash(state);
         hash_text_style(&self.style, state);
         self.options.hash(state);
     }
@@ -600,7 +599,7 @@ mod tests {
 
     #[test]
     fn hash_changes_when_style_changes() {
-        let text = Rc::<str>::from("Hello");
+        let text = AnnotatedString::from("Hello");
         let element_a = TextModifierElement::new(
             text.clone(),
             TextStyle::default(),
@@ -630,9 +629,9 @@ mod tests {
             ..Default::default()
         };
         let options = TextLayoutOptions::default();
-        let element_a =
-            TextModifierElement::new(Rc::<str>::from("Hash me"), style.clone(), options);
-        let element_b = TextModifierElement::new(Rc::<str>::from("Hash me"), style, options);
+        let text = AnnotatedString::from("Hash me");
+        let element_a = TextModifierElement::new(text.clone(), style.clone(), options);
+        let element_b = TextModifierElement::new(text, style, options);
 
         assert_eq!(element_a, element_b);
         assert_eq!(hash_of(&element_a), hash_of(&element_b));

@@ -21,6 +21,3 @@ tiny-skia = "0.12.0"
 hyphenation = { version = "0.8.4", features = ["embed_all"] }
 
 
-[[bin]]
-name = "test_fr"
-path = "src/test_fr.rs"

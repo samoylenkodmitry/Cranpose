@@ -200,7 +200,10 @@ fn layout_column_produces_expected_measurements() {
         .expect("compute layout");
 
     let root_layout = layout_tree.root().clone();
-    let text_metrics = crate::text::measure_text("Hello", &TextStyle::default());
+    let text_metrics = crate::text::measure_text(
+        &crate::text::AnnotatedString::from("Hello"),
+        &TextStyle::default(),
+    );
     let expected_root_width = text_metrics.width + 20.0;
     let expected_root_height = text_metrics.height + 30.0 + 20.0;
     assert!((root_layout.rect.width - expected_root_width).abs() < 1e-3);

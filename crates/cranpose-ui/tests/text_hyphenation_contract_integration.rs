@@ -8,9 +8,14 @@ use cranpose_ui::{
 struct ContractMeasurer;
 
 impl TextMeasurer for ContractMeasurer {
-    fn measure(&self, text: &str, _style: &TextStyle) -> TextMetrics {
-        let line_count = text.split('\n').count().max(1);
+    fn measure(
+        &self,
+        text: &cranpose_ui::text::AnnotatedString,
+        _style: &TextStyle,
+    ) -> TextMetrics {
+        let line_count = text.text.split('\n').count().max(1);
         let width = text
+            .text
             .split('\n')
             .map(|line| line.chars().count() as f32 * 6.0)
             .fold(0.0_f32, f32::max);
@@ -22,20 +27,36 @@ impl TextMeasurer for ContractMeasurer {
         }
     }
 
-    fn get_offset_for_position(&self, text: &str, _style: &TextStyle, x: f32, _y: f32) -> usize {
+    fn get_offset_for_position(
+        &self,
+        text: &cranpose_ui::text::AnnotatedString,
+        _style: &TextStyle,
+        x: f32,
+        _y: f32,
+    ) -> usize {
         let char_idx = (x / 6.0).round().max(0.0) as usize;
-        text.char_indices()
+        text.text
+            .char_indices()
             .nth(char_idx)
             .map(|(byte_idx, _)| byte_idx)
-            .unwrap_or(text.len())
+            .unwrap_or(text.text.len())
     }
 
-    fn get_cursor_x_for_offset(&self, text: &str, _style: &TextStyle, offset: usize) -> f32 {
-        text[..offset.min(text.len())].chars().count() as f32 * 6.0
+    fn get_cursor_x_for_offset(
+        &self,
+        text: &cranpose_ui::text::AnnotatedString,
+        _style: &TextStyle,
+        offset: usize,
+    ) -> f32 {
+        text.text[..offset.min(text.text.len())].chars().count() as f32 * 6.0
     }
 
-    fn layout(&self, text: &str, _style: &TextStyle) -> TextLayoutResult {
-        TextLayoutResult::monospaced(text, 6.0, 10.0)
+    fn layout(
+        &self,
+        text: &cranpose_ui::text::AnnotatedString,
+        _style: &TextStyle,
+    ) -> TextLayoutResult {
+        TextLayoutResult::monospaced(&text.text, 6.0, 10.0)
     }
 
     fn choose_auto_hyphen_break(
@@ -62,7 +83,6 @@ fn prepare_text_layout_uses_measurer_hyphen_contract() {
             hyphens: Hyphens::Auto,
             ..Default::default()
         },
-        ..Default::default()
     };
     let options = TextLayoutOptions {
         overflow: TextOverflow::Clip,
@@ -71,9 +91,14 @@ fn prepare_text_layout_uses_measurer_hyphen_contract() {
         min_lines: 1,
     };
 
-    let prepared = prepare_text_layout("Transformation", &style, options, Some(24.0));
+    let prepared = prepare_text_layout(
+        &cranpose_ui::text::AnnotatedString::from("Transformation"),
+        &style,
+        options,
+        Some(24.0),
+    );
     assert_eq!(
-        prepared.text.lines().collect::<Vec<_>>(),
+        prepared.text.text.lines().collect::<Vec<_>>(),
         vec!["Tra", "nsf", "orm", "ati", "on"]
     );
 }

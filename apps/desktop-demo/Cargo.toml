@@ -72,7 +72,9 @@ console_error_panic_hook = "0.1"
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 
 [dev-dependencies]
+cosmic-text = "0.18.2"
 cranpose-macros = { path = "../../crates/cranpose-macros" }
+cranpose-render-wgpu = { path = "../../crates/cranpose-render/wgpu" }
 cranpose-testing = { path = "../../crates/cranpose-testing" }
 
 # Robot test runners

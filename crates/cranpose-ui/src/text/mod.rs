@@ -1,3 +1,4 @@
+pub mod annotated_string;
 pub mod decoration;
 pub mod font;
 pub mod layout_options;
@@ -6,6 +7,7 @@ pub mod paragraph;
 pub mod style;
 pub mod unit;
 
+pub use annotated_string::{AnnotatedString, RangeStyle};
 pub use decoration::{Shadow, TextDecoration};
 pub use font::{FontFamily, FontStyle, FontSynthesis, FontWeight};
 pub use layout_options::{TextLayoutOptions, TextOverflow};

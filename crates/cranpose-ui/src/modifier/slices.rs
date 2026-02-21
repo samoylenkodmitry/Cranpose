@@ -25,7 +25,7 @@ pub struct ModifierNodeSlices {
     pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
     click_handlers: Vec<Rc<dyn Fn(Point)>>,
     clip_to_bounds: bool,
-    text_content: Option<Rc<str>>,
+    text_content: Option<crate::text::AnnotatedString>,
     text_style: Option<TextStyle>,
     text_layout_options: Option<TextLayoutOptions>,
     graphics_layer: Option<GraphicsLayer>,
@@ -138,10 +138,10 @@ impl ModifierNodeSlices {
     }
 
     pub fn text_content(&self) -> Option<&str> {
-        self.text_content.as_deref()
+        self.text_content.as_ref().map(|a| a.text.as_str())
     }
 
-    pub fn text_content_rc(&self) -> Option<Rc<str>> {
+    pub fn annotated_string(&self) -> Option<crate::text::AnnotatedString> {
         self.text_content.clone()
     }
 
@@ -341,14 +341,14 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
         let any = node.as_any();
         if let Some(text_node) = any.downcast_ref::<TextModifierNode>() {
             // Rightmost text modifier wins
-            slices.text_content = Some(text_node.text_arc());
+            slices.text_content = Some(text_node.annotated_string());
             slices.text_style = Some(text_node.style().clone());
             slices.text_layout_options = Some(text_node.options());
         }
         // Also check for TextFieldModifierNode (editable text fields)
         if let Some(text_field_node) = any.downcast_ref::<TextFieldModifierNode>() {
             let text = text_field_node.text();
-            slices.text_content = Some(Rc::from(text));
+            slices.text_content = Some(crate::text::AnnotatedString::from(text));
             slices.text_layout_options = Some(TextLayoutOptions::default());
 
             // Update content offsets for cursor positioning in collect_draw_primitives()

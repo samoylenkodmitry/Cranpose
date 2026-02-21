@@ -8,13 +8,13 @@ const MIN_SEGMENT_CHARS: usize = 2;
 fn get_dictionary(language: Language) -> Option<Standard> {
     static DICTIONARIES: OnceLock<RwLock<HashMap<Language, Standard>>> = OnceLock::new();
     let cache = DICTIONARIES.get_or_init(|| RwLock::new(HashMap::new()));
-    
+
     if let Ok(read_guard) = cache.read() {
         if let Some(dict) = read_guard.get(&language) {
             return Some(dict.clone());
         }
     }
-    
+
     // Load if not in cache
     match Standard::from_embedded(language) {
         Ok(dict) => {
@@ -36,13 +36,13 @@ pub fn choose_auto_hyphen_break(
     if line.is_empty() || measured_break_char <= segment_start_char {
         return None;
     }
-    
+
     let language = resolve_hyphenation_language(style)?;
 
     let dictionary = get_dictionary(language)?;
     let boundaries = char_boundaries(line);
     let char_count = boundaries.len().saturating_sub(1);
-    
+
     if measured_break_char == 0 || measured_break_char >= char_count {
         return None;
     }
@@ -60,7 +60,7 @@ pub fn choose_auto_hyphen_break(
     let min_local_break = segment_start_char
         .saturating_sub(word_start)
         .saturating_add(MIN_SEGMENT_CHARS);
-        
+
     if min_local_break > max_local_break {
         return None;
     }
@@ -87,11 +87,11 @@ fn resolve_hyphenation_language(style: &TextStyle) -> Option<Language> {
     if locale_list.is_empty() {
         return Some(Language::EnglishUS);
     }
-    
+
     // Check first matching locale
     let primary_locale = locale_list.locales().first()?;
     let normalized = primary_locale.trim().replace('_', "-").to_ascii_lowercase();
-    
+
     // Handle specific regions or fallbacks
     // The hyphenation crate uses specific enums for languages
     if normalized.starts_with("en-gb") {
@@ -123,7 +123,7 @@ fn resolve_hyphenation_language(style: &TextStyle) -> Option<Language> {
     if normalized.starts_with("nl") {
         return Some(Language::Dutch);
     }
-    
+
     // We only embed standard dictionary languages right now.
     // If not found, hyphenation is disabled.
     None
@@ -195,16 +195,19 @@ mod tests {
     #[test]
     fn locale_gate_uses_french_dictionary() {
         // "éléphant" -> él-éphant (break at byte 5, which is char 3)
-        let break_idx =
-            choose_auto_hyphen_break("éléphant", &style_with_locale("fr-FR"), 0, 7);
+        let break_idx = choose_auto_hyphen_break("éléphant", &style_with_locale("fr-FR"), 0, 7);
         assert_eq!(break_idx, Some(3));
     }
 
     #[test]
     fn locale_gate_uses_german_dictionary() {
         // "Geschwindigkeitsbegrenzung" -> Ge-schwin-dig-keits-be-gren-zung
-        let break_idx =
-            choose_auto_hyphen_break("Geschwindigkeitsbegrenzung", &style_with_locale("de-DE"), 10, 20);
+        let break_idx = choose_auto_hyphen_break(
+            "Geschwindigkeitsbegrenzung",
+            &style_with_locale("de-DE"),
+            10,
+            20,
+        );
         assert!(break_idx.is_some());
     }
 

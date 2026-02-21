@@ -1,8 +1,8 @@
 #![allow(non_snake_case)]
 
 use cranpose_ui::text::{
-    BaselineShift, FontFamily, FontStyle, FontSynthesis, FontWeight, Hyphens, LineBreak,
-    LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim, LocaleList,
+    AnnotatedString, BaselineShift, FontFamily, FontStyle, FontSynthesis, FontWeight, Hyphens,
+    LineBreak, LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim, LocaleList,
     ParagraphStyle, PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle,
     Shadow as TextShadow, SpanStyle, TextAlign, TextDecoration, TextDirection, TextDrawStyle,
     TextGeometricTransform, TextIndent, TextMotion, TextOverflow, TextUnit,
@@ -275,6 +275,91 @@ pub(crate) fn TextShowcaseTab() {
                 ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(10.0)),
                 move || {
                     Text(
+                        "AnnotatedString Features",
+                        Modifier::empty(),
+                        section_title_style(),
+                    );
+
+                    Column(
+                        card_modifier(),
+                        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
+                        move || {
+                            style_chip_label("Multiple SpanStyles applied to a single text node");
+
+                            let annotated_text = AnnotatedString::builder()
+                                .push_style(SpanStyle {
+                                    color: Some(Color(0.5, 0.9, 0.6, 1.0)),
+                                    font_weight: Some(FontWeight::BOLD),
+                                    ..Default::default()
+                                })
+                                .append("This is bold green ")
+                                .pop()
+                                .append("and this is normal text. ")
+                                .push_style(SpanStyle {
+                                    color: Some(Color(0.9, 0.4, 0.4, 1.0)),
+                                    font_style: Some(FontStyle::Italic),
+                                    text_decoration: Some(TextDecoration::UNDERLINE),
+                                    ..Default::default()
+                                })
+                                .append("This is red, italic, and underlined!")
+                                .pop()
+                                .to_annotated_string();
+
+                            Text(
+                                annotated_text,
+                                Modifier::empty()
+                                    .background(Color(0.2, 0.16, 0.12, 1.0))
+                                    .rounded_corners(8.0)
+                                    .padding(8.0),
+                                TextStyle {
+                                    span_style: SpanStyle {
+                                        color: Some(Color(1.0, 0.9, 0.82, 1.0)),
+                                        font_size: TextUnit::Sp(14.0),
+                                        ..Default::default()
+                                    },
+                                    ..Default::default()
+                                },
+                            );
+
+                            style_chip_label("Inline Styles inside Builder");
+
+                            let annotated_text2 = AnnotatedString::builder()
+                                .append("You can also ")
+                                .push_style(SpanStyle {
+                                    font_size: TextUnit::Sp(22.0),
+                                    color: Some(Color(0.4, 0.8, 1.0, 1.0)),
+                                    ..Default::default()
+                                })
+                                .append("change font size")
+                                .pop()
+                                .append(" dynamically mid-sentence!")
+                                .to_annotated_string();
+
+                            Text(
+                                annotated_text2,
+                                Modifier::empty()
+                                    .background(Color(0.12, 0.15, 0.22, 1.0))
+                                    .rounded_corners(8.0)
+                                    .padding(8.0),
+                                TextStyle {
+                                    span_style: SpanStyle {
+                                        color: Some(Color(0.95, 0.97, 1.0, 1.0)),
+                                        font_size: TextUnit::Sp(14.0),
+                                        ..Default::default()
+                                    },
+                                    ..Default::default()
+                                },
+                            );
+                        },
+                    );
+                },
+            );
+
+            Column(
+                section_modifier(),
+                ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(10.0)),
+                move || {
+                    Text(
                         "ParagraphStyle Features",
                         Modifier::empty(),
                         section_title_style(),
@@ -372,13 +457,17 @@ pub(crate) fn TextShowcaseTab() {
                                 1,
                             );
 
-                            Spacer(Size { width: 0.0, height: 4.0 });
+                            Spacer(Size {
+                                width: 0.0,
+                                height: 4.0,
+                            });
                             style_chip_label(
                                 "Worldwide Hyphenation Dictionaries (fr-FR, de-DE, es-ES locales)",
                             );
                             Row(
                                 Modifier::empty(),
-                                RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(12.0)),
+                                RowSpec::new()
+                                    .horizontal_arrangement(LinearArrangement::SpacedBy(12.0)),
                                 move || {
                                     BasicText(
                                         "Hyphenation test: configuration super-éléphant transformation magnifique.",
@@ -416,7 +505,9 @@ pub(crate) fn TextShowcaseTab() {
                                             span_style: SpanStyle {
                                                 color: Some(Color(0.9, 0.95, 1.0, 1.0)),
                                                 font_size: TextUnit::Sp(14.0),
-                                                locale_list: Some(LocaleList::from_language_tags("de-DE")),
+                                                locale_list: Some(LocaleList::from_language_tags(
+                                                    "de-DE",
+                                                )),
                                                 ..Default::default()
                                             },
                                             paragraph_style: ParagraphStyle {
@@ -441,7 +532,9 @@ pub(crate) fn TextShowcaseTab() {
                                             span_style: SpanStyle {
                                                 color: Some(Color(1.0, 0.95, 0.9, 1.0)),
                                                 font_size: TextUnit::Sp(14.0),
-                                                locale_list: Some(LocaleList::from_language_tags("es-ES")),
+                                                locale_list: Some(LocaleList::from_language_tags(
+                                                    "es-ES",
+                                                )),
                                                 ..Default::default()
                                             },
                                             paragraph_style: ParagraphStyle {
@@ -455,7 +548,7 @@ pub(crate) fn TextShowcaseTab() {
                                         4,
                                         1,
                                     );
-                                }
+                                },
                             );
                         },
                     );

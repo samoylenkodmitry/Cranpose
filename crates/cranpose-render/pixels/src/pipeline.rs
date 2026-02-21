@@ -320,7 +320,7 @@ fn render_container(
 
     // Render text content if present in modifier slices.
     // Text is now handled via TextModifierNode in the modifier chain.
-    if let Some(value) = layout.node_data.modifier_slices().text_content_rc() {
+    if let Some(value) = layout.node_data.modifier_slices().annotated_string() {
         let default_text_style = cranpose_ui::text::TextStyle::default();
         let text_style_ref = layout
             .node_data
@@ -338,7 +338,7 @@ fn render_container(
         let content_width = (rect.width - padding.left - padding.right).max(0.0);
         let measure_width = resolve_text_measure_width(content_width, padding, None, options);
         let prepared = prepare_text_layout(
-            value.as_ref(),
+            &value,
             text_style_ref,
             options,
             Some(measure_width).filter(|w| w.is_finite() && *w > 0.0),
@@ -350,7 +350,7 @@ fn render_container(
         };
         let alignment_offset = resolve_text_horizontal_offset(
             text_style_ref,
-            value.as_ref(),
+            value.text.as_str(),
             content_width,
             prepared.metrics.width,
         );
@@ -379,7 +379,7 @@ fn render_container(
                 rect,
                 text_rect,
                 &node_layer,
-                prepared.text.as_str(),
+                &prepared.text,
                 text_style_ref,
                 font_size,
                 options,
@@ -500,7 +500,7 @@ fn push_text_style_draws(
     rect: Rect,
     text_rect: Rect,
     node_layer: &GraphicsLayer,
-    text: &str,
+    text: &cranpose_ui::text::AnnotatedString,
     text_style: &TextStyle,
     font_size: f32,
     options: TextLayoutOptions,
@@ -566,7 +566,7 @@ fn push_text_style_draws(
         scene.push_text(
             node_id,
             transformed_shadow_rect,
-            Rc::from(text),
+            Rc::new(text.clone()),
             Color::TRANSPARENT,
             shadow_text_style,
             font_size,
@@ -590,7 +590,7 @@ fn push_text_style_draws(
     scene.push_text(
         node_id,
         transformed_shifted_text_rect,
-        Rc::from(text),
+        Rc::new(text.clone()),
         transformed_text_color,
         transformed_text_style,
         font_size,
@@ -605,43 +605,79 @@ fn push_text_decorations(
     scene: &mut Scene,
     rect: Rect,
     text_rect: Rect,
-    node_layer: &GraphicsLayer,
-    text: &str,
-    text_style: &TextStyle,
+    content_layer: &GraphicsLayer,
+    annotated_text: &cranpose_ui::text::AnnotatedString,
+    global_style: &TextStyle,
     text_brush: &Brush,
     text_clip: Option<Rect>,
 ) {
-    let Some(decoration) = text_style.span_style.text_decoration else {
-        return;
-    };
-    if decoration == TextDecoration::NONE {
+    if annotated_text.is_empty() {
         return;
     }
 
-    let font_size = text_style.resolve_font_size(14.0);
-    let line_height = text_style.resolve_line_height(14.0, font_size).max(1.0);
-    let thickness = (font_size * 0.06).clamp(1.0, line_height * 0.25);
-    let brush = text_brush.clone();
+    let boundaries = annotated_text.span_boundaries();
+    let text_str = annotated_text.text.as_str();
 
-    for (line_index, line) in text.split('\n').enumerate() {
-        let line_width = measure_text(line, text_style)
-            .width
-            .min(text_rect.width)
-            .max(0.0);
-        if line_width <= 0.0 {
+    let mut current_offset: f32 = 0.0;
+
+    for window in boundaries.windows(2) {
+        let start = window[0];
+        let end = window[1];
+        if start == end {
             continue;
         }
 
-        let line_top = text_rect.y + line_index as f32 * line_height;
+        let slice = &text_str[start..end];
+        let mut merged_style = global_style.span_style.clone();
+        for span in &annotated_text.span_styles {
+            if span.range.start <= start && span.range.end >= end {
+                merged_style = merged_style.merge(&span.item);
+            }
+        }
+
+        let mut span_text_style = global_style.clone();
+        span_text_style.span_style = merged_style.clone();
+
+        let span_width = measure_text(
+            &cranpose_ui::text::AnnotatedString::from(slice),
+            &span_text_style,
+        )
+        .width
+        .max(0.0);
+
+        let Some(decoration) = merged_style.text_decoration else {
+            current_offset += span_width;
+            continue;
+        };
+
+        if decoration == TextDecoration::NONE || span_width <= 0.0 {
+            current_offset += span_width;
+            continue;
+        }
+
+        let font_size = span_text_style.resolve_font_size(14.0);
+        let line_height = span_text_style
+            .resolve_line_height(14.0, font_size)
+            .max(1.0);
+        let thickness = (font_size * 0.06).clamp(1.0, line_height * 0.25);
+        let brush = merged_style.brush.clone().unwrap_or_else(|| {
+            merged_style
+                .color
+                .map(Brush::solid)
+                .unwrap_or_else(|| text_brush.clone())
+        });
+
+        // Using y for single line since we don't map wrapping correctly without layout runs yet
+        let line_top = text_rect.y;
 
         if decoration.contains(TextDecoration::UNDERLINE) {
             let underline_rect = Rect {
-                x: text_rect.x,
+                x: text_rect.x + current_offset,
                 y: line_top + line_height - thickness * 1.35,
-                width: line_width,
+                width: span_width,
                 height: thickness,
             };
-            let transformed = apply_layer_to_rect(underline_rect, rect, node_layer);
+            let transformed = apply_layer_to_rect(underline_rect, rect, content_layer);
             scene.push_shape(
                 transformed,
                 brush.clone(),
@@ -653,20 +689,16 @@ fn push_text_decorations(
 
         if decoration.contains(TextDecoration::LINE_THROUGH) {
             let strike_rect = Rect {
-                x: text_rect.x,
+                x: text_rect.x + current_offset,
                 y: line_top + line_height * 0.52 - thickness * 0.5,
-                width: line_width,
+                width: span_width,
                 height: thickness,
             };
-            let transformed = apply_layer_to_rect(strike_rect, rect, node_layer);
-            scene.push_shape(
-                transformed,
-                brush.clone(),
-                None,
-                text_clip,
-                BlendMode::SrcOver,
-            );
+            let transformed = apply_layer_to_rect(strike_rect, rect, content_layer);
+            scene.push_shape(transformed, brush, None, text_clip, BlendMode::SrcOver);
         }
+
+        current_offset += span_width;
     }
 }
 
@@ -874,7 +906,7 @@ fn render_node_from_applier(
     }
 
     // Render text content if present
-    if let Some(value) = modifier_slices.text_content_rc() {
+    if let Some(value) = modifier_slices.annotated_string() {
         let default_text_style = cranpose_ui::text::TextStyle::default();
         let text_style_ref = modifier_slices.text_style().unwrap_or(&default_text_style);
 
@@ -892,7 +924,7 @@ fn render_node_from_applier(
         let measure_width =
             resolve_text_measure_width(content_width, padding, measured_max_width, options);
         let prepared = prepare_text_layout(
-            value.as_ref(),
+            &value,
             text_style_ref,
             options,
             Some(measure_width).filter(|w| w.is_finite() && *w > 0.0),
@@ -904,7 +936,7 @@ fn render_node_from_applier(
         };
         let alignment_offset = resolve_text_horizontal_offset(
             text_style_ref,
-            value.as_ref(),
+            value.text.as_str(),
             content_width,
             prepared.metrics.width,
         );
@@ -933,7 +965,7 @@ fn render_node_from_applier(
                 rect,
                 text_rect,
                 &node_layer,
-                prepared.text.as_str(),
+                &prepared.text,
                 text_style_ref,
                 font_size,
                 options,
@@ -1293,18 +1325,28 @@ mod tests {
         let options = cranpose_ui::TextLayoutOptions::default();
         let content_width = 130.0;
 
-        let wrapped_by_content =
-            prepare_text_layout(text, &style, options, Some(content_width)).text;
+        let wrapped_by_content = prepare_text_layout(
+            &cranpose_ui::text::AnnotatedString::from(text),
+            &style,
+            options,
+            Some(content_width),
+        )
+        .text;
         assert!(
-            wrapped_by_content.contains('\n'),
+            wrapped_by_content.text.contains('\n'),
             "control check expected wrapping at content width: {wrapped_by_content:?}"
         );
 
         let measure_width =
             resolve_text_measure_width(content_width, padding, Some(180.0), options);
-        let prepared = prepare_text_layout(text, &style, options, Some(measure_width));
+        let prepared = prepare_text_layout(
+            &cranpose_ui::text::AnnotatedString::from(text),
+            &style,
+            options,
+            Some(measure_width),
+        );
         assert!(
-            !prepared.text.contains('\n'),
+            !prepared.text.text.contains('\n'),
             "measurement width should prevent synthetic wrap: {:?}",
             prepared.text
         );
@@ -1329,9 +1371,14 @@ mod tests {
         let content_width = 130.0;
         let measure_width =
             resolve_text_measure_width(content_width, padding, Some(180.0), options);
-        let prepared = prepare_text_layout(text, &style, options, Some(measure_width));
+        let prepared = prepare_text_layout(
+            &cranpose_ui::text::AnnotatedString::from(text),
+            &style,
+            options,
+            Some(measure_width),
+        );
         assert!(
-            prepared.text.contains('\n'),
+            prepared.text.text.contains('\n'),
             "finite max_lines should keep constrained wrapping: {:?}",
             prepared.text
         );
@@ -1372,7 +1419,7 @@ mod tests {
             rect,
             rect,
             &GraphicsLayer::default(),
-            "Decorated shadow text",
+            &cranpose_ui::text::AnnotatedString::from("Decorated shadow text"),
             &style,
             14.0,
             TextLayoutOptions::default(),
@@ -1431,7 +1478,7 @@ mod tests {
             rect,
             rect,
             &GraphicsLayer::default(),
-            "Decorated",
+            &cranpose_ui::text::AnnotatedString::from("Decorated"),
             &style,
             14.0,
             TextLayoutOptions::default(),
@@ -1466,7 +1513,7 @@ mod tests {
             rect,
             rect,
             &GraphicsLayer::default(),
-            "Shifted",
+            &cranpose_ui::text::AnnotatedString::from("Shifted"),
             &style,
             14.0,
             TextLayoutOptions::default(),
@@ -1508,7 +1555,7 @@ mod tests {
             rect,
             rect,
             &GraphicsLayer::default(),
-            "Gradient text",
+            &cranpose_ui::text::AnnotatedString::from("Gradient text"),
             &style,
             14.0,
             TextLayoutOptions::default(),
@@ -1541,9 +1588,14 @@ mod tests {
         let content_width = 130.0;
         let measure_width =
             resolve_text_measure_width(content_width, padding, Some(180.0), options);
-        let prepared = prepare_text_layout(text, &style, options, Some(measure_width));
+        let prepared = prepare_text_layout(
+            &cranpose_ui::text::AnnotatedString::from(text),
+            &style,
+            options,
+            Some(measure_width),
+        );
         assert!(
-            prepared.text.contains('\u{2026}'),
+            prepared.text.text.contains('\u{2026}'),
             "ellipsis should remain active: {:?}",
             prepared.text
         );

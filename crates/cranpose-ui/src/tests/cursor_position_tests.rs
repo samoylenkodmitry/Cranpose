@@ -84,7 +84,8 @@ fn cursor_x_position_matches_text_width() {
         };
 
         // Expected cursor x = width of "Hello"
-        let expected_x = crate::text::measure_text("Hello", &style).width;
+        let expected_x =
+            crate::text::measure_text(&crate::text::AnnotatedString::from("Hello"), &style).width;
 
         assert!(
             (cursor_rect.x - expected_x).abs() < 0.1,
@@ -159,7 +160,8 @@ fn selection_draw_command_created_when_selected() {
         assert!(!primitives.is_empty(), "Expected selection primitive");
 
         // Selection width should match width of "Hello"
-        let expected_width = crate::text::measure_text("Hello", &style).width;
+        let expected_width =
+            crate::text::measure_text(&crate::text::AnnotatedString::from("Hello"), &style).width;
         let selection_rect = primitives.iter().find_map(|primitive| {
             if let cranpose_ui_graphics::DrawPrimitive::Rect { rect, .. } = primitive {
                 if (rect.width - expected_width).abs() < 1.0 {

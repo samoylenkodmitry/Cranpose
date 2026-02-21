@@ -18,17 +18,17 @@ use cranpose_foundation::modifier_element;
 use std::rc::Rc; // Added Rc import
 
 #[derive(Clone)]
-pub struct DynamicTextSource(Rc<dyn Fn() -> Rc<str>>);
+pub struct DynamicTextSource(Rc<dyn Fn() -> crate::text::AnnotatedString>);
 
 impl DynamicTextSource {
     pub fn new<F>(resolver: F) -> Self
     where
-        F: Fn() -> Rc<str> + 'static,
+        F: Fn() -> crate::text::AnnotatedString + 'static,
     {
         Self(Rc::new(resolver))
     }
 
-    fn resolve(&self) -> Rc<str> {
+    fn resolve(&self) -> crate::text::AnnotatedString {
         (self.0)()
     }
 }
@@ -39,16 +39,14 @@ impl PartialEq for DynamicTextSource {
     }
 }
 
-impl Eq for DynamicTextSource {}
-
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq)]
 enum TextSource {
-    Static(Rc<str>),
+    Static(crate::text::AnnotatedString),
     Dynamic(DynamicTextSource),
 }
 
 impl TextSource {
-    fn resolve(&self) -> Rc<str> {
+    fn resolve(&self) -> crate::text::AnnotatedString {
         match self {
             TextSource::Static(text) => text.clone(),
             TextSource::Dynamic(dynamic) => dynamic.resolve(),
@@ -62,13 +60,19 @@ trait IntoTextSource {
 
 impl IntoTextSource for String {
     fn into_text_source(self) -> TextSource {
-        TextSource::Static(Rc::from(self))
+        TextSource::Static(crate::text::AnnotatedString::from(self))
     }
 }
 
 impl IntoTextSource for &str {
     fn into_text_source(self) -> TextSource {
-        TextSource::Static(Rc::from(self))
+        TextSource::Static(crate::text::AnnotatedString::from(self))
+    }
+}
+
+impl IntoTextSource for crate::text::AnnotatedString {
+    fn into_text_source(self) -> TextSource {
+        TextSource::Static(self)
     }
 }
 
@@ -79,7 +83,7 @@ where
     fn into_text_source(self) -> TextSource {
         let state = self;
         TextSource::Dynamic(DynamicTextSource::new(move || {
-            Rc::from(state.value().to_string())
+            crate::text::AnnotatedString::from(state.value().to_string())
         }))
     }
 }
@@ -91,7 +95,7 @@ where
     fn into_text_source(self) -> TextSource {
         let state = self;
         TextSource::Dynamic(DynamicTextSource::new(move || {
-            Rc::from(state.value().to_string())
+            crate::text::AnnotatedString::from(state.value().to_string())
         }))
     }
 }
@@ -101,7 +105,9 @@ where
     F: Fn() -> String + 'static,
 {
     fn into_text_source(self) -> TextSource {
-        TextSource::Dynamic(DynamicTextSource::new(move || Rc::from(self())))
+        TextSource::Dynamic(DynamicTextSource::new(move || {
+            crate::text::AnnotatedString::from(self())
+        }))
     }
 }
 
@@ -142,6 +148,7 @@ where
     S: IntoTextSource + Clone + PartialEq + 'static,
 {
     let current = text.into_text_source().resolve();
+    
     let options = TextLayoutOptions {
         overflow,
         soft_wrap,

@@ -189,7 +189,12 @@ impl TextFieldModifierNode {
 
                     let now = web_time::Instant::now();
                     let text = state.text();
-                    let pos = crate::text::get_offset_for_position(&text, &style, click_x, click_y);
+                    let pos = crate::text::get_offset_for_position(
+                        &crate::text::AnnotatedString::from(text.as_str()),
+                        &style,
+                        click_x,
+                        click_y,
+                    );
 
                     // Detect double-click
                     let is_double_click = if let Some(last) = refs.last_click_time.get() {
@@ -237,7 +242,10 @@ impl TextFieldModifierNode {
                         if *refs.is_focused.borrow() {
                             let text = state.text();
                             let current_pos = crate::text::get_offset_for_position(
-                                &text, &style, click_x, click_y,
+                                &crate::text::AnnotatedString::from(text.as_str()),
+                                &style,
+                                click_x,
+                                click_y,
                             );
 
                             // Update selection directly (without undo stack push)
@@ -359,7 +367,10 @@ impl TextFieldModifierNode {
     /// Measures the text content.
     fn measure_text_content(&self) -> Size {
         let text = self.state.text();
-        let metrics = crate::text::measure_text(&text, &self.style);
+        let metrics = crate::text::measure_text(
+            &crate::text::AnnotatedString::from(text.as_str()),
+            &self.style,
+        );
         Size {
             width: metrics.width,
             height: metrics.height,
@@ -394,7 +405,12 @@ impl TextFieldModifierNode {
         }
 
         // Use proper text layout hit testing instead of character-based calculation
-        let byte_offset = crate::text::get_offset_for_position(&text, &self.style, x_offset, 0.0);
+        let byte_offset = crate::text::get_offset_for_position(
+            &crate::text::AnnotatedString::from(text.as_str()),
+            &self.style,
+            x_offset,
+            0.0,
+        );
 
         self.state.edit(|buffer| {
             buffer.place_cursor_before_char(byte_offset);
@@ -538,7 +554,11 @@ impl DrawModifierNode for TextFieldModifierNode {
             let selection = state.selection();
             let padding_left = content_offset.get();
             let padding_top = content_y_offset.get();
-            let line_height = crate::text::measure_text(&text, &style).line_height;
+            let line_height = crate::text::measure_text(
+                &crate::text::AnnotatedString::from(text.as_str()),
+                &style,
+            )
+            .line_height;
 
             // Draw selection highlight
             if !selection.collapsed() {
@@ -556,11 +576,17 @@ impl DrawModifierNode for TextFieldModifierNode {
                         let sel_start_in_line = sel_start.saturating_sub(line_start);
                         let sel_end_in_line = (sel_end - line_start).min(line.len());
 
-                        let sel_start_x =
-                            crate::text::measure_text(&line[..sel_start_in_line], &style).width
-                                + padding_left;
-                        let sel_end_x = crate::text::measure_text(&line[..sel_end_in_line], &style)
-                            .width
+                        let sel_start_x = crate::text::measure_text(
+                            &crate::text::AnnotatedString::from(&line[..sel_start_in_line]),
+                            &style,
+                        )
+                        .width
+                            + padding_left;
+                        let sel_end_x = crate::text::measure_text(
+                            &crate::text::AnnotatedString::from(&line[..sel_end_in_line]),
+                            &style,
+                        )
+                        .width
                             + padding_left;
                         let sel_width = sel_end_x - sel_start_x;
 
@@ -618,13 +644,18 @@ impl DrawModifierNode for TextFieldModifierNode {
                                 line.len()
                             };
 
-                            let comp_start_x =
-                                crate::text::measure_text(&line[..comp_start_in_line], &style)
-                                    .width
-                                    + padding_left;
-                            let comp_end_x =
-                                crate::text::measure_text(&line[..comp_end_in_line], &style).width
-                                    + padding_left;
+                            let comp_start_x = crate::text::measure_text(
+                                &crate::text::AnnotatedString::from(&line[..comp_start_in_line]),
+                                &style,
+                            )
+                            .width
+                                + padding_left;
+                            let comp_end_x = crate::text::measure_text(
+                                &crate::text::AnnotatedString::from(&line[..comp_end_in_line]),
+                                &style,
+                            )
+                            .width
+                                + padding_left;
                             let comp_width = comp_end_x - comp_start_x;
 
                             if comp_width > 0.0 {
@@ -653,7 +684,11 @@ impl DrawModifierNode for TextFieldModifierNode {
                 let text_before = &text[..pos];
                 let line_index = text_before.matches('\n').count();
                 let line_start = text_before.rfind('\n').map(|i| i + 1).unwrap_or(0);
-                let cursor_x = crate::text::measure_text(&text_before[line_start..], &style).width
+                let cursor_x = crate::text::measure_text(
+                    &crate::text::AnnotatedString::from(&text_before[line_start..]),
+                    &style,
+                )
+                .width
                     + padding_left;
                 let cursor_y = padding_top + line_index as f32 * line_height;
 
@@ -922,7 +957,8 @@ mod tests {
             let style = crate::text::TextStyle::default();
 
             // Empty text - cursor should be at x=0
-            let empty_width = crate::text::measure_text("", &style).width;
+            let empty_width =
+                crate::text::measure_text(&crate::text::AnnotatedString::from(""), &style).width;
             assert!(
                 empty_width.abs() < 0.1,
                 "Empty text should have 0 width, got {}",
@@ -930,7 +966,8 @@ mod tests {
             );
 
             // Non-empty text - cursor at end should be at text width
-            let hi_width = crate::text::measure_text("Hi", &style).width;
+            let hi_width =
+                crate::text::measure_text(&crate::text::AnnotatedString::from("Hi"), &style).width;
             assert!(
                 hi_width > 0.0,
                 "Text 'Hi' should have positive width: {}",
@@ -938,7 +975,8 @@ mod tests {
             );
 
             // Partial text - cursor after 'H' should be at width of 'H'
-            let h_width = crate::text::measure_text("H", &style).width;
+            let h_width =
+                crate::text::measure_text(&crate::text::AnnotatedString::from("H"), &style).width;
             assert!(h_width > 0.0, "Text 'H' should have positive width");
             assert!(
                 h_width < hi_width,
@@ -962,7 +1000,11 @@ mod tests {
             assert_eq!(text_before_cursor, "Hi");
 
             // So cursor x = width of "Hi"
-            let cursor_x = crate::text::measure_text(text_before_cursor, &style).width;
+            let cursor_x = crate::text::measure_text(
+                &crate::text::AnnotatedString::from(text_before_cursor),
+                &style,
+            )
+            .width;
             assert!(
                 (cursor_x - hi_width).abs() < 0.1,
                 "Cursor x {} should equal 'Hi' width {}",
