@@ -1541,11 +1541,11 @@ impl GpuRenderer {
         height: u32,
         root_scale: f32,
     ) {
-        if shadow.shapes.is_empty() {
+        if shadow.shapes.is_empty() && shadow.texts.is_empty() {
             return;
         }
 
-        let shape_bounds = shadow
+        let shape_bounds_opt = shadow
             .shapes
             .iter()
             .map(|(shape, _)| shape.rect)
@@ -1555,7 +1555,31 @@ impl GpuRenderer {
                 width: (a.x + a.width).max(b.x + b.width) - a.x.min(b.x),
                 height: (a.y + a.height).max(b.y + b.height) - a.y.min(b.y),
             });
-        let Some(shape_bounds) = shape_bounds else {
+            
+        let text_bounds_opt = shadow
+            .texts
+            .iter()
+            .map(|text| text.rect)
+            .reduce(|a, b| Rect {
+                x: a.x.min(b.x),
+                y: a.y.min(b.y),
+                width: (a.x + a.width).max(b.x + b.width) - a.x.min(b.x),
+                height: (a.y + a.height).max(b.y + b.height) - a.y.min(b.y),
+            });
+            
+        let combined_bounds = match (shape_bounds_opt, text_bounds_opt) {
+            (Some(s), Some(t)) => Some(Rect {
+                x: s.x.min(t.x),
+                y: s.y.min(t.y),
+                width: (s.x + s.width).max(t.x + t.width) - s.x.min(t.x),
+                height: (s.y + s.height).max(t.y + t.height) - s.y.min(t.y),
+            }),
+            (Some(s), None) => Some(s),
+            (None, Some(t)) => Some(t),
+            (None, None) => None,
+        };
+        
+        let Some(shape_bounds) = combined_bounds else {
             return;
         };
 
@@ -1597,6 +1621,21 @@ impl GpuRenderer {
                     [0.0, 0.0],
                 );
             }
+            if !shadow.texts.is_empty() {
+                let text_refs: Vec<&TextDraw> = shadow.texts.iter().collect();
+                if let Err(e) = self.prepare_text_for_render(&text_refs, width, height, root_scale) {
+                    eprintln!("Failed to prepare text for zero-blur shadow: {}", e);
+                } else {
+                    let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Zero Blur Shadow Text Encoder"),
+                    });
+                    if let Err(e) = self.encode_text_pass(&mut encoder, target_view, wgpu::LoadOp::Load) {
+                        eprintln!("Failed to encode text for zero-blur shadow: {}", e);
+                    }
+                    self.queue.submit(std::iter::once(encoder.finish()));
+                    self.frame_stats.bump_submits();
+                }
+            }
             return;
         }
 
@@ -1617,10 +1656,10 @@ impl GpuRenderer {
         //    The first shape gets LoadOp::Clear to initialize the texture;
         //    subsequent shapes use LoadOp::Load.
         let viewport_offset = [bounds_x.floor(), bounds_y.floor()];
-        let mut first_shadow_shape = true;
+        let mut first_shadow_item = true; // Tracks shapes and texts
         for (shape, blend_mode) in &shadow.shapes {
-            let load = if first_shadow_shape {
-                first_shadow_shape = false;
+            let load = if first_shadow_item {
+                first_shadow_item = false;
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
             } else {
                 wgpu::LoadOp::Load
@@ -1635,6 +1674,39 @@ impl GpuRenderer {
                 load,
                 viewport_offset,
             );
+        }
+
+        if !shadow.texts.is_empty() {
+            let mut shifted_texts = shadow.texts.clone();
+            for text in &mut shifted_texts {
+                text.rect.x -= viewport_offset[0] / root_scale;
+                text.rect.y -= viewport_offset[1] / root_scale;
+                if let Some(clip) = text.clip.as_mut() {
+                    clip.x -= viewport_offset[0] / root_scale;
+                    clip.y -= viewport_offset[1] / root_scale;
+                }
+            }
+            
+            let load = if first_shadow_item {
+                first_shadow_item = false;
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+            } else {
+                wgpu::LoadOp::Load
+            };
+            
+            let text_refs: Vec<&TextDraw> = shifted_texts.iter().collect();
+            if let Err(e) = self.prepare_text_for_render(&text_refs, bounds_w, bounds_h, root_scale) {
+                eprintln!("Failed to prepare text for shadow: {}", e);
+            } else {
+                let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Shadow Text Encoder"),
+                });
+                if let Err(e) = self.encode_text_pass(&mut encoder, &source.view, load) {
+                    eprintln!("Failed to encode text for shadow: {}", e);
+                }
+                self.queue.submit(std::iter::once(encoder.finish()));
+                self.frame_stats.bump_submits();
+            }
         }
 
         // 3. Apply Gaussian blur on the bounds-sized textures.
@@ -3105,6 +3177,7 @@ mod tests {
     fn test_shadow_draw(shapes: Vec<(DrawShape, BlendMode)>) -> ShadowDraw {
         ShadowDraw {
             shapes,
+            texts: vec![],
             blur_radius: 8.0,
             clip: None,
             z_index: 0,

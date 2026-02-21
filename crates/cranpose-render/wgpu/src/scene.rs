@@ -135,6 +135,8 @@ pub struct ShadowDraw {
     /// Shapes to render to offscreen target before blur.
     /// Each shape carries its own blend mode (SrcOver for fill, DstOut for cutout).
     pub shapes: Vec<(DrawShape, BlendMode)>,
+    /// Texts to render to offscreen target before blur.
+    pub texts: Vec<TextDraw>,
     /// Gaussian blur radius in pixels.
     pub blur_radius: f32,
     /// Optional clip rect applied when compositing (inner shadows clip to element bounds).

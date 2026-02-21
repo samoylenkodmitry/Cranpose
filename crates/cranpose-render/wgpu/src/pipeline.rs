@@ -17,7 +17,7 @@ use cranpose_ui_graphics::{
     RenderEffect, RoundedCornerShape, Size,
 };
 
-use crate::scene::{BackdropLayer, ClickAction, DrawShape, EffectLayer, Scene, ShadowDraw};
+use crate::scene::{BackdropLayer, ClickAction, DrawShape, EffectLayer, Scene, ShadowDraw, TextDraw};
 use crate::text_raster::{rasterize_text_to_image, requires_rasterized_glyph_path};
 
 // Re-use style functions from a local copy
@@ -154,6 +154,7 @@ fn push_layer_shadow(
         };
         scene.push_shadow_draw(ShadowDraw {
             shapes: vec![shadow_shape(ambient_rect, ambient, resolved_shape)],
+            texts: vec![],
             blur_radius: ambient_blur_radius,
             clip,
             z_index: 0, // populated by Scene::push_shadow_draw()
@@ -177,6 +178,7 @@ fn push_layer_shadow(
         };
         scene.push_shadow_draw(ShadowDraw {
             shapes: vec![shadow_shape(spot_rect, spot, resolved_shape)],
+            texts: vec![],
             blur_radius: spot_blur_radius,
             clip,
             z_index: 0, // populated by Scene::push_shadow_draw()
@@ -628,36 +630,28 @@ fn push_text_style_draws(
         );
         let mut shadow_text_style = transformed_text_style.clone();
         shadow_text_style.span_style.brush = None;
-        let shadow_z_start = scene.next_z;
-        scene.push_text(
-            node_id,
-            transformed_shadow_rect,
-            Rc::from(text),
-            apply_layer_to_color(shadow.color, content_layer),
-            shadow_text_style,
-            font_size,
-            text_scale,
-            options,
-            text_clip,
-        );
         let blur_radius = shadow.blur_radius.max(0.0) * text_scale;
-        if blur_radius > f32::EPSILON {
-            let blur_margin = (blur_radius * 3.0).max(1.0);
-            scene.effect_layers.push(EffectLayer {
-                rect: Rect {
-                    x: transformed_shadow_rect.x - blur_margin,
-                    y: transformed_shadow_rect.y - blur_margin,
-                    width: transformed_shadow_rect.width + blur_margin * 2.0,
-                    height: transformed_shadow_rect.height + blur_margin * 2.0,
-                },
-                clip: text_clip,
-                effect: Some(RenderEffect::blur(blur_radius)),
-                blend_mode: BlendMode::SrcOver,
-                composite_alpha: 1.0,
-                z_start: shadow_z_start,
-                z_end: scene.next_z,
-            });
-        }
+        
+        let shadow_text = TextDraw {
+            node_id,
+            rect: transformed_shadow_rect,
+            text: Rc::from(text),
+            color: apply_layer_to_color(shadow.color, content_layer),
+            text_style: shadow_text_style,
+            font_size,
+            scale: text_scale,
+            layout_options: options,
+            z_index: 0,
+            clip: text_clip,
+        };
+
+        scene.push_shadow_draw(ShadowDraw {
+            shapes: vec![],
+            texts: vec![shadow_text],
+            blur_radius,
+            clip: text_clip,
+            z_index: 0,
+        });
     }
 
     push_text_decorations(
@@ -1570,30 +1564,21 @@ mod tests {
         };
         assert_eq!(*background, Color(0.2, 0.3, 0.52, 0.55));
 
-        assert_eq!(scene.texts.len(), 2, "shadow + content text expected");
-        assert_eq!(scene.texts[0].color, Color(0.0, 0.0, 0.0, 0.95));
-        assert_eq!(scene.texts[1].color, Color(0.9, 0.95, 1.0, 1.0));
-        assert!(scene.texts[0].rect.x > scene.texts[1].rect.x);
-        assert!(scene.texts[0].rect.y > scene.texts[1].rect.y);
-        assert_eq!(
-            scene.effect_layers.len(),
-            1,
-            "blurred text shadow uses effect layer"
-        );
-        let effect = scene.effect_layers[0]
-            .effect
-            .as_ref()
-            .expect("shadow effect should be present");
+        assert_eq!(scene.texts.len(), 1, "content text expected");
+        assert_eq!(scene.shadow_draws.len(), 1, "shadow draw expected");
+        assert_eq!(scene.shadow_draws[0].texts.len(), 1, "shadow text expected");
+        assert_eq!(scene.shadow_draws[0].texts[0].color, Color(0.0, 0.0, 0.0, 0.95));
+        assert_eq!(scene.texts[0].color, Color(0.9, 0.95, 1.0, 1.0));
+        assert!(scene.shadow_draws[0].texts[0].rect.x > scene.texts[0].rect.x);
+        assert!(scene.shadow_draws[0].texts[0].rect.y > scene.texts[0].rect.y);
         assert!(
-            matches!(
-                effect,
-                RenderEffect::Blur {
-                    radius_x,
-                    radius_y,
-                    ..
-                } if (*radius_x - 3.0).abs() < f32::EPSILON && (*radius_y - 3.0).abs() < f32::EPSILON
-            ),
-            "shadow blur radius should map to blur effect: {effect:?}"
+            scene.effect_layers.is_empty(),
+            "blurred text shadow does not use effect layer"
+        );
+        assert_eq!(
+            scene.shadow_draws[0].blur_radius,
+            3.0,
+            "shadow uses blurred shadow draw radius"
         );
     }
 
@@ -1632,7 +1617,10 @@ mod tests {
             None,
         );
 
-        assert_eq!(scene.texts.len(), 2, "shadow + content text expected");
+        assert_eq!(scene.texts.len(), 1, "content text expected");
+        assert_eq!(scene.shadow_draws.len(), 1, "shadow draw expected");
+        assert_eq!(scene.shadow_draws[0].texts.len(), 1, "shadow text expected");
+        assert_eq!(scene.shadow_draws[0].blur_radius, 0.0, "hard shadow blur radius");
         assert!(
             scene.effect_layers.is_empty(),
             "hard shadow should not allocate blur effect layer"

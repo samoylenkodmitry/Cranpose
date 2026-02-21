@@ -371,6 +371,92 @@ pub(crate) fn TextShowcaseTab() {
                                 4,
                                 1,
                             );
+
+                            Spacer(Size { width: 0.0, height: 4.0 });
+                            style_chip_label(
+                                "Worldwide Hyphenation Dictionaries (fr-FR, de-DE, es-ES locales)",
+                            );
+                            Row(
+                                Modifier::empty(),
+                                RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(12.0)),
+                                move || {
+                                    BasicText(
+                                        "Hyphenation test: configuration super-éléphant transformation magnifique.",
+                                        Modifier::empty()
+                                            .width(140.0)
+                                            .background(Color(0.18, 0.12, 0.16, 1.0))
+                                            .rounded_corners(8.0)
+                                            .padding(8.0),
+                                        TextStyle {
+                                            span_style: SpanStyle {
+                                                color: Some(Color(1.0, 0.9, 0.95, 1.0)),
+                                                font_size: TextUnit::Sp(14.0),
+                                                locale_list: Some(LocaleList::from_language_tags("fr-FR")),
+                                                ..Default::default()
+                                            },
+                                            paragraph_style: ParagraphStyle {
+                                                line_break: LineBreak::Paragraph,
+                                                hyphens: Hyphens::Auto,
+                                                ..Default::default()
+                                            },
+                                        },
+                                        TextOverflow::Clip,
+                                        true,
+                                        4,
+                                        1,
+                                    );
+                                    BasicText(
+                                        "Streichholzschächtelchen Windschutzscheibenschmutz",
+                                        Modifier::empty()
+                                            .width(140.0)
+                                            .background(Color(0.12, 0.15, 0.16, 1.0))
+                                            .rounded_corners(8.0)
+                                            .padding(8.0),
+                                        TextStyle {
+                                            span_style: SpanStyle {
+                                                color: Some(Color(0.9, 0.95, 1.0, 1.0)),
+                                                font_size: TextUnit::Sp(14.0),
+                                                locale_list: Some(LocaleList::from_language_tags("de-DE")),
+                                                ..Default::default()
+                                            },
+                                            paragraph_style: ParagraphStyle {
+                                                line_break: LineBreak::Paragraph,
+                                                hyphens: Hyphens::Auto,
+                                                ..Default::default()
+                                            },
+                                        },
+                                        TextOverflow::Clip,
+                                        true,
+                                        4,
+                                        1,
+                                    );
+                                    BasicText(
+                                        "Desoxirribonucleótido electroencefalografista",
+                                        Modifier::empty()
+                                            .width(140.0)
+                                            .background(Color(0.16, 0.14, 0.12, 1.0))
+                                            .rounded_corners(8.0)
+                                            .padding(8.0),
+                                        TextStyle {
+                                            span_style: SpanStyle {
+                                                color: Some(Color(1.0, 0.95, 0.9, 1.0)),
+                                                font_size: TextUnit::Sp(14.0),
+                                                locale_list: Some(LocaleList::from_language_tags("es-ES")),
+                                                ..Default::default()
+                                            },
+                                            paragraph_style: ParagraphStyle {
+                                                line_break: LineBreak::Paragraph,
+                                                hyphens: Hyphens::Auto,
+                                                ..Default::default()
+                                            },
+                                        },
+                                        TextOverflow::Clip,
+                                        true,
+                                        4,
+                                        1,
+                                    );
+                                }
+                            );
                         },
                     );
                 },

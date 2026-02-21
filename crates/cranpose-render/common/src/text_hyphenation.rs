@@ -1,14 +1,30 @@
 use cranpose_ui::text::TextStyle;
 use hyphenation::{Hyphenator, Language, Load, Standard};
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::sync::{OnceLock, RwLock};
 
 const MIN_SEGMENT_CHARS: usize = 2;
 
-fn english_us_dictionary() -> Option<&'static Standard> {
-    static EN_US_DICTIONARY: OnceLock<Option<Standard>> = OnceLock::new();
-    EN_US_DICTIONARY
-        .get_or_init(|| Standard::from_embedded(Language::EnglishUS).ok())
-        .as_ref()
+fn get_dictionary(language: Language) -> Option<Standard> {
+    static DICTIONARIES: OnceLock<RwLock<HashMap<Language, Standard>>> = OnceLock::new();
+    let cache = DICTIONARIES.get_or_init(|| RwLock::new(HashMap::new()));
+    
+    if let Ok(read_guard) = cache.read() {
+        if let Some(dict) = read_guard.get(&language) {
+            return Some(dict.clone());
+        }
+    }
+    
+    // Load if not in cache
+    match Standard::from_embedded(language) {
+        Ok(dict) => {
+            if let Ok(mut write_guard) = cache.write() {
+                write_guard.insert(language, dict.clone());
+            }
+            Some(dict)
+        }
+        Err(_) => None,
+    }
 }
 
 pub fn choose_auto_hyphen_break(
@@ -20,14 +36,14 @@ pub fn choose_auto_hyphen_break(
     if line.is_empty() || measured_break_char <= segment_start_char {
         return None;
     }
-    if !should_use_english_dictionary(style) {
-        return None;
-    }
+    
+    let language = resolve_hyphenation_language(style)?;
 
-    let dictionary = english_us_dictionary()?;
+    let dictionary = get_dictionary(language)?;
     let boundaries = char_boundaries(line);
-    let line_end = boundaries.len().saturating_sub(1);
-    if measured_break_char == 0 || measured_break_char >= line_end {
+    let char_count = boundaries.len().saturating_sub(1);
+    
+    if measured_break_char == 0 || measured_break_char >= char_count {
         return None;
     }
     if !is_break_inside_word(line, &boundaries, measured_break_char) {
@@ -44,6 +60,7 @@ pub fn choose_auto_hyphen_break(
     let min_local_break = segment_start_char
         .saturating_sub(word_start)
         .saturating_add(MIN_SEGMENT_CHARS);
+        
     if min_local_break > max_local_break {
         return None;
     }
@@ -63,17 +80,53 @@ pub fn choose_auto_hyphen_break(
     None
 }
 
-fn should_use_english_dictionary(style: &TextStyle) -> bool {
+fn resolve_hyphenation_language(style: &TextStyle) -> Option<Language> {
     let Some(locale_list) = style.span_style.locale_list.as_ref() else {
-        return true;
+        return Some(Language::EnglishUS);
     };
     if locale_list.is_empty() {
-        return true;
+        return Some(Language::EnglishUS);
     }
-    locale_list.locales().iter().any(|locale| {
-        let normalized = locale.trim().replace('_', "-").to_ascii_lowercase();
-        normalized == "und" || normalized.starts_with("en")
-    })
+    
+    // Check first matching locale
+    let primary_locale = locale_list.locales().first()?;
+    let normalized = primary_locale.trim().replace('_', "-").to_ascii_lowercase();
+    
+    // Handle specific regions or fallbacks
+    // The hyphenation crate uses specific enums for languages
+    if normalized.starts_with("en-gb") {
+        return Some(Language::EnglishGB);
+    }
+    if normalized.starts_with("en") || normalized == "und" {
+        return Some(Language::EnglishUS);
+    }
+    if normalized.starts_with("fr") {
+        return Some(Language::French);
+    }
+    if normalized.starts_with("de") {
+        // hyphenation crate distinguishes old/new orthography
+        // Defaulting to new (1996) orthography for modern texts
+        return Some(Language::German1996);
+    }
+    if normalized.starts_with("es") {
+        return Some(Language::Spanish);
+    }
+    if normalized.starts_with("it") {
+        return Some(Language::Italian);
+    }
+    if normalized.starts_with("ru") {
+        return Some(Language::Russian);
+    }
+    if normalized.starts_with("pt") {
+        return Some(Language::Portuguese);
+    }
+    if normalized.starts_with("nl") {
+        return Some(Language::Dutch);
+    }
+    
+    // We only embed standard dictionary languages right now.
+    // If not found, hyphenation is disabled.
+    None
 }
 
 fn char_boundaries(text: &str) -> Vec<usize> {
@@ -140,10 +193,19 @@ mod tests {
     }
 
     #[test]
-    fn locale_gate_skips_non_english_dictionary() {
+    fn locale_gate_uses_french_dictionary() {
+        // "éléphant" -> él-éphant (break at byte 5, which is char 3)
         let break_idx =
-            choose_auto_hyphen_break("Transformation", &style_with_locale("fr-FR"), 8, 12);
-        assert_eq!(break_idx, None);
+            choose_auto_hyphen_break("éléphant", &style_with_locale("fr-FR"), 0, 7);
+        assert_eq!(break_idx, Some(3));
+    }
+
+    #[test]
+    fn locale_gate_uses_german_dictionary() {
+        // "Geschwindigkeitsbegrenzung" -> Ge-schwin-dig-keits-be-gren-zung
+        let break_idx =
+            choose_auto_hyphen_break("Geschwindigkeitsbegrenzung", &style_with_locale("de-DE"), 10, 20);
+        assert!(break_idx.is_some());
     }
 
     #[test]

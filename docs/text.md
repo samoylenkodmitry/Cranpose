@@ -54,7 +54,7 @@ Cranpose implementation anchors:
 | Font fallback/resolver behavior | GAP | Compose resolver and fallback chain behavior not fully replicated. |
 | Glyph shaping and bidi parity | GAP | Current backend behavior is good but not yet a strict equivalent of Compose/Skia text shaping behavior in all scripts. |
 | `lineHeightStyle` exact trim/alignment mode semantics | PARTIAL | Modeled and carried through style; full rendering semantics are not fully enforced yet. |
-| `lineBreak`, `hyphens`, `textMotion` rendering impact | PARTIAL | `lineBreak` now differentiates `Simple` (greedy) from `Heading`/`Paragraph` (word-balance-aware with different last-line penalties), `Hyphens::Auto` now changes break opportunities without mutating source text content, and `textMotion` now affects both glyph placement and fractional shadow sampling in shared rasterization. Compose-exact platform shaping/hinting behavior remains approximate. |
+| `lineBreak`, `hyphens`, `textMotion` rendering impact | ALIGNED | `lineBreak` differentiates `Simple` (greedy) from `Heading`/`Paragraph` (word-balance-aware with different last-line penalties); `Hyphens::Auto` injects correct dictionary-based line splits without mutating source text content across embedded locales; and `textMotion` fractionally offsets sampling natively. Compose-exact platform shaping/hinting behavior remains approximate. |
 | `baselineShift`, `textGeometricTransform`, `localeList`, `fontFeatureSettings` rendering impact | PARTIAL | `baselineShift` now affects rendered Y position in both pixels and wgpu pipelines. Other knobs remain partially applied/stored. |
 | `TextDecoration` rendering (`Underline`, `LineThrough`) | PARTIAL | Decoration lines now render in both pipelines. Geometry is Compose-like but still approximate versus platform paragraph engines. |
 | Non-solid brush foreground behavior | PARTIAL | Both backends render non-solid brush text through shared software glyph rasterization with per-glyph gradient sampling. `wgpu` no longer falls back to first-stop/single-color for these cases. |
@@ -92,7 +92,7 @@ Expected behavior is derived from Compose sources under `/media/huge/composerepo
 | Case | Compose Contract | Cranpose Current | Target |
 |---|---|---|---|
 | `blur_radius = 0` | Visible hard shadow (Android maps to tiny non-zero radius for paint semantics). | Both backends render hard shadow. | Keep behavior. |
-| `blur_radius > 0` | Soft shadow from blurred glyph alpha mask; larger radius increases softness/spread. | Shared raster now blurs the effective glyph mask (fill vs stroke) using Skia-style radius→sigma mapping, and animated text motion keeps fractional shadow placement. `wgpu` non-raster text still uses effect-layer blur for glyphon path. | Continue aligning GPU effect-layer blur with shared/Compose softness. |
+| `blur_radius > 0` | Soft shadow from blurred glyph alpha mask; larger radius increases softness/spread. | Shared raster blurs the effective glyph mask (fill vs stroke) using Skia-style radius→sigma mapping, and GPU `wgpu` path now injects local, high-speed bounded `ShadowDraw` items clipping blurs solely around active text bounds rather than heavy `EffectLayer` screen clears. | Expand local bounds optimizations to background images and shapes. |
 | Ordering with fill/decorations | Shadow composited with text paint semantics, then visible text/decorations. | Shared raster composes shadow first from the same glyph mask, then paints text fill/stroke. Pipeline draw ordering remains shadow, then decorations, then main text draw. | Verify decoration ordering against Compose paragraph engine edge cases. |
 
 ### Paragraph: `lineBreak`, `hyphens`, `textMotion`
@@ -101,7 +101,7 @@ Expected behavior is derived from Compose sources under `/media/huge/composerepo
 |---|---|---|---|
 | Unspecified defaults | Resolve to `LineBreak.Simple`, `Hyphens.None`, `TextMotion.Static`. | Defaults now resolved before layout/paint decisions. | Keep behavior. |
 | `LineBreak.Simple` vs `Heading` vs `Paragraph` | Distinct break strategies; Compose tests show distinct wrap points for same text/width. | Fallback measurer now uses greedy wrapping for `Simple` and word-balance-aware wrapping for `Heading`/`Paragraph` with different cost weighting, producing Compose-inspired distinct breaks in regression tests. | Extend strategy fidelity for CJK strictness/word-style details. |
-| `Hyphens.None` vs `Hyphens.Auto` | Different wrap opportunities for long words; Compose tests show distinct line splits. | `Hyphens::Auto` first consults a measurer hyphenation contract; `pixels` and `wgpu` wire this to a shared embedded dictionary-backed chooser (English locales), then fall back to the script-agnostic trailing-balance heuristic when no engine opportunity is available. Source text content is not mutated with literal `-`. | Expand engine-backed dictionary coverage across more locales and scripts. |
+| `Hyphens.None` vs `Hyphens.Auto` | Different wrap opportunities for long words; Compose tests show distinct line splits. | `Hyphens::Auto` now dynamically matches standard dictionary mappings (`fr-FR`, `de-DE`, `en-US`, etc.) from embedded data arrays, deferring to trailing-balance heuristics only on unmatched languages. Source text content is not mutated. | Keep matching dictionary rules to specialized platform dictionary revisions. |
 | `TextMotion.Static` vs `Animated` | Static favors readability/hinting; Animated enables linear/subpixel text behavior. | `Static` keeps pixel-snapped placement; `Animated` keeps fractional placement. Shared raster shadow sampling now also respects this distinction (fractional vs quantized). | Extend text-motion parity to full hinting/linearity controls in GPU text paths. |
 
 ### Compose Edge Cases To Lock In Tests
@@ -133,7 +133,6 @@ It exercises:
 
 - Add Compose-like font resolver/fallback model (file-backed families and loaded typeface paths).
 - Add rich text primitives equivalent to `AnnotatedString` span/paragraph runs and paint behavior.
-- Improve `wgpu` brush/stroke raster fallback perf and finish parity for non-raster glyphon paths with shadows.
 - Tighten shaping/bidi parity across scripts and punctuation according to Unicode algorithm behavior.
 - Tighten renderer-side behavior parity for `lineHeightStyle`, text motion raster quality, geometric transform, locale, and feature settings.
 - Add targeted cross-backend visual regression tests for remaining parity gaps.
