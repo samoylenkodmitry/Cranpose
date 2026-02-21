@@ -657,7 +657,7 @@ fn push_text_decorations(
 
         let font_size = span_text_style.resolve_font_size(14.0);
         let line_height = span_text_style
-            .resolve_line_height(14.0, font_size)
+            .resolve_line_height(14.0, font_size * 1.4)
             .max(1.0);
         let thickness = (font_size * 0.06).clamp(1.0, line_height * 0.25);
         let brush = merged_style.brush.clone().unwrap_or_else(|| {

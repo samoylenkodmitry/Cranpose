@@ -256,30 +256,43 @@ fn prepare_text_layout_fallback<M: TextMeasurer + ?Sized>(
     let hyphens_mode = style.paragraph_style.hyphens.take_or_else(|| Hyphens::None);
 
     let mut lines = split_text_lines(text.text.as_str());
+    let mut annotated_lines = split_annotated_lines(text);
     if let Some(width_limit) = wrap_width {
         let mut wrapped = Vec::with_capacity(lines.len());
-        for line in &lines {
-            wrapped.extend(wrap_line_to_width(
+        let mut wrapped_annotated = Vec::with_capacity(lines.len());
+        for line in &annotated_lines {
+            let wrapped_lines = wrap_line_to_width(
                 measurer,
                 line,
                 style,
                 width_limit,
                 line_break_mode,
                 hyphens_mode,
-            ));
+            );
+            for wrapped_line in wrapped_lines {
+                wrapped.push(wrapped_line.text.clone());
+                wrapped_annotated.push(wrapped_line);
+            }
         }
         lines = wrapped;
+        annotated_lines = wrapped_annotated;
     }
 
     let mut did_overflow = false;
     let mut visible_lines = lines.clone();
+    let mut visible_annotated_lines = annotated_lines.clone();
 
     if opts.overflow != TextOverflow::Visible && visible_lines.len() > opts.max_lines {
         did_overflow = true;
         visible_lines.truncate(opts.max_lines);
+        visible_annotated_lines.truncate(opts.max_lines);
         if let Some(last_line) = visible_lines.last_mut() {
             *last_line =
                 apply_line_overflow(measurer, last_line, style, max_width, opts, true, true);
+            if let Some(last_annotated_line) = visible_annotated_lines.last_mut() {
+                *last_annotated_line =
+                    remap_annotated_for_display(last_annotated_line, last_line.as_str());
+            }
         }
     }
 
@@ -287,9 +300,10 @@ fn prepare_text_layout_fallback<M: TextMeasurer + ?Sized>(
         let single_line_ellipsis = opts.max_lines == 1 || !opts.soft_wrap;
         let visible_len = visible_lines.len();
         for (line_index, line) in visible_lines.iter_mut().enumerate() {
-            let width = measurer
-                .measure(&crate::text::AnnotatedString::from(&*line), style)
-                .width;
+            let width = visible_annotated_lines
+                .get(line_index)
+                .map(|annotated_line| measurer.measure(annotated_line, style).width)
+                .unwrap_or_default();
             if width > width_limit + WRAP_EPSILON {
                 if opts.overflow == TextOverflow::Visible {
                     continue;
@@ -304,25 +318,25 @@ fn prepare_text_layout_fallback<M: TextMeasurer + ?Sized>(
                     line_index + 1 == visible_len,
                     single_line_ellipsis,
                 );
+                if let Some(annotated_line) = visible_annotated_lines.get_mut(line_index) {
+                    *annotated_line = remap_annotated_for_display(annotated_line, line.as_str());
+                }
             }
         }
     }
 
-    let display_text = visible_lines.join("\n");
+    let display_annotated = join_annotated_lines(&visible_annotated_lines);
+    debug_assert_eq!(display_annotated.text, visible_lines.join("\n"));
     let line_height = measurer.measure(text, style).line_height.max(0.0);
     let display_line_count = visible_lines.len().max(1);
     let layout_line_count = display_line_count.max(opts.min_lines);
 
-    let measured_width = if visible_lines.is_empty() {
+    let measured_width = if visible_annotated_lines.is_empty() {
         0.0
     } else {
-        visible_lines
+        visible_annotated_lines
             .iter()
-            .map(|line| {
-                measurer
-                    .measure(&crate::text::AnnotatedString::from(line), style)
-                    .width
-            })
+            .map(|line| measurer.measure(line, style).width)
             .fold(0.0_f32, f32::max)
     };
     let width = if opts.overflow == TextOverflow::Visible {
@@ -333,7 +347,6 @@ fn prepare_text_layout_fallback<M: TextMeasurer + ?Sized>(
         measured_width
     };
 
-    let display_annotated = remap_annotated_for_display(text, display_text.as_str());
     PreparedTextLayout {
         text: display_annotated,
         metrics: TextMetrics {
@@ -351,6 +364,76 @@ fn split_text_lines(text: &str) -> Vec<String> {
         return vec![String::new()];
     }
     text.split('\n').map(ToString::to_string).collect()
+}
+
+fn split_annotated_lines(text: &crate::text::AnnotatedString) -> Vec<crate::text::AnnotatedString> {
+    if text.text.is_empty() {
+        return vec![crate::text::AnnotatedString::from("")];
+    }
+
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    for (idx, ch) in text.text.char_indices() {
+        if ch == '\n' {
+            out.push(text.subsequence(start..idx));
+            start = idx + ch.len_utf8();
+        }
+    }
+    out.push(text.subsequence(start..text.text.len()));
+    out
+}
+
+fn join_annotated_lines(lines: &[crate::text::AnnotatedString]) -> crate::text::AnnotatedString {
+    if lines.is_empty() {
+        return crate::text::AnnotatedString::from("");
+    }
+
+    let mut text = String::new();
+    let mut span_styles = Vec::new();
+    let mut paragraph_styles = Vec::new();
+    let mut offset = 0usize;
+
+    for (idx, line) in lines.iter().enumerate() {
+        text.push_str(line.text.as_str());
+        for span in &line.span_styles {
+            span_styles.push(crate::text::RangeStyle {
+                item: span.item.clone(),
+                range: (span.range.start + offset)..(span.range.end + offset),
+            });
+        }
+        for span in &line.paragraph_styles {
+            paragraph_styles.push(crate::text::RangeStyle {
+                item: span.item.clone(),
+                range: (span.range.start + offset)..(span.range.end + offset),
+            });
+        }
+
+        offset += line.text.len();
+        if idx + 1 < lines.len() {
+            text.push('\n');
+            offset += 1;
+        }
+    }
+
+    crate::text::AnnotatedString {
+        text,
+        span_styles,
+        paragraph_styles,
+    }
+}
+
+fn trim_segment_end_whitespace(line: &str, start: usize, mut end: usize) -> usize {
+    while end > start {
+        let Some((idx, ch)) = line[start..end].char_indices().next_back() else {
+            break;
+        };
+        if ch.is_whitespace() {
+            end = start + idx;
+        } else {
+            break;
+        }
+    }
+    end
 }
 
 fn remap_annotated_for_display(
@@ -457,18 +540,18 @@ fn normalize_max_width(max_width: Option<f32>) -> Option<f32> {
 
 fn wrap_line_to_width<M: TextMeasurer + ?Sized>(
     measurer: &M,
-    line: &str,
+    line: &crate::text::AnnotatedString,
     style: &TextStyle,
     max_width: f32,
     line_break: LineBreak,
     hyphens: Hyphens,
-) -> Vec<String> {
-    if line.is_empty() {
-        return vec![String::new()];
+) -> Vec<crate::text::AnnotatedString> {
+    if line.text.is_empty() {
+        return vec![crate::text::AnnotatedString::from("")];
     }
 
     if matches!(line_break, LineBreak::Heading | LineBreak::Paragraph)
-        && line.chars().any(char::is_whitespace)
+        && line.text.chars().any(char::is_whitespace)
     {
         if let Some(balanced) =
             wrap_line_with_word_balance(measurer, line, style, max_width, line_break)
@@ -482,13 +565,14 @@ fn wrap_line_to_width<M: TextMeasurer + ?Sized>(
 
 fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
     measurer: &M,
-    line: &str,
+    line: &crate::text::AnnotatedString,
     style: &TextStyle,
     max_width: f32,
     line_break: LineBreak,
     hyphens: Hyphens,
-) -> Vec<String> {
-    let boundaries = char_boundaries(line);
+) -> Vec<crate::text::AnnotatedString> {
+    let line_text = line.text.as_str();
+    let boundaries = char_boundaries(line_text);
     let mut wrapped = Vec::new();
     let mut start_idx = 0usize;
 
@@ -499,10 +583,8 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
 
         while low <= high {
             let mid = (low + high) / 2;
-            let segment = &line[boundaries[start_idx]..boundaries[mid]];
-            let width = measurer
-                .measure(&crate::text::AnnotatedString::from(segment), style)
-                .width;
+            let segment = line.subsequence(boundaries[start_idx]..boundaries[mid]);
+            let width = measurer.measure(&segment, style).width;
             if width <= max_width + WRAP_EPSILON || mid == start_idx + 1 {
                 best = mid;
                 low = mid + 1;
@@ -514,31 +596,39 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
             }
         }
 
-        let wrap_idx = choose_wrap_break(line, &boundaries, start_idx, best, line_break);
+        let wrap_idx = choose_wrap_break(line_text, &boundaries, start_idx, best, line_break);
         let mut effective_wrap_idx = wrap_idx;
         let can_hyphenate = hyphens == Hyphens::Auto
             && wrap_idx == best
             && best < boundaries.len() - 1
-            && is_break_inside_word(line, &boundaries, wrap_idx);
+            && is_break_inside_word(line_text, &boundaries, wrap_idx);
         if can_hyphenate {
-            effective_wrap_idx =
-                resolve_auto_hyphen_break(measurer, line, style, &boundaries, start_idx, wrap_idx);
+            effective_wrap_idx = resolve_auto_hyphen_break(
+                measurer,
+                line_text,
+                style,
+                &boundaries,
+                start_idx,
+                wrap_idx,
+            );
         }
-        let mut segment = line[boundaries[start_idx]..boundaries[effective_wrap_idx]].to_string();
+
+        let segment_start = boundaries[start_idx];
+        let mut segment_end = boundaries[effective_wrap_idx];
         if wrap_idx != best {
-            segment = segment.trim_end().to_string();
+            segment_end = trim_segment_end_whitespace(line_text, segment_start, segment_end);
         }
-        wrapped.push(segment);
+        wrapped.push(line.subsequence(segment_start..segment_end));
 
         start_idx = if wrap_idx != best {
-            skip_leading_whitespace(line, &boundaries, wrap_idx)
+            skip_leading_whitespace(line_text, &boundaries, wrap_idx)
         } else {
             effective_wrap_idx
         };
     }
 
     if wrapped.is_empty() {
-        wrapped.push(String::new());
+        wrapped.push(crate::text::AnnotatedString::from(""));
     }
 
     wrapped
@@ -546,13 +636,14 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
 
 fn wrap_line_with_word_balance<M: TextMeasurer + ?Sized>(
     measurer: &M,
-    line: &str,
+    line: &crate::text::AnnotatedString,
     style: &TextStyle,
     max_width: f32,
     line_break: LineBreak,
-) -> Option<Vec<String>> {
-    let boundaries = char_boundaries(line);
-    let breakpoints = collect_word_breakpoints(line, &boundaries);
+) -> Option<Vec<crate::text::AnnotatedString>> {
+    let line_text = line.text.as_str();
+    let boundaries = char_boundaries(line_text);
+    let breakpoints = collect_word_breakpoints(line_text, &boundaries);
     if breakpoints.len() <= 2 {
         return None;
     }
@@ -566,13 +657,12 @@ fn wrap_line_with_word_balance<M: TextMeasurer + ?Sized>(
         for end in start + 1..node_count {
             let start_byte = boundaries[breakpoints[start]];
             let end_byte = boundaries[breakpoints[end]];
-            let segment = line[start_byte..end_byte].trim_end();
-            if segment.is_empty() {
+            let trimmed_end = trim_segment_end_whitespace(line_text, start_byte, end_byte);
+            if trimmed_end <= start_byte {
                 continue;
             }
-            let segment_width = measurer
-                .measure(&crate::text::AnnotatedString::from(segment), style)
-                .width;
+            let segment = line.subsequence(start_byte..trimmed_end);
+            let segment_width = measurer.measure(&segment, style).width;
             if segment_width > max_width + WRAP_EPSILON {
                 continue;
             }
@@ -606,11 +696,11 @@ fn wrap_line_with_word_balance<M: TextMeasurer + ?Sized>(
         let next = next_index[current]?;
         let start_byte = boundaries[breakpoints[current]];
         let end_byte = boundaries[breakpoints[next]];
-        let segment = line[start_byte..end_byte].trim_end().to_string();
-        if segment.is_empty() {
+        let trimmed_end = trim_segment_end_whitespace(line_text, start_byte, end_byte);
+        if trimmed_end <= start_byte {
             return None;
         }
-        wrapped.push(segment);
+        wrapped.push(line.subsequence(start_byte..trimmed_end));
         current = next;
     }
 
@@ -1403,5 +1493,37 @@ mod tests {
         for span in &prepared.text.span_styles {
             assert!(span.range.end <= prepared.text.text.len());
         }
+    }
+
+    #[test]
+    fn mixed_font_size_segments_wrap_without_truncation() {
+        let style = TextStyle {
+            span_style: crate::text::SpanStyle {
+                font_size: TextUnit::Sp(14.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let options = TextLayoutOptions {
+            overflow: TextOverflow::Clip,
+            soft_wrap: true,
+            max_lines: usize::MAX,
+            min_lines: 1,
+        };
+        let annotated = crate::text::AnnotatedString::builder()
+            .append("You can also ")
+            .push_style(crate::text::SpanStyle {
+                font_size: TextUnit::Sp(22.0),
+                ..Default::default()
+            })
+            .append("change font size")
+            .pop()
+            .append(" dynamically mid-sentence!")
+            .to_annotated_string();
+
+        let prepared = prepare_text_layout(&annotated, &style, options, Some(260.0));
+        assert!(prepared.text.text.contains('\n'));
+        assert!(prepared.text.text.contains("mid-sentence!"));
+        assert!(!prepared.did_overflow);
     }
 }
