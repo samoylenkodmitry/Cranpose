@@ -148,7 +148,7 @@ This section is a context handoff for the next implementation chat.
 ### Known open gaps
 
 - Runtime shader path still caps gradient stops at `GPU_TEXT_BRUSH_EFFECT_MAX_STOPS` (`16`).
-- Rich span runs now use GPU material when span ranges do not override paint fields; full per-span paint material unification is still pending.
+- Rich span runs now use GPU material batching for paint overrides (`color` / `brush` / `alpha` / `draw_style`) via per-material glyph-mask effect passes. Remaining work is focused on visual-line decoration parity and additional mixed-bidi hardening.
 - `TextDrawStyle` API still exposes width-only stroke controls (cap/join/miter/path parity is pending).
 - `push_text_decorations(...)` in `wgpu` still uses single-line approximation instead of measured visual line boxes.
 
@@ -171,11 +171,11 @@ Non-negotiable invariants:
 - Style differences (fill/stroke/gradient/alpha) must be encoded as GPU material state, not renderer path switching.
 - Any span case not yet materialized must still stay on GPU glyph draw path and never fallback to software image text.
 
-Workstream 1: span paint material unification (remaining core gap)
+Workstream 1: span paint material unification
 
-1. Implement per-span paint material batching for spans that override paint fields (`color`, `brush`, `alpha`, `draw_style`).
-2. Keep non-paint span attributes (weight/style/family/size/spacing) intact in the same pass model.
-3. Preserve bidi visual ordering and wrapped-line brush continuity while splitting material regions.
+1. DONE: per-span paint material batching for spans that override paint fields (`color`, `brush`, `alpha`, `draw_style`) is in place.
+2. DONE: non-paint span attributes (weight/style/family/size/spacing) remain intact in the mask pass model.
+3. Remaining: extend coverage for mixed-bidi and wrapped-line continuity edge cases as follow-up hardening.
 
 Done gate:
 
@@ -230,7 +230,8 @@ Execution order:
 - `push_text_style_draws_stroke_contract_uses_gpu_shader_mask`
 - `push_text_style_draws_gradient_stroke_contract_uses_gpu_shader_mask`
 - `push_text_style_draws_span_gradient_without_paint_override_uses_gpu_shader_mask`
-- `push_text_style_draws_span_gradient_with_paint_override_skips_gpu_shader_mask`
+- `push_text_style_draws_span_gradient_with_paint_override_uses_gpu_shader_mask_batches`
+- `push_text_style_draws_adjacent_span_paint_overrides_batch_same_material`
 - Stroke and gradient+stroke text do not emit `scene.push_image(...)`.
 
 ### Decoration parity contract (explicit remaining gap)
@@ -256,7 +257,7 @@ Tests to add/update:
 
 - `cargo fmt` passed.
 - `cargo clippy -p cranpose-render-wgpu --tests -- -D warnings` passed.
-- `cargo test -p cranpose-render-wgpu` passed (`66` tests).
+- `cargo test -p cranpose-render-wgpu` passed (`67` tests).
 - `apps/desktop-demo/build-web.sh` passed.
 - `(cd apps/android-demo/android && ./gradlew :app:assembleRelease)` passed.
 - `./run_robot_test.sh` passed (`77`/`77`).

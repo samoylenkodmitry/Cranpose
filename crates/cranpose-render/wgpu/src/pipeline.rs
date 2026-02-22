@@ -1,7 +1,7 @@
 //! Scene building pipeline - copies layout tree to render scene.
 //! This module is copied from the pixels renderer to maintain compatibility.
 
-use std::rc::Rc;
+use std::{ops::Range, rc::Rc};
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::Brush;
@@ -857,17 +857,23 @@ const GPU_TEXT_BRUSH_EFFECT_MATERIAL_SLOT: usize = 5;
 const GPU_TEXT_DRAW_MODE_FILL: f32 = 0.0;
 const GPU_TEXT_DRAW_MODE_STROKE: f32 = 1.0;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 enum GpuTextDrawMode {
     Fill,
     Stroke { width: f32 },
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct GpuTextMaterial {
     brush: Brush,
     alpha_multiplier: f32,
     draw_mode: GpuTextDrawMode,
+}
+
+#[derive(Clone)]
+struct GpuTextMaterialBatch {
+    material: GpuTextMaterial,
+    visible_ranges: Vec<Range<usize>>,
 }
 
 fn gpu_text_material_for_style(
@@ -1102,6 +1108,173 @@ fn text_for_gpu_mask(
     mask_text
 }
 
+fn text_with_layer_transformed_span_paint(
+    text: &cranpose_ui::text::AnnotatedString,
+    content_layer: &GraphicsLayer,
+) -> cranpose_ui::text::AnnotatedString {
+    if text.span_styles.is_empty() {
+        return text.clone();
+    }
+
+    let mut transformed_text = text.clone();
+    for span in &mut transformed_text.span_styles {
+        span.item.color = span
+            .item
+            .color
+            .map(|color| apply_layer_to_color(color, content_layer));
+        span.item.brush = span
+            .item
+            .brush
+            .clone()
+            .map(|brush| apply_layer_to_brush(brush, content_layer));
+    }
+    transformed_text
+}
+
+fn merged_span_style_for_range(
+    text: &cranpose_ui::text::AnnotatedString,
+    base_span_style: &cranpose_ui::text::SpanStyle,
+    start: usize,
+    end: usize,
+) -> cranpose_ui::text::SpanStyle {
+    let mut merged_style = base_span_style.clone();
+    for span in &text.span_styles {
+        if span.range.start <= start && span.range.end >= end {
+            merged_style = merged_style.merge(&span.item);
+        }
+    }
+    merged_style
+}
+
+fn gpu_text_material_batches_for_text(
+    text: &cranpose_ui::text::AnnotatedString,
+    text_style: &TextStyle,
+    fallback_color: Color,
+    text_scale: f32,
+) -> Vec<GpuTextMaterialBatch> {
+    let mut batches: Vec<GpuTextMaterialBatch> = Vec::new();
+    for window in text.span_boundaries().windows(2) {
+        let start = window[0];
+        let end = window[1];
+        if start == end {
+            continue;
+        }
+
+        let mut range_style = text_style.clone();
+        range_style.span_style =
+            merged_span_style_for_range(text, &text_style.span_style, start, end);
+        let material = gpu_text_material_for_style(&range_style, fallback_color, text_scale);
+        if let Some(last_batch) = batches.last_mut() {
+            if last_batch.material == material {
+                if let Some(last_range) = last_batch.visible_ranges.last_mut() {
+                    if last_range.end == start {
+                        last_range.end = end;
+                    } else {
+                        last_batch.visible_ranges.push(start..end);
+                    }
+                } else {
+                    last_batch.visible_ranges.push(start..end);
+                }
+                continue;
+            }
+        }
+
+        batches.push(GpuTextMaterialBatch {
+            material,
+            visible_ranges: std::iter::once(start..end).collect(),
+        });
+    }
+    batches
+}
+
+fn text_for_gpu_mask_batch(
+    text: &cranpose_ui::text::AnnotatedString,
+    visible_ranges: &[Range<usize>],
+) -> cranpose_ui::text::AnnotatedString {
+    let mut mask_text = text_for_gpu_mask(text);
+    let visible_style = cranpose_ui::text::SpanStyle {
+        color: Some(Color::WHITE),
+        ..Default::default()
+    };
+    for range in visible_ranges {
+        if range.start >= range.end {
+            continue;
+        }
+        mask_text.span_styles.push(cranpose_ui::text::RangeStyle {
+            item: visible_style.clone(),
+            range: range.clone(),
+        });
+    }
+    mask_text
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_span_gpu_text_material_draws(
+    scene: &mut Scene,
+    node_id: NodeId,
+    text_rect: Rect,
+    content_layer: &GraphicsLayer,
+    text: &cranpose_ui::text::AnnotatedString,
+    transformed_text_style: &TextStyle,
+    fallback_color: Color,
+    font_size: f32,
+    text_scale: f32,
+    options: TextLayoutOptions,
+    text_clip: Option<Rect>,
+) -> bool {
+    let transformed_span_text = text_with_layer_transformed_span_paint(text, content_layer);
+    let material_batches = gpu_text_material_batches_for_text(
+        &transformed_span_text,
+        transformed_text_style,
+        fallback_color,
+        text_scale,
+    );
+    if material_batches.is_empty() {
+        return false;
+    }
+
+    let mut batch_effects = Vec::with_capacity(material_batches.len());
+    for batch in material_batches {
+        let Some(effect) = build_gpu_text_effect(&batch.material, text_rect) else {
+            return false;
+        };
+        batch_effects.push((batch.visible_ranges, effect));
+    }
+
+    let mut mask_text_style = transformed_text_style.clone();
+    mask_text_style.span_style.brush = None;
+    mask_text_style.span_style.alpha = None;
+    mask_text_style.span_style.color = Some(Color(1.0, 1.0, 1.0, 0.0));
+    mask_text_style.span_style.draw_style = Some(TextDrawStyle::Fill);
+
+    for (visible_ranges, effect) in batch_effects {
+        let z_start = scene.next_z;
+        let mask_text = text_for_gpu_mask_batch(text, &visible_ranges);
+        scene.push_text(
+            node_id,
+            text_rect,
+            Rc::new(mask_text),
+            Color(1.0, 1.0, 1.0, 0.0),
+            mask_text_style.clone(),
+            font_size,
+            text_scale,
+            options,
+            text_clip,
+        );
+        scene.effect_layers.push(EffectLayer {
+            rect: text_rect,
+            clip: text_clip,
+            effect: Some(effect),
+            blend_mode: BlendMode::SrcOver,
+            composite_alpha: 1.0,
+            z_start,
+            z_end: scene.next_z,
+        });
+    }
+
+    true
+}
+
 #[allow(clippy::too_many_arguments)]
 fn push_text_style_draws(
     scene: &mut Scene,
@@ -1207,13 +1380,32 @@ fn push_text_style_draws(
         text_clip,
     );
 
-    if let Some(effect) = gpu_text_effect_for_style(
-        &transformed_text_style,
-        snapped_shifted_text_rect,
-        transformed_text_color,
-        text_scale,
-    ) {
-        if !text_has_span_foreground_overrides(text) {
+    let has_span_foreground_overrides = text_has_span_foreground_overrides(text);
+    if has_span_foreground_overrides
+        && push_span_gpu_text_material_draws(
+            scene,
+            node_id,
+            snapped_shifted_text_rect,
+            content_layer,
+            text,
+            &transformed_text_style,
+            transformed_text_color,
+            font_size,
+            text_scale,
+            options,
+            text_clip,
+        )
+    {
+        return;
+    }
+
+    if !has_span_foreground_overrides {
+        if let Some(effect) = gpu_text_effect_for_style(
+            &transformed_text_style,
+            snapped_shifted_text_rect,
+            transformed_text_color,
+            text_scale,
+        ) {
             let z_start = scene.next_z;
             let mut mask_text_style = transformed_text_style.clone();
             mask_text_style.span_style.brush = None;
@@ -2727,7 +2919,7 @@ mod tests {
     }
 
     #[test]
-    fn push_text_style_draws_span_gradient_with_paint_override_skips_gpu_shader_mask() {
+    fn push_text_style_draws_span_gradient_with_paint_override_uses_gpu_shader_mask_batches() {
         let mut scene = Scene::new();
         let style = cranpose_ui::TextStyle {
             span_style: cranpose_ui::SpanStyle {
@@ -2744,6 +2936,7 @@ mod tests {
             .append("GPU ")
             .push_style(cranpose_ui::text::SpanStyle {
                 color: Some(Color::RED),
+                font_weight: Some(cranpose_ui::text::FontWeight::BOLD),
                 ..Default::default()
             })
             .append("Mask")
@@ -2770,18 +2963,151 @@ mod tests {
         );
 
         assert_eq!(scene.images.len(), 0, "no software fallback should be used");
-        assert_eq!(scene.texts.len(), 1, "expected one direct glyph text draw");
         assert!(
-            scene.effect_layers.is_empty(),
-            "span paint overrides should keep direct span-colored glyph path until per-span gpu materials land"
+            scene.texts.len() >= 2,
+            "span paint overrides should split into per-material mask draws"
+        );
+        assert_eq!(
+            scene.texts.len(),
+            scene.effect_layers.len(),
+            "each mask draw should be wrapped by one runtime shader layer"
+        );
+        assert!(
+            scene
+                .effect_layers
+                .iter()
+                .all(|layer| layer.z_start + 1 == layer.z_end),
+            "each per-span material layer should isolate exactly one mask draw"
+        );
+        assert!(
+            scene
+                .texts
+                .iter()
+                .all(|draw| draw.color == Color(1.0, 1.0, 1.0, 0.0)),
+            "per-material mask draws should default to transparent non-target glyphs"
+        );
+        assert!(
+            scene
+                .texts
+                .iter()
+                .all(
+                    |draw| draw.text_style.span_style.color == Some(Color(1.0, 1.0, 1.0, 0.0))
+                        && draw.text_style.span_style.brush.is_none()
+                        && draw.text_style.span_style.alpha.is_none()
+                        && draw.text_style.span_style.draw_style == Some(TextDrawStyle::Fill)
+                ),
+            "mask text style should force fill-mode alpha masks for each batch"
+        );
+        assert!(
+            scene.texts.iter().all(|draw| draw
+                .text
+                .span_styles
+                .iter()
+                .any(|span| span.item.color == Some(Color::WHITE))),
+            "each batch should include explicit visible-range white mask spans"
+        );
+        assert!(
+            scene.texts.iter().all(|draw| draw
+                .text
+                .span_styles
+                .iter()
+                .any(|span| span.item.font_weight == Some(cranpose_ui::text::FontWeight::BOLD))),
+            "mask text should preserve non-paint span styling"
+        );
+        assert!(
+            scene.texts.iter().all(|draw| draw
+                .text
+                .span_styles
+                .iter()
+                .all(|span| span.item.color != Some(Color::RED))),
+            "original span paint overrides should not leak directly into mask attrs"
+        );
+
+        let mut brush_kinds = Vec::new();
+        for layer in &scene.effect_layers {
+            let Some(RenderEffect::Shader { shader }) = layer.effect.as_ref() else {
+                panic!("expected runtime shader effect for span material batch");
+            };
+            brush_kinds.push(shader.uniforms().first().copied().unwrap_or_default());
+        }
+        assert_eq!(
+            brush_kinds,
+            vec![GPU_TEXT_BRUSH_KIND_LINEAR, GPU_TEXT_BRUSH_KIND_SOLID],
+            "global gradient and span solid override should map to separate shader batches"
+        );
+    }
+
+    #[test]
+    fn push_text_style_draws_adjacent_span_paint_overrides_batch_same_material() {
+        let mut scene = Scene::new();
+        let style = cranpose_ui::TextStyle::default();
+        let text = cranpose_ui::text::AnnotatedString::builder()
+            .push_style(cranpose_ui::text::SpanStyle {
+                color: Some(Color::RED),
+                ..Default::default()
+            })
+            .append("GP")
+            .pop()
+            .push_style(cranpose_ui::text::SpanStyle {
+                color: Some(Color::RED),
+                ..Default::default()
+            })
+            .append("U!")
+            .pop()
+            .to_annotated_string();
+        let rect = Rect {
+            x: 8.0,
+            y: 20.0,
+            width: 220.0,
+            height: 32.0,
+        };
+
+        push_text_style_draws(
+            &mut scene,
+            21 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            &text,
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        assert_eq!(scene.images.len(), 0, "no software fallback should be used");
+        assert_eq!(
+            scene.texts.len(),
+            1,
+            "adjacent equal-material spans should batch into one mask draw"
+        );
+        assert_eq!(
+            scene.effect_layers.len(),
+            1,
+            "adjacent equal-material spans should share one runtime shader pass"
+        );
+        assert_eq!(
+            scene.effect_layers[0].z_start + 1,
+            scene.effect_layers[0].z_end
+        );
+        let Some(RenderEffect::Shader { shader }) = scene.effect_layers[0].effect.as_ref() else {
+            panic!("expected runtime shader effect for solid span batch");
+        };
+        let uniforms = shader.uniforms();
+        let uniform = |index: usize| uniforms.get(index).copied().unwrap_or(0.0);
+        assert_eq!(uniform(0), GPU_TEXT_BRUSH_KIND_SOLID);
+        assert_eq!(scene.texts[0].color, Color(1.0, 1.0, 1.0, 0.0));
+        assert_eq!(
+            scene.texts[0].text_style.span_style.color,
+            Some(Color(1.0, 1.0, 1.0, 0.0))
         );
         assert!(
             scene.texts[0]
                 .text
                 .span_styles
                 .iter()
-                .any(|span| span.item.color.is_some()),
-            "original span paint overrides should be preserved on direct path"
+                .any(|span| span.item.color == Some(Color::WHITE)),
+            "batched mask text should contain white-visible range spans"
         );
     }
 
