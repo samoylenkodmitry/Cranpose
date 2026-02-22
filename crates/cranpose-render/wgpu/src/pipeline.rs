@@ -938,12 +938,9 @@ fn gpu_text_material_for_style(
         .span_style
         .brush
         .clone()
+        .or_else(|| text_style.span_style.color.map(Brush::solid))
         .unwrap_or_else(|| Brush::solid(fallback_color));
-    let alpha_multiplier = if text_style.span_style.brush.is_some() {
-        text_style.span_style.alpha.unwrap_or(1.0)
-    } else {
-        1.0
-    };
+    let alpha_multiplier = text_style.span_style.alpha.unwrap_or(1.0);
 
     GpuTextMaterial {
         brush,
@@ -1201,6 +1198,12 @@ fn gpu_text_material_batches_for_text(
         let start = window[0];
         let end = window[1];
         if start == end {
+            continue;
+        }
+        let Some(range_text) = text.text.get(start..end) else {
+            continue;
+        };
+        if !range_text.chars().any(|ch| ch != '\n' && ch != '\r') {
             continue;
         }
 
@@ -3864,6 +3867,257 @@ mod tests {
                 .iter()
                 .any(|span| span.item.color == Some(Color::WHITE)),
             "batched mask text should contain white-visible range spans"
+        );
+    }
+
+    #[test]
+    fn push_text_style_draws_span_color_override_packs_solid_color_material() {
+        let mut scene = Scene::new();
+        let style = cranpose_ui::TextStyle::default();
+        let text = cranpose_ui::text::AnnotatedString::builder()
+            .push_style(cranpose_ui::text::SpanStyle {
+                color: Some(Color::RED),
+                ..Default::default()
+            })
+            .append("Tint")
+            .pop()
+            .to_annotated_string();
+        let rect = Rect {
+            x: 8.0,
+            y: 20.0,
+            width: 220.0,
+            height: 32.0,
+        };
+
+        push_text_style_draws(
+            &mut scene,
+            24 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            &text,
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        assert_eq!(scene.images.len(), 0, "no software fallback should be used");
+        assert_eq!(scene.texts.len(), 1);
+        assert_eq!(scene.effect_layers.len(), 1);
+        let Some(RenderEffect::Shader { shader }) = scene.effect_layers[0].effect.as_ref() else {
+            panic!("expected runtime shader effect for span color override");
+        };
+        let uniforms = shader.uniforms();
+        let uniform = |index: usize| uniforms.get(index).copied().unwrap_or_default();
+        let color_slot = GPU_TEXT_BRUSH_EFFECT_FIRST_STOP_SLOT * 4;
+        assert_eq!(uniform(0), GPU_TEXT_BRUSH_KIND_SOLID);
+        assert!((uniform(color_slot) - Color::RED.r()).abs() < f32::EPSILON);
+        assert!((uniform(color_slot + 1) - Color::RED.g()).abs() < f32::EPSILON);
+        assert!((uniform(color_slot + 2) - Color::RED.b()).abs() < f32::EPSILON);
+        assert!((uniform(color_slot + 3) - Color::RED.a()).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn push_text_style_draws_span_alpha_override_modulates_gpu_material_alpha() {
+        let mut scene = Scene::new();
+        let style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                color: Some(Color::BLUE),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let text = cranpose_ui::text::AnnotatedString::builder()
+            .push_style(cranpose_ui::text::SpanStyle {
+                alpha: Some(0.25),
+                ..Default::default()
+            })
+            .append("Fade")
+            .pop()
+            .to_annotated_string();
+        let rect = Rect {
+            x: 8.0,
+            y: 20.0,
+            width: 220.0,
+            height: 32.0,
+        };
+
+        push_text_style_draws(
+            &mut scene,
+            25 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            &text,
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        assert_eq!(scene.images.len(), 0, "no software fallback should be used");
+        assert_eq!(scene.texts.len(), 1);
+        assert_eq!(scene.effect_layers.len(), 1);
+        let Some(RenderEffect::Shader { shader }) = scene.effect_layers[0].effect.as_ref() else {
+            panic!("expected runtime shader effect for span alpha override");
+        };
+        let uniforms = shader.uniforms();
+        let uniform = |index: usize| uniforms.get(index).copied().unwrap_or_default();
+        let color_slot = GPU_TEXT_BRUSH_EFFECT_FIRST_STOP_SLOT * 4;
+        assert_eq!(uniform(0), GPU_TEXT_BRUSH_KIND_SOLID);
+        assert!((uniform(color_slot) - Color::BLUE.r()).abs() < f32::EPSILON);
+        assert!((uniform(color_slot + 1) - Color::BLUE.g()).abs() < f32::EPSILON);
+        assert!((uniform(color_slot + 2) - Color::BLUE.b()).abs() < f32::EPSILON);
+        assert!((uniform(color_slot + 3) - Color::BLUE.a()).abs() < f32::EPSILON);
+        assert!((uniform(3) - 0.25).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn push_text_style_draws_wrap_newline_gap_keeps_same_material_batch() {
+        let mut scene = Scene::new();
+        let style = cranpose_ui::TextStyle::default();
+        let text = cranpose_ui::text::AnnotatedString::builder()
+            .push_style(cranpose_ui::text::SpanStyle {
+                color: Some(Color::RED),
+                ..Default::default()
+            })
+            .append("ABC")
+            .pop()
+            .append("\n")
+            .push_style(cranpose_ui::text::SpanStyle {
+                color: Some(Color::RED),
+                ..Default::default()
+            })
+            .append("DEF")
+            .pop()
+            .to_annotated_string();
+        let rect = Rect {
+            x: 8.0,
+            y: 20.0,
+            width: 220.0,
+            height: 56.0,
+        };
+
+        push_text_style_draws(
+            &mut scene,
+            26 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            &text,
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        assert_eq!(scene.images.len(), 0, "no software fallback should be used");
+        assert_eq!(
+            scene.texts.len(),
+            1,
+            "newline-only style gaps should not force extra material batches"
+        );
+        assert_eq!(
+            scene.effect_layers.len(),
+            1,
+            "same-material spans split by wrapped newline should share one effect layer"
+        );
+
+        let white_ranges: Vec<_> = scene.texts[0]
+            .text
+            .span_styles
+            .iter()
+            .filter(|span| span.item.color == Some(Color::WHITE))
+            .map(|span| span.range.clone())
+            .collect();
+        assert_eq!(
+            white_ranges,
+            vec![0..3, 4..7],
+            "batch mask should keep one visible-range span per wrapped visual segment"
+        );
+    }
+
+    #[test]
+    fn push_text_style_draws_mixed_bidi_wrapped_same_material_keeps_single_batch() {
+        let mut scene = Scene::new();
+        let style = cranpose_ui::TextStyle::default();
+        let source_text = cranpose_ui::text::AnnotatedString::builder()
+            .push_style(cranpose_ui::text::SpanStyle {
+                color: Some(Color::RED),
+                ..Default::default()
+            })
+            .append("abc אבג def דהו ghi jkl mno")
+            .pop()
+            .to_annotated_string();
+        let options = TextLayoutOptions {
+            overflow: TextOverflow::Clip,
+            soft_wrap: true,
+            max_lines: usize::MAX,
+            min_lines: 1,
+        };
+        let prepared = prepare_text_layout(&source_text, &style, options, Some(64.0));
+        assert!(
+            prepared.text.text.contains('\n'),
+            "test setup should produce wrapped multiline text: {:?}",
+            prepared.text
+        );
+        let rect = Rect {
+            x: 8.0,
+            y: 20.0,
+            width: 240.0,
+            height: 96.0,
+        };
+
+        push_text_style_draws(
+            &mut scene,
+            27 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            &prepared.text,
+            &style,
+            14.0,
+            options,
+            None,
+        );
+
+        assert_eq!(scene.images.len(), 0, "no software fallback should be used");
+        assert_eq!(
+            scene.texts.len(),
+            1,
+            "wrapped mixed-bidi text with one material should stay in one mask batch"
+        );
+        assert_eq!(
+            scene.effect_layers.len(),
+            1,
+            "wrapped mixed-bidi text with one material should stay in one effect layer"
+        );
+
+        let white_ranges: Vec<_> = scene.texts[0]
+            .text
+            .span_styles
+            .iter()
+            .filter(|span| span.item.color == Some(Color::WHITE))
+            .map(|span| span.range.clone())
+            .collect();
+        assert!(
+            white_ranges.len() > 1,
+            "wrapped text should produce multiple visible ranges in one batch"
+        );
+        assert!(
+            white_ranges
+                .windows(2)
+                .all(|window| window[0].end <= window[1].start),
+            "visible ranges should preserve logical ordering"
+        );
+        assert!(
+            white_ranges.iter().all(|range| prepared
+                .text
+                .text
+                .get(range.clone())
+                .is_some_and(|segment| !segment.contains('\n'))),
+            "visible ranges should not include newline-only gaps"
         );
     }
 

@@ -230,12 +230,11 @@ Execution order:
 
 ### Recommended pre-alpha focus (next cycle)
 
-1. Workstream 3 follow-up: run manual showcase QA for halo/edge tuning at common DPIs after the new stroke-bound expansion path.
-2. Harden mixed-bidi and wrapped-line continuity edge cases in span material batching.
-3. Add any additional renderer-level coverage uncovered by mixed-bidi/wrapped-line stress cases.
-4. Keep Workstream 4 gates as strict blockers after every text pipeline change.
-5. Defer API-surface expansion (`TextDrawStyle` cap/join/miter/path) until stroke quality is stable.
-6. Treat gradient-stop cap expansion as lower priority unless blocked by a concrete product/demo requirement.
+1. `50%` effort: harden mixed-bidi and wrapped-line continuity edge cases in span material batching.
+2. `30%` effort: implement Compose-like font resolver/fallback architecture (file-backed families + loaded typeface paths).
+3. `20%` effort: keep Workstream 4 gates + regression coverage updates as strict blockers after each major change.
+4. Defer API-surface expansion (`TextDrawStyle` cap/join/miter/path) until priorities `1` and `2` are stable.
+5. Treat gradient-stop cap expansion as lower priority unless blocked by a concrete product/demo requirement.
 
 ### New chat bootstrap context (copy/paste)
 
@@ -268,10 +267,15 @@ Hard invariants:
 - No `scene.push_image(...)` text fallback in wgpu text style routing.
 
 Next priority (pre-alpha):
-1) Workstream 3 follow-up: manual visual QA for halo/edge tuning after stroke-bound expansion.
-2) Follow-up mixed-bidi and wrapped-line continuity hardening for span material batching.
-3) Add coverage only where mixed-bidi/wrapped-line stress reveals new quality gaps.
-4) Re-run full gates after each major change.
+1) `50%`: mixed-bidi and wrapped-line continuity hardening for span material batching.
+2) `30%`: Compose-like font resolver/fallback architecture (resolver model + file-backed families + loaded typeface paths).
+3) `20%`: regression/gates discipline after each major change.
+4) Keep stroke-edge manual QA as follow-up polish, not primary scope for this cycle.
+
+Primary done gates for this cycle:
+- Mixed-bidi/wrapped-line stress tests pass in `wgpu` material batching with stable visual ordering/continuity.
+- Font resolver/fallback design is implemented (not stubbed), wired into measurement + render paths, and validated on desktop/web/android.
+- Full mandatory verification commands pass after each major checkpoint.
 
 Useful anchors:
 - crates/cranpose-render/wgpu/src/pipeline.rs
@@ -353,9 +357,9 @@ It exercises:
 
 ## Remaining Work to Reach Strict 1:1
 
-- Add Compose-like font resolver/fallback model (file-backed families and loaded typeface paths).
+- Add Compose-like font resolver/fallback model (file-backed families and loaded typeface paths). [PRIMARY NEXT-CYCLE SCOPE: 30%]
 - Add rich text primitives equivalent to `AnnotatedString` span/paragraph runs and paint behavior.
-- Tighten shaping/bidi parity across scripts and punctuation according to Unicode algorithm behavior.
+- Tighten shaping/bidi parity across scripts and punctuation according to Unicode algorithm behavior. [PRIMARY NEXT-CYCLE SCOPE: 50%]
 - Tighten renderer-side behavior parity for `lineHeightStyle`, text motion raster quality, geometric transform, locale, and feature settings.
 - Add targeted cross-backend visual regression tests for remaining parity gaps.
 
