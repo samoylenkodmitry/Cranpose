@@ -316,7 +316,9 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
         style: &cranpose_ui::text::TextStyle,
     ) -> cranpose_ui::text_layout_result::TextLayoutResult {
         let text = text.text.as_str();
-        use cranpose_ui::text_layout_result::{LineLayout, TextLayoutResult};
+        use cranpose_ui::text_layout_result::{
+            GlyphLayout, LineLayout, TextLayoutData, TextLayoutResult,
+        };
 
         let font_size = resolve_font_size(style);
         let scale = Scale::uniform(font_size);
@@ -329,6 +331,7 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
 
         let mut glyph_x_positions = Vec::new();
         let mut char_to_byte = Vec::new();
+        let mut glyph_layouts = Vec::new();
         let mut lines = Vec::new();
         let mut current_x = 0.0f32;
         let mut line_start = 0;
@@ -353,6 +356,19 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
             } else {
                 // Get glyph advance
                 let glyph = font.glyph(c).scaled(scale);
+                let glyph_width = glyph.h_metrics().advance_width.max(0.0);
+                let glyph_end = byte_offset + c.len_utf8();
+                if glyph_end > byte_offset {
+                    glyph_layouts.push(GlyphLayout {
+                        line_index: lines.len(),
+                        start_offset: byte_offset,
+                        end_offset: glyph_end,
+                        x: current_x,
+                        y,
+                        width: glyph_width,
+                        height: line_height,
+                    });
+                }
                 current_x += glyph.h_metrics().advance_width;
                 if let Some((_, next)) = iter.peek() {
                     if *next != '\n' {
@@ -376,13 +392,16 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
 
         let metrics = measure_text_impl(text, style, font_size);
         TextLayoutResult::new(
-            metrics.width,
-            metrics.height,
-            line_height,
-            glyph_x_positions,
-            char_to_byte,
-            lines,
             text,
+            TextLayoutData {
+                width: metrics.width,
+                height: metrics.height,
+                line_height,
+                glyph_x_positions,
+                char_to_byte,
+                lines,
+                glyph_layouts,
+            },
         )
     }
 

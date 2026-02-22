@@ -10,8 +10,8 @@ use cranpose_ui::text::{
     TextMotion, TextStyle,
 };
 use cranpose_ui::{
-    measure_text, prepare_text_layout, LayoutBox, LayoutNode, LayoutNodeKind, SubcomposeLayoutNode,
-    TextLayoutOptions, TextOverflow,
+    layout_text, measure_text, prepare_text_layout, LayoutBox, LayoutNode, LayoutNodeKind,
+    SubcomposeLayoutNode, TextLayoutOptions, TextOverflow,
 };
 use cranpose_ui_graphics::{
     BlendMode, Color, CompositingStrategy, EdgeInsets, GraphicsLayer, LayerShape, Point, Rect,
@@ -33,6 +33,7 @@ use style::{
 const TEXT_CLIP_PAD: f32 = 1.0;
 const GPU_TEXT_BRUSH_EFFECT_MAX_STOPS: usize = 16;
 const GPU_TEXT_BRUSH_EFFECT_FIRST_STOP_SLOT: usize = 8;
+const DECORATION_SEGMENT_MERGE_EPSILON: f32 = 0.75;
 const GPU_TEXT_BRUSH_EFFECT_SHADER: &str = r#"
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -1463,19 +1464,186 @@ fn push_text_decorations(
     text_brush: &Brush,
     text_clip: Option<Rect>,
 ) {
-    if annotated_text.is_empty() {
+    if annotated_text.is_empty() || !text_has_visible_decoration(annotated_text, global_style) {
         return;
     }
 
-    let line_height = measure_text(annotated_text, global_style)
-        .line_height
-        .max(1.0);
-    let mut line_top = text_rect.y;
-    for line in split_annotated_lines_for_decorations(annotated_text) {
-        let mut current_offset = 0.0;
-        let boundaries = line.span_boundaries();
+    let layout = layout_text(annotated_text, global_style);
+    let mut segments =
+        decoration_segments_from_glyph_layouts(annotated_text, global_style, &layout);
+    if segments.is_empty() {
+        segments = decoration_segments_from_logical_lines(annotated_text, global_style);
+    }
 
-        for window in boundaries.windows(2) {
+    for segment in segments {
+        let Some(decoration) = segment.span_style.text_decoration else {
+            continue;
+        };
+        if decoration == TextDecoration::NONE {
+            continue;
+        }
+
+        let span_width = segment.width();
+        if span_width <= 0.0 {
+            continue;
+        }
+
+        let line_height = segment.line_height.max(1.0);
+        let font_size = segment.span_style.resolve_font_size(14.0);
+        let thickness = (font_size * 0.06).clamp(1.0, line_height * 0.25);
+        let brush = decoration_brush_for_span(&segment.span_style, text_brush, content_layer);
+        let line_top = text_rect.y + segment.line_top;
+        let segment_x = text_rect.x + segment.x_start;
+
+        if decoration.contains(TextDecoration::UNDERLINE) {
+            let underline_rect = Rect {
+                x: segment_x,
+                y: line_top + line_height - thickness * 1.35,
+                width: span_width,
+                height: thickness,
+            };
+            let transformed = apply_layer_to_rect(underline_rect, rect, content_layer);
+            scene.push_shape(
+                transformed,
+                brush.clone(),
+                None,
+                text_clip,
+                BlendMode::SrcOver,
+            );
+        }
+
+        if decoration.contains(TextDecoration::LINE_THROUGH) {
+            let strike_rect = Rect {
+                x: segment_x,
+                y: line_top + line_height * 0.52 - thickness * 0.5,
+                width: span_width,
+                height: thickness,
+            };
+            let transformed = apply_layer_to_rect(strike_rect, rect, content_layer);
+            scene.push_shape(transformed, brush, None, text_clip, BlendMode::SrcOver);
+        }
+    }
+}
+
+fn text_has_visible_decoration(
+    text: &cranpose_ui::text::AnnotatedString,
+    global_style: &TextStyle,
+) -> bool {
+    if global_style
+        .span_style
+        .text_decoration
+        .is_some_and(|decoration| decoration != TextDecoration::NONE)
+    {
+        return true;
+    }
+
+    text.span_styles.iter().any(|span| {
+        span.item
+            .text_decoration
+            .is_some_and(|decoration| decoration != TextDecoration::NONE)
+    })
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct DecorationVisualSegment {
+    line_index: usize,
+    line_top: f32,
+    line_height: f32,
+    x_start: f32,
+    x_end: f32,
+    span_style: cranpose_ui::text::SpanStyle,
+}
+
+impl DecorationVisualSegment {
+    fn width(&self) -> f32 {
+        (self.x_end - self.x_start).max(0.0)
+    }
+}
+
+fn decoration_segments_from_glyph_layouts(
+    text: &cranpose_ui::text::AnnotatedString,
+    global_style: &TextStyle,
+    layout: &cranpose_ui::text_layout_result::TextLayoutResult,
+) -> Vec<DecorationVisualSegment> {
+    let mut glyph_layouts: Vec<_> = layout
+        .glyph_layouts()
+        .iter()
+        .copied()
+        .filter(|glyph| glyph.end_offset > glyph.start_offset && glyph.width.is_finite())
+        .collect();
+    if glyph_layouts.is_empty() {
+        return Vec::new();
+    }
+
+    glyph_layouts.sort_by(|a, b| {
+        a.line_index
+            .cmp(&b.line_index)
+            .then_with(|| a.x.total_cmp(&b.x))
+            .then_with(|| a.start_offset.cmp(&b.start_offset))
+            .then_with(|| a.end_offset.cmp(&b.end_offset))
+    });
+
+    let text_len = text.text.len();
+    let mut segments: Vec<DecorationVisualSegment> = Vec::new();
+    for glyph in glyph_layouts {
+        let start = glyph.start_offset.min(text_len);
+        let end = glyph.end_offset.min(text_len);
+        if start >= end {
+            continue;
+        }
+
+        let merged_style = merged_span_style_for_range(text, &global_style.span_style, start, end);
+        let Some(decoration) = merged_style.text_decoration else {
+            continue;
+        };
+        if decoration == TextDecoration::NONE {
+            continue;
+        }
+
+        let glyph_start_x = glyph.x;
+        let glyph_end_x = (glyph.x + glyph.width.max(0.0)).max(glyph_start_x);
+        if glyph_end_x <= glyph_start_x {
+            continue;
+        }
+
+        if let Some(last) = segments.last_mut() {
+            let same_line = last.line_index == glyph.line_index;
+            let same_style = last.span_style == merged_style;
+            let same_vertical_band =
+                (last.line_top - glyph.y).abs() <= DECORATION_SEGMENT_MERGE_EPSILON;
+            let touching = glyph_start_x <= last.x_end + DECORATION_SEGMENT_MERGE_EPSILON;
+            if same_line && same_style && same_vertical_band && touching {
+                last.x_end = last.x_end.max(glyph_end_x);
+                last.line_height = last.line_height.max(glyph.height.max(1.0));
+                continue;
+            }
+        }
+
+        segments.push(DecorationVisualSegment {
+            line_index: glyph.line_index,
+            line_top: glyph.y,
+            line_height: glyph.height.max(1.0),
+            x_start: glyph_start_x,
+            x_end: glyph_end_x,
+            span_style: merged_style,
+        });
+    }
+
+    segments
+}
+
+fn decoration_segments_from_logical_lines(
+    text: &cranpose_ui::text::AnnotatedString,
+    global_style: &TextStyle,
+) -> Vec<DecorationVisualSegment> {
+    let line_height = measure_text(text, global_style).line_height.max(1.0);
+    let mut line_top = 0.0;
+    let mut line_index = 0usize;
+    let mut segments: Vec<DecorationVisualSegment> = Vec::new();
+
+    for line in split_annotated_lines_for_decorations(text) {
+        let mut current_offset = 0.0;
+        for window in line.span_boundaries().windows(2) {
             let start = window[0];
             let end = window[1];
             if start == end {
@@ -1494,48 +1662,39 @@ fn push_text_decorations(
                 current_offset += span_width;
                 continue;
             };
-
             if decoration == TextDecoration::NONE || span_width <= 0.0 {
                 current_offset += span_width;
                 continue;
             }
 
-            let font_size = span_text_style.resolve_font_size(14.0);
-            let thickness = (font_size * 0.06).clamp(1.0, line_height * 0.25);
-            let brush = decoration_brush_for_span(&merged_style, text_brush, content_layer);
-
-            if decoration.contains(TextDecoration::UNDERLINE) {
-                let underline_rect = Rect {
-                    x: text_rect.x + current_offset,
-                    y: line_top + line_height - thickness * 1.35,
-                    width: span_width,
-                    height: thickness,
-                };
-                let transformed = apply_layer_to_rect(underline_rect, rect, content_layer);
-                scene.push_shape(
-                    transformed,
-                    brush.clone(),
-                    None,
-                    text_clip,
-                    BlendMode::SrcOver,
-                );
+            let x_start = current_offset;
+            let x_end = current_offset + span_width;
+            if let Some(last) = segments.last_mut() {
+                let same_line = last.line_index == line_index;
+                let same_style = last.span_style == merged_style;
+                let touching = x_start <= last.x_end + DECORATION_SEGMENT_MERGE_EPSILON;
+                if same_line && same_style && touching {
+                    last.x_end = last.x_end.max(x_end);
+                    current_offset += span_width;
+                    continue;
+                }
             }
 
-            if decoration.contains(TextDecoration::LINE_THROUGH) {
-                let strike_rect = Rect {
-                    x: text_rect.x + current_offset,
-                    y: line_top + line_height * 0.52 - thickness * 0.5,
-                    width: span_width,
-                    height: thickness,
-                };
-                let transformed = apply_layer_to_rect(strike_rect, rect, content_layer);
-                scene.push_shape(transformed, brush, None, text_clip, BlendMode::SrcOver);
-            }
-
+            segments.push(DecorationVisualSegment {
+                line_index,
+                line_top,
+                line_height,
+                x_start,
+                x_end,
+                span_style: merged_style,
+            });
             current_offset += span_width;
         }
+        line_index = line_index.saturating_add(1);
         line_top += line_height;
     }
+
+    segments
 }
 
 fn split_annotated_lines_for_decorations(
@@ -1999,6 +2158,47 @@ fn render_node_from_applier(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cranpose_ui::text_layout_result::{
+        GlyphLayout, LineLayout, TextLayoutData, TextLayoutResult,
+    };
+
+    fn synthetic_text_layout(
+        text: &str,
+        line_height: f32,
+        lines: Vec<LineLayout>,
+        glyph_layouts: Vec<GlyphLayout>,
+    ) -> TextLayoutResult {
+        let mut glyph_x_positions = Vec::new();
+        let mut char_to_byte = Vec::new();
+        for (byte_offset, _) in text.char_indices() {
+            glyph_x_positions.push(0.0);
+            char_to_byte.push(byte_offset);
+        }
+        glyph_x_positions.push(0.0);
+        char_to_byte.push(text.len());
+
+        let width = glyph_layouts
+            .iter()
+            .map(|glyph| (glyph.x + glyph.width).max(0.0))
+            .fold(0.0, f32::max);
+        let height = lines
+            .iter()
+            .map(|line| (line.y + line.height).max(0.0))
+            .fold(line_height.max(0.0), f32::max);
+
+        TextLayoutResult::new(
+            text,
+            TextLayoutData {
+                width,
+                height,
+                line_height,
+                glyph_x_positions,
+                char_to_byte,
+                lines,
+                glyph_layouts,
+            },
+        )
+    }
 
     #[test]
     fn auto_alpha_triggers_isolation_with_composite_alpha() {
@@ -2418,6 +2618,38 @@ mod tests {
     }
 
     #[test]
+    fn text_has_visible_decoration_detects_global_and_span_styles() {
+        let plain_style = cranpose_ui::TextStyle::default();
+        let plain_text = cranpose_ui::text::AnnotatedString::from("Plain");
+        assert!(!text_has_visible_decoration(&plain_text, &plain_style));
+
+        let decorated_global_style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                text_decoration: Some(cranpose_ui::text::TextDecoration::UNDERLINE),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(text_has_visible_decoration(
+            &plain_text,
+            &decorated_global_style
+        ));
+
+        let span_decorated_text = cranpose_ui::text::AnnotatedString::builder()
+            .push_style(cranpose_ui::text::SpanStyle {
+                text_decoration: Some(cranpose_ui::text::TextDecoration::LINE_THROUGH),
+                ..Default::default()
+            })
+            .append("Span")
+            .pop()
+            .to_annotated_string();
+        assert!(text_has_visible_decoration(
+            &span_decorated_text,
+            &plain_style
+        ));
+    }
+
+    #[test]
     fn push_text_style_draws_emits_background_shadow_and_main_text() {
         let mut scene = Scene::new();
         let style = cranpose_ui::TextStyle {
@@ -2619,6 +2851,192 @@ mod tests {
         assert!(
             ((ys[2] - ys[1]) - line_height).abs() <= line_height * 0.35,
             "line 2->3 decoration delta should follow measured line height"
+        );
+    }
+
+    #[test]
+    fn decoration_segments_from_glyph_layouts_line_through_preserves_bidi_visual_order() {
+        let style = cranpose_ui::TextStyle::default();
+        let text = cranpose_ui::text::AnnotatedString::builder()
+            .push_style(cranpose_ui::text::SpanStyle {
+                color: Some(Color::RED),
+                text_decoration: Some(cranpose_ui::text::TextDecoration::LINE_THROUGH),
+                ..Default::default()
+            })
+            .append("A")
+            .pop()
+            .push_style(cranpose_ui::text::SpanStyle {
+                color: Some(Color(0.0, 0.8, 0.0, 1.0)),
+                text_decoration: Some(cranpose_ui::text::TextDecoration::LINE_THROUGH),
+                ..Default::default()
+            })
+            .append("B")
+            .pop()
+            .push_style(cranpose_ui::text::SpanStyle {
+                color: Some(Color::BLUE),
+                text_decoration: Some(cranpose_ui::text::TextDecoration::LINE_THROUGH),
+                ..Default::default()
+            })
+            .append("C")
+            .pop()
+            .to_annotated_string();
+
+        let layout = synthetic_text_layout(
+            "ABC",
+            12.0,
+            vec![LineLayout {
+                start_offset: 0,
+                end_offset: 3,
+                y: 0.0,
+                height: 12.0,
+            }],
+            vec![
+                GlyphLayout {
+                    line_index: 0,
+                    start_offset: 0,
+                    end_offset: 1,
+                    x: 20.0,
+                    y: 0.0,
+                    width: 10.0,
+                    height: 12.0,
+                },
+                GlyphLayout {
+                    line_index: 0,
+                    start_offset: 1,
+                    end_offset: 2,
+                    x: 10.0,
+                    y: 0.0,
+                    width: 10.0,
+                    height: 12.0,
+                },
+                GlyphLayout {
+                    line_index: 0,
+                    start_offset: 2,
+                    end_offset: 3,
+                    x: 0.0,
+                    y: 0.0,
+                    width: 10.0,
+                    height: 12.0,
+                },
+            ],
+        );
+
+        let segments = decoration_segments_from_glyph_layouts(&text, &style, &layout);
+        assert_eq!(
+            segments.len(),
+            3,
+            "each differently styled glyph should emit one segment"
+        );
+
+        let red = segments
+            .iter()
+            .find(|segment| segment.span_style.color == Some(Color::RED))
+            .expect("red segment");
+        let green = segments
+            .iter()
+            .find(|segment| segment.span_style.color == Some(Color(0.0, 0.8, 0.0, 1.0)))
+            .expect("green segment");
+        let blue = segments
+            .iter()
+            .find(|segment| segment.span_style.color == Some(Color::BLUE))
+            .expect("blue segment");
+
+        assert!((red.x_start - 20.0).abs() < f32::EPSILON);
+        assert!((green.x_start - 10.0).abs() < f32::EPSILON);
+        assert!((blue.x_start - 0.0).abs() < f32::EPSILON);
+        assert!(
+            blue.x_start < green.x_start && green.x_start < red.x_start,
+            "segments must follow visual x-order instead of logical span order"
+        );
+    }
+
+    #[test]
+    fn decoration_segments_from_glyph_layouts_multiline_line_through_keeps_visual_line_boxes() {
+        let style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                text_decoration: Some(cranpose_ui::text::TextDecoration::LINE_THROUGH),
+                ..Default::default()
+            },
+            paragraph_style: cranpose_ui::ParagraphStyle {
+                text_align: cranpose_ui::text::TextAlign::End,
+                ..Default::default()
+            },
+        };
+        let text = cranpose_ui::text::AnnotatedString::from("AB\nCD");
+        let layout = synthetic_text_layout(
+            "AB\nCD",
+            12.0,
+            vec![
+                LineLayout {
+                    start_offset: 0,
+                    end_offset: 2,
+                    y: 0.0,
+                    height: 12.0,
+                },
+                LineLayout {
+                    start_offset: 3,
+                    end_offset: 5,
+                    y: 22.0,
+                    height: 18.0,
+                },
+            ],
+            vec![
+                GlyphLayout {
+                    line_index: 0,
+                    start_offset: 0,
+                    end_offset: 1,
+                    x: 28.0,
+                    y: 0.0,
+                    width: 10.0,
+                    height: 12.0,
+                },
+                GlyphLayout {
+                    line_index: 0,
+                    start_offset: 1,
+                    end_offset: 2,
+                    x: 38.0,
+                    y: 0.0,
+                    width: 10.0,
+                    height: 12.0,
+                },
+                GlyphLayout {
+                    line_index: 1,
+                    start_offset: 3,
+                    end_offset: 4,
+                    x: 6.0,
+                    y: 22.0,
+                    width: 10.0,
+                    height: 18.0,
+                },
+                GlyphLayout {
+                    line_index: 1,
+                    start_offset: 4,
+                    end_offset: 5,
+                    x: 16.0,
+                    y: 22.0,
+                    width: 10.0,
+                    height: 18.0,
+                },
+            ],
+        );
+
+        let segments = decoration_segments_from_glyph_layouts(&text, &style, &layout);
+        assert_eq!(
+            segments.len(),
+            2,
+            "adjacent same-style glyphs should merge to one segment per visual line"
+        );
+        assert!((segments[0].x_start - 28.0).abs() < f32::EPSILON);
+        assert!((segments[0].x_end - 48.0).abs() < f32::EPSILON);
+        assert!((segments[0].line_top - 0.0).abs() < f32::EPSILON);
+        assert!((segments[0].line_height - 12.0).abs() < f32::EPSILON);
+        assert!((segments[1].x_start - 6.0).abs() < f32::EPSILON);
+        assert!((segments[1].x_end - 26.0).abs() < f32::EPSILON);
+        assert!((segments[1].line_top - 22.0).abs() < f32::EPSILON);
+        assert!((segments[1].line_height - 18.0).abs() < f32::EPSILON);
+        assert!(
+            segments[1].line_top - segments[0].line_top > 20.0,
+            "line-through boxes should preserve measured wrapped line spacing"
         );
     }
 

@@ -960,7 +960,9 @@ impl TextMeasurer for WgpuTextMeasurer {
         style: &cranpose_ui::text::TextStyle,
     ) -> cranpose_ui::text_layout_result::TextLayoutResult {
         let text_str = text.text.as_str();
-        use cranpose_ui::text_layout_result::{LineLayout, TextLayoutResult};
+        use cranpose_ui::text_layout_result::{
+            GlyphLayout, LineLayout, TextLayoutData, TextLayoutResult,
+        };
 
         let font_size = resolve_font_size(style);
         let line_height = resolve_effective_line_height(style, text, font_size);
@@ -996,6 +998,7 @@ impl TextMeasurer for WgpuTextMeasurer {
         // Extract glyph positions from layout runs
         let mut glyph_x_positions = Vec::new();
         let mut char_to_byte = Vec::new();
+        let mut glyph_layouts = Vec::new();
         let mut lines = Vec::new();
         let line_offsets: Vec<(usize, usize)> = text_str
             .split('\n')
@@ -1007,23 +1010,13 @@ impl TextMeasurer for WgpuTextMeasurer {
             })
             .collect();
 
-        let mut current_line_y = 0.0f32;
-        let mut line_start_offset = 0usize;
-
         for run in buffer.buffer.layout_runs() {
             let line_idx = run.line_i;
-            let line_y = line_idx as f32 * line_height;
-
-            // Track line boundaries
-            if lines.is_empty() || line_y != current_line_y {
-                if !lines.is_empty() {
-                    // Close previous line
-                    if let Some(_last) = lines.last_mut() {
-                        // end_offset will be updated when we see a newline or end
-                    }
-                }
-                current_line_y = line_y;
-            }
+            let run_height = run
+                .glyphs
+                .iter()
+                .fold(run.line_height, |acc, glyph| acc.max(glyph.font_size * 1.4))
+                .max(1.0);
 
             for glyph in run.glyphs.iter() {
                 let (line_start, line_end) = line_offsets
@@ -1036,10 +1029,16 @@ impl TextMeasurer for WgpuTextMeasurer {
 
                 glyph_x_positions.push(glyph.x);
                 char_to_byte.push(glyph_start);
-
-                // Track line end
-                if glyph_end > line_start_offset {
-                    line_start_offset = glyph_end;
+                if glyph_end > glyph_start {
+                    glyph_layouts.push(GlyphLayout {
+                        line_index: line_idx,
+                        start_offset: glyph_start,
+                        end_offset: glyph_end,
+                        x: glyph.x,
+                        y: run.line_top,
+                        width: glyph.w.max(0.0),
+                        height: run_height,
+                    });
                 }
             }
         }
@@ -1081,13 +1080,16 @@ impl TextMeasurer for WgpuTextMeasurer {
 
         let metrics = self.measure(text, style);
         TextLayoutResult::new(
-            metrics.width,
-            metrics.height,
-            line_height,
-            glyph_x_positions,
-            char_to_byte,
-            lines,
             text_str,
+            TextLayoutData {
+                width: metrics.width,
+                height: metrics.height,
+                line_height,
+                glyph_x_positions,
+                char_to_byte,
+                lines,
+                glyph_layouts,
+            },
         )
     }
 }
