@@ -125,6 +125,7 @@ This section is a context handoff for the next implementation chat.
 - Plain-text non-solid fill and plain-text stroke now share one GPU text-material path: glyph mask submission + runtime shader material evaluation.
 - `push_text_style_draws(...)` no longer emits `scene.push_image(...)` for text style routing in `wgpu`.
 - Runtime stroke rendering is packed through shader material uniforms and evaluated from the glyph alpha mask in GPU space.
+- Stroke effect layers now expand bounds from shader-packed stroke padding, preventing thick/high-scale stroke clipping while preserving brush-space coordinates.
 
 ### Current `wgpu` routing contract
 
@@ -132,7 +133,7 @@ This section is a context handoff for the next implementation chat.
 |---|---|---|
 | Solid fill (`color`, no stroke) | Glyphon text draw | Fast and stable; no software fallback. |
 | Non-solid fill (`brush`, `drawStyle = Fill`, plain text with no inline spans) | Glyphon text mask + `RenderEffect::runtime_shader` text material pass | GPU path with gradient evaluation in shader. |
-| Stroke (`drawStyle = Stroke { width > 0 }`), solid or gradient, plain text | Glyphon text mask + `RenderEffect::runtime_shader` text material pass | GPU path; no software image fallback. |
+| Stroke (`drawStyle = Stroke { width > 0 }`), solid or gradient, plain text | Glyphon text mask + `RenderEffect::runtime_shader` text material pass | GPU path with expanded effect bounds to protect outline edges; no software image fallback. |
 | Styled runs/inline span text | GPU material batching for paint overrides + glyph draw for same-material regions | No software text fallback route; decoration geometry now follows measured glyph-run visual boxes. Remaining quality work is stroke hardening and gradient-stop constraints. |
 
 ### Key code anchors (current branch)
@@ -150,7 +151,7 @@ This section is a context handoff for the next implementation chat.
 - Runtime shader path still caps gradient stops at `GPU_TEXT_BRUSH_EFFECT_MAX_STOPS` (`16`).
 - Rich span runs now use GPU material batching for paint overrides (`color` / `brush` / `alpha` / `draw_style`) via per-material glyph-mask effect passes. Remaining work is follow-up hardening for mixed-bidi and wrapped-line continuity stress cases.
 - `TextDrawStyle` API still exposes width-only stroke controls (cap/join/miter/path parity is pending).
-- Stroke quality hardening for thick strokes/small glyphs/high scale factors is still pending (Workstream 3).
+- Stroke quality hardening now includes shader-side stroke padding + expanded effect bounds and static-vs-animated stroke snapping regression coverage; additional manual visual tuning remains follow-up.
 
 ### Remaining GPU Work Plan
 
@@ -203,8 +204,8 @@ Workstream 3: stroke quality hardening
 
 Done gate:
 
-- Regression tests cover stroke width scaling and gradient+stroke uniform packing.
-- Manual showcase checks confirm no new halo/clipping artifacts at common DPIs.
+- Regression tests cover stroke width scaling, shader stroke padding packing, expanded effect bounds, gradient+stroke uniform packing, and static-vs-animated stroke motion snapping.
+- Automated renderer/platform gates pass after stroke hardening changes; keep manual showcase checks for halo tuning as follow-up.
 
 Workstream 4: release-quality verification gates
 
@@ -226,6 +227,68 @@ Execution order:
 2. Workstream 2
 3. Workstream 3
 4. Workstream 4
+
+### Recommended pre-alpha focus (next cycle)
+
+1. Workstream 3 follow-up: run manual showcase QA for halo/edge tuning at common DPIs after the new stroke-bound expansion path.
+2. Harden mixed-bidi and wrapped-line continuity edge cases in span material batching.
+3. Add any additional renderer-level coverage uncovered by mixed-bidi/wrapped-line stress cases.
+4. Keep Workstream 4 gates as strict blockers after every text pipeline change.
+5. Defer API-surface expansion (`TextDrawStyle` cap/join/miter/path) until stroke quality is stable.
+6. Treat gradient-stop cap expansion as lower priority unless blocked by a concrete product/demo requirement.
+
+### New chat bootstrap context (copy/paste)
+
+```text
+Continue work on cranpose text GPU unification.
+
+Project: /home/s/develop/projects/compose-rs-proposal
+Branch: text
+Primary doc: docs/text.md
+
+Current state:
+- wgpu runtime has no software text raster module and no software text image fallback routing.
+- Plain text + span paint overrides are on GPU material batching (glyph mask + runtime shader effects).
+- Decorations are generated from measured glyph-run visual boxes (`layout_text(...)` glyph layouts), with logical-line fallback only if glyph boxes are unavailable.
+- Decoration parity gap tracked in docs is resolved on this branch.
+- Non-decorated text now short-circuits decoration layout work to avoid shaping overhead.
+
+Latest validation snapshot:
+- cargo fmt passed
+- cargo clippy -p cranpose-render-wgpu --tests -- -D warnings passed
+- cargo test -p cranpose-render-wgpu passed (74 tests)
+- cargo test -p cranpose-ui text_layout_result -- --nocapture passed
+- apps/desktop-demo/build-web.sh passed
+- (cd apps/android-demo/android && ./gradlew :app:assembleRelease) passed
+- ./run_robot_test.sh --sequential passed (77/77)
+
+Hard invariants:
+- crates/cranpose-render/wgpu/src must not reference software text raster hooks.
+- Style differences (fill/stroke/gradient/alpha) must remain GPU material state, not route switching.
+- No `scene.push_image(...)` text fallback in wgpu text style routing.
+
+Next priority (pre-alpha):
+1) Workstream 3 follow-up: manual visual QA for halo/edge tuning after stroke-bound expansion.
+2) Follow-up mixed-bidi and wrapped-line continuity hardening for span material batching.
+3) Add coverage only where mixed-bidi/wrapped-line stress reveals new quality gaps.
+4) Re-run full gates after each major change.
+
+Useful anchors:
+- crates/cranpose-render/wgpu/src/pipeline.rs
+- crates/cranpose-render/wgpu/src/lib.rs
+- crates/cranpose-render/pixels/src/draw.rs
+- crates/cranpose-ui/src/text_layout_result.rs
+
+Mandatory verification commands:
+- cargo fmt
+- cargo clippy -p cranpose-render-wgpu --tests -- -D warnings
+- cargo test -p cranpose-render-wgpu
+- cargo test -p cranpose-ui text_layout_result -- --nocapture
+- apps/desktop-demo/build-web.sh
+- (cd apps/android-demo/android && ./gradlew :app:assembleRelease)
+- ./run_robot_test.sh --sequential
+- rg -n "software_text_raster|rasterize_text_to_image|requires_rasterized_glyph_path" crates/cranpose-render/wgpu/src -g'*.rs'
+```
 
 ### Route invariants now locked by tests
 
@@ -261,7 +324,7 @@ Tests to add/update:
 
 - `cargo fmt` passed.
 - `cargo clippy -p cranpose-render-wgpu --tests -- -D warnings` passed.
-- `cargo test -p cranpose-render-wgpu` passed (`73` tests).
+- `cargo test -p cranpose-render-wgpu` passed (`74` tests).
 - `cargo test -p cranpose-ui text_layout_result -- --nocapture` passed.
 - `apps/desktop-demo/build-web.sh` passed.
 - `(cd apps/android-demo/android && ./gradlew :app:assembleRelease)` passed.
@@ -269,7 +332,7 @@ Tests to add/update:
 
 ### Branch working set at snapshot time
 
-- `crates/cranpose-render/wgpu/src/pipeline.rs`: decoration segments now generated from measured glyph-run visual boxes, with additional bidi/multiline line-through tests and non-decorated fast-path short-circuiting.
+- `crates/cranpose-render/wgpu/src/pipeline.rs`: text stroke shader path now packs stroke padding, expands effect bounds to avoid clipping, and adds regression tests for stroke edge bounds + static/animated motion consistency.
 - `crates/cranpose-render/wgpu/src/lib.rs`: wgpu text measurer now exports glyph-run layout boxes into shared text layout results.
 - `crates/cranpose-render/pixels/src/draw.rs`: pixels measurer now populates shared glyph layout payload to keep `TextLayoutResult` contract aligned.
 - `crates/cranpose-ui/src/text_layout_result.rs`: `GlyphLayout` + `TextLayoutData` added; constructor and accessors updated for shared glyph-run geometry.

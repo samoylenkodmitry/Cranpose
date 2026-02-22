@@ -226,13 +226,22 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 
     // Renderer-reserved slot 62 stores layer pixel rect: x, y, width, height.
     let layer_rect = u[62];
+    let layer_origin = layer_rect.xy;
     let layer_size = max(layer_rect.zw, vec2<f32>(0.00001));
+    let layer_max = layer_origin + layer_size;
     let tex_size = vec2<f32>(textureDimensions(input_texture));
     let pixel = input.uv * tex_size;
-    let local_uv = (pixel - layer_rect.xy) / layer_size;
+    if (pixel.x < layer_origin.x || pixel.y < layer_origin.y ||
+        pixel.x > layer_max.x || pixel.y > layer_max.y) {
+        return vec4<f32>(0.0);
+    }
+
+    let local_uv = (pixel - layer_origin) / layer_size;
     let logical_size = max(u[1].xy, vec2<f32>(0.00001));
-    let local = local_uv * logical_size;
-    let local_to_px = layer_size / logical_size;
+    let stroke_padding_local = vec2<f32>(max(u[5].z, 0.0));
+    let expanded_logical_size = max(logical_size + stroke_padding_local * 2.0, vec2<f32>(0.00001));
+    let local = local_uv * expanded_logical_size - stroke_padding_local;
+    let local_to_px = layer_size / expanded_logical_size;
     let local_to_px_avg = max((local_to_px.x + local_to_px.y) * 0.5, 0.00001);
     let stroke_width_local = max(u[5].y, 0.0);
     let stroke_radius_px = stroke_width_local * local_to_px_avg * 0.5;
@@ -857,6 +866,7 @@ const GPU_TEXT_BRUSH_KIND_SOLID: f32 = 3.0;
 const GPU_TEXT_BRUSH_EFFECT_MATERIAL_SLOT: usize = 5;
 const GPU_TEXT_DRAW_MODE_FILL: f32 = 0.0;
 const GPU_TEXT_DRAW_MODE_STROKE: f32 = 1.0;
+const GPU_TEXT_STROKE_EFFECT_EDGE_PAD: f32 = 1.0;
 
 #[derive(Clone, PartialEq)]
 enum GpuTextDrawMode {
@@ -875,6 +885,34 @@ struct GpuTextMaterial {
 struct GpuTextMaterialBatch {
     material: GpuTextMaterial,
     visible_ranges: Vec<Range<usize>>,
+}
+
+fn stroke_effect_padding_local(stroke_width_local: f32) -> f32 {
+    if !stroke_width_local.is_finite() || stroke_width_local <= 0.0 {
+        return 0.0;
+    }
+    stroke_width_local * 0.5 + GPU_TEXT_STROKE_EFFECT_EDGE_PAD
+}
+
+fn stroke_effect_padding_for_draw_mode(draw_mode: &GpuTextDrawMode) -> f32 {
+    match draw_mode {
+        GpuTextDrawMode::Fill => 0.0,
+        GpuTextDrawMode::Stroke { width } => stroke_effect_padding_local(*width),
+    }
+}
+
+fn expand_text_effect_rect(text_rect: Rect, stroke_padding: f32) -> Rect {
+    let padding = stroke_padding.max(0.0);
+    if padding <= 0.0 {
+        return text_rect;
+    }
+
+    Rect {
+        x: text_rect.x - padding,
+        y: text_rect.y - padding,
+        width: (text_rect.width + padding * 2.0).max(0.0),
+        height: (text_rect.height + padding * 2.0).max(0.0),
+    }
 }
 
 fn gpu_text_material_for_style(
@@ -914,7 +952,10 @@ fn gpu_text_material_for_style(
     }
 }
 
-fn build_gpu_text_effect(material: &GpuTextMaterial, text_rect: Rect) -> Option<RenderEffect> {
+fn build_gpu_text_effect(
+    material: &GpuTextMaterial,
+    text_rect: Rect,
+) -> Option<(RenderEffect, Rect)> {
     if !text_rect.width.is_finite()
         || !text_rect.height.is_finite()
         || text_rect.width <= 0.0
@@ -923,6 +964,8 @@ fn build_gpu_text_effect(material: &GpuTextMaterial, text_rect: Rect) -> Option<
         return None;
     }
 
+    let stroke_padding = stroke_effect_padding_for_draw_mode(&material.draw_mode);
+    let effect_rect = expand_text_effect_rect(text_rect, stroke_padding);
     let mut shader = RuntimeShader::new(GPU_TEXT_BRUSH_EFFECT_SHADER);
     let logical_width = text_rect.width.max(f32::EPSILON);
     let logical_height = text_rect.height.max(f32::EPSILON);
@@ -935,7 +978,7 @@ fn build_gpu_text_effect(material: &GpuTextMaterial, text_rect: Rect) -> Option<
     set_shader_vec4(
         &mut shader,
         GPU_TEXT_BRUSH_EFFECT_MATERIAL_SLOT,
-        [draw_mode, stroke_width, 0.0, 0.0],
+        [draw_mode, stroke_width, stroke_padding, 0.0],
     );
 
     let alpha = if material.alpha_multiplier.is_finite() {
@@ -1018,7 +1061,7 @@ fn build_gpu_text_effect(material: &GpuTextMaterial, text_rect: Rect) -> Option<
                     alpha,
                 ],
             );
-            return Some(RenderEffect::runtime_shader(shader));
+            return Some((RenderEffect::runtime_shader(shader), effect_rect));
         }
     };
 
@@ -1049,7 +1092,7 @@ fn build_gpu_text_effect(material: &GpuTextMaterial, text_rect: Rect) -> Option<
         shader.set_float((color_slot + 1) * 4, resolved_stops[index]);
     }
 
-    Some(RenderEffect::runtime_shader(shader))
+    Some((RenderEffect::runtime_shader(shader), effect_rect))
 }
 
 fn gpu_text_effect_for_style(
@@ -1057,7 +1100,7 @@ fn gpu_text_effect_for_style(
     text_rect: Rect,
     fallback_color: Color,
     text_scale: f32,
-) -> Option<RenderEffect> {
+) -> Option<(RenderEffect, Rect)> {
     let uses_non_solid_brush = matches!(
         text_style.span_style.brush,
         Some(
@@ -1236,10 +1279,10 @@ fn push_span_gpu_text_material_draws(
 
     let mut batch_effects = Vec::with_capacity(material_batches.len());
     for batch in material_batches {
-        let Some(effect) = build_gpu_text_effect(&batch.material, text_rect) else {
+        let Some((effect, effect_rect)) = build_gpu_text_effect(&batch.material, text_rect) else {
             return false;
         };
-        batch_effects.push((batch.visible_ranges, effect));
+        batch_effects.push((batch.visible_ranges, effect, effect_rect));
     }
 
     let mut mask_text_style = transformed_text_style.clone();
@@ -1248,7 +1291,7 @@ fn push_span_gpu_text_material_draws(
     mask_text_style.span_style.color = Some(Color(1.0, 1.0, 1.0, 0.0));
     mask_text_style.span_style.draw_style = Some(TextDrawStyle::Fill);
 
-    for (visible_ranges, effect) in batch_effects {
+    for (visible_ranges, effect, effect_rect) in batch_effects {
         let z_start = scene.next_z;
         let mask_text = text_for_gpu_mask_batch(text, &visible_ranges);
         scene.push_text(
@@ -1263,7 +1306,7 @@ fn push_span_gpu_text_material_draws(
             text_clip,
         );
         scene.effect_layers.push(EffectLayer {
-            rect: text_rect,
+            rect: effect_rect,
             clip: text_clip,
             effect: Some(effect),
             blend_mode: BlendMode::SrcOver,
@@ -1401,7 +1444,7 @@ fn push_text_style_draws(
     }
 
     if !has_span_foreground_overrides {
-        if let Some(effect) = gpu_text_effect_for_style(
+        if let Some((effect, effect_rect)) = gpu_text_effect_for_style(
             &transformed_text_style,
             snapped_shifted_text_rect,
             transformed_text_color,
@@ -1428,7 +1471,7 @@ fn push_text_style_draws(
             );
 
             scene.effect_layers.push(EffectLayer {
-                rect: snapped_shifted_text_rect,
+                rect: effect_rect,
                 clip: text_clip,
                 effect: Some(effect),
                 blend_mode: BlendMode::SrcOver,
@@ -3387,6 +3430,25 @@ mod tests {
             (uniform(material_slot + 1) - 5.0).abs() < f32::EPSILON,
             "stroke width should be packed into shader uniforms"
         );
+        let expected_padding = stroke_effect_padding_local(5.0);
+        assert!(
+            (uniform(material_slot + 2) - expected_padding).abs() < f32::EPSILON,
+            "stroke effect should pack outline padding into shader uniforms"
+        );
+        let mask_rect = scene.texts[0].rect;
+        assert!(
+            (scene.effect_layers[0].rect.x - (mask_rect.x - expected_padding)).abs() < f32::EPSILON
+                && (scene.effect_layers[0].rect.y - (mask_rect.y - expected_padding)).abs()
+                    < f32::EPSILON
+                && (scene.effect_layers[0].rect.width - (mask_rect.width + expected_padding * 2.0))
+                    .abs()
+                    < f32::EPSILON
+                && (scene.effect_layers[0].rect.height
+                    - (mask_rect.height + expected_padding * 2.0))
+                    .abs()
+                    < f32::EPSILON,
+            "stroke effects should expand effect bounds to avoid outline clipping"
+        );
     }
 
     #[test]
@@ -3438,6 +3500,25 @@ mod tests {
         assert!(
             (uniform(material_slot + 1) - 6.0).abs() < f32::EPSILON,
             "stroke width should scale with graphics layer scale"
+        );
+        let expected_padding = stroke_effect_padding_local(6.0);
+        assert!(
+            (uniform(material_slot + 2) - expected_padding).abs() < f32::EPSILON,
+            "scaled stroke should update shader padding with scaled width"
+        );
+        let mask_rect = scene.texts[0].rect;
+        assert!(
+            (scene.effect_layers[0].rect.x - (mask_rect.x - expected_padding)).abs() < f32::EPSILON
+                && (scene.effect_layers[0].rect.y - (mask_rect.y - expected_padding)).abs()
+                    < f32::EPSILON
+                && (scene.effect_layers[0].rect.width - (mask_rect.width + expected_padding * 2.0))
+                    .abs()
+                    < f32::EPSILON
+                && (scene.effect_layers[0].rect.height
+                    - (mask_rect.height + expected_padding * 2.0))
+                    .abs()
+                    < f32::EPSILON,
+            "scaled stroke effects should expand effect bounds by scaled outline padding"
         );
     }
 
@@ -3501,6 +3582,21 @@ mod tests {
             uniform(material_slot),
             GPU_TEXT_DRAW_MODE_STROKE,
             "gradient + stroke should keep stroke draw mode"
+        );
+        let expected_padding = stroke_effect_padding_local(2.8);
+        let mask_rect = scene.texts[0].rect;
+        assert!(
+            (scene.effect_layers[0].rect.x - (mask_rect.x - expected_padding)).abs() < f32::EPSILON
+                && (scene.effect_layers[0].rect.y - (mask_rect.y - expected_padding)).abs()
+                    < f32::EPSILON
+                && (scene.effect_layers[0].rect.width - (mask_rect.width + expected_padding * 2.0))
+                    .abs()
+                    < f32::EPSILON
+                && (scene.effect_layers[0].rect.height
+                    - (mask_rect.height + expected_padding * 2.0))
+                    .abs()
+                    < f32::EPSILON,
+            "gradient stroke should also expand effect bounds to preserve edges"
         );
     }
 
@@ -3824,6 +3920,91 @@ mod tests {
         assert_eq!(static_scene.texts[0].rect.y, base_rect.y.round());
         assert!((animated_scene.texts[0].rect.x - base_rect.x).abs() < f32::EPSILON);
         assert!((animated_scene.texts[0].rect.y - base_rect.y).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn push_text_style_draws_stroke_text_motion_static_snaps_mask_and_effect_bounds() {
+        let base_rect = Rect {
+            x: 8.25,
+            y: 10.75,
+            width: 180.0,
+            height: 28.0,
+        };
+        let static_style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                draw_style: Some(cranpose_ui::text::TextDrawStyle::Stroke { width: 4.0 }),
+                ..Default::default()
+            },
+            paragraph_style: cranpose_ui::ParagraphStyle {
+                text_motion: Some(cranpose_ui::text::TextMotion::Static),
+                ..Default::default()
+            },
+        };
+        let animated_style = cranpose_ui::TextStyle {
+            span_style: static_style.span_style.clone(),
+            paragraph_style: cranpose_ui::ParagraphStyle {
+                text_motion: Some(cranpose_ui::text::TextMotion::Animated),
+                ..Default::default()
+            },
+        };
+
+        let mut static_scene = Scene::new();
+        push_text_style_draws(
+            &mut static_scene,
+            22 as NodeId,
+            base_rect,
+            base_rect,
+            &GraphicsLayer::default(),
+            &cranpose_ui::text::AnnotatedString::from("Stroke Motion"),
+            &static_style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        let mut animated_scene = Scene::new();
+        push_text_style_draws(
+            &mut animated_scene,
+            23 as NodeId,
+            base_rect,
+            base_rect,
+            &GraphicsLayer::default(),
+            &cranpose_ui::text::AnnotatedString::from("Stroke Motion"),
+            &animated_style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        assert_eq!(static_scene.texts.len(), 1);
+        assert_eq!(static_scene.effect_layers.len(), 1);
+        assert_eq!(animated_scene.texts.len(), 1);
+        assert_eq!(animated_scene.effect_layers.len(), 1);
+
+        let expected_padding = stroke_effect_padding_local(4.0);
+        assert_eq!(static_scene.texts[0].rect.x, base_rect.x.round());
+        assert_eq!(static_scene.texts[0].rect.y, base_rect.y.round());
+        let static_mask_rect = static_scene.texts[0].rect;
+        assert!(
+            (static_scene.effect_layers[0].rect.x - (static_mask_rect.x - expected_padding)).abs()
+                < f32::EPSILON
+                && (static_scene.effect_layers[0].rect.y - (static_mask_rect.y - expected_padding))
+                    .abs()
+                    < f32::EPSILON
+        );
+
+        assert!((animated_scene.texts[0].rect.x - base_rect.x).abs() < f32::EPSILON);
+        assert!((animated_scene.texts[0].rect.y - base_rect.y).abs() < f32::EPSILON);
+        let animated_mask_rect = animated_scene.texts[0].rect;
+        assert!(
+            (animated_scene.effect_layers[0].rect.x - (animated_mask_rect.x - expected_padding))
+                .abs()
+                < f32::EPSILON
+                && (animated_scene.effect_layers[0].rect.y
+                    - (animated_mask_rect.y - expected_padding))
+                    .abs()
+                    < f32::EPSILON
+        );
     }
 
     #[test]
