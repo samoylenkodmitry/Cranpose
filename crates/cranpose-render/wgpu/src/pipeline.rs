@@ -6,7 +6,8 @@ use std::rc::Rc;
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::Brush;
 use cranpose_ui::text::{
-    resolve_text_direction, ResolvedTextDirection, TextAlign, TextDecoration, TextMotion, TextStyle,
+    resolve_text_direction, ResolvedTextDirection, TextAlign, TextDecoration, TextDrawStyle,
+    TextMotion, TextStyle,
 };
 use cranpose_ui::{
     measure_text, prepare_text_layout, LayoutBox, LayoutNode, LayoutNodeKind, SubcomposeLayoutNode,
@@ -14,7 +15,7 @@ use cranpose_ui::{
 };
 use cranpose_ui_graphics::{
     BlendMode, Color, CompositingStrategy, EdgeInsets, GraphicsLayer, LayerShape, Point, Rect,
-    RenderEffect, RoundedCornerShape, Size,
+    RenderEffect, RoundedCornerShape, RuntimeShader, Size, TileMode,
 };
 
 use crate::scene::{
@@ -31,6 +32,176 @@ use style::{
 };
 
 const TEXT_CLIP_PAD: f32 = 1.0;
+const GPU_TEXT_BRUSH_EFFECT_MAX_STOPS: usize = 16;
+const GPU_TEXT_BRUSH_EFFECT_FIRST_STOP_SLOT: usize = 8;
+const GPU_TEXT_BRUSH_EFFECT_SHADER: &str = r#"
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+}
+
+@vertex
+fn fullscreen_vs(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
+    var output: VertexOutput;
+    let x = f32(i32(vertex_index & 1u) * 2 - 1);
+    let y = f32(i32(vertex_index >> 1u) * 2 - 1);
+    output.uv = vec2<f32>(x * 0.5 + 0.5, 1.0 - (y * 0.5 + 0.5));
+    output.position = vec4<f32>(x, y, 0.0, 1.0);
+    return output;
+}
+
+@group(0) @binding(0) var input_texture: texture_2d<f32>;
+@group(0) @binding(1) var input_sampler: sampler;
+@group(1) @binding(0) var<uniform> u: array<vec4<f32>, 64>;
+
+const BRUSH_LINEAR: u32 = 0u;
+const BRUSH_RADIAL: u32 = 1u;
+const BRUSH_SWEEP: u32 = 2u;
+const TILE_CLAMP: u32 = 0u;
+const TILE_REPEAT: u32 = 1u;
+const TILE_MIRROR: u32 = 2u;
+const TILE_DECAL: u32 = 3u;
+const MAX_STOPS: u32 = 16u;
+
+struct GradientSample {
+    t: f32,
+    valid: bool,
+}
+
+fn uniform_u32(value: f32) -> u32 {
+    return u32(max(round(value), 0.0));
+}
+
+fn stop_color(index: u32) -> vec4<f32> {
+    return u[8u + index * 2u];
+}
+
+fn stop_position(index: u32) -> f32 {
+    return u[8u + index * 2u + 1u].x;
+}
+
+fn remap_gradient_t(raw_t: f32, tile_mode: u32) -> GradientSample {
+    if (tile_mode == TILE_REPEAT) {
+        let repeated = raw_t - floor(raw_t);
+        return GradientSample(repeated, true);
+    }
+
+    if (tile_mode == TILE_MIRROR) {
+        let wrapped = raw_t - floor(raw_t * 0.5) * 2.0;
+        let mirrored = select(wrapped, 2.0 - wrapped, wrapped > 1.0);
+        return GradientSample(clamp(mirrored, 0.0, 1.0), true);
+    }
+
+    if (tile_mode == TILE_DECAL) {
+        let valid = raw_t >= 0.0 && raw_t <= 1.0;
+        return GradientSample(clamp(raw_t, 0.0, 1.0), valid);
+    }
+
+    return GradientSample(clamp(raw_t, 0.0, 1.0), true);
+}
+
+fn sample_gradient(t: f32, stop_count: u32) -> vec4<f32> {
+    if (stop_count == 0u) {
+        return vec4<f32>(0.0);
+    }
+    if (stop_count == 1u) {
+        return stop_color(0u);
+    }
+
+    let first = stop_color(0u);
+    let first_t = stop_position(0u);
+    if (t <= first_t) {
+        return first;
+    }
+
+    for (var i: u32 = 0u; i + 1u < MAX_STOPS; i = i + 1u) {
+        if (i + 1u >= stop_count) {
+            break;
+        }
+        let current = stop_color(i);
+        let next = stop_color(i + 1u);
+        let current_t = stop_position(i);
+        let next_t = stop_position(i + 1u);
+
+        if (t <= next_t) {
+            let span = max(next_t - current_t, 0.00001);
+            let frac = clamp((t - current_t) / span, 0.0, 1.0);
+            return mix(current, next, frac);
+        }
+    }
+
+    return stop_color(stop_count - 1u);
+}
+
+fn evaluate_brush(local: vec2<f32>) -> vec4<f32> {
+    let brush_type = uniform_u32(u[0].x);
+    let stop_count = min(uniform_u32(u[0].y), MAX_STOPS);
+    let tile_mode = uniform_u32(u[0].z);
+    if (stop_count == 0u) {
+        return vec4<f32>(0.0);
+    }
+
+    if (brush_type == BRUSH_LINEAR) {
+        let start = u[2].xy;
+        let end = u[2].zw;
+        let delta = end - start;
+        let denom = max(dot(delta, delta), 0.00001);
+        let raw_t = dot(local - start, delta) / denom;
+        let sample = remap_gradient_t(raw_t, tile_mode);
+        if (!sample.valid) {
+            return vec4<f32>(0.0);
+        }
+        return sample_gradient(sample.t, stop_count);
+    }
+
+    if (brush_type == BRUSH_RADIAL) {
+        let center = u[3].xy;
+        let radius = max(u[3].z, 0.00001);
+        let raw_t = distance(local, center) / radius;
+        let sample = remap_gradient_t(raw_t, tile_mode);
+        if (!sample.valid) {
+            return vec4<f32>(0.0);
+        }
+        return sample_gradient(sample.t, stop_count);
+    }
+
+    if (brush_type == BRUSH_SWEEP) {
+        let center = u[4].xy;
+        let delta = local - center;
+        let angle = atan2(delta.y, delta.x);
+        let raw_t = angle / (2.0 * 3.14159265358979) + 0.5;
+        let sample = remap_gradient_t(raw_t, TILE_CLAMP);
+        if (!sample.valid) {
+            return vec4<f32>(0.0);
+        }
+        return sample_gradient(sample.t, stop_count);
+    }
+
+    return sample_gradient(0.0, stop_count);
+}
+
+@fragment
+fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+    let sampled = textureSample(input_texture, input_sampler, input.uv);
+    if (sampled.a <= 0.0) {
+        return vec4<f32>(0.0);
+    }
+
+    // Renderer-reserved slot 62 stores layer pixel rect: x, y, width, height.
+    let layer_rect = u[62];
+    let layer_size = max(layer_rect.zw, vec2<f32>(0.00001));
+    let tex_size = vec2<f32>(textureDimensions(input_texture));
+    let pixel = input.uv * tex_size;
+    let local_uv = (pixel - layer_rect.xy) / layer_size;
+    let logical_size = max(u[1].xy, vec2<f32>(0.00001));
+    let local = local_uv * logical_size;
+
+    let brush = evaluate_brush(local);
+    let alpha_multiplier = clamp(u[0].w, 0.0, 1.0);
+    let out_alpha = sampled.a * brush.a * alpha_multiplier;
+    return vec4<f32>(brush.rgb * out_alpha, out_alpha);
+}
+"#;
 
 fn pad_clip_rect(rect: Rect) -> Rect {
     Rect {
@@ -596,6 +767,245 @@ fn snap_text_rect_for_motion(rect: Rect, text_style: &TextStyle) -> Rect {
     rect
 }
 
+fn snap_rasterized_text_rect_for_motion(rect: Rect, text_style: &TextStyle) -> Rect {
+    if text_style
+        .paragraph_style
+        .text_motion
+        .unwrap_or(TextMotion::Static)
+        != TextMotion::Static
+    {
+        return rect;
+    }
+
+    Rect {
+        x: rect.x.round(),
+        y: rect.y.round(),
+        width: if rect.width > 0.0 {
+            rect.width.ceil().max(1.0)
+        } else {
+            rect.width
+        },
+        height: if rect.height > 0.0 {
+            rect.height.ceil().max(1.0)
+        } else {
+            rect.height
+        },
+    }
+}
+
+fn tile_mode_to_shader_uniform(tile_mode: TileMode) -> f32 {
+    match tile_mode {
+        TileMode::Clamp => 0.0,
+        TileMode::Repeated => 1.0,
+        TileMode::Mirror => 2.0,
+        TileMode::Decal => 3.0,
+    }
+}
+
+fn normalized_gradient_stops(color_count: usize, stops: Option<&[f32]>) -> Vec<f32> {
+    if let Some(explicit) = stops.filter(|values| values.len() == color_count) {
+        return explicit.to_vec();
+    }
+    if color_count <= 1 {
+        return vec![0.0; color_count];
+    }
+    (0..color_count)
+        .map(|index| index as f32 / (color_count - 1) as f32)
+        .collect()
+}
+
+fn set_shader_vec4(shader: &mut RuntimeShader, slot: usize, values: [f32; 4]) {
+    shader.set_float4(slot * 4, values[0], values[1], values[2], values[3]);
+}
+
+fn resolve_gradient_component(extent: f32, value: f32) -> f32 {
+    if value.is_finite() {
+        value
+    } else if value.is_sign_positive() {
+        extent.max(0.0)
+    } else {
+        0.0
+    }
+}
+
+const GPU_TEXT_BRUSH_KIND_LINEAR: f32 = 0.0;
+const GPU_TEXT_BRUSH_KIND_RADIAL: f32 = 1.0;
+const GPU_TEXT_BRUSH_KIND_SWEEP: f32 = 2.0;
+const GPU_TEXT_BRUSH_KIND_SOLID: f32 = 3.0;
+
+fn build_gpu_text_effect(
+    brush: &Brush,
+    text_rect: Rect,
+    alpha_multiplier: f32,
+) -> Option<RenderEffect> {
+    if !text_rect.width.is_finite()
+        || !text_rect.height.is_finite()
+        || text_rect.width <= 0.0
+        || text_rect.height <= 0.0
+    {
+        return None;
+    }
+
+    let mut shader = RuntimeShader::new(GPU_TEXT_BRUSH_EFFECT_SHADER);
+    let logical_width = text_rect.width.max(f32::EPSILON);
+    let logical_height = text_rect.height.max(f32::EPSILON);
+    set_shader_vec4(&mut shader, 1, [logical_width, logical_height, 0.0, 0.0]);
+
+    let alpha = if alpha_multiplier.is_finite() {
+        alpha_multiplier.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+
+    let (brush_type, colors, stops, tile_mode) = match brush {
+        Brush::LinearGradient {
+            colors,
+            stops,
+            start,
+            end,
+            tile_mode,
+        } => {
+            let resolved_start_x = resolve_gradient_component(logical_width, start.x);
+            let resolved_start_y = resolve_gradient_component(logical_height, start.y);
+            let resolved_end_x = resolve_gradient_component(logical_width, end.x);
+            let resolved_end_y = resolve_gradient_component(logical_height, end.y);
+            set_shader_vec4(
+                &mut shader,
+                2,
+                [
+                    resolved_start_x,
+                    resolved_start_y,
+                    resolved_end_x,
+                    resolved_end_y,
+                ],
+            );
+            (
+                GPU_TEXT_BRUSH_KIND_LINEAR,
+                colors,
+                stops.as_deref(),
+                *tile_mode,
+            )
+        }
+        Brush::RadialGradient {
+            colors,
+            stops,
+            center,
+            radius,
+            tile_mode,
+        } => {
+            set_shader_vec4(&mut shader, 3, [center.x, center.y, *radius, 0.0]);
+            (
+                GPU_TEXT_BRUSH_KIND_RADIAL,
+                colors,
+                stops.as_deref(),
+                *tile_mode,
+            )
+        }
+        Brush::SweepGradient {
+            colors,
+            stops,
+            center,
+        } => {
+            set_shader_vec4(&mut shader, 4, [center.x, center.y, 0.0, 0.0]);
+            (
+                GPU_TEXT_BRUSH_KIND_SWEEP,
+                colors,
+                stops.as_deref(),
+                TileMode::Clamp,
+            )
+        }
+        Brush::Solid(color) => {
+            set_shader_vec4(
+                &mut shader,
+                GPU_TEXT_BRUSH_EFFECT_FIRST_STOP_SLOT,
+                [color.r(), color.g(), color.b(), color.a()],
+            );
+            shader.set_float((GPU_TEXT_BRUSH_EFFECT_FIRST_STOP_SLOT + 1) * 4, 0.0);
+            set_shader_vec4(
+                &mut shader,
+                0,
+                [
+                    GPU_TEXT_BRUSH_KIND_SOLID,
+                    1.0,
+                    tile_mode_to_shader_uniform(TileMode::Clamp),
+                    alpha,
+                ],
+            );
+            return Some(RenderEffect::runtime_shader(shader));
+        }
+    };
+
+    let stop_count = colors.len();
+    if stop_count == 0 || stop_count > GPU_TEXT_BRUSH_EFFECT_MAX_STOPS {
+        return None;
+    }
+
+    set_shader_vec4(
+        &mut shader,
+        0,
+        [
+            brush_type,
+            stop_count as f32,
+            tile_mode_to_shader_uniform(tile_mode),
+            alpha,
+        ],
+    );
+
+    let resolved_stops = normalized_gradient_stops(stop_count, stops);
+    for (index, color) in colors.iter().enumerate() {
+        let color_slot = GPU_TEXT_BRUSH_EFFECT_FIRST_STOP_SLOT + index * 2;
+        set_shader_vec4(
+            &mut shader,
+            color_slot,
+            [color.r(), color.g(), color.b(), color.a()],
+        );
+        shader.set_float((color_slot + 1) * 4, resolved_stops[index]);
+    }
+
+    Some(RenderEffect::runtime_shader(shader))
+}
+
+fn gpu_text_effect_for_style(
+    text_style: &TextStyle,
+    text_rect: Rect,
+    fallback_color: Color,
+) -> Option<RenderEffect> {
+    let uses_stroke = matches!(
+        text_style.span_style.draw_style,
+        Some(TextDrawStyle::Stroke { width }) if width.is_finite() && width > 0.0
+    );
+    if uses_stroke {
+        return None;
+    }
+
+    let uses_non_solid_brush = matches!(
+        text_style.span_style.brush,
+        Some(
+            Brush::LinearGradient { .. }
+                | Brush::RadialGradient { .. }
+                | Brush::SweepGradient { .. }
+        )
+    );
+    if !uses_non_solid_brush {
+        return None;
+    }
+
+    let brush_storage;
+    let brush_ref = if let Some(brush) = text_style.span_style.brush.as_ref() {
+        brush
+    } else {
+        brush_storage = Brush::solid(fallback_color);
+        &brush_storage
+    };
+    let alpha_multiplier = if text_style.span_style.brush.is_some() {
+        text_style.span_style.alpha.unwrap_or(1.0)
+    } else {
+        1.0
+    };
+
+    build_gpu_text_effect(brush_ref, text_rect, alpha_multiplier)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn push_text_style_draws(
     scene: &mut Scene,
@@ -701,26 +1111,72 @@ fn push_text_style_draws(
         text_clip,
     );
 
-    if text.span_styles.is_empty() && requires_rasterized_glyph_path(&transformed_text_style) {
-        let image = rasterize_text_to_image(
-            text.text.as_str(),
-            snapped_shifted_text_rect,
+    if text.span_styles.is_empty() {
+        if let Some(effect) = gpu_text_effect_for_style(
             &transformed_text_style,
-            transformed_text_color,
-            font_size,
-            text_scale,
-        )
-        .expect("styled text raster path requires configured raster fonts");
-        scene.push_image(
             snapped_shifted_text_rect,
-            image,
-            1.0,
-            None,
-            text_clip,
-            None,
-            BlendMode::SrcOver,
-        );
-        return;
+            transformed_text_color,
+        ) {
+            let z_start = scene.next_z;
+            let mut mask_text_style = transformed_text_style.clone();
+            mask_text_style.span_style.brush = None;
+            mask_text_style.span_style.alpha = None;
+            mask_text_style.span_style.color = Some(Color::WHITE);
+            mask_text_style.span_style.draw_style = Some(TextDrawStyle::Fill);
+
+            scene.push_text(
+                node_id,
+                snapped_shifted_text_rect,
+                Rc::new(text.clone()),
+                Color::WHITE,
+                mask_text_style,
+                font_size,
+                text_scale,
+                options,
+                text_clip,
+            );
+
+            scene.effect_layers.push(EffectLayer {
+                rect: snapped_shifted_text_rect,
+                clip: text_clip,
+                effect: Some(effect),
+                blend_mode: BlendMode::SrcOver,
+                composite_alpha: 1.0,
+                z_start,
+                z_end: scene.next_z,
+            });
+            return;
+        }
+
+        if requires_rasterized_glyph_path(&transformed_text_style) {
+            let rasterized_text_rect =
+                snap_rasterized_text_rect_for_motion(snapped_shifted_text_rect, text_style);
+            let image = rasterize_text_to_image(
+                text.text.as_str(),
+                rasterized_text_rect,
+                &transformed_text_style,
+                transformed_text_color,
+                font_size,
+                text_scale,
+            )
+            .expect("styled text raster path requires configured raster fonts");
+            let rasterized_draw_rect = Rect {
+                x: rasterized_text_rect.x,
+                y: rasterized_text_rect.y,
+                width: image.width() as f32,
+                height: image.height() as f32,
+            };
+            scene.push_image(
+                rasterized_draw_rect,
+                image,
+                1.0,
+                None,
+                text_clip,
+                None,
+                BlendMode::SrcOver,
+            );
+            return;
+        }
     }
 
     scene.push_text(
@@ -1820,7 +2276,7 @@ mod tests {
     }
 
     #[test]
-    fn push_text_style_draws_non_solid_brush_contract_does_not_fallback_to_first_stop() {
+    fn push_text_style_draws_non_solid_brush_contract_uses_gpu_shader_mask() {
         init_test_fonts();
         let mut scene = Scene::new();
         let first_stop = Color(1.0, 0.0, 0.0, 1.0);
@@ -1855,53 +2311,112 @@ mod tests {
             None,
         );
 
-        assert!(
-            scene.texts.is_empty(),
-            "non-solid brush text should bypass glyphon color-only path"
+        assert_eq!(
+            scene.texts.len(),
+            1,
+            "gradient text should use glyphon text mask"
+        );
+        assert_eq!(
+            scene.effect_layers.len(),
+            1,
+            "gradient text should be wrapped in a shader effect layer"
         );
         assert_eq!(
             scene.images.len(),
-            1,
-            "non-solid brush text should rasterize to an image draw"
+            0,
+            "gradient text should not fall back to software raster image draws"
         );
 
-        let image = &scene.images[0].image;
-        let pixels = image.pixels();
-        let mut max_red = 0.0f32;
-        let mut min_red = 1.0f32;
-        let mut max_blue = 0.0f32;
-        let mut min_blue = 1.0f32;
-        let mut ink_count = 0usize;
-        for y in 0..image.height() {
-            for x in 0..image.width() {
-                let idx = ((y * image.width() + x) * 4) as usize;
-                if pixels[idx + 3] == 0 {
-                    continue;
-                }
-                let red = pixels[idx] as f32 / 255.0;
-                let blue = pixels[idx + 2] as f32 / 255.0;
-                max_red = max_red.max(red);
-                min_red = min_red.min(red);
-                max_blue = max_blue.max(blue);
-                min_blue = min_blue.min(blue);
-                ink_count += 1;
-            }
-        }
+        let layer = &scene.effect_layers[0];
+        assert_eq!(layer.z_start + 1, layer.z_end);
+        let Some(RenderEffect::Shader { shader }) = layer.effect.as_ref() else {
+            panic!("expected runtime shader effect for non-solid brush text");
+        };
+        let uniforms = shader.uniforms();
+
+        let uniform = |index: usize| uniforms.get(index).copied().unwrap_or(0.0);
+        assert!((uniform(0) - 0.0).abs() < f32::EPSILON, "linear brush type");
         assert!(
-            ink_count > 0,
-            "expected visible glyph pixels in rasterized image"
+            (uniform(1) - 2.0).abs() < f32::EPSILON,
+            "two gradient stops"
         );
-        let red_span = max_red - min_red;
-        let blue_span = max_blue - min_blue;
-        let max_channel_delta = red_span.max(blue_span);
+
+        let stop0_color_index = GPU_TEXT_BRUSH_EFFECT_FIRST_STOP_SLOT * 4;
+        let stop1_color_index = (GPU_TEXT_BRUSH_EFFECT_FIRST_STOP_SLOT + 2) * 4;
         assert!(
-            max_channel_delta > 0.12,
-            "gradient raster should vary visible color channels, red_span={red_span:.3}, blue_span={blue_span:.3}"
+            uniform(stop0_color_index) > 0.95 && uniform(stop0_color_index + 2) < 0.05,
+            "first stop should remain red-dominant in shader uniforms"
+        );
+        assert!(
+            uniform(stop1_color_index + 2) > 0.95 && uniform(stop1_color_index) < 0.05,
+            "second stop should remain blue-dominant in shader uniforms"
         );
     }
 
     #[test]
-    fn push_text_style_draws_stroke_contract_rasterizes_to_image() {
+    fn push_text_style_draws_default_linear_gradient_fill_resolves_infinite_endpoints() {
+        init_test_fonts();
+        let mut scene = Scene::new();
+        let style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                brush: Some(Brush::linear_gradient(vec![
+                    Color(0.42, 0.94, 1.0, 1.0),
+                    Color(1.0, 0.76, 0.54, 1.0),
+                ])),
+                draw_style: Some(cranpose_ui::text::TextDrawStyle::Fill),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let rect = Rect {
+            x: 8.0,
+            y: 20.0,
+            width: 220.0,
+            height: 32.0,
+        };
+
+        push_text_style_draws(
+            &mut scene,
+            13 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            &cranpose_ui::text::AnnotatedString::from("Gradient fill"),
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        assert_eq!(
+            scene.images.len(),
+            0,
+            "gradient fill should not route through software image rendering"
+        );
+        assert_eq!(
+            scene.effect_layers.len(),
+            1,
+            "gradient fill should emit runtime shader effect layer"
+        );
+        let Some(RenderEffect::Shader { shader }) = scene.effect_layers[0].effect.as_ref() else {
+            panic!("expected runtime shader effect for gradient fill");
+        };
+
+        let uniforms = shader.uniforms();
+        let uniform = |index: usize| uniforms.get(index).copied().unwrap_or(0.0);
+        let start_x = uniform(8);
+        let start_y = uniform(9);
+        let end_x = uniform(10);
+        let end_y = uniform(11);
+
+        assert!(start_x.is_finite() && start_y.is_finite());
+        assert!(end_x.is_finite() && end_y.is_finite());
+        assert!(end_x > start_x, "x endpoint should span gradient range");
+        assert!(end_y > start_y, "y endpoint should span gradient range");
+    }
+
+    #[test]
+    fn push_text_style_draws_stroke_contract_uses_software_renderer() {
         init_test_fonts();
         let mut scene = Scene::new();
         let style = cranpose_ui::TextStyle {
@@ -1933,12 +2448,67 @@ mod tests {
 
         assert!(
             scene.texts.is_empty(),
-            "stroke text should bypass glyphon fill-only path"
+            "stroke should bypass glyphon fill-only text path"
+        );
+        assert!(
+            scene.effect_layers.is_empty(),
+            "stroke should not use the gradient runtime-shader layer path"
         );
         assert_eq!(
             scene.images.len(),
             1,
-            "stroke text should rasterize to an image draw"
+            "stroke should render via software text image"
+        );
+    }
+
+    #[test]
+    fn push_text_style_draws_gradient_stroke_contract_uses_software_renderer() {
+        init_test_fonts();
+        let mut scene = Scene::new();
+        let style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                brush: Some(Brush::linear_gradient_range(
+                    vec![Color(0.2, 0.9, 1.0, 1.0), Color(1.0, 0.7, 0.5, 1.0)],
+                    Point::new(0.0, 0.0),
+                    Point::new(180.0, 0.0),
+                )),
+                draw_style: Some(cranpose_ui::text::TextDrawStyle::Stroke { width: 2.8 }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let rect = Rect {
+            x: 8.0,
+            y: 20.0,
+            width: 220.0,
+            height: 32.0,
+        };
+
+        push_text_style_draws(
+            &mut scene,
+            12 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            &cranpose_ui::text::AnnotatedString::from("Gradient stroke"),
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        assert!(
+            scene.texts.is_empty(),
+            "gradient + stroke should not enter glyphon fill mask path"
+        );
+        assert!(
+            scene.effect_layers.is_empty(),
+            "gradient + stroke should bypass runtime shader fill effect path"
+        );
+        assert_eq!(
+            scene.images.len(),
+            1,
+            "gradient + stroke should render via software text image path"
         );
     }
 
@@ -1950,20 +2520,18 @@ mod tests {
             width: 180.0,
             height: 28.0,
         };
-        let static_style = cranpose_ui::TextStyle {
-            paragraph_style: cranpose_ui::ParagraphStyle {
+        let static_style = cranpose_ui::TextStyle::from_paragraph_style(
+            cranpose_ui::ParagraphStyle {
                 text_motion: Some(cranpose_ui::text::TextMotion::Static),
                 ..Default::default()
             },
-            ..Default::default()
-        };
-        let animated_style = cranpose_ui::TextStyle {
-            paragraph_style: cranpose_ui::ParagraphStyle {
+        );
+        let animated_style = cranpose_ui::TextStyle::from_paragraph_style(
+            cranpose_ui::ParagraphStyle {
                 text_motion: Some(cranpose_ui::text::TextMotion::Animated),
                 ..Default::default()
             },
-            ..Default::default()
-        };
+        );
 
         let mut static_scene = Scene::new();
         push_text_style_draws(
@@ -1999,6 +2567,74 @@ mod tests {
         assert_eq!(static_scene.texts[0].rect.y, base_rect.y.round());
         assert!((animated_scene.texts[0].rect.x - base_rect.x).abs() < f32::EPSILON);
         assert!((animated_scene.texts[0].rect.y - base_rect.y).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn push_text_style_draws_gradient_static_text_snaps_mask_and_effect_bounds() {
+        init_test_fonts();
+
+        let mut scene = Scene::new();
+        let base_rect = Rect {
+            x: 8.25,
+            y: 10.75,
+            width: 180.2,
+            height: 28.4,
+        };
+        let style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                brush: Some(Brush::linear_gradient_range(
+                    vec![Color(0.2, 0.9, 1.0, 1.0), Color(1.0, 0.7, 0.5, 1.0)],
+                    Point::new(0.0, 0.0),
+                    Point::new(180.0, 0.0),
+                )),
+                ..Default::default()
+            },
+            paragraph_style: cranpose_ui::ParagraphStyle {
+                text_motion: Some(cranpose_ui::text::TextMotion::Static),
+                ..Default::default()
+            },
+        };
+
+        push_text_style_draws(
+            &mut scene,
+            11 as NodeId,
+            base_rect,
+            base_rect,
+            &GraphicsLayer::default(),
+            &cranpose_ui::text::AnnotatedString::from("Gradient static"),
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        assert!(
+            scene.images.is_empty(),
+            "gradient text should not use rasterized image fallback"
+        );
+        assert_eq!(
+            scene.texts.len(),
+            1,
+            "gradient should emit a glyphon mask text draw"
+        );
+        assert_eq!(
+            scene.effect_layers.len(),
+            1,
+            "gradient should emit one runtime shader effect layer"
+        );
+
+        let text_draw = &scene.texts[0];
+        assert_eq!(text_draw.rect.x, base_rect.x.round());
+        assert_eq!(text_draw.rect.y, base_rect.y.round());
+
+        let effect_layer = &scene.effect_layers[0];
+        assert_eq!(effect_layer.rect.x, base_rect.x.round());
+        assert_eq!(effect_layer.rect.y, base_rect.y.round());
+        assert!((effect_layer.rect.width - base_rect.width).abs() < 1e-3);
+        assert!((effect_layer.rect.height - base_rect.height).abs() < 1e-3);
+        let Some(RenderEffect::Shader { .. }) = effect_layer.effect.as_ref() else {
+            panic!("gradient text should use runtime shader effect");
+        };
     }
 
     #[test]

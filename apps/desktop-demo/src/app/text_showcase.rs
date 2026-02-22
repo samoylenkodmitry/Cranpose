@@ -244,16 +244,19 @@ pub(crate) fn TextShowcaseTab() {
 
                             style_chip_label("brush + alpha + draw_style + platform_style");
                             Text(
-                                "Gradient/alpha/stroke/platform",
+                                "Gradient/alpha/fill/platform",
                                 Modifier::empty(),
                                 TextStyle {
                                     span_style: SpanStyle {
                                         brush: Some(Brush::linear_gradient(vec![
-                                            Color(0.5, 0.95, 1.0, 0.0),
-                                            Color(1.0, 0.72, 0.5, 1.0),
+                                            Color(0.42, 0.94, 1.0, 1.0),
+                                            Color(0.75, 0.84, 1.0, 1.0),
+                                            Color(1.0, 0.76, 0.54, 1.0),
                                         ])),
-                                        alpha: Some(0.88),
-                                        draw_style: Some(TextDrawStyle::Stroke { width: 1.5 }),
+                                        alpha: Some(0.92),
+                                        font_size: TextUnit::Sp(17.0),
+                                        font_weight: Some(FontWeight::SEMI_BOLD),
+                                        draw_style: Some(TextDrawStyle::Fill),
                                         platform_style: Some(PlatformSpanStyle),
                                         ..Default::default()
                                     },

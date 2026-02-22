@@ -675,8 +675,16 @@ fn draw_text_plain(frame: &mut [u8], width: u32, height: u32, draw: &TextDraw) {
         Rect {
             x: draw.rect.x.round(),
             y: draw.rect.y.round(),
-            width: draw.rect.width,
-            height: draw.rect.height,
+            width: if draw.rect.width > 0.0 {
+                draw.rect.width.ceil().max(1.0)
+            } else {
+                draw.rect.width
+            },
+            height: if draw.rect.height > 0.0 {
+                draw.rect.height.ceil().max(1.0)
+            } else {
+                draw.rect.height
+            },
         }
     } else {
         draw.rect
@@ -694,7 +702,14 @@ fn draw_text_plain(frame: &mut [u8], width: u32, height: u32, draw: &TextDraw) {
         return;
     };
 
-    blit_rasterized_text_image(frame, width, height, raster_rect, draw.clip, &image);
+    let blit_rect = Rect {
+        x: raster_rect.x,
+        y: raster_rect.y,
+        width: image.width() as f32,
+        height: image.height() as f32,
+    };
+
+    blit_rasterized_text_image(frame, width, height, blit_rect, draw.clip, &image);
 }
 
 fn blit_rasterized_text_image(

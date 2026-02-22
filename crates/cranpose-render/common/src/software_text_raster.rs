@@ -97,6 +97,7 @@ pub fn rasterize_text_to_image_with_font(
         let offset = point(origin_x, baseline_y);
 
         for glyph in font.layout(line, scale_px, offset) {
+            let glyph = align_glyph_for_text_motion(glyph, static_text_motion);
             if let Some(bb) = glyph.pixel_bounding_box() {
                 let Some(mask) = build_glyph_mask(&glyph, bb, raster_style) else {
                     continue;
@@ -137,6 +138,28 @@ pub fn rasterize_text_to_image_with_font(
     }
 
     ImageBitmap::from_rgba8(width, height, rgba).ok()
+}
+
+fn align_glyph_for_text_motion(
+    glyph: rusttype::PositionedGlyph<'_>,
+    static_text_motion: bool,
+) -> rusttype::PositionedGlyph<'_> {
+    if !static_text_motion {
+        return glyph;
+    }
+
+    let position = glyph.position();
+    let snapped_x = position.x.round();
+    let snapped_y = position.y.round();
+    if (snapped_x - position.x).abs() < f32::EPSILON
+        && (snapped_y - position.y).abs() < f32::EPSILON
+    {
+        return glyph;
+    }
+
+    glyph
+        .into_unpositioned()
+        .positioned(point(snapped_x, snapped_y))
 }
 
 fn blend_src_over(dst: &mut [f32; 4], src: [f32; 4]) {
@@ -1179,6 +1202,41 @@ mod tests {
             static_image.pixels(),
             animated_image.pixels(),
             "TextMotion::Static should quantize shadow placement while Animated keeps fractional sampling"
+        );
+    }
+
+    #[test]
+    fn static_text_motion_aligns_glyph_positions_to_pixel_grid() {
+        let font = Font::try_from_bytes(include_bytes!(
+            "../../../../apps/desktop-demo/assets/Roboto-Regular.ttf"
+        ) as &[u8])
+        .expect("font");
+        let scale = Scale::uniform(17.0);
+
+        let base_glyph = font
+            .layout("A", scale, point(0.0, 13.37))
+            .next()
+            .expect("glyph");
+        let static_aligned = align_glyph_for_text_motion(base_glyph, true);
+        let static_position = static_aligned.position();
+        assert!(
+            (static_position.x - static_position.x.round()).abs() < f32::EPSILON,
+            "static text should snap glyph x to pixel grid"
+        );
+        assert!(
+            (static_position.y - static_position.y.round()).abs() < f32::EPSILON,
+            "static text should snap glyph y to pixel grid"
+        );
+
+        let animated_source = font
+            .layout("A", scale, point(0.0, 13.37))
+            .next()
+            .expect("glyph");
+        let animated_aligned = align_glyph_for_text_motion(animated_source, false);
+        let animated_position = animated_aligned.position();
+        assert!(
+            (animated_position.y - 13.37).abs() < 1e-3,
+            "animated text should preserve fractional glyph position"
         );
     }
 }
