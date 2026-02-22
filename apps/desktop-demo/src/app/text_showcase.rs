@@ -256,7 +256,7 @@ pub(crate) fn TextShowcaseTab() {
                                         alpha: Some(0.92),
                                         font_size: TextUnit::Sp(17.0),
                                         font_weight: Some(FontWeight::SEMI_BOLD),
-                                        draw_style: Some(TextDrawStyle::Fill),
+                                        draw_style: Some(TextDrawStyle::Stroke { width: 3.8 }),
                                         platform_style: Some(PlatformSpanStyle),
                                         ..Default::default()
                                     },

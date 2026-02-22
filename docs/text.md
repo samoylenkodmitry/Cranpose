@@ -38,7 +38,7 @@ Cranpose implementation anchors:
 | `FontWeight` range and named constants | ALIGNED | Range validation and constants (`W100..W900`, aliases) implemented. |
 | `TextAlign` values (`Left`, `Right`, `Center`, `Justify`, `Start`, `End`, `Unspecified`) | ALIGNED | Implemented in `paragraph.rs`. |
 | `TextDirection` values (`Ltr`, `Rtl`, `Content`, `ContentOrLtr`, `ContentOrRtl`, `Unspecified`) | ALIGNED | Implemented with resolver helper and content heuristic. |
-| `SpanStyle` structure | PARTIAL | Core and stable fields are modeled, including foreground variants (`color` / `brush` + `alpha`), platform style, and draw style. `wgpu` now uses a hybrid route: GPU mask + runtime shader for plain-text gradient fill, software glyph raster for stroke and gradient+stroke; `pixels` still uses software glyph raster for styled text. |
+| `SpanStyle` structure | PARTIAL | Core and stable fields are modeled, including foreground variants (`color` / `brush` + `alpha`), platform style, and draw style. In `wgpu`, plain-text non-solid fill and stroke now share one GPU text-material path (glyph mask + runtime shader), with no style-driven software image fallback. `pixels` remains software-rendered. |
 | `ParagraphStyle` structure | ALIGNED | Core and stable fields are modeled, including platform paragraph style. |
 | `TextStyle` combining span + paragraph | PARTIAL | `TextStyle { span_style, paragraph_style }` plus merge/plus/from/to/platform-style helper APIs are implemented. Full Compose constructor/copy/saver overload surface is not fully mirrored. |
 | `TextStyle` API shape parity (no flattened fields) | ALIGNED | Cranpose now only exposes `TextStyle { span_style, paragraph_style }` for Compose-like API structure. |
@@ -57,7 +57,7 @@ Cranpose implementation anchors:
 | `lineBreak`, `hyphens`, `textMotion` rendering impact | ALIGNED | `lineBreak` differentiates `Simple` (greedy) from `Heading`/`Paragraph` (word-balance-aware with different last-line penalties); `Hyphens::Auto` injects correct dictionary-based line splits without mutating source text content across embedded locales; and `textMotion` fractionally offsets sampling natively. Compose-exact platform shaping/hinting behavior remains approximate. |
 | `baselineShift`, `textGeometricTransform`, `localeList`, `fontFeatureSettings` rendering impact | PARTIAL | `baselineShift` now affects rendered Y position in both pixels and wgpu pipelines. Other knobs remain partially applied/stored. |
 | `TextDecoration` rendering (`Underline`, `LineThrough`) | PARTIAL | Decoration lines now render in both pipelines. Geometry is Compose-like but still approximate versus platform paragraph engines. |
-| Non-solid brush foreground behavior | PARTIAL | `wgpu` renders plain-text gradient fill via glyph mask + runtime shader, and routes stroke (with or without gradient) through software glyph rasterization. `pixels` remains software-rendered. `wgpu` no longer collapses fill gradients to first-stop/single-color. |
+| Non-solid brush foreground behavior | PARTIAL | `wgpu` renders plain-text gradient fill and stroke via one GPU material shader over a glyph mask, with no style-based software fallback path. `pixels` remains software-rendered. |
 
 ## Phase-1 Parity Contract Matrix
 
@@ -81,9 +81,9 @@ Expected behavior is derived from Compose sources under `/media/huge/composerepo
 | Case | Compose Contract | Cranpose Current | Target |
 |---|---|---|---|
 | `brush = SolidColor(c)` with `alpha` | Treated as color with alpha modulation. | Works through color resolution. | Keep behavior. |
-| `brush = ShaderBrush` | Shader sampled during glyph paint; not collapsed to a single fallback color. | `pixels` samples brush per glyph in text draw space; `wgpu` uses runtime shader masking for plain-text non-solid fill and software glyph raster for stroke or unsupported style combinations. | Move to a single GPU text-material path for both fill and stroke. |
-| `drawStyle = Fill` | Fill glyph interior. | Explicit fill path used in both backends. In `wgpu`, non-solid plain-text fill now uses GPU runtime shader masking over a glyphon alpha mask. | Preserve semantics and extend to span-rich text without software fallback. |
-| `drawStyle = Stroke(...)` | Outline glyph using stroke parameters (width/cap/join/miter/path). | Shared software raster stroke now uses glyph-path stroking with Compose-like defaults (`Butt` cap, `Miter` join, miter limit `4`) instead of pure mask dilation; both `pixels` and `wgpu` consume this path. | Add remaining stroke-parameter surface parity beyond width-only API. |
+| `brush = ShaderBrush` | Shader sampled during glyph paint; not collapsed to a single fallback color. | `pixels` samples brush per glyph in text draw space; `wgpu` uses runtime shader masking/material evaluation for plain-text fill and stroke with no software text fallback route. | Extend the same material model to span-rich text. |
+| `drawStyle = Fill` | Fill glyph interior. | Explicit fill path used in both backends. In `wgpu`, plain-text non-solid fill uses GPU runtime shader masking over a glyphon alpha mask. | Preserve semantics and extend to span-rich text material routing. |
+| `drawStyle = Stroke(...)` | Outline glyph using stroke parameters (width/cap/join/miter/path). | `wgpu` plain-text stroke is now GPU-rendered through the same glyph-mask + runtime-shader material path as fill; `pixels` keeps software glyph-path stroking. | Add remaining stroke-parameter surface parity beyond width-only API. |
 | Multi-paragraph brush continuity | Single brush shader continuity across paragraph segments. | `pixels` keeps brush continuity across wrapped text in one draw; `wgpu` raster fallback preserves continuity within each emitted text draw. | Match Compose continuity details across all paragraph/shaping paths. |
 | Bidi with brush/stroke | Brush/stroke applies consistently to visual glyph order. | Brush/stroke now applies in both backends for emitted glyph runs; full Compose bidi/shaping parity remains broader work. | Equivalent semantics in `pixels` and `wgpu` for mixed-direction text. |
 
@@ -119,95 +119,77 @@ Expected behavior is derived from Compose sources under `/media/huge/composerepo
 
 This section is a context handoff for the next implementation chat.
 
-### Why text quality still feels inconsistent
+### What changed in this handoff
 
-- `wgpu` text is currently a hybrid pipeline with two execution paths.
-- Fill text can go through glyphon/GPU masking.
-- Stroke text still routes through software glyph rasterization.
-- Different AA/hinting/rasterization stacks produce visibly different edges and perceived sharpness.
+- `wgpu` stroke and gradient+stroke no longer route through software-rasterized text images.
+- Plain-text non-solid fill and plain-text stroke now share one GPU text-material path: glyph mask submission + runtime shader material evaluation.
+- `push_text_style_draws(...)` no longer emits `scene.push_image(...)` for text style routing in `wgpu`.
+- Runtime stroke rendering is packed through shader material uniforms and evaluated from the glyph alpha mask in GPU space.
 
 ### Current `wgpu` routing contract
 
 | Case | Route | Current quality/perf implications |
 |---|---|---|
-| Solid fill (`color`, no stroke) | Glyphon text draw | Fast and stable. |
-| Non-solid fill (`brush`, `drawStyle = Fill`, plain text with no inline spans) | Glyphon text mask + `RenderEffect::runtime_shader` gradient pass | GPU path, avoids previous first-stop color collapse bug. |
-| Stroke (`drawStyle = Stroke { width > 0 }`), solid or gradient | Software rasterized text image | Functional, but stroke edge quality differs from fill path. |
-| Styled runs/inline span text with non-solid brush | Still falls back to software raster path in current architecture | Behavior works but does not share GPU fill quality path yet. |
+| Solid fill (`color`, no stroke) | Glyphon text draw | Fast and stable; no software fallback. |
+| Non-solid fill (`brush`, `drawStyle = Fill`, plain text with no inline spans) | Glyphon text mask + `RenderEffect::runtime_shader` text material pass | GPU path with gradient evaluation in shader. |
+| Stroke (`drawStyle = Stroke { width > 0 }`), solid or gradient, plain text | Glyphon text mask + `RenderEffect::runtime_shader` text material pass | GPU path; no software image fallback. |
+| Styled runs/inline span text | Glyphon text draw (span-aware attrs) | No software text fallback route; brush/drawStyle parity across spans remains open work. |
 
 ### Key code anchors (current branch)
 
 - `crates/cranpose-render/wgpu/src/pipeline.rs`
-- `gpu_text_effect_for_style(...)`: decides when gradient text can use GPU mask + shader.
-- `build_gpu_text_effect(...)`: packs gradient uniforms and creates runtime shader effect.
-- `resolve_gradient_component(...)`: resolves infinite gradient endpoints (`+inf/-inf`) to local text bounds.
-- `push_text_style_draws(...)`: route split between glyphon text, effect layer, and software text image.
-- `crates/cranpose-render/wgpu/src/text_raster.rs`
-- `requires_rasterized_glyph_path(...)`: currently true for non-solid brush and stroke.
-- `crates/cranpose-render/common/src/software_text_raster.rs`
-- `align_glyph_for_text_motion(...)`: static text motion snaps glyph placement for software raster path.
-- `crates/cranpose-render/pixels/src/draw.rs`
-- Raster blit uses image dimensions from raster output rect to avoid clipping.
-
-### Fixes already landed on this branch
-
-- Fill gradient in `wgpu` no longer collapses to first color when using default linear gradient endpoints.
-- Gradient+stroke no longer incorrectly routes into GPU fill-effect path that ignores stroke width.
-- Static text-motion snapping and raster blit rect sizing were tightened to reduce clipping artifacts.
-- Demo text showcase now highlights fill gradient path instead of stroke example.
+- `gpu_text_material_for_style(...)`: builds one material contract (brush, alpha, draw mode, stroke width) for GPU text effects.
+- `build_gpu_text_effect(...)`: packs brush + draw-mode uniforms for runtime shader execution.
+- `GPU_TEXT_BRUSH_EFFECT_SHADER`: now evaluates fill and stroke from one shader contract.
+- `push_text_style_draws(...)`: text style routing now chooses glyph draw or glyph-mask+effect, never software image fallback.
+- `crates/cranpose-render/wgpu/src/lib.rs`: `text_raster` module is test-only; runtime renderer does not initialize raster fallback fonts.
+- `crates/cranpose-render/pixels/src/draw.rs`: software raster blit sizing fix remains in place for pixels backend.
 
 ### Known open gaps
 
-- The hybrid path remains the core architecture problem: same API, different renderer internals.
-- Stroke quality depends on software raster rules and does not match GPU fill path crispness.
-- GPU gradient path is currently scoped to plain text draws; rich span runs still need unified handling.
-- Runtime shader path currently supports up to 16 gradient stops (`GPU_TEXT_BRUSH_EFFECT_MAX_STOPS`).
-- `TextDrawStyle` API currently exposes only stroke width; cap/join/miter/path effect parity is incomplete.
+- Runtime shader path still caps gradient stops at `GPU_TEXT_BRUSH_EFFECT_MAX_STOPS` (`16`).
+- Rich span runs are not yet unified under one span-material shader contract (global plain-text material path is complete).
+- `TextDrawStyle` API still exposes width-only stroke controls (cap/join/miter/path parity is pending).
+- `push_text_decorations(...)` in `wgpu` still uses single-line approximation instead of measured visual line boxes.
 
-### Direction to make this production-grade
+### Route invariants now locked by tests
 
-- Remove text software fallback from `wgpu` runtime rendering path.
-- Move to one GPU text material pipeline where fill, stroke, gradient, and alpha are handled in one shader contract.
-- Keep one shaping source (`cosmic-text`) and one glyph cache/atlas strategy for all text draws.
-- Keep behavior parity tests as the contract gate during migration.
+- `push_text_style_draws_stroke_contract_uses_gpu_shader_mask`
+- `push_text_style_draws_gradient_stroke_contract_uses_gpu_shader_mask`
+- Stroke and gradient+stroke text do not emit `scene.push_image(...)`.
 
-### Suggested migration plan (no half-migrated state)
+### Decoration parity contract (explicit remaining gap)
 
-1. Define a single `GpuTextMaterial` contract for all text draws:
-   - Encodes fill/stroke/brush/alpha, text motion, and shadow inputs.
-   - Replace route checks in `push_text_style_draws(...)` with one material builder.
-2. Replace `requires_rasterized_glyph_path(...)` routing with GPU path support for stroke:
-   - Implement stroke in shader using distance-to-edge data (SDF/MSDF or equivalent).
-   - Keep gradient evaluation in the same shader path.
-3. Extend from plain text to full span-run text:
-   - Preserve brush continuity across runs and bidi ordering.
-   - Keep one draw model and one AA strategy.
-4. Delete software text image fallback path for `wgpu`:
-   - Remove text-driven `scene.push_image(...)` calls in `wgpu` pipeline.
-   - Keep software raster only for explicit bitmap/image features, not text paint semantics.
-5. Lock final acceptance with tests:
-   - Unit tests for route invariants and uniform packing.
-   - Robot visual tests for fill vs stroke sharpness, gradient continuity, baseline shift, clipping.
+Current state:
 
-### Minimum acceptance criteria for completion
+- `push_text_decorations(...)` computes decoration geometry by linear chunk widths.
+- The current implementation is marked in code as a simple/single-line approximation.
 
-- `wgpu` text rendering has one execution pipeline for fill + stroke + gradient.
-- No runtime routing from text style to software image fallback in `wgpu`.
-- Fill/stroke visual quality is consistent under the same font size and scale.
-- Existing text parity tests and robot tests pass with zero warnings in clippy/test commands.
+Required end-state:
+
+- Decoration segments are generated from measured line boxes (`prepare_text_layout(...)` output), not from linearized offsets.
+- Underline and line-through honor wrapped lines, alignment (`Start`/`End`), and span boundaries in the same visual order as text draws.
+- Decoration brush resolution matches the span foreground contract (`color`/`brush`/`alpha`) with no style-dependent fallback route.
+
+Tests to add/update:
+
+- Wrapped multiline underline with mixed span styles validates one decoration segment per visual line.
+- Wrapped multiline line-through with bidi text validates visual ordering consistency.
+- Baseline shift + decoration test verifies decoration Y placement remains tied to shifted line metrics.
 
 ### Validation snapshot for this branch (latest run)
 
 - `cargo fmt` passed.
 - `cargo clippy -p cranpose-render-wgpu --tests -- -D warnings` passed.
-- `cargo test -p cranpose-render-wgpu` passed (`69` tests).
+- `cargo test -p cranpose-render-wgpu` passed (`70` tests).
+- `apps/desktop-demo/build-web.sh` passed.
+- `(cd apps/android-demo/android && ./gradlew :app:assembleRelease)` passed.
+- `./run_robot_test.sh` passed (`77`/`77`).
 
 ### Branch working set at snapshot time
 
-- `apps/desktop-demo/src/app/text_showcase.rs`: showcase text switched to fill-gradient sample.
-- `crates/cranpose-render/common/src/software_text_raster.rs`: static text-motion glyph snapping in software raster path.
-- `crates/cranpose-render/pixels/src/draw.rs`: raster text blit rect uses actual image dimensions to avoid clipping.
-- `crates/cranpose-render/wgpu/src/pipeline.rs`: GPU gradient mask shader path, route guards for stroke, and gradient endpoint fixes.
+- `crates/cranpose-render/wgpu/src/pipeline.rs`: GPU text-material stroke support in runtime shader; software text image routing removed from live path.
+- `crates/cranpose-render/wgpu/src/lib.rs`: software text raster module gated to tests only for `wgpu`.
 
 ## Demo Coverage
 

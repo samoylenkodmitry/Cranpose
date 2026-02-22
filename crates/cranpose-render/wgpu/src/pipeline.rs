@@ -21,7 +21,6 @@ use cranpose_ui_graphics::{
 use crate::scene::{
     BackdropLayer, ClickAction, DrawShape, EffectLayer, Scene, ShadowDraw, TextDraw,
 };
-use crate::text_raster::{rasterize_text_to_image, requires_rasterized_glyph_path};
 
 // Re-use style functions from a local copy
 mod style;
@@ -62,6 +61,9 @@ const TILE_REPEAT: u32 = 1u;
 const TILE_MIRROR: u32 = 2u;
 const TILE_DECAL: u32 = 3u;
 const MAX_STOPS: u32 = 16u;
+const DRAW_FILL: u32 = 0u;
+const DRAW_STROKE: u32 = 1u;
+const OUTLINE_SAMPLE_COUNT: u32 = 8u;
 
 struct GradientSample {
     t: f32,
@@ -180,10 +182,44 @@ fn evaluate_brush(local: vec2<f32>) -> vec4<f32> {
     return sample_gradient(0.0, stop_count);
 }
 
+fn sample_mask_alpha(uv: vec2<f32>) -> f32 {
+    return textureSample(input_texture, input_sampler, uv).a;
+}
+
+fn max_dilated_alpha(uv: vec2<f32>, texel: vec2<f32>, radius_px: f32, center_alpha: f32) -> f32 {
+    let radius = max(radius_px, 0.0);
+    if (radius <= 0.0) {
+        return center_alpha;
+    }
+
+    let half_radius = radius * 0.5;
+    var max_alpha = center_alpha;
+    let directions = array<vec2<f32>, 8>(
+        vec2<f32>(1.0, 0.0),
+        vec2<f32>(-1.0, 0.0),
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(0.0, -1.0),
+        vec2<f32>(0.70710677, 0.70710677),
+        vec2<f32>(-0.70710677, 0.70710677),
+        vec2<f32>(0.70710677, -0.70710677),
+        vec2<f32>(-0.70710677, -0.70710677),
+    );
+
+    for (var i: u32 = 0u; i < OUTLINE_SAMPLE_COUNT; i = i + 1u) {
+        let dir = directions[i];
+        max_alpha = max(max_alpha, sample_mask_alpha(uv + dir * texel * radius));
+        max_alpha = max(max_alpha, sample_mask_alpha(uv + dir * texel * half_radius));
+    }
+
+    return max_alpha;
+}
+
 @fragment
 fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let sampled = textureSample(input_texture, input_sampler, input.uv);
-    if (sampled.a <= 0.0) {
+    let draw_mode = uniform_u32(u[5].x);
+    let fill_alpha = sampled.a;
+    if (draw_mode == DRAW_FILL && fill_alpha <= 0.0) {
         return vec4<f32>(0.0);
     }
 
@@ -195,10 +231,21 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let local_uv = (pixel - layer_rect.xy) / layer_size;
     let logical_size = max(u[1].xy, vec2<f32>(0.00001));
     let local = local_uv * logical_size;
+    let local_to_px = layer_size / logical_size;
+    let local_to_px_avg = max((local_to_px.x + local_to_px.y) * 0.5, 0.00001);
+    let stroke_width_local = max(u[5].y, 0.0);
+    let stroke_radius_px = stroke_width_local * local_to_px_avg * 0.5;
+    let texel = vec2<f32>(1.0) / max(tex_size, vec2<f32>(1.0));
+    let outline_alpha = max_dilated_alpha(input.uv, texel, stroke_radius_px, fill_alpha);
+    let stroke_alpha = max(outline_alpha - fill_alpha, 0.0);
+    let material_alpha = select(fill_alpha, stroke_alpha, draw_mode == DRAW_STROKE);
+    if (material_alpha <= 0.0) {
+        return vec4<f32>(0.0);
+    }
 
     let brush = evaluate_brush(local);
     let alpha_multiplier = clamp(u[0].w, 0.0, 1.0);
-    let out_alpha = sampled.a * brush.a * alpha_multiplier;
+    let out_alpha = material_alpha * brush.a * alpha_multiplier;
     return vec4<f32>(brush.rgb * out_alpha, out_alpha);
 }
 "#;
@@ -767,32 +814,6 @@ fn snap_text_rect_for_motion(rect: Rect, text_style: &TextStyle) -> Rect {
     rect
 }
 
-fn snap_rasterized_text_rect_for_motion(rect: Rect, text_style: &TextStyle) -> Rect {
-    if text_style
-        .paragraph_style
-        .text_motion
-        .unwrap_or(TextMotion::Static)
-        != TextMotion::Static
-    {
-        return rect;
-    }
-
-    Rect {
-        x: rect.x.round(),
-        y: rect.y.round(),
-        width: if rect.width > 0.0 {
-            rect.width.ceil().max(1.0)
-        } else {
-            rect.width
-        },
-        height: if rect.height > 0.0 {
-            rect.height.ceil().max(1.0)
-        } else {
-            rect.height
-        },
-    }
-}
-
 fn tile_mode_to_shader_uniform(tile_mode: TileMode) -> f32 {
     match tile_mode {
         TileMode::Clamp => 0.0,
@@ -832,12 +853,61 @@ const GPU_TEXT_BRUSH_KIND_LINEAR: f32 = 0.0;
 const GPU_TEXT_BRUSH_KIND_RADIAL: f32 = 1.0;
 const GPU_TEXT_BRUSH_KIND_SWEEP: f32 = 2.0;
 const GPU_TEXT_BRUSH_KIND_SOLID: f32 = 3.0;
+const GPU_TEXT_BRUSH_EFFECT_MATERIAL_SLOT: usize = 5;
+const GPU_TEXT_DRAW_MODE_FILL: f32 = 0.0;
+const GPU_TEXT_DRAW_MODE_STROKE: f32 = 1.0;
 
-fn build_gpu_text_effect(
-    brush: &Brush,
-    text_rect: Rect,
+#[derive(Clone)]
+enum GpuTextDrawMode {
+    Fill,
+    Stroke { width: f32 },
+}
+
+#[derive(Clone)]
+struct GpuTextMaterial {
+    brush: Brush,
     alpha_multiplier: f32,
-) -> Option<RenderEffect> {
+    draw_mode: GpuTextDrawMode,
+}
+
+fn gpu_text_material_for_style(
+    text_style: &TextStyle,
+    fallback_color: Color,
+    text_scale: f32,
+) -> GpuTextMaterial {
+    let scale = if text_scale.is_finite() && text_scale > 0.0 {
+        text_scale
+    } else {
+        1.0
+    };
+    let draw_mode = match text_style.span_style.draw_style {
+        Some(TextDrawStyle::Stroke { width }) if width.is_finite() && width > 0.0 => {
+            GpuTextDrawMode::Stroke {
+                width: width * scale,
+            }
+        }
+        _ => GpuTextDrawMode::Fill,
+    };
+
+    let brush = text_style
+        .span_style
+        .brush
+        .clone()
+        .unwrap_or_else(|| Brush::solid(fallback_color));
+    let alpha_multiplier = if text_style.span_style.brush.is_some() {
+        text_style.span_style.alpha.unwrap_or(1.0)
+    } else {
+        1.0
+    };
+
+    GpuTextMaterial {
+        brush,
+        alpha_multiplier,
+        draw_mode,
+    }
+}
+
+fn build_gpu_text_effect(material: &GpuTextMaterial, text_rect: Rect) -> Option<RenderEffect> {
     if !text_rect.width.is_finite()
         || !text_rect.height.is_finite()
         || text_rect.width <= 0.0
@@ -851,13 +921,23 @@ fn build_gpu_text_effect(
     let logical_height = text_rect.height.max(f32::EPSILON);
     set_shader_vec4(&mut shader, 1, [logical_width, logical_height, 0.0, 0.0]);
 
-    let alpha = if alpha_multiplier.is_finite() {
-        alpha_multiplier.clamp(0.0, 1.0)
+    let (draw_mode, stroke_width) = match material.draw_mode {
+        GpuTextDrawMode::Fill => (GPU_TEXT_DRAW_MODE_FILL, 0.0),
+        GpuTextDrawMode::Stroke { width } => (GPU_TEXT_DRAW_MODE_STROKE, width.max(0.0)),
+    };
+    set_shader_vec4(
+        &mut shader,
+        GPU_TEXT_BRUSH_EFFECT_MATERIAL_SLOT,
+        [draw_mode, stroke_width, 0.0, 0.0],
+    );
+
+    let alpha = if material.alpha_multiplier.is_finite() {
+        material.alpha_multiplier.clamp(0.0, 1.0)
     } else {
         1.0
     };
 
-    let (brush_type, colors, stops, tile_mode) = match brush {
+    let (brush_type, colors, stops, tile_mode) = match &material.brush {
         Brush::LinearGradient {
             colors,
             stops,
@@ -969,15 +1049,8 @@ fn gpu_text_effect_for_style(
     text_style: &TextStyle,
     text_rect: Rect,
     fallback_color: Color,
+    text_scale: f32,
 ) -> Option<RenderEffect> {
-    let uses_stroke = matches!(
-        text_style.span_style.draw_style,
-        Some(TextDrawStyle::Stroke { width }) if width.is_finite() && width > 0.0
-    );
-    if uses_stroke {
-        return None;
-    }
-
     let uses_non_solid_brush = matches!(
         text_style.span_style.brush,
         Some(
@@ -986,24 +1059,16 @@ fn gpu_text_effect_for_style(
                 | Brush::SweepGradient { .. }
         )
     );
-    if !uses_non_solid_brush {
+    let uses_stroke = matches!(
+        text_style.span_style.draw_style,
+        Some(TextDrawStyle::Stroke { width }) if width.is_finite() && width > 0.0
+    );
+    if !uses_non_solid_brush && !uses_stroke {
         return None;
     }
 
-    let brush_storage;
-    let brush_ref = if let Some(brush) = text_style.span_style.brush.as_ref() {
-        brush
-    } else {
-        brush_storage = Brush::solid(fallback_color);
-        &brush_storage
-    };
-    let alpha_multiplier = if text_style.span_style.brush.is_some() {
-        text_style.span_style.alpha.unwrap_or(1.0)
-    } else {
-        1.0
-    };
-
-    build_gpu_text_effect(brush_ref, text_rect, alpha_multiplier)
+    let material = gpu_text_material_for_style(text_style, fallback_color, text_scale);
+    build_gpu_text_effect(&material, text_rect)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1116,6 +1181,7 @@ fn push_text_style_draws(
             &transformed_text_style,
             snapped_shifted_text_rect,
             transformed_text_color,
+            text_scale,
         ) {
             let z_start = scene.next_z;
             let mut mask_text_style = transformed_text_style.clone();
@@ -1145,36 +1211,6 @@ fn push_text_style_draws(
                 z_start,
                 z_end: scene.next_z,
             });
-            return;
-        }
-
-        if requires_rasterized_glyph_path(&transformed_text_style) {
-            let rasterized_text_rect =
-                snap_rasterized_text_rect_for_motion(snapped_shifted_text_rect, text_style);
-            let image = rasterize_text_to_image(
-                text.text.as_str(),
-                rasterized_text_rect,
-                &transformed_text_style,
-                transformed_text_color,
-                font_size,
-                text_scale,
-            )
-            .expect("styled text raster path requires configured raster fonts");
-            let rasterized_draw_rect = Rect {
-                x: rasterized_text_rect.x,
-                y: rasterized_text_rect.y,
-                width: image.width() as f32,
-                height: image.height() as f32,
-            };
-            scene.push_image(
-                rasterized_draw_rect,
-                image,
-                1.0,
-                None,
-                text_clip,
-                None,
-                BlendMode::SrcOver,
-            );
             return;
         }
     }
@@ -2416,7 +2452,7 @@ mod tests {
     }
 
     #[test]
-    fn push_text_style_draws_stroke_contract_uses_software_renderer() {
+    fn push_text_style_draws_stroke_contract_uses_gpu_shader_mask() {
         init_test_fonts();
         let mut scene = Scene::new();
         let style = cranpose_ui::TextStyle {
@@ -2446,23 +2482,93 @@ mod tests {
             None,
         );
 
-        assert!(
-            scene.texts.is_empty(),
-            "stroke should bypass glyphon fill-only text path"
+        assert_eq!(
+            scene.texts.len(),
+            1,
+            "stroke should emit a glyph mask text draw"
         );
-        assert!(
-            scene.effect_layers.is_empty(),
-            "stroke should not use the gradient runtime-shader layer path"
+        assert_eq!(
+            scene.effect_layers.len(),
+            1,
+            "stroke should route through runtime shader effect layer"
         );
         assert_eq!(
             scene.images.len(),
-            1,
-            "stroke should render via software text image"
+            0,
+            "stroke should not render via software image fallback"
+        );
+        let Some(RenderEffect::Shader { shader }) = scene.effect_layers[0].effect.as_ref() else {
+            panic!("expected runtime shader effect for stroke text");
+        };
+        let uniforms = shader.uniforms();
+        let uniform = |index: usize| uniforms.get(index).copied().unwrap_or(0.0);
+        let material_slot = GPU_TEXT_BRUSH_EFFECT_MATERIAL_SLOT * 4;
+        assert_eq!(
+            uniform(material_slot),
+            GPU_TEXT_DRAW_MODE_STROKE,
+            "stroke path should set stroke draw mode in shader uniforms"
+        );
+        assert!(
+            (uniform(material_slot + 1) - 5.0).abs() < f32::EPSILON,
+            "stroke width should be packed into shader uniforms"
         );
     }
 
     #[test]
-    fn push_text_style_draws_gradient_stroke_contract_uses_software_renderer() {
+    fn push_text_style_draws_stroke_material_scales_width_with_layer_scale() {
+        init_test_fonts();
+        let mut scene = Scene::new();
+        let style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                draw_style: Some(cranpose_ui::text::TextDrawStyle::Stroke { width: 3.0 }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let rect = Rect {
+            x: 8.0,
+            y: 20.0,
+            width: 180.0,
+            height: 32.0,
+        };
+        let scaled_layer = GraphicsLayer {
+            scale: 2.0,
+            ..Default::default()
+        };
+
+        push_text_style_draws(
+            &mut scene,
+            18 as NodeId,
+            rect,
+            rect,
+            &scaled_layer,
+            &cranpose_ui::text::AnnotatedString::from("Scaled stroke"),
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        assert_eq!(
+            scene.effect_layers.len(),
+            1,
+            "expected one shader effect layer"
+        );
+        let Some(RenderEffect::Shader { shader }) = scene.effect_layers[0].effect.as_ref() else {
+            panic!("expected runtime shader effect for scaled stroke");
+        };
+        let uniforms = shader.uniforms();
+        let uniform = |index: usize| uniforms.get(index).copied().unwrap_or(0.0);
+        let material_slot = GPU_TEXT_BRUSH_EFFECT_MATERIAL_SLOT * 4;
+        assert_eq!(uniform(material_slot), GPU_TEXT_DRAW_MODE_STROKE);
+        assert!(
+            (uniform(material_slot + 1) - 6.0).abs() < f32::EPSILON,
+            "stroke width should scale with graphics layer scale"
+        );
+    }
+
+    #[test]
+    fn push_text_style_draws_gradient_stroke_contract_uses_gpu_shader_mask() {
         init_test_fonts();
         let mut scene = Scene::new();
         let style = cranpose_ui::TextStyle {
@@ -2497,18 +2603,31 @@ mod tests {
             None,
         );
 
-        assert!(
-            scene.texts.is_empty(),
-            "gradient + stroke should not enter glyphon fill mask path"
+        assert_eq!(
+            scene.texts.len(),
+            1,
+            "gradient + stroke should emit a glyph mask text draw"
         );
-        assert!(
-            scene.effect_layers.is_empty(),
-            "gradient + stroke should bypass runtime shader fill effect path"
+        assert_eq!(
+            scene.effect_layers.len(),
+            1,
+            "gradient + stroke should emit one runtime shader effect layer"
         );
         assert_eq!(
             scene.images.len(),
-            1,
-            "gradient + stroke should render via software text image path"
+            0,
+            "gradient + stroke should not use software text image path"
+        );
+        let Some(RenderEffect::Shader { shader }) = scene.effect_layers[0].effect.as_ref() else {
+            panic!("expected runtime shader effect for gradient stroke");
+        };
+        let uniforms = shader.uniforms();
+        let uniform = |index: usize| uniforms.get(index).copied().unwrap_or(0.0);
+        let material_slot = GPU_TEXT_BRUSH_EFFECT_MATERIAL_SLOT * 4;
+        assert_eq!(
+            uniform(material_slot),
+            GPU_TEXT_DRAW_MODE_STROKE,
+            "gradient + stroke should keep stroke draw mode"
         );
     }
 
@@ -2520,18 +2639,16 @@ mod tests {
             width: 180.0,
             height: 28.0,
         };
-        let static_style = cranpose_ui::TextStyle::from_paragraph_style(
-            cranpose_ui::ParagraphStyle {
+        let static_style =
+            cranpose_ui::TextStyle::from_paragraph_style(cranpose_ui::ParagraphStyle {
                 text_motion: Some(cranpose_ui::text::TextMotion::Static),
                 ..Default::default()
-            },
-        );
-        let animated_style = cranpose_ui::TextStyle::from_paragraph_style(
-            cranpose_ui::ParagraphStyle {
+            });
+        let animated_style =
+            cranpose_ui::TextStyle::from_paragraph_style(cranpose_ui::ParagraphStyle {
                 text_motion: Some(cranpose_ui::text::TextMotion::Animated),
                 ..Default::default()
-            },
-        );
+            });
 
         let mut static_scene = Scene::new();
         push_text_style_draws(

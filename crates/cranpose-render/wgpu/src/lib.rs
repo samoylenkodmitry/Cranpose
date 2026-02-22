@@ -11,6 +11,7 @@ mod render;
 mod scene;
 mod shader_cache;
 mod shaders;
+#[cfg(test)]
 mod text_raster;
 
 pub use scene::{BackdropLayer, ClickAction, DrawShape, HitRegion, ImageDraw, Scene, TextDraw};
@@ -34,7 +35,6 @@ use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use text_raster::configure_raster_fonts;
 
 /// Size-only cache for ultra-fast text measurement lookups.
 /// Key: (text_hash, font_size_fixed_point, style_hash)
@@ -297,7 +297,6 @@ impl WgpuRenderer {
     /// ```
     pub fn new_with_fonts(fonts: &[&[u8]]) -> Self {
         let mut font_system = FontSystem::new();
-        configure_raster_fonts(fonts);
 
         // On Android, DO NOT load system fonts
         // Modern Android uses Variable Fonts for Roboto which can cause
