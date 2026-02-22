@@ -142,89 +142,95 @@ This section is a context handoff for the next implementation chat.
 - `build_gpu_text_effect(...)`: packs brush + draw-mode uniforms for runtime shader execution.
 - `GPU_TEXT_BRUSH_EFFECT_SHADER`: now evaluates fill and stroke from one shader contract.
 - `push_text_style_draws(...)`: text style routing now chooses glyph draw or glyph-mask+effect, never software image fallback.
-- `crates/cranpose-render/wgpu/src/lib.rs`: `text_raster` module is test-only; runtime renderer does not initialize raster fallback fonts.
+- `crates/cranpose-render/wgpu/src/lib.rs`: no `wgpu` software text raster module remains.
 - `crates/cranpose-render/pixels/src/draw.rs`: software raster blit sizing fix remains in place for pixels backend.
 
 ### Known open gaps
 
 - Runtime shader path still caps gradient stops at `GPU_TEXT_BRUSH_EFFECT_MAX_STOPS` (`16`).
-- Rich span runs are not yet unified under one span-material shader contract (global plain-text material path is complete).
+- Rich span runs now use GPU material when span ranges do not override paint fields; full per-span paint material unification is still pending.
 - `TextDrawStyle` API still exposes width-only stroke controls (cap/join/miter/path parity is pending).
 - `push_text_decorations(...)` in `wgpu` still uses single-line approximation instead of measured visual line boxes.
 
-### Remaining GPU Migration Plan
+### Remaining GPU Work Plan
 
-Goal:
+Target:
 
-- In live runtime code, software text raster exists only for `pixels` renderer.
-- `wgpu` text uses a single GPU pipeline for fill/stroke/gradient across plain and rich text.
+- Software text raster is runtime-only in `pixels` renderer.
+- `wgpu` text uses one GPU text-material execution model for fill/stroke/gradient in runtime paths.
+
+Current checkpoint:
+
+- `wgpu` runtime has no `software_text_raster` references.
+- `wgpu` text style routing does not use `scene.push_image(...)`.
+- Plain text and span text without paint overrides already use GPU material masking.
 
 Non-negotiable invariants:
 
-- `crates/cranpose-render/wgpu/src` has no non-test dependency on `software_text_raster`.
-- `wgpu` text style routing never emits `scene.push_image(...)`.
-- Style differences (fill vs stroke vs gradient) are material uniforms, not renderer route switches.
+- `crates/cranpose-render/wgpu/src` must stay free of runtime software raster hooks.
+- Style differences (fill/stroke/gradient/alpha) must be encoded as GPU material state, not renderer path switching.
+- Any span case not yet materialized must still stay on GPU glyph draw path and never fallback to software image text.
 
-Milestone 1: enforce renderer boundaries (pixels-only soft raster)
+Workstream 1: span paint material unification (remaining core gap)
 
-1. Keep software text raster runtime calls only in:
-   - `crates/cranpose-render/pixels/src/draw.rs`
-2. Keep `wgpu` free of runtime software raster hooks:
-   - no `rasterize_text_to_image(...)` path
-   - no `requires_rasterized_glyph_path(...)` route decisions
-3. Move/contain `wgpu` software-raster test helpers so they do not imply runtime coupling.
+1. Implement per-span paint material batching for spans that override paint fields (`color`, `brush`, `alpha`, `draw_style`).
+2. Keep non-paint span attributes (weight/style/family/size/spacing) intact in the same pass model.
+3. Preserve bidi visual ordering and wrapped-line brush continuity while splitting material regions.
 
-Acceptance gate:
+Done gate:
 
-- `rg -n "software_text_raster|rasterize_text_to_image|requires_rasterized_glyph_path" crates/cranpose-render/wgpu/src -g'*.rs'` only returns test-only references.
+- Mixed span tests (`solid`, `gradient fill`, `gradient stroke`, mixed bidi) run through GPU material or GPU glyph path only.
+- No software image text draws in any `wgpu` text tests.
+
+Workstream 2: decoration rewrite from real line layout
+
+1. Replace the current single-line approximation in `push_text_decorations(...)`.
+2. Drive underline and line-through geometry from measured visual line boxes.
+3. Resolve decoration brush/alpha from the same span foreground contract used by text material resolution.
+
+Done gate:
+
+- New multiline decoration tests pass for mixed spans, bidi, and baseline shift.
+- Decoration ordering remains stable with shadows and text body draws.
+
+Workstream 3: stroke quality hardening
+
+1. Improve edge behavior for thick strokes and small glyphs under high scale factors.
+2. Validate static vs animated text-motion quality remains consistent after stroke refinements.
+3. Keep the material shader contract stable for wasm/android precision constraints.
+
+Done gate:
+
+- Regression tests cover stroke width scaling and gradient+stroke uniform packing.
+- Manual showcase checks confirm no new halo/clipping artifacts at common DPIs.
+
+Workstream 4: release-quality verification gates
+
+1. Keep zero-warning quality gates for renderer crate.
+2. Re-run platform viability checks after each major text pipeline change.
+3. Keep route-invariant tests as hard blockers.
+
+Done gate:
+
 - `cargo clippy -p cranpose-render-wgpu --tests -- -D warnings` passes.
+- `cargo test -p cranpose-render-wgpu` passes.
+- `apps/desktop-demo/build-web.sh` passes.
+- `(cd apps/android-demo/android && ./gradlew :app:assembleRelease)` passes.
+- `./run_robot_test.sh` passes.
 
-Milestone 2: unify rich span text under GPU material path
+Execution order:
 
-1. Replace `text.span_styles.is_empty()` gating in `push_text_style_draws(...)` with a span-aware GPU material submission path.
-2. Build per-span/per-run material dispatch for brush + stroke without falling back to software images.
-3. Preserve brush continuity across wrapped lines and bidi visual order.
-
-Acceptance gate:
-
-- New tests covering mixed spans (`solid`, `gradient fill`, `gradient stroke`) assert:
-  - no `scene.images` text draws
-  - expected GPU effect/material submissions
-
-Milestone 3: decoration correctness from real line layout
-
-1. Rework `push_text_decorations(...)` to consume measured visual line boxes from `prepare_text_layout(...)`.
-2. Emit underline/line-through per visual line and per resolved span segment.
-3. Keep decoration brush/alpha resolution aligned with foreground material contract.
-
-Acceptance gate:
-
-- Wrapped multiline + bidi decoration tests pass with expected segment counts and ordering.
-
-Milestone 4: stroke quality + scale robustness
-
-1. Tighten GPU stroke edge quality for large stroke widths and high DPI scales.
-2. Validate quality parity for static/animated text motion under scaling.
-3. Keep the same output contract on wasm/android backends.
-
-Acceptance gate:
-
-- Add regression tests for stroke width scaling and gradient+stroke uniform packing.
-- Run platform checks:
-  - `apps/desktop-demo/build-web.sh`
-  - `(cd apps/android-demo/android && ./gradlew :app:assembleRelease)`
-  - `./run_robot_test.sh`
-
-Final done criteria:
-
-- `wgpu` has one GPU text-material execution model for fill/stroke/gradient in runtime paths.
-- Software text raster is runtime-only in `pixels` renderer.
-- `wgpu` text style routing has zero software fallback branches.
+1. Workstream 1
+2. Workstream 2
+3. Workstream 3
+4. Workstream 4
 
 ### Route invariants now locked by tests
 
 - `push_text_style_draws_stroke_contract_uses_gpu_shader_mask`
 - `push_text_style_draws_gradient_stroke_contract_uses_gpu_shader_mask`
+- `push_text_style_draws_span_gradient_without_paint_override_uses_gpu_shader_mask`
+- `push_text_style_draws_span_gradient_with_paint_override_skips_gpu_shader_mask`
 - Stroke and gradient+stroke text do not emit `scene.push_image(...)`.
 
 ### Decoration parity contract (explicit remaining gap)
@@ -250,7 +256,7 @@ Tests to add/update:
 
 - `cargo fmt` passed.
 - `cargo clippy -p cranpose-render-wgpu --tests -- -D warnings` passed.
-- `cargo test -p cranpose-render-wgpu` passed (`70` tests).
+- `cargo test -p cranpose-render-wgpu` passed (`66` tests).
 - `apps/desktop-demo/build-web.sh` passed.
 - `(cd apps/android-demo/android && ./gradlew :app:assembleRelease)` passed.
 - `./run_robot_test.sh` passed (`77`/`77`).
@@ -258,7 +264,7 @@ Tests to add/update:
 ### Branch working set at snapshot time
 
 - `crates/cranpose-render/wgpu/src/pipeline.rs`: GPU text-material stroke support in runtime shader; software text image routing removed from live path.
-- `crates/cranpose-render/wgpu/src/lib.rs`: software text raster module gated to tests only for `wgpu`.
+- `crates/cranpose-render/wgpu/src/lib.rs`: `wgpu` software text raster module removed from runtime code.
 
 ## Demo Coverage
 

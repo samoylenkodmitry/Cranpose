@@ -11,8 +11,6 @@ mod render;
 mod scene;
 mod shader_cache;
 mod shaders;
-#[cfg(test)]
-mod text_raster;
 
 pub use scene::{BackdropLayer, ClickAction, DrawShape, HitRegion, ImageDraw, Scene, TextDraw};
 

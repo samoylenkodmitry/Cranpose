@@ -1071,6 +1071,37 @@ fn gpu_text_effect_for_style(
     build_gpu_text_effect(&material, text_rect)
 }
 
+fn span_has_foreground_override(span_style: &cranpose_ui::text::SpanStyle) -> bool {
+    span_style.color.is_some()
+        || span_style.brush.is_some()
+        || span_style.alpha.is_some()
+        || span_style.draw_style.is_some()
+}
+
+fn text_has_span_foreground_overrides(text: &cranpose_ui::text::AnnotatedString) -> bool {
+    text.span_styles
+        .iter()
+        .any(|span| span_has_foreground_override(&span.item))
+}
+
+fn text_for_gpu_mask(
+    text: &cranpose_ui::text::AnnotatedString,
+) -> cranpose_ui::text::AnnotatedString {
+    if text.span_styles.is_empty() {
+        return text.clone();
+    }
+
+    let mut mask_text = text.clone();
+    for span in &mut mask_text.span_styles {
+        span.item.color = None;
+        span.item.brush = None;
+        span.item.alpha = None;
+        span.item.draw_style = None;
+        span.item.shadow = None;
+    }
+    mask_text
+}
+
 #[allow(clippy::too_many_arguments)]
 fn push_text_style_draws(
     scene: &mut Scene,
@@ -1176,24 +1207,25 @@ fn push_text_style_draws(
         text_clip,
     );
 
-    if text.span_styles.is_empty() {
-        if let Some(effect) = gpu_text_effect_for_style(
-            &transformed_text_style,
-            snapped_shifted_text_rect,
-            transformed_text_color,
-            text_scale,
-        ) {
+    if let Some(effect) = gpu_text_effect_for_style(
+        &transformed_text_style,
+        snapped_shifted_text_rect,
+        transformed_text_color,
+        text_scale,
+    ) {
+        if !text_has_span_foreground_overrides(text) {
             let z_start = scene.next_z;
             let mut mask_text_style = transformed_text_style.clone();
             mask_text_style.span_style.brush = None;
             mask_text_style.span_style.alpha = None;
             mask_text_style.span_style.color = Some(Color::WHITE);
             mask_text_style.span_style.draw_style = Some(TextDrawStyle::Fill);
+            let mask_text = text_for_gpu_mask(text);
 
             scene.push_text(
                 node_id,
                 snapped_shifted_text_rect,
-                Rc::new(text.clone()),
+                Rc::new(mask_text),
                 Color::WHITE,
                 mask_text_style,
                 font_size,
@@ -1691,12 +1723,6 @@ fn render_node_from_applier(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn init_test_fonts() {
-        crate::text_raster::configure_raster_fonts(&[include_bytes!(
-            "../../../../apps/desktop-demo/assets/Roboto-Light.ttf"
-        ) as &[u8]]);
-    }
 
     #[test]
     fn auto_alpha_triggers_isolation_with_composite_alpha() {
@@ -2313,7 +2339,6 @@ mod tests {
 
     #[test]
     fn push_text_style_draws_non_solid_brush_contract_uses_gpu_shader_mask() {
-        init_test_fonts();
         let mut scene = Scene::new();
         let first_stop = Color(1.0, 0.0, 0.0, 1.0);
         let style = cranpose_ui::TextStyle {
@@ -2391,7 +2416,6 @@ mod tests {
 
     #[test]
     fn push_text_style_draws_default_linear_gradient_fill_resolves_infinite_endpoints() {
-        init_test_fonts();
         let mut scene = Scene::new();
         let style = cranpose_ui::TextStyle {
             span_style: cranpose_ui::SpanStyle {
@@ -2453,7 +2477,6 @@ mod tests {
 
     #[test]
     fn push_text_style_draws_stroke_contract_uses_gpu_shader_mask() {
-        init_test_fonts();
         let mut scene = Scene::new();
         let style = cranpose_ui::TextStyle {
             span_style: cranpose_ui::SpanStyle {
@@ -2516,7 +2539,6 @@ mod tests {
 
     #[test]
     fn push_text_style_draws_stroke_material_scales_width_with_layer_scale() {
-        init_test_fonts();
         let mut scene = Scene::new();
         let style = cranpose_ui::TextStyle {
             span_style: cranpose_ui::SpanStyle {
@@ -2569,7 +2591,6 @@ mod tests {
 
     #[test]
     fn push_text_style_draws_gradient_stroke_contract_uses_gpu_shader_mask() {
-        init_test_fonts();
         let mut scene = Scene::new();
         let style = cranpose_ui::TextStyle {
             span_style: cranpose_ui::SpanStyle {
@@ -2632,6 +2653,139 @@ mod tests {
     }
 
     #[test]
+    fn push_text_style_draws_span_gradient_without_paint_override_uses_gpu_shader_mask() {
+        let mut scene = Scene::new();
+        let style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                brush: Some(Brush::linear_gradient_range(
+                    vec![Color(0.15, 0.9, 1.0, 1.0), Color(1.0, 0.65, 0.45, 1.0)],
+                    Point::new(0.0, 0.0),
+                    Point::new(200.0, 0.0),
+                )),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let text = cranpose_ui::text::AnnotatedString::builder()
+            .append("GPU ")
+            .push_style(cranpose_ui::text::SpanStyle {
+                font_weight: Some(cranpose_ui::text::FontWeight::BOLD),
+                ..Default::default()
+            })
+            .append("Mask")
+            .pop()
+            .to_annotated_string();
+        let rect = Rect {
+            x: 8.0,
+            y: 20.0,
+            width: 220.0,
+            height: 32.0,
+        };
+
+        push_text_style_draws(
+            &mut scene,
+            19 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            &text,
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        assert_eq!(
+            scene.images.len(),
+            0,
+            "span gradient should not use image path"
+        );
+        assert_eq!(scene.texts.len(), 1, "expected one mask text draw");
+        assert_eq!(
+            scene.effect_layers.len(),
+            1,
+            "span gradient without paint overrides should use gpu effect path"
+        );
+        let mask_text = &scene.texts[0].text;
+        assert!(
+            mask_text
+                .span_styles
+                .iter()
+                .all(|span| span.item.color.is_none()
+                    && span.item.brush.is_none()
+                    && span.item.alpha.is_none()
+                    && span.item.draw_style.is_none()),
+            "mask text span styles should clear paint fields for uniform material sampling"
+        );
+        assert!(
+            mask_text
+                .span_styles
+                .iter()
+                .any(|span| span.item.font_weight == Some(cranpose_ui::text::FontWeight::BOLD)),
+            "mask text should preserve non-paint span styling"
+        );
+    }
+
+    #[test]
+    fn push_text_style_draws_span_gradient_with_paint_override_skips_gpu_shader_mask() {
+        let mut scene = Scene::new();
+        let style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                brush: Some(Brush::linear_gradient_range(
+                    vec![Color(0.15, 0.9, 1.0, 1.0), Color(1.0, 0.65, 0.45, 1.0)],
+                    Point::new(0.0, 0.0),
+                    Point::new(200.0, 0.0),
+                )),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let text = cranpose_ui::text::AnnotatedString::builder()
+            .append("GPU ")
+            .push_style(cranpose_ui::text::SpanStyle {
+                color: Some(Color::RED),
+                ..Default::default()
+            })
+            .append("Mask")
+            .pop()
+            .to_annotated_string();
+        let rect = Rect {
+            x: 8.0,
+            y: 20.0,
+            width: 220.0,
+            height: 32.0,
+        };
+
+        push_text_style_draws(
+            &mut scene,
+            20 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            &text,
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        assert_eq!(scene.images.len(), 0, "no software fallback should be used");
+        assert_eq!(scene.texts.len(), 1, "expected one direct glyph text draw");
+        assert!(
+            scene.effect_layers.is_empty(),
+            "span paint overrides should keep direct span-colored glyph path until per-span gpu materials land"
+        );
+        assert!(
+            scene.texts[0]
+                .text
+                .span_styles
+                .iter()
+                .any(|span| span.item.color.is_some()),
+            "original span paint overrides should be preserved on direct path"
+        );
+    }
+
+    #[test]
     fn push_text_style_draws_text_motion_static_snaps_position() {
         let base_rect = Rect {
             x: 8.25,
@@ -2688,8 +2842,6 @@ mod tests {
 
     #[test]
     fn push_text_style_draws_gradient_static_text_snaps_mask_and_effect_bounds() {
-        init_test_fonts();
-
         let mut scene = Scene::new();
         let base_rect = Rect {
             x: 8.25,
