@@ -133,7 +133,7 @@ This section is a context handoff for the next implementation chat.
 | Solid fill (`color`, no stroke) | Glyphon text draw | Fast and stable; no software fallback. |
 | Non-solid fill (`brush`, `drawStyle = Fill`, plain text with no inline spans) | Glyphon text mask + `RenderEffect::runtime_shader` text material pass | GPU path with gradient evaluation in shader. |
 | Stroke (`drawStyle = Stroke { width > 0 }`), solid or gradient, plain text | Glyphon text mask + `RenderEffect::runtime_shader` text material pass | GPU path; no software image fallback. |
-| Styled runs/inline span text | GPU material batching for paint overrides + glyph draw for same-material regions | No software text fallback route; remaining gap is decoration visual-order/line-box fidelity on complex bidi/align cases. |
+| Styled runs/inline span text | GPU material batching for paint overrides + glyph draw for same-material regions | No software text fallback route; decoration geometry now follows measured glyph-run visual boxes. Remaining quality work is stroke hardening and gradient-stop constraints. |
 
 ### Key code anchors (current branch)
 
@@ -148,9 +148,9 @@ This section is a context handoff for the next implementation chat.
 ### Known open gaps
 
 - Runtime shader path still caps gradient stops at `GPU_TEXT_BRUSH_EFFECT_MAX_STOPS` (`16`).
-- Rich span runs now use GPU material batching for paint overrides (`color` / `brush` / `alpha` / `draw_style`) via per-material glyph-mask effect passes. Remaining work is focused on visual-line decoration parity and additional mixed-bidi hardening.
+- Rich span runs now use GPU material batching for paint overrides (`color` / `brush` / `alpha` / `draw_style`) via per-material glyph-mask effect passes. Remaining work is follow-up hardening for mixed-bidi and wrapped-line continuity stress cases.
 - `TextDrawStyle` API still exposes width-only stroke controls (cap/join/miter/path parity is pending).
-- `push_text_decorations(...)` is now line-aware for prepared visual lines and span paint alpha, but still does not consume full glyph-run visual boxes for complex bidi/alignment cases.
+- Stroke quality hardening for thick strokes/small glyphs/high scale factors is still pending (Workstream 3).
 
 ### Remaining GPU Work Plan
 
@@ -164,6 +164,7 @@ Current checkpoint:
 - `wgpu` runtime has no `software_text_raster` references.
 - `wgpu` text style routing does not use `scene.push_image(...)`.
 - Plain text and span text without paint overrides already use GPU material masking.
+- `push_text_decorations(...)` now consumes measured glyph-run visual boxes from layout data, with logical-line fallback only when glyph boxes are unavailable.
 
 Non-negotiable invariants:
 
@@ -185,12 +186,13 @@ Done gate:
 Workstream 2: decoration rewrite from real line layout
 
 1. DONE: removed single-line-only decoration emission and split geometry per prepared visual line.
-2. PARTIAL: underline and line-through now follow prepared line segmentation + measured line height; remaining work is exact glyph-run visual box fidelity for complex bidi/alignment.
+2. DONE: underline and line-through now use measured glyph-run visual boxes (not only logical/prepared-line segmentation), including complex bidi visual ordering.
 3. DONE: decoration brush/alpha resolution now follows span foreground contract (`color`/`brush`/`alpha`) in the GPU path.
+4. DONE: avoid shaping overhead for non-decorated text by short-circuiting decoration layout work when no visible decorations are present.
 
 Done gate:
 
-- New multiline decoration tests pass for mixed spans, bidi, and baseline shift.
+- New multiline decoration tests pass for mixed spans, bidi visual ordering, and baseline shift.
 - Decoration ordering remains stable with shadows and text body draws.
 
 Workstream 3: stroke quality hardening
@@ -233,39 +235,44 @@ Execution order:
 - `push_text_style_draws_span_gradient_with_paint_override_uses_gpu_shader_mask_batches`
 - `push_text_style_draws_adjacent_span_paint_overrides_batch_same_material`
 - Stroke and gradient+stroke text do not emit `scene.push_image(...)`.
+- `decoration_segments_from_glyph_layouts_line_through_preserves_bidi_visual_order`
+- `decoration_segments_from_glyph_layouts_multiline_line_through_keeps_visual_line_boxes`
 
-### Decoration parity contract (explicit remaining gap)
+### Decoration parity contract (resolved on this branch)
 
 Current state:
 
-- `push_text_decorations(...)` now emits per-line segments from prepared visual lines (`\n`-split prepared text) instead of one linearized strip.
+- `push_text_decorations(...)` now emits decoration segments from measured glyph-run visual boxes (`layout_text(...)` glyph layout), preserving visual ordering and wrapped-line geometry.
 - Decoration brush and alpha are resolved from span foreground style and modulated through layer color/alpha.
 
 Required end-state:
 
-- Decoration segments are generated from true measured visual line boxes/glyph runs (`prepare_text_layout(...)` + run geometry), not only logical line segmentation.
-- Underline and line-through honor wrapped lines, alignment (`Start`/`End`), and span boundaries in the same visual order as text draws.
-- Decoration brush resolution matches the span foreground contract (`color`/`brush`/`alpha`) with no style-dependent fallback route.
+- DONE on this branch for the tracked gap: decoration segments are generated from measured glyph-run visual boxes.
+- DONE on this branch for the tracked gap: underline/line-through follow wrapped lines and bidi visual ordering.
+- DONE on this branch for the tracked gap: brush resolution matches the span foreground contract (`color`/`brush`/`alpha`) with no style-dependent fallback route.
 
 Tests to add/update:
 
 - Wrapped multiline underline with mixed span styles validates one decoration segment per visual line. (DONE via unit tests)
-- Wrapped multiline line-through with bidi text validates visual ordering consistency.
+- Wrapped multiline line-through with bidi text validates visual ordering consistency. (DONE via unit tests)
 - Baseline shift + decoration test verifies decoration Y placement remains tied to shifted line metrics. (DONE via unit tests)
 
 ### Validation snapshot for this branch (latest run)
 
 - `cargo fmt` passed.
 - `cargo clippy -p cranpose-render-wgpu --tests -- -D warnings` passed.
-- `cargo test -p cranpose-render-wgpu` passed (`70` tests).
+- `cargo test -p cranpose-render-wgpu` passed (`73` tests).
+- `cargo test -p cranpose-ui text_layout_result -- --nocapture` passed.
 - `apps/desktop-demo/build-web.sh` passed.
 - `(cd apps/android-demo/android && ./gradlew :app:assembleRelease)` passed.
 - `./run_robot_test.sh --sequential` passed (`77`/`77`).
 
 ### Branch working set at snapshot time
 
-- `crates/cranpose-render/wgpu/src/pipeline.rs`: GPU text-material stroke support in runtime shader; software text image routing removed from live path.
-- `crates/cranpose-render/wgpu/src/lib.rs`: `wgpu` software text raster module removed from runtime code.
+- `crates/cranpose-render/wgpu/src/pipeline.rs`: decoration segments now generated from measured glyph-run visual boxes, with additional bidi/multiline line-through tests and non-decorated fast-path short-circuiting.
+- `crates/cranpose-render/wgpu/src/lib.rs`: wgpu text measurer now exports glyph-run layout boxes into shared text layout results.
+- `crates/cranpose-render/pixels/src/draw.rs`: pixels measurer now populates shared glyph layout payload to keep `TextLayoutResult` contract aligned.
+- `crates/cranpose-ui/src/text_layout_result.rs`: `GlyphLayout` + `TextLayoutData` added; constructor and accessors updated for shared glyph-run geometry.
 
 ## Demo Coverage
 
