@@ -1319,6 +1319,11 @@ fn push_text_style_draws(
     let text_color =
         resolve_text_color_without_gradient_fallback(text_style, Color(1.0, 1.0, 1.0, 1.0));
     let transformed_text_color = apply_layer_to_color(text_color, content_layer);
+    let text_brush = text_style
+        .span_style
+        .brush
+        .clone()
+        .unwrap_or_else(|| Brush::solid(text_color));
     let mut transformed_text_style = text_style.clone();
     transformed_text_style.span_style.shadow = None;
     transformed_text_style.span_style.brush = text_style
@@ -1326,11 +1331,6 @@ fn push_text_style_draws(
         .brush
         .clone()
         .map(|brush| apply_layer_to_brush(brush, content_layer));
-    let text_brush = transformed_text_style
-        .span_style
-        .brush
-        .clone()
-        .unwrap_or_else(|| Brush::solid(transformed_text_color));
 
     if let Some(shadow) = text_style.span_style.shadow {
         let shadow_rect = Rect {
@@ -1467,93 +1467,177 @@ fn push_text_decorations(
         return;
     }
 
-    let boundaries = annotated_text.span_boundaries();
-    let text_str = annotated_text.text.as_str();
+    let line_height = measure_text(annotated_text, global_style)
+        .line_height
+        .max(1.0);
+    let mut line_top = text_rect.y;
+    for line in split_annotated_lines_for_decorations(annotated_text) {
+        let mut current_offset = 0.0;
+        let boundaries = line.span_boundaries();
 
-    let mut current_offset: f32 = 0.0; // Simple approximation: horizontally linearize lines without true word wrap
-
-    // Fallback: draw span decorations by measuring chunks
-    // Note: this implementation is simplistic and only correct for single-line text runs.
-    for window in boundaries.windows(2) {
-        let start = window[0];
-        let end = window[1];
-        if start == end {
-            continue;
-        }
-
-        let slice = &text_str[start..end];
-        let mut merged_style = global_style.span_style.clone();
-        for span in &annotated_text.span_styles {
-            if span.range.start <= start && span.range.end >= end {
-                merged_style = merged_style.merge(&span.item);
+        for window in boundaries.windows(2) {
+            let start = window[0];
+            let end = window[1];
+            if start == end {
+                continue;
             }
-        }
 
-        let mut span_text_style = global_style.clone();
-        span_text_style.span_style = merged_style.clone();
+            let merged_style =
+                merged_span_style_for_range(&line, &global_style.span_style, start, end);
+            let mut span_text_style = global_style.clone();
+            span_text_style.span_style = merged_style.clone();
+            let span_width = measure_text(&line.subsequence(start..end), &span_text_style)
+                .width
+                .max(0.0);
 
-        let span_width = measure_text(
-            &cranpose_ui::text::AnnotatedString::from(slice),
-            &span_text_style,
-        )
-        .width
-        .max(0.0);
-
-        let Some(decoration) = merged_style.text_decoration else {
-            current_offset += span_width;
-            continue;
-        };
-
-        if decoration == TextDecoration::NONE || span_width <= 0.0 {
-            current_offset += span_width;
-            continue;
-        }
-
-        let font_size = span_text_style.resolve_font_size(14.0);
-        let line_height = span_text_style
-            .resolve_line_height(14.0, font_size * 1.4)
-            .max(1.0);
-        let thickness = (font_size * 0.06).clamp(1.0, line_height * 0.25);
-        let brush = merged_style.brush.clone().unwrap_or_else(|| {
-            merged_style
-                .color
-                .map(Brush::solid)
-                .unwrap_or_else(|| text_brush.clone())
-        });
-
-        // Using y for single line since we don't map wrapping correctly without layout runs yet
-        let line_top = text_rect.y;
-
-        if decoration.contains(TextDecoration::UNDERLINE) {
-            let underline_rect = Rect {
-                x: text_rect.x + current_offset,
-                y: line_top + line_height - thickness * 1.35,
-                width: span_width,
-                height: thickness,
+            let Some(decoration) = merged_style.text_decoration else {
+                current_offset += span_width;
+                continue;
             };
-            let transformed = apply_layer_to_rect(underline_rect, rect, content_layer);
-            scene.push_shape(
-                transformed,
-                brush.clone(),
-                None,
-                text_clip,
-                BlendMode::SrcOver,
-            );
-        }
 
-        if decoration.contains(TextDecoration::LINE_THROUGH) {
-            let strike_rect = Rect {
-                x: text_rect.x + current_offset,
-                y: line_top + line_height * 0.52 - thickness * 0.5,
-                width: span_width,
-                height: thickness,
-            };
-            let transformed = apply_layer_to_rect(strike_rect, rect, content_layer);
-            scene.push_shape(transformed, brush, None, text_clip, BlendMode::SrcOver);
-        }
+            if decoration == TextDecoration::NONE || span_width <= 0.0 {
+                current_offset += span_width;
+                continue;
+            }
 
-        current_offset += span_width;
+            let font_size = span_text_style.resolve_font_size(14.0);
+            let thickness = (font_size * 0.06).clamp(1.0, line_height * 0.25);
+            let brush = decoration_brush_for_span(&merged_style, text_brush, content_layer);
+
+            if decoration.contains(TextDecoration::UNDERLINE) {
+                let underline_rect = Rect {
+                    x: text_rect.x + current_offset,
+                    y: line_top + line_height - thickness * 1.35,
+                    width: span_width,
+                    height: thickness,
+                };
+                let transformed = apply_layer_to_rect(underline_rect, rect, content_layer);
+                scene.push_shape(
+                    transformed,
+                    brush.clone(),
+                    None,
+                    text_clip,
+                    BlendMode::SrcOver,
+                );
+            }
+
+            if decoration.contains(TextDecoration::LINE_THROUGH) {
+                let strike_rect = Rect {
+                    x: text_rect.x + current_offset,
+                    y: line_top + line_height * 0.52 - thickness * 0.5,
+                    width: span_width,
+                    height: thickness,
+                };
+                let transformed = apply_layer_to_rect(strike_rect, rect, content_layer);
+                scene.push_shape(transformed, brush, None, text_clip, BlendMode::SrcOver);
+            }
+
+            current_offset += span_width;
+        }
+        line_top += line_height;
     }
+}
+
+fn split_annotated_lines_for_decorations(
+    text: &cranpose_ui::text::AnnotatedString,
+) -> Vec<cranpose_ui::text::AnnotatedString> {
+    if text.text.is_empty() {
+        return vec![cranpose_ui::text::AnnotatedString::from("")];
+    }
+
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+    for (idx, ch) in text.text.char_indices() {
+        if ch == '\n' {
+            lines.push(text.subsequence(start..idx));
+            start = idx + ch.len_utf8();
+        }
+    }
+    lines.push(text.subsequence(start..text.text.len()));
+    lines
+}
+
+fn resolved_alpha_multiplier(alpha: Option<f32>) -> f32 {
+    match alpha {
+        Some(value) if value.is_finite() => value.clamp(0.0, 1.0),
+        _ => 1.0,
+    }
+}
+
+fn color_with_alpha_multiplier(color: Color, alpha_multiplier: f32) -> Color {
+    Color(
+        color.r(),
+        color.g(),
+        color.b(),
+        (color.a() * alpha_multiplier).clamp(0.0, 1.0),
+    )
+}
+
+fn brush_with_alpha_multiplier(brush: Brush, alpha_multiplier: f32) -> Brush {
+    match brush {
+        Brush::Solid(color) => Brush::solid(color_with_alpha_multiplier(color, alpha_multiplier)),
+        Brush::LinearGradient {
+            colors,
+            stops,
+            start,
+            end,
+            tile_mode,
+        } => Brush::LinearGradient {
+            colors: colors
+                .into_iter()
+                .map(|color| color_with_alpha_multiplier(color, alpha_multiplier))
+                .collect(),
+            stops,
+            start,
+            end,
+            tile_mode,
+        },
+        Brush::RadialGradient {
+            colors,
+            stops,
+            center,
+            radius,
+            tile_mode,
+        } => Brush::RadialGradient {
+            colors: colors
+                .into_iter()
+                .map(|color| color_with_alpha_multiplier(color, alpha_multiplier))
+                .collect(),
+            stops,
+            center,
+            radius,
+            tile_mode,
+        },
+        Brush::SweepGradient {
+            colors,
+            stops,
+            center,
+        } => Brush::SweepGradient {
+            colors: colors
+                .into_iter()
+                .map(|color| color_with_alpha_multiplier(color, alpha_multiplier))
+                .collect(),
+            stops,
+            center,
+        },
+    }
+}
+
+fn decoration_brush_for_span(
+    merged_style: &cranpose_ui::text::SpanStyle,
+    fallback_brush: &Brush,
+    content_layer: &GraphicsLayer,
+) -> Brush {
+    let brush = merged_style
+        .brush
+        .clone()
+        .or_else(|| merged_style.color.map(Brush::solid))
+        .unwrap_or_else(|| fallback_brush.clone());
+    let alpha_multiplier = resolved_alpha_multiplier(merged_style.alpha);
+    apply_layer_to_brush(
+        brush_with_alpha_multiplier(brush, alpha_multiplier),
+        content_layer,
+    )
 }
 
 fn resolve_text_measure_width(
@@ -2489,6 +2573,164 @@ mod tests {
 
         assert_eq!(scene.shapes.len(), 2, "underline + line-through expected");
         assert_eq!(scene.texts.len(), 1, "main text expected");
+    }
+
+    #[test]
+    fn push_text_style_draws_emits_multiline_decoration_shapes_per_visual_line() {
+        let mut scene = Scene::new();
+        let style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                text_decoration: Some(cranpose_ui::text::TextDecoration::UNDERLINE),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let text = cranpose_ui::text::AnnotatedString::from("One\nTwo\nThree");
+        let rect = Rect {
+            x: 8.0,
+            y: 10.0,
+            width: 220.0,
+            height: 72.0,
+        };
+
+        push_text_style_draws(
+            &mut scene,
+            22 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            &text,
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        assert_eq!(scene.shapes.len(), 3, "one underline per visual line");
+        let line_height = measure_text(&text, &style).line_height.max(1.0);
+        let mut ys: Vec<f32> = scene.shapes.iter().map(|shape| shape.rect.y).collect();
+        ys.sort_by(|a, b| a.total_cmp(b));
+        assert!(ys[1] > ys[0], "second underline should be below first line");
+        assert!(ys[2] > ys[1], "third underline should be below second line");
+        assert!(
+            ((ys[1] - ys[0]) - line_height).abs() <= line_height * 0.35,
+            "line 1->2 decoration delta should follow measured line height"
+        );
+        assert!(
+            ((ys[2] - ys[1]) - line_height).abs() <= line_height * 0.35,
+            "line 2->3 decoration delta should follow measured line height"
+        );
+    }
+
+    #[test]
+    fn push_text_style_draws_resolves_decoration_brush_with_span_alpha_and_layer_alpha() {
+        let mut scene = Scene::new();
+        let style = cranpose_ui::TextStyle::default();
+        let text = cranpose_ui::text::AnnotatedString::builder()
+            .push_style(cranpose_ui::text::SpanStyle {
+                color: Some(Color::RED),
+                alpha: Some(0.4),
+                text_decoration: Some(cranpose_ui::text::TextDecoration::UNDERLINE),
+                ..Default::default()
+            })
+            .append("Tinted")
+            .pop()
+            .to_annotated_string();
+        let rect = Rect {
+            x: 8.0,
+            y: 10.0,
+            width: 180.0,
+            height: 28.0,
+        };
+        let layer = GraphicsLayer {
+            alpha: 0.5,
+            ..Default::default()
+        };
+
+        push_text_style_draws(
+            &mut scene,
+            23 as NodeId,
+            rect,
+            rect,
+            &layer,
+            &text,
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        assert_eq!(scene.shapes.len(), 1, "one underline expected");
+        let Brush::Solid(color) = scene.shapes[0].brush else {
+            panic!("span color decoration should resolve to solid brush");
+        };
+        assert!((color.r() - 1.0).abs() < 1e-6);
+        assert!(color.g() < 1e-6);
+        assert!(color.b() < 1e-6);
+        assert!(
+            (color.a() - 0.2).abs() < 1e-3,
+            "span alpha and layer alpha should both modulate decoration alpha"
+        );
+    }
+
+    #[test]
+    fn push_text_style_draws_baseline_shift_offsets_decoration_y_position() {
+        let mut base_scene = Scene::new();
+        let mut shifted_scene = Scene::new();
+        let base_style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                text_decoration: Some(cranpose_ui::text::TextDecoration::UNDERLINE),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let shifted_style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                baseline_shift: Some(cranpose_ui::text::BaselineShift::SUPERSCRIPT),
+                text_decoration: Some(cranpose_ui::text::TextDecoration::UNDERLINE),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let rect = Rect {
+            x: 8.0,
+            y: 18.0,
+            width: 180.0,
+            height: 28.0,
+        };
+        let text = cranpose_ui::text::AnnotatedString::from("Shifted");
+
+        push_text_style_draws(
+            &mut base_scene,
+            24 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            &text,
+            &base_style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+        push_text_style_draws(
+            &mut shifted_scene,
+            25 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            &text,
+            &shifted_style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        assert_eq!(base_scene.shapes.len(), 1, "base underline expected");
+        assert_eq!(shifted_scene.shapes.len(), 1, "shifted underline expected");
+        assert!(
+            shifted_scene.shapes[0].rect.y < base_scene.shapes[0].rect.y,
+            "baseline shift should move decoration geometry with shifted text"
+        );
     }
 
     #[test]

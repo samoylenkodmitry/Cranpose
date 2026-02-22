@@ -133,7 +133,7 @@ This section is a context handoff for the next implementation chat.
 | Solid fill (`color`, no stroke) | Glyphon text draw | Fast and stable; no software fallback. |
 | Non-solid fill (`brush`, `drawStyle = Fill`, plain text with no inline spans) | Glyphon text mask + `RenderEffect::runtime_shader` text material pass | GPU path with gradient evaluation in shader. |
 | Stroke (`drawStyle = Stroke { width > 0 }`), solid or gradient, plain text | Glyphon text mask + `RenderEffect::runtime_shader` text material pass | GPU path; no software image fallback. |
-| Styled runs/inline span text | Glyphon text draw (span-aware attrs) | No software text fallback route; brush/drawStyle parity across spans remains open work. |
+| Styled runs/inline span text | GPU material batching for paint overrides + glyph draw for same-material regions | No software text fallback route; remaining gap is decoration visual-order/line-box fidelity on complex bidi/align cases. |
 
 ### Key code anchors (current branch)
 
@@ -150,7 +150,7 @@ This section is a context handoff for the next implementation chat.
 - Runtime shader path still caps gradient stops at `GPU_TEXT_BRUSH_EFFECT_MAX_STOPS` (`16`).
 - Rich span runs now use GPU material batching for paint overrides (`color` / `brush` / `alpha` / `draw_style`) via per-material glyph-mask effect passes. Remaining work is focused on visual-line decoration parity and additional mixed-bidi hardening.
 - `TextDrawStyle` API still exposes width-only stroke controls (cap/join/miter/path parity is pending).
-- `push_text_decorations(...)` in `wgpu` still uses single-line approximation instead of measured visual line boxes.
+- `push_text_decorations(...)` is now line-aware for prepared visual lines and span paint alpha, but still does not consume full glyph-run visual boxes for complex bidi/alignment cases.
 
 ### Remaining GPU Work Plan
 
@@ -184,9 +184,9 @@ Done gate:
 
 Workstream 2: decoration rewrite from real line layout
 
-1. Replace the current single-line approximation in `push_text_decorations(...)`.
-2. Drive underline and line-through geometry from measured visual line boxes.
-3. Resolve decoration brush/alpha from the same span foreground contract used by text material resolution.
+1. DONE: removed single-line-only decoration emission and split geometry per prepared visual line.
+2. PARTIAL: underline and line-through now follow prepared line segmentation + measured line height; remaining work is exact glyph-run visual box fidelity for complex bidi/alignment.
+3. DONE: decoration brush/alpha resolution now follows span foreground contract (`color`/`brush`/`alpha`) in the GPU path.
 
 Done gate:
 
@@ -238,29 +238,29 @@ Execution order:
 
 Current state:
 
-- `push_text_decorations(...)` computes decoration geometry by linear chunk widths.
-- The current implementation is marked in code as a simple/single-line approximation.
+- `push_text_decorations(...)` now emits per-line segments from prepared visual lines (`\n`-split prepared text) instead of one linearized strip.
+- Decoration brush and alpha are resolved from span foreground style and modulated through layer color/alpha.
 
 Required end-state:
 
-- Decoration segments are generated from measured line boxes (`prepare_text_layout(...)` output), not from linearized offsets.
+- Decoration segments are generated from true measured visual line boxes/glyph runs (`prepare_text_layout(...)` + run geometry), not only logical line segmentation.
 - Underline and line-through honor wrapped lines, alignment (`Start`/`End`), and span boundaries in the same visual order as text draws.
 - Decoration brush resolution matches the span foreground contract (`color`/`brush`/`alpha`) with no style-dependent fallback route.
 
 Tests to add/update:
 
-- Wrapped multiline underline with mixed span styles validates one decoration segment per visual line.
+- Wrapped multiline underline with mixed span styles validates one decoration segment per visual line. (DONE via unit tests)
 - Wrapped multiline line-through with bidi text validates visual ordering consistency.
-- Baseline shift + decoration test verifies decoration Y placement remains tied to shifted line metrics.
+- Baseline shift + decoration test verifies decoration Y placement remains tied to shifted line metrics. (DONE via unit tests)
 
 ### Validation snapshot for this branch (latest run)
 
 - `cargo fmt` passed.
 - `cargo clippy -p cranpose-render-wgpu --tests -- -D warnings` passed.
-- `cargo test -p cranpose-render-wgpu` passed (`67` tests).
+- `cargo test -p cranpose-render-wgpu` passed (`70` tests).
 - `apps/desktop-demo/build-web.sh` passed.
 - `(cd apps/android-demo/android && ./gradlew :app:assembleRelease)` passed.
-- `./run_robot_test.sh` passed (`77`/`77`).
+- `./run_robot_test.sh --sequential` passed (`77`/`77`).
 
 ### Branch working set at snapshot time
 
