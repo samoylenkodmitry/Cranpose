@@ -1,12 +1,5 @@
-//! Demo fonts for the Cranpose application.
-//!
-//! These fonts are embedded at compile time and used for text rendering
-//! across both desktop and Android platforms.
-
-/// Static array of embedded font data.
+/// Primary font bundle for the demo application.
 ///
-/// Contains Roboto Light and Regular variants used throughout the demo.
-pub static DEMO_FONTS: [&[u8]; 2] = [
-    include_bytes!("../assets/Roboto-Light.ttf"),
-    include_bytes!("../assets/Roboto-Regular.ttf"),
-];
+/// Empty: the framework's embedded NotoSansMerged (NotoSans + NotoEmoji outlines) is
+/// used as the default fallback, covering Latin/Greek/Cyrillic text and emoji.
+pub static DEMO_FONTS: [&[u8]; 0] = [];

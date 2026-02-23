@@ -6,6 +6,9 @@
 #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
 use std::path::PathBuf;
 
+#[cfg(feature = "renderer-wgpu")]
+pub use cranpose_render_wgpu::FallbackFontPolicy;
+
 /// Configuration for application settings.
 pub struct AppSettings {
     /// Window title (desktop) / app name (mobile)
@@ -14,8 +17,11 @@ pub struct AppSettings {
     pub initial_width: u32,
     /// Initial window height in logical pixels (desktop only)
     pub initial_height: u32,
-    /// Optional embedded fonts to use for text rendering
+    /// Primary embedded fonts loaded at highest priority.
     pub fonts: Option<&'static [&'static [u8]]>,
+    /// Controls which framework fallback fonts are injected after primary fonts.
+    #[cfg(feature = "renderer-wgpu")]
+    pub fallback_policy: FallbackFontPolicy,
     /// Whether to load system fonts on Android (default: false)
     pub android_use_system_fonts: bool,
     /// Run in headless mode (window hidden, for robot testing)
@@ -42,6 +48,8 @@ impl Default for AppSettings {
             initial_width: 800,
             initial_height: 600,
             fonts: None,
+            #[cfg(feature = "renderer-wgpu")]
+            fallback_policy: FallbackFontPolicy::Default,
             android_use_system_fonts: false,
             headless: false,
             #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
@@ -148,7 +156,7 @@ impl AppLauncher {
     /// use cranpose::AppLauncher;
     ///
     /// // In specialized environments, you might include bytes:
-    /// // static REGULAR: &[u8] = include_bytes!("../assets/Roboto-Regular.ttf");
+    /// // static REGULAR: &[u8] = include_bytes!("../assets/MyFont.ttf");
     /// static DUMMY_FONT: &[u8] = &[];
     /// static FONTS: &[&[u8]] = &[DUMMY_FONT];
     ///
@@ -169,6 +177,84 @@ impl AppLauncher {
     /// Use static fonts via `with_fonts()` for reliable rendering.
     pub fn with_android_use_system_fonts(mut self, use_system_fonts: bool) -> Self {
         self.settings.android_use_system_fonts = use_system_fonts;
+        self
+    }
+
+    /// Add extra fallback fonts on top of the framework default bundle.
+    ///
+    /// The framework default bundle (NotoSansMerged) is still injected; the supplied
+    /// fonts are appended as additional fallbacks after it.
+    ///
+    /// Use this when you need to support a script that neither the app's primary fonts
+    /// nor the framework defaults cover.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use cranpose::AppLauncher;
+    ///
+    /// static MY_EXTRA: &[u8] = &[]; // replace with actual font bytes
+    /// static EXTRA_FONTS: &[&[u8]] = &[MY_EXTRA];
+    ///
+    /// AppLauncher::new()
+    ///     .with_extra_fallback_fonts(EXTRA_FONTS)
+    ///     .run(|| {});
+    /// ```
+    #[cfg(feature = "renderer-wgpu")]
+    pub fn with_extra_fallback_fonts(mut self, fonts: &'static [&'static [u8]]) -> Self {
+        self.settings.fallback_policy = FallbackFontPolicy::Extend(fonts);
+        self
+    }
+
+    /// Replace the framework default fallback bundle with the supplied fonts.
+    ///
+    /// The framework default (NotoSansMerged) is **not** injected.  Only the provided
+    /// fonts are used as fallbacks.
+    ///
+    /// The renderer still guarantees at least one face is present: if the supplied
+    /// slice is empty and no primary fonts were provided via `with_fonts`, an embedded
+    /// NotoSansMerged is injected as a last-resort guard.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use cranpose::AppLauncher;
+    ///
+    /// static MY_FALLBACK: &[u8] = &[]; // replace with actual font bytes
+    /// static FALLBACK_FONTS: &[&[u8]] = &[MY_FALLBACK];
+    ///
+    /// AppLauncher::new()
+    ///     .with_fallback_fonts(FALLBACK_FONTS)
+    ///     .run(|| {});
+    /// ```
+    #[cfg(feature = "renderer-wgpu")]
+    pub fn with_fallback_fonts(mut self, fonts: &'static [&'static [u8]]) -> Self {
+        self.settings.fallback_policy = FallbackFontPolicy::Replace(fonts);
+        self
+    }
+
+    /// Disable all framework fallback fonts.
+    ///
+    /// No fallback fonts are injected by the framework.  Only the primary fonts
+    /// supplied via `with_fonts` are loaded.  An embedded NotoSansMerged is still
+    /// injected if the font database would otherwise be empty.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use cranpose::AppLauncher;
+    ///
+    /// static MY_FONT: &[u8] = &[]; // replace with actual font bytes
+    /// static FONTS: &[&[u8]] = &[MY_FONT];
+    ///
+    /// AppLauncher::new()
+    ///     .with_fonts(FONTS)
+    ///     .with_no_fallback_fonts()
+    ///     .run(|| {});
+    /// ```
+    #[cfg(feature = "renderer-wgpu")]
+    pub fn with_no_fallback_fonts(mut self) -> Self {
+        self.settings.fallback_policy = FallbackFontPolicy::None;
         self
     }
 

@@ -92,8 +92,6 @@ fn resolve_hyphenation_language(style: &TextStyle) -> Option<Language> {
     let primary_locale = locale_list.locales().first()?;
     let normalized = primary_locale.trim().replace('_', "-").to_ascii_lowercase();
 
-    // Handle specific regions or fallbacks
-    // The hyphenation crate uses specific enums for languages
     if normalized.starts_with("en-gb") {
         return Some(Language::EnglishGB);
     }
@@ -104,8 +102,6 @@ fn resolve_hyphenation_language(style: &TextStyle) -> Option<Language> {
         return Some(Language::French);
     }
     if normalized.starts_with("de") {
-        // hyphenation crate distinguishes old/new orthography
-        // Defaulting to new (1996) orthography for modern texts
         return Some(Language::German1996);
     }
     if normalized.starts_with("es") {
@@ -123,9 +119,25 @@ fn resolve_hyphenation_language(style: &TextStyle) -> Option<Language> {
     if normalized.starts_with("nl") {
         return Some(Language::Dutch);
     }
+    if normalized.starts_with("pl") {
+        return Some(Language::Polish);
+    }
+    if normalized.starts_with("sv") {
+        return Some(Language::Swedish);
+    }
+    if normalized.starts_with("da") {
+        return Some(Language::Danish);
+    }
+    if normalized.starts_with("cs") {
+        return Some(Language::Czech);
+    }
+    if normalized.starts_with("sk") {
+        return Some(Language::Slovak);
+    }
+    if normalized.starts_with("uk") {
+        return Some(Language::Ukrainian);
+    }
 
-    // We only embed standard dictionary languages right now.
-    // If not found, hyphenation is disabled.
     None
 }
 
@@ -194,14 +206,12 @@ mod tests {
 
     #[test]
     fn locale_gate_uses_french_dictionary() {
-        // "éléphant" -> él-éphant (break at byte 5, which is char 3)
         let break_idx = choose_auto_hyphen_break("éléphant", &style_with_locale("fr-FR"), 0, 7);
         assert_eq!(break_idx, Some(3));
     }
 
     #[test]
     fn locale_gate_uses_german_dictionary() {
-        // "Geschwindigkeitsbegrenzung" -> Ge-schwin-dig-keits-be-gren-zung
         let break_idx = choose_auto_hyphen_break(
             "Geschwindigkeitsbegrenzung",
             &style_with_locale("de-DE"),
@@ -209,6 +219,12 @@ mod tests {
             20,
         );
         assert!(break_idx.is_some());
+    }
+
+    #[test]
+    fn unknown_locale_disables_hyphenation() {
+        let break_idx = choose_auto_hyphen_break("Transformation", &style_with_locale("ja-JP"), 8, 12);
+        assert_eq!(break_idx, None);
     }
 
     #[test]

@@ -42,3 +42,4 @@
 - 'legacy'/'old way' etc allowed. we are in a pre-alpha, everything is fresh, clean, single instance
 - be aware of what you've done by looking at git status
 - don't call anything 'migration'. Say no to half-states. Only complete entropy annihilation is allowed.
+- don't hardcode things

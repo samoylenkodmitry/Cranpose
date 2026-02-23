@@ -783,6 +783,26 @@ mod tests {
         ])
     }
 
+    fn ink_x_range(image: &ImageBitmap) -> Option<(u32, u32)> {
+        let width = image.width();
+        let height = image.height();
+        let pixels = image.pixels();
+        let mut min_x = u32::MAX;
+        let mut max_x = 0u32;
+        let mut found = false;
+        for y in 0..height {
+            for x in 0..width {
+                let idx = ((y * width + x) * 4) as usize;
+                if pixels[idx + 3] > 0 {
+                    min_x = min_x.min(x);
+                    max_x = max_x.max(x + 1);
+                    found = true;
+                }
+            }
+        }
+        found.then_some((min_x, max_x))
+    }
+
     fn top_ink_row(image: &ImageBitmap) -> Option<u32> {
         let width = image.width();
         let height = image.height();
@@ -910,15 +930,32 @@ mod tests {
     #[test]
     fn rasterized_gradient_text_shows_color_transition() {
         let font = Font::try_from_bytes(include_bytes!(
-            "../../../../apps/desktop-demo/assets/Roboto-Regular.ttf"
+            "../../../../assets/NotoSansMerged.ttf"
         ) as &[u8])
         .expect("font");
+        // Use a gradient sized to the rendered text width so left=red, right=blue.
+        // We first do a plain measurement pass to know the text width.
+        let plain_style = TextStyle::default();
+        let probe = rasterize_text_to_image_with_font(
+            "MMMMMMMM",
+            Rect { x: 0.0, y: 0.0, width: 320.0, height: 96.0 },
+            &plain_style,
+            Color::WHITE,
+            48.0,
+            1.0,
+            &font,
+        )
+        .expect("probe image");
+        let (ink_x_min, ink_x_max) =
+            ink_x_range(&probe).expect("probe must contain ink");
+        let gradient_end = ink_x_max as f32;
+
         let style = TextStyle {
             span_style: SpanStyle {
                 brush: Some(Brush::linear_gradient_range(
                     vec![Color::RED, Color::BLUE],
                     Point::new(0.0, 0.0),
-                    Point::new(320.0, 0.0),
+                    Point::new(gradient_end, 0.0),
                 )),
                 ..Default::default()
             },
@@ -927,12 +964,7 @@ mod tests {
 
         let image = rasterize_text_to_image_with_font(
             "MMMMMMMM",
-            Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 320.0,
-                height: 96.0,
-            },
+            Rect { x: 0.0, y: 0.0, width: 320.0, height: 96.0 },
             &style,
             Color::WHITE,
             48.0,
@@ -941,14 +973,17 @@ mod tests {
         )
         .expect("rasterized image");
 
-        let left = average_ink_rgb(&image, 12, 130, 8, 90).expect("left ink");
-        let right = average_ink_rgb(&image, 190, 308, 8, 90).expect("right ink");
+        let ink_span = ink_x_max.saturating_sub(ink_x_min).max(1);
+        let left_end = ink_x_min + ink_span * 3 / 10;
+        let right_start = ink_x_max.saturating_sub(ink_span * 3 / 10);
+        let left = average_ink_rgb(&image, ink_x_min, left_end, 8, 90).expect("left ink");
+        let right = average_ink_rgb(&image, right_start, ink_x_max, 8, 90).expect("right ink");
         assert!(
-            left[0] > left[2] * 1.15,
+            left[0] > left[2] * 1.1,
             "left region should be red dominant, got {left:?}"
         );
         assert!(
-            right[2] > right[0] * 1.15,
+            right[2] > right[0] * 1.1,
             "right region should be blue dominant, got {right:?}"
         );
     }
@@ -956,7 +991,7 @@ mod tests {
     #[test]
     fn rasterized_stroke_and_fill_ink_coverage_differs() {
         let font = Font::try_from_bytes(include_bytes!(
-            "../../../../apps/desktop-demo/assets/Roboto-Regular.ttf"
+            "../../../../assets/NotoSansMerged.ttf"
         ) as &[u8])
         .expect("font");
         let fill_style = TextStyle::default();
@@ -1007,7 +1042,7 @@ mod tests {
     #[test]
     fn stroke_path_uses_miter_join_for_acute_apexes() {
         let font = Font::try_from_bytes(include_bytes!(
-            "../../../../apps/desktop-demo/assets/Roboto-Regular.ttf"
+            "../../../../assets/NotoSansMerged.ttf"
         ) as &[u8])
         .expect("font");
         let fill_style = TextStyle::default();
@@ -1073,7 +1108,7 @@ mod tests {
     #[test]
     fn shadow_blur_radius_changes_spread_for_shared_raster_path() {
         let font = Font::try_from_bytes(include_bytes!(
-            "../../../../apps/desktop-demo/assets/Roboto-Regular.ttf"
+            "../../../../assets/NotoSansMerged.ttf"
         ) as &[u8])
         .expect("font");
         let base_shadow = Shadow {
@@ -1142,7 +1177,7 @@ mod tests {
     #[test]
     fn text_motion_changes_fractional_shadow_sampling() {
         let font = Font::try_from_bytes(include_bytes!(
-            "../../../../apps/desktop-demo/assets/Roboto-Regular.ttf"
+            "../../../../assets/NotoSansMerged.ttf"
         ) as &[u8])
         .expect("font");
         let base_shadow = Shadow {
@@ -1208,7 +1243,7 @@ mod tests {
     #[test]
     fn static_text_motion_aligns_glyph_positions_to_pixel_grid() {
         let font = Font::try_from_bytes(include_bytes!(
-            "../../../../apps/desktop-demo/assets/Roboto-Regular.ttf"
+            "../../../../assets/NotoSansMerged.ttf"
         ) as &[u8])
         .expect("font");
         let scale = Scale::uniform(17.0);

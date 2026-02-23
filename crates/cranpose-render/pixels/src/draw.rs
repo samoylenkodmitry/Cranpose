@@ -19,7 +19,7 @@ use crate::style::point_in_resolved_rounded_rect;
 
 static FONT: Lazy<Font<'static>> = Lazy::new(|| {
     let f = Font::try_from_bytes(include_bytes!(
-        "../../../../apps/desktop-demo/assets/Roboto-Light.ttf"
+        "../../../../assets/NotoSansMerged.ttf"
     ) as &[u8])
     .expect("font");
     f
@@ -1070,6 +1070,23 @@ mod tests {
         count
     }
 
+    /// Returns `(top_y, bottom_y)` (exclusive) of all non-background ink rows.
+    fn ink_y_range(frame: &[u8], width: u32, height: u32) -> Option<(u32, u32)> {
+        let mut top = None;
+        let mut bottom = 0u32;
+        for y in 0..height {
+            for x in 0..width {
+                let idx = ((y * width + x) * 4) as usize;
+                if &frame[idx..idx + 4] != [18, 18, 24, 255] {
+                    top.get_or_insert(y);
+                    bottom = y + 1;
+                    break;
+                }
+            }
+        }
+        top.map(|t| (t, bottom))
+    }
+
     #[test]
     fn blend_mode_support_matrix_is_explicit() {
         assert!(is_blend_mode_supported(BlendMode::SrcOver));
@@ -1111,11 +1128,20 @@ mod tests {
         let mut frame = vec![0u8; (width * height * 4) as usize];
         draw_scene(&mut frame, width, height, &scene);
 
-        let first_line_ink = count_non_background_pixels_in_band(&frame, width, 8, 32);
-        let second_line_ink = count_non_background_pixels_in_band(&frame, width, 32, 64);
-        assert!(first_line_ink > 50, "expected first line to render");
+        // Find the y-range of all ink pixels (font-agnostic approach).
+        let (ink_top, ink_bottom) = ink_y_range(&frame, width, height)
+            .expect("expected ink pixels in rendered text");
+        let ink_height = ink_bottom - ink_top;
         assert!(
-            second_line_ink > 30,
+            ink_height >= 20,
+            "expected two lines of ink, ink spans only {ink_height}px (y={ink_top}..{ink_bottom})"
+        );
+        let mid_y = ink_top + ink_height / 2;
+        let first_line_ink = count_non_background_pixels_in_band(&frame, width, ink_top, mid_y);
+        let second_line_ink = count_non_background_pixels_in_band(&frame, width, mid_y, ink_bottom);
+        assert!(first_line_ink > 20, "expected first line to render, got {first_line_ink}");
+        assert!(
+            second_line_ink > 20,
             "expected second line ink, got {second_line_ink}"
         );
     }
