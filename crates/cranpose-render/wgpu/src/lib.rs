@@ -35,6 +35,9 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 const EMBEDDED_FALLBACK_FONT_BYTES: &[u8] = include_bytes!("../../../../assets/Roboto-Regular.ttf");
+const EMBEDDED_UNICODE_FALLBACK_FONT_BYTES: &[u8] =
+    include_bytes!("../../../../assets/DejaVuSans.ttf");
+const EMBEDDED_UNICODE_FALLBACK_FAMILY: &str = "DejaVu Sans";
 
 /// Size-only cache for ultra-fast text measurement lookups.
 /// Key: (text_hash, font_size_fixed_point, style_hash)
@@ -313,6 +316,7 @@ impl WgpuFontFamilyResolver {
 
     fn ensure_non_empty_font_db(&mut self, font_system: &mut FontSystem) {
         if font_system.db().faces().next().is_some() {
+            load_embedded_unicode_fallback_if_missing(font_system);
             return;
         }
 
@@ -327,7 +331,10 @@ impl WgpuFontFamilyResolver {
             log::error!(
                 "Embedded Roboto fallback font failed to load; text shaping may still panic"
             );
+            return;
         }
+
+        load_embedded_unicode_fallback_if_missing(font_system);
     }
 
     fn resolve_family_owned_uncached(
@@ -529,10 +536,33 @@ fn load_fonts_with_embedded_fallback(font_system: &mut FontSystem, fonts: &[&[u8
         font_system
             .db_mut()
             .load_font_data(EMBEDDED_FALLBACK_FONT_BYTES.to_vec());
-        face_count = font_system.db().faces().count();
     }
 
+    load_embedded_unicode_fallback_if_missing(font_system);
+    face_count = font_system.db().faces().count();
     log::info!("Total font faces loaded: {}", face_count);
+}
+
+fn font_db_contains_family(font_system: &FontSystem, family_name: &str) -> bool {
+    font_system.db().faces().any(|face| {
+        face.families
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case(family_name))
+    })
+}
+
+fn load_embedded_unicode_fallback_if_missing(font_system: &mut FontSystem) {
+    if font_db_contains_family(font_system, EMBEDDED_UNICODE_FALLBACK_FAMILY) {
+        return;
+    }
+
+    log::info!(
+        "Loading embedded Unicode fallback font {} for cross-script glyph coverage",
+        EMBEDDED_UNICODE_FALLBACK_FAMILY
+    );
+    font_system
+        .db_mut()
+        .load_font_data(EMBEDDED_UNICODE_FALLBACK_FONT_BYTES.to_vec());
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1633,7 +1663,8 @@ mod tests {
 
     #[test]
     fn load_fonts_with_embedded_fallback_populates_face_db_when_empty() {
-        let mut font_system = FontSystem::new();
+        let db = glyphon::fontdb::Database::new();
+        let mut font_system = FontSystem::new_with_locale_and_db("en-US".to_string(), db);
         load_fonts_with_embedded_fallback(&mut font_system, &[]);
         assert!(
             font_system.db().faces().count() > 0,
@@ -1642,8 +1673,20 @@ mod tests {
     }
 
     #[test]
+    fn load_fonts_with_embedded_fallback_adds_unicode_script_coverage_font() {
+        let db = glyphon::fontdb::Database::new();
+        let mut font_system = FontSystem::new_with_locale_and_db("en-US".to_string(), db);
+        load_fonts_with_embedded_fallback(&mut font_system, &[]);
+        assert!(
+            font_db_contains_family(&font_system, EMBEDDED_UNICODE_FALLBACK_FAMILY),
+            "embedded unicode fallback family must be present for script coverage"
+        );
+    }
+
+    #[test]
     fn resolver_injects_embedded_fallback_if_font_db_is_empty() {
-        let mut font_system = FontSystem::new();
+        let db = glyphon::fontdb::Database::new();
+        let mut font_system = FontSystem::new_with_locale_and_db("en-US".to_string(), db);
         let mut resolver = WgpuFontFamilyResolver::default();
         let span_style = cranpose_ui::text::SpanStyle::default();
 

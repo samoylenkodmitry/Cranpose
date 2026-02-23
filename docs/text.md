@@ -132,6 +132,7 @@ This section is a context handoff for the next implementation chat.
 - Renderer startup now guarantees at least one loaded face by injecting an embedded Roboto fallback when app settings provide no fonts (critical for wasm/web stability).
 - Resolver now also enforces a runtime non-empty font-db guard before family resolution/shaping, injecting embedded fallback if the db is unexpectedly empty.
 - Attr resolution now downgrades requested style/weight to an available face when exact style/weight is absent (critical for wasm where no system italic/bold fallback exists).
+- Embedded Unicode fallback font (`DejaVu Sans`) is now force-loaded in `wgpu` bootstrap to provide cross-script coverage (Hebrew/arrows and similar glyph sets) when app fonts are script-limited.
 
 ### Current `wgpu` routing contract
 
@@ -262,11 +263,12 @@ Current state:
 - Web/wasm startup now includes embedded fallback font bootstrap when no app fonts are provided, preventing missing-font crash paths.
 - Resolver path now enforces a non-empty font db before shaping and injects embedded fallback at runtime if needed.
 - Style/weight requests are now normalized to available faces before shaping to avoid `cosmic-text` default-font panics on wasm text showcase content.
+- `wgpu` now also injects an embedded Unicode fallback family for script coverage so text tabs with Hebrew/symbol content do not degrade to tofu boxes when demo fonts are Roboto-only.
 
 Latest validation snapshot:
 - cargo fmt passed
 - cargo clippy -p cranpose-render-wgpu --tests -- -D warnings passed
-- cargo test -p cranpose-render-wgpu passed (86 tests)
+- cargo test -p cranpose-render-wgpu passed (87 tests)
 - cargo test -p cranpose-ui text_layout_result -- --nocapture passed
 - apps/desktop-demo/build-web.sh passed
 - (cd apps/android-demo/android && ./gradlew :app:assembleRelease) passed
@@ -340,7 +342,7 @@ Tests to add/update:
 
 - `cargo fmt` passed.
 - `cargo clippy -p cranpose-render-wgpu --tests -- -D warnings` passed.
-- `cargo test -p cranpose-render-wgpu` passed (`86` tests).
+- `cargo test -p cranpose-render-wgpu` passed (`87` tests).
 - `cargo test -p cranpose-ui text_layout_result -- --nocapture` passed.
 - `apps/desktop-demo/build-web.sh` passed.
 - `(cd apps/android-demo/android && ./gradlew :app:assembleRelease)` passed.
@@ -349,7 +351,7 @@ Tests to add/update:
 
 ### Branch working set at snapshot time
 
-- `crates/cranpose-render/wgpu/src/lib.rs`: shared `WgpuFontFamilyResolver` added and wired through text measurement/render preparation (request cache, canonical family resolution, generic fallback seeding, file-backed and loaded-typeface path loading, embedded fallback bootstrap, runtime non-empty font-db enforcement before shaping, and style/weight normalization to available faces).
+- `crates/cranpose-render/wgpu/src/lib.rs`: shared `WgpuFontFamilyResolver` added and wired through text measurement/render preparation (request cache, canonical family resolution, generic fallback seeding, file-backed and loaded-typeface path loading, embedded fallback bootstrap, runtime non-empty font-db enforcement before shaping, style/weight normalization to available faces, and embedded Unicode fallback-family loading for script coverage).
 - `crates/cranpose-render/wgpu/src/render.rs`: `GpuRenderer` now owns resolver handle and uses it for all text buffer `ensure(...)` calls.
 - `crates/cranpose-ui/src/text/font.rs`: `FontFile`, `FileBackedFontFamily`, and `LoadedTypefacePath` added; `FontFamily` now models file-backed/typeface-path variants.
 - `crates/cranpose-ui/src/text/mod.rs`: new font model types re-exported for app usage.
