@@ -193,6 +193,7 @@ pub(crate) fn apply_draw_commands(
                 };
                 scene.push_shadow_draw(ShadowDraw {
                     shapes: vec![shape_pair],
+                    texts: vec![],
                     blur_radius,
                     clip,
                     z_index: 0,
@@ -224,6 +225,7 @@ pub(crate) fn apply_draw_commands(
                 let transformed_clip = apply_layer_to_rect(abs_clip, layer_bounds, layer);
                 scene.push_shadow_draw(ShadowDraw {
                     shapes: vec![fill_pair, cutout_pair],
+                    texts: vec![],
                     blur_radius,
                     clip: clip.map_or(Some(transformed_clip), |parent_clip| {
                         parent_clip.intersect(transformed_clip)

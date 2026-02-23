@@ -26,3 +26,5 @@ log = "0.4"
 lru = "0.12"
 rustc-hash = "2.1.1"
 naga = { version = "25.0.1", features = ["wgsl-in"] }
+rusttype = "0.9.3"
+ttf-parser = "0.25.1"

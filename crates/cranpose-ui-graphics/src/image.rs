@@ -33,7 +33,7 @@ pub struct ImageBitmap {
 pub enum ColorFilter {
     /// Compose-style tint using `BlendMode::SrcIn`.
     Tint(Color),
-    /// Explicit per-channel modulation (legacy multiply behavior).
+    /// Explicit per-channel modulation (multiply behavior).
     Modulate(Color),
     /// 4x5 color matrix in row-major order.
     ///

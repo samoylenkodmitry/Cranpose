@@ -4,14 +4,17 @@ use crate::effect_renderer::{EffectRenderer, RoundedCompositeMask};
 use crate::offscreen::OffscreenTarget;
 use crate::scene::{BackdropLayer, DrawShape, EffectLayer, ImageDraw, ShadowDraw, TextDraw};
 use crate::shaders;
-use crate::{SharedTextBuffer, SharedTextCache, TextCacheKey};
+use crate::{
+    EnsureTextBufferParams, SharedFontFamilyResolver, SharedTextBuffer, SharedTextCache,
+    TextCacheKey,
+};
 use bytemuck::{Pod, Zeroable};
 use cranpose_ui_graphics::{
     BlendMode, Brush, Color, ColorFilter, ImageBitmap, Rect, RenderEffect, TileMode,
 };
 use glyphon::{
-    Attrs, Cache, Color as GlyphonColor, FontSystem, Metrics, Resolution, SwashCache, TextArea,
-    TextAtlas, TextBounds, TextRenderer, Viewport,
+    Cache, Color as GlyphonColor, FontSystem, Metrics, Resolution, SwashCache, TextArea, TextAtlas,
+    TextBounds, TextRenderer, Viewport,
 };
 use lru::LruCache;
 use std::num::NonZeroUsize;
@@ -486,6 +489,7 @@ pub struct GpuRenderer {
     image_bind_group_layout: wgpu::BindGroupLayout,
     image_sampler: wgpu::Sampler,
     font_system: Arc<Mutex<FontSystem>>,
+    font_family_resolver: SharedFontFamilyResolver,
     text_renderer: TextRenderer,
     text_atlas: TextAtlas,
     swash_cache: SwashCache,
@@ -521,6 +525,7 @@ impl GpuRenderer {
         queue: Arc<wgpu::Queue>,
         surface_format: wgpu::TextureFormat,
         font_system: Arc<Mutex<FontSystem>>,
+        font_family_resolver: SharedFontFamilyResolver,
         text_cache: SharedTextCache,
     ) -> Self {
         let uniform_bind_group_layout =
@@ -696,6 +701,7 @@ impl GpuRenderer {
             image_bind_group_layout,
             image_sampler,
             font_system,
+            font_family_resolver,
             text_renderer,
             text_atlas,
             swash_cache,
@@ -1493,11 +1499,11 @@ impl GpuRenderer {
         height: u32,
         root_scale: f32,
     ) {
-        if shadow.shapes.is_empty() {
+        if shadow.shapes.is_empty() && shadow.texts.is_empty() {
             return;
         }
 
-        let shape_bounds = shadow
+        let shape_bounds_opt = shadow
             .shapes
             .iter()
             .map(|(shape, _)| shape.rect)
@@ -1507,7 +1513,31 @@ impl GpuRenderer {
                 width: (a.x + a.width).max(b.x + b.width) - a.x.min(b.x),
                 height: (a.y + a.height).max(b.y + b.height) - a.y.min(b.y),
             });
-        let Some(shape_bounds) = shape_bounds else {
+
+        let text_bounds_opt = shadow
+            .texts
+            .iter()
+            .map(|text| text.rect)
+            .reduce(|a, b| Rect {
+                x: a.x.min(b.x),
+                y: a.y.min(b.y),
+                width: (a.x + a.width).max(b.x + b.width) - a.x.min(b.x),
+                height: (a.y + a.height).max(b.y + b.height) - a.y.min(b.y),
+            });
+
+        let combined_bounds = match (shape_bounds_opt, text_bounds_opt) {
+            (Some(s), Some(t)) => Some(Rect {
+                x: s.x.min(t.x),
+                y: s.y.min(t.y),
+                width: (s.x + s.width).max(t.x + t.width) - s.x.min(t.x),
+                height: (s.y + s.height).max(t.y + t.height) - s.y.min(t.y),
+            }),
+            (Some(s), None) => Some(s),
+            (None, Some(t)) => Some(t),
+            (None, None) => None,
+        };
+
+        let Some(shape_bounds) = combined_bounds else {
             return;
         };
 
@@ -1549,6 +1579,26 @@ impl GpuRenderer {
                     [0.0, 0.0],
                 );
             }
+            if !shadow.texts.is_empty() {
+                let text_refs: Vec<&TextDraw> = shadow.texts.iter().collect();
+                if let Err(e) = self.prepare_text_for_render(&text_refs, width, height, root_scale)
+                {
+                    eprintln!("Failed to prepare text for zero-blur shadow: {}", e);
+                } else {
+                    let mut encoder =
+                        self.device
+                            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                label: Some("Zero Blur Shadow Text Encoder"),
+                            });
+                    if let Err(e) =
+                        self.encode_text_pass(&mut encoder, target_view, wgpu::LoadOp::Load)
+                    {
+                        eprintln!("Failed to encode text for zero-blur shadow: {}", e);
+                    }
+                    self.queue.submit(std::iter::once(encoder.finish()));
+                    self.frame_stats.bump_submits();
+                }
+            }
             return;
         }
 
@@ -1569,10 +1619,10 @@ impl GpuRenderer {
         //    The first shape gets LoadOp::Clear to initialize the texture;
         //    subsequent shapes use LoadOp::Load.
         let viewport_offset = [bounds_x.floor(), bounds_y.floor()];
-        let mut first_shadow_shape = true;
+        let mut first_shadow_item = true; // Tracks shapes and texts
         for (shape, blend_mode) in &shadow.shapes {
-            let load = if first_shadow_shape {
-                first_shadow_shape = false;
+            let load = if first_shadow_item {
+                first_shadow_item = false;
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
             } else {
                 wgpu::LoadOp::Load
@@ -1587,6 +1637,41 @@ impl GpuRenderer {
                 load,
                 viewport_offset,
             );
+        }
+
+        if !shadow.texts.is_empty() {
+            let mut shifted_texts = shadow.texts.clone();
+            for text in &mut shifted_texts {
+                text.rect.x -= viewport_offset[0] / root_scale;
+                text.rect.y -= viewport_offset[1] / root_scale;
+                if let Some(clip) = text.clip.as_mut() {
+                    clip.x -= viewport_offset[0] / root_scale;
+                    clip.y -= viewport_offset[1] / root_scale;
+                }
+            }
+
+            let load = if first_shadow_item {
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+            } else {
+                wgpu::LoadOp::Load
+            };
+
+            let text_refs: Vec<&TextDraw> = shifted_texts.iter().collect();
+            if let Err(e) = self.prepare_text_for_render(&text_refs, bounds_w, bounds_h, root_scale)
+            {
+                eprintln!("Failed to prepare text for shadow: {}", e);
+            } else {
+                let mut encoder =
+                    self.device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Shadow Text Encoder"),
+                        });
+                if let Err(e) = self.encode_text_pass(&mut encoder, &source.view, load) {
+                    eprintln!("Failed to encode text for shadow: {}", e);
+                }
+                self.queue.submit(std::iter::once(encoder.finish()));
+                self.frame_stats.bump_submits();
+            }
         }
 
         // 3. Apply Gaussian blur on the bounds-sized textures.
@@ -2439,6 +2524,7 @@ impl GpuRenderer {
     ) -> Result<(), String> {
         let mut font_system = self.font_system.lock().unwrap();
         let mut text_cache = self.text_cache.lock().unwrap();
+        let mut font_family_resolver = self.font_family_resolver.lock().unwrap();
 
         let mut text_keys: Vec<TextCacheKey> = Vec::with_capacity(layer_texts.len());
 
@@ -2451,26 +2537,41 @@ impl GpuRenderer {
             }
 
             let font_size_px = text_draw.font_size * text_draw.scale * root_scale;
-            let key = TextCacheKey::for_node(text_draw.node_id, font_size_px);
+            let style_hash =
+                text_draw.text_style.measurement_hash() ^ text_draw.text.span_styles_hash();
+            let line_height_px = crate::resolve_effective_line_height(
+                &text_draw.text_style,
+                &text_draw.text,
+                font_size_px,
+            );
+            let key = TextCacheKey::for_node(text_draw.node_id, font_size_px, style_hash);
 
             let buffer = text_cache.entry(key.clone()).or_insert_with(|| {
                 let buffer = glyphon::Buffer::new(
                     &mut font_system,
-                    Metrics::new(font_size_px, font_size_px * 1.4),
+                    Metrics::new(font_size_px, line_height_px),
                 );
                 SharedTextBuffer {
                     buffer,
                     text: String::new(),
                     font_size: 0.0,
+                    line_height: 0.0,
+                    style_hash: 0,
                     cached_size: None,
                 }
             });
 
             buffer.ensure(
                 &mut font_system,
-                text_draw.text.as_ref(),
-                font_size_px,
-                Attrs::new(),
+                &mut font_family_resolver,
+                EnsureTextBufferParams {
+                    annotated_text: &text_draw.text,
+                    font_size_px,
+                    line_height_px,
+                    style_hash,
+                    style: &text_draw.text_style,
+                    scale: text_draw.scale * root_scale,
+                },
             );
 
             text_keys.push(key);
@@ -2503,23 +2604,9 @@ impl GpuRenderer {
             let left_px = text_draw.rect.x * root_scale;
             let top_px = text_draw.rect.y * root_scale;
 
-            let bounds = TextBounds {
-                left: text_draw
-                    .clip
-                    .map(|c| (c.x * root_scale) as i32)
-                    .unwrap_or(0),
-                top: text_draw
-                    .clip
-                    .map(|c| (c.y * root_scale) as i32)
-                    .unwrap_or(0),
-                right: text_draw
-                    .clip
-                    .map(|c| ((c.x + c.width) * root_scale) as i32)
-                    .unwrap_or(width as i32),
-                bottom: text_draw
-                    .clip
-                    .map(|c| ((c.y + c.height) * root_scale) as i32)
-                    .unwrap_or(height as i32),
+            let Some(bounds) = text_bounds_for_clip(text_draw.clip, root_scale, width, height)
+            else {
+                continue;
             };
 
             text_areas.push(TextArea {
@@ -2875,6 +2962,43 @@ fn scissor_rect_for_layer(
     scissor_rect_for_rect(clipped_rect, root_scale, width, height)
 }
 
+fn text_bounds_for_clip(
+    clip: Option<Rect>,
+    root_scale: f32,
+    width: u32,
+    height: u32,
+) -> Option<TextBounds> {
+    let viewport = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: width as f32,
+        height: height as f32,
+    };
+    let clipped = match clip {
+        Some(clip_rect) => clip_rect.intersect(viewport)?,
+        None => viewport,
+    };
+
+    let left = (clipped.x * root_scale).floor();
+    let top = (clipped.y * root_scale).floor();
+    let right = ((clipped.x + clipped.width) * root_scale).ceil();
+    let bottom = ((clipped.y + clipped.height) * root_scale).ceil();
+
+    if !(left.is_finite() && top.is_finite() && right.is_finite() && bottom.is_finite()) {
+        return None;
+    }
+    if right <= left || bottom <= top {
+        return None;
+    }
+
+    Some(TextBounds {
+        left: left as i32,
+        top: top as i32,
+        right: right as i32,
+        bottom: bottom as i32,
+    })
+}
+
 fn tint_for_image(
     color_filter: Option<ColorFilter>,
     alpha: f32,
@@ -3028,6 +3152,7 @@ mod tests {
     fn test_shadow_draw(shapes: Vec<(DrawShape, BlendMode)>) -> ShadowDraw {
         ShadowDraw {
             shapes,
+            texts: vec![],
             blur_radius: 8.0,
             clip: None,
             z_index: 0,
@@ -3068,10 +3193,12 @@ mod tests {
                 width: 8.0,
                 height: 8.0,
             },
-            text: std::rc::Rc::<str>::from("t"),
+            text: std::rc::Rc::new(cranpose_ui::text::AnnotatedString::from("t")),
             color: Color::WHITE,
+            text_style: cranpose_ui::TextStyle::default(),
             font_size: 12.0,
             scale: 1.0,
+            layout_options: cranpose_ui::TextLayoutOptions::default(),
             z_index,
             clip: None,
         }
@@ -3094,6 +3221,47 @@ mod tests {
 
         let scissor = scissor_rect_for_layer(rect, Some(clip), 1.0, 200, 200);
         assert_eq!(scissor, Some((20, 15, 20, 15)));
+    }
+
+    #[test]
+    fn text_bounds_for_clip_rounds_outward_and_clamps() {
+        let clip = Rect {
+            x: 10.2,
+            y: 5.4,
+            width: 20.1,
+            height: 9.3,
+        };
+        let bounds = text_bounds_for_clip(Some(clip), 1.0, 200, 120).expect("bounds");
+        assert_eq!(bounds.left, 10);
+        assert_eq!(bounds.top, 5);
+        assert_eq!(bounds.right, 31);
+        assert_eq!(bounds.bottom, 15);
+    }
+
+    #[test]
+    fn text_bounds_for_clip_returns_none_when_intersection_is_empty() {
+        let clip = Rect {
+            x: 220.0,
+            y: 10.0,
+            width: 40.0,
+            height: 20.0,
+        };
+        assert!(text_bounds_for_clip(Some(clip), 1.0, 200, 120).is_none());
+    }
+
+    #[test]
+    fn text_bounds_for_clip_scales_to_physical_pixels() {
+        let clip = Rect {
+            x: 1.25,
+            y: 2.5,
+            width: 6.0,
+            height: 4.0,
+        };
+        let bounds = text_bounds_for_clip(Some(clip), 2.0, 200, 120).expect("bounds");
+        assert_eq!(bounds.left, 2);
+        assert_eq!(bounds.top, 5);
+        assert_eq!(bounds.right, 15);
+        assert_eq!(bounds.bottom, 13);
     }
 
     #[test]

@@ -15,7 +15,8 @@ use wasm_bindgen::prelude::*;
 #[cfg(all(feature = "web", target_arch = "wasm32"))]
 #[wasm_bindgen(start)]
 pub fn web_init() {
-    wasm_logger::init(wasm_logger::Config::default());
+    // Keep wasm console focused on actionable issues; dependency debug traces are too noisy.
+    wasm_logger::init(wasm_logger::Config::new(log::Level::Info));
     console_error_panic_hook::set_once();
 }
 

@@ -55,7 +55,7 @@
 //!
 //! # Architecture Notes
 //!
-//! This is the **only** modifier implementation — there is no legacy "value-based" system.
+//! This is the **only** modifier implementation — there is no alternate "value-based" system.
 //! All modifier factories in `Modifier` return `ModifierNodeElement` instances that create
 //! these nodes. The system achieves complete 1:1 parity with Jetpack Compose's modifier
 //! architecture.

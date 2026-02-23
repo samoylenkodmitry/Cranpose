@@ -19,14 +19,13 @@
 //! This follows the principle that `MeasurePolicy` is for child layout, while modifier nodes
 //! handle content rendering and measurement.
 
-use crate::text::TextStyle;
+use crate::text::{AnnotatedString, TextLayoutOptions, TextStyle};
 use cranpose_foundation::{
     Constraints, DelegatableNode, DrawModifierNode, DrawScope, InvalidationKind,
     LayoutModifierNode, Measurable, MeasurementProxy, ModifierNode, ModifierNodeContext,
     ModifierNodeElement, NodeCapabilities, NodeState, SemanticsConfiguration, SemanticsNode, Size,
 };
 use std::hash::{Hash, Hasher};
-use std::rc::Rc;
 
 /// Node that stores text content and handles measurement, drawing, and semantics.
 ///
@@ -39,25 +38,27 @@ use std::rc::Rc;
 /// `compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/modifiers/TextStringSimpleNode.kt`
 #[derive(Debug)]
 pub struct TextModifierNode {
-    text: Rc<str>,
+    text: AnnotatedString,
     style: TextStyle,
+    options: TextLayoutOptions,
     state: NodeState,
 }
 
 impl TextModifierNode {
-    pub fn new(text: Rc<str>, style: TextStyle) -> Self {
+    pub fn new(text: AnnotatedString, style: TextStyle, options: TextLayoutOptions) -> Self {
         Self {
             text,
             style,
+            options: options.normalized(),
             state: NodeState::new(),
         }
     }
 
     pub fn text(&self) -> &str {
-        &self.text
+        &self.text.text
     }
 
-    pub fn text_arc(&self) -> Rc<str> {
+    pub fn annotated_string(&self) -> AnnotatedString {
         self.text.clone()
     }
 
@@ -65,8 +66,17 @@ impl TextModifierNode {
         &self.style
     }
 
-    fn measure_text_content(&self) -> Size {
-        let metrics = crate::text::measure_text(&self.text, &self.style);
+    pub fn options(&self) -> TextLayoutOptions {
+        self.options
+    }
+
+    fn measure_text_content(&self, max_width: Option<f32>) -> Size {
+        let metrics = crate::text::measure_text_with_options(
+            &self.text,
+            &self.style,
+            self.options,
+            max_width,
+        );
         Size {
             width: metrics.width,
             height: metrics.height,
@@ -121,7 +131,11 @@ impl LayoutModifierNode for TextModifierNode {
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
         // Measure the text content
-        let text_size = self.measure_text_content();
+        let max_width = constraints
+            .max_width
+            .is_finite()
+            .then_some(constraints.max_width);
+        let text_size = self.measure_text_content(max_width);
 
         // Constrain text size to the provided constraints
         let width = text_size
@@ -138,25 +152,28 @@ impl LayoutModifierNode for TextModifierNode {
     }
 
     fn min_intrinsic_width(&self, _measurable: &dyn Measurable, _height: f32) -> f32 {
-        self.measure_text_content().width
+        self.measure_text_content(None).width
     }
 
     fn max_intrinsic_width(&self, _measurable: &dyn Measurable, _height: f32) -> f32 {
-        self.measure_text_content().width
+        self.measure_text_content(None).width
     }
 
     fn min_intrinsic_height(&self, _measurable: &dyn Measurable, _width: f32) -> f32 {
-        self.measure_text_content().height
+        self.measure_text_content(Some(_width).filter(|w| w.is_finite() && *w > 0.0))
+            .height
     }
 
     fn max_intrinsic_height(&self, _measurable: &dyn Measurable, _width: f32) -> f32 {
-        self.measure_text_content().height
+        self.measure_text_content(Some(_width).filter(|w| w.is_finite() && *w > 0.0))
+            .height
     }
 
     fn create_measurement_proxy(&self) -> Option<Box<dyn MeasurementProxy>> {
         Some(Box::new(TextMeasurementProxy {
             text: self.text.clone(),
-            style: self.style.clone(), // Add style
+            style: self.style.clone(),
+            options: self.options,
         }))
     }
 }
@@ -166,15 +183,21 @@ impl LayoutModifierNode for TextModifierNode {
 /// Phase 2: Instead of reconstructing nodes via `TextModifierNode::new()`, this proxy
 /// directly implements measurement logic using the snapshotted text content.
 struct TextMeasurementProxy {
-    text: Rc<str>,
-    style: TextStyle, // Add style
+    text: AnnotatedString,
+    style: TextStyle,
+    options: TextLayoutOptions,
 }
 
 impl TextMeasurementProxy {
     /// Measure the text content dimensions.
     /// Matches TextModifierNode::measure_text_content() logic.
-    fn measure_text_content(&self) -> Size {
-        let metrics = crate::text::measure_text(&self.text, &self.style);
+    fn measure_text_content(&self, max_width: Option<f32>) -> Size {
+        let metrics = crate::text::measure_text_with_options(
+            &self.text,
+            &self.style,
+            self.options,
+            max_width,
+        );
         Size {
             width: metrics.width,
             height: metrics.height,
@@ -190,7 +213,11 @@ impl MeasurementProxy for TextMeasurementProxy {
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
         // Directly implement text measurement logic (no node reconstruction)
-        let text_size = self.measure_text_content();
+        let max_width = constraints
+            .max_width
+            .is_finite()
+            .then_some(constraints.max_width);
+        let text_size = self.measure_text_content(max_width);
 
         // Constrain text size to the provided constraints
         let width = text_size
@@ -205,19 +232,21 @@ impl MeasurementProxy for TextMeasurementProxy {
     }
 
     fn min_intrinsic_width_proxy(&self, _measurable: &dyn Measurable, _height: f32) -> f32 {
-        self.measure_text_content().width
+        self.measure_text_content(None).width
     }
 
     fn max_intrinsic_width_proxy(&self, _measurable: &dyn Measurable, _height: f32) -> f32 {
-        self.measure_text_content().width
+        self.measure_text_content(None).width
     }
 
     fn min_intrinsic_height_proxy(&self, _measurable: &dyn Measurable, _width: f32) -> f32 {
-        self.measure_text_content().height
+        self.measure_text_content(Some(_width).filter(|w| w.is_finite() && *w > 0.0))
+            .height
     }
 
     fn max_intrinsic_height_proxy(&self, _measurable: &dyn Measurable, _width: f32) -> f32 {
-        self.measure_text_content().height
+        self.measure_text_content(Some(_width).filter(|w| w.is_finite() && *w > 0.0))
+            .height
     }
 }
 
@@ -237,7 +266,7 @@ impl DrawModifierNode for TextModifierNode {
 impl SemanticsNode for TextModifierNode {
     fn merge_semantics(&self, config: &mut SemanticsConfiguration) {
         // Provide text content for accessibility
-        config.content_description = Some(self.text.to_string());
+        config.content_description = Some(self.text.text.clone());
     }
 }
 
@@ -251,13 +280,18 @@ impl SemanticsNode for TextModifierNode {
 /// Matches Jetpack Compose: `TextStringSimpleElement` in BasicText.kt
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextModifierElement {
-    text: Rc<str>,
+    text: AnnotatedString,
     style: TextStyle,
+    options: TextLayoutOptions,
 }
 
 impl TextModifierElement {
-    pub fn new(text: Rc<str>, style: TextStyle) -> Self {
-        Self { text, style }
+    pub fn new(text: AnnotatedString, style: TextStyle, options: TextLayoutOptions) -> Self {
+        Self {
+            text,
+            style,
+            options: options.normalized(),
+        }
     }
 }
 
@@ -296,11 +330,135 @@ fn hash_option_color<H: Hasher>(color: &Option<crate::modifier::Color>, state: &
     }
 }
 
-fn hash_option_f32<H: Hasher>(value: Option<f32>, state: &mut H) {
-    match value {
-        Some(value) => {
+fn hash_brush<H: Hasher>(brush: &crate::modifier::Brush, state: &mut H) {
+    match brush {
+        crate::modifier::Brush::Solid(color) => {
+            0u8.hash(state);
+            hash_color(*color, state);
+        }
+        crate::modifier::Brush::LinearGradient {
+            colors,
+            stops,
+            start,
+            end,
+            tile_mode,
+        } => {
             1u8.hash(state);
-            hash_f32_bits(value, state);
+            colors.len().hash(state);
+            for color in colors {
+                hash_color(*color, state);
+            }
+            match stops {
+                Some(stops) => {
+                    1u8.hash(state);
+                    stops.len().hash(state);
+                    for stop in stops {
+                        hash_f32_bits(*stop, state);
+                    }
+                }
+                None => 0u8.hash(state),
+            }
+            hash_f32_bits(start.x, state);
+            hash_f32_bits(start.y, state);
+            hash_f32_bits(end.x, state);
+            hash_f32_bits(end.y, state);
+            tile_mode.hash(state);
+        }
+        crate::modifier::Brush::RadialGradient {
+            colors,
+            stops,
+            center,
+            radius,
+            tile_mode,
+        } => {
+            2u8.hash(state);
+            colors.len().hash(state);
+            for color in colors {
+                hash_color(*color, state);
+            }
+            match stops {
+                Some(stops) => {
+                    1u8.hash(state);
+                    stops.len().hash(state);
+                    for stop in stops {
+                        hash_f32_bits(*stop, state);
+                    }
+                }
+                None => 0u8.hash(state),
+            }
+            hash_f32_bits(center.x, state);
+            hash_f32_bits(center.y, state);
+            hash_f32_bits(*radius, state);
+            tile_mode.hash(state);
+        }
+        crate::modifier::Brush::SweepGradient {
+            colors,
+            stops,
+            center,
+        } => {
+            3u8.hash(state);
+            colors.len().hash(state);
+            for color in colors {
+                hash_color(*color, state);
+            }
+            match stops {
+                Some(stops) => {
+                    1u8.hash(state);
+                    stops.len().hash(state);
+                    for stop in stops {
+                        hash_f32_bits(*stop, state);
+                    }
+                }
+                None => 0u8.hash(state),
+            }
+            hash_f32_bits(center.x, state);
+            hash_f32_bits(center.y, state);
+        }
+    }
+}
+
+fn hash_option_brush<H: Hasher>(brush: &Option<crate::modifier::Brush>, state: &mut H) {
+    match brush {
+        Some(brush) => {
+            1u8.hash(state);
+            hash_brush(brush, state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
+fn hash_option_alpha<H: Hasher>(alpha: &Option<f32>, state: &mut H) {
+    match alpha {
+        Some(alpha) => {
+            1u8.hash(state);
+            hash_f32_bits(*alpha, state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
+fn hash_option_baseline_shift<H: Hasher>(
+    baseline_shift: &Option<crate::text::BaselineShift>,
+    state: &mut H,
+) {
+    match baseline_shift {
+        Some(shift) => {
+            1u8.hash(state);
+            hash_f32_bits(shift.0, state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
+fn hash_option_text_geometric_transform<H: Hasher>(
+    transform: &Option<crate::text::TextGeometricTransform>,
+    state: &mut H,
+) {
+    match transform {
+        Some(transform) => {
+            1u8.hash(state);
+            hash_f32_bits(transform.scale_x, state);
+            hash_f32_bits(transform.skew_x, state);
         }
         None => 0u8.hash(state),
     }
@@ -330,31 +488,63 @@ fn hash_option_text_indent<H: Hasher>(indent: &Option<crate::text::TextIndent>, 
     }
 }
 
+fn hash_option_text_draw_style<H: Hasher>(
+    draw_style: &Option<crate::text::TextDrawStyle>,
+    state: &mut H,
+) {
+    match draw_style {
+        Some(crate::text::TextDrawStyle::Fill) => {
+            1u8.hash(state);
+            0u8.hash(state);
+        }
+        Some(crate::text::TextDrawStyle::Stroke { width }) => {
+            1u8.hash(state);
+            1u8.hash(state);
+            hash_f32_bits(*width, state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
 fn hash_text_style<H: Hasher>(style: &TextStyle, state: &mut H) {
-    hash_option_color(&style.color, state);
-    hash_text_unit(style.font_size, state);
-    style.font_weight.hash(state);
-    style.font_style.hash(state);
-    style.font_synthesis.hash(state);
-    style.font_family.hash(state);
-    style.font_feature_settings.hash(state);
-    hash_text_unit(style.letter_spacing, state);
-    hash_option_f32(style.baseline_shift, state);
-    style.text_geometric_transform.is_some().hash(state);
-    style.locale_list.is_some().hash(state);
-    hash_option_color(&style.background, state);
-    style.text_decoration.hash(state);
-    hash_option_shadow(&style.shadow, state);
-    style.text_align.hash(state);
-    style.text_direction.hash(state);
-    hash_text_unit(style.line_height, state);
-    hash_option_text_indent(&style.text_indent, state);
+    let span = &style.span_style;
+    let paragraph = &style.paragraph_style;
+
+    hash_option_color(&span.color, state);
+    hash_option_brush(&span.brush, state);
+    hash_option_alpha(&span.alpha, state);
+    hash_text_unit(span.font_size, state);
+    span.font_weight.hash(state);
+    span.font_style.hash(state);
+    span.font_synthesis.hash(state);
+    span.font_family.hash(state);
+    span.font_feature_settings.hash(state);
+    hash_text_unit(span.letter_spacing, state);
+    hash_option_baseline_shift(&span.baseline_shift, state);
+    hash_option_text_geometric_transform(&span.text_geometric_transform, state);
+    span.locale_list.hash(state);
+    hash_option_color(&span.background, state);
+    span.text_decoration.hash(state);
+    hash_option_shadow(&span.shadow, state);
+    span.platform_style.hash(state);
+    hash_option_text_draw_style(&span.draw_style, state);
+
+    paragraph.text_align.hash(state);
+    paragraph.text_direction.hash(state);
+    hash_text_unit(paragraph.line_height, state);
+    hash_option_text_indent(&paragraph.text_indent, state);
+    paragraph.platform_style.hash(state);
+    paragraph.line_height_style.hash(state);
+    paragraph.line_break.hash(state);
+    paragraph.hyphens.hash(state);
+    paragraph.text_motion.hash(state);
 }
 
 impl Hash for TextModifierElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.text.hash(state);
+        self.text.text.hash(state);
         hash_text_style(&self.style, state);
+        self.options.hash(state);
     }
 }
 
@@ -362,7 +552,7 @@ impl ModifierNodeElement for TextModifierElement {
     type Node = TextModifierNode;
 
     fn create(&self) -> Self::Node {
-        TextModifierNode::new(self.text.clone(), self.style.clone())
+        TextModifierNode::new(self.text.clone(), self.style.clone(), self.options)
     }
 
     fn update(&self, node: &mut Self::Node) {
@@ -373,6 +563,10 @@ impl ModifierNodeElement for TextModifierElement {
         }
         if node.style != self.style {
             node.style = self.style.clone();
+            changed = true;
+        }
+        if node.options != self.options {
+            node.options = self.options;
             changed = true;
         }
 
@@ -405,13 +599,20 @@ mod tests {
 
     #[test]
     fn hash_changes_when_style_changes() {
-        let text = Rc::<str>::from("Hello");
-        let element_a = TextModifierElement::new(text.clone(), TextStyle::default());
+        let text = AnnotatedString::from("Hello");
+        let element_a = TextModifierElement::new(
+            text.clone(),
+            TextStyle::default(),
+            TextLayoutOptions::default(),
+        );
         let style_b = TextStyle {
-            font_size: TextUnit::Sp(18.0),
+            span_style: crate::text::SpanStyle {
+                font_size: TextUnit::Sp(18.0),
+                ..Default::default()
+            },
             ..Default::default()
         };
-        let element_b = TextModifierElement::new(text, style_b);
+        let element_b = TextModifierElement::new(text, style_b, TextLayoutOptions::default());
 
         assert_ne!(element_a, element_b);
         assert_ne!(hash_of(&element_a), hash_of(&element_b));
@@ -420,12 +621,17 @@ mod tests {
     #[test]
     fn hash_matches_for_equal_elements() {
         let style = TextStyle {
-            font_size: TextUnit::Sp(14.0),
-            letter_spacing: TextUnit::Em(0.1),
+            span_style: crate::text::SpanStyle {
+                font_size: TextUnit::Sp(14.0),
+                letter_spacing: TextUnit::Em(0.1),
+                ..Default::default()
+            },
             ..Default::default()
         };
-        let element_a = TextModifierElement::new(Rc::<str>::from("Hash me"), style.clone());
-        let element_b = TextModifierElement::new(Rc::<str>::from("Hash me"), style);
+        let options = TextLayoutOptions::default();
+        let text = AnnotatedString::from("Hash me");
+        let element_a = TextModifierElement::new(text.clone(), style.clone(), options);
+        let element_b = TextModifierElement::new(text, style, options);
 
         assert_eq!(element_a, element_b);
         assert_eq!(hash_of(&element_a), hash_of(&element_b));

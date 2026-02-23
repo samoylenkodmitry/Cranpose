@@ -10,7 +10,7 @@ use crate::modifier_nodes::{
     BackgroundNode, ClipToBoundsNode, CornerShapeNode, DrawCommandNode, GraphicsLayerNode,
     PaddingNode,
 };
-use crate::text::TextStyle;
+use crate::text::{TextLayoutOptions, TextStyle};
 use crate::text_field_modifier_node::TextFieldModifierNode;
 use crate::text_modifier_node::TextModifierNode;
 use cranpose_ui_graphics::EdgeInsets;
@@ -25,8 +25,9 @@ pub struct ModifierNodeSlices {
     pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
     click_handlers: Vec<Rc<dyn Fn(Point)>>,
     clip_to_bounds: bool,
-    text_content: Option<Rc<str>>,
+    text_content: Option<crate::text::AnnotatedString>,
     text_style: Option<TextStyle>,
+    text_layout_options: Option<TextLayoutOptions>,
     graphics_layer: Option<GraphicsLayer>,
     graphics_layer_resolver: Option<Rc<dyn Fn() -> GraphicsLayer>>,
     chain_guard: Option<Rc<ChainGuard>>,
@@ -45,6 +46,7 @@ impl Clone for ModifierNodeSlices {
             clip_to_bounds: self.clip_to_bounds,
             text_content: self.text_content.clone(),
             text_style: self.text_style.clone(),
+            text_layout_options: self.text_layout_options,
             graphics_layer: self.graphics_layer.clone(),
             graphics_layer_resolver: self.graphics_layer_resolver.clone(),
             chain_guard: self.chain_guard.clone(),
@@ -136,15 +138,19 @@ impl ModifierNodeSlices {
     }
 
     pub fn text_content(&self) -> Option<&str> {
-        self.text_content.as_deref()
+        self.text_content.as_ref().map(|a| a.text.as_str())
     }
 
-    pub fn text_content_rc(&self) -> Option<Rc<str>> {
+    pub fn annotated_string(&self) -> Option<crate::text::AnnotatedString> {
         self.text_content.clone()
     }
 
     pub fn text_style(&self) -> Option<&TextStyle> {
         self.text_style.as_ref()
+    }
+
+    pub fn text_layout_options(&self) -> Option<TextLayoutOptions> {
+        self.text_layout_options
     }
 
     pub fn graphics_layer(&self) -> Option<GraphicsLayer> {
@@ -201,6 +207,7 @@ impl ModifierNodeSlices {
         self.clip_to_bounds = false;
         self.text_content = None;
         self.text_style = None;
+        self.text_layout_options = None;
         self.graphics_layer = None;
         self.graphics_layer_resolver = None;
         self.chain_guard = None;
@@ -216,6 +223,7 @@ impl fmt::Debug for ModifierNodeSlices {
             .field("clip_to_bounds", &self.clip_to_bounds)
             .field("text_content", &self.text_content)
             .field("text_style", &self.text_style)
+            .field("text_layout_options", &self.text_layout_options)
             .field("graphics_layer", &self.graphics_layer)
             .field(
                 "graphics_layer_resolver",
@@ -333,13 +341,15 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
         let any = node.as_any();
         if let Some(text_node) = any.downcast_ref::<TextModifierNode>() {
             // Rightmost text modifier wins
-            slices.text_content = Some(text_node.text_arc());
+            slices.text_content = Some(text_node.annotated_string());
             slices.text_style = Some(text_node.style().clone());
+            slices.text_layout_options = Some(text_node.options());
         }
         // Also check for TextFieldModifierNode (editable text fields)
         if let Some(text_field_node) = any.downcast_ref::<TextFieldModifierNode>() {
             let text = text_field_node.text();
-            slices.text_content = Some(Rc::from(text));
+            slices.text_content = Some(crate::text::AnnotatedString::from(text));
+            slices.text_layout_options = Some(TextLayoutOptions::default());
 
             // Update content offsets for cursor positioning in collect_draw_primitives()
             text_field_node.set_content_offset(padding.left);

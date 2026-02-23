@@ -3,6 +3,7 @@
 use cranpose_core::NodeId;
 use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_render_common::{HitTestTarget, RenderScene};
+use cranpose_ui::{TextLayoutOptions, TextStyle};
 use cranpose_ui_graphics::{
     BlendMode, Brush, Color, ColorFilter, ImageBitmap, Point, Rect, RenderEffect,
     RoundedCornerShape,
@@ -45,10 +46,12 @@ pub struct DrawShape {
 pub struct TextDraw {
     pub node_id: NodeId,
     pub rect: Rect,
-    pub text: Rc<str>,
+    pub text: Rc<cranpose_ui::text::AnnotatedString>,
     pub color: Color,
+    pub text_style: TextStyle,
     pub font_size: f32,
     pub scale: f32,
+    pub layout_options: TextLayoutOptions,
     pub z_index: usize,
     pub clip: Option<Rect>,
 }
@@ -132,6 +135,8 @@ pub struct ShadowDraw {
     /// Shapes to render to offscreen target before blur.
     /// Each shape carries its own blend mode (SrcOver for fill, DstOut for cutout).
     pub shapes: Vec<(DrawShape, BlendMode)>,
+    /// Texts to render to offscreen target before blur.
+    pub texts: Vec<TextDraw>,
     /// Gaussian blur radius in pixels.
     pub blur_radius: f32,
     /// Optional clip rect applied when compositing (inner shadows clip to element bounds).
@@ -297,10 +302,12 @@ impl Scene {
         &mut self,
         node_id: NodeId,
         rect: Rect,
-        text: Rc<str>,
+        text: Rc<cranpose_ui::text::AnnotatedString>,
         color: Color,
+        text_style: TextStyle,
         font_size: f32,
         scale: f32,
+        layout_options: TextLayoutOptions,
         clip: Option<Rect>,
     ) {
         let z_index = self.next_z;
@@ -310,8 +317,10 @@ impl Scene {
             rect,
             text,
             color,
+            text_style,
             font_size,
             scale,
+            layout_options,
             z_index,
             clip,
         });

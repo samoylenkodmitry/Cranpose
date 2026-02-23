@@ -116,11 +116,9 @@ pub async fn run(
     surface.configure(&device, &surface_config);
 
     // Create renderer with fonts from settings
-    let mut renderer = if let Some(fonts) = settings.fonts {
-        WgpuRenderer::new_with_fonts(fonts)
-    } else {
-        WgpuRenderer::new()
-    };
+    let fonts: &[&[u8]] = settings.fonts.unwrap_or(&[]);
+    log::info!("Web renderer startup: {} font(s)", fonts.len());
+    let mut renderer = WgpuRenderer::new(fonts);
     renderer.init_gpu(Arc::new(device), Arc::new(queue), surface_format);
     renderer.set_root_scale(scale_factor as f32);
     cranpose_ui::set_density(scale_factor as f32);

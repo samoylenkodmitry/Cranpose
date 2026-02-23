@@ -13,7 +13,7 @@ fn create_app() -> AppLauncher {
     AppLauncher::new()
         .with_title("Cranpose Demo")
         .with_size(800, 600)
-        .with_fonts(&DEMO_FONTS)
+        .with_fonts(DEMO_FONTS)
         .with_fps_counter(true) // Show FPS overlay in corner
 }
 
@@ -40,7 +40,8 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen(start)]
 pub fn web_init() {
     // Set up logging
-    wasm_logger::init(wasm_logger::Config::default());
+    // Keep wasm console focused on actionable issues; dependency debug traces are too noisy.
+    wasm_logger::init(wasm_logger::Config::new(log::Level::Info));
     console_error_panic_hook::set_once();
     log::info!("🚀 BUILD-ID-XYZ123-2047 🚀 Cranpose demo starting in browser...");
 }

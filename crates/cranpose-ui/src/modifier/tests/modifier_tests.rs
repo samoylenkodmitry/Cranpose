@@ -359,9 +359,13 @@ fn blur_with_edge_treatment_sets_expected_render_effect() {
     );
 
     let layer = observed.expect("blur layer");
+    let expected_radius = 6.0 * crate::current_density();
     assert_eq!(
         layer.render_effect,
-        Some(RenderEffect::blur_with_edge_treatment(6.0, TileMode::Decal))
+        Some(RenderEffect::blur_with_edge_treatment(
+            expected_radius,
+            TileMode::Decal,
+        ))
     );
     assert_eq!(layer.shape, LayerShape::Rectangle);
     assert!(!layer.clip);

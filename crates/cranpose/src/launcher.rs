@@ -14,7 +14,7 @@ pub struct AppSettings {
     pub initial_width: u32,
     /// Initial window height in logical pixels (desktop only)
     pub initial_height: u32,
-    /// Optional embedded fonts to use for text rendering
+    /// Fonts loaded for text rendering (ordered: primary first, fallbacks last).
     pub fonts: Option<&'static [&'static [u8]]>,
     /// Whether to load system fonts on Android (default: false)
     pub android_use_system_fonts: bool,
@@ -148,7 +148,7 @@ impl AppLauncher {
     /// use cranpose::AppLauncher;
     ///
     /// // In specialized environments, you might include bytes:
-    /// // static REGULAR: &[u8] = include_bytes!("../assets/Roboto-Regular.ttf");
+    /// // static REGULAR: &[u8] = include_bytes!("../assets/MyFont.ttf");
     /// static DUMMY_FONT: &[u8] = &[];
     /// static FONTS: &[&[u8]] = &[DUMMY_FONT];
     ///

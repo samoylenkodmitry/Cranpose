@@ -289,11 +289,8 @@ pub fn run(
                             // Create or reuse app shell
                             if app_shell.is_none() {
                                 // First initialization - create renderer and app shell
-                                let mut renderer = if let Some(fonts) = settings.fonts {
-                                    WgpuRenderer::new_with_fonts(fonts)
-                                } else {
-                                    WgpuRenderer::new()
-                                };
+                                let fonts: &[&[u8]] = settings.fonts.unwrap_or(&[]);
+                                let mut renderer = WgpuRenderer::new(fonts);
                                 renderer.init_gpu(device.clone(), queue.clone(), surface_format);
                                 renderer.set_root_scale(density);
 

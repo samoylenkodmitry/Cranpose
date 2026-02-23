@@ -34,5 +34,12 @@
 - the #[cfg(feature = "robot-app")] is forbidden 
 - reference JC kt repo /media/huge/composerepo/
 - perf scripts are perf*.sh at project root
-- e2e robot headless tests is ./run_robot_test.sh (should all pass)
+- e2e robot headless tests is ./run_robot_test.sh --sequential (should all pass)
 - do not use big models as subagents (opus, codex xhigh thinking, etc), only small fast & cheap to not waste tokens
+- no 'backwards compatability' is allowed; we in a pre-alpha
+- no comments in style "now it is like that" - we are not writing history
+- duplicated code (10+ lines) without architecture is forbidden
+- 'legacy'/'old way' etc not allowed. we are in a pre-alpha, everything is fresh, clean, single instance
+- be aware of what you've done by looking at git status
+- don't call anything 'migration'. Say no to half-states. Only complete entropy annihilation is allowed.
+- don't hardcode things

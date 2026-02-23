@@ -10,7 +10,7 @@
 use crate::composable;
 use crate::layout::policies::EmptyMeasurePolicy;
 use crate::modifier::Modifier;
-use crate::text::TextStyle;
+use crate::text::{TextLayoutOptions, TextOverflow, TextStyle};
 use crate::text_modifier_node::TextModifierElement;
 use crate::widgets::Layout;
 use cranpose_core::{MutableState, NodeId, State};
@@ -18,17 +18,17 @@ use cranpose_foundation::modifier_element;
 use std::rc::Rc; // Added Rc import
 
 #[derive(Clone)]
-pub struct DynamicTextSource(Rc<dyn Fn() -> Rc<str>>);
+pub struct DynamicTextSource(Rc<dyn Fn() -> crate::text::AnnotatedString>);
 
 impl DynamicTextSource {
     pub fn new<F>(resolver: F) -> Self
     where
-        F: Fn() -> Rc<str> + 'static,
+        F: Fn() -> crate::text::AnnotatedString + 'static,
     {
         Self(Rc::new(resolver))
     }
 
-    fn resolve(&self) -> Rc<str> {
+    fn resolve(&self) -> crate::text::AnnotatedString {
         (self.0)()
     }
 }
@@ -39,16 +39,14 @@ impl PartialEq for DynamicTextSource {
     }
 }
 
-impl Eq for DynamicTextSource {}
-
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq)]
 enum TextSource {
-    Static(Rc<str>),
+    Static(crate::text::AnnotatedString),
     Dynamic(DynamicTextSource),
 }
 
 impl TextSource {
-    fn resolve(&self) -> Rc<str> {
+    fn resolve(&self) -> crate::text::AnnotatedString {
         match self {
             TextSource::Static(text) => text.clone(),
             TextSource::Dynamic(dynamic) => dynamic.resolve(),
@@ -62,13 +60,19 @@ trait IntoTextSource {
 
 impl IntoTextSource for String {
     fn into_text_source(self) -> TextSource {
-        TextSource::Static(Rc::from(self))
+        TextSource::Static(crate::text::AnnotatedString::from(self))
     }
 }
 
 impl IntoTextSource for &str {
     fn into_text_source(self) -> TextSource {
-        TextSource::Static(Rc::from(self))
+        TextSource::Static(crate::text::AnnotatedString::from(self))
+    }
+}
+
+impl IntoTextSource for crate::text::AnnotatedString {
+    fn into_text_source(self) -> TextSource {
+        TextSource::Static(self)
     }
 }
 
@@ -79,7 +83,7 @@ where
     fn into_text_source(self) -> TextSource {
         let state = self;
         TextSource::Dynamic(DynamicTextSource::new(move || {
-            Rc::from(state.value().to_string())
+            crate::text::AnnotatedString::from(state.value().to_string())
         }))
     }
 }
@@ -91,7 +95,7 @@ where
     fn into_text_source(self) -> TextSource {
         let state = self;
         TextSource::Dynamic(DynamicTextSource::new(move || {
-            Rc::from(state.value().to_string())
+            crate::text::AnnotatedString::from(state.value().to_string())
         }))
     }
 }
@@ -101,7 +105,9 @@ where
     F: Fn() -> String + 'static,
 {
     fn into_text_source(self) -> TextSource {
-        TextSource::Dynamic(DynamicTextSource::new(move || Rc::from(self())))
+        TextSource::Dynamic(DynamicTextSource::new(move || {
+            crate::text::AnnotatedString::from(self())
+        }))
     }
 }
 
@@ -129,15 +135,31 @@ impl IntoTextSource for DynamicTextSource {
 /// Text("Hello World", Modifier::padding(16.0), TextStyle::default());
 /// ```
 #[composable]
-pub fn Text<S>(value: S, modifier: Modifier, style: TextStyle) -> NodeId
+pub fn BasicText<S>(
+    text: S,
+    modifier: Modifier,
+    style: TextStyle,
+    overflow: TextOverflow,
+    soft_wrap: bool,
+    max_lines: usize,
+    min_lines: usize,
+) -> NodeId
 where
     S: IntoTextSource + Clone + PartialEq + 'static,
 {
-    let current = value.into_text_source().resolve();
+    let current = text.into_text_source().resolve();
+
+    let options = TextLayoutOptions {
+        overflow,
+        soft_wrap,
+        max_lines,
+        min_lines,
+    }
+    .normalized();
 
     // Create a text modifier element that will add TextModifierNode to the chain
     // TextModifierNode handles measurement, drawing, and semantics
-    let text_element = modifier_element(TextModifierElement::new(current, style));
+    let text_element = modifier_element(TextModifierElement::new(current, style, options));
     let final_modifier = Modifier::from_parts(vec![text_element]);
     let combined_modifier = modifier.then(final_modifier);
 
@@ -147,4 +169,43 @@ where
         EmptyMeasurePolicy,
         || {}, // No children
     )
+}
+
+#[composable]
+pub fn Text<S>(value: S, modifier: Modifier, style: TextStyle) -> NodeId
+where
+    S: IntoTextSource + Clone + PartialEq + 'static,
+{
+    BasicText(
+        value,
+        modifier,
+        style,
+        TextOverflow::Clip,
+        true,
+        usize::MAX,
+        1,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::run_test_composition;
+
+    #[test]
+    fn basic_text_creates_node() {
+        let composition = run_test_composition(|| {
+            BasicText(
+                "Hello",
+                Modifier::empty(),
+                TextStyle::default(),
+                TextOverflow::Clip,
+                true,
+                usize::MAX,
+                1,
+            );
+        });
+
+        assert!(composition.root().is_some());
+    }
 }

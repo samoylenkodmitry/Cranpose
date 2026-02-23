@@ -1,6 +1,8 @@
 //! Common rendering contracts shared between renderer backends.
 
+pub mod software_text_raster;
 pub mod style_shared;
+pub mod text_hyphenation;
 
 use cranpose_foundation::nodes::input::PointerEvent;
 use cranpose_ui::LayoutTree;

@@ -8,6 +8,9 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
+use cranpose_render_common::software_text_raster::rasterize_text_to_image_with_font;
+use cranpose_render_common::text_hyphenation::choose_auto_hyphen_break as choose_shared_auto_hyphen_break;
+use cranpose_ui::text::TextMotion;
 use cranpose_ui::{Brush, TextMeasurer, TextMetrics};
 use cranpose_ui_graphics::{BlendMode, Color, ColorFilter, Rect, TileMode};
 
@@ -16,7 +19,7 @@ use crate::style::point_in_resolved_rounded_rect;
 
 static FONT: Lazy<Font<'static>> = Lazy::new(|| {
     let f = Font::try_from_bytes(include_bytes!(
-        "../../../../apps/desktop-demo/assets/Roboto-Light.ttf"
+        "../../../../apps/desktop-demo/assets/NotoSansMerged.ttf"
     ) as &[u8])
     .expect("font");
     f
@@ -35,12 +38,14 @@ pub struct CachedRusttypeTextMeasurer {
 struct TextKey {
     text: Rc<str>,
     font_size_bits: u32,
+    style_hash: u64,
 }
 
 impl PartialEq for TextKey {
     fn eq(&self, other: &Self) -> bool {
         (Rc::ptr_eq(&self.text, &other.text) || *self.text == *other.text)
             && self.font_size_bits == other.font_size_bits
+            && self.style_hash == other.style_hash
     }
 }
 
@@ -50,6 +55,7 @@ impl Hash for TextKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.text.hash(state);
         self.font_size_bits.hash(state);
+        self.style_hash.hash(state);
     }
 }
 
@@ -72,7 +78,13 @@ impl TextMetricsCache {
         }
     }
 
-    fn get_or_measure<F>(&mut self, text: &str, font_size: f32, measure: F) -> TextMetrics
+    fn get_or_measure<F>(
+        &mut self,
+        text: &str,
+        font_size: f32,
+        style_hash: u64,
+        measure: F,
+    ) -> TextMetrics
     where
         F: FnOnce(&str, f32) -> TextMetrics,
     {
@@ -81,6 +93,7 @@ impl TextMetricsCache {
         let key = TextKey {
             text: Rc::from(text),
             font_size_bits: font_size.to_bits(),
+            style_hash,
         };
 
         if let Some(metrics) = self.map.get(&key).copied() {
@@ -158,35 +171,45 @@ fn clip_rect_to_bounds(
     })
 }
 
-fn clip_bounds_from_clip(clip: Option<Rect>, width: u32, height: u32) -> Option<ClipBounds> {
-    clip.and_then(|rect| clip_rect_to_bounds(rect, None, width, height))
-}
-
 // Helper to resolve font size from style
 fn resolve_font_size(style: &cranpose_ui::text::TextStyle) -> f32 {
-    match style.font_size {
-        cranpose_ui::text::TextUnit::Sp(v) => v,
-        cranpose_ui::text::TextUnit::Em(v) => v * 14.0,
-        cranpose_ui::text::TextUnit::Unspecified => 14.0, // Default to 14.0
-    }
+    style.resolve_font_size(14.0)
+}
+
+fn resolve_line_height(style: &cranpose_ui::text::TextStyle, font_size: f32) -> f32 {
+    style.resolve_line_height(14.0, font_size)
+}
+
+fn resolve_letter_spacing(style: &cranpose_ui::text::TextStyle, font_size: f32) -> f32 {
+    let _ = font_size;
+    style.resolve_letter_spacing(14.0)
 }
 
 impl TextMeasurer for CachedRusttypeTextMeasurer {
-    fn measure(&self, text: &str, style: &cranpose_ui::text::TextStyle) -> TextMetrics {
+    fn measure(
+        &self,
+        text: &cranpose_ui::text::AnnotatedString,
+        style: &cranpose_ui::text::TextStyle,
+    ) -> TextMetrics {
+        let text_str = text.text.as_str();
         let font_size = resolve_font_size(style);
+        let style_hash = style.measurement_hash();
         self.cache
             .lock()
             .expect("text metrics cache poisoned")
-            .get_or_measure(text, font_size, measure_text_impl)
+            .get_or_measure(text_str, font_size, style_hash, |value, size| {
+                measure_text_impl(value, style, size)
+            })
     }
 
     fn get_offset_for_position(
         &self,
-        text: &str,
+        text: &cranpose_ui::text::AnnotatedString,
         style: &cranpose_ui::text::TextStyle,
         x: f32,
         _y: f32,
     ) -> usize {
+        let text = text.text.as_str();
         if text.is_empty() {
             return 0;
         }
@@ -196,15 +219,30 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
         let font = &*FONT;
         let v_metrics = font.v_metrics(scale);
         let origin = point(0.0, v_metrics.ascent);
+        let line_height = resolve_line_height(style, (v_metrics.ascent - v_metrics.descent).ceil());
+
+        let line_index = (_y / line_height).floor().max(0.0) as usize;
+        let lines: Vec<&str> = text.split('\n').collect();
+        let target_line = line_index.min(lines.len().saturating_sub(1));
+
+        let mut line_start_byte = 0;
+        for line in lines.iter().take(target_line) {
+            line_start_byte += line.len() + 1;
+        }
+
+        let line_text = lines.get(target_line).unwrap_or(&"");
+        if line_text.is_empty() {
+            return line_start_byte;
+        }
 
         // Find the glyph whose center is closest to x
         let mut best_offset = 0;
         let mut best_distance = f32::INFINITY;
         let mut current_byte_offset = 0;
 
-        for c in text.chars() {
+        for c in line_text.chars() {
             // Get glyph position for this character
-            let prefix = &text[..current_byte_offset];
+            let prefix = &line_text[..current_byte_offset];
             let mut glyph_x = 0.0f32;
 
             // Measure prefix width to get glyph start position
@@ -215,7 +253,7 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
             }
 
             // Get width of current character to find center
-            let char_str = &text[current_byte_offset..current_byte_offset + c.len_utf8()];
+            let char_str = &line_text[current_byte_offset..current_byte_offset + c.len_utf8()];
             let char_width = {
                 let mut w = 0.0f32;
                 for glyph in font.layout(char_str, scale, origin) {
@@ -245,21 +283,22 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
         }
 
         // Also check end of text
-        let total_width = measure_text_impl(text, font_size).width;
+        let total_width = measure_text_impl(line_text, style, font_size).width;
         let end_dist = (x - total_width).abs();
         if end_dist < best_distance {
-            best_offset = text.len();
+            best_offset = line_text.len();
         }
 
-        best_offset
+        line_start_byte + best_offset.min(line_text.len())
     }
 
     fn get_cursor_x_for_offset(
         &self,
-        text: &str,
+        text: &cranpose_ui::text::AnnotatedString,
         style: &cranpose_ui::text::TextStyle,
         offset: usize,
     ) -> f32 {
+        let text = text.text.as_str();
         let clamped_offset = offset.min(text.len());
         if clamped_offset == 0 {
             return 0.0;
@@ -268,32 +307,39 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
         let font_size = resolve_font_size(style);
         // Measure text up to offset
         let prefix = &text[..clamped_offset];
-        measure_text_impl(prefix, font_size).width
+        measure_text_impl(prefix, style, font_size).width
     }
 
     fn layout(
         &self,
-        text: &str,
+        text: &cranpose_ui::text::AnnotatedString,
         style: &cranpose_ui::text::TextStyle,
     ) -> cranpose_ui::text_layout_result::TextLayoutResult {
-        use cranpose_ui::text_layout_result::{LineLayout, TextLayoutResult};
+        let text = text.text.as_str();
+        use cranpose_ui::text_layout_result::{
+            GlyphLayout, LineLayout, TextLayoutData, TextLayoutResult,
+        };
 
         let font_size = resolve_font_size(style);
         let scale = Scale::uniform(font_size);
         let font = &*FONT;
         let v_metrics = font.v_metrics(scale);
-        let line_height = (v_metrics.ascent - v_metrics.descent).ceil();
+        let natural_line_height = (v_metrics.ascent - v_metrics.descent).ceil();
+        let line_height = resolve_line_height(style, natural_line_height);
+        let letter_spacing = resolve_letter_spacing(style, font_size);
         let _origin = point(0.0, v_metrics.ascent);
 
         let mut glyph_x_positions = Vec::new();
         let mut char_to_byte = Vec::new();
+        let mut glyph_layouts = Vec::new();
         let mut lines = Vec::new();
         let mut current_x = 0.0f32;
         let mut line_start = 0;
         let mut y = 0.0f32;
 
         // Build glyph positions
-        for (byte_offset, c) in text.char_indices() {
+        let mut iter = text.char_indices().peekable();
+        while let Some((byte_offset, c)) = iter.next() {
             glyph_x_positions.push(current_x);
             char_to_byte.push(byte_offset);
 
@@ -310,7 +356,25 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
             } else {
                 // Get glyph advance
                 let glyph = font.glyph(c).scaled(scale);
+                let glyph_width = glyph.h_metrics().advance_width.max(0.0);
+                let glyph_end = byte_offset + c.len_utf8();
+                if glyph_end > byte_offset {
+                    glyph_layouts.push(GlyphLayout {
+                        line_index: lines.len(),
+                        start_offset: byte_offset,
+                        end_offset: glyph_end,
+                        x: current_x,
+                        y,
+                        width: glyph_width,
+                        height: line_height,
+                    });
+                }
                 current_x += glyph.h_metrics().advance_width;
+                if let Some((_, next)) = iter.peek() {
+                    if *next != '\n' {
+                        current_x += letter_spacing;
+                    }
+                }
             }
         }
 
@@ -326,24 +390,43 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
             height: line_height,
         });
 
-        let metrics = measure_text_impl(text, font_size);
+        let metrics = measure_text_impl(text, style, font_size);
         TextLayoutResult::new(
-            metrics.width,
-            metrics.height,
-            line_height,
-            glyph_x_positions,
-            char_to_byte,
-            lines,
             text,
+            TextLayoutData {
+                width: metrics.width,
+                height: metrics.height,
+                line_height,
+                glyph_x_positions,
+                char_to_byte,
+                lines,
+                glyph_layouts,
+            },
         )
+    }
+
+    fn choose_auto_hyphen_break(
+        &self,
+        line: &str,
+        style: &cranpose_ui::text::TextStyle,
+        segment_start_char: usize,
+        measured_break_char: usize,
+    ) -> Option<usize> {
+        choose_shared_auto_hyphen_break(line, style, segment_start_char, measured_break_char)
     }
 }
 
-fn measure_text_impl(text: &str, font_size: f32) -> TextMetrics {
+fn measure_text_impl(
+    text: &str,
+    style: &cranpose_ui::text::TextStyle,
+    font_size: f32,
+) -> TextMetrics {
     let scale = Scale::uniform(font_size);
     let font = &*FONT;
     let v_metrics = font.v_metrics(scale);
-    let line_height = (v_metrics.ascent - v_metrics.descent).ceil();
+    let natural_line_height = (v_metrics.ascent - v_metrics.descent).ceil();
+    let line_height = resolve_line_height(style, natural_line_height);
+    let letter_spacing = resolve_letter_spacing(style, font_size);
 
     // Split by newlines for multiline support
     let lines: Vec<&str> = text.split('\n').collect();
@@ -372,6 +455,8 @@ fn measure_text_impl(text: &str, font_size: f32) -> TextMetrics {
         } else {
             (line_max_x - min_x).max(0.0)
         };
+        let char_spacing = (line.chars().count().saturating_sub(1) as f32) * letter_spacing;
+        let line_width = (line_width + char_spacing).max(0.0);
         max_width = max_width.max(line_width);
     }
 
@@ -514,47 +599,183 @@ fn draw_image(frame: &mut [u8], width: u32, height: u32, draw: &ImageDraw) {
 }
 
 fn draw_text(frame: &mut [u8], width: u32, height: u32, draw: &TextDraw) {
-    let color = color_to_rgba(draw.color);
+    if draw.text.span_styles.is_empty() {
+        draw_text_plain(frame, width, height, draw);
+        return;
+    }
+
+    draw_text_with_span_styles(frame, width, height, draw);
+}
+
+fn draw_text_with_span_styles(frame: &mut [u8], width: u32, height: u32, draw: &TextDraw) {
+    let boundaries = draw.text.span_boundaries();
+    let mut cursor_x = draw.rect.x;
+    let mut cursor_y = draw.rect.y;
+    let base_line_height = draw
+        .text_style
+        .resolve_line_height(14.0, draw.font_size)
+        .max(1.0);
+    let mut current_line_height = base_line_height;
+
+    for window in boundaries.windows(2) {
+        let start = window[0];
+        let end = window[1];
+        if start == end {
+            continue;
+        }
+
+        let chunk = &draw.text.text[start..end];
+        let mut merged_span = draw.text_style.span_style.clone();
+        for span in &draw.text.span_styles {
+            if span.range.start <= start && span.range.end >= end {
+                merged_span = merged_span.merge(&span.item);
+            }
+        }
+
+        let mut chunk_style = draw.text_style.clone();
+        chunk_style.span_style = merged_span;
+
+        for part in chunk.split_inclusive('\n') {
+            let has_newline = part.ends_with('\n');
+            let content = if has_newline {
+                &part[..part.len().saturating_sub(1)]
+            } else {
+                part
+            };
+
+            if !content.is_empty() {
+                let segment = cranpose_ui::text::AnnotatedString::from(content);
+                let metrics = cranpose_ui::text::measure_text(&segment, &chunk_style);
+                let segment_draw = TextDraw {
+                    node_id: draw.node_id,
+                    rect: Rect {
+                        x: cursor_x,
+                        y: cursor_y,
+                        width: metrics.width.max(1.0),
+                        height: metrics.height.max(1.0),
+                    },
+                    text: Rc::new(segment),
+                    color: chunk_style.resolve_text_color(draw.color),
+                    text_style: chunk_style.clone(),
+                    font_size: chunk_style.resolve_font_size(draw.font_size),
+                    scale: draw.scale,
+                    layout_options: draw.layout_options,
+                    z_index: draw.z_index,
+                    clip: draw.clip,
+                };
+                draw_text_plain(frame, width, height, &segment_draw);
+                cursor_x += metrics.width;
+                current_line_height = current_line_height.max(metrics.line_height.max(1.0));
+            }
+
+            if has_newline {
+                cursor_x = draw.rect.x;
+                cursor_y += current_line_height;
+                current_line_height = base_line_height;
+            }
+        }
+    }
+}
+
+fn draw_text_plain(frame: &mut [u8], width: u32, height: u32, draw: &TextDraw) {
     let text_scale = draw.scale.max(0.0);
     if text_scale == 0.0 {
         return;
     }
-    let clip_bounds = clip_bounds_from_clip(draw.clip, width, height);
-    if draw.clip.is_some() && clip_bounds.is_none() {
+
+    let static_text_motion = draw
+        .text_style
+        .paragraph_style
+        .text_motion
+        .unwrap_or(TextMotion::Static)
+        == TextMotion::Static;
+
+    let raster_rect = if static_text_motion {
+        Rect {
+            x: draw.rect.x.round(),
+            y: draw.rect.y.round(),
+            width: if draw.rect.width > 0.0 {
+                draw.rect.width.ceil().max(1.0)
+            } else {
+                draw.rect.width
+            },
+            height: if draw.rect.height > 0.0 {
+                draw.rect.height.ceil().max(1.0)
+            } else {
+                draw.rect.height
+            },
+        }
+    } else {
+        draw.rect
+    };
+
+    let Some(image) = rasterize_text_to_image_with_font(
+        draw.text.text.as_str(),
+        raster_rect,
+        &draw.text_style,
+        draw.color,
+        draw.font_size,
+        text_scale,
+        &FONT,
+    ) else {
+        return;
+    };
+
+    let blit_rect = Rect {
+        x: raster_rect.x,
+        y: raster_rect.y,
+        width: image.width() as f32,
+        height: image.height() as f32,
+    };
+
+    blit_rasterized_text_image(frame, width, height, blit_rect, draw.clip, &image);
+}
+
+fn blit_rasterized_text_image(
+    frame: &mut [u8],
+    width: u32,
+    height: u32,
+    rect: Rect,
+    clip: Option<Rect>,
+    image: &cranpose_ui_graphics::ImageBitmap,
+) {
+    if rect.width <= 0.0 || rect.height <= 0.0 {
         return;
     }
-    let clip_limits =
-        clip_bounds.map(|bounds| (bounds.min_x, bounds.min_y, bounds.max_x, bounds.max_y));
-    let scale = Scale::uniform(draw.font_size * text_scale);
-    let font = &*FONT;
-    let v_metrics = font.v_metrics(scale);
-    let offset = point(draw.rect.x, draw.rect.y + v_metrics.ascent);
-    for glyph in font.layout(&draw.text, scale, offset) {
-        if let Some(bb) = glyph.pixel_bounding_box() {
-            if let Some((min_x, min_y, max_x, max_y)) = clip_limits {
-                if bb.max.x <= min_x || bb.min.x >= max_x || bb.max.y <= min_y || bb.min.y >= max_y
-                {
-                    continue;
-                }
+    let clip_bounds = match clip_rect_to_bounds(rect, clip, width, height) {
+        Some(bounds) => bounds,
+        None => return,
+    };
+
+    let img_width = image.width();
+    let img_height = image.height();
+    if img_width == 0 || img_height == 0 {
+        return;
+    }
+    let src_pixels = image.pixels();
+
+    for py in clip_bounds.min_y..clip_bounds.max_y {
+        for px in clip_bounds.min_x..clip_bounds.max_x {
+            let sample_x = px as f32 + 0.5;
+            let sample_y = py as f32 + 0.5;
+            let u = ((sample_x - rect.x) / rect.width).clamp(0.0, 1.0);
+            let v = ((sample_y - rect.y) / rect.height).clamp(0.0, 1.0);
+
+            let src_x = (u * (img_width - 1) as f32).round() as u32;
+            let src_y = (v * (img_height - 1) as f32).round() as u32;
+            let src_idx = ((src_y * img_width + src_x) * 4) as usize;
+            let src = [
+                src_pixels[src_idx] as f32 / 255.0,
+                src_pixels[src_idx + 1] as f32 / 255.0,
+                src_pixels[src_idx + 2] as f32 / 255.0,
+                src_pixels[src_idx + 3] as f32 / 255.0,
+            ];
+            if src[3] <= 0.0 {
+                continue;
             }
-            glyph.draw(|gx, gy, value| {
-                let px = bb.min.x + gx as i32;
-                let py = bb.min.y + gy as i32;
-                if let Some((min_x, min_y, max_x, max_y)) = clip_limits {
-                    if px < min_x || px >= max_x || py < min_y || py >= max_y {
-                        return;
-                    }
-                }
-                if px < 0 || py < 0 || px as u32 >= width || py as u32 >= height {
-                    return;
-                }
-                let idx = ((py as u32 * width + px as u32) * 4) as usize;
-                blend_pixel(
-                    &mut frame[idx..idx + 4],
-                    [color[0], color[1], color[2], value],
-                    BlendMode::SrcOver,
-                );
-            });
+
+            let dst_idx = ((py as u32 * width + px as u32) * 4) as usize;
+            blend_pixel(&mut frame[dst_idx..dst_idx + 4], src, BlendMode::SrcOver);
         }
     }
 }
@@ -759,6 +980,113 @@ fn lerp_color(a: Color, b: Color, t: f32) -> Color {
 mod tests {
     use super::*;
 
+    fn count_non_background_pixels(frame: &[u8], width: u32, height: u32) -> usize {
+        count_non_background_pixels_in_band(frame, width, 0, height)
+    }
+
+    fn render_single_text_frame(
+        style: cranpose_ui::TextStyle,
+        color: Color,
+        x: f32,
+    ) -> (u32, u32, Vec<u8>) {
+        let mut scene = Scene::new();
+        scene.push_text(
+            11,
+            Rect {
+                x,
+                y: 16.0,
+                width: 320.0,
+                height: 90.0,
+            },
+            Rc::new(cranpose_ui::text::AnnotatedString::from("MMMMMMMM")),
+            color,
+            style,
+            64.0,
+            1.0,
+            cranpose_ui::TextLayoutOptions::default(),
+            None,
+        );
+
+        let width = 360;
+        let height = 140;
+        let mut frame = vec![0u8; (width * height * 4) as usize];
+        draw_scene(&mut frame, width, height, &scene);
+        (width, height, frame)
+    }
+
+    fn average_ink_rgb(
+        frame: &[u8],
+        width: u32,
+        x_min: u32,
+        x_max: u32,
+        y_min: u32,
+        y_max: u32,
+    ) -> Option<[f32; 3]> {
+        let mut sum_r = 0.0f32;
+        let mut sum_g = 0.0f32;
+        let mut sum_b = 0.0f32;
+        let mut count = 0usize;
+
+        for y in y_min..y_max {
+            for x in x_min..x_max {
+                let idx = ((y * width + x) * 4) as usize;
+                let px = &frame[idx..idx + 4];
+                if px == [18, 18, 24, 255] {
+                    continue;
+                }
+                sum_r += px[0] as f32 / 255.0;
+                sum_g += px[1] as f32 / 255.0;
+                sum_b += px[2] as f32 / 255.0;
+                count += 1;
+            }
+        }
+
+        if count == 0 {
+            return None;
+        }
+        Some([
+            sum_r / count as f32,
+            sum_g / count as f32,
+            sum_b / count as f32,
+        ])
+    }
+
+    fn count_non_background_pixels_in_band(
+        frame: &[u8],
+        width: u32,
+        y_min_inclusive: u32,
+        y_max_exclusive: u32,
+    ) -> usize {
+        let mut count = 0usize;
+        for y in y_min_inclusive..y_max_exclusive {
+            for x in 0..width {
+                let idx = ((y * width + x) * 4) as usize;
+                let px = &frame[idx..idx + 4];
+                if px != [18, 18, 24, 255] {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    /// Returns `(top_y, bottom_y)` (exclusive) of all non-background ink rows.
+    fn ink_y_range(frame: &[u8], width: u32, height: u32) -> Option<(u32, u32)> {
+        let mut top = None;
+        let mut bottom = 0u32;
+        for y in 0..height {
+            for x in 0..width {
+                let idx = ((y * width + x) * 4) as usize;
+                if &frame[idx..idx + 4] != [18, 18, 24, 255] {
+                    top.get_or_insert(y);
+                    bottom = y + 1;
+                    break;
+                }
+            }
+        }
+        top.map(|t| (t, bottom))
+    }
+
     #[test]
     fn blend_mode_support_matrix_is_explicit() {
         assert!(is_blend_mode_supported(BlendMode::SrcOver));
@@ -771,5 +1099,201 @@ mod tests {
     fn mirror_tile_mode_reflects_second_interval() {
         assert_eq!(normalize_gradient_t(1.25, TileMode::Mirror), Some(0.75));
         assert_eq!(normalize_gradient_t(1.75, TileMode::Mirror), Some(0.25));
+    }
+
+    #[test]
+    fn multiline_text_renders_second_line_pixels() {
+        let mut scene = Scene::new();
+        scene.push_text(
+            1,
+            Rect {
+                x: 8.0,
+                y: 8.0,
+                width: 180.0,
+                height: 80.0,
+            },
+            Rc::new(cranpose_ui::text::AnnotatedString::from(
+                "Dynamic\nModifiers",
+            )),
+            Color::WHITE,
+            cranpose_ui::TextStyle::default(),
+            14.0,
+            1.0,
+            cranpose_ui::TextLayoutOptions::default(),
+            None,
+        );
+
+        let width = 220;
+        let height = 100;
+        let mut frame = vec![0u8; (width * height * 4) as usize];
+        draw_scene(&mut frame, width, height, &scene);
+
+        // Find the y-range of all ink pixels (font-agnostic approach).
+        let (ink_top, ink_bottom) = ink_y_range(&frame, width, height)
+            .expect("expected ink pixels in rendered text");
+        let ink_height = ink_bottom - ink_top;
+        assert!(
+            ink_height >= 20,
+            "expected two lines of ink, ink spans only {ink_height}px (y={ink_top}..{ink_bottom})"
+        );
+        let mid_y = ink_top + ink_height / 2;
+        let first_line_ink = count_non_background_pixels_in_band(&frame, width, ink_top, mid_y);
+        let second_line_ink = count_non_background_pixels_in_band(&frame, width, mid_y, ink_bottom);
+        assert!(first_line_ink > 20, "expected first line to render, got {first_line_ink}");
+        assert!(
+            second_line_ink > 20,
+            "expected second line ink, got {second_line_ink}"
+        );
+    }
+
+    #[test]
+    fn text_clip_bounds_prevent_drawing_outside_scroll_window() {
+        let mut scene = Scene::new();
+        scene.push_text(
+            2,
+            Rect {
+                x: 8.0,
+                y: 40.0,
+                width: 180.0,
+                height: 24.0,
+            },
+            Rc::new(cranpose_ui::text::AnnotatedString::from("Clipped Text")),
+            Color::WHITE,
+            cranpose_ui::TextStyle::default(),
+            14.0,
+            1.0,
+            cranpose_ui::TextLayoutOptions::default(),
+            Some(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 220.0,
+                height: 20.0,
+            }),
+        );
+
+        let width = 220;
+        let height = 100;
+        let mut frame = vec![0u8; (width * height * 4) as usize];
+        draw_scene(&mut frame, width, height, &scene);
+
+        let total_ink = count_non_background_pixels_in_band(&frame, width, 0, height);
+        assert_eq!(
+            total_ink, 0,
+            "text should be fully clipped but rendered {total_ink} ink pixels"
+        );
+    }
+
+    #[test]
+    fn gradient_brush_contract_requires_visible_color_transition() {
+        let style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                brush: Some(Brush::linear_gradient_range(
+                    vec![Color(1.0, 0.0, 0.0, 1.0), Color(0.0, 0.0, 1.0, 1.0)],
+                    cranpose_ui_graphics::Point::new(0.0, 0.0),
+                    cranpose_ui_graphics::Point::new(320.0, 0.0),
+                )),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let (width, _height, frame) = render_single_text_frame(style, Color::WHITE, 12.0);
+        let left = average_ink_rgb(&frame, width, 20, 150, 20, 120).expect("left ink");
+        let right = average_ink_rgb(&frame, width, 200, 340, 20, 120).expect("right ink");
+
+        assert!(
+            left[0] > left[2] * 1.15,
+            "left side should be red-dominant for horizontal gradient, got {left:?}"
+        );
+        assert!(
+            right[2] > right[0] * 1.15,
+            "right side should be blue-dominant for horizontal gradient, got {right:?}"
+        );
+    }
+
+    #[test]
+    fn draw_style_stroke_contract_changes_raster_output() {
+        let fill_style = cranpose_ui::TextStyle::default();
+        let stroke_style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                draw_style: Some(cranpose_ui::text::TextDrawStyle::Stroke { width: 6.0 }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let (width, height, fill_frame) = render_single_text_frame(fill_style, Color::WHITE, 12.0);
+        let (_, _, stroke_frame) = render_single_text_frame(stroke_style, Color::WHITE, 12.0);
+        let fill_ink = count_non_background_pixels(&fill_frame, width, height);
+        let stroke_ink = count_non_background_pixels(&stroke_frame, width, height);
+
+        assert_ne!(
+            fill_frame, stroke_frame,
+            "Fill and Stroke text must not rasterize identically"
+        );
+        assert!(
+            fill_ink.abs_diff(stroke_ink) > 250,
+            "Fill/Stroke ink coverage should differ; fill={fill_ink}, stroke={stroke_ink}"
+        );
+    }
+
+    #[test]
+    fn shadow_blur_radius_contract_changes_raster_output() {
+        let base_shadow = cranpose_ui::text::Shadow {
+            color: Color(0.0, 0.0, 0.0, 0.85),
+            offset: cranpose_ui_graphics::Point::new(6.0, 4.0),
+            blur_radius: 0.0,
+        };
+        let zero_blur_style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                shadow: Some(base_shadow),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let blurred_style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                shadow: Some(cranpose_ui::text::Shadow {
+                    blur_radius: 10.0,
+                    ..base_shadow
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let (_, _, zero_frame) = render_single_text_frame(zero_blur_style, Color::WHITE, 12.0);
+        let (_, _, blur_frame) = render_single_text_frame(blurred_style, Color::WHITE, 12.0);
+
+        assert_ne!(
+            zero_frame, blur_frame,
+            "Changing shadow blur radius must change rendered output"
+        );
+    }
+
+    #[test]
+    fn text_motion_contract_changes_raster_output() {
+        let static_style = cranpose_ui::TextStyle {
+            paragraph_style: cranpose_ui::ParagraphStyle {
+                text_motion: Some(cranpose_ui::text::TextMotion::Static),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let animated_style = cranpose_ui::TextStyle {
+            paragraph_style: cranpose_ui::ParagraphStyle {
+                text_motion: Some(cranpose_ui::text::TextMotion::Animated),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let (_, _, static_frame) = render_single_text_frame(static_style, Color::WHITE, 12.35);
+        let (_, _, animated_frame) = render_single_text_frame(animated_style, Color::WHITE, 12.35);
+
+        assert_ne!(
+            static_frame, animated_frame,
+            "TextMotion::Static and TextMotion::Animated should not rasterize identically"
+        );
     }
 }

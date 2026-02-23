@@ -1,7 +1,9 @@
 use cranpose_services::{local_http_client, local_uri_handler, HttpClientRef};
 use cranpose_ui::{
-    composable, text::TextDecoration, Brush, Button, Color, Column, ColumnSpec, CornerRadii,
-    LinearArrangement, Modifier, Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
+    composable,
+    text::{SpanStyle, TextDecoration},
+    Brush, Button, Color, Column, ColumnSpec, CornerRadii, LinearArrangement, Modifier, Row,
+    RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -124,7 +126,10 @@ pub(crate) fn web_fetch_example() {
                             "API Endpoint:",
                             Modifier::empty().padding(2.0),
                             TextStyle {
-                                color: Some(Color(0.7, 0.74, 0.86, 1.0)),
+                                span_style: SpanStyle {
+                                    color: Some(Color(0.7, 0.74, 0.86, 1.0)),
+                                    ..Default::default()
+                                },
                                 ..Default::default()
                             },
                         );
@@ -136,8 +141,11 @@ pub(crate) fn web_fetch_example() {
                                 }
                             }),
                             TextStyle {
-                                color: Some(Color(0.32, 0.72, 0.98, 1.0)),
-                                text_decoration: Some(TextDecoration::UNDERLINE),
+                                span_style: SpanStyle {
+                                    color: Some(Color(0.32, 0.72, 0.98, 1.0)),
+                                    text_decoration: Some(TextDecoration::UNDERLINE),
+                                    ..Default::default()
+                                },
                                 ..Default::default()
                             },
                         );

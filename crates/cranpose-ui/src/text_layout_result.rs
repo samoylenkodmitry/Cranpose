@@ -20,12 +20,49 @@ pub struct LineLayout {
     pub height: f32,
 }
 
+/// Visual glyph bounds emitted by the text shaper.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GlyphLayout {
+    /// Logical line index for this glyph box.
+    pub line_index: usize,
+    /// Byte offset where glyph coverage starts.
+    pub start_offset: usize,
+    /// Byte offset where glyph coverage ends (exclusive).
+    pub end_offset: usize,
+    /// X position from line origin.
+    pub x: f32,
+    /// Y position from paragraph top.
+    pub y: f32,
+    /// Glyph box width.
+    pub width: f32,
+    /// Glyph box height.
+    pub height: f32,
+}
+
 /// Cached text layout result with pre-computed glyph positions.
 ///
 /// Compute once during `measure()`, reuse for:
 /// - Cursor X position rendering
 /// - Selection highlight geometry
 /// - Click-to-position cursor
+#[derive(Debug, Clone)]
+pub struct TextLayoutData {
+    /// Total width of laid out text
+    pub width: f32,
+    /// Total height of laid out text
+    pub height: f32,
+    /// Height of a single line
+    pub line_height: f32,
+    /// X position at each character boundary (including end)
+    pub glyph_x_positions: Vec<f32>,
+    /// Byte offset for each character index
+    pub char_to_byte: Vec<usize>,
+    /// Line layout information
+    pub lines: Vec<LineLayout>,
+    /// Visual glyph boxes in shaped order.
+    pub glyph_layouts: Vec<GlyphLayout>,
+}
+
 #[derive(Debug, Clone)]
 pub struct TextLayoutResult {
     /// Total width of laid out text
@@ -43,28 +80,23 @@ pub struct TextLayoutResult {
     char_to_byte: Vec<usize>,
     /// Line layout information
     pub lines: Vec<LineLayout>,
+    /// Visual glyph boxes in shaped order.
+    glyph_layouts: Vec<GlyphLayout>,
     /// Hash of text this was computed for (for validation)
     text_hash: u64,
 }
 
 impl TextLayoutResult {
     /// Creates a new layout result with the given glyph positions.
-    pub fn new(
-        width: f32,
-        height: f32,
-        line_height: f32,
-        glyph_x_positions: Vec<f32>,
-        char_to_byte: Vec<usize>,
-        lines: Vec<LineLayout>,
-        text: &str,
-    ) -> Self {
+    pub fn new(text: &str, data: TextLayoutData) -> Self {
         Self {
-            width,
-            height,
-            line_height,
-            glyph_x_positions,
-            char_to_byte,
-            lines,
+            width: data.width,
+            height: data.height,
+            line_height: data.line_height,
+            glyph_x_positions: data.glyph_x_positions,
+            char_to_byte: data.char_to_byte,
+            lines: data.lines,
+            glyph_layouts: data.glyph_layouts,
             text_hash: Self::hash_text(text),
         }
     }
@@ -127,6 +159,11 @@ impl TextLayoutResult {
         self.text_hash == Self::hash_text(text)
     }
 
+    /// Returns visual glyph boxes emitted by shaping/layout.
+    pub fn glyph_layouts(&self) -> &[GlyphLayout] {
+        &self.glyph_layouts
+    }
+
     fn hash_text(text: &str) -> u64 {
         let mut hasher = DefaultHasher::new();
         text.hash(&mut hasher);
@@ -137,16 +174,41 @@ impl TextLayoutResult {
     pub fn monospaced(text: &str, char_width: f32, line_height: f32) -> Self {
         let mut glyph_x_positions = Vec::new();
         let mut char_to_byte = Vec::new();
-        let mut x = 0.0;
+        let mut glyph_layouts = Vec::new();
+        let mut cursor_x = 0.0;
 
         for (byte_offset, _c) in text.char_indices() {
-            glyph_x_positions.push(x);
+            glyph_x_positions.push(cursor_x);
             char_to_byte.push(byte_offset);
-            x += char_width;
+            cursor_x += char_width;
         }
         // Add end position
-        glyph_x_positions.push(x);
+        glyph_x_positions.push(cursor_x);
         char_to_byte.push(text.len());
+
+        let mut line_x = 0.0;
+        let mut line_y = 0.0;
+        let mut line_index = 0usize;
+        for (byte_offset, c) in text.char_indices() {
+            if c == '\n' {
+                line_index = line_index.saturating_add(1);
+                line_y += line_height;
+                line_x = 0.0;
+                continue;
+            }
+            let glyph_start = byte_offset;
+            let glyph_end = glyph_start + c.len_utf8();
+            glyph_layouts.push(GlyphLayout {
+                line_index,
+                start_offset: glyph_start,
+                end_offset: glyph_end,
+                x: line_x,
+                y: line_y,
+                width: char_width,
+                height: line_height,
+            });
+            line_x += char_width;
+        }
 
         // Compute lines - collect once and reuse
         let line_texts: Vec<&str> = text.split('\n').collect();
@@ -189,13 +251,16 @@ impl TextLayoutResult {
         }
 
         Self::new(
-            max_width,
-            lines.len() as f32 * line_height,
-            line_height,
-            glyph_x_positions,
-            char_to_byte,
-            lines,
             text,
+            TextLayoutData {
+                width: max_width,
+                height: lines.len() as f32 * line_height,
+                line_height,
+                glyph_x_positions,
+                char_to_byte,
+                lines,
+                glyph_layouts,
+            },
         )
     }
 }

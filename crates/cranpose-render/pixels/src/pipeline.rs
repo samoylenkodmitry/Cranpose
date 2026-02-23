@@ -3,10 +3,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::Brush;
-use cranpose_ui::{measure_text, LayoutBox, LayoutNode, LayoutNodeKind, SubcomposeLayoutNode};
+use cranpose_ui::text::{
+    resolve_text_direction, ResolvedTextDirection, TextAlign, TextDecoration, TextStyle,
+};
+use cranpose_ui::{
+    measure_text, prepare_text_layout, LayoutBox, LayoutNode, LayoutNodeKind, SubcomposeLayoutNode,
+    TextLayoutOptions, TextOverflow,
+};
 use cranpose_ui_graphics::{
-    BlendMode, Color, CompositingStrategy, GraphicsLayer, LayerShape, Point, Rect, RenderEffect,
-    RoundedCornerShape, Size,
+    BlendMode, Color, CompositingStrategy, EdgeInsets, GraphicsLayer, LayerShape, Point, Rect,
+    RenderEffect, RoundedCornerShape, Size,
 };
 
 use crate::scene::{ClickAction, Scene};
@@ -15,6 +21,17 @@ use crate::style::{
     apply_layer_to_quad, apply_layer_to_rect, combine_layers, layer_uniform_scale, quad_bounds,
     scale_corner_radii, DrawPlacement, NodeStyle,
 };
+
+const TEXT_CLIP_PAD: f32 = 1.0;
+
+fn pad_clip_rect(rect: Rect) -> Rect {
+    Rect {
+        x: rect.x - TEXT_CLIP_PAD,
+        y: rect.y - TEXT_CLIP_PAD,
+        width: (rect.width + TEXT_CLIP_PAD * 2.0).max(0.0),
+        height: (rect.height + TEXT_CLIP_PAD * 2.0).max(0.0),
+    }
+}
 
 static REPORTED_UNSUPPORTED_PIXELS_EFFECTS: AtomicBool = AtomicBool::new(false);
 
@@ -303,7 +320,7 @@ fn render_container(
 
     // Render text content if present in modifier slices.
     // Text is now handled via TextModifierNode in the modifier chain.
-    if let Some(value) = layout.node_data.modifier_slices().text_content_rc() {
+    if let Some(value) = layout.node_data.modifier_slices().annotated_string() {
         let default_text_style = cranpose_ui::text::TextStyle::default();
         let text_style_ref = layout
             .node_data
@@ -311,33 +328,65 @@ fn render_container(
             .text_style()
             .unwrap_or(&default_text_style);
 
-        let metrics = measure_text(value.as_ref(), text_style_ref);
+        let options = layout
+            .node_data
+            .modifier_slices()
+            .text_layout_options()
+            .unwrap_or_default()
+            .normalized();
         let padding = style.padding;
+        let content_width = (rect.width - padding.left - padding.right).max(0.0);
+        let measure_width = resolve_text_measure_width(content_width, padding, None, options);
+        let prepared = prepare_text_layout(
+            &value,
+            text_style_ref,
+            options,
+            Some(measure_width).filter(|w| w.is_finite() && *w > 0.0),
+        );
+        let draw_width = if options.overflow == TextOverflow::Visible {
+            prepared.metrics.width
+        } else {
+            content_width
+        };
+        let alignment_offset = resolve_text_horizontal_offset(
+            text_style_ref,
+            value.text.as_str(),
+            content_width,
+            prepared.metrics.width,
+        );
         let text_rect = Rect {
+            x: rect.x + padding.left + alignment_offset,
+            y: rect.y + padding.top,
+            width: draw_width,
+            height: prepared.metrics.height,
+        };
+        let text_bounds_rect = Rect {
             x: rect.x + padding.left,
             y: rect.y + padding.top,
-            width: metrics.width,
-            height: metrics.height,
+            width: content_width,
+            height: (rect.height - padding.top - padding.bottom).max(0.0),
         };
-        let transformed_text_rect = apply_layer_to_rect(text_rect, rect, &node_layer);
+        // Extract font size from text style or default
+        let font_size = text_style_ref.resolve_font_size(14.0);
+        let expanded_text_bounds =
+            expand_text_bounds_for_baseline_shift(text_bounds_rect, text_style_ref, font_size);
+        let transformed_text_bounds = apply_layer_to_rect(expanded_text_bounds, rect, &node_layer);
+        let text_clip = resolve_text_clip(options.overflow, visual_clip, transformed_text_bounds);
 
-        // Extract color and font size from text style or default
-        let text_color = text_style_ref.color.unwrap_or(Color(1.0, 1.0, 1.0, 1.0));
-        let font_size = match text_style_ref.font_size {
-            cranpose_ui::text::TextUnit::Sp(v) => v,
-            cranpose_ui::text::TextUnit::Em(v) => v * 14.0, // basic Em support
-            cranpose_ui::text::TextUnit::Unspecified => 14.0,
-        };
-
-        scene.push_text(
-            layout.node_id,
-            transformed_text_rect,
-            value,
-            apply_layer_to_color(text_color, &node_layer),
-            font_size,
-            layer_uniform_scale(&node_layer),
-            visual_clip,
-        );
+        if let Some(text_clip) = text_clip {
+            push_text_style_draws(
+                scene,
+                layout.node_id,
+                rect,
+                text_rect,
+                &node_layer,
+                &prepared.text,
+                text_style_ref,
+                font_size,
+                options,
+                text_clip,
+            );
+        }
     }
 
     for handler in &style.click_actions {
@@ -416,6 +465,326 @@ fn resolve_clip(parent_clip: Option<Rect>, requested_clip: Option<Rect>) -> Opti
         (Some(parent), None) => Some(parent),
         (None, Some(current)) => Some(current),
         (None, None) => None,
+    }
+}
+
+fn resolve_text_clip(
+    overflow: TextOverflow,
+    visual_clip: Option<Rect>,
+    transformed_text_bounds: Rect,
+) -> Option<Option<Rect>> {
+    if overflow == TextOverflow::Visible {
+        return Some(visual_clip);
+    }
+    resolve_clip(visual_clip, Some(pad_clip_rect(transformed_text_bounds))).map(Some)
+}
+
+fn expand_text_bounds_for_baseline_shift(
+    text_bounds: Rect,
+    text_style: &TextStyle,
+    font_size: f32,
+) -> Rect {
+    let baseline_shift_px = text_style
+        .span_style
+        .baseline_shift
+        .filter(|shift| shift.is_specified())
+        .map(|shift| -(shift.0 * font_size))
+        .unwrap_or(0.0);
+    if baseline_shift_px == 0.0 {
+        return text_bounds;
+    }
+
+    if baseline_shift_px < 0.0 {
+        Rect {
+            x: text_bounds.x,
+            y: text_bounds.y + baseline_shift_px,
+            width: text_bounds.width,
+            height: (text_bounds.height - baseline_shift_px).max(0.0),
+        }
+    } else {
+        Rect {
+            x: text_bounds.x,
+            y: text_bounds.y,
+            width: text_bounds.width,
+            height: (text_bounds.height + baseline_shift_px).max(0.0),
+        }
+    }
+}
+
+fn resolve_text_color_without_gradient_fallback(text_style: &TextStyle, default: Color) -> Color {
+    let mut color = text_style
+        .span_style
+        .color
+        .or(match text_style.span_style.brush.as_ref() {
+            Some(Brush::Solid(color)) => Some(*color),
+            _ => None,
+        })
+        .unwrap_or(default);
+    if let Some(alpha) = text_style.span_style.alpha {
+        color.3 *= alpha.clamp(0.0, 1.0);
+    }
+    color
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_text_style_draws(
+    scene: &mut Scene,
+    node_id: NodeId,
+    rect: Rect,
+    text_rect: Rect,
+    node_layer: &GraphicsLayer,
+    text: &cranpose_ui::text::AnnotatedString,
+    text_style: &TextStyle,
+    font_size: f32,
+    options: TextLayoutOptions,
+    text_clip: Option<Rect>,
+) {
+    let baseline_shift_px = text_style
+        .span_style
+        .baseline_shift
+        .filter(|shift| shift.is_specified())
+        .map(|shift| -(shift.0 * font_size))
+        .unwrap_or(0.0);
+    let shifted_text_rect = Rect {
+        x: text_rect.x,
+        y: text_rect.y + baseline_shift_px,
+        width: text_rect.width,
+        height: text_rect.height,
+    };
+    let transformed_shifted_text_rect = apply_layer_to_rect(shifted_text_rect, rect, node_layer);
+
+    if let Some(background) = text_style.span_style.background {
+        let brush = apply_layer_to_brush(Brush::solid(background), node_layer);
+        scene.push_shape(
+            transformed_shifted_text_rect,
+            brush,
+            None,
+            text_clip,
+            BlendMode::SrcOver,
+        );
+    }
+
+    let text_color =
+        resolve_text_color_without_gradient_fallback(text_style, Color(1.0, 1.0, 1.0, 1.0));
+    let transformed_text_color = apply_layer_to_color(text_color, node_layer);
+    let mut transformed_text_style = text_style.clone();
+    transformed_text_style.span_style.shadow = None;
+    transformed_text_style.span_style.brush = text_style
+        .span_style
+        .brush
+        .clone()
+        .map(|brush| apply_layer_to_brush(brush, node_layer));
+    let text_brush = transformed_text_style
+        .span_style
+        .brush
+        .clone()
+        .unwrap_or_else(|| Brush::solid(transformed_text_color));
+
+    if let Some(shadow) = text_style.span_style.shadow {
+        let shadow_rect = Rect {
+            x: shifted_text_rect.x + shadow.offset.x,
+            y: shifted_text_rect.y + shadow.offset.y,
+            width: shifted_text_rect.width,
+            height: shifted_text_rect.height,
+        };
+        let transformed_shadow_rect = apply_layer_to_rect(shadow_rect, rect, node_layer);
+        let transformed_shadow_color = apply_layer_to_color(shadow.color, node_layer);
+        let mut shadow_text_style = transformed_text_style.clone();
+        shadow_text_style.span_style.brush = None;
+        shadow_text_style.span_style.shadow = Some(cranpose_ui::text::Shadow {
+            color: transformed_shadow_color,
+            offset: Point::new(0.0, 0.0),
+            blur_radius: shadow.blur_radius,
+        });
+        scene.push_text(
+            node_id,
+            transformed_shadow_rect,
+            Rc::new(text.clone()),
+            Color::TRANSPARENT,
+            shadow_text_style,
+            font_size,
+            layer_uniform_scale(node_layer),
+            options,
+            text_clip,
+        );
+    }
+
+    push_text_decorations(
+        scene,
+        rect,
+        shifted_text_rect,
+        node_layer,
+        text,
+        text_style,
+        &text_brush,
+        text_clip,
+    );
+
+    scene.push_text(
+        node_id,
+        transformed_shifted_text_rect,
+        Rc::new(text.clone()),
+        transformed_text_color,
+        transformed_text_style,
+        font_size,
+        layer_uniform_scale(node_layer),
+        options,
+        text_clip,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_text_decorations(
+    scene: &mut Scene,
+    rect: Rect,
+    text_rect: Rect,
+    content_layer: &GraphicsLayer,
+    annotated_text: &cranpose_ui::text::AnnotatedString,
+    global_style: &TextStyle,
+    text_brush: &Brush,
+    text_clip: Option<Rect>,
+) {
+    if annotated_text.is_empty() {
+        return;
+    }
+
+    let boundaries = annotated_text.span_boundaries();
+    let text_str = annotated_text.text.as_str();
+
+    let mut current_offset: f32 = 0.0;
+
+    for window in boundaries.windows(2) {
+        let start = window[0];
+        let end = window[1];
+        if start == end {
+            continue;
+        }
+
+        let slice = &text_str[start..end];
+        let mut merged_style = global_style.span_style.clone();
+        for span in &annotated_text.span_styles {
+            if span.range.start <= start && span.range.end >= end {
+                merged_style = merged_style.merge(&span.item);
+            }
+        }
+
+        let mut span_text_style = global_style.clone();
+        span_text_style.span_style = merged_style.clone();
+
+        let span_width = measure_text(
+            &cranpose_ui::text::AnnotatedString::from(slice),
+            &span_text_style,
+        )
+        .width
+        .max(0.0);
+
+        let Some(decoration) = merged_style.text_decoration else {
+            current_offset += span_width;
+            continue;
+        };
+
+        if decoration == TextDecoration::NONE || span_width <= 0.0 {
+            current_offset += span_width;
+            continue;
+        }
+
+        let font_size = span_text_style.resolve_font_size(14.0);
+        let line_height = span_text_style
+            .resolve_line_height(14.0, font_size * 1.4)
+            .max(1.0);
+        let thickness = (font_size * 0.06).clamp(1.0, line_height * 0.25);
+        let brush = merged_style.brush.clone().unwrap_or_else(|| {
+            merged_style
+                .color
+                .map(Brush::solid)
+                .unwrap_or_else(|| text_brush.clone())
+        });
+
+        // Using y for single line since we don't map wrapping correctly without layout runs yet
+        let line_top = text_rect.y;
+
+        if decoration.contains(TextDecoration::UNDERLINE) {
+            let underline_rect = Rect {
+                x: text_rect.x + current_offset,
+                y: line_top + line_height - thickness * 1.35,
+                width: span_width,
+                height: thickness,
+            };
+            let transformed = apply_layer_to_rect(underline_rect, rect, content_layer);
+            scene.push_shape(
+                transformed,
+                brush.clone(),
+                None,
+                text_clip,
+                BlendMode::SrcOver,
+            );
+        }
+
+        if decoration.contains(TextDecoration::LINE_THROUGH) {
+            let strike_rect = Rect {
+                x: text_rect.x + current_offset,
+                y: line_top + line_height * 0.52 - thickness * 0.5,
+                width: span_width,
+                height: thickness,
+            };
+            let transformed = apply_layer_to_rect(strike_rect, rect, content_layer);
+            scene.push_shape(transformed, brush, None, text_clip, BlendMode::SrcOver);
+        }
+
+        current_offset += span_width;
+    }
+}
+
+fn resolve_text_measure_width(
+    content_width: f32,
+    padding: EdgeInsets,
+    measured_max_width: Option<f32>,
+    options: TextLayoutOptions,
+) -> f32 {
+    let width = content_width.max(0.0);
+    if let Some(max_width) = measured_max_width.filter(|w| w.is_finite() && *w > 0.0) {
+        let measured_content_width = (max_width - padding.left - padding.right).max(0.0);
+        if measured_content_width <= width {
+            return measured_content_width;
+        }
+
+        let may_expand_to_avoid_synthetic_wrap = options.soft_wrap
+            && options.max_lines == usize::MAX
+            && options.overflow == TextOverflow::Clip;
+        if may_expand_to_avoid_synthetic_wrap {
+            return measured_content_width;
+        }
+    }
+    width
+}
+
+fn resolve_text_horizontal_offset(
+    style: &TextStyle,
+    text: &str,
+    content_width: f32,
+    measured_width: f32,
+) -> f32 {
+    let available_width = content_width.max(0.0);
+    let remaining = (available_width - measured_width.max(0.0)).max(0.0);
+    let paragraph_style = &style.paragraph_style;
+    let direction = resolve_text_direction(text, Some(paragraph_style.text_direction));
+    match paragraph_style.text_align {
+        TextAlign::Left => 0.0,
+        TextAlign::Right => remaining,
+        TextAlign::Center => remaining * 0.5,
+        TextAlign::Justify => 0.0,
+        TextAlign::Start => match direction {
+            ResolvedTextDirection::Ltr => 0.0,
+            ResolvedTextDirection::Rtl => remaining,
+        },
+        TextAlign::End => match direction {
+            ResolvedTextDirection::Ltr => remaining,
+            ResolvedTextDirection::Rtl => 0.0,
+        },
+        TextAlign::Unspecified => match direction {
+            ResolvedTextDirection::Ltr => 0.0,
+            ResolvedTextDirection::Rtl => remaining,
+        },
     }
 }
 
@@ -570,37 +939,73 @@ fn render_node_from_applier(
     }
 
     // Render text content if present
-    if let Some(value) = modifier_slices.text_content_rc() {
+    if let Some(value) = modifier_slices.annotated_string() {
         let default_text_style = cranpose_ui::text::TextStyle::default();
         let text_style_ref = modifier_slices.text_style().unwrap_or(&default_text_style);
 
-        let metrics = measure_text(value.as_ref(), text_style_ref);
+        let options = modifier_slices
+            .text_layout_options()
+            .unwrap_or_default()
+            .normalized();
         let padding = style.padding;
+        let content_width = (rect.width - padding.left - padding.right).max(0.0);
+        let measured_max_width = layout_state
+            .measurement_constraints
+            .max_width
+            .is_finite()
+            .then_some(layout_state.measurement_constraints.max_width);
+        let measure_width =
+            resolve_text_measure_width(content_width, padding, measured_max_width, options);
+        let prepared = prepare_text_layout(
+            &value,
+            text_style_ref,
+            options,
+            Some(measure_width).filter(|w| w.is_finite() && *w > 0.0),
+        );
+        let draw_width = if options.overflow == TextOverflow::Visible {
+            prepared.metrics.width
+        } else {
+            content_width
+        };
+        let alignment_offset = resolve_text_horizontal_offset(
+            text_style_ref,
+            value.text.as_str(),
+            content_width,
+            prepared.metrics.width,
+        );
         let text_rect = Rect {
+            x: rect.x + padding.left + alignment_offset,
+            y: rect.y + padding.top,
+            width: draw_width,
+            height: prepared.metrics.height,
+        };
+        let text_bounds_rect = Rect {
             x: rect.x + padding.left,
             y: rect.y + padding.top,
-            width: metrics.width,
-            height: metrics.height,
+            width: content_width,
+            height: (rect.height - padding.top - padding.bottom).max(0.0),
         };
-        let transformed_text_rect = apply_layer_to_rect(text_rect, rect, &node_layer);
+        // Extract font size
+        let font_size = text_style_ref.resolve_font_size(14.0);
+        let expanded_text_bounds =
+            expand_text_bounds_for_baseline_shift(text_bounds_rect, text_style_ref, font_size);
+        let transformed_text_bounds = apply_layer_to_rect(expanded_text_bounds, rect, &node_layer);
+        let text_clip = resolve_text_clip(options.overflow, visual_clip, transformed_text_bounds);
 
-        // Extract color and font size
-        let text_color = text_style_ref.color.unwrap_or(Color(1.0, 1.0, 1.0, 1.0));
-        let font_size = match text_style_ref.font_size {
-            cranpose_ui::text::TextUnit::Sp(v) => v,
-            cranpose_ui::text::TextUnit::Em(v) => v * 14.0,
-            cranpose_ui::text::TextUnit::Unspecified => 14.0,
-        };
-
-        scene.push_text(
-            node_id,
-            transformed_text_rect,
-            value,
-            apply_layer_to_color(text_color, &node_layer),
-            font_size,
-            layer_uniform_scale(&node_layer),
-            visual_clip,
-        );
+        if let Some(text_clip) = text_clip {
+            push_text_style_draws(
+                scene,
+                node_id,
+                rect,
+                text_rect,
+                &node_layer,
+                &prepared.text,
+                text_style_ref,
+                font_size,
+                options,
+                text_clip,
+            );
+        }
     }
 
     // Collect click actions
@@ -787,6 +1192,470 @@ mod tests {
                 width: 20.0,
                 height: 20.0,
             }
+        );
+    }
+
+    #[test]
+    fn resolve_text_clip_skips_when_intersection_is_empty() {
+        let visual_clip = Some(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        });
+        let text_bounds = Rect {
+            x: 20.0,
+            y: 20.0,
+            width: 5.0,
+            height: 5.0,
+        };
+        assert_eq!(
+            resolve_text_clip(TextOverflow::Clip, visual_clip, text_bounds),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_text_clip_visible_keeps_unbounded_draw() {
+        let text_bounds = Rect {
+            x: 20.0,
+            y: 20.0,
+            width: 5.0,
+            height: 5.0,
+        };
+        assert_eq!(
+            resolve_text_clip(TextOverflow::Visible, None, text_bounds),
+            Some(None)
+        );
+    }
+
+    #[test]
+    fn expand_text_bounds_for_baseline_shift_superscript_extends_top() {
+        let style = TextStyle {
+            span_style: cranpose_ui::text::SpanStyle {
+                baseline_shift: Some(cranpose_ui::text::BaselineShift::SUPERSCRIPT),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let text_bounds = Rect {
+            x: 20.0,
+            y: 20.0,
+            width: 50.0,
+            height: 18.0,
+        };
+        let expanded = expand_text_bounds_for_baseline_shift(text_bounds, &style, 20.0);
+        assert!(expanded.y < text_bounds.y);
+        assert!(expanded.height > text_bounds.height);
+        assert_eq!(
+            expanded.y + expanded.height,
+            text_bounds.y + text_bounds.height
+        );
+    }
+
+    #[test]
+    fn resolve_text_measure_width_expands_for_multiline_clip_text() {
+        let padding = EdgeInsets {
+            left: 4.0,
+            top: 0.0,
+            right: 4.0,
+            bottom: 0.0,
+        };
+        let width =
+            resolve_text_measure_width(130.0, padding, Some(180.0), TextLayoutOptions::default());
+        assert!((width - 172.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn resolve_text_measure_width_caps_single_line_measurements() {
+        let padding = EdgeInsets {
+            left: 4.0,
+            top: 0.0,
+            right: 4.0,
+            bottom: 0.0,
+        };
+        let width = resolve_text_measure_width(
+            130.0,
+            padding,
+            Some(180.0),
+            TextLayoutOptions {
+                overflow: TextOverflow::Ellipsis,
+                soft_wrap: false,
+                max_lines: 1,
+                min_lines: 1,
+            },
+        );
+        assert!((width - 130.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn resolve_text_measure_width_respects_tighter_measurement_constraint() {
+        let padding = EdgeInsets {
+            left: 4.0,
+            top: 0.0,
+            right: 4.0,
+            bottom: 0.0,
+        };
+        let width =
+            resolve_text_measure_width(130.0, padding, Some(100.0), TextLayoutOptions::default());
+        assert!((width - 92.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn resolve_text_measure_width_falls_back_to_content_width_without_constraint() {
+        let padding = EdgeInsets {
+            left: 4.0,
+            top: 0.0,
+            right: 4.0,
+            bottom: 0.0,
+        };
+        let width = resolve_text_measure_width(130.0, padding, None, TextLayoutOptions::default());
+        assert!((width - 130.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn resolve_text_measure_width_keeps_content_width_for_finite_max_lines() {
+        let padding = EdgeInsets {
+            left: 4.0,
+            top: 0.0,
+            right: 4.0,
+            bottom: 0.0,
+        };
+        let options = TextLayoutOptions {
+            max_lines: 4,
+            ..TextLayoutOptions::default()
+        };
+        let width = resolve_text_measure_width(130.0, padding, Some(180.0), options);
+        assert!((width - 130.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn resolve_text_horizontal_offset_centers_text() {
+        let style = cranpose_ui::TextStyle {
+            paragraph_style: cranpose_ui::ParagraphStyle {
+                text_align: cranpose_ui::text::TextAlign::Center,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let offset = resolve_text_horizontal_offset(&style, "hello", 120.0, 80.0);
+        assert!((offset - 20.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn resolve_text_horizontal_offset_uses_rtl_start() {
+        let style = cranpose_ui::TextStyle {
+            paragraph_style: cranpose_ui::ParagraphStyle {
+                text_align: cranpose_ui::text::TextAlign::Start,
+                text_direction: cranpose_ui::text::TextDirection::Rtl,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let offset = resolve_text_horizontal_offset(&style, "hello", 120.0, 80.0);
+        assert!((offset - 40.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn resolve_text_horizontal_offset_uses_start_for_unspecified_align() {
+        let style = cranpose_ui::TextStyle {
+            paragraph_style: cranpose_ui::ParagraphStyle {
+                text_align: cranpose_ui::text::TextAlign::Unspecified,
+                text_direction: cranpose_ui::text::TextDirection::Rtl,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let offset = resolve_text_horizontal_offset(&style, "hello", 120.0, 80.0);
+        assert!((offset - 40.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn measurement_constraint_width_prevents_spurious_wrap() {
+        let padding = EdgeInsets {
+            left: 4.0,
+            top: 0.0,
+            right: 4.0,
+            bottom: 0.0,
+        };
+        let text = "Dynamic Modifiers";
+        let style = cranpose_ui::TextStyle::default();
+        let options = cranpose_ui::TextLayoutOptions::default();
+        let content_width = 130.0;
+
+        let wrapped_by_content = prepare_text_layout(
+            &cranpose_ui::text::AnnotatedString::from(text),
+            &style,
+            options,
+            Some(content_width),
+        )
+        .text;
+        assert!(
+            wrapped_by_content.text.contains('\n'),
+            "control check expected wrapping at content width: {wrapped_by_content:?}"
+        );
+
+        let measure_width =
+            resolve_text_measure_width(content_width, padding, Some(180.0), options);
+        let prepared = prepare_text_layout(
+            &cranpose_ui::text::AnnotatedString::from(text),
+            &style,
+            options,
+            Some(measure_width),
+        );
+        assert!(
+            !prepared.text.text.contains('\n'),
+            "measurement width should prevent synthetic wrap: {:?}",
+            prepared.text
+        );
+    }
+
+    #[test]
+    fn finite_max_lines_keeps_wrap_points_under_content_width() {
+        let padding = EdgeInsets {
+            left: 4.0,
+            top: 0.0,
+            right: 4.0,
+            bottom: 0.0,
+        };
+        let text = "This paragraph demonstrates textIndent lineHeight lineBreak";
+        let style = cranpose_ui::TextStyle::default();
+        let options = cranpose_ui::TextLayoutOptions {
+            overflow: TextOverflow::Clip,
+            soft_wrap: true,
+            max_lines: 4,
+            min_lines: 1,
+        };
+        let content_width = 130.0;
+        let measure_width =
+            resolve_text_measure_width(content_width, padding, Some(180.0), options);
+        let prepared = prepare_text_layout(
+            &cranpose_ui::text::AnnotatedString::from(text),
+            &style,
+            options,
+            Some(measure_width),
+        );
+        assert!(
+            prepared.text.text.contains('\n'),
+            "finite max_lines should keep constrained wrapping: {:?}",
+            prepared.text
+        );
+    }
+
+    #[test]
+    fn push_text_style_draws_emits_background_shadow_and_main_text() {
+        let mut scene = Scene::new();
+        let style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                color: Some(Color(0.9, 0.95, 1.0, 1.0)),
+                background: Some(Color(0.2, 0.3, 0.52, 0.55)),
+                shadow: Some(cranpose_ui::text::Shadow {
+                    color: Color(0.0, 0.0, 0.0, 0.95),
+                    offset: Point::new(2.0, 2.0),
+                    blur_radius: 3.0,
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let rect = Rect {
+            x: 8.0,
+            y: 10.0,
+            width: 180.0,
+            height: 28.0,
+        };
+        let clip = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 400.0,
+            height: 200.0,
+        };
+
+        push_text_style_draws(
+            &mut scene,
+            7 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            &cranpose_ui::text::AnnotatedString::from("Decorated shadow text"),
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            Some(clip),
+        );
+
+        assert_eq!(
+            scene.shapes.len(),
+            1,
+            "span background should emit one shape"
+        );
+        let Brush::Solid(background) = &scene.shapes[0].brush else {
+            panic!("background draw should use a solid brush");
+        };
+        assert_eq!(*background, Color(0.2, 0.3, 0.52, 0.55));
+
+        assert_eq!(scene.texts.len(), 2, "shadow + content text expected");
+        assert_eq!(scene.texts[0].color, Color::TRANSPARENT);
+        let shadow_style = scene.texts[0]
+            .text_style
+            .span_style
+            .shadow
+            .expect("shadow draw should carry style shadow");
+        assert_eq!(shadow_style.color, Color(0.0, 0.0, 0.0, 0.95));
+        assert_eq!(shadow_style.offset, Point::new(0.0, 0.0));
+        assert!((shadow_style.blur_radius - 3.0).abs() < f32::EPSILON);
+        assert_eq!(scene.texts[1].color, Color(0.9, 0.95, 1.0, 1.0));
+        assert!(scene.texts[0].rect.x > scene.texts[1].rect.x);
+        assert!(scene.texts[0].rect.y > scene.texts[1].rect.y);
+    }
+
+    #[test]
+    fn push_text_style_draws_emits_decoration_shapes() {
+        let mut scene = Scene::new();
+        let style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                color: Some(Color(0.9, 0.95, 1.0, 1.0)),
+                text_decoration: Some(
+                    cranpose_ui::text::TextDecoration::UNDERLINE
+                        .combine(cranpose_ui::text::TextDecoration::LINE_THROUGH),
+                ),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let rect = Rect {
+            x: 8.0,
+            y: 10.0,
+            width: 180.0,
+            height: 28.0,
+        };
+
+        push_text_style_draws(
+            &mut scene,
+            7 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            &cranpose_ui::text::AnnotatedString::from("Decorated"),
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        assert_eq!(scene.shapes.len(), 2, "underline + line-through expected");
+        assert_eq!(scene.texts.len(), 1, "main text expected");
+    }
+
+    #[test]
+    fn push_text_style_draws_applies_baseline_shift() {
+        let mut scene = Scene::new();
+        let style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                color: Some(Color(0.9, 0.95, 1.0, 1.0)),
+                baseline_shift: Some(cranpose_ui::text::BaselineShift::SUPERSCRIPT),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let rect = Rect {
+            x: 8.0,
+            y: 20.0,
+            width: 180.0,
+            height: 28.0,
+        };
+
+        push_text_style_draws(
+            &mut scene,
+            7 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            &cranpose_ui::text::AnnotatedString::from("Shifted"),
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        assert_eq!(scene.texts.len(), 1);
+        assert!(
+            scene.texts[0].rect.y < rect.y,
+            "superscript baseline shift should move text up"
+        );
+    }
+
+    #[test]
+    fn push_text_style_draws_non_solid_brush_contract_does_not_fallback_to_first_stop() {
+        let mut scene = Scene::new();
+        let first_stop = Color(1.0, 0.0, 0.0, 1.0);
+        let style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                brush: Some(Brush::linear_gradient_range(
+                    vec![first_stop, Color(0.0, 0.0, 1.0, 1.0)],
+                    Point::new(0.0, 0.0),
+                    Point::new(180.0, 0.0),
+                )),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let rect = Rect {
+            x: 8.0,
+            y: 20.0,
+            width: 180.0,
+            height: 28.0,
+        };
+
+        push_text_style_draws(
+            &mut scene,
+            7 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            &cranpose_ui::text::AnnotatedString::from("Gradient text"),
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        assert_eq!(scene.texts.len(), 1);
+        assert_ne!(
+            scene.texts[0].color, first_stop,
+            "non-solid brush text should not degrade to first-stop fallback color"
+        );
+    }
+
+    #[test]
+    fn single_line_overflow_keeps_content_width_for_ellipsis() {
+        let padding = EdgeInsets {
+            left: 4.0,
+            top: 0.0,
+            right: 4.0,
+            bottom: 0.0,
+        };
+        let text = "Overflow sample: Supercalifragilisticexpialidocious";
+        let style = cranpose_ui::TextStyle::default();
+        let options = TextLayoutOptions {
+            overflow: TextOverflow::Ellipsis,
+            soft_wrap: false,
+            max_lines: 1,
+            min_lines: 1,
+        };
+        let content_width = 130.0;
+        let measure_width =
+            resolve_text_measure_width(content_width, padding, Some(180.0), options);
+        let prepared = prepare_text_layout(
+            &cranpose_ui::text::AnnotatedString::from(text),
+            &style,
+            options,
+            Some(measure_width),
+        );
+        assert!(
+            prepared.text.text.contains('\u{2026}'),
+            "ellipsis should remain active: {:?}",
+            prepared.text
         );
     }
 }

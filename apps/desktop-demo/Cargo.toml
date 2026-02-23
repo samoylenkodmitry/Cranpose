@@ -73,6 +73,7 @@ console_error_panic_hook = "0.1"
 
 [dev-dependencies]
 cranpose-macros = { path = "../../crates/cranpose-macros" }
+cranpose-render-wgpu = { path = "../../crates/cranpose-render/wgpu" }
 cranpose-testing = { path = "../../crates/cranpose-testing" }
 
 # Robot test runners
@@ -476,4 +477,9 @@ required-features = ["robot-app"]
 [[example]]
 name = "robot_measure_shaders"
 path = "robot-runners/robot_measure_shaders.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_text_showcase_gradient"
+path = "robot-runners/robot_text_showcase_gradient.rs"
 required-features = ["robot-app"]

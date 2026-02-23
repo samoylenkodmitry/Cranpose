@@ -108,7 +108,11 @@ fn main() {
                 let _ = robot.exit();
                 return;
             };
-            let line_height = measure_text("A", &TextStyle::default()).line_height;
+            let line_height = measure_text(
+                &cranpose::text::AnnotatedString::from("A"),
+                &TextStyle::default(),
+            )
+            .line_height;
             let lines = 3.0_f32;
             let extra_height = (th - line_height * lines).max(0.0);
             let padding_top = extra_height / 2.0;

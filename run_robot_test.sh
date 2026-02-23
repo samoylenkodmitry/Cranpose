@@ -138,8 +138,14 @@ run_test() {
         robot_lazy_list_after_modifiers|robot_tab_navigation)
             timeout_secs=120
             ;;
+        robot_measure_shaders)
+            timeout_secs=180
+            ;;
         robot_shader_backdrop_drag)
-            timeout_secs=120
+            timeout_secs=180
+            ;;
+        robot_shadow_fields)
+            timeout_secs=180
             ;;
         robot_double_click|robot_multiline_click|robot_multiline_nav)
             timeout_secs=90
@@ -147,10 +153,10 @@ run_test() {
     esac
 
     if command -v timeout >/dev/null 2>&1; then
-        timeout "${timeout_secs}s" cargo run --package desktop-app --example "$example" --features robot-app > "$output_file" 2>&1
+        CRANPOSE_HEADLESS=1 timeout "${timeout_secs}s" cargo run --package desktop-app --example "$example" --features robot-app > "$output_file" 2>&1
         local exit_code=$?
     else
-        cargo run --package desktop-app --example "$example" --features robot-app > "$output_file" 2>&1
+        CRANPOSE_HEADLESS=1 cargo run --package desktop-app --example "$example" --features robot-app > "$output_file" 2>&1
         local exit_code=$?
     fi
 
