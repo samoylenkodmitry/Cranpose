@@ -1,6 +1,6 @@
 # Text Parity Tracker
 
-Last Updated: 2026-02-22
+Last Updated: 2026-02-23
 
 This document tracks API and behavior parity between Cranpose text rendering and Jetpack Compose text.
 
@@ -133,6 +133,7 @@ This section is a context handoff for the next implementation chat.
 - Resolver now also enforces a runtime non-empty font-db guard before family resolution/shaping, injecting embedded fallback if the db is unexpectedly empty.
 - Attr resolution now downgrades requested style/weight to an available face when exact style/weight is absent (critical for wasm where no system italic/bold fallback exists).
 - Embedded Unicode fallback font (`DejaVu Sans`) is now force-loaded in `wgpu` bootstrap to provide cross-script coverage (Hebrew/arrows and similar glyph sets) when app fonts are script-limited.
+- Web demo wasm logging now initializes at `Info` level (instead of `Debug`) to suppress dependency debug spam (`naga`, `wgpu-hal`, `cosmic-text`) during normal tab switching diagnostics.
 
 ### Current `wgpu` routing contract
 
