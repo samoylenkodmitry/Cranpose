@@ -117,8 +117,13 @@ pub async fn run(
 
     // Create renderer with fonts from settings
     let mut renderer = if let Some(fonts) = settings.fonts {
+        log::info!(
+            "Web renderer startup received {} configured font blobs",
+            fonts.len()
+        );
         WgpuRenderer::new_with_fonts(fonts)
     } else {
+        log::warn!("Web renderer startup received no configured fonts");
         WgpuRenderer::new()
     };
     renderer.init_gpu(Arc::new(device), Arc::new(queue), surface_format);

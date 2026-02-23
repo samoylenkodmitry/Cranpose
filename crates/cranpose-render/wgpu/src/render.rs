@@ -4,7 +4,10 @@ use crate::effect_renderer::{EffectRenderer, RoundedCompositeMask};
 use crate::offscreen::OffscreenTarget;
 use crate::scene::{BackdropLayer, DrawShape, EffectLayer, ImageDraw, ShadowDraw, TextDraw};
 use crate::shaders;
-use crate::{EnsureTextBufferParams, SharedTextBuffer, SharedTextCache, TextCacheKey};
+use crate::{
+    EnsureTextBufferParams, SharedFontFamilyResolver, SharedTextBuffer, SharedTextCache,
+    TextCacheKey,
+};
 use bytemuck::{Pod, Zeroable};
 use cranpose_ui_graphics::{
     BlendMode, Brush, Color, ColorFilter, ImageBitmap, Rect, RenderEffect, TileMode,
@@ -486,6 +489,7 @@ pub struct GpuRenderer {
     image_bind_group_layout: wgpu::BindGroupLayout,
     image_sampler: wgpu::Sampler,
     font_system: Arc<Mutex<FontSystem>>,
+    font_family_resolver: SharedFontFamilyResolver,
     text_renderer: TextRenderer,
     text_atlas: TextAtlas,
     swash_cache: SwashCache,
@@ -521,6 +525,7 @@ impl GpuRenderer {
         queue: Arc<wgpu::Queue>,
         surface_format: wgpu::TextureFormat,
         font_system: Arc<Mutex<FontSystem>>,
+        font_family_resolver: SharedFontFamilyResolver,
         text_cache: SharedTextCache,
     ) -> Self {
         let uniform_bind_group_layout =
@@ -696,6 +701,7 @@ impl GpuRenderer {
             image_bind_group_layout,
             image_sampler,
             font_system,
+            font_family_resolver,
             text_renderer,
             text_atlas,
             swash_cache,
@@ -2518,6 +2524,7 @@ impl GpuRenderer {
     ) -> Result<(), String> {
         let mut font_system = self.font_system.lock().unwrap();
         let mut text_cache = self.text_cache.lock().unwrap();
+        let mut font_family_resolver = self.font_family_resolver.lock().unwrap();
 
         let mut text_keys: Vec<TextCacheKey> = Vec::with_capacity(layer_texts.len());
 
@@ -2556,6 +2563,7 @@ impl GpuRenderer {
 
             buffer.ensure(
                 &mut font_system,
+                &mut font_family_resolver,
                 EnsureTextBufferParams {
                     annotated_text: &text_draw.text,
                     font_size_px,

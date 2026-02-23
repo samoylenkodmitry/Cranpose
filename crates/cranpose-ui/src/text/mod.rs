@@ -9,7 +9,10 @@ pub mod unit;
 
 pub use annotated_string::{AnnotatedString, RangeStyle};
 pub use decoration::{Shadow, TextDecoration};
-pub use font::{FontFamily, FontStyle, FontSynthesis, FontWeight};
+pub use font::{
+    FileBackedFontFamily, FontFamily, FontFile, FontStyle, FontSynthesis, FontWeight,
+    LoadedTypefacePath,
+};
 pub use layout_options::{TextLayoutOptions, TextOverflow};
 pub use measure::{
     get_cursor_x_for_offset, get_offset_for_position, layout_text, measure_text,

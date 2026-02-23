@@ -1,4 +1,57 @@
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FontFile {
+    pub path: String,
+    pub weight: FontWeight,
+    pub style: FontStyle,
+}
+
+impl FontFile {
+    pub fn new(path: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            weight: FontWeight::NORMAL,
+            style: FontStyle::Normal,
+        }
+    }
+
+    pub fn with_weight(mut self, weight: FontWeight) -> Self {
+        self.weight = weight;
+        self
+    }
+
+    pub fn with_style(mut self, style: FontStyle) -> Self {
+        self.style = style;
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FileBackedFontFamily {
+    pub fonts: Vec<FontFile>,
+}
+
+impl FileBackedFontFamily {
+    pub fn new(fonts: Vec<FontFile>) -> Self {
+        assert!(
+            !fonts.is_empty(),
+            "FileBackedFontFamily requires at least one font file"
+        );
+        Self { fonts }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct LoadedTypefacePath {
+    pub path: String,
+}
+
+impl LoadedTypefacePath {
+    pub fn new(path: impl Into<String>) -> Self {
+        Self { path: path.into() }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum FontFamily {
     Default,
     SansSerif,
@@ -7,6 +60,8 @@ pub enum FontFamily {
     Cursive,
     Fantasy,
     Named(String),
+    FileBacked(FileBackedFontFamily),
+    LoadedTypeface(LoadedTypefacePath),
 }
 
 impl FontFamily {
@@ -24,6 +79,14 @@ impl FontFamily {
             "Fantasy" | "fantasy" => Self::Fantasy,
             value => Self::Named(value.to_string()),
         }
+    }
+
+    pub fn file_backed(fonts: Vec<FontFile>) -> Self {
+        Self::FileBacked(FileBackedFontFamily::new(fonts))
+    }
+
+    pub fn loaded_typeface_path(path: impl Into<String>) -> Self {
+        Self::LoadedTypeface(LoadedTypefacePath::new(path))
     }
 
     pub fn family_name(&self) -> Option<&str> {
@@ -136,6 +199,47 @@ mod tests {
         let family = FontFamily::named("Fira Sans");
         assert_eq!(family, FontFamily::Named("Fira Sans".to_string()));
         assert_eq!(family.family_name(), Some("Fira Sans"));
+    }
+
+    #[test]
+    fn font_family_file_backed_preserves_font_entries() {
+        let family = FontFamily::file_backed(vec![
+            FontFile::new("/tmp/Roboto-Regular.ttf"),
+            FontFile::new("/tmp/Roboto-Bold.ttf").with_weight(FontWeight::BOLD),
+        ]);
+        let FontFamily::FileBacked(file_backed) = family else {
+            panic!("expected file-backed family");
+        };
+        assert_eq!(file_backed.fonts.len(), 2);
+        assert_eq!(file_backed.fonts[0].path, "/tmp/Roboto-Regular.ttf");
+        assert_eq!(file_backed.fonts[0].weight, FontWeight::NORMAL);
+        assert_eq!(file_backed.fonts[1].path, "/tmp/Roboto-Bold.ttf");
+        assert_eq!(file_backed.fonts[1].weight, FontWeight::BOLD);
+    }
+
+    #[test]
+    fn font_file_builder_applies_style_and_weight() {
+        let file = FontFile::new("/tmp/Roboto-Italic.ttf")
+            .with_weight(FontWeight::MEDIUM)
+            .with_style(FontStyle::Italic);
+        assert_eq!(file.path, "/tmp/Roboto-Italic.ttf");
+        assert_eq!(file.weight, FontWeight::MEDIUM);
+        assert_eq!(file.style, FontStyle::Italic);
+    }
+
+    #[test]
+    #[should_panic(expected = "requires at least one font file")]
+    fn file_backed_font_family_rejects_empty_font_list() {
+        let _ = FileBackedFontFamily::new(Vec::new());
+    }
+
+    #[test]
+    fn font_family_loaded_typeface_path_preserves_path() {
+        let family = FontFamily::loaded_typeface_path("/tmp/FiraSans-Regular.ttf");
+        let FontFamily::LoadedTypeface(typeface) = family else {
+            panic!("expected loaded typeface family");
+        };
+        assert_eq!(typeface.path, "/tmp/FiraSans-Regular.ttf");
     }
 
     #[test]

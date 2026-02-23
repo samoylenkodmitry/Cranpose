@@ -34,7 +34,7 @@ Cranpose implementation anchors:
 
 | Feature | Status | Notes |
 |---|---|---|
-| `FontFamily` generic values (`Default`, `SansSerif`, `Serif`, `Monospace`, `Cursive`) | PARTIAL | Supported, plus `Fantasy` and `Named(String)`. Compose also supports resolver/file-backed/list/typeface families which are not modeled 1:1 yet. |
+| `FontFamily` generic values (`Default`, `SansSerif`, `Serif`, `Monospace`, `Cursive`) | PARTIAL | Supported, plus `Fantasy`, `Named(String)`, `FileBacked(Vec<FontFile>)`, and `LoadedTypeface(path)`. Compose resolver/list internals are implemented in `wgpu` as a runtime resolver but API surface is not yet 1:1. |
 | `FontWeight` range and named constants | ALIGNED | Range validation and constants (`W100..W900`, aliases) implemented. |
 | `TextAlign` values (`Left`, `Right`, `Center`, `Justify`, `Start`, `End`, `Unspecified`) | ALIGNED | Implemented in `paragraph.rs`. |
 | `TextDirection` values (`Ltr`, `Rtl`, `Content`, `ContentOrLtr`, `ContentOrRtl`, `Unspecified`) | ALIGNED | Implemented with resolver helper and content heuristic. |
@@ -51,7 +51,7 @@ Cranpose implementation anchors:
 | Style-aware text measurement caching | ALIGNED | Cache keys include style hash (not only text/font size). |
 | Overflow handling (`Clip`, `Ellipsis`, `StartEllipsis`, `MiddleEllipsis`, `Visible`) | PARTIAL | Implemented in fallback measurer/path and now width-clamped to content bounds in render pipelines; parity with platform line-breaking engines is not exact. |
 | Multiline cursor/offset mapping | PARTIAL | Fixed in pixels measurer for Y-based line selection; broader shaping-cluster parity still pending. |
-| Font fallback/resolver behavior | GAP | Compose resolver and fallback chain behavior not fully replicated. |
+| Font fallback/resolver behavior | PARTIAL | `wgpu` now uses a shared resolver for measurement + render (`TypefaceRequest` cache, named-family fallback to canonical loaded families, file-backed and loaded-typeface path resolution, wasm-safe path handling, generic fallback seeding, and embedded fallback font bootstrap). Full Compose fallback-chain parity remains ongoing. |
 | Glyph shaping and bidi parity | GAP | Current backend behavior is good but not yet a strict equivalent of Compose/Skia text shaping behavior in all scripts. |
 | `lineHeightStyle` exact trim/alignment mode semantics | PARTIAL | Modeled and carried through style; full rendering semantics are not fully enforced yet. |
 | `lineBreak`, `hyphens`, `textMotion` rendering impact | ALIGNED | `lineBreak` differentiates `Simple` (greedy) from `Heading`/`Paragraph` (word-balance-aware with different last-line penalties); `Hyphens::Auto` injects correct dictionary-based line splits without mutating source text content across embedded locales; and `textMotion` fractionally offsets sampling natively. Compose-exact platform shaping/hinting behavior remains approximate. |
@@ -81,10 +81,10 @@ Expected behavior is derived from Compose sources under `/media/huge/composerepo
 | Case | Compose Contract | Cranpose Current | Target |
 |---|---|---|---|
 | `brush = SolidColor(c)` with `alpha` | Treated as color with alpha modulation. | Works through color resolution. | Keep behavior. |
-| `brush = ShaderBrush` | Shader sampled during glyph paint; not collapsed to a single fallback color. | `pixels` samples brush per glyph in text draw space; `wgpu` uses runtime shader masking/material evaluation for plain-text fill and stroke with no software text fallback route. | Extend the same material model to span-rich text. |
-| `drawStyle = Fill` | Fill glyph interior. | Explicit fill path used in both backends. In `wgpu`, plain-text non-solid fill uses GPU runtime shader masking over a glyphon alpha mask. | Preserve semantics and extend to span-rich text material routing. |
+| `brush = ShaderBrush` | Shader sampled during glyph paint; not collapsed to a single fallback color. | `pixels` samples brush per glyph in text draw space; `wgpu` uses runtime shader masking/material evaluation for plain-text and span-batched fill/stroke with no software text fallback route. | Harden continuity on mixed-bidi and wrapped-line stress cases. |
+| `drawStyle = Fill` | Fill glyph interior. | Explicit fill path used in both backends. In `wgpu`, non-solid fill uses GPU runtime shader masking over a glyphon alpha mask for plain text and span material batches. | Preserve semantics and harden stress-case continuity. |
 | `drawStyle = Stroke(...)` | Outline glyph using stroke parameters (width/cap/join/miter/path). | `wgpu` plain-text stroke is now GPU-rendered through the same glyph-mask + runtime-shader material path as fill; `pixels` keeps software glyph-path stroking. | Add remaining stroke-parameter surface parity beyond width-only API. |
-| Multi-paragraph brush continuity | Single brush shader continuity across paragraph segments. | `pixels` keeps brush continuity across wrapped text in one draw; `wgpu` raster fallback preserves continuity within each emitted text draw. | Match Compose continuity details across all paragraph/shaping paths. |
+| Multi-paragraph brush continuity | Single brush shader continuity across paragraph segments. | `pixels` keeps brush continuity across wrapped text in one draw; `wgpu` keeps continuity through same-material batching and glyph-mask effect passes. | Match Compose continuity details across all paragraph/shaping paths, especially mixed bidi wraps. |
 | Bidi with brush/stroke | Brush/stroke applies consistently to visual glyph order. | Brush/stroke now applies in both backends for emitted glyph runs; full Compose bidi/shaping parity remains broader work. | Equivalent semantics in `pixels` and `wgpu` for mixed-direction text. |
 
 ### Shadow Blur (`shadow.blur_radius`)
@@ -126,6 +126,12 @@ This section is a context handoff for the next implementation chat.
 - `push_text_style_draws(...)` no longer emits `scene.push_image(...)` for text style routing in `wgpu`.
 - Runtime stroke rendering is packed through shader material uniforms and evaluated from the glyph alpha mask in GPU space.
 - Stroke effect layers now expand bounds from shader-packed stroke padding, preventing thick/high-scale stroke clipping while preserving brush-space coordinates.
+- `FontFamily` model now includes Compose-like file-backed and loaded-typeface path variants in `cranpose-ui`.
+- `wgpu` now runs a shared font resolver across measurement + render paths with request caching, canonical family-name resolution, and generic fallback seeding.
+- Missing named families now resolve to GPU fallback families instead of failing family lookup.
+- Renderer startup now guarantees at least one loaded face by injecting an embedded Roboto fallback when app settings provide no fonts (critical for wasm/web stability).
+- Resolver now also enforces a runtime non-empty font-db guard before family resolution/shaping, injecting embedded fallback if the db is unexpectedly empty.
+- Attr resolution now downgrades requested style/weight to an available face when exact style/weight is absent (critical for wasm where no system italic/bold fallback exists).
 
 ### Current `wgpu` routing contract
 
@@ -152,6 +158,7 @@ This section is a context handoff for the next implementation chat.
 - Rich span runs now use GPU material batching for paint overrides (`color` / `brush` / `alpha` / `draw_style`) via per-material glyph-mask effect passes. Remaining work is follow-up hardening for mixed-bidi and wrapped-line continuity stress cases.
 - `TextDrawStyle` API still exposes width-only stroke controls (cap/join/miter/path parity is pending).
 - Stroke quality hardening now includes shader-side stroke padding + expanded effect bounds and static-vs-animated stroke snapping regression coverage; additional manual visual tuning remains follow-up.
+- Font resolver currently approximates Compose resolver behavior but is not yet a strict equivalent for every fallback-chain and synthesis edge case.
 
 ### Remaining GPU Work Plan
 
@@ -230,8 +237,8 @@ Execution order:
 
 ### Recommended pre-alpha focus (next cycle)
 
-1. `50%` effort: harden mixed-bidi and wrapped-line continuity edge cases in span material batching.
-2. `30%` effort: implement Compose-like font resolver/fallback architecture (file-backed families + loaded typeface paths).
+1. `60%` effort: harden mixed-bidi and wrapped-line continuity edge cases in span material batching.
+2. `20%` effort: tighten Compose resolver parity details on top of the implemented resolver architecture (fallback chain nuances, synthesis fidelity, wasm path provisioning strategy).
 3. `20%` effort: keep Workstream 4 gates + regression coverage updates as strict blockers after each major change.
 4. Defer API-surface expansion (`TextDrawStyle` cap/join/miter/path) until priorities `1` and `2` are stable.
 5. Treat gradient-stop cap expansion as lower priority unless blocked by a concrete product/demo requirement.
@@ -251,15 +258,20 @@ Current state:
 - Decorations are generated from measured glyph-run visual boxes (`layout_text(...)` glyph layouts), with logical-line fallback only if glyph boxes are unavailable.
 - Decoration parity gap tracked in docs is resolved on this branch.
 - Non-decorated text now short-circuits decoration layout work to avoid shaping overhead.
+- Compose-like font resolver/fallback architecture is implemented in `wgpu` and wired into both measurement and render paths.
+- Web/wasm startup now includes embedded fallback font bootstrap when no app fonts are provided, preventing missing-font crash paths.
+- Resolver path now enforces a non-empty font db before shaping and injects embedded fallback at runtime if needed.
+- Style/weight requests are now normalized to available faces before shaping to avoid `cosmic-text` default-font panics on wasm text showcase content.
 
 Latest validation snapshot:
 - cargo fmt passed
 - cargo clippy -p cranpose-render-wgpu --tests -- -D warnings passed
-- cargo test -p cranpose-render-wgpu passed (74 tests)
+- cargo test -p cranpose-render-wgpu passed (86 tests)
 - cargo test -p cranpose-ui text_layout_result -- --nocapture passed
 - apps/desktop-demo/build-web.sh passed
 - (cd apps/android-demo/android && ./gradlew :app:assembleRelease) passed
 - ./run_robot_test.sh --sequential passed (77/77)
+- rg -n "software_text_raster|rasterize_text_to_image|requires_rasterized_glyph_path" crates/cranpose-render/wgpu/src -g'*.rs' returned no matches
 
 Hard invariants:
 - crates/cranpose-render/wgpu/src must not reference software text raster hooks.
@@ -267,8 +279,8 @@ Hard invariants:
 - No `scene.push_image(...)` text fallback in wgpu text style routing.
 
 Next priority (pre-alpha):
-1) `50%`: mixed-bidi and wrapped-line continuity hardening for span material batching.
-2) `30%`: Compose-like font resolver/fallback architecture (resolver model + file-backed families + loaded typeface paths).
+1) `60%`: mixed-bidi and wrapped-line continuity hardening for span material batching.
+2) `20%`: resolver parity refinements beyond the implemented architecture (Compose fallback-chain details and synthesis behavior).
 3) `20%`: regression/gates discipline after each major change.
 4) Keep stroke-edge manual QA as follow-up polish, not primary scope for this cycle.
 
@@ -328,18 +340,20 @@ Tests to add/update:
 
 - `cargo fmt` passed.
 - `cargo clippy -p cranpose-render-wgpu --tests -- -D warnings` passed.
-- `cargo test -p cranpose-render-wgpu` passed (`74` tests).
+- `cargo test -p cranpose-render-wgpu` passed (`86` tests).
 - `cargo test -p cranpose-ui text_layout_result -- --nocapture` passed.
 - `apps/desktop-demo/build-web.sh` passed.
 - `(cd apps/android-demo/android && ./gradlew :app:assembleRelease)` passed.
 - `./run_robot_test.sh --sequential` passed (`77`/`77`).
+- `rg -n "software_text_raster|rasterize_text_to_image|requires_rasterized_glyph_path" crates/cranpose-render/wgpu/src -g'*.rs'` returned no matches.
 
 ### Branch working set at snapshot time
 
-- `crates/cranpose-render/wgpu/src/pipeline.rs`: text stroke shader path now packs stroke padding, expands effect bounds to avoid clipping, and adds regression tests for stroke edge bounds + static/animated motion consistency.
-- `crates/cranpose-render/wgpu/src/lib.rs`: wgpu text measurer now exports glyph-run layout boxes into shared text layout results.
-- `crates/cranpose-render/pixels/src/draw.rs`: pixels measurer now populates shared glyph layout payload to keep `TextLayoutResult` contract aligned.
-- `crates/cranpose-ui/src/text_layout_result.rs`: `GlyphLayout` + `TextLayoutData` added; constructor and accessors updated for shared glyph-run geometry.
+- `crates/cranpose-render/wgpu/src/lib.rs`: shared `WgpuFontFamilyResolver` added and wired through text measurement/render preparation (request cache, canonical family resolution, generic fallback seeding, file-backed and loaded-typeface path loading, embedded fallback bootstrap, runtime non-empty font-db enforcement before shaping, and style/weight normalization to available faces).
+- `crates/cranpose-render/wgpu/src/render.rs`: `GpuRenderer` now owns resolver handle and uses it for all text buffer `ensure(...)` calls.
+- `crates/cranpose-ui/src/text/font.rs`: `FontFile`, `FileBackedFontFamily`, and `LoadedTypefacePath` added; `FontFamily` now models file-backed/typeface-path variants.
+- `crates/cranpose-ui/src/text/mod.rs`: new font model types re-exported for app usage.
+- `crates/cranpose/src/web.rs`: web startup now logs configured font-blob count (or missing-font warning) for direct wasm diagnostics.
 
 ## Demo Coverage
 
@@ -357,9 +371,9 @@ It exercises:
 
 ## Remaining Work to Reach Strict 1:1
 
-- Add Compose-like font resolver/fallback model (file-backed families and loaded typeface paths). [PRIMARY NEXT-CYCLE SCOPE: 30%]
+- Tighten resolver fallback-chain and synthesis semantics to align with Compose edge cases across all platforms.
 - Add rich text primitives equivalent to `AnnotatedString` span/paragraph runs and paint behavior.
-- Tighten shaping/bidi parity across scripts and punctuation according to Unicode algorithm behavior. [PRIMARY NEXT-CYCLE SCOPE: 50%]
+- Tighten shaping/bidi parity across scripts and punctuation according to Unicode algorithm behavior.
 - Tighten renderer-side behavior parity for `lineHeightStyle`, text motion raster quality, geometric transform, locale, and feature settings.
 - Add targeted cross-backend visual regression tests for remaining parity gaps.
 
