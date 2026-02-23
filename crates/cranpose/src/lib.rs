@@ -11,8 +11,6 @@ compile_error!(
 compile_error!("cranpose requires either `renderer-pixels` or `renderer-wgpu` feature.");
 
 mod launcher;
-#[cfg(feature = "renderer-wgpu")]
-pub use launcher::FallbackFontPolicy;
 pub use launcher::{AppLauncher, AppSettings};
 #[cfg(feature = "renderer-wgpu")]
 mod present_mode;
@@ -32,8 +30,6 @@ pub use cranpose_core::{
 
 /// Convenience imports for Cranpose applications.
 pub mod prelude {
-    #[cfg(feature = "renderer-wgpu")]
-    pub use crate::FallbackFontPolicy;
     pub use crate::{AppLauncher, AppSettings};
     pub use cranpose_core::{mutableStateOf, remember, rememberUpdatedState, useState};
     pub use cranpose_services::*;

@@ -775,8 +775,8 @@ impl ApplicationHandler for App {
         surface.configure(&device, &surface_config);
 
         // Create renderer with fonts from settings
-        let primary_fonts: &[&[u8]] = self.settings.fonts.take().unwrap_or(&[]);
-        let mut renderer = WgpuRenderer::new(primary_fonts, &self.settings.fallback_policy);
+        let fonts: &[&[u8]] = self.settings.fonts.take().unwrap_or(&[]);
+        let mut renderer = WgpuRenderer::new(fonts);
         renderer.init_gpu(Arc::new(device), Arc::new(queue), surface_format);
         let initial_scale = window.scale_factor();
         renderer.set_root_scale(initial_scale as f32);

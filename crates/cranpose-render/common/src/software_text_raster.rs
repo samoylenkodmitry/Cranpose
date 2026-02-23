@@ -930,7 +930,7 @@ mod tests {
     #[test]
     fn rasterized_gradient_text_shows_color_transition() {
         let font = Font::try_from_bytes(include_bytes!(
-            "../../../../assets/NotoSansMerged.ttf"
+            "../../../../apps/desktop-demo/assets/NotoSansMerged.ttf"
         ) as &[u8])
         .expect("font");
         // Use a gradient sized to the rendered text width so left=red, right=blue.
@@ -991,7 +991,7 @@ mod tests {
     #[test]
     fn rasterized_stroke_and_fill_ink_coverage_differs() {
         let font = Font::try_from_bytes(include_bytes!(
-            "../../../../assets/NotoSansMerged.ttf"
+            "../../../../apps/desktop-demo/assets/NotoSansMerged.ttf"
         ) as &[u8])
         .expect("font");
         let fill_style = TextStyle::default();
@@ -1042,7 +1042,7 @@ mod tests {
     #[test]
     fn stroke_path_uses_miter_join_for_acute_apexes() {
         let font = Font::try_from_bytes(include_bytes!(
-            "../../../../assets/NotoSansMerged.ttf"
+            "../../../../apps/desktop-demo/assets/NotoSansMerged.ttf"
         ) as &[u8])
         .expect("font");
         let fill_style = TextStyle::default();
@@ -1108,7 +1108,7 @@ mod tests {
     #[test]
     fn shadow_blur_radius_changes_spread_for_shared_raster_path() {
         let font = Font::try_from_bytes(include_bytes!(
-            "../../../../assets/NotoSansMerged.ttf"
+            "../../../../apps/desktop-demo/assets/NotoSansMerged.ttf"
         ) as &[u8])
         .expect("font");
         let base_shadow = Shadow {
@@ -1177,7 +1177,7 @@ mod tests {
     #[test]
     fn text_motion_changes_fractional_shadow_sampling() {
         let font = Font::try_from_bytes(include_bytes!(
-            "../../../../assets/NotoSansMerged.ttf"
+            "../../../../apps/desktop-demo/assets/NotoSansMerged.ttf"
         ) as &[u8])
         .expect("font");
         let base_shadow = Shadow {
@@ -1243,7 +1243,7 @@ mod tests {
     #[test]
     fn static_text_motion_aligns_glyph_positions_to_pixel_grid() {
         let font = Font::try_from_bytes(include_bytes!(
-            "../../../../assets/NotoSansMerged.ttf"
+            "../../../../apps/desktop-demo/assets/NotoSansMerged.ttf"
         ) as &[u8])
         .expect("font");
         let scale = Scale::uniform(17.0);

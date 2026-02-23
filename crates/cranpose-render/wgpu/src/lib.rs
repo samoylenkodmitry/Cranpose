@@ -34,67 +34,6 @@ use std::num::NonZeroUsize;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-// Text fallback: NotoSansMerged (NotoSans + NotoSansSymbols, OFL 1.1).
-// 1.2 MB; covers Latin/Greek/Cyrillic text plus arrows and symbols (U+2190–U+27FF etc.).
-const EMBEDDED_FALLBACK_FONT_BYTES: &[u8] =
-    include_bytes!("../../../../assets/NotoSansMerged.ttf");
-const EMBEDDED_FALLBACK_FAMILY: &str = "Noto Sans";
-
-// Emoji fallback: Twemoji.Mozilla (COLR+CPAL v0, Apache 2.0 / CC-BY 4.0).
-// 1.4 MB; 13 700+ emoji as COLR vector glyphs — rendered in full color via SwashContent::Color.
-const EMBEDDED_EMOJI_FONT_BYTES: &[u8] =
-    include_bytes!("../../../../assets/TwemojiMozilla.ttf");
-const EMBEDDED_EMOJI_FAMILY: &str = "Twemoji Mozilla";
-
-/// Controls which fallback fonts the framework injects after primary app fonts.
-///
-/// The framework's default bundle is two fonts:
-/// - **NotoSansMerged** (1.2 MB, OFL 1.1): Latin/Greek/Cyrillic text plus symbol blocks.
-/// - **Twemoji Mozilla** (1.4 MB, Apache 2.0/CC-BY 4.0): 13 700+ COLR vector color emoji.
-///
-/// Both work on every target including WASM/WebGL2.  Applications are expected to supply
-/// their own primary text fonts via [`AppLauncher::with_fonts`][crate::AppLauncher::with_fonts].
-///
-/// Use this policy to extend, replace, or disable the bundle.
-///
-/// # Example
-///
-/// ```no_run
-/// // (inside AppLauncher builder – see AppLauncher docs for full example)
-/// // Add fonts on top of the framework defaults:
-/// //   .with_extra_fallback_fonts(&[MY_EXTRA_FONT])
-/// // Replace the framework defaults entirely:
-/// //   .with_fallback_fonts(&[MY_FALLBACK])
-/// // Disable all framework fallbacks:
-/// //   .with_no_fallback_fonts()
-/// ```
-#[derive(Clone, Debug, Default)]
-pub enum FallbackFontPolicy {
-    /// Inject the framework's default fallback bundle: NotoSansMerged (text+symbols) +
-    /// Twemoji Mozilla (COLR color emoji).
-    ///
-    /// Appended after primary app fonts so it only activates for codepoints the primary
-    /// fonts do not cover.  This is the default on all targets including WASM.
-    #[default]
-    Default,
-    /// Inject the framework defaults **and** the supplied extra fonts as additional fallbacks.
-    ///
-    /// Framework defaults are loaded first; the extra fonts are appended after.
-    Extend(&'static [&'static [u8]]),
-    /// Do **not** inject the framework defaults; use only the supplied fonts as fallbacks.
-    ///
-    /// The renderer still guarantees at least one face is present – if the provided
-    /// slice is empty it injects the embedded NotoSansMerged as a last-resort guard
-    /// so that text rendering never panics.
-    Replace(&'static [&'static [u8]]),
-    /// No framework or user-supplied fallback fonts.
-    ///
-    /// Only primary app fonts (passed via `AppLauncher::with_fonts`) are loaded.
-    /// The renderer still injects the embedded NotoSansMerged if the font database
-    /// would otherwise be empty, preventing a hard renderer crash.
-    None,
-}
-
 /// Size-only cache for ultra-fast text measurement lookups.
 /// Key: (text_hash, font_size_fixed_point, style_hash)
 /// Value: (text_content, size) - text stored to handle hash collisions
@@ -371,19 +310,8 @@ impl WgpuFontFamilyResolver {
     }
 
     fn ensure_non_empty_font_db(&mut self, font_system: &mut FontSystem) {
-        if font_system.db().faces().next().is_some() {
-            load_embedded_fallback_if_missing(font_system);
-            load_embedded_emoji_if_missing(font_system);
-            return;
-        }
-
-        log::warn!("Font database is empty before shaping; injecting guard font");
-        font_system
-            .db_mut()
-            .load_font_data(EMBEDDED_FALLBACK_FONT_BYTES.to_vec());
-
         if font_system.db().faces().next().is_none() {
-            log::error!("Guard font failed to load; text shaping may still panic");
+            log::warn!("Font database is empty; text will not render. Provide fonts via AppLauncher::with_fonts.");
         }
     }
 
@@ -573,104 +501,14 @@ impl WgpuFontFamilyResolver {
     }
 }
 
-fn load_fonts_with_policy(
-    font_system: &mut FontSystem,
-    primary_fonts: &[&[u8]],
-    policy: &FallbackFontPolicy,
-) {
-    for (i, font_data) in primary_fonts.iter().enumerate() {
-        log::info!(
-            "Loading primary font #{}, size: {} bytes",
-            i,
-            font_data.len()
-        );
+fn load_fonts(font_system: &mut FontSystem, fonts: &[&[u8]]) {
+    for (i, font_data) in fonts.iter().enumerate() {
+        log::info!("Loading font #{}, size: {} bytes", i, font_data.len());
         font_system.db_mut().load_font_data(font_data.to_vec());
     }
-
-    match policy {
-        FallbackFontPolicy::Default => {
-            load_framework_fallbacks(font_system);
-        }
-        FallbackFontPolicy::Extend(extra) => {
-            load_framework_fallbacks(font_system);
-            for (i, font_data) in extra.iter().enumerate() {
-                log::info!(
-                    "Loading extra fallback font #{}, size: {} bytes",
-                    i,
-                    font_data.len()
-                );
-                font_system.db_mut().load_font_data(font_data.to_vec());
-            }
-        }
-        FallbackFontPolicy::Replace(user_fallbacks) => {
-            for (i, font_data) in user_fallbacks.iter().enumerate() {
-                log::info!(
-                    "Loading replacement fallback font #{}, size: {} bytes",
-                    i,
-                    font_data.len()
-                );
-                font_system.db_mut().load_font_data(font_data.to_vec());
-            }
-            ensure_guard_font(font_system);
-        }
-        FallbackFontPolicy::None => {
-            ensure_guard_font(font_system);
-        }
-    }
-
-    let face_count = font_system.db().faces().count();
-    log::info!("Total font faces loaded: {}", face_count);
+    log::info!("Total font faces loaded: {}", font_system.db().faces().count());
 }
 
-fn load_framework_fallbacks(font_system: &mut FontSystem) {
-    load_embedded_fallback_if_missing(font_system);
-    load_embedded_emoji_if_missing(font_system);
-    ensure_guard_font(font_system);
-}
-
-/// Inject the fallback font only when the database is still empty after all policy loading.
-fn ensure_guard_font(font_system: &mut FontSystem) {
-    if font_system.db().faces().count() == 0 {
-        log::warn!("No fonts loaded – injecting NotoSansMerged as last-resort guard.");
-        font_system
-            .db_mut()
-            .load_font_data(EMBEDDED_FALLBACK_FONT_BYTES.to_vec());
-    }
-}
-
-fn font_db_contains_family(font_system: &FontSystem, family_name: &str) -> bool {
-    font_system.db().faces().any(|face| {
-        face.families
-            .iter()
-            .any(|(name, _)| name.eq_ignore_ascii_case(family_name))
-    })
-}
-
-fn load_embedded_fallback_if_missing(font_system: &mut FontSystem) {
-    if font_db_contains_family(font_system, EMBEDDED_FALLBACK_FAMILY) {
-        return;
-    }
-    log::info!(
-        "Loading embedded text fallback {} (NotoSans + symbols, 1.2 MB)",
-        EMBEDDED_FALLBACK_FAMILY
-    );
-    font_system
-        .db_mut()
-        .load_font_data(EMBEDDED_FALLBACK_FONT_BYTES.to_vec());
-}
-
-fn load_embedded_emoji_if_missing(font_system: &mut FontSystem) {
-    if font_db_contains_family(font_system, EMBEDDED_EMOJI_FAMILY) {
-        return;
-    }
-    log::info!(
-        "Loading embedded emoji font {} (COLR color, 1.4 MB)",
-        EMBEDDED_EMOJI_FAMILY
-    );
-    font_system
-        .db_mut()
-        .load_font_data(EMBEDDED_EMOJI_FONT_BYTES.to_vec());
-}
 
 #[cfg(not(target_arch = "wasm32"))]
 fn primary_family_name_from_bytes(bytes: &[u8]) -> Option<String> {
@@ -738,24 +576,11 @@ pub struct WgpuRenderer {
 impl WgpuRenderer {
     /// Create a new WGPU renderer.
     ///
-    /// * `primary_fonts` – application-supplied font bytes loaded at highest priority.
-    ///   Pass `&[]` if the application does not supply its own fonts.
-    /// * `policy` – controls which framework fallback fonts are injected after the
-    ///   primary fonts.  See [`FallbackFontPolicy`] for the available options.
+    /// * `fonts` – font bytes to load, ordered by priority (first = highest priority).
+    ///   Pass `&[]` to load no fonts; text will not render until fonts are provided.
     ///
     /// Call [`init_gpu`][Self::init_gpu] before rendering.
-    ///
-    /// # Example
-    ///
-    /// ```text
-    /// let font_light = include_bytes!("path/to/font-light.ttf");
-    /// let font_regular = include_bytes!("path/to/font-regular.ttf");
-    /// let renderer = WgpuRenderer::new(
-    ///     &[font_light, font_regular],
-    ///     &FallbackFontPolicy::Default,
-    /// );
-    /// ```
-    pub fn new(primary_fonts: &[&[u8]], policy: &FallbackFontPolicy) -> Self {
+    pub fn new(fonts: &[&[u8]]) -> Self {
         let mut font_system = FontSystem::new();
 
         // On Android never load system fonts: modern Android ships variable Roboto
@@ -763,7 +588,7 @@ impl WgpuRenderer {
         #[cfg(target_os = "android")]
         log::info!("Skipping Android system fonts – using application-provided fonts only");
 
-        load_fonts_with_policy(&mut font_system, primary_fonts, policy);
+        load_fonts(&mut font_system, fonts);
 
         let mut font_family_resolver_impl = WgpuFontFamilyResolver::default();
         font_family_resolver_impl.prime(&mut font_system);
@@ -895,7 +720,7 @@ impl WgpuRenderer {
 
 impl Default for WgpuRenderer {
     fn default() -> Self {
-        Self::new(&[], &FallbackFontPolicy::Default)
+        Self::new(&[])
     }
 }
 
@@ -1636,7 +1461,7 @@ mod tests {
 
     fn seeded_font_system_and_resolver() -> (FontSystem, WgpuFontFamilyResolver) {
         let mut db = glyphon::fontdb::Database::new();
-        db.load_font_data(EMBEDDED_FALLBACK_FONT_BYTES.to_vec());
+        db.load_font_data(TEST_FONT.to_vec());
         let mut font_system = FontSystem::new_with_locale_and_db("en-US".to_string(), db);
         let mut resolver = WgpuFontFamilyResolver::default();
         resolver.prime(&mut font_system);
@@ -1735,97 +1560,36 @@ mod tests {
         );
     }
 
+    // Font bytes used by tests — the same file the demo app ships.
+    static TEST_FONT: &[u8] = include_bytes!("../../../../apps/desktop-demo/assets/NotoSansMerged.ttf");
+
     fn empty_font_system() -> FontSystem {
         let db = glyphon::fontdb::Database::new();
         FontSystem::new_with_locale_and_db("en-US".to_string(), db)
     }
 
     #[test]
-    fn default_policy_populates_face_db() {
+    fn load_fonts_populates_face_db() {
         let mut fs = empty_font_system();
-        load_fonts_with_policy(&mut fs, &[], &FallbackFontPolicy::Default);
-        assert!(
-            fs.db().faces().count() > 0,
-            "Default policy must load at least one face"
-        );
+        load_fonts(&mut fs, &[TEST_FONT]);
+        assert!(fs.db().faces().count() > 0, "load_fonts must load at least one face");
     }
 
     #[test]
-    fn default_policy_includes_text_and_emoji_fonts() {
+    fn load_fonts_empty_slice_leaves_db_empty() {
         let mut fs = empty_font_system();
-        load_fonts_with_policy(&mut fs, &[], &FallbackFontPolicy::Default);
-        assert!(
-            font_db_contains_family(&fs, EMBEDDED_FALLBACK_FAMILY),
-            "Default policy must include the NotoSansMerged text fallback"
-        );
-        assert!(
-            font_db_contains_family(&fs, EMBEDDED_EMOJI_FAMILY),
-            "Default policy must include Twemoji color emoji fallback"
-        );
+        load_fonts(&mut fs, &[]);
+        assert_eq!(fs.db().faces().count(), 0, "empty slice must not load any faces");
     }
 
     #[test]
-    fn extend_policy_includes_framework_and_extra_fonts() {
-        static EXTRA: &[&[u8]] = &[EMBEDDED_FALLBACK_FONT_BYTES];
-        let mut fs = empty_font_system();
-        load_fonts_with_policy(&mut fs, &[], &FallbackFontPolicy::Extend(EXTRA));
-        assert!(
-            font_db_contains_family(&fs, EMBEDDED_FALLBACK_FAMILY),
-            "Extend policy must still include framework fallback font"
-        );
-    }
-
-    #[test]
-    fn replace_policy_excludes_framework_defaults() {
-        static REPLACEMENT: &[&[u8]] = &[EMBEDDED_FALLBACK_FONT_BYTES];
-        let mut fs = empty_font_system();
-        load_fonts_with_policy(&mut fs, &[], &FallbackFontPolicy::Replace(REPLACEMENT));
-        // The same family name is loaded via REPLACEMENT, but the framework default path
-        // was not taken – verified by checking the face count matches one font face only.
-        assert!(
-            fs.db().faces().count() > 0,
-            "Replace policy must load the replacement fonts"
-        );
-    }
-
-    #[test]
-    fn none_policy_excludes_framework_defaults() {
-        let mut fs = empty_font_system();
-        // Seed with the fallback font so the guard doesn't fire, then verify None
-        // policy does not add an extra copy of the framework fallback.
-        fs.db_mut()
-            .load_font_data(EMBEDDED_FALLBACK_FONT_BYTES.to_vec());
-        let face_count_before = fs.db().faces().count();
-        load_fonts_with_policy(&mut fs, &[], &FallbackFontPolicy::None);
-        assert_eq!(
-            fs.db().faces().count(),
-            face_count_before,
-            "None policy must not inject additional framework fonts"
-        );
-    }
-
-    #[test]
-    fn none_policy_empty_db_guard_injects_fallback() {
-        let mut fs = empty_font_system();
-        load_fonts_with_policy(&mut fs, &[], &FallbackFontPolicy::None);
-        assert!(
-            fs.db().faces().count() > 0,
-            "None policy with empty DB must inject last-resort guard font so rendering never panics"
-        );
-    }
-
-    #[test]
-    fn resolver_injects_embedded_fallback_if_font_db_is_empty() {
+    fn resolver_logs_warning_if_font_db_is_empty() {
+        // With no fonts loaded the resolver should not panic; it just warns.
         let mut font_system = empty_font_system();
         let mut resolver = WgpuFontFamilyResolver::default();
         let span_style = cranpose_ui::text::SpanStyle::default();
-
+        // Must not panic even with an empty DB.
         let _ = resolver.resolve_family_owned(&mut font_system, &span_style);
-
-        assert!(
-            font_system.db().faces().next().is_some(),
-            "resolver must guarantee at least one face before shaping"
-        );
     }
 
     #[test]
@@ -1842,7 +1606,7 @@ mod tests {
             std::process::id(),
             nonce
         );
-        std::fs::write(&unique_path, EMBEDDED_FALLBACK_FONT_BYTES).expect("write font fixture");
+        std::fs::write(&unique_path, TEST_FONT).expect("write font fixture");
 
         let style = cranpose_ui::text::TextStyle {
             span_style: cranpose_ui::text::SpanStyle {

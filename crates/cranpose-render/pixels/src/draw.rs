@@ -19,7 +19,7 @@ use crate::style::point_in_resolved_rounded_rect;
 
 static FONT: Lazy<Font<'static>> = Lazy::new(|| {
     let f = Font::try_from_bytes(include_bytes!(
-        "../../../../assets/NotoSansMerged.ttf"
+        "../../../../apps/desktop-demo/assets/NotoSansMerged.ttf"
     ) as &[u8])
     .expect("font");
     f
