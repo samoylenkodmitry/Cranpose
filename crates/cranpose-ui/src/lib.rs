@@ -100,13 +100,16 @@ pub use subcompose_layout::{
 };
 pub use text::{
     get_cursor_x_for_offset, get_offset_for_position, layout_text, measure_text,
-    measure_text_with_options, prepare_text_layout, set_text_measurer, ParagraphStyle,
-    PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle, PreparedTextLayout, SpanStyle,
-    TextDrawStyle, TextLayoutOptions, TextMeasurer, TextMetrics, TextOverflow, TextStyle,
+    measure_text_with_options, prepare_text_layout, set_text_measurer, LinkAnnotation,
+    ParagraphStyle, PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle,
+    PreparedTextLayout, SpanStyle, StringAnnotation, TextDrawStyle, TextLayoutOptions,
+    TextMeasurer, TextMetrics, TextOverflow, TextStyle,
 };
 pub use text_field_modifier_node::{TextFieldElement, TextFieldModifierNode};
 pub use text_modifier_node::{TextModifierElement, TextModifierNode};
+pub use widgets::clickable_text::ClickableText;
 pub use widgets::lazy_list::{LazyColumn, LazyColumnSpec, LazyRow, LazyRowSpec};
+pub use widgets::linked_text::LinkedText;
 
 // Debug utilities
 pub use debug::{

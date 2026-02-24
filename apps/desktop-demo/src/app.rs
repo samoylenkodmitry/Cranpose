@@ -20,6 +20,7 @@ mod animations;
 mod hacker_news;
 mod images;
 pub mod lazy_list;
+mod markdown;
 mod mineswapper2;
 mod shaders;
 mod text_showcase;
@@ -31,6 +32,7 @@ use animations::AnimationsTab;
 use hacker_news::hacker_news_tab;
 use images::images_tab;
 use lazy_list::lazy_list_example;
+use markdown::markdown_viewer_tab;
 use shaders::ShadersTab;
 use text_showcase::TextShowcaseTab;
 use web_fetch::web_fetch_example;
@@ -60,6 +62,7 @@ pub enum DemoTab {
     Winamp,
     Xkcd,
     Shaders,
+    MarkdownViewer,
 }
 
 impl DemoTab {
@@ -81,11 +84,12 @@ impl DemoTab {
             DemoTab::Winamp => "Winamp",
             DemoTab::Xkcd => "XKCD",
             DemoTab::Shaders => "Shaders",
+            DemoTab::MarkdownViewer => "Markdown",
         }
     }
 }
 
-pub const DEMO_TABS: [DemoTab; 16] = [
+pub const DEMO_TABS: [DemoTab; 17] = [
     DemoTab::Counter,
     DemoTab::CompositionLocal,
     DemoTab::Async,
@@ -102,6 +106,7 @@ pub const DEMO_TABS: [DemoTab; 16] = [
     DemoTab::Winamp,
     DemoTab::Xkcd,
     DemoTab::Shaders,
+    DemoTab::MarkdownViewer,
 ];
 
 pub fn demo_tab_labels() -> Vec<&'static str> {
@@ -298,6 +303,7 @@ fn render_active_tab(active: DemoTab) {
         DemoTab::Winamp => WinampTab(),
         DemoTab::Xkcd => xkcd_tab(),
         DemoTab::Shaders => ShadersTab(),
+        DemoTab::MarkdownViewer => markdown_viewer_tab(),
     }
 }
 
