@@ -391,6 +391,8 @@ fn join_annotated_lines(lines: &[crate::text::AnnotatedString]) -> crate::text::
     let mut text = String::new();
     let mut span_styles = Vec::new();
     let mut paragraph_styles = Vec::new();
+    let mut string_annotations = Vec::new();
+    let mut link_annotations = Vec::new();
     let mut offset = 0usize;
 
     for (idx, line) in lines.iter().enumerate() {
@@ -407,6 +409,18 @@ fn join_annotated_lines(lines: &[crate::text::AnnotatedString]) -> crate::text::
                 range: (span.range.start + offset)..(span.range.end + offset),
             });
         }
+        for ann in &line.string_annotations {
+            string_annotations.push(crate::text::RangeStyle {
+                item: ann.item.clone(),
+                range: (ann.range.start + offset)..(ann.range.end + offset),
+            });
+        }
+        for ann in &line.link_annotations {
+            link_annotations.push(crate::text::RangeStyle {
+                item: ann.item.clone(),
+                range: (ann.range.start + offset)..(ann.range.end + offset),
+            });
+        }
 
         offset += line.text.len();
         if idx + 1 < lines.len() {
@@ -419,6 +433,8 @@ fn join_annotated_lines(lines: &[crate::text::AnnotatedString]) -> crate::text::
         text,
         span_styles,
         paragraph_styles,
+        string_annotations,
+        link_annotations,
     }
 }
 
@@ -449,6 +465,8 @@ fn remap_annotated_for_display(
         text: display_text.to_string(),
         span_styles: remap_range_styles(&source.span_styles, &display_chars),
         paragraph_styles: remap_range_styles(&source.paragraph_styles, &display_chars),
+        string_annotations: remap_range_styles(&source.string_annotations, &display_chars),
+        link_annotations: remap_range_styles(&source.link_annotations, &display_chars),
     }
 }
 

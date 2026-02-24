@@ -506,9 +506,11 @@ fn load_fonts(font_system: &mut FontSystem, fonts: &[&[u8]]) {
         log::info!("Loading font #{}, size: {} bytes", i, font_data.len());
         font_system.db_mut().load_font_data(font_data.to_vec());
     }
-    log::info!("Total font faces loaded: {}", font_system.db().faces().count());
+    log::info!(
+        "Total font faces loaded: {}",
+        font_system.db().faces().count()
+    );
 }
-
 
 #[cfg(not(target_arch = "wasm32"))]
 fn primary_family_name_from_bytes(bytes: &[u8]) -> Option<String> {
@@ -1355,14 +1357,16 @@ impl TextMeasurer for WgpuTextMeasurer {
                 scale: 1.0,
             },
         );
+        let measured_size = buffer.size();
 
         // Extract glyph positions from layout runs
         let mut glyph_x_positions = Vec::new();
         let mut char_to_byte = Vec::new();
         let mut glyph_layouts = Vec::new();
         let mut lines = Vec::new();
-        let line_offsets: Vec<(usize, usize)> = text_str
-            .split('\n')
+        let text_lines: Vec<&str> = text_str.split('\n').collect();
+        let line_offsets: Vec<(usize, usize)> = text_lines
+            .iter()
             .scan(0usize, |line_start, line| {
                 let start = *line_start;
                 let end = start + line.len();
@@ -1405,15 +1409,14 @@ impl TextMeasurer for WgpuTextMeasurer {
         }
 
         // Add end position
-        let total_width = self.measure(text, style).width;
-        glyph_x_positions.push(total_width);
+        glyph_x_positions.push(measured_size.width);
         char_to_byte.push(text_str.len());
 
         // Build lines from text newlines
         let mut y = 0.0f32;
         let mut line_start = 0usize;
-        for (i, line_text) in text_str.split('\n').enumerate() {
-            let line_end = if i == text_str.split('\n').count() - 1 {
+        for (i, line_text) in text_lines.iter().enumerate() {
+            let line_end = if i == text_lines.len() - 1 {
                 text_str.len()
             } else {
                 line_start + line_text.len()
@@ -1439,7 +1442,12 @@ impl TextMeasurer for WgpuTextMeasurer {
             });
         }
 
-        let metrics = self.measure(text, style);
+        let metrics = cranpose_ui::TextMetrics {
+            width: measured_size.width,
+            height: measured_size.height,
+            line_height,
+            line_count: text_lines.len().max(1),
+        };
         TextLayoutResult::new(
             text_str,
             TextLayoutData {
@@ -1560,8 +1568,54 @@ mod tests {
         );
     }
 
+    #[test]
+    fn layout_matches_measure_without_reentrant_mutex_lock() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let (font_system, resolver) = seeded_font_system_and_resolver();
+            let measurer = WgpuTextMeasurer::new(
+                Arc::new(Mutex::new(font_system)),
+                Arc::new(Mutex::new(HashMap::new())),
+                Arc::new(Mutex::new(resolver)),
+            );
+            let text = cranpose_ui::text::AnnotatedString::from("hello\nworld");
+            let style = cranpose_ui::text::TextStyle::default();
+
+            let layout = measurer.layout(&text, &style);
+            let metrics = measurer.measure(&text, &style);
+            tx.send((
+                layout.width,
+                layout.height,
+                layout.lines.len(),
+                metrics.width,
+                metrics.height,
+                metrics.line_count,
+            ))
+            .expect("send layout metrics");
+        });
+
+        let (
+            layout_width,
+            layout_height,
+            layout_lines,
+            measured_width,
+            measured_height,
+            measured_lines,
+        ) = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("layout timed out; possible recursive mutex acquisition");
+
+        assert!((layout_width - measured_width).abs() < 0.5);
+        assert!((layout_height - measured_height).abs() < 0.5);
+        assert_eq!(layout_lines, measured_lines.max(1));
+    }
+
     // Font bytes used by tests — the same file the demo app ships.
-    static TEST_FONT: &[u8] = include_bytes!("../../../../apps/desktop-demo/assets/NotoSansMerged.ttf");
+    static TEST_FONT: &[u8] =
+        include_bytes!("../../../../apps/desktop-demo/assets/NotoSansMerged.ttf");
 
     fn empty_font_system() -> FontSystem {
         let db = glyphon::fontdb::Database::new();
@@ -1572,14 +1626,21 @@ mod tests {
     fn load_fonts_populates_face_db() {
         let mut fs = empty_font_system();
         load_fonts(&mut fs, &[TEST_FONT]);
-        assert!(fs.db().faces().count() > 0, "load_fonts must load at least one face");
+        assert!(
+            fs.db().faces().count() > 0,
+            "load_fonts must load at least one face"
+        );
     }
 
     #[test]
     fn load_fonts_empty_slice_leaves_db_empty() {
         let mut fs = empty_font_system();
         load_fonts(&mut fs, &[]);
-        assert_eq!(fs.db().faces().count(), 0, "empty slice must not load any faces");
+        assert_eq!(
+            fs.db().faces().count(),
+            0,
+            "empty slice must not load any faces"
+        );
     }
 
     #[test]

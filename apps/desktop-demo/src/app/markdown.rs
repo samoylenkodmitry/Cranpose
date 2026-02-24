@@ -1,0 +1,1162 @@
+use cranpose_foundation::lazy::remember_lazy_list_state;
+use cranpose_foundation::text::TextFieldState;
+use cranpose_foundation::SemanticsConfiguration;
+use cranpose_services::{local_http_client, local_uri_handler, HttpClientRef};
+use cranpose_ui::{
+    composable,
+    text::{
+        AnnotatedString, FontFamily, FontStyle, FontWeight, LinkAnnotation, SpanStyle,
+        TextDecoration, TextUnit,
+    },
+    Brush, Button, Color, Column, ColumnSpec, CornerRadii, LazyColumn, LazyColumnSpec,
+    LinearArrangement, LinkedText, Modifier, Row, RowSpec, Size, Spacer, Text, TextStyle,
+    VerticalAlignment,
+};
+use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+
+// ---------------------------------------------------------------------------
+// Markdown → AnnotatedString block list
+// ---------------------------------------------------------------------------
+
+/// One rendered "block" of markdown content.
+#[derive(Clone, Debug, PartialEq)]
+enum MarkdownBlock {
+    /// A styled paragraph of inline text (may contain link annotations for clickable links).
+    Text(AnnotatedString),
+    /// A horizontal divider (---).
+    Rule,
+}
+
+/// Inline style stack tracking what styles are currently open.
+#[derive(Clone, Default)]
+struct InlineStyle {
+    bold: bool,
+    italic: bool,
+    code: bool,
+    heading: Option<HeadingLevel>,
+    blockquote_depth: u32,
+}
+
+impl InlineStyle {
+    fn heading_font_size(level: HeadingLevel) -> f32 {
+        match level {
+            HeadingLevel::H1 => 28.0,
+            HeadingLevel::H2 => 24.0,
+            HeadingLevel::H3 => 20.0,
+            HeadingLevel::H4 => 18.0,
+            HeadingLevel::H5 => 16.0,
+            HeadingLevel::H6 => 14.0,
+        }
+    }
+
+    fn to_span_style(&self) -> SpanStyle {
+        let font_weight = if self.bold || self.heading.is_some() {
+            Some(FontWeight::BOLD)
+        } else {
+            None
+        };
+        let font_style = if self.italic {
+            Some(FontStyle::Italic)
+        } else {
+            None
+        };
+        let font_family = if self.code {
+            Some(FontFamily::Monospace)
+        } else {
+            None
+        };
+        let font_size = if let Some(level) = self.heading {
+            TextUnit::Sp(Self::heading_font_size(level))
+        } else {
+            TextUnit::Unspecified
+        };
+        let background = if self.code {
+            Some(Color(0.12, 0.12, 0.16, 0.6))
+        } else {
+            None
+        };
+        let color = if self.blockquote_depth > 0 {
+            Some(Color(0.55, 0.65, 0.85, 1.0))
+        } else {
+            None
+        };
+        SpanStyle {
+            font_weight,
+            font_style,
+            font_family,
+            font_size,
+            background,
+            color,
+            ..Default::default()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Thin builder wrapper: keeps style depth so we don't expose it to pulldown-cmark event handler.
+// ---------------------------------------------------------------------------
+struct BlockBuilder {
+    style: InlineStyle,
+    builder_raw: Option<cranpose_ui::text::annotated_string::Builder>,
+    blocks: Vec<MarkdownBlock>,
+}
+
+impl BlockBuilder {
+    fn new() -> Self {
+        Self {
+            style: InlineStyle::default(),
+            builder_raw: None,
+            blocks: Vec::new(),
+        }
+    }
+
+    fn push_inline_style(&mut self) {
+        let style = self.style.to_span_style();
+        let b = std::mem::take(&mut self.builder_raw).unwrap_or_else(|| {
+            let mut b = AnnotatedString::builder();
+            if self.style.blockquote_depth > 0 {
+                let prefix = "│ ".repeat(self.style.blockquote_depth as usize);
+                b = b
+                    .push_style(SpanStyle {
+                        color: Some(Color(0.40, 0.55, 0.80, 1.0)),
+                        ..Default::default()
+                    })
+                    .append(&prefix)
+                    .pop();
+            }
+            b
+        });
+        self.builder_raw = Some(b.push_style(style));
+    }
+
+    fn pop_style(&mut self) {
+        if let Some(b) = self.builder_raw.take() {
+            self.builder_raw = Some(b.pop());
+        }
+    }
+
+    fn push_span_style(&mut self, style: SpanStyle) {
+        let b = self
+            .builder_raw
+            .take()
+            .unwrap_or_else(AnnotatedString::builder);
+        self.builder_raw = Some(b.push_style(style));
+    }
+
+    fn push_link(&mut self, link: LinkAnnotation) {
+        let b = self
+            .builder_raw
+            .take()
+            .unwrap_or_else(AnnotatedString::builder);
+        self.builder_raw = Some(b.push_link(link));
+    }
+
+    fn append(&mut self, text: &str) {
+        let b = self
+            .builder_raw
+            .take()
+            .unwrap_or_else(AnnotatedString::builder);
+        self.builder_raw = Some(b.append(text));
+    }
+
+    fn flush_block(&mut self) {
+        if let Some(b) = self.builder_raw.take() {
+            let s = b.to_annotated_string();
+            if !s.text.is_empty() {
+                self.blocks.push(MarkdownBlock::Text(s));
+            }
+        }
+    }
+
+    fn push_rule(&mut self) {
+        self.flush_block();
+        self.blocks.push(MarkdownBlock::Rule);
+    }
+}
+
+/// Convert raw markdown text into a list of styled blocks.
+fn markdown_to_blocks(markdown: &str) -> Vec<MarkdownBlock> {
+    let options = Options::empty();
+    let parser = Parser::new_ext(markdown, options);
+
+    let mut b = BlockBuilder::new();
+
+    for event in parser {
+        match event {
+            // ---- Block start ----
+            Event::Start(Tag::Heading { level, .. }) => {
+                b.flush_block();
+                b.style.heading = Some(level);
+                b.push_inline_style();
+            }
+            Event::Start(Tag::Paragraph) => {
+                b.flush_block();
+                b.push_inline_style();
+            }
+            Event::Start(Tag::BlockQuote(_)) => {
+                b.flush_block();
+                b.style.blockquote_depth += 1;
+                b.push_inline_style();
+            }
+            Event::Start(Tag::CodeBlock(_)) => {
+                b.flush_block();
+                b.style.code = true;
+                b.push_inline_style();
+            }
+            Event::Start(Tag::Item) => {
+                b.flush_block();
+                b.push_span_style(SpanStyle {
+                    color: Some(Color(0.55, 0.65, 0.85, 1.0)),
+                    ..Default::default()
+                });
+                b.append("• ");
+                b.pop_style();
+                b.push_inline_style();
+            }
+            Event::Start(Tag::Emphasis) => {
+                b.style.italic = true;
+                b.push_inline_style();
+            }
+            Event::Start(Tag::Strong) => {
+                b.style.bold = true;
+                b.push_inline_style();
+            }
+            Event::Start(Tag::Link { dest_url, .. }) => {
+                // Store the URL as a LinkAnnotation::Url — auto-handled by LinkedText.
+                b.push_link(LinkAnnotation::Url(dest_url.to_string()));
+                b.push_span_style(SpanStyle {
+                    color: Some(Color(0.35, 0.65, 0.95, 1.0)),
+                    text_decoration: Some(TextDecoration::UNDERLINE),
+                    ..Default::default()
+                });
+            }
+            Event::Start(Tag::Image { .. }) => {
+                b.push_span_style(SpanStyle {
+                    color: Some(Color(0.55, 0.55, 0.55, 1.0)),
+                    ..Default::default()
+                });
+                b.append("[image: ");
+            }
+            // Inline code
+            Event::Code(text) => {
+                b.push_span_style(SpanStyle {
+                    font_family: Some(FontFamily::Monospace),
+                    background: Some(Color(0.12, 0.12, 0.16, 0.6)),
+                    ..Default::default()
+                });
+                b.append(&text);
+                b.pop_style();
+            }
+            Event::Text(text) => b.append(&text),
+            Event::SoftBreak => b.append(" "),
+            Event::HardBreak => b.append("\n"),
+            Event::Rule => b.push_rule(),
+
+            // ---- Block end ----
+            Event::End(TagEnd::Heading(_)) => {
+                b.pop_style();
+                b.style.heading = None;
+                b.flush_block();
+            }
+            Event::End(TagEnd::Paragraph) => {
+                b.pop_style();
+                b.flush_block();
+            }
+            Event::End(TagEnd::BlockQuote(_)) => {
+                b.pop_style();
+                b.style.blockquote_depth = b.style.blockquote_depth.saturating_sub(1);
+                b.flush_block();
+            }
+            Event::End(TagEnd::CodeBlock) => {
+                b.pop_style();
+                b.style.code = false;
+                b.flush_block();
+            }
+            Event::End(TagEnd::Item) => {
+                b.pop_style();
+                b.flush_block();
+            }
+            Event::End(TagEnd::Emphasis) => {
+                b.pop_style();
+                b.style.italic = false;
+            }
+            Event::End(TagEnd::Strong) => {
+                b.pop_style();
+                b.style.bold = false;
+            }
+            Event::End(TagEnd::Link) => {
+                // Pop span style then link annotation (LIFO)
+                b.pop_style();
+                b.pop_style();
+            }
+            Event::End(TagEnd::Image) => {
+                b.append("]");
+                b.pop_style();
+            }
+            _ => {}
+        }
+    }
+
+    b.flush_block();
+    b.blocks
+}
+
+// ---------------------------------------------------------------------------
+// Fetch state
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq)]
+enum FetchState {
+    Idle,
+    Loading,
+    Done(Vec<MarkdownBlock>),
+    Error(String),
+}
+
+async fn fetch_markdown(client: &HttpClientRef, url: &str) -> Result<String, String> {
+    client
+        .get_text(url)
+        .await
+        .map_err(|e| format!("Request failed: {e}"))
+}
+
+const DEFAULT_URL: &str =
+    "https://raw.githubusercontent.com/samoylenkodmitry/s-a--m.github.io/refs/heads/master/_posts/2023-07-14-leetcode_daily.md";
+
+// ---------------------------------------------------------------------------
+// Composable
+// ---------------------------------------------------------------------------
+
+#[allow(non_snake_case)]
+#[composable]
+pub fn markdown_viewer_tab() {
+    let url_state =
+        cranpose_core::remember(|| TextFieldState::new(DEFAULT_URL)).with(|s| s.clone());
+    let fetch_state = cranpose_core::useState(|| FetchState::Idle);
+    let request_counter = cranpose_core::useState(|| 0u64);
+    let http_client = local_http_client().current();
+
+    let url_state_for_effect = url_state.clone();
+    cranpose_core::LaunchedEffect!(request_counter.get(), move |scope| {
+        let tick = request_counter.get();
+        if tick == 0 {
+            return;
+        }
+
+        let url = url_state_for_effect.text();
+        let url = url.trim().to_string();
+        let status = fetch_state;
+        status.set(FetchState::Loading);
+
+        let client = http_client.clone();
+        scope.launch_background(
+            move |token| async move {
+                if token.is_cancelled() {
+                    return Err("request cancelled".to_string());
+                }
+                if url.is_empty() {
+                    return Err("URL is empty".to_string());
+                }
+                // Only the raw text crosses the thread boundary — AnnotatedString
+                // (which may contain Rc inside LinkAnnotation) is built on the main thread.
+                fetch_markdown(&client, &url).await
+            },
+            move |result| match result {
+                Ok(text) => {
+                    let blocks = markdown_to_blocks(&text);
+                    status.set(FetchState::Done(blocks));
+                }
+                Err(err) => status.set(FetchState::Error(err)),
+            },
+        );
+    });
+
+    Column(
+        Modifier::empty()
+            .padding(16.0)
+            .background(Color(0.06, 0.08, 0.14, 1.0))
+            .rounded_corners(20.0)
+            .padding(16.0)
+            .fill_max_size(),
+        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(12.0)),
+        {
+            let url_state_for_row = url_state.clone();
+            let request_state = request_counter;
+            let status_state = fetch_state;
+            move || {
+                // ---- URL input row ----
+                Row(
+                    Modifier::empty().fill_max_width(),
+                    RowSpec::new()
+                        .horizontal_arrangement(LinearArrangement::SpacedBy(8.0))
+                        .vertical_alignment(VerticalAlignment::CenterVertically),
+                    {
+                        let url_row = url_state_for_row.clone();
+                        let req = request_state;
+                        move || {
+                            cranpose_ui::BasicTextField(
+                                url_row.clone(),
+                                Modifier::empty()
+                                    .weight(1.0)
+                                    .padding(10.0)
+                                    .background(Color(0.12, 0.14, 0.22, 1.0))
+                                    .rounded_corners(10.0),
+                                TextStyle {
+                                    span_style: SpanStyle {
+                                        color: Some(Color(0.82, 0.86, 0.95, 1.0)),
+                                        font_size: TextUnit::Sp(12.0),
+                                        ..Default::default()
+                                    },
+                                    ..Default::default()
+                                },
+                            );
+                            Button(
+                                Modifier::empty()
+                                    .rounded_corners(10.0)
+                                    .draw_behind(|scope| {
+                                        scope.draw_round_rect(
+                                            Brush::linear_gradient(vec![
+                                                Color(0.22, 0.52, 0.92, 1.0),
+                                                Color(0.14, 0.38, 0.78, 1.0),
+                                            ]),
+                                            CornerRadii::uniform(10.0),
+                                        );
+                                    })
+                                    .padding(10.0),
+                                move || req.update(|v| *v = v.wrapping_add(1)),
+                                || {
+                                    Text(
+                                        "Fetch",
+                                        Modifier::empty().padding(4.0),
+                                        TextStyle {
+                                            span_style: SpanStyle {
+                                                color: Some(Color(1.0, 1.0, 1.0, 1.0)),
+                                                font_weight: Some(FontWeight::BOLD),
+                                                ..Default::default()
+                                            },
+                                            ..Default::default()
+                                        },
+                                    );
+                                },
+                            );
+                        }
+                    },
+                );
+
+                // ---- Status / content area ----
+                match status_state.get() {
+                    FetchState::Idle => {
+                        Text(
+                            "Enter a URL pointing to a raw Markdown file and press Fetch.",
+                            Modifier::empty()
+                                .padding(12.0)
+                                .background(Color(0.10, 0.14, 0.24, 0.8))
+                                .rounded_corners(12.0),
+                            TextStyle {
+                                span_style: SpanStyle {
+                                    color: Some(Color(0.65, 0.70, 0.85, 1.0)),
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            },
+                        );
+                    }
+                    FetchState::Loading => {
+                        Text(
+                            "Fetching…",
+                            Modifier::empty()
+                                .padding(12.0)
+                                .background(Color(0.14, 0.20, 0.38, 0.9))
+                                .rounded_corners(12.0),
+                            TextStyle {
+                                span_style: SpanStyle {
+                                    color: Some(Color(0.75, 0.82, 1.0, 1.0)),
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            },
+                        );
+                    }
+                    FetchState::Error(msg) => {
+                        Text(
+                            format!("Error: {msg}"),
+                            Modifier::empty()
+                                .padding(12.0)
+                                .background(Color(0.40, 0.12, 0.12, 0.9))
+                                .rounded_corners(12.0),
+                            TextStyle {
+                                span_style: SpanStyle {
+                                    color: Some(Color(1.0, 0.65, 0.65, 1.0)),
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            },
+                        );
+                    }
+                    FetchState::Done(blocks) => {
+                        render_markdown_blocks(blocks);
+                    }
+                }
+            }
+        },
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Render helpers
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug)]
+struct ScrollbarMetrics {
+    thumb_h: f32,
+    thumb_y: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ScrollbarModel {
+    total_items: usize,
+    average_item_size: f32,
+    max_item_position: f32,
+    thumb_fraction: f32,
+    scroll_fraction: f32,
+}
+
+impl Default for ScrollbarModel {
+    fn default() -> Self {
+        Self {
+            total_items: 0,
+            average_item_size: 1.0,
+            max_item_position: 0.0,
+            thumb_fraction: 1.0,
+            scroll_fraction: 0.0,
+        }
+    }
+}
+
+const MARKDOWN_SCROLLBAR_RAIL_WIDTH: f32 = 16.0;
+const MARKDOWN_SCROLLBAR_THUMB_WIDTH: f32 = 8.0;
+const MARKDOWN_SCROLLBAR_MIN_THUMB_HEIGHT: f32 = 32.0;
+
+fn compute_scrollbar_metrics(
+    rail_height: f32,
+    thumb_fraction: f32,
+    scroll_fraction: f32,
+    min_thumb_height: f32,
+) -> ScrollbarMetrics {
+    let h = rail_height.max(1.0);
+    let thumb_h = (thumb_fraction * h).max(min_thumb_height).min(h);
+    let thumb_range = (h - thumb_h).max(0.0);
+    let thumb_y = scroll_fraction.clamp(0.0, 1.0) * thumb_range;
+    ScrollbarMetrics { thumb_h, thumb_y }
+}
+
+fn compute_scrollbar_model(
+    total_items: usize,
+    viewport_size: f32,
+    average_item_size: f32,
+    first_visible_index: usize,
+    first_visible_offset: f32,
+) -> ScrollbarModel {
+    let average_item_size = average_item_size.max(1.0);
+    let viewport_size = viewport_size.max(1.0);
+
+    if total_items == 0 {
+        return ScrollbarModel {
+            total_items,
+            average_item_size,
+            max_item_position: 0.0,
+            thumb_fraction: 1.0,
+            scroll_fraction: 0.0,
+        };
+    }
+
+    let estimated_visible_items = (viewport_size / average_item_size).max(1.0);
+    let max_item_position = (total_items as f32 - estimated_visible_items).max(0.0);
+    let current_item_position = if max_item_position > 0.0 {
+        (first_visible_index as f32 + (first_visible_offset / average_item_size))
+            .clamp(0.0, max_item_position)
+    } else {
+        0.0
+    };
+
+    let thumb_fraction = (estimated_visible_items / total_items as f32).clamp(0.04, 1.0);
+    let scroll_fraction = if max_item_position > 0.0 {
+        current_item_position / max_item_position
+    } else {
+        0.0
+    };
+
+    ScrollbarModel {
+        total_items,
+        average_item_size,
+        max_item_position,
+        thumb_fraction,
+        scroll_fraction,
+    }
+}
+
+fn scroll_target_for_fraction(model: ScrollbarModel, scroll_fraction: f32) -> (usize, f32) {
+    if model.total_items == 0 || model.max_item_position <= 0.0 {
+        return (0, 0.0);
+    }
+
+    let target_position = scroll_fraction.clamp(0.0, 1.0) * model.max_item_position;
+    let mut index = target_position.floor() as usize;
+    index = index.min(model.total_items.saturating_sub(1));
+    let offset = ((target_position - index as f32) * model.average_item_size).max(0.0);
+    (index, offset)
+}
+
+fn average_visible_item_size(
+    layout_info: &cranpose_foundation::lazy::LazyListLayoutInfo,
+    fallback_average_item_size: f32,
+) -> f32 {
+    if layout_info.visible_items_info.is_empty() {
+        return fallback_average_item_size.max(1.0);
+    }
+
+    let total_size: f32 = layout_info
+        .visible_items_info
+        .iter()
+        .map(|item| item.size.max(1.0))
+        .sum();
+    (total_size / layout_info.visible_items_info.len() as f32).max(1.0)
+}
+
+fn stabilize_scrollbar_model_for_scrollable_content(
+    mut model: ScrollbarModel,
+    can_scroll_forward: bool,
+    can_scroll_backward: bool,
+) -> ScrollbarModel {
+    if model.total_items == 0 {
+        return model;
+    }
+    if model.max_item_position > 0.0 {
+        return model;
+    }
+    if !can_scroll_forward && !can_scroll_backward {
+        return model;
+    }
+
+    // When content barely overflows the viewport, coarse item-based estimation can
+    // produce a full-height thumb even though the list is scrollable.
+    model.max_item_position = 1.0;
+    model.thumb_fraction = model.thumb_fraction.min(0.98);
+    model.scroll_fraction = match (can_scroll_backward, can_scroll_forward) {
+        (false, true) => 0.0,
+        (true, false) => 1.0,
+        (true, true) => 0.5,
+        (false, false) => 0.0,
+    };
+    model
+}
+
+fn read_interaction_scrollbar_model(
+    list_state: cranpose_foundation::lazy::LazyListState,
+) -> (ScrollbarModel, f32) {
+    let info = list_state.layout_info();
+    let model = compute_scrollbar_model(
+        info.total_items_count,
+        info.viewport_size,
+        average_visible_item_size(&info, list_state.average_item_size()),
+        list_state.first_visible_item_index(),
+        list_state.first_visible_item_scroll_offset(),
+    );
+    let model = stabilize_scrollbar_model_for_scrollable_content(
+        model,
+        list_state.can_scroll_forward(),
+        list_state.can_scroll_backward(),
+    );
+    let rail_height = info.viewport_size.max(1.0);
+    (model, rail_height)
+}
+
+/// Isolated observer scope for LazyList scroll reactivity.
+#[allow(non_snake_case)]
+#[composable]
+fn MarkdownScrollbarModelObserver(
+    list_state: cranpose_foundation::lazy::LazyListState,
+    model_state: cranpose_core::MutableState<ScrollbarModel>,
+) {
+    let first_visible_index = list_state.first_visible_item_index();
+    let first_visible_offset = list_state.first_visible_item_scroll_offset();
+    let layout_info = list_state.layout_info();
+    let can_scroll_forward = list_state.can_scroll_forward();
+    let can_scroll_backward = list_state.can_scroll_backward();
+    let avg_item_size = average_visible_item_size(&layout_info, list_state.average_item_size());
+    let next_model = compute_scrollbar_model(
+        layout_info.total_items_count,
+        layout_info.viewport_size,
+        avg_item_size,
+        first_visible_index,
+        first_visible_offset,
+    );
+    let next_model = stabilize_scrollbar_model_for_scrollable_content(
+        next_model,
+        can_scroll_forward,
+        can_scroll_backward,
+    );
+
+    if model_state.get_non_reactive() != next_model {
+        cranpose_core::SideEffect(move || {
+            model_state.set(next_model);
+        });
+    }
+}
+
+#[allow(non_snake_case)]
+#[composable]
+fn MarkdownBlocksList(
+    list_state: cranpose_foundation::lazy::LazyListState,
+    blocks: Vec<MarkdownBlock>,
+) {
+    LazyColumn(
+        Modifier::empty()
+            .semantics(|config: &mut SemanticsConfiguration| {
+                config.content_description = Some("MarkdownListViewport".to_string());
+            })
+            .fill_max_size(),
+        list_state,
+        LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(6.0)),
+        move |scope| {
+            use cranpose_foundation::lazy::LazyListScopeExt;
+            scope.items_vec(blocks.clone(), |block| match block.clone() {
+                MarkdownBlock::Text(annotated) => render_text_block(annotated),
+                MarkdownBlock::Rule => render_rule(),
+            });
+        },
+    );
+}
+
+#[allow(non_snake_case)]
+#[composable]
+fn MarkdownScrollbarRail(
+    list_state: cranpose_foundation::lazy::LazyListState,
+    model_state: cranpose_core::MutableState<ScrollbarModel>,
+) {
+    let model = model_state.get();
+    let thumb_frac = model.thumb_fraction;
+    let scroll_frac = model.scroll_fraction;
+
+    cranpose_ui::Box(
+        Modifier::empty()
+            .semantics(|config: &mut SemanticsConfiguration| {
+                config.content_description = Some("MarkdownScrollbarRail".to_string());
+            })
+            .width(MARKDOWN_SCROLLBAR_RAIL_WIDTH)
+            .fill_max_height()
+            .background(Color(0.12, 0.15, 0.24, 1.0))
+            .draw_behind(move |scope| {
+                let metrics = compute_scrollbar_metrics(
+                    scope.size().height,
+                    thumb_frac,
+                    scroll_frac,
+                    MARKDOWN_SCROLLBAR_MIN_THUMB_HEIGHT,
+                );
+                let x = (MARKDOWN_SCROLLBAR_RAIL_WIDTH - MARKDOWN_SCROLLBAR_THUMB_WIDTH) * 0.5;
+                scope.draw_rect_at(
+                    cranpose_ui::Rect {
+                        x,
+                        y: metrics.thumb_y,
+                        width: MARKDOWN_SCROLLBAR_THUMB_WIDTH,
+                        height: metrics.thumb_h,
+                    },
+                    Brush::solid(Color(0.55, 0.68, 1.0, 0.90)),
+                );
+            })
+            .pointer_input("scrollbar_drag", move |scope| async move {
+                use cranpose_foundation::PointerEventKind;
+                loop {
+                    scope
+                        .await_pointer_event_scope(|scope| async move {
+                            let mut dragging = false;
+                            let mut drag_grab_offset = 0.0f32;
+                            loop {
+                                let event = scope.await_pointer_event().await;
+                                match event.kind {
+                                    PointerEventKind::Down => {
+                                        let (model, rail_h) =
+                                            read_interaction_scrollbar_model(list_state);
+                                        let metrics = compute_scrollbar_metrics(
+                                            rail_h,
+                                            model.thumb_fraction,
+                                            model.scroll_fraction,
+                                            MARKDOWN_SCROLLBAR_MIN_THUMB_HEIGHT,
+                                        );
+                                        if model.max_item_position > 0.0 {
+                                            let y = event.position.y.clamp(0.0, rail_h);
+                                            let thumb_range = (rail_h - metrics.thumb_h).max(0.0);
+                                            let target_thumb_y =
+                                                (y - metrics.thumb_h * 0.5).clamp(0.0, thumb_range);
+                                            let target_scroll_fraction = if thumb_range > 0.0 {
+                                                target_thumb_y / thumb_range
+                                            } else {
+                                                0.0
+                                            };
+                                            let (target_idx, target_offset) =
+                                                scroll_target_for_fraction(
+                                                    model,
+                                                    target_scroll_fraction,
+                                                );
+                                            list_state.scroll_to_item(target_idx, target_offset);
+                                            dragging = true;
+                                            drag_grab_offset = metrics.thumb_h * 0.5;
+                                            event.consume();
+                                        }
+                                    }
+                                    PointerEventKind::Move if dragging => {
+                                        let (model, rail_h) =
+                                            read_interaction_scrollbar_model(list_state);
+                                        let metrics = compute_scrollbar_metrics(
+                                            rail_h,
+                                            model.thumb_fraction,
+                                            model.scroll_fraction,
+                                            MARKDOWN_SCROLLBAR_MIN_THUMB_HEIGHT,
+                                        );
+                                        let thumb_range = (rail_h - metrics.thumb_h).max(0.0);
+                                        let target_thumb_y = (event.position.y.clamp(0.0, rail_h)
+                                            - drag_grab_offset)
+                                            .clamp(0.0, thumb_range);
+                                        let target_scroll_fraction = if thumb_range > 0.0 {
+                                            target_thumb_y / thumb_range
+                                        } else {
+                                            0.0
+                                        };
+                                        let (target_idx, target_offset) =
+                                            scroll_target_for_fraction(
+                                                model,
+                                                target_scroll_fraction,
+                                            );
+                                        if model.max_item_position > 0.0 {
+                                            list_state.scroll_to_item(target_idx, target_offset);
+                                        }
+                                        event.consume();
+                                    }
+                                    PointerEventKind::Up | PointerEventKind::Cancel => {
+                                        if dragging {
+                                            event.consume();
+                                        }
+                                        break; // end gesture, restart loop
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        })
+                        .await;
+                }
+            }),
+        cranpose_ui::BoxSpec::default(),
+        || {},
+    );
+}
+
+#[allow(non_snake_case)]
+#[composable]
+fn render_markdown_blocks(blocks: Vec<MarkdownBlock>) {
+    let list_state = remember_lazy_list_state();
+    let scrollbar_model_state = cranpose_core::useState(ScrollbarModel::default);
+
+    Row(Modifier::empty().fill_max_size(), RowSpec::new(), {
+        let blocks_for_row = blocks.clone();
+        let model_state_for_row = scrollbar_model_state;
+        move || {
+            // Wrap LazyColumn in a weighted Box so Row reserves space for the rail.
+            cranpose_ui::Box(
+                Modifier::empty().weight(1.0).fill_max_height(),
+                cranpose_ui::BoxSpec::default(),
+                {
+                    let blocks_for_box = blocks_for_row.clone();
+                    move || {
+                        MarkdownBlocksList(list_state, blocks_for_box.clone());
+                    }
+                },
+            );
+
+            // Isolated reactivity scope: reads first_visible/layout_info and syncs the model state.
+            MarkdownScrollbarModelObserver(list_state, model_state_for_row.clone());
+            MarkdownScrollbarRail(list_state, model_state_for_row.clone());
+        }
+    });
+}
+
+#[allow(non_snake_case)]
+#[composable]
+fn render_text_block(annotated: AnnotatedString) {
+    let text_style = TextStyle {
+        span_style: SpanStyle {
+            color: Some(Color(0.88, 0.90, 0.96, 1.0)),
+            font_size: TextUnit::Sp(14.0),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    if !annotated.link_annotations.is_empty() {
+        // Inject the platform URI handler as the open_url callback.
+        // LinkedText dispatches Url via open_url, Clickable handlers are called directly.
+        let uri_handler = local_uri_handler().current();
+        LinkedText(
+            annotated,
+            Modifier::empty().fill_max_width().padding(2.0),
+            text_style,
+            move |url| {
+                if let Err(err) = uri_handler.open_uri(url) {
+                    log::error!("Failed to open URL {url}: {err:#}");
+                }
+            },
+        );
+    } else {
+        Text(
+            annotated,
+            Modifier::empty().fill_max_width().padding(2.0),
+            text_style,
+        );
+    }
+}
+
+#[allow(non_snake_case)]
+#[composable]
+fn render_rule() {
+    Spacer(Size {
+        width: 0.0,
+        height: 4.0,
+    });
+    cranpose_ui::Box(
+        Modifier::empty()
+            .fill_max_width()
+            .draw_behind(|scope| {
+                let size = scope.size();
+                scope.draw_rect_at(
+                    cranpose_ui::Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: size.width,
+                        height: 2.0,
+                    },
+                    Brush::solid(Color(0.35, 0.40, 0.55, 0.5)),
+                );
+            })
+            .size(cranpose_ui::Size {
+                width: f32::INFINITY,
+                height: 2.0,
+            }),
+        cranpose_ui::BoxSpec::default(),
+        || {},
+    );
+    Spacer(Size {
+        width: 0.0,
+        height: 4.0,
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cranpose_ui::text::FontWeight;
+
+    #[test]
+    fn heading_produces_bold_block() {
+        let blocks = markdown_to_blocks("# Hello World");
+        assert_eq!(blocks.len(), 1);
+        let MarkdownBlock::Text(annotated) = &blocks[0] else {
+            panic!("expected Text block");
+        };
+        assert!(annotated.text.contains("Hello World"));
+        let has_bold = annotated
+            .span_styles
+            .iter()
+            .any(|s| s.item.font_weight == Some(FontWeight::BOLD));
+        assert!(has_bold, "H1 should produce bold span style");
+    }
+
+    #[test]
+    fn bold_inline_produces_bold_span() {
+        let blocks = markdown_to_blocks("Normal **bold** normal");
+        assert_eq!(blocks.len(), 1);
+        let MarkdownBlock::Text(annotated) = &blocks[0] else {
+            panic!("expected Text block");
+        };
+        let has_bold = annotated
+            .span_styles
+            .iter()
+            .any(|s| s.item.font_weight == Some(FontWeight::BOLD));
+        assert!(has_bold, "**bold** should produce a bold span");
+    }
+
+    #[test]
+    fn italic_inline_produces_italic_span() {
+        let blocks = markdown_to_blocks("Normal *italic* normal");
+        assert_eq!(blocks.len(), 1);
+        let MarkdownBlock::Text(annotated) = &blocks[0] else {
+            panic!("expected Text block");
+        };
+        let has_italic = annotated
+            .span_styles
+            .iter()
+            .any(|s| s.item.font_style == Some(FontStyle::Italic));
+        assert!(has_italic, "*italic* should produce an italic span");
+    }
+
+    #[test]
+    fn horizontal_rule_produces_rule_block() {
+        let blocks = markdown_to_blocks("---");
+        let has_rule = blocks.iter().any(|b| matches!(b, MarkdownBlock::Rule));
+        assert!(has_rule, "--- should emit a Rule block");
+    }
+
+    #[test]
+    fn empty_input_yields_no_blocks() {
+        let blocks = markdown_to_blocks("");
+        assert!(blocks.is_empty());
+    }
+
+    #[test]
+    fn multiple_paragraphs_yield_separate_blocks() {
+        let blocks = markdown_to_blocks("First paragraph\n\nSecond paragraph");
+        let text_blocks: Vec<_> = blocks
+            .iter()
+            .filter(|b| matches!(b, MarkdownBlock::Text(_)))
+            .collect();
+        assert_eq!(
+            text_blocks.len(),
+            2,
+            "expected two separate paragraph blocks"
+        );
+    }
+
+    #[test]
+    fn link_stores_url_link_annotation() {
+        let blocks = markdown_to_blocks("Click [here](https://example.com) please");
+        assert_eq!(blocks.len(), 1);
+        let MarkdownBlock::Text(annotated) = &blocks[0] else {
+            panic!("expected Text block");
+        };
+        assert!(
+            !annotated.link_annotations.is_empty(),
+            "link should produce a LinkAnnotation"
+        );
+        let url_anns = annotated.get_link_annotations(0, annotated.text.len());
+        assert_eq!(url_anns.len(), 1);
+        assert!(
+            matches!(&url_anns[0].item, LinkAnnotation::Url(url) if url == "https://example.com"),
+            "expected LinkAnnotation::Url with the correct URL"
+        );
+    }
+
+    #[test]
+    fn link_annotation_covers_only_link_text() {
+        let blocks = markdown_to_blocks("Before [link](https://x.com) after");
+        let MarkdownBlock::Text(annotated) = &blocks[0] else {
+            panic!("expected Text block");
+        };
+        // Find the byte range of "link" in the text
+        let start = annotated.text.find("link").expect("link text present");
+        let end = start + "link".len();
+        let ann = &annotated.link_annotations[0];
+        assert_eq!(
+            ann.range,
+            start..end,
+            "link annotation should cover only 'link'"
+        );
+    }
+
+    #[test]
+    fn scrollbar_metrics_handle_small_rail_height() {
+        let metrics = compute_scrollbar_metrics(16.0, 0.04, 1.0, 32.0);
+        assert_eq!(metrics.thumb_h, 16.0);
+        assert_eq!(metrics.thumb_y, 0.0);
+    }
+
+    #[test]
+    fn scrollbar_metrics_clamp_scroll_fraction() {
+        let low = compute_scrollbar_metrics(100.0, 0.5, -10.0, 32.0);
+        let high = compute_scrollbar_metrics(100.0, 0.5, 10.0, 32.0);
+        assert_eq!(low.thumb_y, 0.0);
+        assert_eq!(high.thumb_y, 50.0);
+    }
+
+    #[test]
+    fn scrollbar_model_computes_fraction_from_position() {
+        let model = compute_scrollbar_model(100, 200.0, 20.0, 10, 10.0);
+        assert_eq!(model.total_items, 100);
+        assert!((model.max_item_position - 90.0).abs() < 0.001);
+        assert!((model.thumb_fraction - 0.1).abs() < 0.001);
+        assert!((model.scroll_fraction - (10.5 / 90.0)).abs() < 0.0001);
+    }
+
+    #[test]
+    fn average_visible_item_size_prefers_measured_visible_items() {
+        let mut layout = cranpose_foundation::lazy::LazyListLayoutInfo::default();
+        layout.visible_items_info = vec![
+            cranpose_foundation::lazy::LazyListItemInfo {
+                index: 0,
+                key: 0,
+                offset: 0.0,
+                size: 20.0,
+            },
+            cranpose_foundation::lazy::LazyListItemInfo {
+                index: 1,
+                key: 1,
+                offset: 20.0,
+                size: 40.0,
+            },
+        ];
+
+        let avg = average_visible_item_size(&layout, 100.0);
+        assert!((avg - 30.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn stabilize_scrollbar_model_keeps_thumb_visible_when_scrollable() {
+        let model = ScrollbarModel {
+            total_items: 18,
+            average_item_size: 32.0,
+            max_item_position: 0.0,
+            thumb_fraction: 1.0,
+            scroll_fraction: 0.0,
+        };
+
+        let stabilized = stabilize_scrollbar_model_for_scrollable_content(model, true, false);
+        assert!(stabilized.max_item_position > 0.0);
+        assert!(stabilized.thumb_fraction < 1.0);
+        assert_eq!(stabilized.scroll_fraction, 0.0);
+    }
+
+    #[test]
+    fn stabilize_scrollbar_model_preserves_non_scrollable_model() {
+        let model = ScrollbarModel {
+            total_items: 5,
+            average_item_size: 40.0,
+            max_item_position: 0.0,
+            thumb_fraction: 1.0,
+            scroll_fraction: 0.0,
+        };
+        let stabilized = stabilize_scrollbar_model_for_scrollable_content(model, false, false);
+        assert_eq!(stabilized, model);
+    }
+
+    #[test]
+    fn scroll_target_for_fraction_maps_to_item_and_offset() {
+        let model = compute_scrollbar_model(100, 200.0, 20.0, 0, 0.0);
+        let (idx, off) = scroll_target_for_fraction(model, 0.5);
+        assert_eq!(idx, 45);
+        assert_eq!(off, 0.0);
+
+        let (idx2, off2) = scroll_target_for_fraction(model, 0.5055556);
+        assert_eq!(idx2, 45);
+        assert!((off2 - 10.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn scroll_target_for_fraction_handles_non_scrollable_model() {
+        let model = compute_scrollbar_model(3, 500.0, 50.0, 0, 0.0);
+        assert_eq!(model.max_item_position, 0.0);
+        let (idx, off) = scroll_target_for_fraction(model, 1.0);
+        assert_eq!(idx, 0);
+        assert_eq!(off, 0.0);
+    }
+}

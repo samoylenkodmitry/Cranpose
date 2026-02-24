@@ -7,7 +7,8 @@ pub mod paragraph;
 pub mod style;
 pub mod unit;
 
-pub use annotated_string::{AnnotatedString, RangeStyle};
+pub use annotated_string::{AnnotatedString, LinkAnnotation, RangeStyle, StringAnnotation};
+
 pub use decoration::{Shadow, TextDecoration};
 pub use font::{
     FileBackedFontFamily, FontFamily, FontFile, FontStyle, FontSynthesis, FontWeight,
