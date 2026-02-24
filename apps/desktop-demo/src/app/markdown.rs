@@ -651,6 +651,26 @@ fn stabilize_scrollbar_model_for_scrollable_content(
     model
 }
 
+fn read_interaction_scrollbar_model(
+    list_state: cranpose_foundation::lazy::LazyListState,
+) -> (ScrollbarModel, f32) {
+    let info = list_state.layout_info();
+    let model = compute_scrollbar_model(
+        info.total_items_count,
+        info.viewport_size,
+        average_visible_item_size(&info, list_state.average_item_size()),
+        list_state.first_visible_item_index(),
+        list_state.first_visible_item_scroll_offset(),
+    );
+    let model = stabilize_scrollbar_model_for_scrollable_content(
+        model,
+        list_state.can_scroll_forward(),
+        list_state.can_scroll_backward(),
+    );
+    let rail_height = info.viewport_size.max(1.0);
+    (model, rail_height)
+}
+
 /// Isolated observer scope for LazyList scroll reactivity.
 #[allow(non_snake_case)]
 #[composable]
@@ -755,24 +775,8 @@ fn MarkdownScrollbarRail(
                                 let event = scope.await_pointer_event().await;
                                 match event.kind {
                                     PointerEventKind::Down => {
-                                        let info = list_state.layout_info();
-                                        let model = compute_scrollbar_model(
-                                            info.total_items_count,
-                                            info.viewport_size,
-                                            average_visible_item_size(
-                                                &info,
-                                                list_state.average_item_size(),
-                                            ),
-                                            list_state.first_visible_item_index(),
-                                            list_state.first_visible_item_scroll_offset(),
-                                        );
-                                        let model =
-                                            stabilize_scrollbar_model_for_scrollable_content(
-                                                model,
-                                                list_state.can_scroll_forward(),
-                                                list_state.can_scroll_backward(),
-                                            );
-                                        let rail_h = info.viewport_size.max(1.0);
+                                        let (model, rail_h) =
+                                            read_interaction_scrollbar_model(list_state);
                                         let metrics = compute_scrollbar_metrics(
                                             rail_h,
                                             model.thumb_fraction,
@@ -801,24 +805,8 @@ fn MarkdownScrollbarRail(
                                         }
                                     }
                                     PointerEventKind::Move if dragging => {
-                                        let info = list_state.layout_info();
-                                        let model = compute_scrollbar_model(
-                                            info.total_items_count,
-                                            info.viewport_size,
-                                            average_visible_item_size(
-                                                &info,
-                                                list_state.average_item_size(),
-                                            ),
-                                            list_state.first_visible_item_index(),
-                                            list_state.first_visible_item_scroll_offset(),
-                                        );
-                                        let model =
-                                            stabilize_scrollbar_model_for_scrollable_content(
-                                                model,
-                                                list_state.can_scroll_forward(),
-                                                list_state.can_scroll_backward(),
-                                            );
-                                        let rail_h = info.viewport_size.max(1.0);
+                                        let (model, rail_h) =
+                                            read_interaction_scrollbar_model(list_state);
                                         let metrics = compute_scrollbar_metrics(
                                             rail_h,
                                             model.thumb_fraction,
