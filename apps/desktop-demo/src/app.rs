@@ -280,8 +280,17 @@ pub fn combined_app() {
     );
 }
 
+#[allow(non_snake_case)]
+#[composable]
+pub fn MarkdownViewerRobotApp() {
+    markdown_viewer_tab();
+}
+
 fn tab_requires_scroll(tab: DemoTab) -> bool {
-    !matches!(tab, DemoTab::HackerNews | DemoTab::Winamp)
+    !matches!(
+        tab,
+        DemoTab::HackerNews | DemoTab::Winamp | DemoTab::MarkdownViewer
+    )
 }
 
 #[composable]

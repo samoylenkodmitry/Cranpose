@@ -210,3 +210,11 @@ fn async_runtime_tab_content_renders_static_states() {
     animation_state.update(|state| state.progress = 1.0);
     drain_all(&mut composition).expect("drain after progress 1");
 }
+
+#[test]
+fn markdown_tab_uses_internal_scroll_container() {
+    assert!(
+        !tab_requires_scroll(DemoTab::MarkdownViewer),
+        "Markdown tab owns an internal lazy list + scrollbar and must not be wrapped in ScrollableTab"
+    );
+}

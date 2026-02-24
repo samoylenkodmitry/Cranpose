@@ -426,6 +426,11 @@ path = "robot-runners/robot_hacker_news_scroll.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_markdown_scrollbar"
+path = "robot-runners/robot_markdown_scrollbar.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_advance_frame_bug"
 path = "robot-runners/robot_advance_frame_bug.rs"
 required-features = ["robot-app"]
