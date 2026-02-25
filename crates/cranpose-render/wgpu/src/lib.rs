@@ -61,6 +61,14 @@ struct TextMeasureTelemetry {
     measure_calls: AtomicU64,
     layout_calls: AtomicU64,
     offset_calls: AtomicU64,
+    measure_with_options_calls: AtomicU64,
+    prepare_with_options_calls: AtomicU64,
+    measure_fast_path_hits: AtomicU64,
+    measure_fast_path_misses: AtomicU64,
+    prepare_fast_path_hits: AtomicU64,
+    prepare_fast_path_misses: AtomicU64,
+    prepared_layout_cache_hits: AtomicU64,
+    prepared_layout_cache_misses: AtomicU64,
     size_cache_hits: AtomicU64,
     size_cache_misses: AtomicU64,
     text_cache_hits: AtomicU64,
@@ -86,6 +94,16 @@ fn maybe_report_text_measure_telemetry(sequence: u64) {
     let measure_calls = telemetry.measure_calls.load(Ordering::Relaxed);
     let layout_calls = telemetry.layout_calls.load(Ordering::Relaxed);
     let offset_calls = telemetry.offset_calls.load(Ordering::Relaxed);
+    let measure_with_options_calls = telemetry.measure_with_options_calls.load(Ordering::Relaxed);
+    let prepare_with_options_calls = telemetry.prepare_with_options_calls.load(Ordering::Relaxed);
+    let measure_fast_path_hits = telemetry.measure_fast_path_hits.load(Ordering::Relaxed);
+    let measure_fast_path_misses = telemetry.measure_fast_path_misses.load(Ordering::Relaxed);
+    let prepare_fast_path_hits = telemetry.prepare_fast_path_hits.load(Ordering::Relaxed);
+    let prepare_fast_path_misses = telemetry.prepare_fast_path_misses.load(Ordering::Relaxed);
+    let prepared_layout_cache_hits = telemetry.prepared_layout_cache_hits.load(Ordering::Relaxed);
+    let prepared_layout_cache_misses = telemetry
+        .prepared_layout_cache_misses
+        .load(Ordering::Relaxed);
     let size_hits = telemetry.size_cache_hits.load(Ordering::Relaxed);
     let size_misses = telemetry.size_cache_misses.load(Ordering::Relaxed);
     let text_hits = telemetry.text_cache_hits.load(Ordering::Relaxed);
@@ -106,6 +124,24 @@ fn maybe_report_text_measure_telemetry(sequence: u64) {
     } else {
         0.0
     };
+    let measure_fast_path_total = measure_fast_path_hits + measure_fast_path_misses;
+    let measure_fast_path_rate = if measure_fast_path_total > 0 {
+        (measure_fast_path_hits as f64 / measure_fast_path_total as f64) * 100.0
+    } else {
+        0.0
+    };
+    let prepare_fast_path_total = prepare_fast_path_hits + prepare_fast_path_misses;
+    let prepare_fast_path_rate = if prepare_fast_path_total > 0 {
+        (prepare_fast_path_hits as f64 / prepare_fast_path_total as f64) * 100.0
+    } else {
+        0.0
+    };
+    let prepared_layout_cache_total = prepared_layout_cache_hits + prepared_layout_cache_misses;
+    let prepared_layout_cache_hit_rate = if prepared_layout_cache_total > 0 {
+        (prepared_layout_cache_hits as f64 / prepared_layout_cache_total as f64) * 100.0
+    } else {
+        0.0
+    };
     let reshape_rate = if ensure_total > 0 {
         (reshapes as f64 / ensure_total as f64) * 100.0
     } else {
@@ -113,10 +149,15 @@ fn maybe_report_text_measure_telemetry(sequence: u64) {
     };
 
     log::warn!(
-        "[text-measure-telemetry] measure_calls={} layout_calls={} offset_calls={} size_hit_rate={:.1}% text_cache_hit_rate={:.1}% reshape_rate={:.1}% reshapes={} reuses={}",
+        "[text-measure-telemetry] measure_calls={} layout_calls={} offset_calls={} measure_with_options_calls={} prepare_with_options_calls={} measure_fast_path_rate={:.1}% prepare_fast_path_rate={:.1}% prepared_layout_cache_hit_rate={:.1}% size_hit_rate={:.1}% text_cache_hit_rate={:.1}% reshape_rate={:.1}% reshapes={} reuses={}",
         measure_calls,
         layout_calls,
         offset_calls,
+        measure_with_options_calls,
+        prepare_with_options_calls,
+        measure_fast_path_rate,
+        prepare_fast_path_rate,
+        prepared_layout_cache_hit_rate,
         size_hit_rate,
         text_hit_rate,
         reshape_rate,
@@ -1309,8 +1350,7 @@ impl WgpuTextMeasurer {
     ) -> Option<cranpose_ui::text::PreparedTextLayout> {
         let options = options.normalized();
         let max_width = max_width.filter(|w| w.is_finite() && *w > 0.0)?;
-        if !Self::supports_fast_wrap_options(style, options) || !Self::is_plain_annotated_text(text)
-        {
+        if !Self::supports_fast_wrap_options(style, options) {
             return None;
         }
 
@@ -1362,20 +1402,18 @@ impl WgpuTextMeasurer {
 
         trim_text_cache(&mut text_cache);
 
-        let mut wrapped_text = String::new();
-        for (index, (start, end)) in wrapped_ranges.iter().enumerate() {
-            if index > 0 {
-                wrapped_text.push('\n');
-            }
-            wrapped_text.push_str(&text_str[*start..*end]);
-        }
+        let wrapped_lines: Vec<cranpose_ui::text::AnnotatedString> = wrapped_ranges
+            .iter()
+            .map(|(start, end)| text.subsequence(*start..*end))
+            .collect();
+        let wrapped_annotated = join_annotated_lines(&wrapped_lines);
 
         let line_count = wrapped_ranges.len().max(options.min_lines).max(1);
         let min_height = options.min_lines as f32 * line_height;
         let height = (line_count as f32 * line_height).max(min_height);
 
         Some(cranpose_ui::text::PreparedTextLayout {
-            text: cranpose_ui::text::AnnotatedString::from(wrapped_text),
+            text: wrapped_annotated,
             metrics: cranpose_ui::TextMetrics {
                 width: size.width.min(max_width),
                 height,
@@ -1407,13 +1445,6 @@ impl WgpuTextMeasurer {
             .take_or_else(|| cranpose_ui::text::Hyphens::None);
         line_break == cranpose_ui::text::LineBreak::Simple
             && hyphens == cranpose_ui::text::Hyphens::None
-    }
-
-    fn is_plain_annotated_text(text: &cranpose_ui::text::AnnotatedString) -> bool {
-        text.span_styles.is_empty()
-            && text.paragraph_styles.is_empty()
-            && text.string_annotations.is_empty()
-            && text.link_annotations.is_empty()
     }
 }
 
@@ -1469,6 +1500,63 @@ fn collect_wrapped_ranges(text: &str, buffer: &Buffer) -> Option<Vec<(usize, usi
         Some(vec![(0, text.len())])
     } else {
         Some(wrapped_ranges)
+    }
+}
+
+fn join_annotated_lines(
+    lines: &[cranpose_ui::text::AnnotatedString],
+) -> cranpose_ui::text::AnnotatedString {
+    if lines.is_empty() {
+        return cranpose_ui::text::AnnotatedString::from("");
+    }
+
+    let mut text = String::new();
+    let mut span_styles = Vec::new();
+    let mut paragraph_styles = Vec::new();
+    let mut string_annotations = Vec::new();
+    let mut link_annotations = Vec::new();
+    let mut offset = 0usize;
+
+    for (idx, line) in lines.iter().enumerate() {
+        text.push_str(line.text.as_str());
+        for span in &line.span_styles {
+            span_styles.push(cranpose_ui::text::RangeStyle {
+                item: span.item.clone(),
+                range: (span.range.start + offset)..(span.range.end + offset),
+            });
+        }
+        for span in &line.paragraph_styles {
+            paragraph_styles.push(cranpose_ui::text::RangeStyle {
+                item: span.item.clone(),
+                range: (span.range.start + offset)..(span.range.end + offset),
+            });
+        }
+        for ann in &line.string_annotations {
+            string_annotations.push(cranpose_ui::text::RangeStyle {
+                item: ann.item.clone(),
+                range: (ann.range.start + offset)..(ann.range.end + offset),
+            });
+        }
+        for ann in &line.link_annotations {
+            link_annotations.push(cranpose_ui::text::RangeStyle {
+                item: ann.item.clone(),
+                range: (ann.range.start + offset)..(ann.range.end + offset),
+            });
+        }
+
+        offset += line.text.len();
+        if idx + 1 < lines.len() {
+            text.push('\n');
+            offset += 1;
+        }
+    }
+
+    cranpose_ui::text::AnnotatedString {
+        text,
+        span_styles,
+        paragraph_styles,
+        string_annotations,
+        link_annotations,
     }
 }
 
@@ -1621,10 +1709,22 @@ impl TextMeasurer for WgpuTextMeasurer {
         options: cranpose_ui::text::TextLayoutOptions,
         max_width: Option<f32>,
     ) -> cranpose_ui::TextMetrics {
+        let telemetry = text_measure_telemetry_enabled().then_some(text_measure_telemetry());
+        let telemetry_sequence = telemetry
+            .map(|t| t.measure_with_options_calls.fetch_add(1, Ordering::Relaxed) + 1)
+            .unwrap_or(0);
         if let Some(metrics) =
             self.try_measure_with_options_fast_path(text, style, options, max_width)
         {
+            if let Some(t) = telemetry {
+                t.measure_fast_path_hits.fetch_add(1, Ordering::Relaxed);
+                maybe_report_text_measure_telemetry(telemetry_sequence);
+            }
             return metrics;
+        }
+        if let Some(t) = telemetry {
+            t.measure_fast_path_misses.fetch_add(1, Ordering::Relaxed);
+            maybe_report_text_measure_telemetry(telemetry_sequence);
         }
         self.prepare_with_options(text, style, options, max_width)
             .metrics
@@ -1637,6 +1737,10 @@ impl TextMeasurer for WgpuTextMeasurer {
         options: cranpose_ui::text::TextLayoutOptions,
         max_width: Option<f32>,
     ) -> cranpose_ui::text::PreparedTextLayout {
+        let telemetry = text_measure_telemetry_enabled().then_some(text_measure_telemetry());
+        let telemetry_sequence = telemetry
+            .map(|t| t.prepare_with_options_calls.fetch_add(1, Ordering::Relaxed) + 1)
+            .unwrap_or(0);
         let normalized_options = options.normalized();
         let normalized_max_width = max_width.filter(|w| w.is_finite() && *w > 0.0);
         let text_str = text.text.as_str();
@@ -1659,29 +1763,46 @@ impl TextMeasurer for WgpuTextMeasurer {
             let mut cache = self.prepared_layout_cache.borrow_mut();
             if let Some((cached_text, prepared)) = cache.get(&cache_key) {
                 if cached_text == text_str {
+                    if let Some(t) = telemetry {
+                        t.prepared_layout_cache_hits.fetch_add(1, Ordering::Relaxed);
+                        maybe_report_text_measure_telemetry(telemetry_sequence);
+                    }
                     return prepared.clone();
                 }
             }
         }
+        if let Some(t) = telemetry {
+            t.prepared_layout_cache_misses
+                .fetch_add(1, Ordering::Relaxed);
+        }
 
-        let prepared = self
-            .try_prepare_with_options_fast_path(
+        let prepared = if let Some(prepared) = self.try_prepare_with_options_fast_path(
+            text,
+            style,
+            normalized_options,
+            normalized_max_width,
+        ) {
+            if let Some(t) = telemetry {
+                t.prepare_fast_path_hits.fetch_add(1, Ordering::Relaxed);
+            }
+            prepared
+        } else {
+            if let Some(t) = telemetry {
+                t.prepare_fast_path_misses.fetch_add(1, Ordering::Relaxed);
+            }
+            self.prepare_with_options_fallback(
                 text,
                 style,
                 normalized_options,
                 normalized_max_width,
             )
-            .unwrap_or_else(|| {
-                self.prepare_with_options_fallback(
-                    text,
-                    style,
-                    normalized_options,
-                    normalized_max_width,
-                )
-            });
+        };
 
         let mut cache = self.prepared_layout_cache.borrow_mut();
         cache.put(cache_key, (text_str.to_string(), prepared.clone()));
+        if telemetry.is_some() {
+            maybe_report_text_measure_telemetry(telemetry_sequence);
+        }
 
         prepared
     }
