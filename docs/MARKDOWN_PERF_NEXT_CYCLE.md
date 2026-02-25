@@ -234,12 +234,42 @@
 - Post-change `perf` sample for the same repro still shows font/shaping symbols present, but measurement call volume is now far lower by telemetry.
   - Remaining optimization surface is renderer prepare frequency and/or scroll/repass cadence, not repeated text measurement of unchanged nodes.
 
+## Continuation Findings (2026-02-25, current chat)
+
+- Re-ran the documented startup + drag probes on rebuilt binaries.
+- Observed a new host/runtime profile in this session:
+  - no-drag baseline (`hold 5s`) repeatedly reported:
+    - `fps_summary: fps=3.4 frame_ms~295 recompositions=3`
+    - startup warnings only (`index 9`, `index 24`)
+  - viewport drag repro (`20 down + 20 up`) did not complete within `70s` timeout in this host state; logs consistently stopped after:
+    - `viewport_drag start: deep_present=false return_present=true`
+
+- Tried a renderer-side culling refactor for text prepare; it caused severe runtime regression in this workspace and was fully reverted (no net renderer behavior change kept from that experiment).
+
+- Landed a safer lazy-input change in:
+  - `crates/cranpose-foundation/src/lazy/lazy_list_state.rs`
+  - `dispatch_scroll_delta` now clamps pending unconsumed backlog to:
+    - `MAX_PENDING_SCROLL_DELTA = 2000.0`
+  - when backlog is already clamped and additional same-direction deltas do not change pending value, invalidation is skipped to avoid no-op repass churn.
+  - Existing direction-change backlog replacement logic remains in place.
+  - Added tests:
+    - `dispatch_scroll_delta_clamps_pending_backlog`
+    - `dispatch_scroll_delta_skips_invalidate_when_clamped_value_is_unchanged`
+
+- Validation run set for this landed change:
+  - `cargo test -p cranpose-foundation lazy::lazy_list_state::tests::` passed (3 tests).
+  - `cargo clippy -p cranpose-foundation -p cranpose-render-wgpu -p desktop-app` passed.
+  - Note: `cargo clippy -p cranpose-foundation -- -D warnings` currently fails due pre-existing unrelated `dead_code` warnings in `crates/cranpose-core/src/frame_clock.rs`.
+
+- Lazy telemetry spot-check (`1` viewport down drag, timeout-bounded) showed pending deltas logged as `-12.77` per dispatch in this slow host state; clamp was not hit in that short run.
+- Post-change no-drag baseline remained in the same host-limited range (`fps ~3.4`), so this change is currently validated by unit tests and telemetry semantics rather than a measurable FPS uplift in this environment.
+
 ## Fresh Chat Handoff (next perf-opt cycle)
 
 ### Workspace state to continue from
 
 - Modified files:
-  - `crates/cranpose-ui/src/text_modifier_node.rs`
+  - `crates/cranpose-foundation/src/lazy/lazy_list_state.rs`
   - `docs/MARKDOWN_PERF_NEXT_CYCLE.md`
 - Untracked artifacts:
   - `clippy_out.txt`
@@ -253,6 +283,7 @@
 - Baseline no-drag run does not show uncontrolled index drift in this workspace and now measures `~9.2 FPS` on the 2.6MB fixture.
 - WGPU `measure_with_options`/`prepare_with_options` fast paths and prepared-layout cache are active and telemetry-visible.
 - Robot binary rebuild command is now explicit in the workflow to avoid stale measurements.
+- Lazy scroll pending backlog is now clamped to `±2000px` and test-covered.
 
 ### What remains open
 
@@ -260,6 +291,7 @@
 - Robot probes still end with `return_present=false` after `20` up-drags in this synthetic scenario.
 - Manual verification on the exact user gesture path is still required (robot and manual may diverge in drag kinematics).
 - Next bottleneck work should focus on scroll-position/gesture semantics and renderer prepare frequency during active scroll.
+- Current host measurements in this chat are much slower than earlier same-day runs; reproduce on a stable host profile before drawing regression conclusions from absolute FPS.
 
 ### Recommended first commands in next chat
 
