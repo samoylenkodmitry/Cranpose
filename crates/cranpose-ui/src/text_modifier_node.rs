@@ -25,6 +25,7 @@ use cranpose_foundation::{
     LayoutModifierNode, Measurable, MeasurementProxy, ModifierNode, ModifierNodeContext,
     ModifierNodeElement, NodeCapabilities, NodeState, SemanticsConfiguration, SemanticsNode, Size,
 };
+use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 
 /// Node that stores text content and handles measurement, drawing, and semantics.
@@ -41,7 +42,14 @@ pub struct TextModifierNode {
     text: AnnotatedString,
     style: TextStyle,
     options: TextLayoutOptions,
+    measure_cache: RefCell<Option<TextMeasureCacheEntry>>,
     state: NodeState,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TextMeasureCacheEntry {
+    max_width_bits: Option<u32>,
+    size: Size,
 }
 
 impl TextModifierNode {
@@ -50,6 +58,7 @@ impl TextModifierNode {
             text,
             style,
             options: options.normalized(),
+            measure_cache: RefCell::new(None),
             state: NodeState::new(),
         }
     }
@@ -71,16 +80,30 @@ impl TextModifierNode {
     }
 
     fn measure_text_content(&self, max_width: Option<f32>) -> Size {
+        let cache_key = max_width.map(f32::to_bits);
+        if let Some(cache) = self.measure_cache.borrow().as_ref() {
+            if cache.max_width_bits == cache_key {
+                return cache.size;
+            }
+        }
+
         let metrics = crate::text::measure_text_with_options(
             &self.text,
             &self.style,
             self.options,
             max_width,
         );
-        Size {
+        let size = Size {
             width: metrics.width,
             height: metrics.height,
-        }
+        };
+        self.measure_cache
+            .borrow_mut()
+            .replace(TextMeasureCacheEntry {
+                max_width_bits: cache_key,
+                size,
+            });
+        size
     }
 }
 
@@ -571,6 +594,7 @@ impl ModifierNodeElement for TextModifierElement {
         }
 
         if changed {
+            node.measure_cache.borrow_mut().take();
             // Text/Style changed - need to invalidate layout, draw, and semantics
             // Note: In the full implementation, we would call context.invalidate here
             // but update() doesn't currently have access to context.

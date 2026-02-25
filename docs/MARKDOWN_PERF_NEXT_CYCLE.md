@@ -200,12 +200,46 @@
   - The large text-shaping churn seen earlier was not representative of the rebuilt binary path.
   - The remaining functional issue is directional return behavior (`return_present=false`), not catastrophic text-measure throughput in this robot profile.
 
+## Continuation Findings (2026-02-25, drag/fling perf cycle)
+
+- New optimization landed in `crates/cranpose-ui/src/text_modifier_node.rs`:
+  - Added a per-node text measurement cache keyed by effective max width (`Option<f32>` bits).
+  - Cache is invalidated when text/style/options are updated.
+  - Goal: stop re-running `measure_text_with_options` for unchanged text nodes across repeated lazy-list passes.
+
+- Validation:
+  - `cargo test -p cranpose-ui` (all tests passed)
+  - `cargo clippy -p cranpose-ui -- -D warnings` (clean)
+  - `cargo fmt` (clean)
+
+- Baseline no-drag check (2.6MB fixture, hold 5s):
+  - still only startup warnings (`index 8`, `index 23`).
+  - `fps_summary: fps=9.0 frame_ms=111.57 recompositions=3`.
+
+- Drag + deep fling repro (`20 down + 20 up`, viewport drag path):
+  - remains functionally reproducible: `return_present=false`.
+  - one additional budget warning still appears during deep traversal (`index 132`).
+  - fresh no-telemetry run measured:
+    - `fps_summary: fps=42.8 frame_ms=23.37 recompositions=1718 recomps_per_sec=42`.
+
+- Text telemetry delta on the same drag/fling repro:
+  - before this change (previous cycle runs): `measure_with_options_calls ~= 68k`, `prepare_with_options_calls ~= 38k`.
+  - after this change:
+    - `measure_with_options_calls ~= 518`
+    - `prepare_with_options_calls ~= 36.8k`
+  - Interpretation:
+    - layout-side text re-measure churn is largely eliminated;
+    - remaining text work is mostly renderer prepare calls during active scrolling.
+
+- Post-change `perf` sample for the same repro still shows font/shaping symbols present, but measurement call volume is now far lower by telemetry.
+  - Remaining optimization surface is renderer prepare frequency and/or scroll/repass cadence, not repeated text measurement of unchanged nodes.
+
 ## Fresh Chat Handoff (next perf-opt cycle)
 
 ### Workspace state to continue from
 
 - Modified files:
-  - `crates/cranpose-render/wgpu/src/lib.rs`
+  - `crates/cranpose-ui/src/text_modifier_node.rs`
   - `docs/MARKDOWN_PERF_NEXT_CYCLE.md`
 - Untracked artifacts:
   - `clippy_out.txt`
@@ -225,7 +259,7 @@
 - User-reported manual bug: after dragging down to around `"19.02.2026"`, upward drag can snap back and feel blocked.
 - Robot probes still end with `return_present=false` after `20` up-drags in this synthetic scenario.
 - Manual verification on the exact user gesture path is still required (robot and manual may diverge in drag kinematics).
-- Next bottleneck work should focus on scroll-position/gesture semantics and app-shell phase timing, not raw text shaping throughput.
+- Next bottleneck work should focus on scroll-position/gesture semantics and renderer prepare frequency during active scroll.
 
 ### Recommended first commands in next chat
 
