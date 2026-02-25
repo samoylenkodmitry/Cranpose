@@ -273,9 +273,42 @@ impl TypefaceRequest {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum FamilyCacheKey {
+    Name(String),
+    Serif,
+    SansSerif,
+    Monospace,
+    Cursive,
+    Fantasy,
+}
+
+impl FamilyCacheKey {
+    fn from_family_owned(family: &FamilyOwned) -> Self {
+        match family {
+            FamilyOwned::Name(name) => Self::Name(name.to_string()),
+            FamilyOwned::Serif => Self::Serif,
+            FamilyOwned::SansSerif => Self::SansSerif,
+            FamilyOwned::Monospace => Self::Monospace,
+            FamilyOwned::Cursive => Self::Cursive,
+            FamilyOwned::Fantasy => Self::Fantasy,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct StyleWeightRequest {
+    family: FamilyCacheKey,
+    requested_weight: cranpose_ui::text::FontWeight,
+    requested_style: cranpose_ui::text::FontStyle,
+}
+
+type ResolvedStyleWeight = Option<(GlyphonStyle, GlyphonWeight)>;
+
 #[derive(Default)]
 struct WgpuFontFamilyResolver {
     request_cache: HashMap<TypefaceRequest, FamilyOwned>,
+    style_weight_cache: HashMap<StyleWeightRequest, ResolvedStyleWeight>,
     loaded_typeface_paths: HashMap<String, String>,
     unavailable_typeface_paths: HashSet<String>,
     available_family_names: HashMap<String, String>,
@@ -306,6 +339,33 @@ impl WgpuFontFamilyResolver {
 
         let resolved = self.resolve_family_owned_uncached(font_system, &request);
         self.request_cache.insert(request, resolved.clone());
+        resolved
+    }
+
+    fn resolve_available_style_and_weight(
+        &mut self,
+        font_system: &FontSystem,
+        family: &FamilyOwned,
+        requested_weight: Option<cranpose_ui::text::FontWeight>,
+        requested_style: Option<cranpose_ui::text::FontStyle>,
+    ) -> Option<(GlyphonStyle, GlyphonWeight)> {
+        let request = StyleWeightRequest {
+            family: FamilyCacheKey::from_family_owned(family),
+            requested_weight: requested_weight.unwrap_or_default(),
+            requested_style: requested_style.unwrap_or_default(),
+        };
+
+        if let Some(cached) = self.style_weight_cache.get(&request) {
+            return *cached;
+        }
+
+        let resolved = resolve_available_style_and_weight_uncached(
+            font_system,
+            family,
+            requested_weight,
+            requested_style,
+        );
+        self.style_weight_cache.insert(request, resolved);
         resolved
     }
 
@@ -400,6 +460,7 @@ impl WgpuFontFamilyResolver {
         }
         self.indexed_face_count = face_count;
         self.request_cache.clear();
+        self.style_weight_cache.clear();
         self.generic_fallback_seeded = false;
     }
 
@@ -431,6 +492,7 @@ impl WgpuFontFamilyResolver {
 
         self.generic_fallback_seeded = true;
         self.request_cache.clear();
+        self.style_weight_cache.clear();
     }
 
     fn load_typeface_path(&mut self, font_system: &mut FontSystem, path: &str) -> Option<String> {
@@ -886,7 +948,7 @@ fn glyphon_style_from_fontdb(style: glyphon::fontdb::Style) -> GlyphonStyle {
     }
 }
 
-fn resolve_available_style_and_weight(
+fn resolve_available_style_and_weight_uncached(
     font_system: &FontSystem,
     family: &FamilyOwned,
     requested_weight: Option<cranpose_ui::text::FontWeight>,
@@ -984,8 +1046,8 @@ fn attrs_from_text_style(
     let family_owned = font_family_resolver.resolve_family_owned(font_system, span_style);
     attrs = attrs.family(family_owned.as_family());
 
-    if let Some((resolved_style, resolved_weight)) =
-        resolve_available_style_and_weight(font_system, &family_owned, font_weight, font_style)
+    if let Some((resolved_style, resolved_weight)) = font_family_resolver
+        .resolve_available_style_and_weight(font_system, &family_owned, font_weight, font_style)
     {
         attrs = attrs.style(resolved_style).weight(resolved_weight);
     } else {

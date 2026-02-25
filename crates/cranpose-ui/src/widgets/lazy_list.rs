@@ -248,11 +248,14 @@ fn measure_lazy_list_internal(
             max_cross_size = max_cross_size.max(cross);
         }
 
+        // Zero/near-zero measured items can cause extremely expensive measure loops
+        // (thousands of items scanned to fill one viewport). Clamp to 1px minimum.
+        let main_axis_size = total_main_size.max(1.0);
         let mut item = LazyListMeasuredItem::new(
             index,
             key_slot_id,
             content_type,
-            total_main_size,
+            main_axis_size,
             max_cross_size,
         );
 
