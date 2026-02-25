@@ -132,3 +132,84 @@
   - `frame_ms ~= 183`
   - `recompositions=3` over 5 seconds
   - time-budget warnings observed only during initial settle (`2` warnings), no steady-state drift in this run.
+
+## Continuation Findings (2026-02-25, later run)
+
+- Re-ran the documented first-command sequence:
+  - no-drag baseline (`hold 5s`) still reports `fps ~5.5`, `frame_ms ~181-183`.
+  - only the initial two lazy time-budget warnings appear (`index 8`, `index 23`), then no steady-state warning spam.
+  - direction-change viewport drag repro still ends with:
+    - `after_viewport_up: deep_present=true`
+    - `return_present=false`
+    - `fps_summary ~36-40`.
+  - `perf record/report` for the direction-change run still shows hot symbols dominated by text/font parsing paths (`ttf_parser`-heavy symbols remain present in top rows).
+
+- Added/kept WGPU text optimizations and probes:
+  - `prepare_with_options` prepared-layout cache (already landed in this branch) remains active and test-covered.
+  - Added a WGPU `prepare_with_options` fast path for **plain annotated text** in the common markdown config (`soft_wrap + Clip + unlimited max_lines + Simple/None`):
+    - wraps using glyphon line runs directly;
+    - falls back to existing generic algorithm when constraints are not matched.
+  - Added renderer-side text prepare telemetry hook (env gated):
+    - `CRANPOSE_TEXT_RENDER_TELEMETRY=1`.
+  - Added text-batch signature reuse path in `GpuRenderer::prepare_text_for_render` to skip identical consecutive prepares.
+
+- What the new telemetry showed:
+  - `CRANPOSE_TEXT_MEASURE_TELEMETRY=1` (no-drag) reported at startup:
+    - `measure_calls=200`
+    - `size_hit_rate=64.5%`
+    - `text_cache_hit_rate=1.4%`
+    - `reshape_rate=98.6%`
+  - `CRANPOSE_TEXT_RENDER_TELEMETRY=1` did not emit periodic logs in the no-drag hold runs, which suggests renderer-side text-prepare path is not the dominant steady-state loop in this robot scenario (or is hit far less than expected).
+
+- Control check:
+  - Small markdown fixture (`/tmp/markdown_small.md`) reaches ~`17.6 FPS` in the same headless robot, confirming the large-fixture path is still the limiting workload.
+
+## Fresh Chat Handoff (next perf-opt cycle)
+
+### Workspace state to continue from
+
+- Modified files:
+  - `crates/cranpose-render/wgpu/src/lib.rs`
+  - `crates/cranpose-render/wgpu/src/render.rs`
+  - `crates/cranpose-ui/src/text/measure.rs`
+  - `crates/cranpose-render/common/src/software_text_raster.rs` (pre-existing in workspace)
+  - `crates/cranpose-render/common/src/text_hyphenation.rs` (pre-existing in workspace)
+  - `crates/cranpose-render/pixels/src/draw.rs` (pre-existing in workspace)
+  - `docs/MARKDOWN_PERF_NEXT_CYCLE.md`
+- Untracked artifacts:
+  - `clippy_out.txt`
+  - `robot_out.txt`
+  - `test_out.txt`
+
+### What is ready
+
+- Lazy scroll direction-reversal backlog mitigation is implemented and test-covered.
+- Markdown robot runner can now drive viewport drags directly and emit sentinel position traces.
+- Baseline no-drag run does not show uncontrolled index drift in this workspace.
+- WGPU has additional prepare/layout fast paths plus env-gated renderer telemetry for the next measurement pass.
+
+### What remains open
+
+- User-reported manual bug: after dragging down to around `"19.02.2026"`, upward drag can snap back and feel blocked.
+- Robot probes did not reproduce a hard lock after the backlog fix; manual verification on the exact user gesture path is still required.
+- Main runtime bottleneck is still text shaping/layout at deep content positions; FPS target (`8+`) is not yet met in no-drag baseline.
+- New uncertainty: no-drag steady-state cost likely is not dominated by repeated renderer-side `prepare_text_for_render`; next cycle should instrument app-shell frame phases to isolate where the `~181ms` frame time is spent after initial settle.
+
+### Recommended first commands in next chat
+
+1. Build and run baseline no-drag profile:
+   - `CRANPOSE_MARKDOWN_FIXTURE_PATH=/tmp/markdown_profile.md CRANPOSE_MARKDOWN_TOP_SENTINEL="Daily leetcode challenge" CRANPOSE_MARKDOWN_DEEP_SENTINEL="" CRANPOSE_HEADLESS=1 CRANPOSE_MARKDOWN_SCROLL_LOOPS=0 CRANPOSE_MARKDOWN_HOLD_SECS=5 CRANPOSE_LAZY_MEASURE_TELEMETRY=1 target/debug/examples/robot_markdown_scrollbar`
+2. Reproduce drag direction behavior with viewport drags:
+   - `CRANPOSE_MARKDOWN_FIXTURE_PATH=/tmp/markdown_profile.md CRANPOSE_MARKDOWN_TOP_SENTINEL="Daily leetcode challenge" CRANPOSE_MARKDOWN_DEEP_SENTINEL="19.02.2026" CRANPOSE_MARKDOWN_RETURN_SENTINEL="Daily leetcode challenge" CRANPOSE_HEADLESS=1 CRANPOSE_MARKDOWN_SCROLL_LOOPS=0 CRANPOSE_MARKDOWN_VIEWPORT_DRAG_DOWN_LOOPS=20 CRANPOSE_MARKDOWN_VIEWPORT_DRAG_UP_LOOPS=20 CRANPOSE_MARKDOWN_WAIT_IDLE_AFTER_DRAG=0 CRANPOSE_LAZY_MEASURE_TELEMETRY=1 target/debug/examples/robot_markdown_scrollbar`
+3. If still stuck, capture CPU profile for that exact run:
+   - `perf record -F 299 -g --call-graph fp -o /tmp/mdperf_dirchange.data bash -lc '...robot_markdown_scrollbar env from step 2...'`
+   - `perf report --stdio -i /tmp/mdperf_dirchange.data`
+4. Run startup/steady-state measurement probes:
+   - `CRANPOSE_MARKDOWN_FIXTURE_PATH=/tmp/markdown_profile.md CRANPOSE_HEADLESS=1 CRANPOSE_MARKDOWN_SCROLL_LOOPS=0 CRANPOSE_MARKDOWN_HOLD_SECS=8 CRANPOSE_TEXT_MEASURE_TELEMETRY=1 target/debug/examples/robot_markdown_scrollbar`
+   - `CRANPOSE_MARKDOWN_FIXTURE_PATH=/tmp/markdown_profile.md CRANPOSE_HEADLESS=1 CRANPOSE_MARKDOWN_SCROLL_LOOPS=0 CRANPOSE_MARKDOWN_HOLD_SECS=8 CRANPOSE_TEXT_RENDER_TELEMETRY=1 target/debug/examples/robot_markdown_scrollbar`
+
+### Priority for next cycle
+
+- Keep measurement-first flow:
+  - verify if any remaining jump-back comes from queued deltas, fling handoff, or scrollbar `scroll_to_item` interference;
+  - then isolate steady-state frame time inside app-shell phases (`layout`, queue dispatch, scene rebuild, renderer submit), since current evidence suggests startup text shaping is still expensive but may not explain all of steady-state `frame_ms ~181`.

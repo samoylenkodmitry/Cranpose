@@ -17,10 +17,12 @@ use glyphon::{
     TextBounds, TextRenderer, Viewport,
 };
 use lru::LruCache;
+use rustc_hash::FxHasher;
+use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::ops::Range;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use crate::gpu_stats;
@@ -39,6 +41,14 @@ const CLEAR_COLOR: wgpu::Color = wgpu::Color {
 const MAX_TEXTURE_CACHE_ITEMS: usize = 256;
 static REPORTED_UNSUPPORTED_WGPU_BLEND_MODES: AtomicBool = AtomicBool::new(false);
 static REPORTED_UNSUPPORTED_WGPU_EFFECTS: AtomicBool = AtomicBool::new(false);
+static TEXT_RENDER_TELEMETRY_ENABLED: OnceLock<bool> = OnceLock::new();
+static TEXT_RENDER_CALLS: AtomicU64 = AtomicU64::new(0);
+static TEXT_RENDER_SKIPS: AtomicU64 = AtomicU64::new(0);
+
+fn text_render_telemetry_enabled() -> bool {
+    *TEXT_RENDER_TELEMETRY_ENABLED
+        .get_or_init(|| std::env::var_os("CRANPOSE_TEXT_RENDER_TELEMETRY").is_some())
+}
 
 fn is_blend_mode_supported(mode: BlendMode) -> bool {
     matches!(mode, BlendMode::SrcOver | BlendMode::DstOut)
@@ -514,6 +524,7 @@ pub struct GpuRenderer {
     scratch_effect_ranges: Vec<Range<usize>>,
     scratch_layer_events: Vec<LayerEvent>,
     effect_renderer: EffectRenderer,
+    last_prepared_text_batch: Option<PreparedTextBatchSignature>,
     frame_stats: gpu_stats::FrameStats,
     frame_count: u64,
     gpu_stats_enabled: bool,
@@ -727,6 +738,7 @@ impl GpuRenderer {
             scratch_effect_ranges: Vec::new(),
             scratch_layer_events: Vec::new(),
             effect_renderer,
+            last_prepared_text_batch: None,
             frame_stats: gpu_stats::FrameStats::default(),
             frame_count: 0,
             gpu_stats_enabled: gpu_stats_enabled(),
@@ -2522,11 +2534,37 @@ impl GpuRenderer {
         height: u32,
         root_scale: f32,
     ) -> Result<(), String> {
+        let telemetry_enabled = text_render_telemetry_enabled();
+        let call_sequence = if telemetry_enabled {
+            TEXT_RENDER_CALLS.fetch_add(1, Ordering::Relaxed) + 1
+        } else {
+            0
+        };
+
+        let batch_signature = prepared_text_batch_signature(layer_texts, width, height, root_scale);
+        if batch_signature.is_some() && self.last_prepared_text_batch == batch_signature {
+            if telemetry_enabled {
+                let skips = TEXT_RENDER_SKIPS.fetch_add(1, Ordering::Relaxed) + 1;
+                if call_sequence.is_multiple_of(20) {
+                    log::warn!(
+                        "[text-render-telemetry] calls={} skips={} skip_rate={:.1}% (prepare reused)",
+                        call_sequence,
+                        skips,
+                        (skips as f64 / call_sequence as f64) * 100.0
+                    );
+                }
+            }
+            return Ok(());
+        }
+
+        let prepare_started = telemetry_enabled.then(std::time::Instant::now);
         let mut font_system = self.font_system.lock().unwrap();
         let mut text_cache = self.text_cache.lock().unwrap();
         let mut font_family_resolver = self.font_family_resolver.lock().unwrap();
 
         let mut text_keys: Vec<TextCacheKey> = Vec::with_capacity(layer_texts.len());
+        let mut valid_items = 0usize;
+        let mut total_chars = 0usize;
 
         for text_draw in layer_texts {
             if text_draw.text.is_empty()
@@ -2535,6 +2573,8 @@ impl GpuRenderer {
             {
                 continue;
             }
+            valid_items += 1;
+            total_chars += text_draw.text.text.len();
 
             let font_size_px = text_draw.font_size * text_draw.scale * root_scale;
             let style_hash =
@@ -2620,10 +2660,6 @@ impl GpuRenderer {
             });
         }
 
-        if text_areas.is_empty() {
-            return Ok(());
-        }
-
         self.text_viewport
             .update(&self.queue, Resolution { width, height });
         self.text_renderer
@@ -2638,6 +2674,22 @@ impl GpuRenderer {
             )
             .map_err(|e| format!("Text prepare error: {:?}", e))?;
 
+        self.last_prepared_text_batch = batch_signature;
+        if telemetry_enabled && call_sequence.is_multiple_of(20) {
+            let skips = TEXT_RENDER_SKIPS.load(Ordering::Relaxed);
+            let elapsed_ms = prepare_started
+                .map(|start| start.elapsed().as_secs_f64() * 1000.0)
+                .unwrap_or(0.0);
+            log::warn!(
+                "[text-render-telemetry] calls={} skips={} skip_rate={:.1}% batch_items={} chars={} prepare_ms={:.2}",
+                call_sequence,
+                skips,
+                (skips as f64 / call_sequence as f64) * 100.0,
+                valid_items,
+                total_chars,
+                elapsed_ms
+            );
+        }
         Ok(())
     }
 
@@ -2713,6 +2765,85 @@ enum BatchKind {
     Shape,
     Image,
     Text,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PreparedTextBatchSignature {
+    hash: u64,
+    width: u32,
+    height: u32,
+    root_scale_bits: u32,
+}
+
+fn hash_f32_bits<H: Hasher>(value: f32, state: &mut H) {
+    value.to_bits().hash(state);
+}
+
+fn hash_optional_rect<H: Hasher>(rect: Option<Rect>, state: &mut H) {
+    match rect {
+        Some(rect) => {
+            1u8.hash(state);
+            hash_f32_bits(rect.x, state);
+            hash_f32_bits(rect.y, state);
+            hash_f32_bits(rect.width, state);
+            hash_f32_bits(rect.height, state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
+fn prepared_text_batch_signature(
+    layer_texts: &[&TextDraw],
+    width: u32,
+    height: u32,
+    root_scale: f32,
+) -> Option<PreparedTextBatchSignature> {
+    let mut hasher = FxHasher::default();
+    let mut item_count = 0usize;
+
+    for text_draw in layer_texts {
+        if text_draw.text.is_empty() || text_draw.rect.width <= 0.0 || text_draw.rect.height <= 0.0
+        {
+            continue;
+        }
+
+        item_count += 1;
+        text_draw.text.text.hash(&mut hasher);
+        text_draw.text.text.len().hash(&mut hasher);
+
+        let style_hash =
+            text_draw.text_style.measurement_hash() ^ text_draw.text.span_styles_hash();
+        style_hash.hash(&mut hasher);
+
+        hash_f32_bits(text_draw.rect.x, &mut hasher);
+        hash_f32_bits(text_draw.rect.y, &mut hasher);
+        hash_f32_bits(text_draw.rect.width, &mut hasher);
+        hash_f32_bits(text_draw.rect.height, &mut hasher);
+        hash_optional_rect(text_draw.clip, &mut hasher);
+
+        hash_f32_bits(text_draw.color.r(), &mut hasher);
+        hash_f32_bits(text_draw.color.g(), &mut hasher);
+        hash_f32_bits(text_draw.color.b(), &mut hasher);
+        hash_f32_bits(text_draw.color.a(), &mut hasher);
+        hash_f32_bits(text_draw.font_size, &mut hasher);
+        hash_f32_bits(text_draw.scale, &mut hasher);
+        text_draw.layout_options.hash(&mut hasher);
+    }
+
+    if item_count == 0 {
+        return None;
+    }
+
+    width.hash(&mut hasher);
+    height.hash(&mut hasher);
+    hash_f32_bits(root_scale, &mut hasher);
+
+    Some(PreparedTextBatchSignature {
+        hash: hasher.finish(),
+        width,
+        height,
+        root_scale_bits: root_scale.to_bits(),
+    })
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -3202,6 +3333,26 @@ mod tests {
             z_index,
             clip: None,
         }
+    }
+
+    #[test]
+    fn prepared_text_batch_signature_is_stable_for_equivalent_inputs() {
+        let text = test_text(0);
+        let cloned = text.clone();
+        let sig_a = prepared_text_batch_signature(&[&text], 1920, 1080, 1.0);
+        let sig_b = prepared_text_batch_signature(&[&cloned], 1920, 1080, 1.0);
+        assert_eq!(sig_a, sig_b);
+    }
+
+    #[test]
+    fn prepared_text_batch_signature_changes_when_geometry_changes() {
+        let text = test_text(0);
+        let mut moved = text.clone();
+        moved.rect.y = 42.0;
+
+        let original = prepared_text_batch_signature(&[&text], 1920, 1080, 1.0);
+        let changed = prepared_text_batch_signature(&[&moved], 1920, 1080, 1.0);
+        assert_ne!(original, changed);
     }
 
     #[test]

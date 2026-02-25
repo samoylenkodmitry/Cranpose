@@ -28,6 +28,7 @@ use glyphon::{
 use lru::LruCache;
 use render::GpuRenderer;
 use rustc_hash::FxHasher;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
@@ -39,6 +40,18 @@ use std::sync::{Arc, Mutex, OnceLock};
 /// Key: (text_hash, font_size_fixed_point, style_hash)
 /// Value: (text_content, size) - text stored to handle hash collisions
 type TextSizeCache = Arc<Mutex<LruCache<(u64, i32, u64), (String, Size)>>>;
+type PreparedTextLayoutCache = Rc<
+    RefCell<LruCache<PreparedTextLayoutCacheKey, (String, cranpose_ui::text::PreparedTextLayout)>>,
+>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct PreparedTextLayoutCacheKey {
+    text_hash: u64,
+    size_int: i32,
+    style_hash: u64,
+    options: cranpose_ui::text::TextLayoutOptions,
+    max_width_bits: Option<u32>,
+}
 
 static TEXT_MEASURE_TELEMETRY_ENABLED: OnceLock<bool> = OnceLock::new();
 static TEXT_MEASURE_TELEMETRY: OnceLock<TextMeasureTelemetry> = OnceLock::new();
@@ -1157,6 +1170,7 @@ struct WgpuTextMeasurer {
     font_system: Arc<Mutex<FontSystem>>,
     font_family_resolver: SharedFontFamilyResolver,
     size_cache: TextSizeCache,
+    prepared_layout_cache: PreparedTextLayoutCache,
     /// Shared buffer cache used by both measurement and rendering
     text_cache: SharedTextCache,
 }
@@ -1172,6 +1186,9 @@ impl WgpuTextMeasurer {
             font_family_resolver,
             // Larger cache size (1024) reduces misses, FxHasher for faster lookups
             size_cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(1024).unwrap()))),
+            prepared_layout_cache: Rc::new(RefCell::new(LruCache::new(
+                NonZeroUsize::new(256).unwrap(),
+            ))),
             text_cache,
         }
     }
@@ -1185,24 +1202,7 @@ impl WgpuTextMeasurer {
     ) -> Option<cranpose_ui::TextMetrics> {
         let options = options.normalized();
         let max_width = max_width.filter(|w| w.is_finite() && *w > 0.0)?;
-        if options.overflow != cranpose_ui::text::TextOverflow::Clip || !options.soft_wrap {
-            return None;
-        }
-        if options.max_lines != usize::MAX {
-            return None;
-        }
-
-        let line_break = style
-            .paragraph_style
-            .line_break
-            .take_or_else(|| cranpose_ui::text::LineBreak::Simple);
-        let hyphens = style
-            .paragraph_style
-            .hyphens
-            .take_or_else(|| cranpose_ui::text::Hyphens::None);
-        if line_break != cranpose_ui::text::LineBreak::Simple
-            || hyphens != cranpose_ui::text::Hyphens::None
-        {
+        if !Self::supports_fast_wrap_options(style, options) {
             return None;
         }
 
@@ -1298,6 +1298,177 @@ impl WgpuTextMeasurer {
             line_height,
             line_count,
         })
+    }
+
+    fn try_prepare_with_options_fast_path(
+        &self,
+        text: &cranpose_ui::text::AnnotatedString,
+        style: &cranpose_ui::text::TextStyle,
+        options: cranpose_ui::text::TextLayoutOptions,
+        max_width: Option<f32>,
+    ) -> Option<cranpose_ui::text::PreparedTextLayout> {
+        let options = options.normalized();
+        let max_width = max_width.filter(|w| w.is_finite() && *w > 0.0)?;
+        if !Self::supports_fast_wrap_options(style, options) || !Self::is_plain_annotated_text(text)
+        {
+            return None;
+        }
+
+        let text_str = text.text.as_str();
+        let font_size = resolve_font_size(style);
+        let line_height = resolve_effective_line_height(style, text, font_size);
+        let style_hash = style.measurement_hash() ^ text.span_styles_hash();
+
+        let text_buffer_key = TextCacheKey::new(text_str, font_size, style_hash);
+        let mut font_system = self.font_system.lock().unwrap();
+        let mut text_cache = self.text_cache.lock().unwrap();
+        let mut font_family_resolver = self.font_family_resolver.lock().unwrap();
+
+        let (size, wrapped_ranges) = {
+            let buffer = text_cache.entry(text_buffer_key).or_insert_with(|| {
+                let buffer = Buffer::new(&mut font_system, Metrics::new(font_size, line_height));
+                SharedTextBuffer {
+                    buffer,
+                    text: String::new(),
+                    font_size: 0.0,
+                    line_height: 0.0,
+                    style_hash: 0,
+                    cached_size: None,
+                }
+            });
+
+            let _ = buffer.ensure(
+                &mut font_system,
+                &mut font_family_resolver,
+                EnsureTextBufferParams {
+                    annotated_text: text,
+                    font_size_px: font_size,
+                    line_height_px: line_height,
+                    style_hash,
+                    style,
+                    scale: 1.0,
+                },
+            );
+
+            buffer
+                .buffer
+                .set_size(&mut font_system, Some(max_width), Some(f32::MAX));
+            buffer.buffer.shape_until_scroll(&mut font_system, false);
+            buffer.cached_size = None;
+            let size = buffer.size();
+            let wrapped_ranges = collect_wrapped_ranges(text_str, &buffer.buffer)?;
+            (size, wrapped_ranges)
+        };
+
+        trim_text_cache(&mut text_cache);
+
+        let mut wrapped_text = String::new();
+        for (index, (start, end)) in wrapped_ranges.iter().enumerate() {
+            if index > 0 {
+                wrapped_text.push('\n');
+            }
+            wrapped_text.push_str(&text_str[*start..*end]);
+        }
+
+        let line_count = wrapped_ranges.len().max(options.min_lines).max(1);
+        let min_height = options.min_lines as f32 * line_height;
+        let height = (line_count as f32 * line_height).max(min_height);
+
+        Some(cranpose_ui::text::PreparedTextLayout {
+            text: cranpose_ui::text::AnnotatedString::from(wrapped_text),
+            metrics: cranpose_ui::TextMetrics {
+                width: size.width.min(max_width),
+                height,
+                line_height,
+                line_count,
+            },
+            did_overflow: false,
+        })
+    }
+
+    fn supports_fast_wrap_options(
+        style: &cranpose_ui::text::TextStyle,
+        options: cranpose_ui::text::TextLayoutOptions,
+    ) -> bool {
+        if options.overflow != cranpose_ui::text::TextOverflow::Clip || !options.soft_wrap {
+            return false;
+        }
+        if options.max_lines != usize::MAX {
+            return false;
+        }
+
+        let line_break = style
+            .paragraph_style
+            .line_break
+            .take_or_else(|| cranpose_ui::text::LineBreak::Simple);
+        let hyphens = style
+            .paragraph_style
+            .hyphens
+            .take_or_else(|| cranpose_ui::text::Hyphens::None);
+        line_break == cranpose_ui::text::LineBreak::Simple
+            && hyphens == cranpose_ui::text::Hyphens::None
+    }
+
+    fn is_plain_annotated_text(text: &cranpose_ui::text::AnnotatedString) -> bool {
+        text.span_styles.is_empty()
+            && text.paragraph_styles.is_empty()
+            && text.string_annotations.is_empty()
+            && text.link_annotations.is_empty()
+    }
+}
+
+fn collect_wrapped_ranges(text: &str, buffer: &Buffer) -> Option<Vec<(usize, usize)>> {
+    if text.is_empty() {
+        return Some(vec![(0, 0)]);
+    }
+
+    let text_lines: Vec<&str> = text.split('\n').collect();
+    let line_offsets: Vec<(usize, usize)> = text_lines
+        .iter()
+        .scan(0usize, |line_start, line| {
+            let start = *line_start;
+            let end = start + line.len();
+            *line_start = end.saturating_add(1);
+            Some((start, end))
+        })
+        .collect();
+
+    let mut wrapped_ranges = Vec::new();
+    for run in buffer.layout_runs() {
+        let (line_start, line_end) = line_offsets
+            .get(run.line_i)
+            .copied()
+            .unwrap_or((0usize, text.len()));
+        let line_len = line_end.saturating_sub(line_start);
+
+        if run.glyphs.is_empty() {
+            wrapped_ranges.push((line_start, line_start));
+            continue;
+        }
+
+        let mut local_start = line_len;
+        let mut local_end = 0usize;
+        for glyph in run.glyphs.iter() {
+            local_start = local_start.min(glyph.start.min(line_len));
+            local_end = local_end.max(glyph.end.min(line_len));
+        }
+
+        let range_start = line_start.saturating_add(local_start.min(line_len));
+        let range_end = line_start.saturating_add(local_end.min(line_len));
+        if range_start > range_end
+            || range_end > text.len()
+            || !text.is_char_boundary(range_start)
+            || !text.is_char_boundary(range_end)
+        {
+            return None;
+        }
+        wrapped_ranges.push((range_start, range_end));
+    }
+
+    if wrapped_ranges.is_empty() {
+        Some(vec![(0, text.len())])
+    } else {
+        Some(wrapped_ranges)
     }
 }
 
@@ -1457,6 +1628,62 @@ impl TextMeasurer for WgpuTextMeasurer {
         }
         self.prepare_with_options(text, style, options, max_width)
             .metrics
+    }
+
+    fn prepare_with_options(
+        &self,
+        text: &cranpose_ui::text::AnnotatedString,
+        style: &cranpose_ui::text::TextStyle,
+        options: cranpose_ui::text::TextLayoutOptions,
+        max_width: Option<f32>,
+    ) -> cranpose_ui::text::PreparedTextLayout {
+        let normalized_options = options.normalized();
+        let normalized_max_width = max_width.filter(|w| w.is_finite() && *w > 0.0);
+        let text_str = text.text.as_str();
+        let font_size = resolve_font_size(style);
+        let style_hash = style.measurement_hash() ^ text.span_styles_hash();
+        let size_int = (font_size * 100.0) as i32;
+
+        let mut hasher = FxHasher::default();
+        text_str.hash(&mut hasher);
+        let text_hash = hasher.finish();
+        let cache_key = PreparedTextLayoutCacheKey {
+            text_hash,
+            size_int,
+            style_hash,
+            options: normalized_options,
+            max_width_bits: normalized_max_width.map(f32::to_bits),
+        };
+
+        {
+            let mut cache = self.prepared_layout_cache.borrow_mut();
+            if let Some((cached_text, prepared)) = cache.get(&cache_key) {
+                if cached_text == text_str {
+                    return prepared.clone();
+                }
+            }
+        }
+
+        let prepared = self
+            .try_prepare_with_options_fast_path(
+                text,
+                style,
+                normalized_options,
+                normalized_max_width,
+            )
+            .unwrap_or_else(|| {
+                self.prepare_with_options_fallback(
+                    text,
+                    style,
+                    normalized_options,
+                    normalized_max_width,
+                )
+            });
+
+        let mut cache = self.prepared_layout_cache.borrow_mut();
+        cache.put(cache_key, (text_str.to_string(), prepared.clone()));
+
+        prepared
     }
 
     fn get_offset_for_position(
@@ -1990,6 +2217,59 @@ mod tests {
             .expect("measure_with_options timed out");
         assert!(width <= 120.5, "wrapped width should honor max width");
         assert!(line_count > 1, "wrapped text should produce multiple lines");
+    }
+
+    #[test]
+    fn prepare_with_options_reuses_cached_layout() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let (font_system, resolver) = seeded_font_system_and_resolver();
+            let measurer = WgpuTextMeasurer::new(
+                Arc::new(Mutex::new(font_system)),
+                Arc::new(Mutex::new(HashMap::new())),
+                Arc::new(Mutex::new(resolver)),
+            );
+            let text = cranpose_ui::text::AnnotatedString::from(
+                "This paragraph demonstrates wrapping with a cached prepared layout.",
+            );
+            let style = cranpose_ui::text::TextStyle::default();
+            let options = cranpose_ui::text::TextLayoutOptions {
+                overflow: cranpose_ui::text::TextOverflow::Clip,
+                soft_wrap: true,
+                max_lines: usize::MAX,
+                min_lines: 1,
+            };
+
+            let first =
+                TextMeasurer::prepare_with_options(&measurer, &text, &style, options, Some(96.0));
+            let first_cache_len = measurer.prepared_layout_cache.borrow().len();
+
+            let second =
+                TextMeasurer::prepare_with_options(&measurer, &text, &style, options, Some(96.0));
+            let second_cache_len = measurer.prepared_layout_cache.borrow().len();
+
+            tx.send((
+                first == second,
+                first.text.text.contains('\n'),
+                first_cache_len,
+                second_cache_len,
+            ))
+            .expect("send prepared layout cache result");
+        });
+
+        let (same_layout, wrapped_text, first_cache_len, second_cache_len) = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("prepare_with_options timed out");
+        assert!(same_layout, "cached prepared layout should be identical");
+        assert!(
+            wrapped_text,
+            "prepared layout should preserve wrapped text output"
+        );
+        assert_eq!(first_cache_len, 1);
+        assert_eq!(second_cache_len, 1);
     }
 
     // Font bytes used by tests — the same file the demo app ships.

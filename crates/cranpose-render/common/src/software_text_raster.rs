@@ -938,7 +938,12 @@ mod tests {
         let plain_style = TextStyle::default();
         let probe = rasterize_text_to_image_with_font(
             "MMMMMMMM",
-            Rect { x: 0.0, y: 0.0, width: 320.0, height: 96.0 },
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 320.0,
+                height: 96.0,
+            },
             &plain_style,
             Color::WHITE,
             48.0,
@@ -946,8 +951,7 @@ mod tests {
             &font,
         )
         .expect("probe image");
-        let (ink_x_min, ink_x_max) =
-            ink_x_range(&probe).expect("probe must contain ink");
+        let (ink_x_min, ink_x_max) = ink_x_range(&probe).expect("probe must contain ink");
         let gradient_end = ink_x_max as f32;
 
         let style = TextStyle {
@@ -964,7 +968,12 @@ mod tests {
 
         let image = rasterize_text_to_image_with_font(
             "MMMMMMMM",
-            Rect { x: 0.0, y: 0.0, width: 320.0, height: 96.0 },
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 320.0,
+                height: 96.0,
+            },
             &style,
             Color::WHITE,
             48.0,

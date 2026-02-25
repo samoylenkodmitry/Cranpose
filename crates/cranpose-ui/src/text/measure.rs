@@ -81,6 +81,16 @@ pub trait TextMeasurer: 'static {
         options: TextLayoutOptions,
         max_width: Option<f32>,
     ) -> PreparedTextLayout {
+        self.prepare_with_options_fallback(text, style, options, max_width)
+    }
+
+    fn prepare_with_options_fallback(
+        &self,
+        text: &crate::text::AnnotatedString,
+        style: &TextStyle,
+        options: TextLayoutOptions,
+        max_width: Option<f32>,
+    ) -> PreparedTextLayout {
         prepare_text_layout_fallback(self, text, style, options, max_width)
     }
 }

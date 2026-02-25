@@ -223,7 +223,8 @@ mod tests {
 
     #[test]
     fn unknown_locale_disables_hyphenation() {
-        let break_idx = choose_auto_hyphen_break("Transformation", &style_with_locale("ja-JP"), 8, 12);
+        let break_idx =
+            choose_auto_hyphen_break("Transformation", &style_with_locale("ja-JP"), 8, 12);
         assert_eq!(break_idx, None);
     }
 
