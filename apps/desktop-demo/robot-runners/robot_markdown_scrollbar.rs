@@ -118,6 +118,40 @@ fn drag_scrollbar(
     }
 }
 
+fn drag_viewport(
+    robot: &cranpose::Robot,
+    viewport_bounds: (f32, f32, f32, f32),
+    from_frac: f32,
+    to_frac: f32,
+    wait_for_idle: bool,
+) {
+    let x = viewport_bounds.0 + viewport_bounds.2 * 0.5;
+    let y0 = viewport_bounds.1 + viewport_bounds.3 * from_frac;
+    let y1 = viewport_bounds.1 + viewport_bounds.3 * to_frac;
+    let steps = 36;
+
+    let _ = robot.mouse_move(x, y0);
+    let _ = robot.mouse_down();
+    for step in 0..=steps {
+        let t = step as f32 / steps as f32;
+        let y = y0 + (y1 - y0) * t;
+        let _ = robot.mouse_move(x, y);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let _ = robot.mouse_up();
+    std::thread::sleep(Duration::from_millis(120));
+    if wait_for_idle {
+        let _ = robot.wait_for_idle();
+    }
+}
+
+fn sentinel_bounds(robot: &cranpose::Robot, text: &str) -> Option<(f32, f32, f32, f32)> {
+    if text.is_empty() {
+        return None;
+    }
+    find_in_semantics(robot, |elem| find_text(elem, text))
+}
+
 fn main() {
     env_logger::init();
     println!("=== Markdown Scrollbar Robot Test ===");
@@ -143,8 +177,31 @@ fn main() {
         .ok()
         .map(|v| !matches!(v.as_str(), "0" | "false" | "FALSE" | "no" | "NO"))
         .unwrap_or(true);
+    let viewport_drag_down_loops = std::env::var("CRANPOSE_MARKDOWN_VIEWPORT_DRAG_DOWN_LOOPS")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(0);
+    let viewport_drag_up_loops = std::env::var("CRANPOSE_MARKDOWN_VIEWPORT_DRAG_UP_LOOPS")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(0);
+    let viewport_drag_from_frac = std::env::var("CRANPOSE_MARKDOWN_VIEWPORT_DRAG_FROM_FRAC")
+        .ok()
+        .and_then(|v| v.parse::<f32>().ok())
+        .unwrap_or(0.75);
+    let viewport_drag_to_frac = std::env::var("CRANPOSE_MARKDOWN_VIEWPORT_DRAG_TO_FRAC")
+        .ok()
+        .and_then(|v| v.parse::<f32>().ok())
+        .unwrap_or(0.20);
+    let viewport_drag_stop_on_deep = std::env::var("CRANPOSE_MARKDOWN_STOP_ON_DEEP")
+        .ok()
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false);
+    let return_sentinel = std::env::var("CRANPOSE_MARKDOWN_RETURN_SENTINEL")
+        .ok()
+        .unwrap_or_else(|| top_sentinel.clone());
     println!(
-        "config: headless={headless} drag_loops={drag_loops} hold_secs={hold_secs} top_sentinel={top_sentinel:?} deep_sentinel={deep_sentinel:?} wait_idle_after_drag={wait_for_idle_after_drag}"
+        "config: headless={headless} drag_loops={drag_loops} hold_secs={hold_secs} top_sentinel={top_sentinel:?} deep_sentinel={deep_sentinel:?} return_sentinel={return_sentinel:?} wait_idle_after_drag={wait_for_idle_after_drag} viewport_drag_down_loops={viewport_drag_down_loops} viewport_drag_up_loops={viewport_drag_up_loops} viewport_drag_from_frac={viewport_drag_from_frac:.2} viewport_drag_to_frac={viewport_drag_to_frac:.2} viewport_drag_stop_on_deep={viewport_drag_stop_on_deep}"
     );
 
     AppLauncher::new()
@@ -210,6 +267,65 @@ fn main() {
                 fail_and_exit(
                     &robot,
                     "scrollbar drag did not move viewport to later markdown lines",
+                );
+            }
+
+            if viewport_drag_down_loops > 0 || viewport_drag_up_loops > 0 {
+                let mut deep_bounds = sentinel_bounds(&robot, &deep_sentinel);
+                let mut return_bounds = sentinel_bounds(&robot, &return_sentinel);
+                println!(
+                    "viewport_drag start: deep_present={} return_present={}",
+                    deep_bounds.is_some(),
+                    return_bounds.is_some()
+                );
+
+                let mut down_drags_executed = 0u32;
+                for _ in 0..viewport_drag_down_loops {
+                    drag_viewport(
+                        &robot,
+                        viewport_bounds,
+                        viewport_drag_from_frac,
+                        viewport_drag_to_frac,
+                        wait_for_idle_after_drag,
+                    );
+                    down_drags_executed += 1;
+                    if viewport_drag_stop_on_deep
+                        && !deep_sentinel.is_empty()
+                        && sentinel_bounds(&robot, &deep_sentinel).is_some()
+                    {
+                        break;
+                    }
+                }
+
+                deep_bounds = sentinel_bounds(&robot, &deep_sentinel);
+                return_bounds = sentinel_bounds(&robot, &return_sentinel);
+                println!(
+                    "after_viewport_down: drags_executed={} deep_present={} deep_y={:?} return_present={} return_y={:?}",
+                    down_drags_executed,
+                    deep_bounds.is_some(),
+                    deep_bounds.map(|b| b.1),
+                    return_bounds.is_some(),
+                    return_bounds.map(|b| b.1)
+                );
+
+                for _ in 0..viewport_drag_up_loops {
+                    drag_viewport(
+                        &robot,
+                        viewport_bounds,
+                        viewport_drag_to_frac,
+                        viewport_drag_from_frac,
+                        wait_for_idle_after_drag,
+                    );
+                }
+
+                deep_bounds = sentinel_bounds(&robot, &deep_sentinel);
+                return_bounds = sentinel_bounds(&robot, &return_sentinel);
+                println!(
+                    "after_viewport_up: deep_present={} deep_y={:?} return_present={} return_y={:?}",
+                    deep_bounds.is_some(),
+                    deep_bounds.map(|b| b.1),
+                    return_bounds.is_some(),
+                    return_bounds.map(|b| b.1)
                 );
             }
 

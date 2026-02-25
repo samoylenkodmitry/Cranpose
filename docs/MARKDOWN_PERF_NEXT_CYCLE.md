@@ -110,3 +110,25 @@
   - `measure_with_options` now uses a width-constrained glyphon pass directly when options are `soft_wrap + Clip + unlimited max_lines` and paragraph style is `Simple/None`.
   - Added regression test:
     - `tests::measure_with_options_fast_path_wraps_to_width`
+
+## Follow-up Findings (2026-02-25, same cycle)
+
+- Added markdown robot viewport-drag telemetry controls (for direct list drag repros):
+  - `CRANPOSE_MARKDOWN_VIEWPORT_DRAG_DOWN_LOOPS`
+  - `CRANPOSE_MARKDOWN_VIEWPORT_DRAG_UP_LOOPS`
+  - `CRANPOSE_MARKDOWN_VIEWPORT_DRAG_FROM_FRAC`
+  - `CRANPOSE_MARKDOWN_VIEWPORT_DRAG_TO_FRAC`
+  - `CRANPOSE_MARKDOWN_STOP_ON_DEEP`
+  - `CRANPOSE_MARKDOWN_RETURN_SENTINEL`
+- Deep rail-jump + viewport-up probes show reverse drag is applied (index decreases), but can still require many drags when starting very deep.
+- Implemented lazy scroll input backlog fix for direction reversal:
+  - In `LazyListState::dispatch_scroll_delta`, when pending unconsumed delta sign differs from new gesture delta sign, stale backlog is dropped and replaced with the latest delta.
+  - Rationale: avoid "snap back" from old-direction backlog on slow frames.
+  - Added tests:
+    - `dispatch_scroll_delta_accumulates_same_direction`
+    - `dispatch_scroll_delta_drops_stale_backlog_on_direction_change`
+- Updated no-drag baseline (`CRANPOSE_MARKDOWN_SCROLL_LOOPS=0`, hold 5s):
+  - `fps_summary: fps=5.4` to `5.5`
+  - `frame_ms ~= 183`
+  - `recompositions=3` over 5 seconds
+  - time-budget warnings observed only during initial settle (`2` warnings), no steady-state drift in this run.

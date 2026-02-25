@@ -524,7 +524,25 @@ impl LazyListState {
     pub fn dispatch_scroll_delta(&self, delta: f32) -> f32 {
         self.inner.with(|rc| {
             let mut inner = rc.borrow_mut();
-            inner.scroll_to_be_consumed += delta;
+            let pending = inner.scroll_to_be_consumed;
+            let reverse_input = pending.abs() > 0.001
+                && delta.abs() > 0.001
+                && pending.signum() != delta.signum();
+            if reverse_input {
+                if lazy_measure_telemetry_enabled() {
+                    log::warn!(
+                        "[lazy-measure-telemetry] dispatch_scroll_delta direction_change pending={:.2} new_delta={:.2}",
+                        pending,
+                        delta
+                    );
+                }
+                // When gesture direction reverses, stale unconsumed backlog from the previous
+                // direction causes "snap back" behavior on slow frames. Keep only the latest
+                // direction intent.
+                inner.scroll_to_be_consumed = delta;
+            } else {
+                inner.scroll_to_be_consumed += delta;
+            }
             if lazy_measure_telemetry_enabled() {
                 log::warn!(
                     "[lazy-measure-telemetry] dispatch_scroll_delta delta={:.2} pending={:.2}",
@@ -907,5 +925,41 @@ pub mod test_helpers {
             stats_state,
             inner,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_helpers::{new_lazy_list_state, with_test_runtime};
+
+    #[test]
+    fn dispatch_scroll_delta_accumulates_same_direction() {
+        with_test_runtime(|| {
+            let state = new_lazy_list_state();
+
+            state.dispatch_scroll_delta(-12.0);
+            state.dispatch_scroll_delta(-8.0);
+
+            assert!((state.peek_scroll_delta() + 20.0).abs() < 0.001);
+            assert!((state.consume_scroll_delta() + 20.0).abs() < 0.001);
+            assert_eq!(state.consume_scroll_delta(), 0.0);
+        });
+    }
+
+    #[test]
+    fn dispatch_scroll_delta_drops_stale_backlog_on_direction_change() {
+        with_test_runtime(|| {
+            let state = new_lazy_list_state();
+
+            state.dispatch_scroll_delta(-120.0);
+            state.dispatch_scroll_delta(-30.0);
+            assert!((state.peek_scroll_delta() + 150.0).abs() < 0.001);
+
+            state.dispatch_scroll_delta(18.0);
+
+            assert!((state.peek_scroll_delta() - 18.0).abs() < 0.001);
+            assert!((state.consume_scroll_delta() - 18.0).abs() < 0.001);
+            assert_eq!(state.consume_scroll_delta(), 0.0);
+        });
     }
 }
