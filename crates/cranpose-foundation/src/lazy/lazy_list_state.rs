@@ -11,12 +11,20 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::OnceLock;
 
 use cranpose_core::MutableState;
 use cranpose_macros::composable;
 
 use super::nearest_range::NearestRangeState;
 use super::prefetch::{PrefetchScheduler, PrefetchStrategy};
+
+static LAZY_MEASURE_TELEMETRY_ENABLED: OnceLock<bool> = OnceLock::new();
+
+fn lazy_measure_telemetry_enabled() -> bool {
+    *LAZY_MEASURE_TELEMETRY_ENABLED
+        .get_or_init(|| std::env::var_os("CRANPOSE_LAZY_MEASURE_TELEMETRY").is_some())
+}
 
 /// Statistics about lazy layout item lifecycle.
 ///
@@ -487,6 +495,13 @@ impl LazyListState {
     /// * `index` - The index of the item to scroll to
     /// * `scroll_offset` - Additional offset within the item (default 0)
     pub fn scroll_to_item(&self, index: usize, scroll_offset: f32) {
+        if lazy_measure_telemetry_enabled() {
+            log::warn!(
+                "[lazy-measure-telemetry] scroll_to_item request index={} offset={:.2}",
+                index,
+                scroll_offset
+            );
+        }
         // Store pending scroll request
         self.inner.with(|rc| {
             rc.borrow_mut().pending_scroll_to_index = Some((index, scroll_offset));
@@ -510,6 +525,13 @@ impl LazyListState {
         self.inner.with(|rc| {
             let mut inner = rc.borrow_mut();
             inner.scroll_to_be_consumed += delta;
+            if lazy_measure_telemetry_enabled() {
+                log::warn!(
+                    "[lazy-measure-telemetry] dispatch_scroll_delta delta={:.2} pending={:.2}",
+                    delta,
+                    inner.scroll_to_be_consumed
+                );
+            }
         });
         self.invalidate();
         delta // Will be adjusted during layout

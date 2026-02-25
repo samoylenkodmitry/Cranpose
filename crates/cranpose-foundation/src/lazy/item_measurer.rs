@@ -5,6 +5,8 @@
 use super::lazy_list_measure::LazyListMeasureConfig;
 use super::lazy_list_measured_item::LazyListMeasuredItem;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 use web_time::{Duration, Instant};
 
 /// Maximum items to measure per pass as a safety limit.
@@ -26,6 +28,27 @@ const DEFAULT_TIME_BUDGET: Duration = Duration::from_millis(50);
 /// Maximum items to measure per pass as a hard safety limit.
 /// Used in addition to time budget to prevent memory exhaustion in extreme cases.
 const MAX_VISIBLE_ITEMS_SAFETY: usize = 10000;
+
+static LAZY_MEASURE_TELEMETRY_ENABLED: OnceLock<bool> = OnceLock::new();
+static LAZY_MEASURE_PASS_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+fn lazy_measure_telemetry_enabled() -> bool {
+    *LAZY_MEASURE_TELEMETRY_ENABLED
+        .get_or_init(|| std::env::var_os("CRANPOSE_LAZY_MEASURE_TELEMETRY").is_some())
+}
+
+/// Metadata returned from a single lazy list item measurement pass.
+#[derive(Debug)]
+pub struct ItemMeasurePass {
+    pub items: Vec<LazyListMeasuredItem>,
+    pub start_index: usize,
+    pub start_offset: f32,
+    pub next_index: usize,
+    pub next_offset: f32,
+    pub measured_visible_items: usize,
+    pub hit_time_budget: bool,
+    pub viewport_filled: bool,
+}
 
 /// Measures items for lazy list layout.
 ///
@@ -70,35 +93,68 @@ where
         &mut self,
         first_item_index: usize,
         first_item_scroll_offset: f32,
-    ) -> Vec<LazyListMeasuredItem> {
+    ) -> ItemMeasurePass {
         let start_time = Instant::now();
         let start_offset = self.config.before_content_padding - first_item_scroll_offset;
         let viewport_end = self.effective_viewport_size - self.config.after_content_padding;
 
         // Measure visible items
-        let (mut visible_items, current_index, current_offset) =
+        let (mut visible_items, current_index, current_offset, hit_time_budget) =
             self.measure_visible(first_item_index, start_offset, viewport_end, start_time);
+        let measured_visible_items = visible_items.len();
 
-        // Measure beyond-bounds items after visible
-        self.measure_beyond_after(
-            current_index,
-            current_offset,
-            &mut visible_items,
-            start_time,
-        );
+        if !hit_time_budget {
+            // Measure beyond-bounds items after visible
+            self.measure_beyond_after(
+                current_index,
+                current_offset,
+                &mut visible_items,
+                start_time,
+            );
 
-        // Measure beyond-bounds items before visible
-        if first_item_index > 0 && !visible_items.is_empty() {
-            let before_items =
-                self.measure_beyond_before(first_item_index, visible_items[0].offset, start_time);
-            if !before_items.is_empty() {
-                let mut combined = before_items;
-                combined.append(&mut visible_items);
-                visible_items = combined;
+            // Measure beyond-bounds items before visible
+            if first_item_index > 0 && !visible_items.is_empty() {
+                let before_items = self.measure_beyond_before(
+                    first_item_index,
+                    visible_items[0].offset,
+                    start_time,
+                );
+                if !before_items.is_empty() {
+                    let mut combined = before_items;
+                    combined.append(&mut visible_items);
+                    visible_items = combined;
+                }
             }
         }
 
-        visible_items
+        let viewport_filled = current_offset >= viewport_end || current_index >= self.items_count;
+        let pass = ItemMeasurePass {
+            items: visible_items,
+            start_index: first_item_index,
+            start_offset,
+            next_index: current_index,
+            next_offset: current_offset,
+            measured_visible_items,
+            hit_time_budget,
+            viewport_filled,
+        };
+        if lazy_measure_telemetry_enabled() {
+            let pass_id = LAZY_MEASURE_PASS_COUNTER.fetch_add(1, Ordering::Relaxed);
+            log::warn!(
+                "[lazy-measure-telemetry] pass={} start_index={} start_offset={:.2} measured_visible={} next_index={} next_offset={:.2} viewport_end={:.2} viewport_filled={} hit_time_budget={} elapsed_ms={:.2}",
+                pass_id,
+                pass.start_index,
+                pass.start_offset,
+                pass.measured_visible_items,
+                pass.next_index,
+                pass.next_offset,
+                viewport_end,
+                pass.viewport_filled,
+                pass.hit_time_budget,
+                start_time.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+        pass
     }
 
     /// Measures visible items starting from `start_index`.
@@ -110,10 +166,11 @@ where
         start_offset: f32,
         viewport_end: f32,
         start_time: Instant,
-    ) -> (Vec<LazyListMeasuredItem>, usize, f32) {
+    ) -> (Vec<LazyListMeasuredItem>, usize, f32, bool) {
         let mut items = Vec::new();
         let mut current_index = start_index;
         let mut current_offset = start_offset;
+        let mut hit_time_budget = false;
 
         while current_index < self.items_count
             && current_offset < viewport_end
@@ -121,6 +178,7 @@ where
         {
             // Check time budget
             if start_time.elapsed() > DEFAULT_TIME_BUDGET {
+                hit_time_budget = true;
                 log::warn!(
                     "Lazy list measurement exceeded time budget ({:?}) at index {}. stopping early.",
                     DEFAULT_TIME_BUDGET,
@@ -148,7 +206,7 @@ where
             );
         }
 
-        (items, current_index, current_offset)
+        (items, current_index, current_offset, hit_time_budget)
     }
 
     /// Measures beyond-bounds items after visible items.
@@ -241,7 +299,8 @@ mod tests {
         let mut measure = |i| create_test_item(i, 50.0);
         let mut measurer = ItemMeasurer::new(&mut measure, &config, 100, 200.0, VecDeque::new());
 
-        let items = measurer.measure_all(0, 0.0);
+        let pass = measurer.measure_all(0, 0.0);
+        let items = pass.items;
 
         // 200px viewport / 50px items = 4 visible + 2 beyond = 6
         assert!(items.len() >= 4);
@@ -255,7 +314,8 @@ mod tests {
         let mut measure = |i| create_test_item(i, 50.0);
         let mut measurer = ItemMeasurer::new(&mut measure, &config, 100, 200.0, VecDeque::new());
 
-        let items = measurer.measure_all(5, 25.0);
+        let pass = measurer.measure_all(5, 25.0);
+        let items = pass.items;
 
         // First visible item should be at index 5
         // Beyond-bounds before should include items 3, 4
@@ -269,7 +329,8 @@ mod tests {
         let mut measure = |i| create_test_item(i, 50.0);
         let mut measurer = ItemMeasurer::new(&mut measure, &config, 3, 1000.0, VecDeque::new());
 
-        let items = measurer.measure_all(0, 0.0);
+        let pass = measurer.measure_all(0, 0.0);
+        let items = pass.items;
 
         // Only 3 items exist, even though viewport can fit more
         assert_eq!(items.len(), 3);
@@ -284,7 +345,8 @@ mod tests {
         let mut measure = |i| create_test_item(i, 50.0);
         let mut measurer = ItemMeasurer::new(&mut measure, &config, 100, 200.0, VecDeque::new());
 
-        let items = measurer.measure_all(0, 0.0);
+        let pass = measurer.measure_all(0, 0.0);
+        let items = pass.items;
 
         // Check spacing is applied
         assert_eq!(items[0].offset, 0.0);

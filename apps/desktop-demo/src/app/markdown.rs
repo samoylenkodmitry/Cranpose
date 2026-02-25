@@ -823,7 +823,7 @@ fn MarkdownScrollbarRail(
                 );
             })
             .pointer_input("scrollbar_drag", move |scope| async move {
-                use cranpose_foundation::PointerEventKind;
+                use cranpose_foundation::{PointerButton, PointerEventKind};
                 loop {
                     scope
                         .await_pointer_event_scope(|scope| async move {
@@ -839,6 +839,15 @@ fn MarkdownScrollbarRail(
                                     PointerEventKind::Down => {
                                         let (model, rail_h) =
                                             read_interaction_scrollbar_model(list_state);
+                                        let inside_rail = event.position.x >= 0.0
+                                            && event.position.x <= MARKDOWN_SCROLLBAR_RAIL_WIDTH
+                                            && event.position.y >= 0.0
+                                            && event.position.y <= rail_h;
+                                        if !inside_rail
+                                            || !event.buttons.contains(PointerButton::Primary)
+                                        {
+                                            continue;
+                                        }
                                         let metrics = compute_scrollbar_metrics(
                                             rail_h,
                                             model.thumb_fraction,

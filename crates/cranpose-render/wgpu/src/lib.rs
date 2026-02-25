@@ -32,12 +32,85 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// Size-only cache for ultra-fast text measurement lookups.
 /// Key: (text_hash, font_size_fixed_point, style_hash)
 /// Value: (text_content, size) - text stored to handle hash collisions
 type TextSizeCache = Arc<Mutex<LruCache<(u64, i32, u64), (String, Size)>>>;
+
+static TEXT_MEASURE_TELEMETRY_ENABLED: OnceLock<bool> = OnceLock::new();
+static TEXT_MEASURE_TELEMETRY: OnceLock<TextMeasureTelemetry> = OnceLock::new();
+
+#[derive(Default)]
+struct TextMeasureTelemetry {
+    measure_calls: AtomicU64,
+    layout_calls: AtomicU64,
+    offset_calls: AtomicU64,
+    size_cache_hits: AtomicU64,
+    size_cache_misses: AtomicU64,
+    text_cache_hits: AtomicU64,
+    text_cache_misses: AtomicU64,
+    ensure_reshapes: AtomicU64,
+    ensure_reuses: AtomicU64,
+}
+
+fn text_measure_telemetry_enabled() -> bool {
+    *TEXT_MEASURE_TELEMETRY_ENABLED
+        .get_or_init(|| std::env::var_os("CRANPOSE_TEXT_MEASURE_TELEMETRY").is_some())
+}
+
+fn text_measure_telemetry() -> &'static TextMeasureTelemetry {
+    TEXT_MEASURE_TELEMETRY.get_or_init(TextMeasureTelemetry::default)
+}
+
+fn maybe_report_text_measure_telemetry(sequence: u64) {
+    if !text_measure_telemetry_enabled() || !sequence.is_multiple_of(200) {
+        return;
+    }
+    let telemetry = text_measure_telemetry();
+    let measure_calls = telemetry.measure_calls.load(Ordering::Relaxed);
+    let layout_calls = telemetry.layout_calls.load(Ordering::Relaxed);
+    let offset_calls = telemetry.offset_calls.load(Ordering::Relaxed);
+    let size_hits = telemetry.size_cache_hits.load(Ordering::Relaxed);
+    let size_misses = telemetry.size_cache_misses.load(Ordering::Relaxed);
+    let text_hits = telemetry.text_cache_hits.load(Ordering::Relaxed);
+    let text_misses = telemetry.text_cache_misses.load(Ordering::Relaxed);
+    let reshapes = telemetry.ensure_reshapes.load(Ordering::Relaxed);
+    let reuses = telemetry.ensure_reuses.load(Ordering::Relaxed);
+
+    let size_total = size_hits + size_misses;
+    let text_total = text_hits + text_misses;
+    let ensure_total = reshapes + reuses;
+    let size_hit_rate = if size_total > 0 {
+        (size_hits as f64 / size_total as f64) * 100.0
+    } else {
+        0.0
+    };
+    let text_hit_rate = if text_total > 0 {
+        (text_hits as f64 / text_total as f64) * 100.0
+    } else {
+        0.0
+    };
+    let reshape_rate = if ensure_total > 0 {
+        (reshapes as f64 / ensure_total as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    log::warn!(
+        "[text-measure-telemetry] measure_calls={} layout_calls={} offset_calls={} size_hit_rate={:.1}% text_cache_hit_rate={:.1}% reshape_rate={:.1}% reshapes={} reuses={}",
+        measure_calls,
+        layout_calls,
+        offset_calls,
+        size_hit_rate,
+        text_hit_rate,
+        reshape_rate,
+        reshapes,
+        reuses
+    );
+}
 
 #[derive(Debug)]
 pub enum WgpuRendererError {
@@ -120,7 +193,7 @@ impl SharedTextBuffer {
         font_system: &mut FontSystem,
         font_family_resolver: &mut WgpuFontFamilyResolver,
         params: EnsureTextBufferParams<'_>,
-    ) {
+    ) -> bool {
         let annotated_text = params.annotated_text;
         let font_size_px = params.font_size_px;
         let line_height_px = params.line_height_px;
@@ -135,7 +208,7 @@ impl SharedTextBuffer {
 
         // Only reshape if something actually changed
         if !text_changed && !font_changed && !line_height_changed && !style_changed {
-            return; // Nothing changed, skip reshape
+            return false;
         }
 
         // Set metrics and size for unlimited layout
@@ -217,6 +290,7 @@ impl SharedTextBuffer {
         self.line_height = line_height_px;
         self.style_hash = style_hash;
         self.cached_size = None; // Invalidate size cache
+        true
     }
 
     /// Get or calculate the size of the shaped text
@@ -1101,6 +1175,130 @@ impl WgpuTextMeasurer {
             text_cache,
         }
     }
+
+    fn try_measure_with_options_fast_path(
+        &self,
+        text: &cranpose_ui::text::AnnotatedString,
+        style: &cranpose_ui::text::TextStyle,
+        options: cranpose_ui::text::TextLayoutOptions,
+        max_width: Option<f32>,
+    ) -> Option<cranpose_ui::TextMetrics> {
+        let options = options.normalized();
+        let max_width = max_width.filter(|w| w.is_finite() && *w > 0.0)?;
+        if options.overflow != cranpose_ui::text::TextOverflow::Clip || !options.soft_wrap {
+            return None;
+        }
+        if options.max_lines != usize::MAX {
+            return None;
+        }
+
+        let line_break = style
+            .paragraph_style
+            .line_break
+            .take_or_else(|| cranpose_ui::text::LineBreak::Simple);
+        let hyphens = style
+            .paragraph_style
+            .hyphens
+            .take_or_else(|| cranpose_ui::text::Hyphens::None);
+        if line_break != cranpose_ui::text::LineBreak::Simple
+            || hyphens != cranpose_ui::text::Hyphens::None
+        {
+            return None;
+        }
+
+        let text_str = text.text.as_str();
+        let font_size = resolve_font_size(style);
+        let line_height = resolve_effective_line_height(style, text, font_size);
+        let style_hash = style.measurement_hash()
+            ^ text.span_styles_hash()
+            ^ (max_width.to_bits() as u64).rotate_left(17)
+            ^ 0x9f4c_3314_2d5b_79e1;
+        let size_int = (font_size * 100.0) as i32;
+
+        let mut hasher = FxHasher::default();
+        text_str.hash(&mut hasher);
+        let text_hash = hasher.finish();
+        let cache_key = (text_hash, size_int, style_hash);
+
+        {
+            let mut cache = self.size_cache.lock().unwrap();
+            if let Some((cached_text, size)) = cache.get(&cache_key) {
+                if cached_text == text_str {
+                    let width = size.width.min(max_width);
+                    let min_height = options.min_lines as f32 * line_height;
+                    let height = size.height.max(min_height);
+                    let line_count =
+                        ((height / line_height).ceil() as usize).max(options.min_lines);
+                    return Some(cranpose_ui::TextMetrics {
+                        width,
+                        height,
+                        line_height,
+                        line_count,
+                    });
+                }
+            }
+        }
+
+        let text_buffer_key = TextCacheKey::new(text_str, font_size, style_hash);
+        let mut font_system = self.font_system.lock().unwrap();
+        let mut text_cache = self.text_cache.lock().unwrap();
+        let mut font_family_resolver = self.font_family_resolver.lock().unwrap();
+
+        let (size, wrapped_line_count) = {
+            let buffer = text_cache.entry(text_buffer_key).or_insert_with(|| {
+                let buffer = Buffer::new(&mut font_system, Metrics::new(font_size, line_height));
+                SharedTextBuffer {
+                    buffer,
+                    text: String::new(),
+                    font_size: 0.0,
+                    line_height: 0.0,
+                    style_hash: 0,
+                    cached_size: None,
+                }
+            });
+
+            let _ = buffer.ensure(
+                &mut font_system,
+                &mut font_family_resolver,
+                EnsureTextBufferParams {
+                    annotated_text: text,
+                    font_size_px: font_size,
+                    line_height_px: line_height,
+                    style_hash,
+                    style,
+                    scale: 1.0,
+                },
+            );
+
+            buffer
+                .buffer
+                .set_size(&mut font_system, Some(max_width), Some(f32::MAX));
+            buffer.buffer.shape_until_scroll(&mut font_system, false);
+            buffer.cached_size = None;
+            let size = buffer.size();
+            let line_count = buffer.buffer.layout_runs().count();
+            (size, line_count)
+        };
+
+        trim_text_cache(&mut text_cache);
+        drop(font_system);
+        drop(text_cache);
+
+        let mut size_cache = self.size_cache.lock().unwrap();
+        size_cache.put(cache_key, (text_str.to_string(), size));
+
+        let width = size.width.min(max_width);
+        let min_height = options.min_lines as f32 * line_height;
+        let height = size.height.max(min_height);
+        let line_count = wrapped_line_count.max(options.min_lines).max(1);
+
+        Some(cranpose_ui::TextMetrics {
+            width,
+            height,
+            line_height,
+            line_count,
+        })
+    }
 }
 
 /// Convenience function for tests to initialize an accurate wgpu text measurer without launching a window.
@@ -1126,6 +1324,10 @@ impl TextMeasurer for WgpuTextMeasurer {
         text: &cranpose_ui::text::AnnotatedString,
         style: &cranpose_ui::text::TextStyle,
     ) -> cranpose_ui::TextMetrics {
+        let telemetry = text_measure_telemetry_enabled().then_some(text_measure_telemetry());
+        let telemetry_sequence = telemetry
+            .map(|t| t.measure_calls.fetch_add(1, Ordering::Relaxed) + 1)
+            .unwrap_or(0);
         let text_str = text.text.as_str();
         let font_size = resolve_font_size(style);
         let line_height = resolve_effective_line_height(style, text, font_size);
@@ -1145,6 +1347,10 @@ impl TextMeasurer for WgpuTextMeasurer {
             if let Some((cached_text, size)) = cache.get(&cache_key) {
                 // Verify partial collision
                 if cached_text == text_str {
+                    if let Some(t) = telemetry {
+                        t.size_cache_hits.fetch_add(1, Ordering::Relaxed);
+                        maybe_report_text_measure_telemetry(telemetry_sequence);
+                    }
                     let line_count = text_str.split('\n').count().max(1);
                     return cranpose_ui::TextMetrics {
                         width: size.width,
@@ -1155,6 +1361,9 @@ impl TextMeasurer for WgpuTextMeasurer {
                 }
             }
         }
+        if let Some(t) = telemetry {
+            t.size_cache_misses.fetch_add(1, Ordering::Relaxed);
+        }
 
         // Get or create text buffer
         let text_buffer_key = TextCacheKey::new(text_str, font_size, style_hash);
@@ -1164,6 +1373,14 @@ impl TextMeasurer for WgpuTextMeasurer {
 
         // Get or create buffer and calculate size
         let size = {
+            if let Some(t) = telemetry {
+                let text_cache_hit = text_cache.contains_key(&text_buffer_key);
+                if text_cache_hit {
+                    t.text_cache_hits.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    t.text_cache_misses.fetch_add(1, Ordering::Relaxed);
+                }
+            }
             let buffer = text_cache.entry(text_buffer_key).or_insert_with(|| {
                 let buffer = Buffer::new(&mut font_system, Metrics::new(font_size, line_height));
                 SharedTextBuffer {
@@ -1177,7 +1394,7 @@ impl TextMeasurer for WgpuTextMeasurer {
             });
 
             // Ensure buffer has the correct text
-            buffer.ensure(
+            let reshaped = buffer.ensure(
                 &mut font_system,
                 &mut font_family_resolver,
                 EnsureTextBufferParams {
@@ -1189,6 +1406,13 @@ impl TextMeasurer for WgpuTextMeasurer {
                     scale: 1.0,
                 },
             );
+            if let Some(t) = telemetry {
+                if reshaped {
+                    t.ensure_reshapes.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    t.ensure_reuses.fetch_add(1, Ordering::Relaxed);
+                }
+            }
 
             // Calculate size if not cached
             buffer.size()
@@ -1207,6 +1431,9 @@ impl TextMeasurer for WgpuTextMeasurer {
 
         // Calculate line info for multiline support
         let line_count = text_str.split('\n').count().max(1);
+        if telemetry.is_some() {
+            maybe_report_text_measure_telemetry(telemetry_sequence);
+        }
 
         cranpose_ui::TextMetrics {
             width: size.width,
@@ -1216,6 +1443,22 @@ impl TextMeasurer for WgpuTextMeasurer {
         }
     }
 
+    fn measure_with_options(
+        &self,
+        text: &cranpose_ui::text::AnnotatedString,
+        style: &cranpose_ui::text::TextStyle,
+        options: cranpose_ui::text::TextLayoutOptions,
+        max_width: Option<f32>,
+    ) -> cranpose_ui::TextMetrics {
+        if let Some(metrics) =
+            self.try_measure_with_options_fast_path(text, style, options, max_width)
+        {
+            return metrics;
+        }
+        self.prepare_with_options(text, style, options, max_width)
+            .metrics
+    }
+
     fn get_offset_for_position(
         &self,
         text: &cranpose_ui::text::AnnotatedString,
@@ -1223,6 +1466,10 @@ impl TextMeasurer for WgpuTextMeasurer {
         x: f32,
         y: f32,
     ) -> usize {
+        let telemetry = text_measure_telemetry_enabled().then_some(text_measure_telemetry());
+        let telemetry_sequence = telemetry
+            .map(|t| t.offset_calls.fetch_add(1, Ordering::Relaxed) + 1)
+            .unwrap_or(0);
         let text_str = text.text.as_str();
         let font_size = resolve_font_size(style);
         let line_height = resolve_effective_line_height(style, text, font_size);
@@ -1237,6 +1484,14 @@ impl TextMeasurer for WgpuTextMeasurer {
         let mut text_cache = self.text_cache.lock().unwrap();
         let mut font_family_resolver = self.font_family_resolver.lock().unwrap();
 
+        if let Some(t) = telemetry {
+            let text_cache_hit = text_cache.contains_key(&cache_key);
+            if text_cache_hit {
+                t.text_cache_hits.fetch_add(1, Ordering::Relaxed);
+            } else {
+                t.text_cache_misses.fetch_add(1, Ordering::Relaxed);
+            }
+        }
         let buffer = text_cache.entry(cache_key).or_insert_with(|| {
             let buffer = Buffer::new(&mut font_system, Metrics::new(font_size, line_height));
             SharedTextBuffer {
@@ -1249,7 +1504,7 @@ impl TextMeasurer for WgpuTextMeasurer {
             }
         });
 
-        buffer.ensure(
+        let reshaped = buffer.ensure(
             &mut font_system,
             &mut font_family_resolver,
             EnsureTextBufferParams {
@@ -1261,6 +1516,14 @@ impl TextMeasurer for WgpuTextMeasurer {
                 scale: 1.0,
             },
         );
+        if let Some(t) = telemetry {
+            if reshaped {
+                t.ensure_reshapes.fetch_add(1, Ordering::Relaxed);
+            } else {
+                t.ensure_reuses.fetch_add(1, Ordering::Relaxed);
+            }
+            maybe_report_text_measure_telemetry(telemetry_sequence);
+        }
 
         let line_offsets: Vec<(usize, usize)> = text_str
             .split('\n')
@@ -1382,6 +1645,10 @@ impl TextMeasurer for WgpuTextMeasurer {
         text: &cranpose_ui::text::AnnotatedString,
         style: &cranpose_ui::text::TextStyle,
     ) -> cranpose_ui::text_layout_result::TextLayoutResult {
+        let telemetry = text_measure_telemetry_enabled().then_some(text_measure_telemetry());
+        let telemetry_sequence = telemetry
+            .map(|t| t.layout_calls.fetch_add(1, Ordering::Relaxed) + 1)
+            .unwrap_or(0);
         let text_str = text.text.as_str();
         use cranpose_ui::text_layout_result::{
             GlyphLayout, LineLayout, TextLayoutData, TextLayoutResult,
@@ -1396,6 +1663,14 @@ impl TextMeasurer for WgpuTextMeasurer {
         let mut text_cache = self.text_cache.lock().unwrap();
         let mut font_family_resolver = self.font_family_resolver.lock().unwrap();
 
+        if let Some(t) = telemetry {
+            let text_cache_hit = text_cache.contains_key(&cache_key);
+            if text_cache_hit {
+                t.text_cache_hits.fetch_add(1, Ordering::Relaxed);
+            } else {
+                t.text_cache_misses.fetch_add(1, Ordering::Relaxed);
+            }
+        }
         let buffer = text_cache.entry(cache_key.clone()).or_insert_with(|| {
             let buffer = Buffer::new(&mut font_system, Metrics::new(font_size, line_height));
             SharedTextBuffer {
@@ -1407,7 +1682,7 @@ impl TextMeasurer for WgpuTextMeasurer {
                 cached_size: None,
             }
         });
-        buffer.ensure(
+        let reshaped = buffer.ensure(
             &mut font_system,
             &mut font_family_resolver,
             EnsureTextBufferParams {
@@ -1419,6 +1694,14 @@ impl TextMeasurer for WgpuTextMeasurer {
                 scale: 1.0,
             },
         );
+        if let Some(t) = telemetry {
+            if reshaped {
+                t.ensure_reshapes.fetch_add(1, Ordering::Relaxed);
+            } else {
+                t.ensure_reuses.fetch_add(1, Ordering::Relaxed);
+            }
+            maybe_report_text_measure_telemetry(telemetry_sequence);
+        }
         let measured_size = buffer.size();
 
         // Extract glyph positions from layout runs
@@ -1673,6 +1956,40 @@ mod tests {
         assert!((layout_width - measured_width).abs() < 0.5);
         assert!((layout_height - measured_height).abs() < 0.5);
         assert_eq!(layout_lines, measured_lines.max(1));
+    }
+
+    #[test]
+    fn measure_with_options_fast_path_wraps_to_width() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let (font_system, resolver) = seeded_font_system_and_resolver();
+            let measurer = WgpuTextMeasurer::new(
+                Arc::new(Mutex::new(font_system)),
+                Arc::new(Mutex::new(HashMap::new())),
+                Arc::new(Mutex::new(resolver)),
+            );
+            let text = cranpose_ui::text::AnnotatedString::from("wrap me ".repeat(120));
+            let style = cranpose_ui::text::TextStyle::default();
+            let options = cranpose_ui::text::TextLayoutOptions {
+                overflow: cranpose_ui::text::TextOverflow::Clip,
+                soft_wrap: true,
+                max_lines: usize::MAX,
+                min_lines: 1,
+            };
+            let metrics =
+                TextMeasurer::measure_with_options(&measurer, &text, &style, options, Some(120.0));
+            tx.send((metrics.width, metrics.line_count))
+                .expect("send wrapped metrics");
+        });
+
+        let (width, line_count) = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("measure_with_options timed out");
+        assert!(width <= 120.5, "wrapped width should honor max width");
+        assert!(line_count > 1, "wrapped text should produce multiple lines");
     }
 
     // Font bytes used by tests — the same file the demo app ships.

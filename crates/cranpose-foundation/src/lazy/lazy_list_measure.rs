@@ -11,11 +11,21 @@ use super::lazy_list_state::{LazyListLayoutInfo, LazyListState};
 use super::scroll_position_resolver::ScrollPositionResolver;
 use super::viewport::ViewportHandler;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 /// Default estimated item size for scroll calculations.
 /// Used when no measured sizes are cached.
 /// 48.0 is a common list item height (Material Design list tile).
 pub const DEFAULT_ITEM_SIZE_ESTIMATE: f32 = 48.0;
+
+static LAZY_MEASURE_TELEMETRY_ENABLED: OnceLock<bool> = OnceLock::new();
+static LAZY_MEASURE_CYCLE_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+fn lazy_measure_telemetry_enabled() -> bool {
+    *LAZY_MEASURE_TELEMETRY_ENABLED
+        .get_or_init(|| std::env::var_os("CRANPOSE_LAZY_MEASURE_TELEMETRY").is_some())
+}
 
 /// Configuration for lazy list measurement.
 #[derive(Clone, Debug)]
@@ -175,7 +185,15 @@ where
         effective_viewport_size,
         pre_measured_queue,
     );
-    let mut visible_items = measurer.measure_all(first_index, first_offset);
+    let measurement_pass = measurer.measure_all(first_index, first_offset);
+    let measurement_start_index = measurement_pass.start_index;
+    let measurement_start_offset = measurement_pass.start_offset;
+    let measurement_next_index = measurement_pass.next_index;
+    let measurement_next_offset = measurement_pass.next_offset;
+    let measurement_measured_visible_items = measurement_pass.measured_visible_items;
+    let measurement_hit_time_budget = measurement_pass.hit_time_budget;
+    let measurement_viewport_filled = measurement_pass.viewport_filled;
+    let mut visible_items = measurement_pass.items;
 
     // 4. Adjust bounds (clamp at start/end)
     let adjuster = BoundsAdjuster::new(config, items_count, effective_viewport_size);
@@ -203,9 +221,21 @@ where
         .iter()
         .find(|item| item_end_with_spacing(item) > config.before_content_padding);
 
+    let unresolved_pass = measurement_hit_time_budget
+        && !measurement_viewport_filled
+        && actual_first_visible.is_none();
+
     let (final_first_index, final_scroll_offset) = if let Some(first) = actual_first_visible {
         let offset = config.before_content_padding - first.offset;
         (first.index, offset.max(0.0))
+    } else if unresolved_pass {
+        let next_index = measurement_next_index.min(items_count.saturating_sub(1));
+        if next_index + 1 >= items_count {
+            (next_index, 0.0)
+        } else {
+            let next_offset = (config.before_content_padding - measurement_next_offset).max(0.0);
+            (next_index, next_offset)
+        }
     } else if !visible_items.is_empty() {
         (visible_items[0].index, 0.0)
     } else {
@@ -215,7 +245,7 @@ where
     // Update state with key for scroll position stability
     if let Some(first) = actual_first_visible {
         state.update_scroll_position_with_key(final_first_index, final_scroll_offset, first.key);
-    } else if !visible_items.is_empty() {
+    } else if !visible_items.is_empty() && !unresolved_pass {
         state.update_scroll_position_with_key(
             final_first_index,
             final_scroll_offset,
@@ -223,6 +253,26 @@ where
         );
     } else {
         state.update_scroll_position(final_first_index, final_scroll_offset);
+    }
+
+    if lazy_measure_telemetry_enabled() {
+        let cycle_id = LAZY_MEASURE_CYCLE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        log::warn!(
+            "[lazy-measure-telemetry] cycle={} input_first_index={} input_first_offset={:.2} normalized_first_index={} normalized_first_offset={:.2} final_first_index={} final_first_offset={:.2} measured_visible={} total_measured={} unresolved_pass={} actual_first_visible={} timed_out={} viewport_filled={}",
+            cycle_id,
+            first_index,
+            first_offset,
+            measurement_start_index,
+            config.before_content_padding - measurement_start_offset,
+            final_first_index,
+            final_scroll_offset,
+            measurement_measured_visible_items,
+            visible_items.len(),
+            unresolved_pass,
+            actual_first_visible.is_some(),
+            measurement_hit_time_budget,
+            measurement_viewport_filled
+        );
     }
     state.update_layout_info(LazyListLayoutInfo {
         visible_items_info: visible_items
@@ -419,6 +469,28 @@ mod tests {
             });
 
             assert_eq!(result.first_visible_item_index, 5);
+        });
+    }
+
+    #[test]
+    fn test_time_budget_progresses_when_visible_item_not_reached() {
+        with_test_runtime(|| {
+            let state = new_lazy_list_state_with_position(100, 5_000.0);
+            let config = LazyListMeasureConfig::default();
+
+            let result = measure_lazy_list(10_000, &state, 100.0, 300.0, &config, |i| {
+                std::thread::sleep(std::time::Duration::from_millis(55));
+                create_test_item(i, 10.0)
+            });
+
+            assert_eq!(
+                result.first_visible_item_index, 203,
+                "time-budgeted pass should advance to the next unresolved index"
+            );
+            assert!(
+                (result.first_visible_item_scroll_offset - 94.0).abs() < 1.0,
+                "expected unresolved offset progress to be preserved"
+            );
         });
     }
 }
