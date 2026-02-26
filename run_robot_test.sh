@@ -123,6 +123,9 @@ run_test() {
         robot_hacker_news_scroll)
             timeout_secs=120
             ;;
+        robot_markdown_end_drag_up)
+            timeout_secs=420
+            ;;
         robot_lazy_varheight_lifecycle)
             timeout_secs=150
             ;;

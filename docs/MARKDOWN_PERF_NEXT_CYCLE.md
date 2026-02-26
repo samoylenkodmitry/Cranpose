@@ -264,52 +264,70 @@
 - Lazy telemetry spot-check (`1` viewport down drag, timeout-bounded) showed pending deltas logged as `-12.77` per dispatch in this slow host state; clamp was not hit in that short run.
 - Post-change no-drag baseline remained in the same host-limited range (`fps ~3.4`), so this change is currently validated by unit tests and telemetry semantics rather than a measurable FPS uplift in this environment.
 
-## Fresh Chat Handoff (next perf-opt cycle)
+## Fresh Chat Handoff (next perf-opt cycle, 2026-02-26)
 
 ### Workspace state to continue from
 
 - Modified files:
+  - `apps/desktop-demo/Cargo.toml`
   - `crates/cranpose-foundation/src/lazy/lazy_list_state.rs`
+  - `run_robot_test.sh`
   - `docs/MARKDOWN_PERF_NEXT_CYCLE.md`
+- Added file:
+  - `apps/desktop-demo/robot-runners/robot_markdown_end_drag_up.rs`
 - Untracked artifacts:
   - `clippy_out.txt`
   - `robot_out.txt`
   - `test_out.txt`
 
-### What is ready
+### New user-reported target bug
 
-- Lazy scroll direction-reversal backlog mitigation is implemented and test-covered.
-- Markdown robot runner can now drive viewport drags directly and emit sentinel position traces.
-- Baseline no-drag run does not show uncontrolled index drift in this workspace and now measures `~9.2 FPS` on the 2.6MB fixture.
-- WGPU `measure_with_options`/`prepare_with_options` fast paths and prepared-layout cache are active and telemetry-visible.
-- Robot binary rebuild command is now explicit in the workflow to avoid stale measurements.
-- Lazy scroll pending backlog is now clamped to `±2000px` and test-covered.
+- Exact manual path to reproduce:
+  1. Scroll big markdown to absolute end.
+  2. Drag down until end is reached.
+  3. Try drag up via content.
+- Expected:
+  - content should move up immediately.
+- Actual:
+  - content can feel blocked (no pixel movement), while moving scrollbar still works.
 
-### What remains open
+### What landed in this chat
 
-- User-reported manual bug: after dragging down to around `"19.02.2026"`, upward drag can snap back and feel blocked.
-- Robot probes still end with `return_present=false` after `20` up-drags in this synthetic scenario.
-- Manual verification on the exact user gesture path is still required (robot and manual may diverge in drag kinematics).
-- Next bottleneck work should focus on scroll-position/gesture semantics and renderer prepare frequency during active scroll.
-- Current host measurements in this chat are much slower than earlier same-day runs; reproduce on a stable host profile before drawing regression conclusions from absolute FPS.
+- Added dedicated runner `robot_markdown_end_drag_up` and registered it in `desktop-app` examples.
+- Runner flow now matches the requested path:
+  1. scrollbar to bottom,
+  2. drag-down-until-stall phase,
+  3. reverse drag-up assertion.
+- Reverse move assertion uses two signals:
+  - bottom probe movement when available,
+  - viewport text-signature change fallback.
+- Added suite timeout for this heavy repro:
+  - `run_robot_test.sh` now uses `420s` for `robot_markdown_end_drag_up`.
+
+### Current status / caveats
+
+- The new runner compiles and runs, but this host is slow on the 2.6MB fixture.
+- Step 1 (scrollbar-to-bottom) is expensive and emits many lazy budget warnings (`50ms`).
+- Bottom text probe is often absent on this fixture (`bottom_probe_y=None`), so absolute-end confirmation is still best-effort.
+- Long full runs were interrupted due runtime cost; no definitive PASS/FAIL yet for the full 2.6MB case on this host.
 
 ### Recommended first commands in next chat
 
-1. Rebuild the robot example binary (important before measurements):
-   - `cargo build -p desktop-app --example robot_markdown_scrollbar --features robot-app`
-2. Build and run baseline no-drag profile:
-   - `CRANPOSE_MARKDOWN_FIXTURE_PATH=/tmp/markdown_profile.md CRANPOSE_MARKDOWN_TOP_SENTINEL="Daily leetcode challenge" CRANPOSE_MARKDOWN_DEEP_SENTINEL="" CRANPOSE_HEADLESS=1 CRANPOSE_MARKDOWN_SCROLL_LOOPS=0 CRANPOSE_MARKDOWN_HOLD_SECS=5 CRANPOSE_LAZY_MEASURE_TELEMETRY=1 target/debug/examples/robot_markdown_scrollbar`
-3. Reproduce drag direction behavior with viewport drags:
-   - `CRANPOSE_MARKDOWN_FIXTURE_PATH=/tmp/markdown_profile.md CRANPOSE_MARKDOWN_TOP_SENTINEL="Daily leetcode challenge" CRANPOSE_MARKDOWN_DEEP_SENTINEL="19.02.2026" CRANPOSE_MARKDOWN_RETURN_SENTINEL="Daily leetcode challenge" CRANPOSE_HEADLESS=1 CRANPOSE_MARKDOWN_SCROLL_LOOPS=0 CRANPOSE_MARKDOWN_VIEWPORT_DRAG_DOWN_LOOPS=20 CRANPOSE_MARKDOWN_VIEWPORT_DRAG_UP_LOOPS=20 CRANPOSE_MARKDOWN_WAIT_IDLE_AFTER_DRAG=0 CRANPOSE_LAZY_MEASURE_TELEMETRY=1 target/debug/examples/robot_markdown_scrollbar`
-4. If still stuck, capture CPU profile for that exact run:
-   - `perf record -F 299 -g --call-graph fp -o /tmp/mdperf_dirchange.data bash -lc '...robot_markdown_scrollbar env from step 2...'`
-   - `perf report --stdio -i /tmp/mdperf_dirchange.data`
-5. Run startup/steady-state measurement probes:
-   - `CRANPOSE_MARKDOWN_FIXTURE_PATH=/tmp/markdown_profile.md CRANPOSE_HEADLESS=1 CRANPOSE_MARKDOWN_SCROLL_LOOPS=0 CRANPOSE_MARKDOWN_HOLD_SECS=8 CRANPOSE_TEXT_MEASURE_TELEMETRY=1 target/debug/examples/robot_markdown_scrollbar`
-   - `CRANPOSE_MARKDOWN_FIXTURE_PATH=/tmp/markdown_profile.md CRANPOSE_HEADLESS=1 CRANPOSE_MARKDOWN_SCROLL_LOOPS=0 CRANPOSE_MARKDOWN_HOLD_SECS=8 CRANPOSE_TEXT_RENDER_TELEMETRY=1 target/debug/examples/robot_markdown_scrollbar`
+1. Rebuild both markdown robot examples:
+   - `cargo build -p desktop-app --example robot_markdown_scrollbar --example robot_markdown_end_drag_up --features robot-app`
+2. Fast sanity for the new 1->2->3 runner (bounded):
+   - `CRANPOSE_MARKDOWN_FIXTURE_PATH=/tmp/markdown_profile.md CRANPOSE_HEADLESS=1 CRANPOSE_MARKDOWN_END_SCROLLBAR_MAX_PASSES=2 CRANPOSE_MARKDOWN_END_DOWN_DRAG_LOOPS=3 CRANPOSE_MARKDOWN_REVERSE_ATTEMPTS=1 target/debug/examples/robot_markdown_end_drag_up`
+3. Full repro attempt with telemetry and log capture:
+   - `CRANPOSE_MARKDOWN_FIXTURE_PATH=/tmp/markdown_profile.md CRANPOSE_HEADLESS=1 CRANPOSE_MARKDOWN_END_SCROLLBAR_MAX_PASSES=6 CRANPOSE_MARKDOWN_END_DOWN_DRAG_LOOPS=10 CRANPOSE_MARKDOWN_REVERSE_ATTEMPTS=3 CRANPOSE_LAZY_MEASURE_TELEMETRY=1 target/debug/examples/robot_markdown_end_drag_up | tee /tmp/md_end_drag_up.log`
+4. Baseline no-drag control run:
+   - `CRANPOSE_MARKDOWN_FIXTURE_PATH=/tmp/markdown_profile.md CRANPOSE_HEADLESS=1 CRANPOSE_MARKDOWN_SCROLL_LOOPS=0 CRANPOSE_MARKDOWN_HOLD_SECS=8 CRANPOSE_LAZY_MEASURE_TELEMETRY=1 target/debug/examples/robot_markdown_scrollbar`
+5. If bug reproduces reliably, capture CPU profile of the exact command from step 3:
+   - `perf record -F 299 -g --call-graph fp -o /tmp/md_end_drag_up.data bash -lc 'CRANPOSE_MARKDOWN_FIXTURE_PATH=/tmp/markdown_profile.md CRANPOSE_HEADLESS=1 CRANPOSE_MARKDOWN_END_SCROLLBAR_MAX_PASSES=6 CRANPOSE_MARKDOWN_END_DOWN_DRAG_LOOPS=10 CRANPOSE_MARKDOWN_REVERSE_ATTEMPTS=3 CRANPOSE_LAZY_MEASURE_TELEMETRY=1 target/debug/examples/robot_markdown_end_drag_up'`
+   - `perf report --stdio -i /tmp/md_end_drag_up.data`
 
 ### Priority for next cycle
 
-- Keep measurement-first flow:
-  - verify if remaining jump-back/blocked-return comes from queued deltas, fling handoff, or scrollbar `scroll_to_item` interference;
-  - instrument app-shell frame phases (`layout`, queue dispatch, scene rebuild, renderer submit) on rebuilt binaries for manual-path parity.
+- Keep measurement-first:
+  - make step-1 absolute-bottom detection deterministic without depending on fragile text probe visibility;
+  - isolate why reverse drag-up deltas are not producing visible movement at end (lazy pending backlog vs scroll-to-item vs gesture handoff);
+  - only then optimize hot path to remove steady-state time-budget warnings and lift FPS under deep drag/fling.

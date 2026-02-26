@@ -524,6 +524,39 @@ impl LazyListState {
     /// registered by LazyColumnImpl/LazyRowImpl with schedule_layout_repass(node_id),
     /// which provides O(subtree) performance instead of O(entire app).
     pub fn dispatch_scroll_delta(&self, delta: f32) -> f32 {
+        let has_scroll_bounds = self
+            .inner
+            .with(|rc| rc.borrow().layout_info.total_items_count > 0);
+        let pushing_forward = delta < -0.001;
+        let pushing_backward = delta > 0.001;
+        let blocked_by_bounds = has_scroll_bounds
+            && ((pushing_forward && !self.can_scroll_forward())
+                || (pushing_backward && !self.can_scroll_backward()));
+
+        if blocked_by_bounds {
+            let should_invalidate = self.inner.with(|rc| {
+                let mut inner = rc.borrow_mut();
+                let pending_before = inner.scroll_to_be_consumed;
+                // If we're already at an edge, clear stale backlog in the same blocked direction.
+                if pending_before.abs() > 0.001 && pending_before.signum() == delta.signum() {
+                    inner.scroll_to_be_consumed = 0.0;
+                }
+                if lazy_measure_telemetry_enabled() {
+                    log::warn!(
+                        "[lazy-measure-telemetry] dispatch_scroll_delta blocked_by_bounds delta={:.2} pending_before={:.2} pending_after={:.2}",
+                        delta,
+                        pending_before,
+                        inner.scroll_to_be_consumed
+                    );
+                }
+                (inner.scroll_to_be_consumed - pending_before).abs() > 0.001
+            });
+            if should_invalidate {
+                self.invalidate();
+            }
+            return 0.0;
+        }
+
         let should_invalidate = self.inner.with(|rc| {
             let mut inner = rc.borrow_mut();
             let pending_before = inner.scroll_to_be_consumed;
@@ -940,13 +973,27 @@ pub mod test_helpers {
 #[cfg(test)]
 mod tests {
     use super::test_helpers::{new_lazy_list_state, with_test_runtime};
+    use super::{LazyListLayoutInfo, LazyListState};
     use std::cell::Cell;
     use std::rc::Rc;
+
+    fn enable_bidirectional_scroll(state: &LazyListState) {
+        state.can_scroll_forward_state.set(true);
+        state.can_scroll_backward_state.set(true);
+    }
+
+    fn mark_scroll_bounds_known(state: &LazyListState) {
+        state.update_layout_info(LazyListLayoutInfo {
+            total_items_count: 10,
+            ..Default::default()
+        });
+    }
 
     #[test]
     fn dispatch_scroll_delta_accumulates_same_direction() {
         with_test_runtime(|| {
             let state = new_lazy_list_state();
+            enable_bidirectional_scroll(&state);
 
             state.dispatch_scroll_delta(-12.0);
             state.dispatch_scroll_delta(-8.0);
@@ -961,6 +1008,7 @@ mod tests {
     fn dispatch_scroll_delta_drops_stale_backlog_on_direction_change() {
         with_test_runtime(|| {
             let state = new_lazy_list_state();
+            enable_bidirectional_scroll(&state);
 
             state.dispatch_scroll_delta(-120.0);
             state.dispatch_scroll_delta(-30.0);
@@ -978,6 +1026,7 @@ mod tests {
     fn dispatch_scroll_delta_clamps_pending_backlog() {
         with_test_runtime(|| {
             let state = new_lazy_list_state();
+            enable_bidirectional_scroll(&state);
 
             state.dispatch_scroll_delta(-1_500.0);
             state.dispatch_scroll_delta(-1_500.0);
@@ -992,6 +1041,7 @@ mod tests {
     fn dispatch_scroll_delta_skips_invalidate_when_clamped_value_is_unchanged() {
         with_test_runtime(|| {
             let state = new_lazy_list_state();
+            enable_bidirectional_scroll(&state);
             let invalidations = Rc::new(Cell::new(0u32));
             let invalidations_clone = Rc::clone(&invalidations);
             state.add_invalidate_callback(Rc::new(move || {
@@ -1009,6 +1059,42 @@ mod tests {
             // Opposite-direction input changes pending and should invalidate again.
             state.dispatch_scroll_delta(100.0);
             assert_eq!(invalidations.get(), 2);
+        });
+    }
+
+    #[test]
+    fn dispatch_scroll_delta_returns_zero_when_forward_is_blocked() {
+        with_test_runtime(|| {
+            let state = new_lazy_list_state();
+            mark_scroll_bounds_known(&state);
+            state.can_scroll_forward_state.set(false);
+            state.can_scroll_backward_state.set(true);
+
+            let consumed = state.dispatch_scroll_delta(-24.0);
+
+            assert_eq!(consumed, 0.0);
+            assert_eq!(state.peek_scroll_delta(), 0.0);
+        });
+    }
+
+    #[test]
+    fn dispatch_scroll_delta_clears_stale_pending_at_forward_edge() {
+        with_test_runtime(|| {
+            let state = new_lazy_list_state();
+            mark_scroll_bounds_known(&state);
+            enable_bidirectional_scroll(&state);
+            state.dispatch_scroll_delta(-300.0);
+            assert!((state.peek_scroll_delta() + 300.0).abs() < 0.001);
+
+            state.can_scroll_forward_state.set(false);
+
+            let blocked_consumed = state.dispatch_scroll_delta(-10.0);
+            assert_eq!(blocked_consumed, 0.0);
+            assert_eq!(state.peek_scroll_delta(), 0.0);
+
+            let reverse_consumed = state.dispatch_scroll_delta(12.0);
+            assert_eq!(reverse_consumed, 12.0);
+            assert!((state.peek_scroll_delta() - 12.0).abs() < 0.001);
         });
     }
 }
