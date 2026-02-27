@@ -8,6 +8,7 @@
 #![allow(non_snake_case)]
 
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::OnceLock;
@@ -235,6 +236,72 @@ enum ModifierKind {
     },
 }
 
+const FINGERPRINT_KIND_EMPTY: u8 = 0;
+const FINGERPRINT_KIND_SINGLE: u8 = 1;
+const FINGERPRINT_KIND_COMBINED: u8 = 2;
+
+fn empty_fingerprints() -> (u64, u64) {
+    let mut strict_hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut structural_hasher = std::collections::hash_map::DefaultHasher::new();
+    FINGERPRINT_KIND_EMPTY.hash(&mut strict_hasher);
+    FINGERPRINT_KIND_EMPTY.hash(&mut structural_hasher);
+    (strict_hasher.finish(), structural_hasher.finish())
+}
+
+fn single_fingerprints(elements: &[DynModifierElement]) -> (u64, u64) {
+    let mut strict_hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut structural_hasher = std::collections::hash_map::DefaultHasher::new();
+
+    FINGERPRINT_KIND_SINGLE.hash(&mut strict_hasher);
+    FINGERPRINT_KIND_SINGLE.hash(&mut structural_hasher);
+    elements.len().hash(&mut strict_hasher);
+    elements.len().hash(&mut structural_hasher);
+
+    for element in elements {
+        let element_type = element.element_type();
+        let capabilities = element.capabilities();
+        let element_hash = element.hash_code();
+
+        element_type.hash(&mut strict_hasher);
+        capabilities.hash(&mut strict_hasher);
+
+        element_type.hash(&mut structural_hasher);
+        capabilities.hash(&mut structural_hasher);
+
+        let requires_update = element.requires_update();
+        requires_update.hash(&mut strict_hasher);
+        if requires_update {
+            let element_ptr = Rc::as_ptr(element) as *const ();
+            element_ptr.hash(&mut strict_hasher);
+        } else {
+            element_hash.hash(&mut strict_hasher);
+        }
+
+        let is_draw_only = capabilities == NodeCapabilities::DRAW;
+        is_draw_only.hash(&mut structural_hasher);
+        if !is_draw_only {
+            element_hash.hash(&mut structural_hasher);
+        }
+    }
+
+    (strict_hasher.finish(), structural_hasher.finish())
+}
+
+fn combined_fingerprints(outer: &Modifier, inner: &Modifier) -> (u64, u64) {
+    let mut strict_hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut structural_hasher = std::collections::hash_map::DefaultHasher::new();
+
+    FINGERPRINT_KIND_COMBINED.hash(&mut strict_hasher);
+    outer.strict_fingerprint.hash(&mut strict_hasher);
+    inner.strict_fingerprint.hash(&mut strict_hasher);
+
+    FINGERPRINT_KIND_COMBINED.hash(&mut structural_hasher);
+    outer.structural_fingerprint.hash(&mut structural_hasher);
+    inner.structural_fingerprint.hash(&mut structural_hasher);
+
+    (strict_hasher.finish(), structural_hasher.finish())
+}
+
 /// Iterator over modifier elements that traverses the tree without allocation.
 ///
 /// This avoids the O(N) allocation of `Modifier::elements()` by using a stack-based
@@ -368,12 +435,17 @@ impl<'a> Iterator for ModifierInspectorIterator<'a> {
 #[derive(Clone)]
 pub struct Modifier {
     kind: ModifierKind,
+    strict_fingerprint: u64,
+    structural_fingerprint: u64,
 }
 
 impl Default for Modifier {
     fn default() -> Self {
+        let (strict_fingerprint, structural_fingerprint) = empty_fingerprints();
         Self {
             kind: ModifierKind::Empty,
+            strict_fingerprint,
+            structural_fingerprint,
         }
     }
 }
@@ -593,11 +665,14 @@ impl Modifier {
         if next.is_trivially_empty() {
             return self.clone();
         }
+        let (strict_fingerprint, structural_fingerprint) = combined_fingerprints(self, &next);
         Modifier {
             kind: ModifierKind::Combined {
                 outer: Rc::new(self.clone()),
                 inner: Rc::new(next),
             },
+            strict_fingerprint,
+            structural_fingerprint,
         }
     }
 
@@ -716,15 +791,17 @@ impl Modifier {
 
     pub(crate) fn from_parts(elements: Vec<DynModifierElement>) -> Self {
         if elements.is_empty() {
-            Self {
-                kind: ModifierKind::Empty,
-            }
+            Self::default()
         } else {
+            let (strict_fingerprint, structural_fingerprint) =
+                single_fingerprints(elements.as_slice());
             Self {
                 kind: ModifierKind::Single {
                     elements: Rc::new(elements),
                     inspector: Rc::new(Vec::new()),
                 },
+                strict_fingerprint,
+                structural_fingerprint,
             }
         }
     }
@@ -750,6 +827,8 @@ impl Modifier {
                         elements,
                         inspector: Rc::new(new_inspector),
                     },
+                    strict_fingerprint: self.strict_fingerprint,
+                    structural_fingerprint: self.structural_fingerprint,
                 }
             }
             ModifierKind::Combined { .. } => {
@@ -769,6 +848,14 @@ impl Modifier {
     }
 
     fn eq_internal(&self, other: &Self, consider_always_update: bool) -> bool {
+        if consider_always_update {
+            if self.strict_fingerprint != other.strict_fingerprint {
+                return false;
+            }
+        } else if self.structural_fingerprint != other.structural_fingerprint {
+            return false;
+        }
+
         match (&self.kind, &other.kind) {
             (ModifierKind::Empty, ModifierKind::Empty) => true,
             (
