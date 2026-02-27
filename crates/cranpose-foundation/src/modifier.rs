@@ -877,11 +877,17 @@ pub trait AnyModifierElement: fmt::Debug {
 
 struct TypedModifierElement<E: ModifierNodeElement> {
     element: E,
+    cached_hash: u64,
 }
 
 impl<E: ModifierNodeElement> TypedModifierElement<E> {
     fn new(element: E) -> Self {
-        Self { element }
+        let mut hasher = DefaultHasher::new();
+        element.hash(&mut hasher);
+        Self {
+            element,
+            cached_hash: hasher.finish(),
+        }
     }
 }
 
@@ -929,9 +935,7 @@ where
     }
 
     fn hash_code(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.element.hash(&mut hasher);
-        hasher.finish()
+        self.cached_hash
     }
 
     fn equals_element(&self, other: &dyn AnyModifierElement) -> bool {

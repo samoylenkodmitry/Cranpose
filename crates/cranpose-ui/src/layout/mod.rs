@@ -24,8 +24,8 @@ use self::core::Placeable;
 #[cfg(test)]
 use self::core::{HorizontalAlignment, VerticalAlignment};
 use crate::modifier::{
-    collect_semantics_from_modifier, collect_slices_from_modifier, DimensionConstraint, EdgeInsets,
-    Modifier, ModifierNodeSlices, Point, Rect as GeometryRect, ResolvedModifiers, Size,
+    collect_semantics_from_modifier, DimensionConstraint, EdgeInsets, Modifier, ModifierNodeSlices,
+    Point, Rect as GeometryRect, ResolvedModifiers, Size,
 };
 
 use crate::subcompose_layout::SubcomposeLayoutNode;
@@ -1981,14 +1981,15 @@ fn runtime_metadata_for(
     }
 
     // Try SubcomposeLayoutNode
-    if let Ok((modifier, resolved_modifiers)) = applier
+    if let Ok((modifier, resolved_modifiers, modifier_slices)) = applier
         .with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-            (node.modifier(), node.resolved_modifiers())
+            (
+                node.modifier(),
+                node.resolved_modifiers(),
+                node.modifier_slices_snapshot(),
+            )
         })
     {
-        // SubcomposeLayoutNode doesn't cache slices yet, so we still allocate here.
-        // TODO: Optimize SubcomposeLayoutNode to cache slices too.
-        let modifier_slices = Rc::new(collect_slices_from_modifier(&modifier));
         return Ok(RuntimeNodeMetadata {
             modifier,
             resolved_modifiers,
