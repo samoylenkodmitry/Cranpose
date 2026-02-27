@@ -349,7 +349,7 @@ fn reverse_drag_moves_content(
             18,
             14,
             180,
-            true,
+            false,
         );
 
         let after_probe_y = sentinel_bounds(robot, bottom_probe).map(|b| b.1);

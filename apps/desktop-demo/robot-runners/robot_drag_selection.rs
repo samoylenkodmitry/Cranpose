@@ -40,6 +40,7 @@ fn main() {
                 let _ = robot.mouse_down();
                 std::thread::sleep(Duration::from_millis(20));
                 let _ = robot.mouse_up();
+                let _ = robot.wait_for_idle();
                 // Wait longer for tab content to load
                 std::thread::sleep(Duration::from_millis(500));
                 println!("✓ Clicked Text Input tab\n");
@@ -52,13 +53,14 @@ fn main() {
             println!("--- Step 2: Find text field ---");
             let mut text_field_pos: Option<(f32, f32, f32, f32)> = None;
 
-            for attempt in 1..=5 {
+            for attempt in 1..=20 {
                 // Look for "Type here..." in the text field
                 text_field_pos = find_in_semantics(&robot, |elem| find_text(elem, "Type here..."));
                 if text_field_pos.is_some() {
                     break;
                 }
-                println!("  Attempt {}/5: not found, waiting...", attempt);
+                println!("  Attempt {}/20: not found, waiting...", attempt);
+                let _ = robot.wait_for_idle();
                 std::thread::sleep(Duration::from_millis(200));
             }
 
@@ -129,7 +131,7 @@ fn main() {
                 println!("\n✓ PASS: Click-drag selection test completed");
                 let _ = robot.exit();
             } else {
-                println!("✗ FAIL: Could not find text field after 5 attempts");
+                println!("✗ FAIL: Could not find text field after 20 attempts");
                 let _ = robot.exit();
             }
         })

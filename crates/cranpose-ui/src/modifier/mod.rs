@@ -9,6 +9,8 @@
 
 use std::fmt;
 use std::rc::Rc;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::OnceLock;
 
 mod alignment;
 mod background;
@@ -190,7 +192,28 @@ pub(crate) fn inspector_metadata<F>(name: &'static str, recorder: F) -> Inspecto
 where
     F: FnOnce(&mut InspectorInfo),
 {
+    // Inspector metadata is debug tooling. Avoid building string-heavy metadata in
+    // optimized runtime unless modifier debugging is explicitly enabled.
+    if !inspector_metadata_enabled() {
+        return InspectorMetadata::new(name, |_| {});
+    }
     InspectorMetadata::new(name, recorder)
+}
+
+pub(crate) fn modifier_debug_enabled() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        static ENV_DEBUG: OnceLock<bool> = OnceLock::new();
+        *ENV_DEBUG.get_or_init(|| std::env::var_os("COMPOSE_DEBUG_MODIFIERS").is_some())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        false
+    }
+}
+
+fn inspector_metadata_enabled() -> bool {
+    cfg!(debug_assertions) || cfg!(test) || modifier_debug_enabled()
 }
 
 /// Internal representation of modifier composition structure.
