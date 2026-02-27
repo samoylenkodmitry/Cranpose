@@ -336,8 +336,8 @@ fn main() {
             }
             let stats = fps_stats();
             println!(
-                "fps_summary: fps={:.1} frame_ms={:.2} recompositions={} recomps_per_sec={}",
-                stats.fps, stats.avg_ms, stats.recompositions, stats.recomps_per_second
+                "fps_summary: fps={:.1} frame_ms={:.2} recompositions={} recomps_per_sec={} total_frames={}",
+                stats.fps, stats.avg_ms, stats.recompositions, stats.recomps_per_second, stats.frame_count
             );
             std::thread::sleep(Duration::from_millis(600));
             let _ = robot.exit();
