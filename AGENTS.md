@@ -1,1 +1,45 @@
-@CLAUDE.md
+# Agent Notes for cranpose
+
+- no unsafe
+- cargo test > 1.tmp 2>& # then read and fix all
+- cargo clippy > 2.tmp 2>& # then read and fix all
+- cargo fmt
+- KISS, DRY, SOLID. don't copy-paste lazily
+- Use `cargo add <crate>` to add dependencies.
+- Use `cargo upgrade` to upgrade dependencies.
+- Use `anyhow` for error handling in application code; use `thiserror` for library code.
+- Write unit tests for all public functions and methods.
+- Write integration tests in the `tests` directory.
+- Follow idiomatic Rust naming conventions (snake_case for variables and functions, CamelCase for types and traits).
+- CamelCase for #[composable] functions
+- Use `Result<T, E>` for functions that can fail; prefer specific error types over `Box<dyn Error>`.
+- Use `Option<T>` for values that can be absent.
+- Use `async`/`await` for asynchronous code; prefer `tokio` as the async runtime.
+- do proper review mitigation; don't short-cut and do a honest professional work; be very strict to your code & architecture decisions; keep repo clean and don't put unfinished parts here; fix everything
+- do not create a half-migrated state of the repo; don't "deprecate"; always change the existing code
+- cargo clippy
+- cargo test
+- cargo tree --duplicates/cargo tree -i <package name> and make sure no duplicates (but do not apply vendor patches, and do not change libraries without asking, can suggest though)
+- make sure android compiles [:app:assembleRelease] in project /home/s/develop/projects/compose-rs-proposal/apps/android-demo/android
+- make sure wasm compiles apps/desktop-demo/build-web.sh
+- (+robot tests)
+- instead of accepting the shortcut always choose to fix the underlying architecture issue
+- do not avoid and do not defer the big architecture refactoring when necessary
+- if there is a bug start with writing a failing test that will catch it so we never regress to it again in the future
+- do a code review; look for any shortcuts, lazyness, taking the easy path instead of doing the hard necessary work, poor architectural choices, everything that will shoot in the foot, poorly written code like it was a deadline 1 minute before end of the work day; but not invent the problems if there arent any- don't fear the significant arch change; everything is still pre-alpha; this is the right time for a big change
+- do not ever git reset, always stash if needed
+- do not ever rm -rf, prefer mv to some _old name
+- all tests should pass, its never *not yours*
+- zero warnings on all build/clippy/test commands, never *was pre-existing*
+- the #[cfg(feature = "robot-app")] is forbidden
+- reference JC kt repo /media/huge/composerepo/
+- perf scripts are perf*.sh at project root
+- e2e robot headless tests is ./run_robot_test.sh --sequential (should all pass)
+- do not use big models as subagents (opus, codex xhigh thinking, etc), only small fast & cheap to not waste tokens
+- no 'backwards compatability' is allowed; we in a pre-alpha
+- no comments in style "now it is like that" - we are not writing history
+- duplicated code (10+ lines) without architecture is forbidden
+- 'legacy'/'old way' etc not allowed. we are in a pre-alpha, everything is fresh, clean, single instance
+- be aware of what you've done by looking at git status
+- don't call anything 'migration'. Say no to half-states. Only complete entropy annihilation is allowed.
+- don't hardcode things

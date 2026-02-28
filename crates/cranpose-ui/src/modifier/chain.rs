@@ -10,9 +10,9 @@ use cranpose_foundation::{
 };
 
 use super::{
-    local::ModifierLocalManager, DimensionConstraint, EdgeInsets, LayoutProperties, Modifier,
-    ModifierInspectorRecord, ModifierLocalAncestorResolver, ModifierLocalToken, Point,
-    ResolvedModifierLocal, ResolvedModifiers,
+    local::ModifierLocalManager, modifier_debug_enabled, DimensionConstraint, EdgeInsets,
+    LayoutProperties, Modifier, ModifierInspectorRecord, ModifierLocalAncestorResolver,
+    ModifierLocalToken, Point, ResolvedModifierLocal, ResolvedModifiers,
 };
 use crate::modifier_nodes::{
     AlignmentNode, FillDirection, FillNode, IntrinsicAxis, IntrinsicSizeNode, OffsetNode,
@@ -21,8 +21,6 @@ use crate::modifier_nodes::{
 use std::any::type_name_of_val;
 use std::cell::RefCell;
 use std::rc::Rc;
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::OnceLock;
 
 /// Snapshot of a modifier node inside a reconciled chain for debugging & inspector tooling.
 #[derive(Clone, Debug, PartialEq)]
@@ -111,7 +109,7 @@ impl ModifierChainHandle {
         }
 
         // Only collect inspector snapshot when debugging is enabled (lazy collection)
-        let should_log = self.debug_logging || global_modifier_debug_flag();
+        let should_log = self.debug_logging || modifier_debug_enabled();
         if should_log {
             self.collect_inspector_snapshot(modifier);
             crate::debug::log_modifier_chain(self.chain(), self.inspector_snapshot());
@@ -403,18 +401,6 @@ fn apply_intrinsic_size_node(layout: &mut LayoutProperties, node: &IntrinsicSize
         IntrinsicAxis::Height => {
             layout.height = constraint;
         }
-    }
-}
-
-fn global_modifier_debug_flag() -> bool {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        static ENV_DEBUG: OnceLock<bool> = OnceLock::new();
-        *ENV_DEBUG.get_or_init(|| std::env::var_os("COMPOSE_DEBUG_MODIFIERS").is_some())
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        false
     }
 }
 

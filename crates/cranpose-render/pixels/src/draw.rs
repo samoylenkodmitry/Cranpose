@@ -1129,8 +1129,8 @@ mod tests {
         draw_scene(&mut frame, width, height, &scene);
 
         // Find the y-range of all ink pixels (font-agnostic approach).
-        let (ink_top, ink_bottom) = ink_y_range(&frame, width, height)
-            .expect("expected ink pixels in rendered text");
+        let (ink_top, ink_bottom) =
+            ink_y_range(&frame, width, height).expect("expected ink pixels in rendered text");
         let ink_height = ink_bottom - ink_top;
         assert!(
             ink_height >= 20,
@@ -1139,7 +1139,10 @@ mod tests {
         let mid_y = ink_top + ink_height / 2;
         let first_line_ink = count_non_background_pixels_in_band(&frame, width, ink_top, mid_y);
         let second_line_ink = count_non_background_pixels_in_band(&frame, width, mid_y, ink_bottom);
-        assert!(first_line_ink > 20, "expected first line to render, got {first_line_ink}");
+        assert!(
+            first_line_ink > 20,
+            "expected first line to render, got {first_line_ink}"
+        );
         assert!(
             second_line_ink > 20,
             "expected second line ink, got {second_line_ink}"

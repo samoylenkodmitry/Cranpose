@@ -103,7 +103,7 @@ pub use text::{
     measure_text_with_options, prepare_text_layout, set_text_measurer, LinkAnnotation,
     ParagraphStyle, PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle,
     PreparedTextLayout, SpanStyle, StringAnnotation, TextDrawStyle, TextLayoutOptions,
-    TextMeasurer, TextMetrics, TextOverflow, TextStyle,
+    TextMeasurer, TextMetrics, TextOverflow, TextShaping, TextStyle,
 };
 pub use text_field_modifier_node::{TextFieldElement, TextFieldModifierNode};
 pub use text_modifier_node::{TextModifierElement, TextModifierNode};

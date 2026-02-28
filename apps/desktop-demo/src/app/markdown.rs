@@ -5,14 +5,15 @@ use cranpose_services::{local_http_client, local_uri_handler, HttpClientRef};
 use cranpose_ui::{
     composable,
     text::{
-        AnnotatedString, FontFamily, FontStyle, FontWeight, LinkAnnotation, SpanStyle,
-        TextDecoration, TextUnit,
+        AnnotatedString, FontFamily, FontStyle, FontWeight, LinkAnnotation, ParagraphStyle,
+        PlatformParagraphStyle, SpanStyle, TextDecoration, TextShaping, TextUnit,
     },
     Brush, Button, Color, Column, ColumnSpec, CornerRadii, LazyColumn, LazyColumnSpec,
     LinearArrangement, LinkedText, Modifier, Row, RowSpec, Size, Spacer, Text, TextStyle,
     VerticalAlignment,
 };
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use std::rc::Rc;
 
 // ---------------------------------------------------------------------------
 // Markdown → AnnotatedString block list
@@ -99,6 +100,7 @@ struct BlockBuilder {
     style: InlineStyle,
     builder_raw: Option<cranpose_ui::text::annotated_string::Builder>,
     blocks: Vec<MarkdownBlock>,
+    list_item_depth: u32,
 }
 
 impl BlockBuilder {
@@ -107,6 +109,7 @@ impl BlockBuilder {
             style: InlineStyle::default(),
             builder_raw: None,
             blocks: Vec::new(),
+            list_item_depth: 0,
         }
     }
 
@@ -190,8 +193,10 @@ fn markdown_to_blocks(markdown: &str) -> Vec<MarkdownBlock> {
                 b.push_inline_style();
             }
             Event::Start(Tag::Paragraph) => {
-                b.flush_block();
-                b.push_inline_style();
+                if b.list_item_depth == 0 {
+                    b.flush_block();
+                    b.push_inline_style();
+                }
             }
             Event::Start(Tag::BlockQuote(_)) => {
                 b.flush_block();
@@ -205,6 +210,7 @@ fn markdown_to_blocks(markdown: &str) -> Vec<MarkdownBlock> {
             }
             Event::Start(Tag::Item) => {
                 b.flush_block();
+                b.list_item_depth += 1;
                 b.push_span_style(SpanStyle {
                     color: Some(Color(0.55, 0.65, 0.85, 1.0)),
                     ..Default::default()
@@ -259,8 +265,10 @@ fn markdown_to_blocks(markdown: &str) -> Vec<MarkdownBlock> {
                 b.flush_block();
             }
             Event::End(TagEnd::Paragraph) => {
-                b.pop_style();
-                b.flush_block();
+                if b.list_item_depth == 0 {
+                    b.pop_style();
+                    b.flush_block();
+                }
             }
             Event::End(TagEnd::BlockQuote(_)) => {
                 b.pop_style();
@@ -275,6 +283,7 @@ fn markdown_to_blocks(markdown: &str) -> Vec<MarkdownBlock> {
             Event::End(TagEnd::Item) => {
                 b.pop_style();
                 b.flush_block();
+                b.list_item_depth = b.list_item_depth.saturating_sub(1);
             }
             Event::End(TagEnd::Emphasis) => {
                 b.pop_style();
@@ -301,6 +310,52 @@ fn markdown_to_blocks(markdown: &str) -> Vec<MarkdownBlock> {
     b.blocks
 }
 
+const MAX_MARKDOWN_BLOCK_BYTES: usize = 1200;
+
+fn split_large_markdown_blocks(blocks: Vec<MarkdownBlock>) -> Vec<MarkdownBlock> {
+    let mut normalized = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        match block {
+            MarkdownBlock::Text(annotated) if annotated.text.len() > MAX_MARKDOWN_BLOCK_BYTES => {
+                split_large_text_block(&annotated, &mut normalized);
+            }
+            other => normalized.push(other),
+        }
+    }
+    normalized
+}
+
+fn split_large_text_block(annotated: &AnnotatedString, out: &mut Vec<MarkdownBlock>) {
+    let text = annotated.text.as_str();
+    let mut start = 0usize;
+
+    while start < text.len() {
+        let mut end = (start + MAX_MARKDOWN_BLOCK_BYTES).min(text.len());
+        while end > start && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        if end == start {
+            end = text[start..]
+                .char_indices()
+                .nth(1)
+                .map(|(offset, _)| start + offset)
+                .unwrap_or(text.len());
+        } else if end < text.len() {
+            let split_window = &text[start..end];
+            if let Some(rel_newline) = split_window.rfind('\n') {
+                let candidate = start + rel_newline + 1;
+                let min_chunk = start + (MAX_MARKDOWN_BLOCK_BYTES / 3);
+                if candidate >= min_chunk {
+                    end = candidate;
+                }
+            }
+        }
+
+        out.push(MarkdownBlock::Text(annotated.subsequence(start..end)));
+        start = end;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Fetch state
 // ---------------------------------------------------------------------------
@@ -309,7 +364,7 @@ fn markdown_to_blocks(markdown: &str) -> Vec<MarkdownBlock> {
 enum FetchState {
     Idle,
     Loading,
-    Done(Vec<MarkdownBlock>),
+    Done(Rc<[MarkdownBlock]>),
     Error(String),
 }
 
@@ -363,7 +418,8 @@ pub fn markdown_viewer_tab() {
             },
             move |result| match result {
                 Ok(text) => {
-                    let blocks = markdown_to_blocks(&text);
+                    let blocks: Rc<[MarkdownBlock]> =
+                        split_large_markdown_blocks(markdown_to_blocks(&text)).into();
                     status.set(FetchState::Done(blocks));
                 }
                 Err(err) => status.set(FetchState::Error(err)),
@@ -708,8 +764,10 @@ fn MarkdownScrollbarModelObserver(
 #[composable]
 fn MarkdownBlocksList(
     list_state: cranpose_foundation::lazy::LazyListState,
-    blocks: Vec<MarkdownBlock>,
+    blocks: Rc<[MarkdownBlock]>,
 ) {
+    let mut spec = LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(6.0));
+    spec.beyond_bounds_item_count = 0;
     LazyColumn(
         Modifier::empty()
             .semantics(|config: &mut SemanticsConfiguration| {
@@ -717,11 +775,11 @@ fn MarkdownBlocksList(
             })
             .fill_max_size(),
         list_state,
-        LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(6.0)),
+        spec,
         move |scope| {
             use cranpose_foundation::lazy::LazyListScopeExt;
-            scope.items_vec(blocks.clone(), |block| match block.clone() {
-                MarkdownBlock::Text(annotated) => render_text_block(annotated),
+            scope.items_indexed_rc(blocks.clone(), |_index, block| match block {
+                MarkdownBlock::Text(annotated) => render_text_block(annotated.clone()),
                 MarkdownBlock::Rule => render_rule(),
             });
         },
@@ -765,18 +823,31 @@ fn MarkdownScrollbarRail(
                 );
             })
             .pointer_input("scrollbar_drag", move |scope| async move {
-                use cranpose_foundation::PointerEventKind;
+                use cranpose_foundation::{PointerButton, PointerEventKind};
                 loop {
                     scope
                         .await_pointer_event_scope(|scope| async move {
+                            use instant::Instant;
+                            use std::time::Duration;
                             let mut dragging = false;
                             let mut drag_grab_offset = 0.0f32;
+                            let mut last_scroll_apply = Instant::now();
+                            let mut last_target: Option<(usize, f32)> = None;
                             loop {
                                 let event = scope.await_pointer_event().await;
                                 match event.kind {
                                     PointerEventKind::Down => {
                                         let (model, rail_h) =
                                             read_interaction_scrollbar_model(list_state);
+                                        let inside_rail = event.position.x >= 0.0
+                                            && event.position.x <= MARKDOWN_SCROLLBAR_RAIL_WIDTH
+                                            && event.position.y >= 0.0
+                                            && event.position.y <= rail_h;
+                                        if !inside_rail
+                                            || !event.buttons.contains(PointerButton::Primary)
+                                        {
+                                            continue;
+                                        }
                                         let metrics = compute_scrollbar_metrics(
                                             rail_h,
                                             model.thumb_fraction,
@@ -801,10 +872,16 @@ fn MarkdownScrollbarRail(
                                             list_state.scroll_to_item(target_idx, target_offset);
                                             dragging = true;
                                             drag_grab_offset = metrics.thumb_h * 0.5;
+                                            last_scroll_apply = Instant::now();
+                                            last_target = Some((target_idx, target_offset));
                                             event.consume();
                                         }
                                     }
                                     PointerEventKind::Move if dragging => {
+                                        if last_scroll_apply.elapsed() < Duration::from_millis(50) {
+                                            event.consume();
+                                            continue;
+                                        }
                                         let (model, rail_h) =
                                             read_interaction_scrollbar_model(list_state);
                                         let metrics = compute_scrollbar_metrics(
@@ -828,7 +905,23 @@ fn MarkdownScrollbarRail(
                                                 target_scroll_fraction,
                                             );
                                         if model.max_item_position > 0.0 {
+                                            if model.total_items > 5_000 {
+                                                if let Some((last_idx, last_offset)) = last_target {
+                                                    let idx_diff = last_idx.abs_diff(target_idx);
+                                                    let offset_diff =
+                                                        (last_offset - target_offset).abs();
+                                                    if idx_diff < 800
+                                                        && offset_diff
+                                                            < model.average_item_size * 0.5
+                                                    {
+                                                        event.consume();
+                                                        continue;
+                                                    }
+                                                }
+                                            }
                                             list_state.scroll_to_item(target_idx, target_offset);
+                                            last_scroll_apply = Instant::now();
+                                            last_target = Some((target_idx, target_offset));
                                         }
                                         event.consume();
                                     }
@@ -852,7 +945,7 @@ fn MarkdownScrollbarRail(
 
 #[allow(non_snake_case)]
 #[composable]
-fn render_markdown_blocks(blocks: Vec<MarkdownBlock>) {
+fn render_markdown_blocks(blocks: Rc<[MarkdownBlock]>) {
     let list_state = remember_lazy_list_state();
     let scrollbar_model_state = cranpose_core::useState(ScrollbarModel::default);
 
@@ -873,8 +966,8 @@ fn render_markdown_blocks(blocks: Vec<MarkdownBlock>) {
             );
 
             // Isolated reactivity scope: reads first_visible/layout_info and syncs the model state.
-            MarkdownScrollbarModelObserver(list_state, model_state_for_row.clone());
-            MarkdownScrollbarRail(list_state, model_state_for_row.clone());
+            MarkdownScrollbarModelObserver(list_state, model_state_for_row);
+            MarkdownScrollbarRail(list_state, model_state_for_row);
         }
     });
 }
@@ -888,7 +981,13 @@ fn render_text_block(annotated: AnnotatedString) {
             font_size: TextUnit::Sp(14.0),
             ..Default::default()
         },
-        ..Default::default()
+        paragraph_style: ParagraphStyle {
+            platform_style: Some(PlatformParagraphStyle {
+                include_font_padding: None,
+                shaping: Some(TextShaping::Basic),
+            }),
+            ..Default::default()
+        },
     };
 
     if !annotated.link_annotations.is_empty() {
@@ -1029,6 +1128,36 @@ mod tests {
     }
 
     #[test]
+    fn list_item_paragraph_keeps_bullet_and_text_in_same_block() {
+        let blocks = markdown_to_blocks("- Time complexity: $$O(n)$$");
+        assert_eq!(blocks.len(), 1, "single list item should produce one block");
+        let MarkdownBlock::Text(annotated) = &blocks[0] else {
+            panic!("expected Text block");
+        };
+        assert!(
+            annotated.text.starts_with("• Time complexity:"),
+            "bullet and text must stay in the same block"
+        );
+    }
+
+    #[test]
+    fn list_items_do_not_emit_bullet_only_blocks() {
+        let blocks = markdown_to_blocks("- first\n- second");
+        let text_blocks: Vec<_> = blocks
+            .iter()
+            .filter_map(|block| match block {
+                MarkdownBlock::Text(annotated) => Some(annotated),
+                MarkdownBlock::Rule => None,
+            })
+            .collect();
+        assert_eq!(text_blocks.len(), 2, "expected one block per list item");
+        assert!(
+            text_blocks.iter().all(|item| item.text.trim() != "•"),
+            "renderer emitted bullet-only block"
+        );
+    }
+
+    #[test]
     fn link_stores_url_link_annotation() {
         let blocks = markdown_to_blocks("Click [here](https://example.com) please");
         assert_eq!(blocks.len(), 1);
@@ -1090,21 +1219,23 @@ mod tests {
 
     #[test]
     fn average_visible_item_size_prefers_measured_visible_items() {
-        let mut layout = cranpose_foundation::lazy::LazyListLayoutInfo::default();
-        layout.visible_items_info = vec![
-            cranpose_foundation::lazy::LazyListItemInfo {
-                index: 0,
-                key: 0,
-                offset: 0.0,
-                size: 20.0,
-            },
-            cranpose_foundation::lazy::LazyListItemInfo {
-                index: 1,
-                key: 1,
-                offset: 20.0,
-                size: 40.0,
-            },
-        ];
+        let layout = cranpose_foundation::lazy::LazyListLayoutInfo {
+            visible_items_info: vec![
+                cranpose_foundation::lazy::LazyListItemInfo {
+                    index: 0,
+                    key: 0,
+                    offset: 0.0,
+                    size: 20.0,
+                },
+                cranpose_foundation::lazy::LazyListItemInfo {
+                    index: 1,
+                    key: 1,
+                    offset: 20.0,
+                    size: 40.0,
+                },
+            ],
+            ..Default::default()
+        };
 
         let avg = average_visible_item_size(&layout, 100.0);
         assert!((avg - 30.0).abs() < 0.001);
@@ -1158,5 +1289,85 @@ mod tests {
         let (idx, off) = scroll_target_for_fraction(model, 1.0);
         assert_eq!(idx, 0);
         assert_eq!(off, 0.0);
+    }
+
+    #[test]
+    fn split_large_markdown_blocks_preserves_text_content() {
+        let long = "a".repeat(MAX_MARKDOWN_BLOCK_BYTES * 2 + 100);
+        let input = vec![MarkdownBlock::Text(AnnotatedString::from(long.as_str()))];
+        let split = split_large_markdown_blocks(input);
+        assert!(
+            split.len() >= 2,
+            "expected long text block to be split into multiple chunks"
+        );
+        let mut joined = String::new();
+        for block in &split {
+            let MarkdownBlock::Text(annotated) = block else {
+                continue;
+            };
+            assert!(
+                annotated.text.len() <= MAX_MARKDOWN_BLOCK_BYTES,
+                "chunk exceeded max block size"
+            );
+            joined.push_str(&annotated.text);
+        }
+        assert_eq!(joined, long, "splitting must preserve full text");
+    }
+
+    #[test]
+    fn split_large_markdown_blocks_preserves_links() {
+        let repeated = format!(
+            "{} [link](https://example.com) {}",
+            "x".repeat(MAX_MARKDOWN_BLOCK_BYTES),
+            "y".repeat(MAX_MARKDOWN_BLOCK_BYTES)
+        );
+        let split = split_large_markdown_blocks(markdown_to_blocks(&repeated));
+        let link_count = split
+            .iter()
+            .filter_map(|block| match block {
+                MarkdownBlock::Text(annotated) => Some(annotated.link_annotations.len()),
+                MarkdownBlock::Rule => None,
+            })
+            .sum::<usize>();
+        assert_eq!(
+            link_count, 1,
+            "link annotations should be preserved after split"
+        );
+    }
+
+    #[test]
+    #[ignore = "profiling helper: run manually with MD_PROFILE_PATH=/path/to/file"]
+    fn profile_large_markdown_from_file() {
+        use std::time::Instant;
+
+        let path = std::env::var("MD_PROFILE_PATH")
+            .expect("set MD_PROFILE_PATH to a markdown file for profiling");
+        let markdown = std::fs::read_to_string(&path).expect("failed to read markdown file");
+        let bytes = markdown.len();
+
+        let started = Instant::now();
+        let blocks = markdown_to_blocks(&markdown);
+        let elapsed = started.elapsed();
+
+        let mut text_block_count = 0usize;
+        let mut max_block_bytes = 0usize;
+        let mut max_block_preview = String::new();
+        for block in &blocks {
+            if let MarkdownBlock::Text(annotated) = block {
+                text_block_count += 1;
+                if annotated.text.len() > max_block_bytes {
+                    max_block_bytes = annotated.text.len();
+                    max_block_preview = annotated.text.chars().take(120).collect();
+                }
+            }
+        }
+
+        println!("PROFILE_MD: file={path}");
+        println!("PROFILE_MD: input_bytes={bytes}");
+        println!("PROFILE_MD: total_blocks={}", blocks.len());
+        println!("PROFILE_MD: text_blocks={text_block_count}");
+        println!("PROFILE_MD: max_block_bytes={max_block_bytes}");
+        println!("PROFILE_MD: max_block_preview={max_block_preview:?}");
+        println!("PROFILE_MD: parse_ms={:.2}", elapsed.as_secs_f64() * 1000.0);
     }
 }
