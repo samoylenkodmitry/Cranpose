@@ -4,19 +4,19 @@
 
 * [x] **Fix P0 leak: observer `scopes` accumulates because clear never happens**: `scopes: Vec<Rc<ScopeEntry>>` keeps entries; `clear(scope)` is never called from composition lifecycle. Fix: when `RecomposeScope` deactivates or its group ends, call `observer.clear(&scope)` (or equivalent) to remove entries; add generation-based cleanup.
 
-* [ ] **Fix P0 leak: `StateArena::cells` never frees**: in `runtime.rs` (`StateArena::alloc()`), `cells: Vec<Option<Box<dyn AnyStateCell>>>` grows on every `mutableStateOf()/useState()`; `StateId` indices never reclaimed. Fix: add a free-list; when state drops push `StateId` to free list; `alloc()` reuses before pushing.
+* [ ] **Fix P0 leak: `StateArena::cells` never frees**: in `runtime.rs` (`StateArena::alloc()`), `cells: Vec<Option<Box<dyn AnyStateCell>>>` grows on every `mutableStateOf()/useState()`; `StateId` indices never reclaimed. Fix: add a free-list; when state drops push `StateId` to free list; `alloc()` reuses before pushing. Note after inspection: `State<T>` / `MutableState<T>` are `Copy` handles today, so reclamation needs explicit cell ownership/refcount semantics, not just bolting a free-list onto the current IDs.
 
 * [x] **Fix P0 leak: dead watchers accumulate in `MutableStateInner::watchers`**: in `lib.rs` (~line **3020**, `subscribe_current_scope()`), dead `Weak<RecomposeScopeInner>` only cleaned via `retain()` when that state is read again; states written but not re-read can accumulate dead watchers. Fix: also clean on write/invalidation (ensure `invalidate_watchers()` retention is comprehensive, not only on upgrade path).
 
 * [x] **Remove P1 hot-path O(n) work on every state read**: `lib.rs` ~**3020** `subscribe_current_scope()` currently does `watchers.retain(...)` (GC scan O(n)) and then `watchers.iter().any(...)` (dedup O(n)) on every `.value()`/`.with()`. Fix: move GC to invalidation time and use O(1) dedup (e.g., `HashSet<ScopeId>`; or an epoch/tag scheme per scope).
 
-* [ ] **Fix P1 O(n²) child diffing in `pop_parent()`**: `lib.rs` ~**2652** uses `current.iter().position(...)` inside a loop → O(n²); also allocates `HashSet<NodeId>` and clones vectors multiple times per diff. Fix: index-based diffing or real list-diff (LIS-based), preallocate scratch buffers, avoid `HashSet`/Vec clones on the hot path.
+* [x] **Fix P1 O(n²) child diffing in `pop_parent()`**: `lib.rs` ~**2652** used `current.iter().position(...)` inside a loop and cloned both child vectors. The diff now consumes `previous` directly, builds a target-position map once, tracks current child indices incrementally, drops the extra `HashSet`, and has regression coverage for mixed remove/move/insert diffs.
 
 * [x] **Fix P1 O(n²) scope grouping in `process_invalid_scopes()`**: `lib.rs` ~**3740** groups scopes via `scope_groups.iter_mut().find(|(existing, _)| Rc::ptr_eq(existing, &host))` (linear scan per scope). Fix: `HashMap` keyed by stable pointer identity (`Rc::as_ptr()`), O(1) grouping.
 
 * [ ] **Cut allocation pressure: replace `Box<dyn FnMut>` commands with an enum**: `lib.rs` ~**1343** defines `type Command = Box<dyn FnMut(&mut dyn Applier)->...>`; every emit/move/insert/remove makes 1–4 heap allocations. Fix: `enum Command { InsertChild{...}, RemoveChild{...}, MoveChild{...}, UpdateNode{...}, BubbleDirty{...} }` stored inline in `Vec<Command>`.
 
-* [ ] **Cut recomposition copying: make `snapshot_locals` COW**: `lib.rs` ~**330** clones locals every boundary: `*local_stack = stack.to_vec()`. Fix: store `Rc<Vec<LocalContext>>` (COW); only clone on write.
+* [x] **Cut recomposition copying: make `snapshot_locals` COW**: `lib.rs` ~**330** cloned locals every boundary via `stack.to_vec()`. Locals now use `Rc<Vec<LocalContext>>`, scope snapshots clone the `Rc`, and providers mutate through `Rc::make_mut` so copying only happens on actual writes.
 
 * [x] **Fix pointer latency: stop cloning full hit-region list on every event**: `scene.rs` ~**395** does `let mut hits = self.hits.clone()` (clones all `HitRegion`s + nested vectors). Fix: collect references/indices only, sort refs/indices by z, return refs (or indices).
 

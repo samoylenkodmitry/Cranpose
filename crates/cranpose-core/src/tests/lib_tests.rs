@@ -2004,6 +2004,75 @@ fn insert_and_remove_emit_expected_ops() {
 }
 
 #[test]
+fn child_diff_handles_interleaved_remove_move_and_insert() {
+    let mut slots = SlotBackend::default();
+    let mut applier = MemoryApplier::new();
+    let runtime = Runtime::new(Arc::new(TestScheduler));
+    let parent_id = applier.create(Box::new(RecordingNode::default()));
+
+    let child_a = applier.create(Box::new(TrackingChild {
+        label: "a".to_string(),
+        mount_count: 1,
+        parent: Some(parent_id),
+    }));
+    let child_b = applier.create(Box::new(TrackingChild {
+        label: "b".to_string(),
+        mount_count: 1,
+        parent: Some(parent_id),
+    }));
+    let child_c = applier.create(Box::new(TrackingChild {
+        label: "c".to_string(),
+        mount_count: 1,
+        parent: Some(parent_id),
+    }));
+    let child_d = applier.create(Box::new(TrackingChild {
+        label: "d".to_string(),
+        mount_count: 1,
+        parent: Some(parent_id),
+    }));
+
+    applier
+        .with_node(parent_id, |node: &mut RecordingNode| {
+            node.children = vec![child_a, child_b, child_c, child_d];
+            node.operations.clear();
+        })
+        .expect("seed parent state");
+    let initial_len = applier.len();
+
+    let child_e = applier.create(Box::new(TrackingChild {
+        label: "e".to_string(),
+        mount_count: 1,
+        parent: Some(parent_id),
+    }));
+    assert_eq!(applier.len(), initial_len + 1);
+
+    let operations = apply_child_diff(
+        &mut slots,
+        &mut applier,
+        &runtime,
+        parent_id,
+        vec![child_a, child_b, child_c, child_d],
+        vec![child_d, child_a, child_e, child_c],
+    );
+
+    assert_eq!(
+        operations,
+        vec![
+            Operation::Remove(child_b),
+            Operation::Move { from: 2, to: 0 },
+            Operation::Insert(child_e),
+            Operation::Move { from: 3, to: 2 },
+        ]
+    );
+
+    let final_children = applier
+        .with_node(parent_id, |node: &mut RecordingNode| node.children.clone())
+        .expect("read final children");
+    assert_eq!(final_children, vec![child_d, child_a, child_e, child_c]);
+    assert_eq!(applier.len(), initial_len);
+}
+
+#[test]
 fn composable_skips_when_inputs_unchanged() {
     INVOCATIONS.with(|calls| calls.set(0));
     let mut composition = Composition::new(MemoryApplier::new());

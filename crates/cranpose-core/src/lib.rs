@@ -152,7 +152,6 @@ fn input_debug_enabled() -> bool {
 pub use runtime::{TestRuntime, TestScheduler};
 
 use crate::collections::map::HashMap;
-use crate::collections::map::HashSet;
 use crate::runtime::{runtime_handle_for, RuntimeId};
 use crate::state::{NeverEqual, SnapshotMutableState, UpdateScope};
 use std::any::Any;
@@ -194,6 +193,7 @@ impl AnchorId {
 pub(crate) type ScopeId = usize;
 type LocalKey = usize;
 pub(crate) type FrameCallbackId = u64;
+type LocalStackSnapshot = Rc<Vec<LocalContext>>;
 
 static NEXT_SCOPE_ID: AtomicUsize = AtomicUsize::new(1);
 static NEXT_LOCAL_KEY: AtomicUsize = AtomicUsize::new(1);
@@ -217,7 +217,7 @@ pub(crate) struct RecomposeScopeInner {
     force_recompose: Cell<bool>,
     parent_hint: Cell<Option<NodeId>>,
     recompose: RefCell<Option<RecomposeCallback>>,
-    local_stack: RefCell<Vec<LocalContext>>,
+    local_stack: RefCell<LocalStackSnapshot>,
     slots_host: RefCell<Option<Weak<SlotsHost>>>,
 }
 
@@ -234,7 +234,7 @@ impl RecomposeScopeInner {
             force_recompose: Cell::new(false),
             parent_hint: Cell::new(None),
             recompose: RefCell::new(None),
-            local_stack: RefCell::new(Vec::new()),
+            local_stack: RefCell::new(Rc::new(Vec::new())),
             slots_host: RefCell::new(None),
         }
     }
@@ -327,11 +327,11 @@ impl RecomposeScope {
         }
     }
 
-    fn snapshot_locals(&self, stack: &[LocalContext]) {
-        *self.inner.local_stack.borrow_mut() = stack.to_vec();
+    fn snapshot_locals(&self, stack: LocalStackSnapshot) {
+        *self.inner.local_stack.borrow_mut() = stack;
     }
 
-    fn local_stack(&self) -> Vec<LocalContext> {
+    fn local_stack(&self) -> LocalStackSnapshot {
         self.inner.local_stack.borrow().clone()
     }
 
@@ -1629,7 +1629,7 @@ pub(crate) struct ComposerCore {
     root: Cell<Option<NodeId>>,
     commands: RefCell<Vec<Command>>,
     scope_stack: RefCell<Vec<RecomposeScope>>,
-    local_stack: RefCell<Vec<LocalContext>>,
+    local_stack: RefCell<LocalStackSnapshot>,
     side_effects: RefCell<Vec<Box<dyn FnOnce()>>>,
     pending_scope_options: RefCell<Option<RecomposeOptions>>,
     phase: Cell<Phase>,
@@ -1673,7 +1673,7 @@ impl ComposerCore {
             root: Cell::new(root),
             commands: RefCell::new(Vec::new()),
             scope_stack: RefCell::new(Vec::new()),
-            local_stack: RefCell::new(Vec::new()),
+            local_stack: RefCell::new(Rc::new(Vec::new())),
             side_effects: RefCell::new(Vec::new()),
             pending_scope_options: RefCell::new(None),
             phase: Cell::new(Phase::Compose),
@@ -1782,8 +1782,12 @@ impl Composer {
         self.core.scope_stack.borrow_mut()
     }
 
-    fn local_stack(&self) -> RefMut<'_, Vec<LocalContext>> {
+    fn local_stack(&self) -> RefMut<'_, LocalStackSnapshot> {
         self.core.local_stack.borrow_mut()
+    }
+
+    fn current_local_stack(&self) -> LocalStackSnapshot {
+        self.core.local_stack.borrow().clone()
     }
 
     fn side_effects_mut(&self) -> RefMut<'_, Vec<Box<dyn FnOnce()>>> {
@@ -1906,10 +1910,7 @@ impl Composer {
             }
         }
 
-        {
-            let locals = self.core.local_stack.borrow();
-            scope_ref.snapshot_locals(&locals);
-        }
+        scope_ref.snapshot_locals(self.current_local_stack());
         {
             let parent_hint = self.parent_stack().last().map(|frame| frame.id);
             scope_ref.set_parent_hint(parent_hint);
@@ -2126,7 +2127,7 @@ impl Composer {
         let runtime_handle = self.runtime_handle();
         slots.borrow_mut().reset();
         let phase = self.phase();
-        let locals = self.core.local_stack.borrow().clone();
+        let locals = self.current_local_stack();
         let core = Rc::new(ComposerCore::new(
             Rc::clone(slots),
             Rc::clone(&self.core.applier),
@@ -2181,7 +2182,7 @@ impl Composer {
         // This allows remembered values to be found and reused
         slots.borrow_mut().reset();
         let phase = self.phase();
-        let locals = self.core.local_stack.borrow().clone();
+        let locals = self.current_local_stack();
         let core = Rc::new(ComposerCore::new(
             Rc::clone(slots),
             Rc::clone(&self.core.applier),
@@ -2293,12 +2294,12 @@ impl Composer {
         }
         {
             let mut stack = self.local_stack();
-            stack.push(context);
+            Rc::make_mut(&mut *stack).push(context);
         }
         let result = f(self);
         {
             let mut stack = self.local_stack();
-            stack.pop();
+            Rc::make_mut(&mut *stack).pop();
         }
         result
     }
@@ -2336,10 +2337,7 @@ impl Composer {
                 let mut stack = self.scope_stack();
                 stack.push(scope.clone());
             }
-            let saved_locals = {
-                let mut locals = self.local_stack();
-                std::mem::take(&mut *locals)
-            };
+            let saved_locals = self.current_local_stack();
             {
                 let mut locals = self.local_stack();
                 *locals = scope.local_stack();
@@ -2671,13 +2669,18 @@ impl Composer {
             let children_changed = previous != new_children;
 
             if children_changed {
-                let mut current = previous.clone();
-                let target = new_children.clone();
-                let desired: HashSet<NodeId> = target.iter().copied().collect();
+                let target = &new_children;
+                let mut target_positions = HashMap::default();
+                target_positions.reserve(target.len());
+                for (index, &child) in target.iter().enumerate() {
+                    target_positions.insert(child, index);
+                }
+
+                let mut current = previous;
 
                 for index in (0..current.len()).rev() {
                     let child = current[index];
-                    if !desired.contains(&child) {
+                    if !target_positions.contains_key(&child) {
                         current.remove(index);
                         self.commands_mut()
                             .push(Box::new(move |applier: &mut dyn Applier| {
@@ -2717,13 +2720,17 @@ impl Composer {
                     }
                 }
 
+                let mut current_positions = build_child_positions(&current);
                 for (target_index, &child) in target.iter().enumerate() {
-                    if let Some(current_index) = current.iter().position(|&c| c == child) {
+                    if let Some(current_index) = current_positions.get(&child).copied() {
                         if current_index != target_index {
                             let from_index = current_index;
-                            current.remove(from_index);
-                            let to_index = target_index.min(current.len());
-                            current.insert(to_index, child);
+                            let to_index = move_child_in_diff_state(
+                                &mut current,
+                                &mut current_positions,
+                                from_index,
+                                target_index,
+                            );
                             self.commands_mut()
                                 .push(Box::new(move |applier: &mut dyn Applier| {
                                     if let Ok(parent_node) = applier.get_mut(id) {
@@ -2743,7 +2750,12 @@ impl Composer {
                     } else {
                         let insert_index = target_index.min(current.len());
                         let appended_index = current.len();
-                        current.insert(insert_index, child);
+                        insert_child_into_diff_state(
+                            &mut current,
+                            &mut current_positions,
+                            insert_index,
+                            child,
+                        );
                         self.commands_mut()
                             .push(Box::new(move |applier: &mut dyn Applier| {
                                 // If the child is currently attached to a different parent,
@@ -2890,6 +2902,59 @@ impl Composer {
 #[derive(Default, Clone)]
 struct ParentChildren {
     children: Vec<NodeId>,
+}
+
+fn build_child_positions(children: &[NodeId]) -> HashMap<NodeId, usize> {
+    let mut positions = HashMap::default();
+    positions.reserve(children.len());
+    for (index, &child) in children.iter().enumerate() {
+        positions.insert(child, index);
+    }
+    positions
+}
+
+fn refresh_child_positions(
+    current: &[NodeId],
+    positions: &mut HashMap<NodeId, usize>,
+    start: usize,
+    end: usize,
+) {
+    if current.is_empty() || start >= current.len() {
+        return;
+    }
+    let end = end.min(current.len() - 1);
+    for (offset, &child) in current[start..=end].iter().enumerate() {
+        positions.insert(child, start + offset);
+    }
+}
+
+fn insert_child_into_diff_state(
+    current: &mut Vec<NodeId>,
+    positions: &mut HashMap<NodeId, usize>,
+    index: usize,
+    child: NodeId,
+) {
+    let index = index.min(current.len());
+    current.insert(index, child);
+    refresh_child_positions(current, positions, index, current.len() - 1);
+}
+
+fn move_child_in_diff_state(
+    current: &mut Vec<NodeId>,
+    positions: &mut HashMap<NodeId, usize>,
+    from_index: usize,
+    target_index: usize,
+) -> usize {
+    let child = current.remove(from_index);
+    let to_index = target_index.min(current.len());
+    current.insert(to_index, child);
+    refresh_child_positions(
+        current,
+        positions,
+        from_index.min(to_index),
+        from_index.max(to_index),
+    );
+    to_index
 }
 
 struct ParentFrame {

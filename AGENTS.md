@@ -43,3 +43,4 @@
 - be aware of what you've done by looking at git status
 - don't call anything 'migration'. Say no to half-states. Only complete entropy annihilation is allowed.
 - don't hardcode things
+- parallelization and SIMD where appropriate (note: the wasm target must not be forgotten)
