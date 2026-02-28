@@ -7,9 +7,11 @@
 //! ```
 
 use cranpose::AppLauncher;
-use cranpose_testing::{find_button_in_semantics, find_in_semantics, find_text_exact};
+use cranpose_testing::{find_in_semantics, find_text, find_text_exact};
 use desktop_app::app;
 use std::time::Duration;
+
+mod text_input_robot_helpers;
 
 fn main() {
     env_logger::init();
@@ -32,29 +34,30 @@ fn main() {
 
             // Step 1: Switch to Text Input tab
             println!("--- Step 1: Switch to Text Input Tab ---");
-            if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Text Input") {
-                let cx = x + w / 2.0;
-                let cy = y + h / 2.0;
-                let _ = robot.mouse_move(cx, cy);
-                std::thread::sleep(Duration::from_millis(20));
-                let _ = robot.mouse_down();
-                std::thread::sleep(Duration::from_millis(20));
-                let _ = robot.mouse_up();
-                std::thread::sleep(Duration::from_millis(500));
+            if text_input_robot_helpers::open_text_input_tab(&robot) {
                 println!("✓ Clicked Text Input tab\n");
             } else {
                 println!("✗ FAIL: Could not find Text Input tab");
                 let _ = robot.exit();
+                return;
             }
 
             // Step 2: Find text field
             println!("--- Step 2: Find text field ---");
-            let text_field = find_in_semantics(&robot, |elem| find_text_exact(elem, ""));
+            let text_field = text_input_robot_helpers::wait_for_in_semantics(&robot, |robot| {
+                find_in_semantics(robot, |elem| find_text(elem, "Empty Text Field:"))
+            })
+            .and_then(|_| {
+                text_input_robot_helpers::wait_for_in_semantics(&robot, |robot| {
+                    find_in_semantics(robot, |elem| find_text_exact(elem, ""))
+                })
+            });
             if text_field.is_none() {
                 println!("✗ FAIL: Could not find text field");
                 let _ = robot.exit();
+                return;
             }
-            let (fx, fy, fw, fh) = text_field.unwrap();
+            let (fx, fy, fw, fh) = text_field.expect("checked above");
             let field_cx = fx + fw / 2.0;
             let field_cy = fy + fh / 2.0;
             println!("✓ Found text field at ({}, {})\n", fx as i32, fy as i32);

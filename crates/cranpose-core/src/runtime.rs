@@ -692,7 +692,7 @@ impl RuntimeHandle {
         }
     }
 
-    pub fn enqueue_node_update(&self, command: Command) {
+    pub(crate) fn enqueue_node_update(&self, command: Command) {
         if let Some(inner) = self.inner.upgrade() {
             inner.enqueue_update(command);
         }
@@ -934,11 +934,5 @@ pub fn schedule_node_update(
     update: impl FnOnce(&mut dyn Applier) -> Result<(), NodeError> + 'static,
 ) {
     let handle = current_runtime_handle().expect("no runtime available to schedule node update");
-    let mut update_opt = Some(update);
-    handle.enqueue_node_update(Box::new(move |applier: &mut dyn Applier| {
-        if let Some(update) = update_opt.take() {
-            return update(applier);
-        }
-        Ok(())
-    }));
+    handle.enqueue_node_update(Command::callback(update));
 }

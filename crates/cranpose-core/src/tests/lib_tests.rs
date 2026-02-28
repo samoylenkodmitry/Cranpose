@@ -1854,11 +1854,11 @@ fn apply_child_diff(
         frame.new_children = new_children;
     }
     composer.pop_parent();
-    let mut commands = composer.take_commands();
+    let commands = composer.take_commands();
     drop(composer);
     teardown_composer(slots, applier, slots_host, applier_host);
-    for command in commands.iter_mut() {
-        command(applier).expect("apply diff command");
+    for command in commands {
+        command.apply(applier).expect("apply diff command");
     }
     applier
         .with_node(parent_id, |node: &mut RecordingNode| {

@@ -114,6 +114,52 @@ impl Renderer for RecordingRenderer {
     }
 }
 
+struct CountingRenderer {
+    scene: TestScene,
+    rebuilds: Rc<Cell<usize>>,
+}
+
+impl CountingRenderer {
+    fn new(rebuilds: Rc<Cell<usize>>) -> Self {
+        Self {
+            scene: TestScene,
+            rebuilds,
+        }
+    }
+}
+
+impl Renderer for CountingRenderer {
+    type Scene = TestScene;
+    type Error = ();
+
+    fn scene(&self) -> &Self::Scene {
+        &self.scene
+    }
+
+    fn scene_mut(&mut self) -> &mut Self::Scene {
+        &mut self.scene
+    }
+
+    fn rebuild_scene(
+        &mut self,
+        _layout_tree: &LayoutTree,
+        _viewport: Size,
+    ) -> Result<(), Self::Error> {
+        self.rebuilds.set(self.rebuilds.get() + 1);
+        Ok(())
+    }
+
+    fn rebuild_scene_from_applier(
+        &mut self,
+        _applier: &mut cranpose_core::MemoryApplier,
+        _root: cranpose_core::NodeId,
+        _viewport: Size,
+    ) -> Result<(), Self::Error> {
+        self.rebuilds.set(self.rebuilds.get() + 1);
+        Ok(())
+    }
+}
+
 #[composable]
 fn tabbed_progress_content() {
     let progress = useState(|| 0.6f32);
@@ -326,6 +372,29 @@ fn draw_repass_updates_render_data_without_layout() {
     assert!(
         (updated_width - 120.0).abs() < 0.1,
         "updated width should reflect latest state"
+    );
+}
+
+#[test]
+fn render_invalidation_without_scene_changes_skips_rebuild() {
+    let root_key = location_key(file!(), line!(), column!());
+    let rebuilds = Rc::new(Cell::new(0));
+    let mut shell = AppShell::new(
+        CountingRenderer::new(Rc::clone(&rebuilds)),
+        root_key,
+        empty_content,
+    );
+
+    shell.update();
+    rebuilds.set(0);
+
+    cranpose_ui::request_render_invalidation();
+    shell.run_render_phase();
+
+    assert_eq!(
+        rebuilds.get(),
+        0,
+        "pure render invalidation should reuse the retained scene"
     );
 }
 

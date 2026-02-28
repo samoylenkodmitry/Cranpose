@@ -14,7 +14,7 @@
 
 * [x] **Fix P1 O(n²) scope grouping in `process_invalid_scopes()`**: `lib.rs` ~**3740** groups scopes via `scope_groups.iter_mut().find(|(existing, _)| Rc::ptr_eq(existing, &host))` (linear scan per scope). Fix: `HashMap` keyed by stable pointer identity (`Rc::as_ptr()`), O(1) grouping.
 
-* [ ] **Cut allocation pressure: replace `Box<dyn FnMut>` commands with an enum**: `lib.rs` ~**1343** defines `type Command = Box<dyn FnMut(&mut dyn Applier)->...>`; every emit/move/insert/remove makes 1–4 heap allocations. Fix: `enum Command { InsertChild{...}, RemoveChild{...}, MoveChild{...}, UpdateNode{...}, BubbleDirty{...} }` stored inline in `Vec<Command>`.
+* [x] **Cut allocation pressure: replace `Box<dyn FnMut>` commands with an enum**: `lib.rs` no longer stores hot applier work as `Box<dyn FnMut(&mut dyn Applier)->...>`. The hot emit/move/insert/remove/bubble/update paths now use an inline `Command` enum; the boxed callback path remains only as a cold fallback for externally scheduled node updates.
 
 * [x] **Cut recomposition copying: make `snapshot_locals` COW**: `lib.rs` ~**330** cloned locals every boundary via `stack.to_vec()`. Locals now use `Rc<Vec<LocalContext>>`, scope snapshots clone the `Rc`, and providers mutate through `Rc::make_mut` so copying only happens on actual writes.
 
@@ -24,7 +24,7 @@
 
 * [x] **Avoid per-batch temporary Vec allocations in renderer**: `render.rs` ~**1330** collects batch slices into new Vecs each time (e.g., `shape_batch: Vec<&DrawShape> = ...collect()`). Fix: pass slice ranges `(start,end)` into encode functions, or reuse a scratch Vec cleared between batches.
 
-* [ ] **Stop full scene rebuild for “any dirty bit”**: `app-shell/lib.rs` ~**1013** (`run_render_phase()`): any dirty flag (render/pointer/focus/cursor blink/draw repass) triggers `rebuild_scene_from_applier()` which walks whole tree and rebuilds all draw/hit vectors. Fix (short-term): split dirty flags so cursor blink/focus/pointer can skip scene rebuild and only rerender; (mid): dirty-subtree tracking; (long): retained scene graph/diff encoding (Vello-like).
+* [ ] **Stop full scene rebuild for “any dirty bit”**: `app-shell/lib.rs` `run_render_phase()` still rebuilds the scene for pointer/focus invalidations and draw repasses, but pure `request_render_invalidation()` frames and cursor blink ticks now reuse the retained scene unless the dev FPS overlay is enabled. Remaining work: pointer/focus invalidations still need a retained hit-region / modifier-slice refresh path before they can safely skip scene rebuild too. Fix (short-term): finish splitting dirty flags so pointer/focus can rerender without rebuilding; (mid): dirty-subtree tracking; (long): retained scene graph/diff encoding (Vello-like).
 
 * [ ] **Skip clean subtrees in layout box refresh**: `app-shell/lib.rs` ~**1061** `refresh_layout_box_data()` recursively walks entire `LayoutTree` even if only few nodes dirty and clones `Modifier` for dirty nodes. Fix: use `dirty_nodes: HashSet<NodeId>` (and propagate “subtree clean”) to avoid recursing into clean subtrees entirely.
 

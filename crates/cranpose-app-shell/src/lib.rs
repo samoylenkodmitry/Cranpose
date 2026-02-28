@@ -1017,11 +1017,15 @@ where
         let draw_repass_pending = cranpose_ui::has_pending_draw_repasses();
         // Tick cursor blink timer - only marks dirty when visibility state changes
         let cursor_blink_dirty = cranpose_ui::tick_cursor_blink();
-        if render_dirty || pointer_dirty || focus_dirty || cursor_blink_dirty || draw_repass_pending
-        {
-            self.scene_dirty = true;
-        }
-        if !self.scene_dirty {
+
+        let render_only_dirty = render_dirty || cursor_blink_dirty;
+        let needs_scene_rebuild = self.scene_dirty
+            || pointer_dirty
+            || focus_dirty
+            || draw_repass_pending
+            || (self.dev_options.fps_counter && render_only_dirty);
+
+        if !needs_scene_rebuild {
             return;
         }
         self.scene_dirty = false;

@@ -1340,7 +1340,296 @@ pub trait Applier: Any {
     }
 }
 
-pub(crate) type Command = Box<dyn FnMut(&mut dyn Applier) -> Result<(), NodeError> + 'static>;
+type TypedNodeUpdate = fn(&mut dyn Node, NodeId) -> Result<(), NodeError>;
+type CommandCallback = Box<dyn FnOnce(&mut dyn Applier) -> Result<(), NodeError> + 'static>;
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DirtyBubble {
+    layout: bool,
+    measure: bool,
+    semantics: bool,
+}
+
+impl DirtyBubble {
+    pub(crate) const LAYOUT_AND_MEASURE: Self = Self {
+        layout: true,
+        measure: true,
+        semantics: false,
+    };
+
+    pub(crate) const SEMANTICS: Self = Self {
+        layout: false,
+        measure: false,
+        semantics: true,
+    };
+
+    fn apply(self, applier: &mut dyn Applier, node_id: NodeId) {
+        if self.layout {
+            bubble_layout_dirty(applier, node_id);
+        }
+        if self.measure {
+            bubble_measure_dirty(applier, node_id);
+        }
+        if self.semantics {
+            bubble_semantics_dirty(applier, node_id);
+        }
+    }
+}
+
+pub(crate) enum Command {
+    BubbleDirty {
+        node_id: NodeId,
+        bubble: DirtyBubble,
+    },
+    UpdateTypedNode {
+        id: NodeId,
+        updater: TypedNodeUpdate,
+    },
+    RemoveNode {
+        id: NodeId,
+    },
+    MountNode {
+        id: NodeId,
+    },
+    AttachChild {
+        parent_id: NodeId,
+        child_id: NodeId,
+        bubble: DirtyBubble,
+    },
+    InsertChild {
+        parent_id: NodeId,
+        child_id: NodeId,
+        appended_index: usize,
+        insert_index: usize,
+        bubble: DirtyBubble,
+    },
+    MoveChild {
+        parent_id: NodeId,
+        from_index: usize,
+        to_index: usize,
+        bubble: DirtyBubble,
+    },
+    RemoveChild {
+        parent_id: NodeId,
+        child_id: NodeId,
+    },
+    ReconcileChildren {
+        parent_id: NodeId,
+        expected_children: Vec<NodeId>,
+        needs_dirty_check: bool,
+    },
+    Callback(CommandCallback),
+}
+
+impl Command {
+    pub(crate) fn update_node<N: Node + 'static>(id: NodeId) -> Self {
+        Self::UpdateTypedNode {
+            id,
+            updater: update_typed_node::<N>,
+        }
+    }
+
+    pub(crate) fn callback(
+        callback: impl FnOnce(&mut dyn Applier) -> Result<(), NodeError> + 'static,
+    ) -> Self {
+        Self::Callback(Box::new(callback))
+    }
+
+    pub(crate) fn apply(self, applier: &mut dyn Applier) -> Result<(), NodeError> {
+        match self {
+            Self::BubbleDirty { node_id, bubble } => {
+                bubble.apply(applier, node_id);
+                Ok(())
+            }
+            Self::UpdateTypedNode { id, updater } => {
+                let node = match applier.get_mut(id) {
+                    Ok(node) => node,
+                    Err(NodeError::Missing { .. }) => return Ok(()),
+                    Err(err) => return Err(err),
+                };
+                updater(node, id)
+            }
+            Self::RemoveNode { id } => {
+                if let Ok(node) = applier.get_mut(id) {
+                    node.unmount();
+                }
+                match applier.remove(id) {
+                    Ok(()) | Err(NodeError::Missing { .. }) => Ok(()),
+                    Err(err) => Err(err),
+                }
+            }
+            Self::MountNode { id } => {
+                let node = match applier.get_mut(id) {
+                    Ok(node) => node,
+                    Err(NodeError::Missing { .. }) => return Ok(()),
+                    Err(err) => return Err(err),
+                };
+                node.set_node_id(id);
+                node.mount();
+                Ok(())
+            }
+            Self::AttachChild {
+                parent_id,
+                child_id,
+                bubble,
+            } => {
+                insert_child_with_reparenting(applier, parent_id, child_id);
+                bubble.apply(applier, parent_id);
+                Ok(())
+            }
+            Self::InsertChild {
+                parent_id,
+                child_id,
+                appended_index,
+                insert_index,
+                bubble,
+            } => {
+                insert_child_with_reparenting(applier, parent_id, child_id);
+                bubble.apply(applier, parent_id);
+                if insert_index != appended_index {
+                    if let Ok(parent_node) = applier.get_mut(parent_id) {
+                        parent_node.move_child(appended_index, insert_index);
+                    }
+                }
+                Ok(())
+            }
+            Self::MoveChild {
+                parent_id,
+                from_index,
+                to_index,
+                bubble,
+            } => {
+                if let Ok(parent_node) = applier.get_mut(parent_id) {
+                    parent_node.move_child(from_index, to_index);
+                }
+                bubble.apply(applier, parent_id);
+                Ok(())
+            }
+            Self::RemoveChild {
+                parent_id,
+                child_id,
+            } => apply_remove_child(applier, parent_id, child_id),
+            Self::ReconcileChildren {
+                parent_id,
+                expected_children,
+                needs_dirty_check,
+            } => reconcile_children(applier, parent_id, &expected_children, needs_dirty_check),
+            Self::Callback(callback) => callback(applier),
+        }
+    }
+}
+
+fn update_typed_node<N: Node + 'static>(node: &mut dyn Node, id: NodeId) -> Result<(), NodeError> {
+    let typed = node
+        .as_any_mut()
+        .downcast_mut::<N>()
+        .ok_or(NodeError::TypeMismatch {
+            id,
+            expected: std::any::type_name::<N>(),
+        })?;
+    typed.update();
+    Ok(())
+}
+
+fn insert_child_with_reparenting(applier: &mut dyn Applier, parent_id: NodeId, child_id: NodeId) {
+    let old_parent = applier
+        .get_mut(child_id)
+        .ok()
+        .and_then(|node| node.parent());
+    if let Some(old_parent_id) = old_parent {
+        if old_parent_id != parent_id {
+            if let Ok(old_parent_node) = applier.get_mut(old_parent_id) {
+                old_parent_node.remove_child(child_id);
+            }
+            if let Ok(child_node) = applier.get_mut(child_id) {
+                child_node.on_removed_from_parent();
+            }
+            bubble_layout_dirty(applier, old_parent_id);
+            bubble_measure_dirty(applier, old_parent_id);
+        }
+    }
+
+    if let Ok(parent_node) = applier.get_mut(parent_id) {
+        parent_node.insert_child(child_id);
+    }
+    if let Ok(child_node) = applier.get_mut(child_id) {
+        child_node.on_attached_to_parent(parent_id);
+    }
+}
+
+fn apply_remove_child(
+    applier: &mut dyn Applier,
+    parent_id: NodeId,
+    child_id: NodeId,
+) -> Result<(), NodeError> {
+    if let Ok(parent_node) = applier.get_mut(parent_id) {
+        parent_node.remove_child(child_id);
+    }
+    bubble_layout_dirty(applier, parent_id);
+    bubble_measure_dirty(applier, parent_id);
+
+    let should_remove = if let Ok(node) = applier.get_mut(child_id) {
+        match node.parent() {
+            Some(existing_parent_id) if existing_parent_id == parent_id => {
+                node.on_removed_from_parent();
+                node.unmount();
+                true
+            }
+            None => {
+                node.unmount();
+                true
+            }
+            Some(_) => false,
+        }
+    } else {
+        true
+    };
+
+    if should_remove {
+        let _ = applier.remove(child_id);
+    }
+    Ok(())
+}
+
+fn reconcile_children(
+    applier: &mut dyn Applier,
+    parent_id: NodeId,
+    expected_children: &[NodeId],
+    needs_dirty_check: bool,
+) -> Result<(), NodeError> {
+    let mut repaired = false;
+    for &child_id in expected_children {
+        let needs_attach = if let Ok(node) = applier.get_mut(child_id) {
+            node.parent() != Some(parent_id)
+        } else {
+            false
+        };
+
+        if needs_attach {
+            insert_child_with_reparenting(applier, parent_id, child_id);
+            repaired = true;
+        }
+    }
+
+    let is_dirty = if needs_dirty_check {
+        if let Ok(node) = applier.get_mut(parent_id) {
+            node.needs_layout()
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    if repaired {
+        bubble_layout_dirty(applier, parent_id);
+        bubble_measure_dirty(applier, parent_id);
+    } else if is_dirty {
+        bubble_layout_dirty(applier, parent_id);
+    }
+
+    Ok(())
+}
 
 #[derive(Default)]
 pub struct MemoryApplier {
@@ -1771,11 +2060,10 @@ impl Composer {
     }
 
     pub(crate) fn enqueue_semantics_invalidation(&self, id: NodeId) {
-        self.commands_mut()
-            .push(Box::new(move |applier: &mut dyn Applier| {
-                bubble_semantics_dirty(applier, id);
-                Ok(())
-            }));
+        self.commands_mut().push(Command::BubbleDirty {
+            node_id: id,
+            bubble: DirtyBubble::SEMANTICS,
+        });
     }
 
     fn scope_stack(&self) -> RefMut<'_, Vec<RecomposeScope>> {
@@ -2147,11 +2435,11 @@ impl Composer {
 
         {
             let mut applier = self.borrow_applier();
-            for mut command in commands.drain(..) {
-                command(&mut *applier)?;
+            for command in commands.drain(..) {
+                command.apply(&mut *applier)?;
             }
-            for mut update in runtime_handle.take_updates() {
-                update(&mut *applier)?;
+            for update in runtime_handle.take_updates() {
+                update.apply(&mut *applier)?;
             }
         }
         runtime_handle.drain_ui();
@@ -2208,11 +2496,11 @@ impl Composer {
 
         {
             let mut applier = self.borrow_applier();
-            for mut command in commands.drain(..) {
-                command(&mut *applier)?;
+            for command in commands.drain(..) {
+                command.apply(&mut *applier)?;
             }
-            for mut update in runtime_handle.take_updates() {
-                update(&mut *applier)?;
+            for update in runtime_handle.take_updates() {
+                update.apply(&mut *applier)?;
             }
         }
         runtime_handle.drain_ui();
@@ -2408,22 +2696,7 @@ impl Composer {
                     }
                     self.with_slots_mut(|slots| slots.advance_after_node_read());
 
-                    self.commands_mut()
-                        .push(Box::new(move |applier: &mut dyn Applier| {
-                            let node = match applier.get_mut(id) {
-                                Ok(node) => node,
-                                Err(NodeError::Missing { .. }) => return Ok(()),
-                                Err(err) => return Err(err),
-                            };
-                            let typed = node.as_any_mut().downcast_mut::<N>().ok_or(
-                                NodeError::TypeMismatch {
-                                    id,
-                                    expected: std::any::type_name::<N>(),
-                                },
-                            )?;
-                            typed.update();
-                            Ok(())
-                        }));
+                    self.commands_mut().push(Command::update_node::<N>(id));
                     self.attach_to_parent(id);
                     return id;
                 }
@@ -2440,16 +2713,7 @@ impl Composer {
                         std::any::type_name::<N>()
                     );
                 }
-                self.commands_mut()
-                    .push(Box::new(move |applier: &mut dyn Applier| {
-                        if let Ok(node) = applier.get_mut(old_id) {
-                            node.unmount();
-                        }
-                        match applier.remove(old_id) {
-                            Ok(()) | Err(NodeError::Missing { .. }) => Ok(()),
-                            Err(err) => Err(err),
-                        }
-                    }));
+                self.commands_mut().push(Command::RemoveNode { id: old_id });
             }
         }
 
@@ -2471,17 +2735,7 @@ impl Composer {
         {
             self.with_slots_mut(|slots| slots.record_node(id));
         }
-        self.commands_mut()
-            .push(Box::new(move |applier: &mut dyn Applier| {
-                let node = match applier.get_mut(id) {
-                    Ok(node) => node,
-                    Err(NodeError::Missing { .. }) => return Ok(()),
-                    Err(err) => return Err(err),
-                };
-                node.set_node_id(id);
-                node.mount();
-                Ok(())
-            }));
+        self.commands_mut().push(Command::MountNode { id });
         self.attach_to_parent(id);
         id
     }
@@ -2571,18 +2825,11 @@ impl Composer {
             match parent_status {
                 Some(existing) if existing == parent_hint => {}
                 None => {
-                    self.commands_mut()
-                        .push(Box::new(move |applier: &mut dyn Applier| {
-                            if let Ok(parent_node) = applier.get_mut(parent_hint) {
-                                parent_node.insert_child(id);
-                            }
-                            if let Ok(child_node) = applier.get_mut(id) {
-                                child_node.on_attached_to_parent(parent_hint);
-                            }
-                            bubble_layout_dirty(applier, parent_hint);
-                            bubble_measure_dirty(applier, parent_hint);
-                            Ok(())
-                        }));
+                    self.commands_mut().push(Command::AttachChild {
+                        parent_id: parent_hint,
+                        child_id: id,
+                        bubble: DirtyBubble::LAYOUT_AND_MEASURE,
+                    });
                 }
                 Some(_) => {}
             }
@@ -2682,41 +2929,10 @@ impl Composer {
                     let child = current[index];
                     if !target_positions.contains_key(&child) {
                         current.remove(index);
-                        self.commands_mut()
-                            .push(Box::new(move |applier: &mut dyn Applier| {
-                                // Remove child from parent and clear parent link atomically
-                                if let Ok(parent_node) = applier.get_mut(id) {
-                                    parent_node.remove_child(child);
-                                }
-                                // Bubble BEFORE clearing parent link so bubbling can verify consistency
-                                bubble_layout_dirty(applier, id);
-                                bubble_measure_dirty(applier, id);
-                                // Now clear parent link and unmount. Remove if we still own the
-                                // node OR if it is orphaned (parent=None). Only skip removal
-                                // when the node has been reparented elsewhere.
-                                let should_remove = if let Ok(node) = applier.get_mut(child) {
-                                    match node.parent() {
-                                        Some(parent_id) if parent_id == id => {
-                                            node.on_removed_from_parent();
-                                            node.unmount();
-                                            true
-                                        }
-                                        None => {
-                                            // Orphaned node: remove to prevent stale roots.
-                                            node.unmount();
-                                            true
-                                        }
-                                        Some(_) => false,
-                                    }
-                                } else {
-                                    true
-                                };
-
-                                if should_remove {
-                                    let _ = applier.remove(child);
-                                }
-                                Ok(())
-                            }));
+                        self.commands_mut().push(Command::RemoveChild {
+                            parent_id: id,
+                            child_id: child,
+                        });
                     }
                 }
 
@@ -2731,21 +2947,12 @@ impl Composer {
                                 from_index,
                                 target_index,
                             );
-                            self.commands_mut()
-                                .push(Box::new(move |applier: &mut dyn Applier| {
-                                    if let Ok(parent_node) = applier.get_mut(id) {
-                                        parent_node.move_child(from_index, to_index);
-                                    }
-                                    Ok(())
-                                }));
-                            self.commands_mut()
-                                .push(Box::new(move |applier: &mut dyn Applier| {
-                                    // Bubble dirty flags to root after reordering
-                                    // Even though parent doesn't change, layout needs recomputation
-                                    bubble_layout_dirty(applier, id);
-                                    bubble_measure_dirty(applier, id);
-                                    Ok(())
-                                }));
+                            self.commands_mut().push(Command::MoveChild {
+                                parent_id: id,
+                                from_index,
+                                to_index,
+                                bubble: DirtyBubble::LAYOUT_AND_MEASURE,
+                            });
                         }
                     } else {
                         let insert_index = target_index.min(current.len());
@@ -2756,109 +2963,30 @@ impl Composer {
                             insert_index,
                             child,
                         );
-                        self.commands_mut()
-                            .push(Box::new(move |applier: &mut dyn Applier| {
-                                // If the child is currently attached to a different parent,
-                                // detach it from the old parent before reparenting.
-                                let old_parent =
-                                    applier.get_mut(child).ok().and_then(|node| node.parent());
-                                if let Some(old_parent_id) = old_parent {
-                                    if old_parent_id != id {
-                                        if let Ok(old_parent_node) = applier.get_mut(old_parent_id)
-                                        {
-                                            old_parent_node.remove_child(child);
-                                        }
-                                        if let Ok(child_node) = applier.get_mut(child) {
-                                            child_node.on_removed_from_parent();
-                                        }
-                                        bubble_layout_dirty(applier, old_parent_id);
-                                        bubble_measure_dirty(applier, old_parent_id);
-                                    }
-                                }
-                                // Insert child and set parent link atomically
-                                if let Ok(parent_node) = applier.get_mut(id) {
-                                    parent_node.insert_child(child);
-                                }
-                                // Set parent link immediately after insertion
-                                if let Ok(child_node) = applier.get_mut(child) {
-                                    child_node.on_attached_to_parent(id);
-                                }
-                                // Bubble dirty flags to root after insertion
-                                bubble_layout_dirty(applier, id);
-                                bubble_measure_dirty(applier, id);
-                                Ok(())
-                            }));
-                        if insert_index != appended_index {
-                            self.commands_mut()
-                                .push(Box::new(move |applier: &mut dyn Applier| {
-                                    if let Ok(parent_node) = applier.get_mut(id) {
-                                        parent_node.move_child(appended_index, insert_index);
-                                    }
-                                    Ok(())
-                                }));
-                        }
+                        self.commands_mut().push(Command::InsertChild {
+                            parent_id: id,
+                            child_id: child,
+                            appended_index,
+                            insert_index,
+                            bubble: DirtyBubble::LAYOUT_AND_MEASURE,
+                        });
                     }
                 }
             }
 
             let expected_children = new_children.clone();
             let needs_dirty_check = !children_changed;
-            self.commands_mut()
-                .push(Box::new(move |applier: &mut dyn Applier| {
-                    let mut repaired = false;
-                    for &child in &expected_children {
-                        let needs_attach = if let Ok(node) = applier.get_mut(child) {
-                            node.parent() != Some(id)
-                        } else {
-                            false
-                        };
-                        if needs_attach {
-                            let old_parent =
-                                applier.get_mut(child).ok().and_then(|node| node.parent());
-                            if let Some(old_parent_id) = old_parent {
-                                if old_parent_id != id {
-                                    if let Ok(old_parent_node) = applier.get_mut(old_parent_id) {
-                                        old_parent_node.remove_child(child);
-                                    }
-                                    if let Ok(child_node) = applier.get_mut(child) {
-                                        child_node.on_removed_from_parent();
-                                    }
-                                    bubble_layout_dirty(applier, old_parent_id);
-                                    bubble_measure_dirty(applier, old_parent_id);
-                                }
-                            }
-                            if let Ok(parent_node) = applier.get_mut(id) {
-                                parent_node.insert_child(child);
-                            }
-                            if let Ok(child_node) = applier.get_mut(child) {
-                                child_node.on_attached_to_parent(id);
-                            }
-                            repaired = true;
-                        }
-                    }
-                    let is_dirty = if needs_dirty_check {
-                        if let Ok(node) = applier.get_mut(id) {
-                            node.needs_layout()
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    };
-                    if repaired {
-                        bubble_layout_dirty(applier, id);
-                        bubble_measure_dirty(applier, id);
-                    } else if is_dirty {
-                        bubble_layout_dirty(applier, id);
-                    }
-                    Ok(())
-                }));
+            self.commands_mut().push(Command::ReconcileChildren {
+                parent_id: id,
+                expected_children,
+                needs_dirty_check,
+            });
 
             remembered.update(|entry| entry.children = new_children);
         }
     }
 
-    pub fn take_commands(&self) -> Vec<Command> {
+    pub(crate) fn take_commands(&self) -> Vec<Command> {
         std::mem::take(&mut *self.commands_mut())
     }
 
@@ -2871,11 +2999,11 @@ impl Composer {
         let runtime_handle = self.runtime_handle();
         {
             let mut applier = self.borrow_applier();
-            for mut command in commands.drain(..) {
-                command(&mut *applier)?;
+            for command in commands.drain(..) {
+                command.apply(&mut *applier)?;
             }
-            for mut update in runtime_handle.take_updates() {
-                update(&mut *applier)?;
+            for update in runtime_handle.take_updates() {
+                update.apply(&mut *applier)?;
             }
         }
         runtime_handle.drain_ui();
@@ -3719,11 +3847,11 @@ impl<A: Applier + 'static> Composition<A> {
 
         {
             let mut applier = self.applier.borrow_dyn();
-            for mut command in commands.drain(..) {
-                command(&mut *applier)?;
+            for command in commands.drain(..) {
+                command.apply(&mut *applier)?;
             }
-            for mut update in runtime_handle.take_updates() {
-                update(&mut *applier)?;
+            for update in runtime_handle.take_updates() {
+                update.apply(&mut *applier)?;
             }
         }
 
@@ -3866,11 +3994,11 @@ impl<A: Applier + 'static> Composition<A> {
             };
             {
                 let mut applier = self.applier.borrow_dyn();
-                for mut command in commands.drain(..) {
-                    command(&mut *applier)?;
+                for command in commands.drain(..) {
+                    command.apply(&mut *applier)?;
                 }
-                for mut update in runtime_handle.take_updates() {
-                    update(&mut *applier)?;
+                for update in runtime_handle.take_updates() {
+                    update.apply(&mut *applier)?;
                 }
             }
             for effect in side_effects {
@@ -3891,8 +4019,8 @@ impl<A: Applier + 'static> Composition<A> {
     pub fn flush_pending_node_updates(&mut self) -> Result<(), NodeError> {
         let updates = self.runtime_handle().take_updates();
         let mut applier = self.applier.borrow_dyn();
-        for mut update in updates {
-            update(&mut *applier)?;
+        for update in updates {
+            update.apply(&mut *applier)?;
         }
         Ok(())
     }

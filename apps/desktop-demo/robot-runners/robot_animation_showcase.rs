@@ -18,6 +18,21 @@ fn read_alpha_text(robot: &cranpose::Robot) -> Option<String> {
     find_text_by_prefix_in_semantics(robot, "Alpha ").map(|(_, _, _, _, text)| text)
 }
 
+fn wait_for_text_change(
+    robot: &cranpose::Robot,
+    initial: &str,
+    read: impl Fn(&cranpose::Robot) -> Option<String>,
+) -> Option<String> {
+    for _ in 0..30 {
+        std::thread::sleep(Duration::from_millis(100));
+        let current = read(robot)?;
+        if current != initial {
+            return Some(current);
+        }
+    }
+    None
+}
+
 fn main() {
     env_logger::init();
     println!("=== Robot Animation Showcase Test ===");
@@ -59,31 +74,19 @@ fn main() {
                 std::process::exit(1);
             });
 
-            std::thread::sleep(Duration::from_millis(1200));
+            let alpha_second = wait_for_text_change(&robot, &alpha_first, read_alpha_text)
+                .unwrap_or_else(|| {
+                    println!("FAIL: Alpha text did not change: '{}'", alpha_first);
+                    robot.exit().ok();
+                    std::process::exit(1);
+                });
 
-            let alpha_second = read_alpha_text(&robot).unwrap_or_else(|| {
-                println!("FATAL: Alpha text missing on second read");
-                robot.exit().ok();
-                std::process::exit(1);
-            });
-
-            let second = read_lazy_pulse(&robot).unwrap_or_else(|| {
-                println!("FATAL: Lazy Pulse text missing on second read");
-                robot.exit().ok();
-                std::process::exit(1);
-            });
-
-            if alpha_first == alpha_second {
-                println!("FAIL: Alpha text did not change: '{}'", alpha_first);
-                robot.exit().ok();
-                std::process::exit(1);
-            }
-
-            if first == second {
-                println!("FAIL: Lazy Pulse did not change: '{}'", first);
-                robot.exit().ok();
-                std::process::exit(1);
-            }
+            let second =
+                wait_for_text_change(&robot, &first, read_lazy_pulse).unwrap_or_else(|| {
+                    println!("FAIL: Lazy Pulse did not change: '{}'", first);
+                    robot.exit().ok();
+                    std::process::exit(1);
+                });
 
             println!(
                 "PASS: Alpha updated from '{}' to '{}'",
