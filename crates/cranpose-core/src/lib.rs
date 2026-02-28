@@ -2912,7 +2912,7 @@ struct LocalContext {
 
 pub(crate) struct MutableStateInner<T: Clone + 'static> {
     state: Arc<SnapshotMutableState<T>>,
-    watchers: RefCell<Vec<Weak<RecomposeScopeInner>>>, // FUTURE(no_std): move to stack-allocated subscription list.
+    watchers: RefCell<HashMap<ScopeId, Weak<RecomposeScopeInner>>>, // FUTURE(no_std): move to stack-allocated subscription list.
     runtime: RuntimeHandle,
 }
 
@@ -2920,7 +2920,7 @@ impl<T: Clone + 'static> MutableStateInner<T> {
     fn new(value: T, runtime: RuntimeHandle) -> Self {
         Self {
             state: SnapshotMutableState::new_in_arc(value, Arc::new(NeverEqual)),
-            watchers: RefCell::new(Vec::new()),
+            watchers: RefCell::new(HashMap::default()),
             runtime,
         }
     }
@@ -2944,15 +2944,30 @@ impl<T: Clone + 'static> MutableStateInner<T> {
         f(&value)
     }
 
+    fn register_scope(&self, scope: &RecomposeScope) -> bool {
+        let mut watchers = self.watchers.borrow_mut();
+        match watchers.get(&scope.id()) {
+            Some(existing) if existing.upgrade().is_some() => false,
+            _ => {
+                watchers.insert(scope.id(), scope.downgrade());
+                true
+            }
+        }
+    }
+
     fn invalidate_watchers(&self) {
         let watchers: Vec<RecomposeScope> = {
             let mut watchers = self.watchers.borrow_mut();
-            watchers.retain(|w| w.strong_count() > 0);
-            watchers
-                .iter()
-                .filter_map(|w| w.upgrade())
-                .map(|inner| RecomposeScope { inner })
-                .collect()
+            let mut live = Vec::with_capacity(watchers.len());
+            watchers.retain(|_, weak| {
+                if let Some(inner) = weak.upgrade() {
+                    live.push(RecomposeScope { inner });
+                    true
+                } else {
+                    false
+                }
+            });
+            live
         };
 
         if input_debug_enabled() {
@@ -3022,22 +3037,15 @@ impl<T: Clone + 'static> State<T> {
             with_current_composer_opt(|composer| composer.current_recranpose_scope())
         {
             self.with_inner(|inner| {
-                let mut watchers = inner.watchers.borrow_mut();
-                watchers.retain(|w| w.strong_count() > 0);
-                let id = scope.id();
-                let already_registered = watchers
-                    .iter()
-                    .any(|w| w.upgrade().map(|inner| inner.id == id).unwrap_or(false));
-                if !already_registered {
-                    watchers.push(scope.downgrade());
-                    if input_debug_enabled() {
-                        eprintln!(
-                            "[CRANPOSE_INPUT_DEBUG] state {:?} subscribe scope={} watchers={}",
-                            inner.state.id(),
-                            id,
-                            watchers.len()
-                        );
-                    }
+                let inserted = inner.register_scope(&scope);
+                if inserted && input_debug_enabled() {
+                    let watchers = inner.watchers.borrow();
+                    eprintln!(
+                        "[CRANPOSE_INPUT_DEBUG] state {:?} subscribe scope={} watchers={}",
+                        inner.state.id(),
+                        scope.id(),
+                        watchers.len()
+                    );
                 }
             });
         }
@@ -3050,7 +3058,7 @@ impl<T: Clone + 'static> State<T> {
 
     pub fn value(&self) -> T {
         self.subscribe_current_scope();
-        self.with(|value| value.clone())
+        self.with_inner(|inner| inner.state.get())
     }
 
     pub fn get(&self) -> T {
@@ -3154,6 +3162,20 @@ impl<T: Clone + 'static> MutableState<T> {
     #[cfg(test)]
     pub(crate) fn watcher_count(&self) -> usize {
         self.with_inner(|inner| inner.watchers.borrow().len())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn subscribe_scope_for_test(&self, scope: &RecomposeScope) {
+        self.as_state().subscribe_scope_for_test(scope);
+    }
+}
+
+#[cfg(test)]
+impl<T: Clone + 'static> State<T> {
+    pub(crate) fn subscribe_scope_for_test(&self, scope: &RecomposeScope) {
+        self.with_inner(|inner| {
+            inner.register_scope(scope);
+        });
     }
 }
 
@@ -3738,14 +3760,14 @@ impl<A: Applier + 'static> Composition<A> {
             let runtime_clone = runtime_handle.clone();
             let root_host = self.slots_host();
             let mut scope_groups: Vec<(Rc<SlotsHost>, Vec<RecomposeScope>)> = Vec::new();
+            let mut scope_group_index: HashMap<usize, usize> = HashMap::default();
             for scope in scopes {
                 let host = scope.slots_host().unwrap_or_else(|| Rc::clone(&root_host));
-                if let Some((_, group)) = scope_groups
-                    .iter_mut()
-                    .find(|(existing, _)| Rc::ptr_eq(existing, &host))
-                {
-                    group.push(scope);
+                let host_key = Rc::as_ptr(&host) as usize;
+                if let Some(index) = scope_group_index.get(&host_key).copied() {
+                    scope_groups[index].1.push(scope);
                 } else {
+                    scope_group_index.insert(host_key, scope_groups.len());
                     scope_groups.push((host, vec![scope]));
                 }
             }

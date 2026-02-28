@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROFILE="dev"
+PROFILE="native-release"
 EXAMPLE="robot_perf_harness"
 DURATION_SECS="10"
 OUTPUT="perf_report.txt"
@@ -11,7 +11,7 @@ HEADLESS="${CRANPOSE_HEADLESS:-0}"
 
 usage() {
     cat <<EOF
-Usage: $0 [--dev|--release] [--example NAME] [--duration SECS] [--output PATH] [--no-mem]
+Usage: $0 [--dev|--release|--profile NAME] [--example NAME] [--duration SECS] [--output PATH] [--no-mem]
 
 Runs perf recording on a robot test binary and writes a text report.
 EOF
@@ -26,6 +26,10 @@ while [[ $# -gt 0 ]]; do
         --release)
             PROFILE="release"
             shift
+            ;;
+        --profile)
+            PROFILE="$2"
+            shift 2
             ;;
         --example)
             EXAMPLE="$2"
@@ -66,8 +70,15 @@ BUILD_ARGS=(--package desktop-app --example "$EXAMPLE" --features robot-app)
 if [[ "$PROFILE" == "release" ]]; then
     PROFILE_DIR="release"
     BUILD_ARGS+=(--release)
-    export CARGO_PROFILE_RELEASE_DEBUG=1
-    export CARGO_PROFILE_RELEASE_STRIP=none
+elif [[ "$PROFILE" != "dev" ]]; then
+    PROFILE_DIR="$PROFILE"
+    BUILD_ARGS+=(--profile "$PROFILE")
+fi
+
+if [[ "$PROFILE" != "dev" ]]; then
+    PROFILE_ENV=$(echo "$PROFILE" | tr '[:lower:]-' '[:upper:]_')
+    export "CARGO_PROFILE_${PROFILE_ENV}_DEBUG=1"
+    export "CARGO_PROFILE_${PROFILE_ENV}_STRIP=none"
 fi
 
 cargo build "${BUILD_ARGS[@]}"

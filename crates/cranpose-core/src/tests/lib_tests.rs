@@ -2625,6 +2625,22 @@ fn stats_watchers_survive_conditional_toggle() {
     );
 }
 
+#[test]
+fn state_write_prunes_dropped_watchers() {
+    let runtime = TestRuntime::new();
+    let handle = runtime.handle();
+    let state = MutableState::with_runtime(0i32, handle.clone());
+    let scope = RecomposeScope::new_for_test(handle);
+
+    state.subscribe_scope_for_test(&scope);
+    assert_eq!(state.watcher_count(), 1);
+
+    drop(scope);
+    state.set_value(1);
+
+    assert_eq!(state.watcher_count(), 0);
+}
+
 // ============================================================================
 // Slot Table Unit Tests - Gap Architecture
 // ============================================================================

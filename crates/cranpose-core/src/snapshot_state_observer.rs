@@ -4,9 +4,10 @@
 // Complex types are inherent to the observer pattern with nested callbacks and state tracking
 #![allow(clippy::type_complexity)]
 
-use crate::collections::map::HashSet;
+use crate::collections::map::{HashMap, HashSet};
 use crate::snapshot_v2::{register_apply_observer, ReadObserver, StateObjectId};
 use crate::state::StateObject;
+use crate::{RecomposeScope, RecomposeScopeInner, ScopeId};
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
@@ -107,7 +108,7 @@ impl SnapshotStateObserver {
 struct SnapshotStateObserverInner {
     executor: Rc<Executor>,
     scopes: RefCell<Vec<Rc<RefCell<ScopeEntry>>>>,
-    fast_scopes: RefCell<Vec<Option<Rc<RefCell<ScopeEntry>>>>>,
+    fast_scopes: RefCell<HashMap<ScopeId, Rc<RefCell<ScopeEntry>>>>,
     pause_count: Rc<Cell<usize>>,
     apply_handle: RefCell<Option<crate::snapshot_v2::ObserverHandle>>,
     weak_self: RefCell<Weak<SnapshotStateObserverInner>>,
@@ -119,7 +120,7 @@ impl SnapshotStateObserverInner {
         Self {
             executor: Rc::new(on_changed_executor),
             scopes: RefCell::new(Vec::new()),
-            fast_scopes: RefCell::new(Vec::new()),
+            fast_scopes: RefCell::new(HashMap::default()),
             pause_count: Rc::new(Cell::new(0)),
             apply_handle: RefCell::new(None),
             weak_self: RefCell::new(Weak::new()),
@@ -134,6 +135,7 @@ impl SnapshotStateObserverInner {
     fn begin_frame(&self) {
         let next = self.frame_version.get().wrapping_add(1);
         self.frame_version.set(next);
+        self.prune_dead_scopes();
     }
 
     fn observe_reads<T, R>(
@@ -225,42 +227,22 @@ impl SnapshotStateObserverInner {
     where
         T: Any + PartialEq + 'static,
     {
-        // Clear from fast_scopes if it's a RecomposeScope
         if let Some(rc_scope) = (scope as &dyn Any).downcast_ref::<RecomposeScope>() {
-            let id = rc_scope.id();
-            let mut fast = self.fast_scopes.borrow_mut();
-            if id < fast.len() {
-                fast[id] = None;
-            }
+            self.fast_scopes.borrow_mut().remove(&rc_scope.id());
         }
 
-        // Clear from scopes
         self.scopes
             .borrow_mut()
             .retain(|entry| !entry.borrow().matches_scope(scope));
     }
 
     fn clear_if(&self, predicate: impl Fn(&dyn Any) -> bool) {
-        // Clear from fast_scopes for any RecomposeScope entries that match predicate
-        let mut fast = self.fast_scopes.borrow_mut();
-        for slot in fast.iter_mut() {
-            if let Some(entry) = slot {
-                let should_clear = {
-                    let entry_ref = entry.borrow();
-                    predicate(entry_ref.scope())
-                };
-                if should_clear {
-                    *slot = None;
-                }
-            }
-        }
-        drop(fast);
-
-        // Clear from scopes
-        self.scopes.borrow_mut().retain(|entry| {
-            let entry_ref = entry.borrow();
-            !predicate(entry_ref.scope())
-        });
+        self.fast_scopes
+            .borrow_mut()
+            .retain(|_, entry| !entry.borrow().matches_predicate(&predicate));
+        self.scopes
+            .borrow_mut()
+            .retain(|entry| !entry.borrow().matches_predicate(&predicate));
     }
 
     fn clear_all(&self) {
@@ -295,24 +277,17 @@ impl SnapshotStateObserverInner {
         scope: impl Any + Clone + PartialEq + 'static,
         on_changed: Rc<dyn Fn(&dyn Any)>,
     ) -> Rc<RefCell<ScopeEntry>> {
-        // ---------- FAST PATH: real compose scope ----------
-        if let Some(rc_scope) = (&scope as &dyn Any).downcast_ref::<RecomposeScope>() {
-            let id: usize = rc_scope.id(); // or `.0` or similar
-
+        let recompose_scope_id = (&scope as &dyn Any)
+            .downcast_ref::<RecomposeScope>()
+            .map(RecomposeScope::id);
+        if let Some(scope_id) = recompose_scope_id {
             let mut fast = self.fast_scopes.borrow_mut();
-
-            if id >= fast.len() {
-                fast.resize_with(id + 1, || None);
-            }
-
-            if let Some(existing) = &fast[id] {
+            if let Some(existing) = fast.get(&scope_id) {
                 return existing.clone();
             }
 
             let entry = Rc::new(RefCell::new(ScopeEntry::new(scope, on_changed)));
-            fast[id] = Some(entry.clone());
-            // CRITICAL: Also add to scopes Vec so handle_apply and clear* methods work correctly
-            drop(fast);
+            fast.insert(scope_id, entry.clone());
             self.scopes.borrow_mut().push(entry.clone());
             return entry;
         }
@@ -330,6 +305,15 @@ impl SnapshotStateObserverInner {
         let entry = Rc::new(RefCell::new(ScopeEntry::new(scope, on_changed)));
         scopes.push(entry.clone());
         entry
+    }
+
+    fn prune_dead_scopes(&self) {
+        self.fast_scopes
+            .borrow_mut()
+            .retain(|_, entry| entry.borrow().should_retain());
+        self.scopes
+            .borrow_mut()
+            .retain(|entry| entry.borrow().should_retain());
     }
 
     fn run_with_read_observer<R>(
@@ -378,23 +362,6 @@ impl SnapshotStateObserverInner {
         }
         drop(scopes);
 
-        {
-            let fast_scopes = self.fast_scopes.borrow();
-            for entry in fast_scopes.iter().flatten() {
-                let entry_ref = entry.borrow();
-                if entry_ref
-                    .observed
-                    .iter()
-                    .any(|id| modified_ids.contains(id))
-                {
-                    let ptr = Rc::as_ptr(entry) as usize;
-                    if seen.insert(ptr) {
-                        to_notify.push(entry.clone());
-                    }
-                }
-            }
-        }
-
         if to_notify.is_empty() {
             return;
         }
@@ -409,8 +376,6 @@ impl SnapshotStateObserverInner {
         }
     }
 }
-
-use cranpose_core::RecomposeScope;
 use smallvec::SmallVec;
 
 enum ObservedIds {
@@ -470,8 +435,17 @@ impl ObservedIds {
 }
 
 const MAX_OBSERVED_STATES: usize = 8;
+
+enum ScopeStorage {
+    Owned(Box<dyn Any>),
+    RecomposeScope {
+        id: ScopeId,
+        weak: Weak<RecomposeScopeInner>,
+    },
+}
+
 struct ScopeEntry {
-    scope: Box<dyn Any>,
+    scope: ScopeStorage,
     on_changed: Rc<dyn Fn(&dyn Any)>,
     observed: ObservedIds,
     read_observer: Option<ReadObserver>,
@@ -485,7 +459,7 @@ impl ScopeEntry {
         T: Any + 'static,
     {
         Self {
-            scope: Box::new(scope),
+            scope: ScopeStorage::from_value(scope),
             on_changed,
             observed: ObservedIds::new(),
             read_observer: None,
@@ -498,7 +472,7 @@ impl ScopeEntry {
     where
         T: Any + 'static,
     {
-        self.scope = Box::new(new_scope);
+        self.scope = ScopeStorage::from_value(new_scope);
         self.on_changed = on_changed;
     }
 
@@ -506,18 +480,65 @@ impl ScopeEntry {
     where
         T: Any + PartialEq + 'static,
     {
-        self.scope
-            .downcast_ref::<T>()
-            .map(|stored| stored == scope)
-            .unwrap_or(false)
+        if let Some(scope) = (scope as &dyn Any).downcast_ref::<RecomposeScope>() {
+            return matches!(
+                &self.scope,
+                ScopeStorage::RecomposeScope { id, .. } if *id == scope.id()
+            );
+        }
+
+        match &self.scope {
+            ScopeStorage::Owned(stored) => stored
+                .downcast_ref::<T>()
+                .map(|stored| stored == scope)
+                .unwrap_or(false),
+            ScopeStorage::RecomposeScope { .. } => false,
+        }
     }
 
-    fn scope(&self) -> &dyn Any {
-        &*self.scope
+    fn matches_predicate(&self, predicate: &impl Fn(&dyn Any) -> bool) -> bool {
+        match &self.scope {
+            ScopeStorage::Owned(scope) => predicate(scope.as_ref()),
+            ScopeStorage::RecomposeScope { weak, .. } => weak
+                .upgrade()
+                .map(|inner| predicate(&RecomposeScope { inner }))
+                .unwrap_or(true),
+        }
+    }
+
+    fn should_retain(&self) -> bool {
+        match &self.scope {
+            ScopeStorage::Owned(_) => true,
+            ScopeStorage::RecomposeScope { weak, .. } => weak.upgrade().is_some(),
+        }
     }
 
     fn notify(&self) {
-        (self.on_changed)(self.scope());
+        match &self.scope {
+            ScopeStorage::Owned(scope) => (self.on_changed)(scope.as_ref()),
+            ScopeStorage::RecomposeScope { weak, .. } => {
+                if let Some(inner) = weak.upgrade() {
+                    (self.on_changed)(&RecomposeScope { inner });
+                }
+            }
+        }
+    }
+}
+
+impl ScopeStorage {
+    fn from_value<T>(value: T) -> Self
+    where
+        T: Any + 'static,
+    {
+        let any = &value as &dyn Any;
+        if let Some(scope) = any.downcast_ref::<RecomposeScope>() {
+            Self::RecomposeScope {
+                id: scope.id(),
+                weak: scope.downgrade(),
+            }
+        } else {
+            Self::Owned(Box::new(value))
+        }
     }
 }
 
@@ -634,5 +655,32 @@ mod tests {
 
         assert_eq!(triggered.get(), 0);
         observer.stop();
+    }
+
+    #[test]
+    fn begin_frame_prunes_dropped_recompose_scope_entries() {
+        let _guard = reset_runtime();
+
+        let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
+        let observer = SnapshotStateObserver::new(|callback| callback());
+        let runtime = crate::TestRuntime::new();
+        let scope = RecomposeScope::new_for_test(runtime.handle());
+
+        observer.observe_reads(
+            scope.clone(),
+            |_| {},
+            || {
+                let _ = state.get();
+            },
+        );
+
+        assert_eq!(observer.inner.scopes.borrow().len(), 1);
+        assert_eq!(observer.inner.fast_scopes.borrow().len(), 1);
+
+        drop(scope);
+        observer.begin_frame();
+
+        assert_eq!(observer.inner.scopes.borrow().len(), 0);
+        assert_eq!(observer.inner.fast_scopes.borrow().len(), 0);
     }
 }
