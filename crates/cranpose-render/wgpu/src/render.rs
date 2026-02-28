@@ -1327,18 +1327,16 @@ impl GpuRenderer {
                         encoder_buffer_usage.reset();
                     }
 
-                    let shape_batch: Vec<&DrawShape> = ordered_items[start..cursor]
-                        .iter()
-                        .map(|(_, item)| match item {
-                            SegmentDrawItem::Shape(shape_index) => &shapes[*shape_index],
-                            _ => unreachable!("shape batch contains only shape items"),
-                        })
-                        .collect();
                     let load_op = load_op_for_batch(&mut first_batch);
                     self.encode_shapes_pass(
                         &mut encoder,
                         target_view,
-                        &shape_batch,
+                        ordered_items[start..cursor]
+                            .iter()
+                            .map(|(_, item)| match item {
+                                SegmentDrawItem::Shape(shape_index) => &shapes[*shape_index],
+                                _ => unreachable!("shape batch contains only shape items"),
+                            }),
                         blend_mode,
                         width,
                         height,
@@ -1380,16 +1378,18 @@ impl GpuRenderer {
                     }
 
                     // Prepare image draw commands (ensure cached, build verts)
-                    let image_batch: Vec<&ImageDraw> = ordered_items[start..cursor]
-                        .iter()
-                        .map(|(_, item)| match item {
-                            SegmentDrawItem::Image(image_index) => &images[*image_index],
-                            _ => unreachable!("image batch contains only image items"),
-                        })
-                        .collect();
                     let load_op = load_op_for_batch(&mut first_batch);
-                    let image_cmds =
-                        self.prepare_image_draw_cmds(&image_batch, width, height, root_scale)?;
+                    let image_cmds = self.prepare_image_draw_cmds(
+                        ordered_items[start..cursor]
+                            .iter()
+                            .map(|(_, item)| match item {
+                                SegmentDrawItem::Image(image_index) => &images[*image_index],
+                                _ => unreachable!("image batch contains only image items"),
+                            }),
+                        width,
+                        height,
+                        root_scale,
+                    )?;
                     self.encode_images_pass(
                         &mut encoder,
                         target_view,
@@ -1429,17 +1429,20 @@ impl GpuRenderer {
                         encoder_buffer_usage.reset();
                     }
 
-                    let text_batch: Vec<&TextDraw> = ordered_items[start..cursor]
-                        .iter()
-                        .map(|(_, item)| match item {
-                            SegmentDrawItem::Text(text_index) => &texts[*text_index],
-                            _ => unreachable!("text batch contains only text items"),
-                        })
-                        .collect();
                     let load_op = load_op_for_batch(&mut first_batch);
                     // Text prepare (shaping, atlas upload) must happen before
                     // we record the pass.
-                    self.prepare_text_for_render(&text_batch, width, height, root_scale)?;
+                    self.prepare_text_for_render(
+                        ordered_items[start..cursor]
+                            .iter()
+                            .map(|(_, item)| match item {
+                                SegmentDrawItem::Text(text_index) => &texts[*text_index],
+                                _ => unreachable!("text batch contains only text items"),
+                            }),
+                        width,
+                        height,
+                        root_scale,
+                    )?;
                     self.encode_text_pass(&mut encoder, target_view, load_op)?;
                     encoder_has_work = true;
                     encoder_buffer_usage.mark_batch(BatchKind::Text);
@@ -1592,8 +1595,8 @@ impl GpuRenderer {
                 );
             }
             if !shadow.texts.is_empty() {
-                let text_refs: Vec<&TextDraw> = shadow.texts.iter().collect();
-                if let Err(e) = self.prepare_text_for_render(&text_refs, width, height, root_scale)
+                if let Err(e) =
+                    self.prepare_text_for_render(shadow.texts.iter(), width, height, root_scale)
                 {
                     eprintln!("Failed to prepare text for zero-blur shadow: {}", e);
                 } else {
@@ -1668,8 +1671,8 @@ impl GpuRenderer {
                 wgpu::LoadOp::Load
             };
 
-            let text_refs: Vec<&TextDraw> = shifted_texts.iter().collect();
-            if let Err(e) = self.prepare_text_for_render(&text_refs, bounds_w, bounds_h, root_scale)
+            if let Err(e) =
+                self.prepare_text_for_render(shifted_texts.iter(), bounds_w, bounds_h, root_scale)
             {
                 eprintln!("Failed to prepare text for shadow: {}", e);
             } else {
@@ -2020,7 +2023,7 @@ impl GpuRenderer {
         self.encode_shapes_pass(
             &mut encoder,
             target_view,
-            layer_shapes,
+            layer_shapes.iter().copied(),
             blend_mode,
             width,
             height,
@@ -2035,21 +2038,20 @@ impl GpuRenderer {
     /// Stage shape buffer writes and record a shape render pass onto the
     /// provided encoder.  The caller is responsible for submitting.
     #[allow(clippy::too_many_arguments)]
-    fn encode_shapes_pass(
+    fn encode_shapes_pass<'a, I>(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         target_view: &wgpu::TextureView,
-        layer_shapes: &[&DrawShape],
+        layer_shapes: I,
         blend_mode: BlendMode,
         width: u32,
         height: u32,
         root_scale: f32,
         load_op: wgpu::LoadOp<wgpu::Color>,
         viewport_offset: [f32; 2],
-    ) {
-        if layer_shapes.is_empty() {
-            return;
-        }
+    ) where
+        I: Iterator<Item = &'a DrawShape>,
+    {
         self.frame_stats.bump_shapes();
 
         // Update viewport uniforms (viewport_offset shifts the origin so that
@@ -2067,7 +2069,7 @@ impl GpuRenderer {
         self.scratch_vertices.clear();
         self.scratch_indices.clear();
 
-        for (idx, shape) in layer_shapes.iter().enumerate() {
+        for (idx, shape) in layer_shapes.enumerate() {
             let local_rect = shape.local_rect;
 
             // Clip rect (scaled to physical pixels)
@@ -2259,6 +2261,9 @@ impl GpuRenderer {
         }
 
         let shape_count = self.scratch_shape_data.len();
+        if shape_count == 0 {
+            return;
+        }
 
         // Ensure buffers have capacity
         self.shape_buffers.ensure_capacity(
@@ -2381,13 +2386,16 @@ impl GpuRenderer {
 
     /// Prepare image vertices, indices, ensure caching, and write to GPU buffers.
     /// Returns the draw commands needed by `encode_images_pass`.
-    fn prepare_image_draw_cmds(
+    fn prepare_image_draw_cmds<'a, I>(
         &mut self,
-        layer_images: &[&ImageDraw],
+        layer_images: I,
         width: u32,
         height: u32,
         root_scale: f32,
-    ) -> Result<Vec<ImageDrawCmd>, String> {
+    ) -> Result<Vec<ImageDrawCmd>, String>
+    where
+        I: Iterator<Item = &'a ImageDraw>,
+    {
         let mut image_vertices = std::mem::take(&mut self.scratch_image_vertices);
         let mut image_indices = std::mem::take(&mut self.scratch_image_indices);
         let mut image_cmds = std::mem::take(&mut self.scratch_image_cmds);
@@ -2527,13 +2535,16 @@ impl GpuRenderer {
 
     /// Prepare text shaping and atlas uploads for the given text batch.
     /// After calling this, `encode_text_pass` can record the render pass.
-    fn prepare_text_for_render(
+    fn prepare_text_for_render<'a, I>(
         &mut self,
-        layer_texts: &[&TextDraw],
+        layer_texts: I,
         width: u32,
         height: u32,
         root_scale: f32,
-    ) -> Result<(), String> {
+    ) -> Result<(), String>
+    where
+        I: Clone + Iterator<Item = &'a TextDraw>,
+    {
         let telemetry_enabled = text_render_telemetry_enabled();
         let call_sequence = if telemetry_enabled {
             TEXT_RENDER_CALLS.fetch_add(1, Ordering::Relaxed) + 1
@@ -2541,7 +2552,8 @@ impl GpuRenderer {
             0
         };
 
-        let batch_signature = prepared_text_batch_signature(layer_texts, width, height, root_scale);
+        let batch_signature =
+            prepared_text_batch_signature(layer_texts.clone(), width, height, root_scale);
         if batch_signature.is_some() && self.last_prepared_text_batch == batch_signature {
             if telemetry_enabled {
                 let skips = TEXT_RENDER_SKIPS.fetch_add(1, Ordering::Relaxed) + 1;
@@ -2562,11 +2574,12 @@ impl GpuRenderer {
         let mut text_cache = self.text_cache.lock().unwrap();
         let mut font_family_resolver = self.font_family_resolver.lock().unwrap();
 
-        let mut text_keys: Vec<TextCacheKey> = Vec::with_capacity(layer_texts.len());
+        let mut text_keys: Vec<TextCacheKey> =
+            Vec::with_capacity(layer_texts.clone().size_hint().0);
         let mut valid_items = 0usize;
         let mut total_chars = 0usize;
 
-        for text_draw in layer_texts {
+        for text_draw in layer_texts.clone() {
             if text_draw.text.is_empty()
                 || text_draw.rect.width <= 0.0
                 || text_draw.rect.height <= 0.0
@@ -2792,12 +2805,15 @@ fn hash_optional_rect<H: Hasher>(rect: Option<Rect>, state: &mut H) {
     }
 }
 
-fn prepared_text_batch_signature(
-    layer_texts: &[&TextDraw],
+fn prepared_text_batch_signature<'a, I>(
+    layer_texts: I,
     width: u32,
     height: u32,
     root_scale: f32,
-) -> Option<PreparedTextBatchSignature> {
+) -> Option<PreparedTextBatchSignature>
+where
+    I: Clone + Iterator<Item = &'a TextDraw>,
+{
     let mut hasher = FxHasher::default();
     let mut item_count = 0usize;
 
@@ -3339,8 +3355,8 @@ mod tests {
     fn prepared_text_batch_signature_is_stable_for_equivalent_inputs() {
         let text = test_text(0);
         let cloned = text.clone();
-        let sig_a = prepared_text_batch_signature(&[&text], 1920, 1080, 1.0);
-        let sig_b = prepared_text_batch_signature(&[&cloned], 1920, 1080, 1.0);
+        let sig_a = prepared_text_batch_signature([&text].into_iter(), 1920, 1080, 1.0);
+        let sig_b = prepared_text_batch_signature([&cloned].into_iter(), 1920, 1080, 1.0);
         assert_eq!(sig_a, sig_b);
     }
 
@@ -3350,8 +3366,8 @@ mod tests {
         let mut moved = text.clone();
         moved.rect.y = 42.0;
 
-        let original = prepared_text_batch_signature(&[&text], 1920, 1080, 1.0);
-        let changed = prepared_text_batch_signature(&[&moved], 1920, 1080, 1.0);
+        let original = prepared_text_batch_signature([&text].into_iter(), 1920, 1080, 1.0);
+        let changed = prepared_text_batch_signature([&moved].into_iter(), 1920, 1080, 1.0);
         assert_ne!(original, changed);
     }
 

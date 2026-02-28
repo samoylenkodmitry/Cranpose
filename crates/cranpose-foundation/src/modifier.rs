@@ -9,12 +9,12 @@
 
 use std::any::{type_name, Any, TypeId};
 use std::cell::{Cell, RefCell};
-use std::collections::hash_map::DefaultHasher;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::{BitOr, BitOrAssign};
 use std::rc::Rc;
 
+use cranpose_core::hash::default;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
@@ -882,7 +882,7 @@ struct TypedModifierElement<E: ModifierNodeElement> {
 
 impl<E: ModifierNodeElement> TypedModifierElement<E> {
     fn new(element: E) -> Self {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = default::new();
         element.hash(&mut hasher);
         Self {
             element,

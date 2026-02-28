@@ -1,4 +1,5 @@
 use super::{inspector_metadata, Modifier, PointerEvent};
+use cranpose_core::hash::default;
 use cranpose_foundation::{
     impl_pointer_input_node, DelegatableNode, ModifierNode, ModifierNodeContext,
     ModifierNodeElement, NodeCapabilities, NodeState, PointerInputNode,
@@ -7,7 +8,7 @@ use cranpose_ui_graphics::Size;
 use futures_task::{waker, ArcWake};
 use std::any::TypeId;
 use std::cell::{Cell, RefCell};
-use std::collections::{hash_map::DefaultHasher, HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
@@ -468,7 +469,7 @@ struct KeyToken {
 
 impl KeyToken {
     fn new<T: Hash + 'static>(value: &T) -> Self {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = default::new();
         value.hash(&mut hasher);
         Self {
             type_id: TypeId::of::<T>(),

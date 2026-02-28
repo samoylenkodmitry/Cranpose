@@ -1,28 +1,28 @@
-* [ ] **Stop using size-tuned `release` for native perf**: in `Cargo.toml` set up *separate* profiles; current native `release` uses `opt-level = "s"` (evidence: `Cargo.toml:62`). For perf runs/builds use a speed profile (`opt-level=3` etc). Benchmark proof (same harness/env): `CRANPOSE_HEADLESS=1 CRANPOSE_PRESENT_MODE=immediate CRANPOSE_PERF_DURATION_SECS=5` → default `release` **1366.8 FPS (0.73ms)** vs `CARGO_PROFILE_RELEASE_OPT_LEVEL=3` **2003.8 FPS (0.50ms)** = **+46.6%**.
+* [x] **Stop using size-tuned `release` for native perf**: in `Cargo.toml` set up *separate* profiles; current native `release` uses `opt-level = "s"` (evidence: `Cargo.toml:62`). For perf runs/builds use a speed profile (`opt-level=3` etc). Benchmark proof (same harness/env): `CRANPOSE_HEADLESS=1 CRANPOSE_PRESENT_MODE=immediate CRANPOSE_PERF_DURATION_SECS=5` → default `release` **1366.8 FPS (0.73ms)** vs `CARGO_PROFILE_RELEASE_OPT_LEVEL=3` **2003.8 FPS (0.50ms)** = **+46.6%**.
 
-* [ ] **Fix P0 leak: `SnapshotStateObserver::fast_scopes` grows without bound**: in `snapshot_state_observer.rs` (`get_scope_entry()`), `fast_scopes: Vec<Option<Rc<ScopeEntry>>>` is indexed by `ScopeId` from a global `AtomicUsize` that only increases; every new scope does `fast_scopes.resize_with(id + 1, || None)` → Vec only grows. Fix: reclaim scope IDs (free-list / generation scheme) and/or reset per-composition; ensure scope teardown triggers cleanup.
+* [x] **Fix P0 leak: `SnapshotStateObserver::fast_scopes` grows without bound**: in `snapshot_state_observer.rs` (`get_scope_entry()`), `fast_scopes: Vec<Option<Rc<ScopeEntry>>>` is indexed by `ScopeId` from a global `AtomicUsize` that only increases; every new scope does `fast_scopes.resize_with(id + 1, || None)` → Vec only grows. Fix: reclaim scope IDs (free-list / generation scheme) and/or reset per-composition; ensure scope teardown triggers cleanup.
 
-* [ ] **Fix P0 leak: observer `scopes` accumulates because clear never happens**: `scopes: Vec<Rc<ScopeEntry>>` keeps entries; `clear(scope)` is never called from composition lifecycle. Fix: when `RecomposeScope` deactivates or its group ends, call `observer.clear(&scope)` (or equivalent) to remove entries; add generation-based cleanup.
+* [x] **Fix P0 leak: observer `scopes` accumulates because clear never happens**: `scopes: Vec<Rc<ScopeEntry>>` keeps entries; `clear(scope)` is never called from composition lifecycle. Fix: when `RecomposeScope` deactivates or its group ends, call `observer.clear(&scope)` (or equivalent) to remove entries; add generation-based cleanup.
 
 * [ ] **Fix P0 leak: `StateArena::cells` never frees**: in `runtime.rs` (`StateArena::alloc()`), `cells: Vec<Option<Box<dyn AnyStateCell>>>` grows on every `mutableStateOf()/useState()`; `StateId` indices never reclaimed. Fix: add a free-list; when state drops push `StateId` to free list; `alloc()` reuses before pushing.
 
-* [ ] **Fix P0 leak: dead watchers accumulate in `MutableStateInner::watchers`**: in `lib.rs` (~line **3020**, `subscribe_current_scope()`), dead `Weak<RecomposeScopeInner>` only cleaned via `retain()` when that state is read again; states written but not re-read can accumulate dead watchers. Fix: also clean on write/invalidation (ensure `invalidate_watchers()` retention is comprehensive, not only on upgrade path).
+* [x] **Fix P0 leak: dead watchers accumulate in `MutableStateInner::watchers`**: in `lib.rs` (~line **3020**, `subscribe_current_scope()`), dead `Weak<RecomposeScopeInner>` only cleaned via `retain()` when that state is read again; states written but not re-read can accumulate dead watchers. Fix: also clean on write/invalidation (ensure `invalidate_watchers()` retention is comprehensive, not only on upgrade path).
 
-* [ ] **Remove P1 hot-path O(n) work on every state read**: `lib.rs` ~**3020** `subscribe_current_scope()` currently does `watchers.retain(...)` (GC scan O(n)) and then `watchers.iter().any(...)` (dedup O(n)) on every `.value()`/`.with()`. Fix: move GC to invalidation time and use O(1) dedup (e.g., `HashSet<ScopeId>`; or an epoch/tag scheme per scope).
+* [x] **Remove P1 hot-path O(n) work on every state read**: `lib.rs` ~**3020** `subscribe_current_scope()` currently does `watchers.retain(...)` (GC scan O(n)) and then `watchers.iter().any(...)` (dedup O(n)) on every `.value()`/`.with()`. Fix: move GC to invalidation time and use O(1) dedup (e.g., `HashSet<ScopeId>`; or an epoch/tag scheme per scope).
 
 * [ ] **Fix P1 O(n²) child diffing in `pop_parent()`**: `lib.rs` ~**2652** uses `current.iter().position(...)` inside a loop → O(n²); also allocates `HashSet<NodeId>` and clones vectors multiple times per diff. Fix: index-based diffing or real list-diff (LIS-based), preallocate scratch buffers, avoid `HashSet`/Vec clones on the hot path.
 
-* [ ] **Fix P1 O(n²) scope grouping in `process_invalid_scopes()`**: `lib.rs` ~**3740** groups scopes via `scope_groups.iter_mut().find(|(existing, _)| Rc::ptr_eq(existing, &host))` (linear scan per scope). Fix: `HashMap` keyed by stable pointer identity (`Rc::as_ptr()`), O(1) grouping.
+* [x] **Fix P1 O(n²) scope grouping in `process_invalid_scopes()`**: `lib.rs` ~**3740** groups scopes via `scope_groups.iter_mut().find(|(existing, _)| Rc::ptr_eq(existing, &host))` (linear scan per scope). Fix: `HashMap` keyed by stable pointer identity (`Rc::as_ptr()`), O(1) grouping.
 
 * [ ] **Cut allocation pressure: replace `Box<dyn FnMut>` commands with an enum**: `lib.rs` ~**1343** defines `type Command = Box<dyn FnMut(&mut dyn Applier)->...>`; every emit/move/insert/remove makes 1–4 heap allocations. Fix: `enum Command { InsertChild{...}, RemoveChild{...}, MoveChild{...}, UpdateNode{...}, BubbleDirty{...} }` stored inline in `Vec<Command>`.
 
 * [ ] **Cut recomposition copying: make `snapshot_locals` COW**: `lib.rs` ~**330** clones locals every boundary: `*local_stack = stack.to_vec()`. Fix: store `Rc<Vec<LocalContext>>` (COW); only clone on write.
 
-* [ ] **Fix pointer latency: stop cloning full hit-region list on every event**: `scene.rs` ~**395** does `let mut hits = self.hits.clone()` (clones all `HitRegion`s + nested vectors). Fix: collect references/indices only, sort refs/indices by z, return refs (or indices).
+* [x] **Fix pointer latency: stop cloning full hit-region list on every event**: `scene.rs` ~**395** does `let mut hits = self.hits.clone()` (clones all `HitRegion`s + nested vectors). Fix: collect references/indices only, sort refs/indices by z, return refs (or indices).
 
-* [ ] **Stop double-storing hit regions**: `scene.rs` ~**329** clones into `node_index` and also pushes into `hits`. Fix: store hits once in `Vec<HitRegion>` and keep `HashMap<NodeId, usize>` to index into the Vec.
+* [x] **Stop double-storing hit regions**: `scene.rs` ~**329** clones into `node_index` and also pushes into `hits`. Fix: store hits once in `Vec<HitRegion>` and keep `HashMap<NodeId, usize>` to index into the Vec.
 
-* [ ] **Avoid per-batch temporary Vec allocations in renderer**: `render.rs` ~**1330** collects batch slices into new Vecs each time (e.g., `shape_batch: Vec<&DrawShape> = ...collect()`). Fix: pass slice ranges `(start,end)` into encode functions, or reuse a scratch Vec cleared between batches.
+* [x] **Avoid per-batch temporary Vec allocations in renderer**: `render.rs` ~**1330** collects batch slices into new Vecs each time (e.g., `shape_batch: Vec<&DrawShape> = ...collect()`). Fix: pass slice ranges `(start,end)` into encode functions, or reuse a scratch Vec cleared between batches.
 
 * [ ] **Stop full scene rebuild for “any dirty bit”**: `app-shell/lib.rs` ~**1013** (`run_render_phase()`): any dirty flag (render/pointer/focus/cursor blink/draw repass) triggers `rebuild_scene_from_applier()` which walks whole tree and rebuilds all draw/hit vectors. Fix (short-term): split dirty flags so cursor blink/focus/pointer can skip scene rebuild and only rerender; (mid): dirty-subtree tracking; (long): retained scene graph/diff encoding (Vello-like).
 
@@ -40,7 +40,7 @@
 
 * [ ] **Do the zero/low-copy text wrapping rewrite**: in `crates/cranpose-ui/src/text/measure.rs`, functions like `wrap_line_greedy`, `split_annotated_lines`, `remap_annotated_for_display` clone `String`s and `Vec<RangeStyle>` heavily. Fix: operate on byte indices (`Range<usize>`) over the original buffers; only build final display string/ranges once wrap points are finalized.
 
-* [ ] **Remove SipHash/`DefaultHasher` from internal hot hashes**: profiler shows hashing cost (e.g., **2.65% CPU**, mostly SipHash: ~**2.05%** `SipHasher::write` + **0.60%** `hash_one`). Replace `std::collections::hash_map::DefaultHasher` with your fast deterministic hasher everywhere internal:
+* [x] **Remove SipHash/`DefaultHasher` from internal hot hashes**: profiler shows hashing cost (e.g., **2.65% CPU**, mostly SipHash: ~**2.05%** `SipHasher::write` + **0.60%** `hash_one`). Replace `std::collections::hash_map::DefaultHasher` with your fast deterministic hasher everywhere internal:
 
   * `crates/cranpose-ui/src/text/style.rs:393` (`TextStyle::measurement_hash()`)
   * `crates/cranpose-foundation/src/modifier.rs:883`

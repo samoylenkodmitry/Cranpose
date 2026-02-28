@@ -13,6 +13,8 @@ use std::rc::Rc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::OnceLock;
 
+use cranpose_core::hash::default;
+
 mod alignment;
 mod background;
 mod blur;
@@ -241,16 +243,16 @@ const FINGERPRINT_KIND_SINGLE: u8 = 1;
 const FINGERPRINT_KIND_COMBINED: u8 = 2;
 
 fn empty_fingerprints() -> (u64, u64) {
-    let mut strict_hasher = std::collections::hash_map::DefaultHasher::new();
-    let mut structural_hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut strict_hasher = default::new();
+    let mut structural_hasher = default::new();
     FINGERPRINT_KIND_EMPTY.hash(&mut strict_hasher);
     FINGERPRINT_KIND_EMPTY.hash(&mut structural_hasher);
     (strict_hasher.finish(), structural_hasher.finish())
 }
 
 fn single_fingerprints(elements: &[DynModifierElement]) -> (u64, u64) {
-    let mut strict_hasher = std::collections::hash_map::DefaultHasher::new();
-    let mut structural_hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut strict_hasher = default::new();
+    let mut structural_hasher = default::new();
 
     FINGERPRINT_KIND_SINGLE.hash(&mut strict_hasher);
     FINGERPRINT_KIND_SINGLE.hash(&mut structural_hasher);
@@ -288,8 +290,8 @@ fn single_fingerprints(elements: &[DynModifierElement]) -> (u64, u64) {
 }
 
 fn combined_fingerprints(outer: &Modifier, inner: &Modifier) -> (u64, u64) {
-    let mut strict_hasher = std::collections::hash_map::DefaultHasher::new();
-    let mut structural_hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut strict_hasher = default::new();
+    let mut structural_hasher = default::new();
 
     FINGERPRINT_KIND_COMBINED.hash(&mut strict_hasher);
     outer.strict_fingerprint.hash(&mut strict_hasher);
