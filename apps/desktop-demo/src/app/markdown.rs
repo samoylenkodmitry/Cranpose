@@ -5,8 +5,8 @@ use cranpose_services::{local_http_client, local_uri_handler, HttpClientRef};
 use cranpose_ui::{
     composable,
     text::{
-        AnnotatedString, FontFamily, FontStyle, FontWeight, LinkAnnotation, SpanStyle,
-        TextDecoration, TextUnit,
+        AnnotatedString, FontFamily, FontStyle, FontWeight, LinkAnnotation, ParagraphStyle,
+        PlatformParagraphStyle, SpanStyle, TextDecoration, TextShaping, TextUnit,
     },
     Brush, Button, Color, Column, ColumnSpec, CornerRadii, LazyColumn, LazyColumnSpec,
     LinearArrangement, LinkedText, Modifier, Row, RowSpec, Size, Spacer, Text, TextStyle,
@@ -981,7 +981,13 @@ fn render_text_block(annotated: AnnotatedString) {
             font_size: TextUnit::Sp(14.0),
             ..Default::default()
         },
-        ..Default::default()
+        paragraph_style: ParagraphStyle {
+            platform_style: Some(PlatformParagraphStyle {
+                include_font_padding: None,
+                shaping: Some(TextShaping::Basic),
+            }),
+            ..Default::default()
+        },
     };
 
     if !annotated.link_annotations.is_empty() {

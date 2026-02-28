@@ -117,9 +117,16 @@ pub enum TextMotion {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct PlatformSpanStyle;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TextShaping {
+    Basic,
+    Advanced,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct PlatformParagraphStyle {
     pub include_font_padding: Option<bool>,
+    pub shaping: Option<TextShaping>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -778,6 +785,7 @@ mod tests {
             span_style: Some(PlatformSpanStyle),
             paragraph_style: Some(PlatformParagraphStyle {
                 include_font_padding: Some(false),
+                shaping: Some(TextShaping::Basic),
             }),
         }));
         assert_eq!(
@@ -786,6 +794,7 @@ mod tests {
                 span_style: Some(PlatformSpanStyle),
                 paragraph_style: Some(PlatformParagraphStyle {
                     include_font_padding: Some(false),
+                    shaping: Some(TextShaping::Basic),
                 }),
             })
         );
@@ -818,6 +827,19 @@ mod tests {
             },
             ParagraphStyle::default(),
         );
+        assert_ne!(style_a.measurement_hash(), style_b.measurement_hash());
+    }
+
+    #[test]
+    fn measurement_hash_includes_platform_paragraph_shaping() {
+        let style_a = TextStyle::default();
+        let style_b = TextStyle::from_paragraph_style(ParagraphStyle {
+            platform_style: Some(PlatformParagraphStyle {
+                include_font_padding: None,
+                shaping: Some(TextShaping::Basic),
+            }),
+            ..Default::default()
+        });
         assert_ne!(style_a.measurement_hash(), style_b.measurement_hash());
     }
 }

@@ -263,6 +263,7 @@ pub(crate) fn TextShowcaseTab() {
                                     paragraph_style: ParagraphStyle {
                                         platform_style: Some(PlatformParagraphStyle {
                                             include_font_padding: Some(false),
+                                            shaping: None,
                                         }),
                                         ..Default::default()
                                     },
@@ -651,6 +652,7 @@ pub(crate) fn TextShowcaseTab() {
                                 span_style: Some(PlatformSpanStyle),
                                 paragraph_style: Some(PlatformParagraphStyle {
                                     include_font_padding: Some(false),
+                                    shaping: None,
                                 }),
                             }));
                     Text(

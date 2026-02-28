@@ -240,6 +240,64 @@ pub(crate) struct EnsureTextBufferParams<'a> {
     pub(crate) scale: f32,
 }
 
+fn requires_advanced_shaping(text: &str) -> bool {
+    text.chars().any(requires_advanced_shaping_char)
+}
+
+fn requires_advanced_shaping_char(ch: char) -> bool {
+    let code = ch as u32;
+    if ch.is_ascii() || ch.is_whitespace() {
+        return false;
+    }
+
+    matches!(
+        code,
+        0x0300..=0x036F
+            | 0x0590..=0x08FF
+            | 0x0900..=0x109F
+            | 0x135D..=0x135F
+            | 0x1712..=0x1715
+            | 0x1732..=0x1735
+            | 0x1752..=0x1753
+            | 0x1772..=0x1773
+            | 0x17B4..=0x17D3
+            | 0x1885..=0x18A9
+            | 0x1A17..=0x1A1B
+            | 0x1AB0..=0x1AFF
+            | 0x1B00..=0x1CFF
+            | 0x1CD0..=0x1DFF
+            | 0x200C..=0x200F
+            | 0x202A..=0x202E
+            | 0x2066..=0x2069
+            | 0x20D0..=0x20FF
+            | 0x2DE0..=0x2DFF
+            | 0x2E80..=0xA7FF
+            | 0xA980..=0xABFF
+            | 0xD800..=0xF8FF
+            | 0xFB1D..=0xFEFF
+            | 0x1F000..=u32::MAX
+    )
+}
+
+fn select_text_shaping(
+    annotated_text: &cranpose_ui::text::AnnotatedString,
+    style: &cranpose_ui::text::TextStyle,
+) -> Shaping {
+    let requested = style
+        .paragraph_style
+        .platform_style
+        .and_then(|platform| platform.shaping);
+
+    match requested {
+        Some(cranpose_ui::text::TextShaping::Basic)
+            if !requires_advanced_shaping(annotated_text.text.as_str()) =>
+        {
+            Shaping::Basic
+        }
+        _ => Shaping::Advanced,
+    }
+}
+
 impl SharedTextBuffer {
     /// Ensure the buffer has the correct text and font_size, only reshaping if needed
     pub(crate) fn ensure(
@@ -276,6 +334,7 @@ impl SharedTextBuffer {
         } else {
             14.0
         };
+        let shaping = select_text_shaping(annotated_text, style);
 
         // Set text and shape
         if annotated_text.span_styles.is_empty() {
@@ -288,7 +347,7 @@ impl SharedTextBuffer {
             );
             let attrs_ref = attrs.as_attrs();
             self.buffer
-                .set_text(font_system, text_str, &attrs_ref, Shaping::Advanced);
+                .set_text(font_system, text_str, &attrs_ref, shaping);
         } else {
             let boundaries = annotated_text.span_boundaries();
             let mut rich_spans: Vec<(&str, AttrsOwned)> =
@@ -331,7 +390,7 @@ impl SharedTextBuffer {
                     .iter()
                     .map(|(slice, attrs)| (*slice, attrs.as_attrs())),
                 &default_attrs_ref,
-                Shaping::Advanced,
+                shaping,
                 None,
             );
         }
@@ -2259,6 +2318,36 @@ mod tests {
             GlyphonWeight(cranpose_ui::text::FontWeight::NORMAL.0),
             "missing bold face should downgrade to available weight instead of panicking during shaping"
         );
+    }
+
+    #[test]
+    fn select_text_shaping_uses_basic_for_simple_text_when_requested() {
+        let style =
+            cranpose_ui::text::TextStyle::from_paragraph_style(cranpose_ui::text::ParagraphStyle {
+                platform_style: Some(cranpose_ui::text::PlatformParagraphStyle {
+                    include_font_padding: None,
+                    shaping: Some(cranpose_ui::text::TextShaping::Basic),
+                }),
+                ..Default::default()
+            });
+        let text = cranpose_ui::text::AnnotatedString::from("• Item 0042: basic markdown text");
+
+        assert_eq!(select_text_shaping(&text, &style), Shaping::Basic);
+    }
+
+    #[test]
+    fn select_text_shaping_falls_back_to_advanced_for_complex_text() {
+        let style =
+            cranpose_ui::text::TextStyle::from_paragraph_style(cranpose_ui::text::ParagraphStyle {
+                platform_style: Some(cranpose_ui::text::PlatformParagraphStyle {
+                    include_font_padding: None,
+                    shaping: Some(cranpose_ui::text::TextShaping::Basic),
+                }),
+                ..Default::default()
+            });
+        let text = cranpose_ui::text::AnnotatedString::from("emoji 😀 requires fallback");
+
+        assert_eq!(select_text_shaping(&text, &style), Shaping::Advanced);
     }
 
     #[test]
