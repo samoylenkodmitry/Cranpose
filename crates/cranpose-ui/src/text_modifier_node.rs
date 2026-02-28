@@ -27,6 +27,7 @@ use cranpose_foundation::{
 };
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 /// Node that stores text content and handles measurement, drawing, and semantics.
 ///
@@ -39,7 +40,7 @@ use std::hash::{Hash, Hasher};
 /// `compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/modifiers/TextStringSimpleNode.kt`
 #[derive(Debug)]
 pub struct TextModifierNode {
-    text: AnnotatedString,
+    text: Rc<AnnotatedString>,
     style: TextStyle,
     options: TextLayoutOptions,
     measure_cache: RefCell<Option<TextMeasureCacheEntry>>,
@@ -53,7 +54,7 @@ struct TextMeasureCacheEntry {
 }
 
 impl TextModifierNode {
-    pub fn new(text: AnnotatedString, style: TextStyle, options: TextLayoutOptions) -> Self {
+    pub fn new(text: Rc<AnnotatedString>, style: TextStyle, options: TextLayoutOptions) -> Self {
         Self {
             text,
             style,
@@ -64,11 +65,11 @@ impl TextModifierNode {
     }
 
     pub fn text(&self) -> &str {
-        &self.text.text
+        self.text.text.as_str()
     }
 
     pub fn annotated_string(&self) -> AnnotatedString {
-        self.text.clone()
+        (*self.text).clone()
     }
 
     pub fn style(&self) -> &TextStyle {
@@ -206,7 +207,7 @@ impl LayoutModifierNode for TextModifierNode {
 /// Phase 2: Instead of reconstructing nodes via `TextModifierNode::new()`, this proxy
 /// directly implements measurement logic using the snapshotted text content.
 struct TextMeasurementProxy {
-    text: AnnotatedString,
+    text: Rc<AnnotatedString>,
     style: TextStyle,
     options: TextLayoutOptions,
 }
@@ -303,13 +304,13 @@ impl SemanticsNode for TextModifierNode {
 /// Matches Jetpack Compose: `TextStringSimpleElement` in BasicText.kt
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextModifierElement {
-    text: AnnotatedString,
+    text: Rc<AnnotatedString>,
     style: TextStyle,
     options: TextLayoutOptions,
 }
 
 impl TextModifierElement {
-    pub fn new(text: AnnotatedString, style: TextStyle, options: TextLayoutOptions) -> Self {
+    pub fn new(text: Rc<AnnotatedString>, style: TextStyle, options: TextLayoutOptions) -> Self {
         Self {
             text,
             style,
@@ -623,7 +624,7 @@ mod tests {
 
     #[test]
     fn hash_changes_when_style_changes() {
-        let text = AnnotatedString::from("Hello");
+        let text = Rc::new(AnnotatedString::from("Hello"));
         let element_a = TextModifierElement::new(
             text.clone(),
             TextStyle::default(),
@@ -653,7 +654,7 @@ mod tests {
             ..Default::default()
         };
         let options = TextLayoutOptions::default();
-        let text = AnnotatedString::from("Hash me");
+        let text = Rc::new(AnnotatedString::from("Hash me"));
         let element_a = TextModifierElement::new(text.clone(), style.clone(), options);
         let element_b = TextModifierElement::new(text, style, options);
 

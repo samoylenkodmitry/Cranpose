@@ -11,6 +11,23 @@ use crate::widgets::BasicText;
 use cranpose_core::NodeId;
 use std::rc::Rc;
 
+#[doc(hidden)]
+pub trait IntoSharedAnnotatedString {
+    fn into_shared(self) -> Rc<AnnotatedString>;
+}
+
+impl IntoSharedAnnotatedString for AnnotatedString {
+    fn into_shared(self) -> Rc<AnnotatedString> {
+        Rc::new(self)
+    }
+}
+
+impl IntoSharedAnnotatedString for Rc<AnnotatedString> {
+    fn into_shared(self) -> Rc<AnnotatedString> {
+        self
+    }
+}
+
 /// Displays an [`AnnotatedString`] and calls `on_click` with the **byte offset** of the character
 /// under the pointer at the time of the click.
 ///
@@ -41,12 +58,16 @@ use std::rc::Rc;
 /// )
 /// ```
 #[allow(clippy::needless_pass_by_value)]
-pub fn ClickableText(
-    text: AnnotatedString,
+pub fn ClickableText<T>(
+    text: T,
     modifier: Modifier,
     style: TextStyle,
     on_click: impl Fn(usize) + 'static,
-) -> NodeId {
+) -> NodeId
+where
+    T: IntoSharedAnnotatedString,
+{
+    let text = text.into_shared();
     let text_for_click = text.clone();
     let style_for_click = style.clone();
     let on_click: Rc<dyn Fn(usize)> = Rc::new(on_click);

@@ -154,7 +154,12 @@ fn CounterRow(label: &'static str, count: State<i32>) -> NodeId {
         Text(label, Modifier::empty(), TextStyle::default());
         let count_for_text = count;
         let text_id = Text(
-            DynamicTextSource::new(move || format!("Count = {}", count_for_text.value()).into()),
+            DynamicTextSource::new(move || {
+                Rc::new(crate::text::AnnotatedString::from(format!(
+                    "Count = {}",
+                    count_for_text.value()
+                )))
+            }),
             Modifier::empty(),
             TextStyle::default(),
         );

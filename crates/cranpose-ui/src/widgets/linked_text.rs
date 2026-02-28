@@ -66,11 +66,13 @@ pub fn LinkedText(
     style: TextStyle,
     open_url: impl Fn(&str) + 'static,
 ) -> NodeId {
-    let link_annotations: Rc<Vec<_>> = Rc::new(text.link_annotations.clone());
+    let text = Rc::new(text);
+    let text_for_links = text.clone();
     let open_url: Rc<dyn Fn(&str)> = Rc::new(open_url);
 
     ClickableText(text, modifier, style, move |offset| {
-        for ann in link_annotations
+        for ann in text_for_links
+            .link_annotations
             .iter()
             .filter(|a| a.range.start <= offset && offset < a.range.end)
         {

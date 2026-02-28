@@ -350,22 +350,21 @@ impl SharedTextBuffer {
                 .set_text(font_system, text_str, &attrs_ref, shaping);
         } else {
             let boundaries = annotated_text.span_boundaries();
-            let mut rich_spans: Vec<(&str, AttrsOwned)> =
+            let mut rich_spans: Vec<(usize, usize, AttrsOwned)> =
                 Vec::with_capacity(boundaries.len().saturating_sub(1));
+            let mut chunk_text_style = style.clone();
             for window in boundaries.windows(2) {
                 let start = window[0];
                 let end = window[1];
                 if start == end {
                     continue;
                 }
-                let slice = &annotated_text.text[start..end];
                 let mut merged_style = style.span_style.clone();
                 for span in &annotated_text.span_styles {
                     if span.range.start <= start && span.range.end >= end {
                         merged_style = merged_style.merge(&span.item);
                     }
                 }
-                let mut chunk_text_style = style.clone();
                 chunk_text_style.span_style = merged_style;
                 let attrs = attrs_from_text_style(
                     &chunk_text_style,
@@ -374,7 +373,13 @@ impl SharedTextBuffer {
                     font_system,
                     font_family_resolver,
                 );
-                rich_spans.push((slice, attrs));
+                if let Some((_, previous_end, previous_attrs)) = rich_spans.last_mut() {
+                    if *previous_end == start && *previous_attrs == attrs {
+                        *previous_end = end;
+                        continue;
+                    }
+                }
+                rich_spans.push((start, end, attrs));
             }
             let default_attrs = attrs_from_text_style(
                 style,
@@ -386,9 +391,9 @@ impl SharedTextBuffer {
             let default_attrs_ref = default_attrs.as_attrs();
             self.buffer.set_rich_text(
                 font_system,
-                rich_spans
-                    .iter()
-                    .map(|(slice, attrs)| (*slice, attrs.as_attrs())),
+                rich_spans.iter().map(|(start, end, attrs)| {
+                    (&annotated_text.text[*start..*end], attrs.as_attrs())
+                }),
                 &default_attrs_ref,
                 shaping,
                 None,
@@ -508,6 +513,11 @@ impl WgpuFontFamilyResolver {
         self.ensure_non_empty_font_db(font_system);
         self.ensure_family_index(font_system);
         self.ensure_generic_fallbacks(font_system);
+    }
+
+    fn clear_resolution_caches(&mut self) {
+        self.request_cache.clear();
+        self.style_weight_cache.clear();
     }
 
     fn resolve_family_owned(
@@ -646,8 +656,7 @@ impl WgpuFontFamilyResolver {
             }
         }
         self.indexed_face_count = face_count;
-        self.request_cache.clear();
-        self.style_weight_cache.clear();
+        self.clear_resolution_caches();
         self.generic_fallback_seeded = false;
     }
 
@@ -678,8 +687,7 @@ impl WgpuFontFamilyResolver {
         db.set_fantasy_family(primary_family);
 
         self.generic_fallback_seeded = true;
-        self.request_cache.clear();
-        self.style_weight_cache.clear();
+        self.clear_resolution_caches();
     }
 
     fn load_typeface_path(&mut self, font_system: &mut FontSystem, path: &str) -> Option<String> {
@@ -1219,7 +1227,6 @@ fn attrs_from_text_style(
 
     let font_size_px = unscaled_font_size * scale;
     let line_height_px = unscaled_line_height * scale;
-
     attrs = attrs.metrics(glyphon::Metrics::new(font_size_px, line_height_px));
 
     if let Some(color) = &span_style.color {

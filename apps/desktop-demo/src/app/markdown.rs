@@ -23,7 +23,7 @@ use std::rc::Rc;
 #[derive(Clone, Debug, PartialEq)]
 enum MarkdownBlock {
     /// A styled paragraph of inline text (may contain link annotations for clickable links).
-    Text(AnnotatedString),
+    Text(Rc<AnnotatedString>),
     /// A horizontal divider (---).
     Rule,
 }
@@ -129,7 +129,11 @@ impl BlockBuilder {
             }
             b
         });
-        self.builder_raw = Some(b.push_style(style));
+        self.builder_raw = if style == SpanStyle::default() {
+            Some(b)
+        } else {
+            Some(b.push_style(style))
+        };
     }
 
     fn pop_style(&mut self) {
@@ -166,7 +170,7 @@ impl BlockBuilder {
         if let Some(b) = self.builder_raw.take() {
             let s = b.to_annotated_string();
             if !s.text.is_empty() {
-                self.blocks.push(MarkdownBlock::Text(s));
+                self.blocks.push(MarkdownBlock::Text(Rc::new(s)));
             }
         }
     }
@@ -351,7 +355,9 @@ fn split_large_text_block(annotated: &AnnotatedString, out: &mut Vec<MarkdownBlo
             }
         }
 
-        out.push(MarkdownBlock::Text(annotated.subsequence(start..end)));
+        out.push(MarkdownBlock::Text(Rc::new(
+            annotated.subsequence(start..end),
+        )));
         start = end;
     }
 }
@@ -974,7 +980,7 @@ fn render_markdown_blocks(blocks: Rc<[MarkdownBlock]>) {
 
 #[allow(non_snake_case)]
 #[composable]
-fn render_text_block(annotated: AnnotatedString) {
+fn render_text_block(annotated: Rc<AnnotatedString>) {
     let text_style = TextStyle {
         span_style: SpanStyle {
             color: Some(Color(0.88, 0.90, 0.96, 1.0)),
@@ -995,7 +1001,7 @@ fn render_text_block(annotated: AnnotatedString) {
         // LinkedText dispatches Url via open_url, Clickable handlers are called directly.
         let uri_handler = local_uri_handler().current();
         LinkedText(
-            annotated,
+            (*annotated).clone(),
             Modifier::empty().fill_max_width().padding(2.0),
             text_style,
             move |url| {
@@ -1124,6 +1130,19 @@ mod tests {
             text_blocks.len(),
             2,
             "expected two separate paragraph blocks"
+        );
+    }
+
+    #[test]
+    fn plain_paragraphs_do_not_emit_empty_span_styles() {
+        let blocks = markdown_to_blocks("plain paragraph");
+        assert_eq!(blocks.len(), 1);
+        let MarkdownBlock::Text(annotated) = &blocks[0] else {
+            panic!("expected Text block");
+        };
+        assert!(
+            annotated.span_styles.is_empty(),
+            "unstyled markdown should not force styled-text rendering"
         );
     }
 
@@ -1294,7 +1313,9 @@ mod tests {
     #[test]
     fn split_large_markdown_blocks_preserves_text_content() {
         let long = "a".repeat(MAX_MARKDOWN_BLOCK_BYTES * 2 + 100);
-        let input = vec![MarkdownBlock::Text(AnnotatedString::from(long.as_str()))];
+        let input = vec![MarkdownBlock::Text(Rc::new(AnnotatedString::from(
+            long.as_str(),
+        )))];
         let split = split_large_markdown_blocks(input);
         assert!(
             split.len() >= 2,
