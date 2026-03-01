@@ -4,16 +4,13 @@ use crate::effect_renderer::{EffectRenderer, RoundedCompositeMask};
 use crate::offscreen::OffscreenTarget;
 use crate::scene::{BackdropLayer, DrawShape, EffectLayer, ImageDraw, ShadowDraw, TextDraw};
 use crate::shaders;
-use crate::{
-    EnsureTextBufferParams, SharedFontFamilyResolver, SharedTextBuffer, SharedTextCache,
-    TextCacheKey,
-};
+use crate::{EnsureTextBufferParams, SharedFontFamilyResolver, SharedTextCache, TextCacheKey};
 use bytemuck::{Pod, Zeroable};
 use cranpose_ui_graphics::{
     BlendMode, Brush, Color, ColorFilter, ImageBitmap, Rect, RenderEffect, TileMode,
 };
 use glyphon::{
-    Cache, Color as GlyphonColor, FontSystem, Metrics, Resolution, SwashCache, TextArea, TextAtlas,
+    Cache, Color as GlyphonColor, FontSystem, Resolution, SwashCache, TextArea, TextAtlas,
     TextBounds, TextRenderer, Viewport,
 };
 use lru::LruCache;
@@ -1081,9 +1078,6 @@ impl GpuRenderer {
             );
             self.effect_renderer.offscreen_pool.release(accum);
         }
-
-        let mut text_cache = self.text_cache.lock().unwrap();
-        crate::trim_text_cache(&mut text_cache);
 
         // Trim the GPU text atlas to reclaim space for glyphs no longer in use.
         // Without this, the atlas grows monotonically and eventually hits AtlasFull.
@@ -2599,20 +2593,13 @@ impl GpuRenderer {
             );
             let key = TextCacheKey::for_node(text_draw.node_id, font_size_px, style_hash);
 
-            let buffer = text_cache.entry(key.clone()).or_insert_with(|| {
-                let buffer = glyphon::Buffer::new(
-                    &mut font_system,
-                    Metrics::new(font_size_px, line_height_px),
-                );
-                SharedTextBuffer {
-                    buffer,
-                    text: String::new(),
-                    font_size: 0.0,
-                    line_height: 0.0,
-                    style_hash: 0,
-                    cached_size: None,
-                }
-            });
+            let (_, _, _, buffer) = crate::shared_text_buffer_mut(
+                &mut text_cache,
+                key.clone(),
+                &mut font_system,
+                font_size_px,
+                line_height_px,
+            );
 
             buffer.ensure(
                 &mut font_system,
@@ -2645,7 +2632,7 @@ impl GpuRenderer {
             let key = &text_keys[key_idx];
             key_idx += 1;
 
-            let cached = text_cache.get(key).expect("Text should be in cache");
+            let cached = text_cache.peek(key).expect("Text should be in cache");
 
             let color = GlyphonColor::rgba(
                 (text_draw.color.r() * 255.0) as u8,

@@ -306,6 +306,10 @@ impl TextFieldModifierNode {
         self.state.text()
     }
 
+    pub fn style(&self) -> &TextStyle {
+        &self.style
+    }
+
     /// Returns the current selection.
     pub fn selection(&self) -> TextRange {
         self.state.selection()

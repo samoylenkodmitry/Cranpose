@@ -73,6 +73,8 @@ struct TextMeasureTelemetry {
     size_cache_misses: AtomicU64,
     text_cache_hits: AtomicU64,
     text_cache_misses: AtomicU64,
+    text_cache_evictions: AtomicU64,
+    text_cache_occupancy: AtomicU64,
     ensure_reshapes: AtomicU64,
     ensure_reuses: AtomicU64,
 }
@@ -108,6 +110,8 @@ fn maybe_report_text_measure_telemetry(sequence: u64) {
     let size_misses = telemetry.size_cache_misses.load(Ordering::Relaxed);
     let text_hits = telemetry.text_cache_hits.load(Ordering::Relaxed);
     let text_misses = telemetry.text_cache_misses.load(Ordering::Relaxed);
+    let text_cache_evictions = telemetry.text_cache_evictions.load(Ordering::Relaxed);
+    let text_cache_occupancy = telemetry.text_cache_occupancy.load(Ordering::Relaxed);
     let reshapes = telemetry.ensure_reshapes.load(Ordering::Relaxed);
     let reuses = telemetry.ensure_reuses.load(Ordering::Relaxed);
 
@@ -149,7 +153,7 @@ fn maybe_report_text_measure_telemetry(sequence: u64) {
     };
 
     log::warn!(
-        "[text-measure-telemetry] measure_calls={} layout_calls={} offset_calls={} measure_with_options_calls={} prepare_with_options_calls={} measure_fast_path_rate={:.1}% prepare_fast_path_rate={:.1}% prepared_layout_cache_hit_rate={:.1}% size_hit_rate={:.1}% text_cache_hit_rate={:.1}% reshape_rate={:.1}% reshapes={} reuses={}",
+        "[text-measure-telemetry] measure_calls={} layout_calls={} offset_calls={} measure_with_options_calls={} prepare_with_options_calls={} measure_fast_path_rate={:.1}% prepare_fast_path_rate={:.1}% prepared_layout_cache_hit_rate={:.1}% size_hit_rate={:.1}% text_cache_hit_rate={:.1}% text_cache_occupancy={} text_cache_evictions={} reshape_rate={:.1}% reshapes={} reuses={}",
         measure_calls,
         layout_calls,
         offset_calls,
@@ -160,6 +164,8 @@ fn maybe_report_text_measure_telemetry(sequence: u64) {
         prepared_layout_cache_hit_rate,
         size_hit_rate,
         text_hit_rate,
+        text_cache_occupancy,
+        text_cache_evictions,
         reshape_rate,
         reshapes,
         reuses
@@ -443,8 +449,8 @@ impl SharedTextBuffer {
     }
 }
 
-/// Shared cache for text buffers used by both measurement and rendering
-pub(crate) type SharedTextCache = Arc<Mutex<HashMap<TextCacheKey, SharedTextBuffer>>>;
+/// Shared cache for text buffers used by both measurement and rendering.
+pub(crate) type SharedTextCache = Arc<Mutex<LruCache<TextCacheKey, SharedTextBuffer>>>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct TypefaceRequest {
@@ -788,31 +794,55 @@ fn primary_family_name_from_bytes(bytes: &[u8]) -> Option<String> {
 }
 
 type SharedFontFamilyResolver = Arc<Mutex<WgpuFontFamilyResolver>>;
+const SHARED_TEXT_CACHE_CAPACITY: usize = 256;
 
-/// Trim text cache if it exceeds MAX_CACHE_ITEMS.
-/// Removes the oldest half of entries when limit is reached.
-pub(crate) fn trim_text_cache(cache: &mut HashMap<TextCacheKey, SharedTextBuffer>) {
-    if cache.len() > MAX_CACHE_ITEMS {
-        let target_size = MAX_CACHE_ITEMS / 2;
-        let to_remove = cache.len() - target_size;
-
-        // Remove oldest entries (arbitrary keys from the front)
-        let keys_to_remove: Vec<TextCacheKey> = cache.keys().take(to_remove).cloned().collect();
-
-        for key in keys_to_remove {
-            cache.remove(&key);
-        }
-
-        log::debug!(
-            "Trimmed text cache from {} to {} entries",
-            cache.len() + to_remove,
-            cache.len()
-        );
+fn new_shared_text_buffer(
+    font_system: &mut FontSystem,
+    font_size: f32,
+    line_height: f32,
+) -> SharedTextBuffer {
+    let buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
+    SharedTextBuffer {
+        buffer,
+        text: String::new(),
+        font_size: 0.0,
+        line_height: 0.0,
+        style_hash: 0,
+        cached_size: None,
     }
 }
 
-/// Maximum number of cached text buffers before trimming occurs
-const MAX_CACHE_ITEMS: usize = 256;
+pub(crate) fn new_shared_text_cache() -> SharedTextCache {
+    Arc::new(Mutex::new(LruCache::new(
+        NonZeroUsize::new(SHARED_TEXT_CACHE_CAPACITY).unwrap(),
+    )))
+}
+
+pub(crate) fn shared_text_buffer_mut<'a>(
+    cache: &'a mut LruCache<TextCacheKey, SharedTextBuffer>,
+    key: TextCacheKey,
+    font_system: &mut FontSystem,
+    font_size: f32,
+    line_height: f32,
+) -> (bool, bool, usize, &'a mut SharedTextBuffer) {
+    if cache.contains(&key) {
+        let len = cache.len();
+        let buffer = cache.get_mut(&key).expect("text cache hit must exist");
+        return (true, false, len, buffer);
+    }
+
+    let evicted = cache
+        .push(
+            key.clone(),
+            new_shared_text_buffer(font_system, font_size, line_height),
+        )
+        .is_some();
+    let len = cache.len();
+    let buffer = cache
+        .get_mut(&key)
+        .expect("inserted text cache entry must exist");
+    (false, evicted, len, buffer)
+}
 
 /// WGPU-based renderer for GPU-accelerated 2D rendering.
 ///
@@ -854,7 +884,7 @@ impl WgpuRenderer {
 
         let font_system = Arc::new(Mutex::new(font_system));
         let font_family_resolver = Arc::new(Mutex::new(font_family_resolver_impl));
-        let text_cache = Arc::new(Mutex::new(HashMap::new()));
+        let text_cache = new_shared_text_cache();
 
         let text_measurer = WgpuTextMeasurer::new(
             font_system.clone(),
@@ -1365,17 +1395,13 @@ impl WgpuTextMeasurer {
         let mut font_family_resolver = self.font_family_resolver.lock().unwrap();
 
         let (size, wrapped_line_count) = {
-            let buffer = text_cache.entry(text_buffer_key).or_insert_with(|| {
-                let buffer = Buffer::new(&mut font_system, Metrics::new(font_size, line_height));
-                SharedTextBuffer {
-                    buffer,
-                    text: String::new(),
-                    font_size: 0.0,
-                    line_height: 0.0,
-                    style_hash: 0,
-                    cached_size: None,
-                }
-            });
+            let (_, _, _, buffer) = shared_text_buffer_mut(
+                &mut text_cache,
+                text_buffer_key,
+                &mut font_system,
+                font_size,
+                line_height,
+            );
 
             let _ = buffer.ensure(
                 &mut font_system,
@@ -1399,8 +1425,6 @@ impl WgpuTextMeasurer {
             let line_count = buffer.buffer.layout_runs().count();
             (size, line_count)
         };
-
-        trim_text_cache(&mut text_cache);
         drop(font_system);
         drop(text_cache);
 
@@ -1445,17 +1469,13 @@ impl WgpuTextMeasurer {
         let mut font_family_resolver = self.font_family_resolver.lock().unwrap();
 
         let (size, wrapped_ranges) = {
-            let buffer = text_cache.entry(text_buffer_key).or_insert_with(|| {
-                let buffer = Buffer::new(&mut font_system, Metrics::new(font_size, line_height));
-                SharedTextBuffer {
-                    buffer,
-                    text: String::new(),
-                    font_size: 0.0,
-                    line_height: 0.0,
-                    style_hash: 0,
-                    cached_size: None,
-                }
-            });
+            let (_, _, _, buffer) = shared_text_buffer_mut(
+                &mut text_cache,
+                text_buffer_key,
+                &mut font_system,
+                font_size,
+                line_height,
+            );
 
             let _ = buffer.ensure(
                 &mut font_system,
@@ -1479,8 +1499,6 @@ impl WgpuTextMeasurer {
             let wrapped_ranges = collect_wrapped_ranges(text_str, &buffer.buffer)?;
             (size, wrapped_ranges)
         };
-
-        trim_text_cache(&mut text_cache);
 
         let wrapped_lines: Vec<cranpose_ui::text::AnnotatedString> = wrapped_ranges
             .iter()
@@ -1647,7 +1665,7 @@ pub fn setup_headless_text_measurer() {
     font_family_resolver_impl.prime(&mut font_system);
     let font_system = Arc::new(Mutex::new(font_system));
     let font_family_resolver = Arc::new(Mutex::new(font_family_resolver_impl));
-    let text_cache = Arc::new(Mutex::new(HashMap::new()));
+    let text_cache = new_shared_text_cache();
     cranpose_ui::text::set_text_measurer(WgpuTextMeasurer::new(
         font_system,
         text_cache,
@@ -1721,25 +1739,25 @@ impl TextMeasurer for WgpuTextMeasurer {
 
         // Get or create buffer and calculate size
         let size = {
+            let (text_cache_hit, evicted, cache_len, buffer) = shared_text_buffer_mut(
+                &mut text_cache,
+                text_buffer_key,
+                &mut font_system,
+                font_size,
+                line_height,
+            );
             if let Some(t) = telemetry {
-                let text_cache_hit = text_cache.contains_key(&text_buffer_key);
                 if text_cache_hit {
                     t.text_cache_hits.fetch_add(1, Ordering::Relaxed);
                 } else {
                     t.text_cache_misses.fetch_add(1, Ordering::Relaxed);
                 }
-            }
-            let buffer = text_cache.entry(text_buffer_key).or_insert_with(|| {
-                let buffer = Buffer::new(&mut font_system, Metrics::new(font_size, line_height));
-                SharedTextBuffer {
-                    buffer,
-                    text: String::new(),
-                    font_size: 0.0,
-                    line_height: 0.0,
-                    style_hash: 0,
-                    cached_size: None,
+                if evicted {
+                    t.text_cache_evictions.fetch_add(1, Ordering::Relaxed);
                 }
-            });
+                t.text_cache_occupancy
+                    .store(cache_len as u64, Ordering::Relaxed);
+            }
 
             // Ensure buffer has the correct text
             let reshaped = buffer.ensure(
@@ -1765,9 +1783,6 @@ impl TextMeasurer for WgpuTextMeasurer {
             // Calculate size if not cached
             buffer.size()
         };
-
-        // Trim cache if needed (after we're done with buffer reference)
-        trim_text_cache(&mut text_cache);
 
         drop(font_system);
         drop(text_cache);
@@ -1946,25 +1961,25 @@ impl TextMeasurer for WgpuTextMeasurer {
         let mut text_cache = self.text_cache.lock().unwrap();
         let mut font_family_resolver = self.font_family_resolver.lock().unwrap();
 
+        let (text_cache_hit, evicted, cache_len, buffer) = shared_text_buffer_mut(
+            &mut text_cache,
+            cache_key,
+            &mut font_system,
+            font_size,
+            line_height,
+        );
         if let Some(t) = telemetry {
-            let text_cache_hit = text_cache.contains_key(&cache_key);
             if text_cache_hit {
                 t.text_cache_hits.fetch_add(1, Ordering::Relaxed);
             } else {
                 t.text_cache_misses.fetch_add(1, Ordering::Relaxed);
             }
-        }
-        let buffer = text_cache.entry(cache_key).or_insert_with(|| {
-            let buffer = Buffer::new(&mut font_system, Metrics::new(font_size, line_height));
-            SharedTextBuffer {
-                buffer,
-                text: String::new(),
-                font_size: 0.0,
-                line_height: 0.0,
-                style_hash: 0,
-                cached_size: None,
+            if evicted {
+                t.text_cache_evictions.fetch_add(1, Ordering::Relaxed);
             }
-        });
+            t.text_cache_occupancy
+                .store(cache_len as u64, Ordering::Relaxed);
+        }
 
         let reshaped = buffer.ensure(
             &mut font_system,
@@ -2125,25 +2140,25 @@ impl TextMeasurer for WgpuTextMeasurer {
         let mut text_cache = self.text_cache.lock().unwrap();
         let mut font_family_resolver = self.font_family_resolver.lock().unwrap();
 
+        let (text_cache_hit, evicted, cache_len, buffer) = shared_text_buffer_mut(
+            &mut text_cache,
+            cache_key.clone(),
+            &mut font_system,
+            font_size,
+            line_height,
+        );
         if let Some(t) = telemetry {
-            let text_cache_hit = text_cache.contains_key(&cache_key);
             if text_cache_hit {
                 t.text_cache_hits.fetch_add(1, Ordering::Relaxed);
             } else {
                 t.text_cache_misses.fetch_add(1, Ordering::Relaxed);
             }
-        }
-        let buffer = text_cache.entry(cache_key.clone()).or_insert_with(|| {
-            let buffer = Buffer::new(&mut font_system, Metrics::new(font_size, line_height));
-            SharedTextBuffer {
-                buffer,
-                text: String::new(),
-                font_size: 0.0,
-                line_height: 0.0,
-                style_hash: 0,
-                cached_size: None,
+            if evicted {
+                t.text_cache_evictions.fetch_add(1, Ordering::Relaxed);
             }
-        });
+            t.text_cache_occupancy
+                .store(cache_len as u64, Ordering::Relaxed);
+        }
         let reshaped = buffer.ensure(
             &mut font_system,
             &mut font_family_resolver,
@@ -2415,7 +2430,7 @@ mod tests {
             let (font_system, resolver) = seeded_font_system_and_resolver();
             let measurer = WgpuTextMeasurer::new(
                 Arc::new(Mutex::new(font_system)),
-                Arc::new(Mutex::new(HashMap::new())),
+                new_shared_text_cache(),
                 Arc::new(Mutex::new(resolver)),
             );
             let text = cranpose_ui::text::AnnotatedString::from("hello\nworld");
@@ -2460,7 +2475,7 @@ mod tests {
             let (font_system, resolver) = seeded_font_system_and_resolver();
             let measurer = WgpuTextMeasurer::new(
                 Arc::new(Mutex::new(font_system)),
-                Arc::new(Mutex::new(HashMap::new())),
+                new_shared_text_cache(),
                 Arc::new(Mutex::new(resolver)),
             );
             let text = cranpose_ui::text::AnnotatedString::from("wrap me ".repeat(120));
@@ -2494,7 +2509,7 @@ mod tests {
             let (font_system, resolver) = seeded_font_system_and_resolver();
             let measurer = WgpuTextMeasurer::new(
                 Arc::new(Mutex::new(font_system)),
-                Arc::new(Mutex::new(HashMap::new())),
+                new_shared_text_cache(),
                 Arc::new(Mutex::new(resolver)),
             );
             let text = cranpose_ui::text::AnnotatedString::from(
@@ -2547,7 +2562,7 @@ mod tests {
             let (font_system, resolver) = seeded_font_system_and_resolver();
             let measurer = WgpuTextMeasurer::new(
                 Arc::new(Mutex::new(font_system)),
-                Arc::new(Mutex::new(HashMap::new())),
+                new_shared_text_cache(),
                 Arc::new(Mutex::new(resolver)),
             );
             let text = cranpose_ui::text::AnnotatedString::from("shared node identity");
@@ -2563,10 +2578,10 @@ mod tests {
 
             tx.send((
                 cache.len(),
-                cache.contains_key(&expected_key),
+                cache.contains(&expected_key),
                 cache
-                    .keys()
-                    .any(|key| matches!(key.key, TextKey::Content(_))),
+                    .iter()
+                    .any(|(key, _)| matches!(key.key, TextKey::Content(_))),
             ))
             .expect("send node cache result");
         });
@@ -2583,6 +2598,29 @@ mod tests {
             !has_content_key,
             "node-aware measurement should not populate content cache keys"
         );
+    }
+
+    #[test]
+    fn shared_text_cache_uses_bounded_lru_eviction() {
+        let mut font_system = FontSystem::new();
+        let mut cache = LruCache::new(NonZeroUsize::new(SHARED_TEXT_CACHE_CAPACITY).unwrap());
+
+        for index in 0..=SHARED_TEXT_CACHE_CAPACITY {
+            let text = format!("cache-entry-{index}");
+            let key = TextCacheKey::new(text.as_str(), 14.0, 7);
+            let _ = shared_text_buffer_mut(&mut cache, key, &mut font_system, 14.0, 16.0);
+        }
+
+        let oldest = TextCacheKey::new("cache-entry-0", 14.0, 7);
+        let newest = TextCacheKey::new(
+            format!("cache-entry-{}", SHARED_TEXT_CACHE_CAPACITY).as_str(),
+            14.0,
+            7,
+        );
+
+        assert_eq!(cache.len(), SHARED_TEXT_CACHE_CAPACITY);
+        assert!(!cache.contains(&oldest));
+        assert!(cache.contains(&newest));
     }
 
     // Font bytes used by tests — the same file the demo app ships.

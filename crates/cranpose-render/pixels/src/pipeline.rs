@@ -3,12 +3,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::Brush;
+#[cfg(test)]
+use cranpose_ui::prepare_text_layout;
 use cranpose_ui::text::{
     resolve_text_direction, ResolvedTextDirection, TextAlign, TextDecoration, TextStyle,
 };
 use cranpose_ui::{
-    measure_text, prepare_text_layout, LayoutBox, LayoutNode, LayoutNodeKind, SubcomposeLayoutNode,
-    TextLayoutOptions, TextOverflow,
+    measure_text, LayoutBox, LayoutNode, LayoutNodeKind, SubcomposeLayoutNode, TextLayoutOptions,
+    TextOverflow,
 };
 use cranpose_ui_graphics::{
     BlendMode, Color, CompositingStrategy, EdgeInsets, GraphicsLayer, LayerShape, Point, Rect,
@@ -320,7 +322,7 @@ fn render_container(
 
     // Render text content if present in modifier slices.
     // Text is now handled via TextModifierNode in the modifier chain.
-    if let Some(value) = layout.node_data.modifier_slices().annotated_string() {
+    if let Some(value) = layout.node_data.modifier_slices().annotated_text() {
         let default_text_style = cranpose_ui::text::TextStyle::default();
         let text_style_ref = layout
             .node_data
@@ -337,12 +339,11 @@ fn render_container(
         let padding = style.padding;
         let content_width = (rect.width - padding.left - padding.right).max(0.0);
         let measure_width = resolve_text_measure_width(content_width, padding, None, options);
-        let prepared = prepare_text_layout(
-            &value,
-            text_style_ref,
-            options,
-            Some(measure_width).filter(|w| w.is_finite() && *w > 0.0),
-        );
+        let prepared = layout
+            .node_data
+            .modifier_slices()
+            .prepare_text_layout(Some(measure_width).filter(|w| w.is_finite() && *w > 0.0))
+            .expect("modifier text layout");
         let draw_width = if options.overflow == TextOverflow::Visible {
             prepared.metrics.width
         } else {
@@ -939,7 +940,7 @@ fn render_node_from_applier(
     }
 
     // Render text content if present
-    if let Some(value) = modifier_slices.annotated_string() {
+    if let Some(value) = modifier_slices.annotated_text() {
         let default_text_style = cranpose_ui::text::TextStyle::default();
         let text_style_ref = modifier_slices.text_style().unwrap_or(&default_text_style);
 
@@ -956,12 +957,9 @@ fn render_node_from_applier(
             .then_some(layout_state.measurement_constraints.max_width);
         let measure_width =
             resolve_text_measure_width(content_width, padding, measured_max_width, options);
-        let prepared = prepare_text_layout(
-            &value,
-            text_style_ref,
-            options,
-            Some(measure_width).filter(|w| w.is_finite() && *w > 0.0),
-        );
+        let prepared = modifier_slices
+            .prepare_text_layout(Some(measure_width).filter(|w| w.is_finite() && *w > 0.0))
+            .expect("modifier text layout");
         let draw_width = if options.overflow == TextOverflow::Visible {
             prepared.metrics.width
         } else {
