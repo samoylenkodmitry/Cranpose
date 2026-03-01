@@ -7,12 +7,11 @@ const CHESSBOARD_LIGHT: [u8; 4] = [240, 240, 240, 255];
 const CHESSBOARD_DARK: [u8; 4] = [36, 54, 72, 255];
 
 pub(crate) fn generate_chessboard_bitmap(tile_size: u32, tiles_per_side: u32) -> ImageBitmap {
-    let width = tile_size.max(1) * tiles_per_side.max(1);
-    let height = width;
-    let mut pixels = vec![0u8; (width * height * 4) as usize];
+    let side = tile_size.max(1) * tiles_per_side.max(1);
+    let mut pixels = vec![0u8; (side * side * 4) as usize];
 
-    for y in 0..height {
-        for x in 0..width {
+    for y in 0..side {
+        for x in 0..side {
             let tile_x = x / tile_size.max(1);
             let tile_y = y / tile_size.max(1);
             let color = if ((tile_x + tile_y) & 1) == 0 {
@@ -20,12 +19,12 @@ pub(crate) fn generate_chessboard_bitmap(tile_size: u32, tiles_per_side: u32) ->
             } else {
                 CHESSBOARD_DARK
             };
-            let idx = ((y * width + x) * 4) as usize;
+            let idx = ((y * side + x) * 4) as usize;
             pixels[idx..idx + 4].copy_from_slice(&color);
         }
     }
 
-    ImageBitmap::from_rgba8(width, height, pixels).expect("valid chessboard bitmap")
+    ImageBitmap::from_rgba8(side, side, pixels).expect("valid chessboard bitmap")
 }
 
 #[composable]

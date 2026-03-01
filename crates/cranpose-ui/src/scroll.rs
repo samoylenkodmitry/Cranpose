@@ -8,7 +8,7 @@
 //! The actual `Modifier.horizontal_scroll()` and `Modifier.vertical_scroll()`
 //! extension methods are defined in `modifier/scroll.rs`.
 
-use cranpose_core::{mutableStateOf, MutableState, NodeId};
+use cranpose_core::{ownedMutableStateOf, NodeId, OwnedMutableState};
 use cranpose_foundation::{
     Constraints, DelegatableNode, LayoutModifierNode, Measurable, ModifierNode,
     ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState,
@@ -40,7 +40,7 @@ pub(crate) struct ScrollStateInner {
     /// Current scroll offset in pixels.
     /// Uses MutableState<f32> for reactivity - Composables can observe this value.
     /// Layout reads use get_non_reactive() to avoid triggering recomposition.
-    value: MutableState<f32>,
+    value: OwnedMutableState<f32>,
     /// Maximum scroll value (content_size - viewport_size)
     /// Using RefCell instead of MutableState to avoid snapshot isolation issues
     max_value: RefCell<f32>,
@@ -59,7 +59,7 @@ impl ScrollState {
         Self {
             inner: Rc::new(ScrollStateInner {
                 id,
-                value: mutableStateOf(initial),
+                value: ownedMutableStateOf(initial),
                 max_value: RefCell::new(0.0),
                 invalidate_callbacks: RefCell::new(std::collections::HashMap::new()),
                 pending_invalidation: Cell::new(false),

@@ -655,14 +655,14 @@ fn test_conditional_with_complex_button_structure() {
                             Text("First View", Modifier::empty(), TextStyle::default());
                             Button(
                                 Modifier::empty(),
-                                move || counter.set(counter.get() + 1),
+                                { move || counter.set(counter.get() + 1) },
                                 || {
                                     Text("Button 1", Modifier::empty(), TextStyle::default());
                                 },
                             );
                             Button(
                                 Modifier::empty(),
-                                move || counter.set(counter.get() + 10),
+                                { move || counter.set(counter.get() + 10) },
                                 || {
                                     Text("Button 2", Modifier::empty(), TextStyle::default());
                                 },

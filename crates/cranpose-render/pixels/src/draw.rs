@@ -1077,7 +1077,7 @@ mod tests {
         for y in 0..height {
             for x in 0..width {
                 let idx = ((y * width + x) * 4) as usize;
-                if &frame[idx..idx + 4] != [18, 18, 24, 255] {
+                if frame[idx..idx + 4] != [18, 18, 24, 255] {
                     top.get_or_insert(y);
                     bottom = y + 1;
                     break;

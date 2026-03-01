@@ -350,7 +350,7 @@ fn draw_repass_updates_render_data_without_layout() {
     let width_state = state_holder
         .borrow()
         .as_ref()
-        .copied()
+        .cloned()
         .expect("width state should be captured");
     width_state.set(120.0);
 

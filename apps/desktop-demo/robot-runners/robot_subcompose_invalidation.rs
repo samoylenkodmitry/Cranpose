@@ -62,7 +62,6 @@ fn test_app() {
             );
 
             // Button to cycle colors
-            let color_scheme_clone = color_scheme.clone();
             Button(
                 Modifier::empty()
                     .padding(8.0)
@@ -72,7 +71,7 @@ fn test_app() {
                         c.content_description = Some("Change Colors".into());
                     }),
                 move || {
-                    color_scheme_clone.set((color_scheme_clone.get() + 1) % 3);
+                    color_scheme.set((color_scheme.get() + 1) % 3);
                 },
                 || {
                     Text(
@@ -84,7 +83,6 @@ fn test_app() {
             );
 
             // LazyColumn using SubcomposeLayoutNode internally with colored items
-            let scheme = current_scheme;
             LazyColumn(
                 Modifier::empty()
                     .fill_max_width()
@@ -99,7 +97,7 @@ fn test_app() {
                         None::<fn(usize) -> u64>,
                         move |i| {
                             // Colors that change based on scheme
-                            let bg = match scheme {
+                            let bg = match current_scheme {
                                 0 => Color(0.1, 0.15, 0.3 + (i as f32 * 0.05), 1.0), // Blue
                                 1 => Color(0.1, 0.3 + (i as f32 * 0.05), 0.15, 1.0), // Green
                                 2 => Color(0.3 + (i as f32 * 0.05), 0.1, 0.15, 1.0), // Red
@@ -118,7 +116,7 @@ fn test_app() {
                                 RowSpec::new(),
                                 move || {
                                     Text(
-                                        format!("Item {} - Scheme {}", i, scheme),
+                                        format!("Item {} - Scheme {}", i, current_scheme),
                                         Modifier::empty(),
                                         TextStyle::default(),
                                     );

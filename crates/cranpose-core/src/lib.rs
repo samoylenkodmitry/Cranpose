@@ -152,7 +152,6 @@ fn input_debug_enabled() -> bool {
 pub use runtime::{TestRuntime, TestScheduler};
 
 use crate::collections::map::HashMap;
-use crate::runtime::{runtime_handle_for, RuntimeId};
 use crate::state::{NeverEqual, SnapshotMutableState, UpdateScope};
 use std::any::Any;
 use std::cell::{Cell, Ref, RefCell, RefMut};
@@ -490,7 +489,7 @@ pub fn remember<T: 'static>(init: impl FnOnce() -> T) -> Owned<T> {
 ///
 /// // This closure is created once, reads latest config via state
 /// let callback = remember(|| {
-///     let cfg = config_state.clone();
+///     let cfg = config_state;
 ///     Rc::new(move || do_something(&cfg.value()))
 /// }).with(|c| c.clone());
 /// ```
@@ -503,10 +502,13 @@ pub fn remember<T: 'static>(init: impl FnOnce() -> T) -> Owned<T> {
 /// ```
 #[allow(non_snake_case)]
 pub fn rememberUpdatedState<T: Clone + 'static>(value: T) -> MutableState<T> {
-    let state = remember(|| mutableStateOf(value.clone()));
-    state.with(|s| {
-        s.set(value);
-        *s
+    with_current_composer(|composer| {
+        let runtime = composer.runtime_handle();
+        let state = composer.remember(|| OwnedMutableState::with_runtime(value.clone(), runtime));
+        state.with(|s| {
+            s.set(value);
+            s.handle()
+        })
     })
 }
 
@@ -536,8 +538,9 @@ pub fn withFrameMillis(
 
 /// Creates a new `MutableState` initialized with the given value.
 ///
-/// `MutableState` is an observable value holder. Reads are tracked by the current
-/// composer or snapshot, and writes trigger recomposition of scopes that read it.
+/// `MutableState` is a cheap copyable observable handle. Reads are tracked by the
+/// current composer or snapshot, and writes trigger recomposition of scopes that
+/// read it.
 ///
 /// # When to use
 /// Use `mutableStateOf` when:
@@ -564,6 +567,10 @@ pub fn withFrameMillis(
 ///     }
 /// }
 /// ```
+///
+/// This creates a runtime-owned persistent state. If you need the state lifetime
+/// tied to a Rust owner instead, store an [`OwnedMutableState`] or call
+/// [`MutableState::retain`] on a handle returned by [`useState`].
 #[allow(non_snake_case)]
 pub fn mutableStateOf<T: Clone + 'static>(initial: T) -> MutableState<T> {
     // Get runtime handle from current composer if available, otherwise from global registry.
@@ -573,7 +580,15 @@ pub fn mutableStateOf<T: Clone + 'static>(initial: T) -> MutableState<T> {
     let runtime = with_current_composer_opt(|composer| composer.runtime_handle())
         .or_else(runtime::current_runtime_handle)
         .expect("mutableStateOf requires an active runtime. Create state inside a composition or after a Runtime is created.");
-    MutableState::with_runtime(initial, runtime)
+    runtime.alloc_persistent_state(initial)
+}
+
+#[allow(non_snake_case)]
+pub fn ownedMutableStateOf<T: Clone + 'static>(initial: T) -> OwnedMutableState<T> {
+    let runtime = with_current_composer_opt(|composer| composer.runtime_handle())
+        .or_else(runtime::current_runtime_handle)
+        .expect("ownedMutableStateOf requires an active runtime. Create state inside a composition or after a Runtime is created.");
+    OwnedMutableState::with_runtime(initial, runtime)
 }
 
 /// Like [`mutableStateOf`] but returns `None` if no runtime is available.
@@ -584,7 +599,7 @@ pub fn mutableStateOf<T: Clone + 'static>(initial: T) -> MutableState<T> {
 pub fn try_mutableStateOf<T: Clone + 'static>(initial: T) -> Option<MutableState<T>> {
     let runtime = with_current_composer_opt(|composer| composer.runtime_handle())
         .or_else(runtime::current_runtime_handle)?;
-    Some(MutableState::with_runtime(initial, runtime))
+    Some(runtime.alloc_persistent_state(initial))
 }
 
 #[allow(non_snake_case)]
@@ -647,7 +662,12 @@ where
 /// ```
 #[allow(non_snake_case)]
 pub fn useState<T: Clone + 'static>(init: impl FnOnce() -> T) -> MutableState<T> {
-    remember(|| mutableStateOf(init())).with(|state| *state)
+    with_current_composer(|composer| {
+        let runtime = composer.runtime_handle();
+        composer
+            .remember(|| OwnedMutableState::with_runtime(init(), runtime))
+            .with(|state| state.handle())
+    })
 }
 
 #[allow(deprecated)]
@@ -710,13 +730,13 @@ pub fn CompositionLocalProvider(
 }
 
 struct LocalStateEntry<T: Clone + 'static> {
-    state: MutableState<T>,
+    state: OwnedMutableState<T>,
 }
 
 impl<T: Clone + 'static> LocalStateEntry<T> {
     fn new(initial: T, runtime: RuntimeHandle) -> Self {
         Self {
-            state: MutableState::with_runtime(initial, runtime),
+            state: OwnedMutableState::with_runtime(initial, runtime),
         }
     }
 
@@ -958,6 +978,20 @@ macro_rules! DisposableEffect {
             $keys,
             $effect,
         )
+    };
+}
+
+#[macro_export]
+macro_rules! clone_captures {
+    ($($alias:ident $(= $value:expr)?),+ $(,)?; $body:expr) => {{
+        $(let $alias = $crate::clone_captures!(@clone $alias $(= $value)?);)+
+        $body
+    }};
+    (@clone $alias:ident = $value:expr) => {
+        ($value).clone()
+    };
+    (@clone $alias:ident) => {
+        $alias.clone()
     };
 }
 
@@ -2651,9 +2685,9 @@ impl Composer {
     pub fn use_state<T: Clone + 'static>(&self, init: impl FnOnce() -> T) -> MutableState<T> {
         let runtime = self.runtime_handle();
         let state = self.with_slots_mut(|slots| {
-            slots.remember(|| MutableState::with_runtime(init(), runtime.clone()))
+            slots.remember(|| OwnedMutableState::with_runtime(init(), runtime.clone()))
         });
-        state.with(|state| *state)
+        state.with(|state| state.handle())
     }
 
     pub fn emit_node<N: Node + 'static>(&self, init: impl FnOnce() -> N) -> NodeId {
@@ -3124,9 +3158,9 @@ impl<T: Clone + 'static> MutableStateInner<T> {
             let runtime = runtime_handle.clone();
             runtime_handle.enqueue_ui_task(Box::new(move || {
                 runtime.with_state_arena(|arena| {
-                    if let Some(inner) = arena.get_typed_opt::<T>(state_id) {
+                    let _ = arena.with_typed_opt::<T, _>(state_id, |inner| {
                         inner.invalidate_watchers();
-                    }
+                    });
                 });
             }));
         }));
@@ -3179,27 +3213,56 @@ impl<T: Clone + 'static> MutableStateInner<T> {
     }
 }
 
-#[derive(Clone)]
+fn register_current_state_scope<T: Clone + 'static>(inner: &MutableStateInner<T>) {
+    let Some(Some(scope)) =
+        with_current_composer_opt(|composer| composer.current_recranpose_scope())
+    else {
+        return;
+    };
+    let inserted = inner.register_scope(&scope);
+    if inserted && input_debug_enabled() {
+        let watchers = inner.watchers.borrow();
+        eprintln!(
+            "[CRANPOSE_INPUT_DEBUG] state {:?} subscribe scope={} watchers={}",
+            inner.state.id(),
+            scope.id(),
+            watchers.len()
+        );
+    }
+}
+
+/// Cheap copyable read-only view of a state cell.
 pub struct State<T: Clone + 'static> {
     id: StateId,
-    runtime_id: RuntimeId,
+    runtime_id: runtime::RuntimeId,
     _marker: PhantomData<fn() -> T>,
 }
 
-impl<T: Clone + 'static> Copy for State<T> {}
-
-#[derive(Clone)]
+/// Cheap copyable mutable view of a state cell.
+///
+/// Ownership lives elsewhere: a composition slot, an [`OwnedMutableState`], or
+/// the runtime for states created with [`mutableStateOf`] / [`MutableState::with_runtime`].
 pub struct MutableState<T: Clone + 'static> {
     id: StateId,
-    runtime_id: RuntimeId,
+    runtime_id: runtime::RuntimeId,
     _marker: PhantomData<fn() -> T>,
 }
 
-impl<T: Clone + 'static> Copy for MutableState<T> {}
+/// Owning state handle for reclaimable state cells.
+///
+/// Store this when the state lifetime should be tied to a Rust object rather
+/// than the runtime. Use [`OwnedMutableState::handle`] to expose a cheap copyable
+/// [`MutableState`] to call sites.
+#[derive(Clone)]
+pub struct OwnedMutableState<T: Clone + 'static> {
+    state: MutableState<T>,
+    _lease: Rc<runtime::StateHandleLease>,
+    _marker: PhantomData<fn() -> T>,
+}
 
 impl<T: Clone + 'static> PartialEq for State<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id && self.runtime_id == other.runtime_id
+        self.state_id() == other.state_id() && self.runtime_id() == other.runtime_id()
     }
 }
 
@@ -3207,41 +3270,49 @@ impl<T: Clone + 'static> Eq for State<T> {}
 
 impl<T: Clone + 'static> PartialEq for MutableState<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id && self.runtime_id == other.runtime_id
+        self.state_id() == other.state_id() && self.runtime_id() == other.runtime_id()
     }
 }
 
 impl<T: Clone + 'static> Eq for MutableState<T> {}
 
+impl<T: Clone + 'static> Copy for State<T> {}
+
+impl<T: Clone + 'static> Clone for State<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: Clone + 'static> Copy for MutableState<T> {}
+
+impl<T: Clone + 'static> Clone for MutableState<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
 impl<T: Clone + 'static> State<T> {
+    fn state_id(&self) -> StateId {
+        self.id
+    }
+
+    fn runtime_id(&self) -> runtime::RuntimeId {
+        self.runtime_id
+    }
+
     fn runtime_handle(&self) -> RuntimeHandle {
-        runtime_handle_for(self.runtime_id).expect("runtime handle missing")
+        runtime::runtime_handle_by_id(self.runtime_id())
+            .unwrap_or_else(|| panic!("runtime {:?} dropped", self.runtime_id()))
     }
 
     fn with_inner<R>(&self, f: impl FnOnce(&MutableStateInner<T>) -> R) -> R {
-        self.runtime_handle().with_state_arena(|arena| {
-            let inner = arena.get_typed::<T>(self.id);
-            f(&inner)
-        })
+        self.runtime_handle()
+            .with_state_arena(|arena| arena.with_typed::<T, R>(self.state_id(), f))
     }
 
     fn subscribe_current_scope(&self) {
-        if let Some(Some(scope)) =
-            with_current_composer_opt(|composer| composer.current_recranpose_scope())
-        {
-            self.with_inner(|inner| {
-                let inserted = inner.register_scope(&scope);
-                if inserted && input_debug_enabled() {
-                    let watchers = inner.watchers.borrow();
-                    eprintln!(
-                        "[CRANPOSE_INPUT_DEBUG] state {:?} subscribe scope={} watchers={}",
-                        inner.state.id(),
-                        scope.id(),
-                        watchers.len()
-                    );
-                }
-            });
-        }
+        self.with_inner(register_current_state_scope::<T>);
     }
 
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
@@ -3260,24 +3331,39 @@ impl<T: Clone + 'static> State<T> {
 }
 
 impl<T: Clone + 'static> MutableState<T> {
+    /// Creates a runtime-owned persistent state handle.
     pub fn with_runtime(value: T, runtime: RuntimeHandle) -> Self {
-        let id = runtime.alloc_state(value);
+        runtime.alloc_persistent_state(value)
+    }
+
+    fn from_parts(id: StateId, runtime_id: runtime::RuntimeId) -> Self {
         Self {
             id,
-            runtime_id: runtime.id(),
+            runtime_id,
             _marker: PhantomData,
         }
     }
 
+    pub(crate) fn from_lease(lease: &Rc<runtime::StateHandleLease>) -> Self {
+        Self::from_parts(lease.id(), lease.runtime().id())
+    }
+
+    fn state_id(&self) -> StateId {
+        self.id
+    }
+
+    fn runtime_id(&self) -> runtime::RuntimeId {
+        self.runtime_id
+    }
+
     fn runtime_handle(&self) -> RuntimeHandle {
-        runtime_handle_for(self.runtime_id).expect("runtime handle missing")
+        runtime::runtime_handle_by_id(self.runtime_id())
+            .unwrap_or_else(|| panic!("runtime {:?} dropped", self.runtime_id()))
     }
 
     fn with_inner<R>(&self, f: impl FnOnce(&MutableStateInner<T>) -> R) -> R {
-        self.runtime_handle().with_state_arena(|arena| {
-            let inner = arena.get_typed::<T>(self.id);
-            f(&inner)
-        })
+        self.runtime_handle()
+            .with_state_arena(|arena| arena.with_typed::<T, R>(self.state_id(), f))
     }
 
     pub fn as_state(&self) -> State<T> {
@@ -3288,24 +3374,42 @@ impl<T: Clone + 'static> MutableState<T> {
         }
     }
 
+    /// Upgrades this handle into an owning state value if the cell is still alive.
+    pub fn try_retain(&self) -> Option<OwnedMutableState<T>> {
+        let lease = self.runtime_handle().retain_state_lease(self.state_id())?;
+        Some(OwnedMutableState {
+            state: *self,
+            _lease: lease,
+            _marker: PhantomData,
+        })
+    }
+
+    /// Upgrades this handle into an owning state value.
+    pub fn retain(&self) -> OwnedMutableState<T> {
+        self.try_retain()
+            .unwrap_or_else(|| panic!("state {:?} is no longer alive", self.state_id()))
+    }
+
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        self.as_state().with(f)
+        self.subscribe_current_scope();
+        self.with_inner(|inner| inner.with_value(f))
     }
 
     pub fn update<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
         let runtime = self.runtime_handle();
         runtime.assert_ui_thread();
         runtime.with_state_arena(|arena| {
-            let inner = arena.get_typed::<T>(self.id);
-            let mut value = inner.state.get();
-            let tracker = UpdateScope::new(inner.state.id());
-            let result = f(&mut value);
-            let wrote_elsewhere = tracker.finish();
-            if !wrote_elsewhere {
-                inner.state.set(value);
-            }
-            inner.invalidate_watchers();
-            result
+            arena.with_typed::<T, R>(self.state_id(), |inner| {
+                let mut value = inner.state.get();
+                let tracker = UpdateScope::new(inner.state.id());
+                let result = f(&mut value);
+                let wrote_elsewhere = tracker.finish();
+                if !wrote_elsewhere {
+                    inner.state.set(value);
+                }
+                inner.invalidate_watchers();
+                result
+            })
         })
     }
 
@@ -3313,9 +3417,10 @@ impl<T: Clone + 'static> MutableState<T> {
         let runtime = self.runtime_handle();
         runtime.assert_ui_thread();
         runtime.with_state_arena(|arena| {
-            let inner = arena.get_typed::<T>(self.id);
-            inner.state.set(value);
-            inner.invalidate_watchers();
+            arena.with_typed::<T, ()>(self.state_id(), |inner| {
+                inner.state.set(value);
+                inner.invalidate_watchers();
+            });
         });
     }
 
@@ -3328,7 +3433,8 @@ impl<T: Clone + 'static> MutableState<T> {
     }
 
     pub fn value(&self) -> T {
-        self.as_state().value()
+        self.subscribe_current_scope();
+        self.with_inner(|inner| inner.state.get())
     }
 
     pub fn get(&self) -> T {
@@ -3352,14 +3458,53 @@ impl<T: Clone + 'static> MutableState<T> {
         self.with_inner(|inner| inner.state.get())
     }
 
+    fn subscribe_current_scope(&self) {
+        self.with_inner(register_current_state_scope::<T>);
+    }
+
     #[cfg(test)]
     pub(crate) fn watcher_count(&self) -> usize {
         self.with_inner(|inner| inner.watchers.borrow().len())
     }
 
     #[cfg(test)]
+    pub(crate) fn state_id_for_test(&self) -> StateId {
+        self.state_id()
+    }
+
+    #[cfg(test)]
     pub(crate) fn subscribe_scope_for_test(&self, scope: &RecomposeScope) {
         self.as_state().subscribe_scope_for_test(scope);
+    }
+}
+
+impl<T: Clone + 'static> OwnedMutableState<T> {
+    /// Creates a reclaimable state owned by this Rust value.
+    pub fn with_runtime(value: T, runtime: RuntimeHandle) -> Self {
+        let lease = runtime.alloc_state(value);
+        Self {
+            state: MutableState::from_lease(&lease),
+            _lease: lease,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Returns a cheap copyable mutable handle to the owned state.
+    pub fn handle(&self) -> MutableState<T> {
+        self.state
+    }
+
+    /// Returns a cheap copyable read-only handle to the owned state.
+    pub fn as_state(&self) -> State<T> {
+        self.state.as_state()
+    }
+}
+
+impl<T: Clone + 'static> Deref for OwnedMutableState<T> {
+    type Target = MutableState<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.state
     }
 }
 
@@ -3386,7 +3531,7 @@ impl<T: fmt::Debug + Clone + 'static> fmt::Debug for MutableState<T> {
 
 #[derive(Clone)]
 pub struct SnapshotStateList<T: Clone + 'static> {
-    state: MutableState<Vec<T>>,
+    state: OwnedMutableState<Vec<T>>,
 }
 
 impl<T: Clone + 'static> SnapshotStateList<T> {
@@ -3396,7 +3541,7 @@ impl<T: Clone + 'static> SnapshotStateList<T> {
     {
         let initial: Vec<T> = values.into_iter().collect();
         Self {
-            state: MutableState::with_runtime(initial, runtime),
+            state: OwnedMutableState::with_runtime(initial, runtime),
         }
     }
 
@@ -3405,7 +3550,7 @@ impl<T: Clone + 'static> SnapshotStateList<T> {
     }
 
     pub fn as_mutable_state(&self) -> MutableState<Vec<T>> {
-        self.state
+        self.state.handle()
     }
 
     pub fn len(&self) -> usize {
@@ -3503,7 +3648,7 @@ where
     K: Clone + Eq + Hash + 'static,
     V: Clone + 'static,
 {
-    state: MutableState<HashMap<K, V>>,
+    state: OwnedMutableState<HashMap<K, V>>,
 }
 
 impl<K, V> SnapshotStateMap<K, V>
@@ -3517,7 +3662,7 @@ where
     {
         let map: HashMap<K, V> = pairs.into_iter().collect();
         Self {
-            state: MutableState::with_runtime(map, runtime),
+            state: OwnedMutableState::with_runtime(map, runtime),
         }
     }
 
@@ -3526,7 +3671,7 @@ where
     }
 
     pub fn as_mutable_state(&self) -> MutableState<HashMap<K, V>> {
-        self.state
+        self.state.handle()
     }
 
     pub fn len(&self) -> usize {
@@ -3592,7 +3737,7 @@ where
 
 struct DerivedState<T: Clone + 'static> {
     compute: Rc<dyn Fn() -> T>, // FUTURE(no_std): store compute closures in arena-managed cell.
-    state: MutableState<T>,
+    state: OwnedMutableState<T>,
 }
 
 impl<T: Clone + 'static> DerivedState<T> {
@@ -3601,7 +3746,7 @@ impl<T: Clone + 'static> DerivedState<T> {
         let initial = compute();
         Self {
             compute,
-            state: MutableState::with_runtime(initial, runtime),
+            state: OwnedMutableState::with_runtime(initial, runtime),
         }
     }
 

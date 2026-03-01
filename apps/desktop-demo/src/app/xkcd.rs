@@ -126,6 +126,7 @@ pub(crate) fn xkcd_tab() {
     let uri_handler = local_uri_handler().current();
 
     cranpose_core::LaunchedEffect!(request_id.get(), move |scope| {
+        let _request_id = request_id.get();
         state.set(XkcdState::Loading);
         let client = http_client.clone();
         scope.launch_background(
@@ -162,7 +163,6 @@ pub(crate) fn xkcd_tab() {
                     .rounded_corners(12.0),
                 TextStyle::default(),
             );
-
             Row(
                 Modifier::empty().fill_max_width(),
                 RowSpec::new()

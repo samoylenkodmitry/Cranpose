@@ -406,8 +406,7 @@ pub fn markdown_viewer_tab() {
 
         let url = url_state_for_effect.text();
         let url = url.trim().to_string();
-        let status = fetch_state;
-        status.set(FetchState::Loading);
+        fetch_state.set(FetchState::Loading);
 
         let client = http_client.clone();
         scope.launch_background(
@@ -426,9 +425,9 @@ pub fn markdown_viewer_tab() {
                 Ok(text) => {
                     let blocks: Rc<[MarkdownBlock]> =
                         split_large_markdown_blocks(markdown_to_blocks(&text)).into();
-                    status.set(FetchState::Done(blocks));
+                    fetch_state.set(FetchState::Done(blocks));
                 }
-                Err(err) => status.set(FetchState::Error(err)),
+                Err(err) => fetch_state.set(FetchState::Error(err)),
             },
         );
     });
@@ -443,8 +442,6 @@ pub fn markdown_viewer_tab() {
         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(12.0)),
         {
             let url_state_for_row = url_state.clone();
-            let request_state = request_counter;
-            let status_state = fetch_state;
             move || {
                 // ---- URL input row ----
                 Row(
@@ -454,7 +451,6 @@ pub fn markdown_viewer_tab() {
                         .vertical_alignment(VerticalAlignment::CenterVertically),
                     {
                         let url_row = url_state_for_row.clone();
-                        let req = request_state;
                         move || {
                             cranpose_ui::BasicTextField(
                                 url_row.clone(),
@@ -485,7 +481,7 @@ pub fn markdown_viewer_tab() {
                                         );
                                     })
                                     .padding(10.0),
-                                move || req.update(|v| *v = v.wrapping_add(1)),
+                                move || request_counter.update(|v| *v = v.wrapping_add(1)),
                                 || {
                                     Text(
                                         "Fetch",
@@ -506,7 +502,7 @@ pub fn markdown_viewer_tab() {
                 );
 
                 // ---- Status / content area ----
-                match status_state.get() {
+                match fetch_state.get() {
                     FetchState::Idle => {
                         Text(
                             "Enter a URL pointing to a raw Markdown file and press Fetch.",
@@ -830,15 +826,18 @@ fn MarkdownScrollbarRail(
             })
             .pointer_input("scrollbar_drag", move |scope| async move {
                 use cranpose_foundation::{PointerButton, PointerEventKind};
+
                 loop {
                     scope
                         .await_pointer_event_scope(|scope| async move {
                             use instant::Instant;
                             use std::time::Duration;
+
                             let mut dragging = false;
                             let mut drag_grab_offset = 0.0f32;
                             let mut last_scroll_apply = Instant::now();
                             let mut last_target: Option<(usize, f32)> = None;
+
                             loop {
                                 let event = scope.await_pointer_event().await;
                                 match event.kind {
@@ -935,7 +934,7 @@ fn MarkdownScrollbarRail(
                                         if dragging {
                                             event.consume();
                                         }
-                                        break; // end gesture, restart loop
+                                        break;
                                     }
                                     _ => {}
                                 }
@@ -957,7 +956,6 @@ fn render_markdown_blocks(blocks: Rc<[MarkdownBlock]>) {
 
     Row(Modifier::empty().fill_max_size(), RowSpec::new(), {
         let blocks_for_row = blocks.clone();
-        let model_state_for_row = scrollbar_model_state;
         move || {
             // Wrap LazyColumn in a weighted Box so Row reserves space for the rail.
             cranpose_ui::Box(
@@ -972,8 +970,8 @@ fn render_markdown_blocks(blocks: Rc<[MarkdownBlock]>) {
             );
 
             // Isolated reactivity scope: reads first_visible/layout_info and syncs the model state.
-            MarkdownScrollbarModelObserver(list_state, model_state_for_row);
-            MarkdownScrollbarRail(list_state, model_state_for_row);
+            MarkdownScrollbarModelObserver(list_state, scrollbar_model_state);
+            MarkdownScrollbarRail(list_state, scrollbar_model_state);
         }
     });
 }

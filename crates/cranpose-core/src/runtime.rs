@@ -2,8 +2,8 @@ use crate::collections::map::HashMap;
 use crate::collections::map::HashSet;
 use crate::MutableStateInner;
 use std::any::Any;
-use std::cell::{Cell, Ref, RefCell};
-use std::collections::{HashMap as StdHashMap, VecDeque};
+use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::{Rc, Weak};
@@ -26,18 +26,8 @@ enum UiMessage {
 type UiContinuation = Box<dyn Fn(Box<dyn Any>) + 'static>;
 type UiContinuationMap = HashMap<u64, UiContinuation>;
 
-trait AnyStateCell {
-    fn as_any(&self) -> &dyn Any;
-}
-
 struct TypedStateCell<T: Clone + 'static> {
     inner: MutableStateInner<T>,
-}
-
-impl<T: Clone + 'static> AnyStateCell for TypedStateCell<T> {
-    fn as_any(&self) -> &dyn Any {
-        &self.inner
-    }
 }
 
 #[allow(dead_code)]
@@ -45,98 +35,205 @@ struct RawStateCell<T: 'static> {
     value: T,
 }
 
-impl<T: 'static> AnyStateCell for RawStateCell<T> {
-    fn as_any(&self) -> &dyn Any {
-        &self.value
-    }
+struct StateArenaSlot {
+    generation: u32,
+    cell: Option<Rc<dyn Any>>,
+    lease: Option<Weak<StateHandleLease>>,
+}
+
+#[derive(Default)]
+struct StateArenaInner {
+    cells: Vec<StateArenaSlot>,
+    free: Vec<u32>,
 }
 
 #[derive(Default)]
 pub(crate) struct StateArena {
-    cells: RefCell<Vec<Option<Box<dyn AnyStateCell>>>>,
+    inner: RefCell<StateArenaInner>,
 }
 
 impl StateArena {
     pub(crate) fn alloc<T: Clone + 'static>(&self, value: T, runtime: RuntimeHandle) -> StateId {
-        let mut cells = self.cells.borrow_mut();
-        let id = StateId(cells.len() as u32);
+        let (slot, generation) = {
+            let mut inner = self.inner.borrow_mut();
+            match inner.free.pop() {
+                Some(slot) => {
+                    let entry = inner
+                        .cells
+                        .get_mut(slot as usize)
+                        .expect("state slot missing");
+                    debug_assert!(entry.cell.is_none(), "reused state slot must be empty");
+                    entry.generation = entry.generation.wrapping_add(1);
+                    (slot, entry.generation)
+                }
+                None => {
+                    let slot = inner.cells.len() as u32;
+                    inner.cells.push(StateArenaSlot {
+                        generation: 0,
+                        cell: None,
+                        lease: None,
+                    });
+                    (slot, 0)
+                }
+            }
+        };
+        let id = StateId::new(slot, generation);
         let inner = MutableStateInner::new(value, runtime.clone());
         inner.install_snapshot_observer(id);
-        let cell: Box<dyn AnyStateCell> = Box::new(TypedStateCell { inner });
-        cells.push(Some(cell));
+        let cell: Rc<dyn Any> = Rc::new(TypedStateCell { inner });
+        self.inner.borrow_mut().cells[slot as usize].cell = Some(cell);
         id
     }
 
     #[allow(dead_code)]
     pub(crate) fn alloc_raw<T: 'static>(&self, value: T) -> StateId {
-        let mut cells = self.cells.borrow_mut();
-        let id = StateId(cells.len() as u32);
-        let cell: Box<dyn AnyStateCell> = Box::new(RawStateCell { value });
-        cells.push(Some(cell));
+        let (slot, generation) = {
+            let mut inner = self.inner.borrow_mut();
+            match inner.free.pop() {
+                Some(slot) => {
+                    let entry = inner
+                        .cells
+                        .get_mut(slot as usize)
+                        .expect("state slot missing");
+                    debug_assert!(entry.cell.is_none(), "reused state slot must be empty");
+                    entry.generation = entry.generation.wrapping_add(1);
+                    (slot, entry.generation)
+                }
+                None => {
+                    let slot = inner.cells.len() as u32;
+                    inner.cells.push(StateArenaSlot {
+                        generation: 0,
+                        cell: None,
+                        lease: None,
+                    });
+                    (slot, 0)
+                }
+            }
+        };
+        let id = StateId::new(slot, generation);
+        let cell: Rc<dyn Any> = Rc::new(RawStateCell { value });
+        self.inner.borrow_mut().cells[slot as usize].cell = Some(cell);
         id
     }
 
-    fn get_cell(&self, id: StateId) -> Ref<'_, Box<dyn AnyStateCell>> {
-        Ref::map(self.cells.borrow(), |cells| {
-            cells
-                .get(id.0 as usize)
-                .and_then(|cell| cell.as_ref())
-                .expect("state cell missing")
-        })
+    fn get_cell(&self, id: StateId) -> Rc<dyn Any> {
+        self.get_cell_opt(id).expect("state cell missing")
     }
 
-    pub(crate) fn get_typed<T: Clone + 'static>(
+    fn get_cell_opt(&self, id: StateId) -> Option<Rc<dyn Any>> {
+        self.inner
+            .borrow()
+            .cells
+            .get(id.slot_index())
+            .filter(|cell| cell.generation == id.generation())
+            .and_then(|cell| cell.cell.as_ref())
+            .cloned()
+    }
+
+    fn get_typed<T: Clone + 'static>(&self, id: StateId) -> Rc<TypedStateCell<T>> {
+        self.get_typed_opt(id).expect("state cell type mismatch")
+    }
+
+    fn get_typed_opt<T: Clone + 'static>(&self, id: StateId) -> Option<Rc<TypedStateCell<T>>> {
+        Rc::downcast::<TypedStateCell<T>>(self.get_cell_opt(id)?).ok()
+    }
+
+    pub(crate) fn with_typed<T: Clone + 'static, R>(
         &self,
         id: StateId,
-    ) -> Ref<'_, MutableStateInner<T>> {
-        Ref::map(self.get_cell(id), |cell| {
-            cell.as_any()
-                .downcast_ref::<MutableStateInner<T>>()
-                .expect("state cell type mismatch")
-        })
+        f: impl FnOnce(&MutableStateInner<T>) -> R,
+    ) -> R {
+        let cell = self.get_typed::<T>(id);
+        f(&cell.inner)
+    }
+
+    pub(crate) fn with_typed_opt<T: Clone + 'static, R>(
+        &self,
+        id: StateId,
+        f: impl FnOnce(&MutableStateInner<T>) -> R,
+    ) -> Option<R> {
+        let cell = self.get_typed_opt::<T>(id)?;
+        Some(f(&cell.inner))
     }
 
     #[allow(dead_code)]
-    pub(crate) fn get_raw<T: 'static>(&self, id: StateId) -> Ref<'_, T> {
-        Ref::map(self.get_cell(id), |cell| {
-            cell.as_any()
-                .downcast_ref::<T>()
-                .expect("raw state cell type mismatch")
-        })
+    pub(crate) fn with_raw<T: 'static, R>(&self, id: StateId, f: impl FnOnce(&T) -> R) -> R {
+        let cell = Rc::downcast::<RawStateCell<T>>(self.get_cell(id))
+            .expect("raw state cell type mismatch");
+        f(&cell.value)
     }
 
-    pub(crate) fn get_typed_opt<T: Clone + 'static>(
-        &self,
-        id: StateId,
-    ) -> Option<Ref<'_, MutableStateInner<T>>> {
-        Ref::filter_map(self.get_cell(id), |cell| {
-            cell.as_any().downcast_ref::<MutableStateInner<T>>()
-        })
-        .ok()
+    pub(crate) fn release(&self, id: StateId) {
+        let cell = {
+            let mut inner = self.inner.borrow_mut();
+            let Some(slot) = inner.cells.get_mut(id.slot_index()) else {
+                return;
+            };
+            if slot.generation != id.generation() {
+                return;
+            }
+            slot.lease = None;
+            let cell = slot.cell.take();
+            if cell.is_some() {
+                inner.free.push(id.slot());
+            }
+            cell
+        };
+        drop(cell);
     }
-}
 
-thread_local! {
-    #[allow(clippy::missing_const_for_thread_local)]
-    static RUNTIME_HANDLES: RefCell<StdHashMap<RuntimeId, RuntimeHandle>> =
-        RefCell::new(StdHashMap::new());
-}
+    #[cfg(test)]
+    pub(crate) fn stats(&self) -> (usize, usize) {
+        let inner = self.inner.borrow();
+        (inner.cells.len(), inner.free.len())
+    }
 
-fn register_runtime_handle(handle: &RuntimeHandle) {
-    RUNTIME_HANDLES.with(|registry| {
-        registry.borrow_mut().insert(handle.id, handle.clone());
-    });
-    // Also set as LAST_RUNTIME so that mutableStateOf() can find it
-    // when called outside of a composition context.
-    LAST_RUNTIME.with(|slot| *slot.borrow_mut() = Some(handle.clone()));
-}
+    pub(crate) fn register_lease(&self, id: StateId, lease: &Rc<StateHandleLease>) {
+        let mut inner = self.inner.borrow_mut();
+        let Some(slot) = inner.cells.get_mut(id.slot_index()) else {
+            panic!("state slot missing");
+        };
+        assert_eq!(
+            slot.generation,
+            id.generation(),
+            "state generation mismatch"
+        );
+        slot.lease = Some(Rc::downgrade(lease));
+    }
 
-pub(crate) fn runtime_handle_for(id: RuntimeId) -> Option<RuntimeHandle> {
-    RUNTIME_HANDLES.with(|registry| registry.borrow().get(&id).cloned())
+    pub(crate) fn retain_lease(&self, id: StateId) -> Option<Rc<StateHandleLease>> {
+        let inner = self.inner.borrow();
+        let slot = inner.cells.get(id.slot_index())?;
+        if slot.generation != id.generation() {
+            return None;
+        }
+        slot.lease.as_ref()?.upgrade()
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct StateId(pub(crate) u32);
+pub struct StateId {
+    slot: u32,
+    generation: u32,
+}
+
+impl StateId {
+    const fn new(slot: u32, generation: u32) -> Self {
+        Self { slot, generation }
+    }
+
+    pub(crate) const fn slot(self) -> u32 {
+        self.slot
+    }
+
+    pub(crate) const fn slot_index(self) -> usize {
+        self.slot as usize
+    }
+
+    pub(crate) const fn generation(self) -> u32 {
+        self.generation
+    }
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RuntimeId(u32);
@@ -241,6 +338,7 @@ struct RuntimeInner {
     next_task_id: Cell<u64>,
     task_waker: RefCell<Option<Waker>>,
     state_arena: StateArena,
+    external_state_owners: RefCell<HashMap<StateId, Rc<StateHandleLease>>>,
     runtime_id: RuntimeId,
 }
 
@@ -271,6 +369,7 @@ impl RuntimeInner {
             next_task_id: Cell::new(1),
             task_waker: RefCell::new(None),
             state_arena: StateArena::default(),
+            external_state_owners: RefCell::new(HashMap::default()),
             runtime_id: RuntimeId::next(),
         }
     }
@@ -572,7 +671,9 @@ impl Runtime {
         let inner = Rc::new(RuntimeInner::new(scheduler));
         RuntimeInner::init_task_waker(&inner);
         let runtime = Self { inner };
-        register_runtime_handle(&runtime.handle());
+        let handle = runtime.handle();
+        register_runtime_handle(&handle);
+        LAST_RUNTIME.with(|slot| *slot.borrow_mut() = Some(handle));
         runtime
     }
 
@@ -600,6 +701,24 @@ impl Runtime {
     #[cfg(any(feature = "internal", test))]
     pub fn frame_clock(&self) -> FrameClock {
         FrameClock::new(self.handle())
+    }
+}
+
+impl Drop for Runtime {
+    fn drop(&mut self) {
+        if Rc::strong_count(&self.inner) != 1 {
+            return;
+        }
+        unregister_runtime_handle(self.inner.runtime_id);
+        LAST_RUNTIME.with(|slot| {
+            let should_clear = slot
+                .borrow()
+                .as_ref()
+                .is_some_and(|handle| handle.id() == self.inner.runtime_id);
+            if should_clear {
+                *slot.borrow_mut() = None;
+            }
+        });
     }
 }
 
@@ -657,13 +776,63 @@ pub struct TaskHandle {
     runtime: RuntimeHandle,
 }
 
+struct DeferredStateRelease {
+    runtime: RuntimeHandle,
+    id: StateId,
+}
+
+pub(crate) struct StateHandleLease {
+    id: StateId,
+    runtime: RuntimeHandle,
+}
+
+impl StateHandleLease {
+    pub(crate) fn id(&self) -> StateId {
+        self.id
+    }
+
+    pub(crate) fn runtime(&self) -> RuntimeHandle {
+        self.runtime.clone()
+    }
+}
+
+impl Drop for StateHandleLease {
+    fn drop(&mut self) {
+        defer_state_release(self.runtime.clone(), self.id);
+    }
+}
+
 impl RuntimeHandle {
     pub fn id(&self) -> RuntimeId {
         self.id
     }
 
-    pub(crate) fn alloc_state<T: Clone + 'static>(&self, value: T) -> StateId {
-        self.with_state_arena(|arena| arena.alloc(value, self.clone()))
+    pub(crate) fn alloc_state<T: Clone + 'static>(&self, value: T) -> Rc<StateHandleLease> {
+        let id = self.with_state_arena(|arena| arena.alloc(value, self.clone()));
+        let lease = Rc::new(StateHandleLease {
+            id,
+            runtime: self.clone(),
+        });
+        self.with_state_arena(|arena| arena.register_lease(id, &lease));
+        lease
+    }
+
+    pub(crate) fn alloc_persistent_state<T: Clone + 'static>(
+        &self,
+        value: T,
+    ) -> crate::MutableState<T> {
+        let lease = self.alloc_state(value);
+        if let Some(inner) = self.inner.upgrade() {
+            inner
+                .external_state_owners
+                .borrow_mut()
+                .insert(lease.id(), Rc::clone(&lease));
+        }
+        crate::MutableState::from_lease(&lease)
+    }
+
+    pub(crate) fn retain_state_lease(&self, id: StateId) -> Option<Rc<StateHandleLease>> {
+        self.with_state_arena(|arena| arena.retain_lease(id))
     }
 
     pub(crate) fn with_state_arena<R>(&self, f: impl FnOnce(&StateArena) -> R) -> R {
@@ -680,10 +849,18 @@ impl RuntimeHandle {
 
     #[allow(dead_code)]
     pub(crate) fn with_value<T: 'static, R>(&self, id: StateId, f: impl FnOnce(&T) -> R) -> R {
-        self.with_state_arena(|arena| {
-            let value = arena.get_raw::<T>(id);
-            f(&value)
-        })
+        self.with_state_arena(|arena| arena.with_raw::<T, R>(id, f))
+    }
+
+    fn release_state_immediate(&self, id: StateId) {
+        if let Some(inner) = self.inner.upgrade() {
+            inner.state_arena.release(id);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn state_arena_stats(&self) -> (usize, usize) {
+        self.with_state_arena(StateArena::stats)
     }
 
     pub fn schedule(&self) {
@@ -896,6 +1073,9 @@ impl futures_task::ArcWake for RuntimeTaskWaker {
 thread_local! {
     static ACTIVE_RUNTIMES: RefCell<Vec<RuntimeHandle>> = const { RefCell::new(Vec::new()) }; // FUTURE(no_std): move to bounded stack storage.
     static LAST_RUNTIME: RefCell<Option<RuntimeHandle>> = const { RefCell::new(None) };
+    static REGISTERED_RUNTIMES: RefCell<HashMap<RuntimeId, RuntimeHandle>> = RefCell::new(HashMap::default());
+    static STATE_TEARDOWN_DEPTH: Cell<usize> = const { Cell::new(0) };
+    static DEFERRED_STATE_RELEASES: RefCell<Vec<DeferredStateRelease>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Gets the current runtime handle from thread-local storage.
@@ -909,7 +1089,65 @@ pub fn current_runtime_handle() -> Option<RuntimeHandle> {
     LAST_RUNTIME.with(|slot| slot.borrow().clone())
 }
 
+pub(crate) fn runtime_handle_by_id(id: RuntimeId) -> Option<RuntimeHandle> {
+    REGISTERED_RUNTIMES.with(|registry| registry.borrow().get(&id).cloned())
+}
+
+fn register_runtime_handle(handle: &RuntimeHandle) {
+    REGISTERED_RUNTIMES.with(|registry| {
+        registry.borrow_mut().insert(handle.id(), handle.clone());
+    });
+}
+
+fn unregister_runtime_handle(id: RuntimeId) {
+    REGISTERED_RUNTIMES.with(|registry| {
+        registry.borrow_mut().remove(&id);
+    });
+}
+
+fn defer_state_release(runtime: RuntimeHandle, id: StateId) {
+    let teardown_active = STATE_TEARDOWN_DEPTH.with(|depth| depth.get() > 0);
+    if teardown_active {
+        DEFERRED_STATE_RELEASES.with(|releases| {
+            releases
+                .borrow_mut()
+                .push(DeferredStateRelease { runtime, id });
+        });
+    } else {
+        runtime.release_state_immediate(id);
+    }
+}
+
+fn flush_deferred_state_releases() {
+    DEFERRED_STATE_RELEASES.with(|releases| {
+        let mut releases = releases.borrow_mut();
+        while let Some(deferred) = releases.pop() {
+            deferred.runtime.release_state_immediate(deferred.id);
+        }
+    });
+}
+
+pub(crate) struct StateTeardownScope;
+
+pub(crate) fn enter_state_teardown_scope() -> StateTeardownScope {
+    STATE_TEARDOWN_DEPTH.with(|depth| depth.set(depth.get() + 1));
+    StateTeardownScope
+}
+
+impl Drop for StateTeardownScope {
+    fn drop(&mut self) {
+        STATE_TEARDOWN_DEPTH.with(|depth| {
+            let next = depth.get().saturating_sub(1);
+            depth.set(next);
+            if next == 0 {
+                flush_deferred_state_releases();
+            }
+        });
+    }
+}
+
 pub(crate) fn push_active_runtime(handle: &RuntimeHandle) {
+    register_runtime_handle(handle);
     ACTIVE_RUNTIMES.with(|stack| stack.borrow_mut().push(handle.clone()));
     LAST_RUNTIME.with(|slot| *slot.borrow_mut() = Some(handle.clone()));
 }

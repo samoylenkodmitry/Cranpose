@@ -53,7 +53,7 @@ pub struct LazyLayoutStats {
 /// Contains the current scroll position represented by the first visible item
 /// index and the first visible item scroll offset.
 ///
-/// This is a Copy type that holds reactive state. Reading `index` or `scroll_offset`
+/// This is a `Copy` type that holds reactive state. Reading `index` or `scroll_offset`
 /// during composition creates a snapshot dependency for automatic recomposition.
 ///
 /// Matches Jetpack Compose's `LazyListScrollPosition` design.

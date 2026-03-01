@@ -567,12 +567,11 @@ fn LazyColumnImpl(
     let policy = cranpose_core::remember(move || {
         let cfg = config_state;
         let content_ref = content_for_policy.clone();
-        let state_ref = state;
         Rc::new(
             move |scope: &mut SubcomposeMeasureScopeImpl<'_>, constraints: Constraints| {
                 let content = content_ref.borrow();
                 let config = cfg.value();
-                measure_lazy_list_internal(scope, constraints, true, &content, &state_ref, &config)
+                measure_lazy_list_internal(scope, constraints, true, &content, &state, &config)
             },
         )
     })
@@ -635,12 +634,11 @@ fn LazyRowImpl(
     let policy = cranpose_core::remember(move || {
         let cfg = config_state;
         let content_ref = content_for_policy.clone();
-        let state_ref = state;
         Rc::new(
             move |scope: &mut SubcomposeMeasureScopeImpl<'_>, constraints: Constraints| {
                 let content = content_ref.borrow();
                 let config = cfg.value();
-                measure_lazy_list_internal(scope, constraints, false, &content, &state_ref, &config)
+                measure_lazy_list_internal(scope, constraints, false, &content, &state, &config)
             },
         )
     })

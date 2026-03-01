@@ -309,8 +309,6 @@ fn main() {
                 tab_strip_region,
                 10,
             );
-            let tab_before_shot = tab_noise_after;
-
             let _ = robot.drag(
                 blur_scroll_start_x,
                 blur_scroll_start_y,
@@ -322,9 +320,9 @@ fn main() {
 
             // Move pointer away from the tab strip before taking the "after"
             // screenshot to avoid hover-highlight false positives.
-            let safe_x = blur_scroll_start_x.clamp(32.0, tab_before_shot.width as f32 - 32.0);
+            let safe_x = blur_scroll_start_x.clamp(32.0, tab_noise_after.width as f32 - 32.0);
             let safe_y =
-                (tab_strip_bottom + 120.0).clamp(tab_strip_bottom + 20.0, tab_before_shot.height as f32 - 32.0);
+                (tab_strip_bottom + 120.0).clamp(tab_strip_bottom + 20.0, tab_noise_after.height as f32 - 32.0);
             let _ = robot.click(safe_x, safe_y);
             std::thread::sleep(Duration::from_millis(120));
             let _ = robot.wait_for_idle();
@@ -335,7 +333,7 @@ fn main() {
             };
 
             let raw_tab_strip_diff =
-                changed_pixel_count_in_region(&tab_before_shot, &tab_after_shot, tab_strip_region, 10);
+                changed_pixel_count_in_region(&tab_noise_after, &tab_after_shot, tab_strip_region, 10);
             let tab_strip_diff = raw_tab_strip_diff.saturating_sub(baseline_tab_strip_diff);
             println!(
                 "Clip check: tab_strip_changed_pixels={} (raw={} baseline={} region_bottom={:.1})",

@@ -6,6 +6,10 @@ description = "Cranpose desktop demo application."
 repository = "https://github.com/samoylenkodmitry/cranpose"
 license = "Apache-2.0"
 
+[lints.clippy]
+clone_on_copy = "deny"
+redundant_locals = "deny"
+
 [package.metadata.wasm-pack.profile.release]
 # Enable wasm-opt with size optimization (can reduce WASM size by 20-40%)
 # --all-features enables all standard WASM features that Rust 1.83+ uses by default

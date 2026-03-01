@@ -19,6 +19,7 @@ use std::cell::Cell;
 #[derive(Default)]
 pub struct SlotTable {
     slots: Vec<Slot>, // FUTURE(no_std): replace Vec with arena-backed slot storage.
+    pending_slot_drops: Vec<Slot>,
     cursor: usize,
     group_stack: Vec<GroupFrame>, // FUTURE(no_std): switch to small stack buffer.
     /// Maps anchor IDs to their current physical positions in the slots array.
@@ -126,6 +127,13 @@ impl Default for Slot {
     }
 }
 
+fn drop_slots_in_reverse(slots: &mut Vec<Slot>) {
+    let _teardown = crate::runtime::enter_state_teardown_scope();
+    while let Some(slot) = slots.pop() {
+        drop(slot);
+    }
+}
+
 impl SlotTable {
     const INITIAL_CAP: usize = 32;
     const LOCAL_GAP_SCAN: usize = 256; // tune
@@ -133,6 +141,7 @@ impl SlotTable {
     pub fn new() -> Self {
         Self {
             slots: Vec::new(),
+            pending_slot_drops: Vec::new(),
             cursor: 0,
             group_stack: Vec::new(),
             anchors: Vec::new(),
@@ -166,12 +175,15 @@ impl SlotTable {
     fn force_gap_here(&mut self, cursor: usize) {
         // we *know* we have capacity (ensure_capacity() already ran)
         // so just overwrite the slot at cursor with a fresh gap
-        self.slots[cursor] = Slot::Gap {
-            anchor: AnchorId::INVALID,
-            group_key: None,
-            group_scope: None,
-            group_len: 0,
-        };
+        self.replace_slot_deferred(
+            cursor,
+            Slot::Gap {
+                anchor: AnchorId::INVALID,
+                group_key: None,
+                group_scope: None,
+                group_len: 0,
+            },
+        );
     }
 
     fn find_right_gap_run(&self, from: usize, scan_limit: usize) -> Option<(usize, usize)> {
@@ -246,6 +258,15 @@ impl SlotTable {
         AnchorId(id)
     }
 
+    fn replace_slot_deferred(&mut self, index: usize, slot: Slot) {
+        let old = std::mem::replace(&mut self.slots[index], slot);
+        self.pending_slot_drops.push(old);
+    }
+
+    fn flush_pending_slot_drops(&mut self) {
+        drop_slots_in_reverse(&mut self.pending_slot_drops);
+    }
+
     /// Register an anchor at a specific position in the slots array.
     fn register_anchor(&mut self, anchor: AnchorId, position: usize) {
         debug_assert!(anchor.is_valid(), "attempted to register invalid anchor");
@@ -312,6 +333,7 @@ impl SlotTable {
         let mut i = start;
         let end = end.min(self.slots.len());
         let mut marked_any = false;
+        let mut retired_slots = Vec::new();
 
         while i < end {
             if i >= self.slots.len() {
@@ -341,12 +363,15 @@ impl SlotTable {
 
             // Mark this slot as a gap, preserving Group metadata if it was a Group
             // This allows Groups to be properly matched and reused during tab switching
-            self.slots[i] = Slot::Gap {
-                anchor,
-                group_key,
-                group_scope,
-                group_len,
-            };
+            retired_slots.push(std::mem::replace(
+                &mut self.slots[i],
+                Slot::Gap {
+                    anchor,
+                    group_key,
+                    group_scope,
+                    group_len,
+                },
+            ));
             marked_any = true;
 
             // If it was a group, recursively mark its children as gaps too
@@ -364,22 +389,28 @@ impl SlotTable {
                         } = self.slots[j]
                         {
                             let child_anchor = self.slots[j].anchor_id();
-                            self.slots[j] = Slot::Gap {
-                                anchor: child_anchor,
-                                group_key: Some(nested_key),
-                                group_scope: nested_scope,
-                                group_len: nested_len,
-                            };
+                            retired_slots.push(std::mem::replace(
+                                &mut self.slots[j],
+                                Slot::Gap {
+                                    anchor: child_anchor,
+                                    group_key: Some(nested_key),
+                                    group_scope: nested_scope,
+                                    group_len: nested_len,
+                                },
+                            ));
                             marked_any = true;
                         } else {
                             // For Nodes and other slots, mark as regular gaps
                             let child_anchor = self.slots[j].anchor_id();
-                            self.slots[j] = Slot::Gap {
-                                anchor: child_anchor,
-                                group_key: None,
-                                group_scope: None,
-                                group_len: 0,
-                            };
+                            retired_slots.push(std::mem::replace(
+                                &mut self.slots[j],
+                                Slot::Gap {
+                                    anchor: child_anchor,
+                                    group_key: None,
+                                    group_scope: None,
+                                    group_len: 0,
+                                },
+                            ));
                             marked_any = true;
                         }
                     }
@@ -390,6 +421,7 @@ impl SlotTable {
             }
         }
 
+        drop_slots_in_reverse(&mut retired_slots);
         if marked_any {
             let owner_idx = owner_index.or_else(|| self.find_group_owner_index(start));
             if let Some(idx) = owner_idx {
@@ -742,12 +774,15 @@ impl SlotTable {
                 }
 
                 // Mark this group as a gap, preserving all its metadata
-                self.slots[cursor] = Slot::Gap {
-                    anchor: old_anchor_val,
-                    group_key: Some(old_key),
-                    group_scope: old_scope_val,
-                    group_len: old_len_val,
-                };
+                self.replace_slot_deferred(
+                    cursor,
+                    Slot::Gap {
+                        anchor: old_anchor_val,
+                        group_key: Some(old_key),
+                        group_scope: old_scope_val,
+                        group_len: old_len_val,
+                    },
+                );
                 // Don't return early - fall through to search logic
                 None
             }
@@ -1241,10 +1276,13 @@ impl SlotTable {
             // We replace in-place to maintain cursor position
             let anchor = self.allocate_anchor();
             let boxed: Box<dyn Any> = Box::new(init());
-            self.slots[cursor] = Slot::Value {
-                anchor,
-                data: boxed,
-            };
+            self.replace_slot_deferred(
+                cursor,
+                Slot::Value {
+                    anchor,
+                    data: boxed,
+                },
+            );
             self.register_anchor(anchor, cursor);
             self.cursor = cursor + 1;
             self.update_group_bounds();
@@ -1378,7 +1416,7 @@ impl SlotTable {
             // For nodes, we can't use gaps because nodes exist in the applier
             // The old node becomes orphaned and will be garbage collected later
             let anchor = self.allocate_anchor();
-            self.slots[cursor] = Slot::Node { anchor, id };
+            self.replace_slot_deferred(cursor, Slot::Node { anchor, id });
             self.register_anchor(anchor, cursor);
             self.cursor = cursor + 1;
             self.update_group_bounds();
@@ -1485,6 +1523,7 @@ impl SlotTable {
                 marked = true;
             }
         }
+        self.flush_pending_slot_drops();
         marked
     }
 }
@@ -1589,5 +1628,12 @@ impl SlotStorage for SlotTable {
 
     fn flush(&mut self) {
         SlotTable::flush_anchors_if_dirty(self);
+    }
+}
+
+impl Drop for SlotTable {
+    fn drop(&mut self) {
+        self.flush_pending_slot_drops();
+        drop_slots_in_reverse(&mut self.slots);
     }
 }

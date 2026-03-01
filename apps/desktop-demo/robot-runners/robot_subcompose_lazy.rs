@@ -23,7 +23,6 @@ fn test_app() {
     use cranpose_ui::Color;
     use cranpose_ui::LinearArrangement;
 
-    // Create LazyListState for scroll control (Copy - no clone needed!)
     let list_state = remember_lazy_list_state();
 
     Column(

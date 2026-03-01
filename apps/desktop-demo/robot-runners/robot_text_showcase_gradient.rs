@@ -90,7 +90,6 @@ fn main() {
                     "gradient/stroke anchor label not found in Text showcase semantics",
                 );
             };
-            let sample_x = anchor_x;
             let sample_y = anchor_y + anchor_h + 2.0;
             let sample_w = anchor_w.max(280.0);
             let sample_h = (anchor_h * 2.2).max(28.0);
@@ -99,9 +98,9 @@ fn main() {
                 .screenshot()
                 .unwrap_or_else(|err| fail(&robot, &format!("screenshot failed: {err}")));
 
-            let left = sample_x.max(0.0).floor() as u32;
+            let left = anchor_x.max(0.0).floor() as u32;
             let top = sample_y.max(0.0).floor() as u32;
-            let right = (sample_x + sample_w).max(0.0).ceil() as u32;
+            let right = (anchor_x + sample_w).max(0.0).ceil() as u32;
             let bottom = (sample_y + sample_h).max(0.0).ceil() as u32;
             let width = right.saturating_sub(left).max(1);
             let height = bottom.saturating_sub(top).max(1);

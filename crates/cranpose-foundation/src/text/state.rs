@@ -4,7 +4,6 @@
 //! `compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/input/TextFieldState.kt`.
 
 use super::{TextFieldBuffer, TextRange};
-use cranpose_core::MutableState;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
@@ -136,7 +135,7 @@ pub struct TextFieldState {
 
     /// Value storage - the SINGLE source of truth for text field value.
     /// Uses MutableState for reactive composition integration.
-    value: Rc<MutableState<TextFieldValue>>,
+    value: Rc<cranpose_core::OwnedMutableState<TextFieldValue>>,
 }
 
 impl std::fmt::Debug for TextFieldState {
@@ -165,7 +164,7 @@ impl TextFieldState {
                 pending_undo_snapshot: RefCell::new(None),
                 line_offsets_cache: RefCell::new(None),
             })),
-            value: Rc::new(cranpose_core::mutableStateOf(initial_value)),
+            value: Rc::new(cranpose_core::ownedMutableStateOf(initial_value)),
         }
     }
 
@@ -183,7 +182,7 @@ impl TextFieldState {
                 pending_undo_snapshot: RefCell::new(None),
                 line_offsets_cache: RefCell::new(None),
             })),
-            value: Rc::new(cranpose_core::mutableStateOf(initial_value)),
+            value: Rc::new(cranpose_core::ownedMutableStateOf(initial_value)),
         }
     }
 

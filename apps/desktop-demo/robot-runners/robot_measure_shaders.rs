@@ -101,13 +101,12 @@ fn main() {
 
                 // 2. Drag Blurred Rect
                 if let Some(center) = find_center("Blur") {
-                    let p1 = center;
                     let p2 = Point {
-                        x: p1.x + 100.0,
-                        y: p1.y,
+                        x: center.x + 100.0,
+                        y: center.y,
                     };
 
-                    robot.drag(p1.x, p1.y, p2.x, p2.y).ok();
+                    robot.drag(center.x, center.y, p2.x, p2.y).ok();
                     let _ = robot.wait_for_idle();
                 } else {
                     println!("  ⚠ 'Blur' rect not found");
@@ -115,12 +114,11 @@ fn main() {
 
                 // 3. Drag Glass Rect
                 if let Some(center) = find_center("Glass") {
-                    let p1 = center;
                     let p2 = Point {
-                        x: p1.x - 50.0,
-                        y: p1.y + 50.0,
+                        x: center.x - 50.0,
+                        y: center.y + 50.0,
                     };
-                    robot.drag(p1.x, p1.y, p2.x, p2.y).ok();
+                    robot.drag(center.x, center.y, p2.x, p2.y).ok();
                     let _ = robot.wait_for_idle();
                 } else {
                     println!("  ⚠ 'Glass' rect not found");

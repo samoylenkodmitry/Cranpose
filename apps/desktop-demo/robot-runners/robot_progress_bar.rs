@@ -260,26 +260,21 @@ fn main() {
                     );
                     Button(
                         Modifier::empty().padding(6.0),
-                        {
-                            let step_state = step_state;
-                            let animation_state = animation;
-                            let stats_state = stats;
-                            move || {
-                                let last = TEST_PCTS.len().saturating_sub(1);
-                                let next = (step_state.get() + 1).min(last);
-                                if next != step_state.get() {
-                                    step_state.set(next);
-                                    let pct = TEST_PCTS[next];
-                                    let progress_value = (pct as f32 / 100.0).clamp(0.0, 1.0);
-                                    animation_state.set(AnimationState {
-                                        progress: progress_value,
-                                        direction: 1.0,
-                                    });
-                                    stats_state.set(FrameStats {
-                                        frames: 120,
-                                        last_frame_ms: 16.0,
-                                    });
-                                }
+                        move || {
+                            let last = TEST_PCTS.len().saturating_sub(1);
+                            let next = (step_state.get() + 1).min(last);
+                            if next != step_state.get() {
+                                step_state.set(next);
+                                let pct = TEST_PCTS[next];
+                                let progress_value = (pct as f32 / 100.0).clamp(0.0, 1.0);
+                                animation.set(AnimationState {
+                                    progress: progress_value,
+                                    direction: 1.0,
+                                });
+                                stats.set(FrameStats {
+                                    frames: 120,
+                                    last_frame_ms: 16.0,
+                                });
                             }
                         },
                         || {

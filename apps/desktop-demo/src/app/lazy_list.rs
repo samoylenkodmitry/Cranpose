@@ -107,18 +107,15 @@ fn FirstVisibleIndexDisplay(list_state: cranpose_foundation::lazy::LazyListState
 #[composable]
 fn LifecycleListItem(index: usize, stats: MutableState<LifecycleStats>) {
     println!("Cranpose item id={index}");
-    let stats_for_compose = stats;
     cranpose_core::SideEffect(move || {
-        stats_for_compose.update(|current| current.total_composes += 1);
+        stats.update(|current| current.total_composes += 1);
     });
 
-    let stats_for_effect = stats;
     DisposableEffect!(index, move |_key| {
-        stats_for_effect.update(|current| current.total_effects += 1);
-        let stats_for_dispose = stats_for_effect;
+        stats.update(|current| current.total_effects += 1);
         DisposableEffectResult::new(move || {
             println!("Dispose item id={index}");
-            stats_for_dispose.update(|current| current.total_disposes += 1);
+            stats.update(|current| current.total_disposes += 1);
         })
     });
 
@@ -195,7 +192,9 @@ fn LifecycleListItem(index: usize, stats: MutableState<LifecycleStats>) {
 pub fn lazy_list_example() {
     let list_state = remember_lazy_list_state();
     let item_count = cranpose_core::useState(|| 100usize);
-    let lifecycle_stats = cranpose_core::useState(LifecycleStats::default);
+    let lifecycle_stats =
+        cranpose_core::remember(|| cranpose_core::mutableStateOf(LifecycleStats::default()))
+            .with(|state| *state);
 
     Column(
         Modifier::empty()
@@ -276,9 +275,8 @@ pub fn lazy_list_example() {
                             })
                             .padding(10.0),
                         {
-                            let count_state = item_count;
                             move || {
-                                count_state.set(count_state.get().saturating_add(10));
+                                item_count.set(item_count.get().saturating_add(10));
                             }
                         },
                         || {
@@ -301,9 +299,8 @@ pub fn lazy_list_example() {
                             })
                             .padding(10.0),
                         {
-                            let count_state = item_count;
                             move || {
-                                count_state.set(count_state.get().saturating_sub(10).max(10));
+                                item_count.set(item_count.get().saturating_sub(10).max(10));
                             }
                         },
                         || {
@@ -338,9 +335,8 @@ pub fn lazy_list_example() {
                             })
                             .padding(10.0),
                         {
-                            let count_state = item_count;
                             move || {
-                                count_state.set(usize::MAX);
+                                item_count.set(usize::MAX);
                             }
                         },
                         || {
@@ -364,9 +360,8 @@ pub fn lazy_list_example() {
                             })
                             .padding(10.0),
                         {
-                            let count_state = item_count;
                             move || {
-                                let count = count_state.get();
+                                let count = item_count.get();
                                 let middle = count / 2;
                                 list_state.scroll_to_item(middle, 0.0);
                             }
@@ -417,9 +412,8 @@ pub fn lazy_list_example() {
                             })
                             .padding(10.0),
                         {
-                            let count_state = item_count;
                             move || {
-                                let count = count_state.get();
+                                let count = item_count.get();
                                 if count > 0 {
                                     list_state.scroll_to_item(count - 1, 0.0);
                                 }
@@ -451,15 +445,17 @@ pub fn lazy_list_example() {
                 .height(400.0)
                 .background(Color(0.06, 0.08, 0.14, 1.0))
                 .rounded_corners(12.0)
-                .pointer_input(list_state.inner_ptr() as usize, move |scope| async move {
-                    scope
-                        .await_pointer_event_scope(|await_scope| async move {
-                            loop {
-                                let event = await_scope.await_pointer_event().await;
-                                event.consume();
-                            }
-                        })
-                        .await;
+                .pointer_input(list_state.inner_ptr() as usize, {
+                    move |scope| async move {
+                        scope
+                            .await_pointer_event_scope(|await_scope| async move {
+                                loop {
+                                    let event = await_scope.await_pointer_event().await;
+                                    event.consume();
+                                }
+                            })
+                            .await;
+                    }
                 });
 
             Box(list_container_modifier, BoxSpec::default(), move || {
@@ -467,24 +463,26 @@ pub fn lazy_list_example() {
                     Modifier::empty().fill_max_width().height(400.0),
                     list_state,
                     LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(4.0)),
-                    |scope| {
-                        scope.items(
-                            count,
-                            None::<fn(usize) -> u64>, // Auto-generate keys from index
-                            // Content type = index % 5 to match height groups
-                            Some(|index: usize| (index % 5) as u64),
-                            move |index| {
-                                LifecycleListItem(index, lifecycle_stats);
-                                Text(
-                                    format!("Hello #{}", index),
-                                    Modifier::empty()
-                                        .padding(8.0)
-                                        .background(Color(0.3, 0.3, 0.4, 0.4))
-                                        .rounded_corners(8.0),
-                                    TextStyle::default(),
-                                );
-                            },
-                        );
+                    {
+                        move |scope| {
+                            scope.items(
+                                count,
+                                None::<fn(usize) -> u64>, // Auto-generate keys from index
+                                // Content type = index % 5 to match height groups
+                                Some(|index: usize| (index % 5) as u64),
+                                move |index| {
+                                    LifecycleListItem(index, lifecycle_stats);
+                                    Text(
+                                        format!("Hello #{}", index),
+                                        Modifier::empty()
+                                            .padding(8.0)
+                                            .background(Color(0.3, 0.3, 0.4, 0.4))
+                                            .rounded_corners(8.0),
+                                        TextStyle::default(),
+                                    );
+                                },
+                            );
+                        }
                     },
                 );
             });
