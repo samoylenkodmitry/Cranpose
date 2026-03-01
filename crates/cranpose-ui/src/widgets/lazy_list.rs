@@ -19,7 +19,7 @@ use cranpose_foundation::lazy::{
     measure_lazy_list, LazyListIntervalContent, LazyListMeasureConfig, LazyListMeasuredItem,
     LazyListState, SmallNodeVec, SmallOffsetVec, DEFAULT_ITEM_SIZE_ESTIMATE,
 };
-use cranpose_ui_layout::{Constraints, LinearArrangement, MeasureResult, Placeable};
+use cranpose_ui_layout::{Constraints, LinearArrangement, MeasureResult};
 use smallvec::SmallVec;
 
 // Re-export from foundation - single source of truth

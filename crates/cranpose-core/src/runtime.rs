@@ -131,7 +131,22 @@ impl StateArena {
     }
 
     fn get_typed<T: Clone + 'static>(&self, id: StateId) -> Rc<TypedStateCell<T>> {
-        self.get_typed_opt(id).expect("state cell type mismatch")
+        match self.get_cell_opt(id) {
+            None => panic!(
+                "state cell missing: slot={}, gen={}, expected={}",
+                id.slot(),
+                id.generation(),
+                std::any::type_name::<T>(),
+            ),
+            Some(cell) => Rc::downcast::<TypedStateCell<T>>(cell).unwrap_or_else(|_| {
+                panic!(
+                    "state cell type mismatch: slot={}, gen={}, expected={}",
+                    id.slot(),
+                    id.generation(),
+                    std::any::type_name::<T>(),
+                )
+            }),
+        }
     }
 
     fn get_typed_opt<T: Clone + 'static>(&self, id: StateId) -> Option<Rc<TypedStateCell<T>>> {

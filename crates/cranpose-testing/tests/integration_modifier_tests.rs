@@ -19,12 +19,12 @@ struct TestMeasurable {
 }
 
 impl Measurable for TestMeasurable {
-    fn measure(&self, constraints: Constraints) -> Box<dyn Placeable> {
-        Box::new(TestPlaceable {
-            width: constraints.max_width.min(self.width),
-            height: constraints.max_height.min(self.height),
-            node_id: 0,
-        })
+    fn measure(&self, constraints: Constraints) -> Placeable {
+        Placeable::value(
+            constraints.max_width.min(self.width),
+            constraints.max_height.min(self.height),
+            0,
+        )
     }
 
     fn min_intrinsic_width(&self, _height: f32) -> f32 {
@@ -41,28 +41,6 @@ impl Measurable for TestMeasurable {
 
     fn max_intrinsic_height(&self, _width: f32) -> f32 {
         self.height
-    }
-}
-
-struct TestPlaceable {
-    width: f32,
-    height: f32,
-    node_id: NodeId,
-}
-
-impl Placeable for TestPlaceable {
-    fn place(&self, _x: f32, _y: f32) {}
-
-    fn width(&self) -> f32 {
-        self.width
-    }
-
-    fn height(&self) -> f32 {
-        self.height
-    }
-
-    fn node_id(&self) -> NodeId {
-        self.node_id
     }
 }
 

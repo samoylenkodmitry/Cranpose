@@ -1595,7 +1595,7 @@ impl LayoutChildMeasurable {
 }
 
 impl Measurable for LayoutChildMeasurable {
-    fn measure(&self, constraints: Constraints) -> Box<dyn Placeable> {
+    fn measure(&self, constraints: Constraints) -> Placeable {
         self.cache.activate(self.cache_epoch);
         let measured_size;
         if let Some(cached) = self.cache.get_measurement(constraints) {
@@ -1633,13 +1633,52 @@ impl Measurable for LayoutChildMeasurable {
             });
         }
 
-        Box::new(LayoutChildPlaceable::new(
-            Rc::clone(&self.applier),
+        // Build the place closure that captures all state needed for placement
+        let applier = Rc::clone(&self.applier);
+        let node_id = self.node_id;
+        let measured = Rc::clone(&self.measured);
+        let last_position = Rc::clone(&self.last_position);
+        let layout_state = self.layout_state.clone();
+
+        let place_fn = Rc::new(move |x: f32, y: f32| {
+            // Retrieve the node's own offset (from modifiers like offset(), padding(), etc.)
+            let internal_offset = measured
+                .borrow()
+                .as_ref()
+                .map(|m| m.offset)
+                .unwrap_or_default();
+
+            let position = Point {
+                x: x + internal_offset.x,
+                y: y + internal_offset.y,
+            };
+            *last_position.borrow_mut() = Some(position);
+
+            // Update retained LayoutNode state
+            if let Some(state) = &layout_state {
+                let mut state = state.borrow_mut();
+                state.position = position;
+                state.is_placed = true;
+            } else if let Ok(mut applier) = applier.try_borrow_typed() {
+                if applier
+                    .with_node::<LayoutNode, _>(node_id, |node| {
+                        node.set_position(position);
+                    })
+                    .is_err()
+                {
+                    let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
+                        node.set_position(position);
+                    });
+                }
+            }
+        });
+
+        Placeable::with_place_fn(
+            measured_size.width,
+            measured_size.height,
             self.node_id,
-            Rc::clone(&self.measured),
-            Rc::clone(&self.last_position),
-            self.layout_state.clone(),
-        ))
+            place_fn,
+        )
     }
 
     fn min_intrinsic_width(&self, height: f32) -> f32 {
@@ -1742,92 +1781,6 @@ impl Measurable for LayoutChildMeasurable {
             })
             .ok()
             .flatten()
-    }
-}
-
-struct LayoutChildPlaceable {
-    applier: Rc<ConcreteApplierHost<MemoryApplier>>,
-    node_id: NodeId,
-    measured: Rc<RefCell<Option<Rc<MeasuredNode>>>>,
-    last_position: Rc<RefCell<Option<Point>>>,
-    layout_state: Option<Rc<RefCell<crate::widgets::nodes::layout_node::LayoutState>>>,
-}
-
-impl LayoutChildPlaceable {
-    fn new(
-        applier: Rc<ConcreteApplierHost<MemoryApplier>>,
-        node_id: NodeId,
-        measured: Rc<RefCell<Option<Rc<MeasuredNode>>>>,
-        last_position: Rc<RefCell<Option<Point>>>,
-        layout_state: Option<Rc<RefCell<crate::widgets::nodes::layout_node::LayoutState>>>,
-    ) -> Self {
-        Self {
-            applier,
-            node_id,
-            measured,
-            last_position,
-            layout_state,
-        }
-    }
-}
-
-impl Placeable for LayoutChildPlaceable {
-    fn place(&self, x: f32, y: f32) {
-        // Retrieve the node's own offset (from modifiers like offset(), padding(), etc.)
-        // This must be added to the placement position (x, y) provided by the parent.
-        let internal_offset = self
-            .measured
-            .borrow()
-            .as_ref()
-            .map(|m| m.offset)
-            .unwrap_or_default();
-
-        let position = Point {
-            x: x + internal_offset.x,
-            y: y + internal_offset.y,
-        };
-        // Update transient storage (for backwards compatibility during transition)
-        *self.last_position.borrow_mut() = Some(position);
-
-        // Update retained LayoutNode state (the new architecture)
-        // PRIORITIZE direct handle to avoid Applier borrow conflicts during layout!
-        if let Some(state) = &self.layout_state {
-            let mut state = state.borrow_mut();
-            state.position = position;
-            state.is_placed = true;
-        } else if let Ok(mut applier) = self.applier.try_borrow_typed() {
-            // Try LayoutNode first, then SubcomposeLayoutNode
-            if applier
-                .with_node::<LayoutNode, _>(self.node_id, |node| {
-                    node.set_position(position);
-                })
-                .is_err()
-            {
-                let _ = applier.with_node::<SubcomposeLayoutNode, _>(self.node_id, |node| {
-                    node.set_position(position);
-                });
-            }
-        }
-    }
-
-    fn width(&self) -> f32 {
-        self.measured
-            .borrow()
-            .as_ref()
-            .map(|node| node.size.width)
-            .unwrap_or(0.0)
-    }
-
-    fn height(&self) -> f32 {
-        self.measured
-            .borrow()
-            .as_ref()
-            .map(|node| node.size.height)
-            .unwrap_or(0.0)
-    }
-
-    fn node_id(&self) -> NodeId {
-        self.node_id
     }
 }
 

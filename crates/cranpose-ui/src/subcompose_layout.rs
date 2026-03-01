@@ -85,35 +85,11 @@ impl PartialEq for SubcomposeChild {
 }
 
 /// A measured child that is ready to be placed.
-#[derive(Clone, Copy, Debug)]
-pub struct SubcomposePlaceable {
-    node_id: NodeId,
-    size: Size,
-}
-
-impl SubcomposePlaceable {
-    pub fn new(node_id: NodeId, size: Size) -> Self {
-        Self { node_id, size }
-    }
-}
-
-impl cranpose_ui_layout::Placeable for SubcomposePlaceable {
-    fn place(&self, _x: f32, _y: f32) {
-        // No-op: in SubcomposeLayout, placement is handled by returning a list of Placements
-    }
-
-    fn width(&self) -> f32 {
-        self.size.width
-    }
-
-    fn height(&self) -> f32 {
-        self.size.height
-    }
-
-    fn node_id(&self) -> NodeId {
-        self.node_id
-    }
-}
+///
+/// This is a type alias for the concrete `Placeable` struct from `cranpose_ui_layout`.
+/// In subcompose layouts, placement is handled by returning a list of `Placement`s,
+/// so the `place()` callback is not used.
+pub type SubcomposePlaceable = cranpose_ui_layout::Placeable;
 
 /// Base trait for measurement scopes.
 pub trait SubcomposeLayoutScope {
@@ -260,16 +236,16 @@ impl<'a> SubcomposeMeasureScope for SubcomposeMeasureScopeImpl<'a> {
     fn measure(&mut self, child: SubcomposeChild, constraints: Constraints) -> SubcomposePlaceable {
         if self.error.borrow().is_some() {
             // Already in error state - return zero-size placeable
-            return SubcomposePlaceable::new(child.node_id, Size::default());
+            return SubcomposePlaceable::value(0.0, 0.0, child.node_id);
         }
 
         if let Err(err) = self.composer.apply_pending_commands() {
             self.record_error(err);
-            return SubcomposePlaceable::new(child.node_id, Size::default());
+            return SubcomposePlaceable::value(0.0, 0.0, child.node_id);
         }
 
         let size = (self.measurer)(child.node_id, constraints);
-        SubcomposePlaceable::new(child.node_id, size)
+        SubcomposePlaceable::value(size.width, size.height, child.node_id)
     }
 
     fn node_has_no_parent(&self, node_id: NodeId) -> bool {

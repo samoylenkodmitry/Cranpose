@@ -334,8 +334,7 @@ impl MeasurePolicy for FlexMeasurePolicy {
         // Children get loose constraints on both axes (min = 0)
         let child_constraints = self.make_constraints(0.0, max_main, 0.0, max_cross);
 
-        let mut placeables: SmallVec<[Option<Box<dyn cranpose_ui_layout::Placeable>>; 8]> =
-            SmallVec::new();
+        let mut placeables: SmallVec<[Option<cranpose_ui_layout::Placeable>; 8]> = SmallVec::new();
         placeables.resize_with(measurables.len(), || None);
         let mut fixed_main_size = 0.0_f32;
         let mut max_cross_size = 0.0_f32;
@@ -406,7 +405,7 @@ impl MeasurePolicy for FlexMeasurePolicy {
         }
 
         // Unwrap all placeables
-        let placeables: SmallVec<[Box<dyn cranpose_ui_layout::Placeable>; 8]> = placeables
+        let placeables: SmallVec<[cranpose_ui_layout::Placeable; 8]> = placeables
             .into_iter()
             .map(|p| p.expect("placeable missing"))
             .collect();

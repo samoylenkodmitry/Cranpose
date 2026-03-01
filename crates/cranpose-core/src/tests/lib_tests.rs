@@ -4636,3 +4636,52 @@ fn multiple_frame_callbacks_state_visibility() {
         "Sequential frame callback state changes should accumulate correctly"
     );
 }
+
+/// Verifies that `MutableState::set` on a released state handle does not panic.
+///
+/// This reproduces a real crash: a SideEffect closure captures a `MutableState`
+/// handle whose underlying `OwnedMutableState` is dropped (by group disposal)
+/// before the side effect runs. The `set` call must silently skip the write.
+#[test]
+fn test_stale_state_handle_set_does_not_panic() {
+    let _guard = reset_snapshot_runtime();
+    let test_runtime = crate::runtime::TestRuntime::new();
+    let handle = test_runtime.handle();
+
+    // Allocate a state and get a handle, then release the underlying cell.
+    let lease = handle.alloc_state(42u32);
+    let state: MutableState<u32> = MutableState::from_lease(&lease);
+    assert_eq!(state.get(), 42);
+
+    // Drop the lease → releases the state arena slot
+    drop(lease);
+
+    // Setting a released state should NOT panic — it should be a no-op
+    state.set(99);
+}
+
+/// Verifies that `MutableState::try_with` and `is_alive` work correctly
+/// on released state handles.
+///
+/// This reproduces a real crash: a fling animation frame callback captures a
+/// `MutableState` handle. A tab switch disposes the composition group (releasing
+/// the state), but the frame callback still fires and tries to read the state.
+#[test]
+fn test_stale_state_handle_try_with_returns_none() {
+    let _guard = reset_snapshot_runtime();
+    let test_runtime = crate::runtime::TestRuntime::new();
+    let handle = test_runtime.handle();
+
+    let lease = handle.alloc_state(42u32);
+    let state: MutableState<u32> = MutableState::from_lease(&lease);
+    assert!(state.is_alive());
+    assert_eq!(state.try_value(), Some(42));
+    assert_eq!(state.try_with(|v| *v + 1), Some(43));
+
+    // Drop the lease → releases the state arena slot
+    drop(lease);
+
+    assert!(!state.is_alive());
+    assert_eq!(state.try_value(), None);
+    assert_eq!(state.try_with(|v| *v + 1), None);
+}

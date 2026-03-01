@@ -3,6 +3,7 @@
 use crate::constraints::Constraints;
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::Size;
+use std::rc::Rc;
 
 /// Parent data for flex layouts (Row/Column weights and alignment).
 #[derive(Clone, Copy, Debug, Default)]
@@ -29,7 +30,7 @@ impl FlexParentData {
 /// Object capable of measuring a layout child and exposing intrinsic sizes.
 pub trait Measurable {
     /// Measures the child with the provided constraints, returning a [`Placeable`].
-    fn measure(&self, constraints: Constraints) -> Box<dyn Placeable>;
+    fn measure(&self, constraints: Constraints) -> Placeable;
 
     /// Returns the minimum width achievable for the given height.
     fn min_intrinsic_width(&self, height: f32) -> f32;
@@ -51,25 +52,93 @@ pub trait Measurable {
 }
 
 /// Result of running a measurement pass for a single child.
-pub trait Placeable {
+///
+/// Concrete struct replacing the former `dyn Placeable` trait object.
+/// This avoids a heap allocation per node per measure pass — the hot
+/// coordinator path (16-byte value) now lives entirely on the stack.
+pub struct Placeable {
+    width: f32,
+    height: f32,
+    node_id: NodeId,
+    content_offset_x: f32,
+    content_offset_y: f32,
+    /// Optional side-effect executed by `place()`.  `None` for pure-value
+    /// placeables (coordinators, subcompose).
+    place_fn: Option<Rc<dyn Fn(f32, f32)>>,
+}
+
+impl Placeable {
+    /// Creates a pure-value placeable with no side effects on `place()`.
+    pub fn value(width: f32, height: f32, node_id: NodeId) -> Self {
+        Self {
+            width,
+            height,
+            node_id,
+            content_offset_x: 0.0,
+            content_offset_y: 0.0,
+            place_fn: None,
+        }
+    }
+
+    /// Creates a pure-value placeable with a content offset.
+    pub fn value_with_offset(
+        width: f32,
+        height: f32,
+        node_id: NodeId,
+        content_offset: (f32, f32),
+    ) -> Self {
+        Self {
+            width,
+            height,
+            node_id,
+            content_offset_x: content_offset.0,
+            content_offset_y: content_offset.1,
+            place_fn: None,
+        }
+    }
+
+    /// Creates a node-backed placeable whose `place()` triggers a side effect.
+    pub fn with_place_fn(
+        width: f32,
+        height: f32,
+        node_id: NodeId,
+        place_fn: Rc<dyn Fn(f32, f32)>,
+    ) -> Self {
+        Self {
+            width,
+            height,
+            node_id,
+            content_offset_x: 0.0,
+            content_offset_y: 0.0,
+            place_fn: Some(place_fn),
+        }
+    }
+
     /// Places the child at the provided coordinates relative to its parent.
-    fn place(&self, x: f32, y: f32);
+    pub fn place(&self, x: f32, y: f32) {
+        if let Some(f) = &self.place_fn {
+            f(x, y);
+        }
+    }
 
     /// Returns the measured width of the child.
-    fn width(&self) -> f32;
+    pub fn width(&self) -> f32 {
+        self.width
+    }
 
     /// Returns the measured height of the child.
-    fn height(&self) -> f32;
+    pub fn height(&self) -> f32 {
+        self.height
+    }
 
     /// Returns the identifier for the underlying layout node.
-    fn node_id(&self) -> NodeId;
+    pub fn node_id(&self) -> NodeId {
+        self.node_id
+    }
 
     /// Returns the accumulated content offset from the coordinator chain.
-    /// This is used by layout modifiers (like scroll) to report where content
-    /// should be positioned within this placeable's bounds.
-    /// Default is (0.0, 0.0) for no offset.
-    fn content_offset(&self) -> (f32, f32) {
-        (0.0, 0.0)
+    pub fn content_offset(&self) -> (f32, f32) {
+        (self.content_offset_x, self.content_offset_y)
     }
 }
 

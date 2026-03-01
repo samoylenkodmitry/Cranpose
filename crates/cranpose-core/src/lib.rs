@@ -3366,6 +3366,29 @@ impl<T: Clone + 'static> MutableState<T> {
             .with_state_arena(|arena| arena.with_typed::<T, R>(self.state_id(), f))
     }
 
+    fn try_with_inner<R>(&self, f: impl FnOnce(&MutableStateInner<T>) -> R) -> Option<R> {
+        self.runtime_handle()
+            .with_state_arena(|arena| arena.with_typed_opt::<T, R>(self.state_id(), f))
+    }
+
+    /// Returns `true` if the underlying state cell is still alive (not released).
+    pub fn is_alive(&self) -> bool {
+        self.try_with_inner(|_| ()).is_some()
+    }
+
+    /// Like `with`, but returns `None` if the state cell has been released.
+    ///
+    /// Use this in frame callbacks, fling animations, and other contexts where
+    /// the owning composition group may have been disposed (e.g., tab switch).
+    pub fn try_with<R>(&self, f: impl FnOnce(&T) -> R) -> Option<R> {
+        self.try_with_inner(|inner| inner.with_value(f))
+    }
+
+    /// Like `value`, but returns `None` if the state cell has been released.
+    pub fn try_value(&self) -> Option<T> {
+        self.try_with_inner(|inner| inner.state.get())
+    }
+
     pub fn as_state(&self) -> State<T> {
         State {
             id: self.id,
@@ -3413,14 +3436,30 @@ impl<T: Clone + 'static> MutableState<T> {
         })
     }
 
+    /// Sets a new value, silently skipping the write if the state cell was released.
+    ///
+    /// State cells can be released between when a `SideEffect` closure captures a
+    /// `MutableState` handle and when the side effect actually runs (command
+    /// application disposes composition groups, freeing their state slots, before
+    /// side effects execute). Using `with_typed_opt` instead of `with_typed`
+    /// avoids a panic on the stale handle.
     pub fn replace(&self, value: T) {
         let runtime = self.runtime_handle();
         runtime.assert_ui_thread();
         runtime.with_state_arena(|arena| {
-            arena.with_typed::<T, ()>(self.state_id(), |inner| {
-                inner.state.set(value);
-                inner.invalidate_watchers();
-            });
+            if arena
+                .with_typed_opt::<T, ()>(self.state_id(), |inner| {
+                    inner.state.set(value);
+                    inner.invalidate_watchers();
+                })
+                .is_none()
+            {
+                log::debug!(
+                    "MutableState::replace skipped: state cell released (slot={}, gen={})",
+                    self.state_id().slot(),
+                    self.state_id().generation(),
+                );
+            }
         });
     }
 
