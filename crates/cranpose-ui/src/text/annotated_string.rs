@@ -328,6 +328,31 @@ enum StyleType {
     LinkAnnotation,
 }
 
+fn clamp_subsequence_range(text: &str, range: Range<usize>) -> Range<usize> {
+    let start = range.start.min(text.len());
+    let end = range.end.max(start).min(text.len());
+    start..end
+}
+
+fn append_clipped_ranges<T: Clone>(
+    target: &mut Vec<MutableRange<T>>,
+    source: &[RangeStyle<T>],
+    source_range: Range<usize>,
+    target_offset: usize,
+) {
+    for style in source {
+        let intersection_start = style.range.start.max(source_range.start);
+        let intersection_end = style.range.end.min(source_range.end);
+        if intersection_start < intersection_end {
+            target.push(MutableRange {
+                item: style.item.clone(),
+                start: (intersection_start - source_range.start) + target_offset,
+                end: (intersection_end - source_range.start) + target_offset,
+            });
+        }
+    }
+}
+
 impl Builder {
     pub fn new() -> Self {
         Self::default()
@@ -336,6 +361,52 @@ impl Builder {
     /// Appends the given String to this Builder.
     pub fn append(mut self, text: &str) -> Self {
         self.text.push_str(text);
+        self
+    }
+
+    pub fn append_annotated(self, annotated: &AnnotatedString) -> Self {
+        self.append_annotated_subsequence(annotated, 0..annotated.text.len())
+    }
+
+    pub fn append_annotated_subsequence(
+        mut self,
+        annotated: &AnnotatedString,
+        range: Range<usize>,
+    ) -> Self {
+        let range = clamp_subsequence_range(annotated.text.as_str(), range);
+        if range.is_empty() {
+            return self;
+        }
+
+        debug_assert!(annotated.text.is_char_boundary(range.start));
+        debug_assert!(annotated.text.is_char_boundary(range.end));
+
+        let target_offset = self.text.len();
+        self.text.push_str(&annotated.text[range.clone()]);
+        append_clipped_ranges(
+            &mut self.span_styles,
+            &annotated.span_styles,
+            range.clone(),
+            target_offset,
+        );
+        append_clipped_ranges(
+            &mut self.paragraph_styles,
+            &annotated.paragraph_styles,
+            range.clone(),
+            target_offset,
+        );
+        append_clipped_ranges(
+            &mut self.string_annotations,
+            &annotated.string_annotations,
+            range.clone(),
+            target_offset,
+        );
+        append_clipped_ranges(
+            &mut self.link_annotations,
+            &annotated.link_annotations,
+            range,
+            target_offset,
+        );
         self
     }
 
@@ -600,5 +671,59 @@ mod tests {
         let sub = annotated.subsequence(4..8); // "link"
         assert_eq!(sub.link_annotations.len(), 1);
         assert_eq!(sub.link_annotations[0].range, 0..4);
+    }
+
+    #[test]
+    fn append_annotated_preserves_ranges_with_existing_prefix() {
+        let annotated = AnnotatedString::builder()
+            .append("Hello ")
+            .push_style(SpanStyle {
+                alpha: Some(0.5),
+                ..Default::default()
+            })
+            .append("World")
+            .pop()
+            .push_string_annotation("kind", "planet")
+            .append("!")
+            .pop()
+            .to_annotated_string();
+
+        let combined = AnnotatedString::builder()
+            .append("Prefix ")
+            .append_annotated(&annotated)
+            .to_annotated_string();
+
+        assert_eq!(combined.text, "Prefix Hello World!");
+        assert_eq!(combined.span_styles.len(), 1);
+        assert_eq!(combined.span_styles[0].range, 13..18);
+        assert_eq!(combined.string_annotations.len(), 1);
+        assert_eq!(combined.string_annotations[0].range, 18..19);
+    }
+
+    #[test]
+    fn append_annotated_subsequence_clips_ranges_to_slice() {
+        let annotated = AnnotatedString::builder()
+            .append("Before ")
+            .push_style(SpanStyle {
+                alpha: Some(0.5),
+                ..Default::default()
+            })
+            .append("Styled")
+            .pop()
+            .with_link(LinkAnnotation::Url("https://example.com".into()), |b| {
+                b.append(" Link")
+            })
+            .to_annotated_string();
+
+        let slice = AnnotatedString::builder()
+            .append("-> ")
+            .append_annotated_subsequence(&annotated, 7..18)
+            .to_annotated_string();
+
+        assert_eq!(slice.text, "-> Styled Link");
+        assert_eq!(slice.span_styles.len(), 1);
+        assert_eq!(slice.span_styles[0].range, 3..9);
+        assert_eq!(slice.link_annotations.len(), 1);
+        assert_eq!(slice.link_annotations[0].range, 9..14);
     }
 }

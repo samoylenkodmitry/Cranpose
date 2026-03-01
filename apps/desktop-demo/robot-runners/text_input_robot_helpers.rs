@@ -27,6 +27,17 @@ pub(crate) fn wait_for_in_semantics(
     None
 }
 
+fn text_input_tab_bounds(robot: &Robot) -> Option<Bounds> {
+    find_button_in_semantics(robot, "Text Input")
+        .or_else(|| find_text_in_semantics(robot, "Text Input"))
+}
+
+fn text_input_demo_visible(robot: &Robot) -> bool {
+    find_in_semantics(robot, |elem| find_text(elem, "Text Input Demo"))
+        .or_else(|| find_in_semantics(robot, |elem| find_text(elem, "Empty Text Field:")))
+        .is_some()
+}
+
 pub(crate) fn click_bounds(robot: &Robot, bounds: Bounds) -> Result<(), String> {
     let (x, y) = center_of(bounds);
     robot.click(x, y)?;
@@ -36,19 +47,20 @@ pub(crate) fn click_bounds(robot: &Robot, bounds: Bounds) -> Result<(), String> 
 }
 
 pub(crate) fn open_text_input_tab(robot: &Robot) -> bool {
-    let Some(tab_bounds) = wait_for_in_semantics(robot, |robot| {
-        find_button_in_semantics(robot, "Text Input")
-            .or_else(|| find_text_in_semantics(robot, "Text Input"))
-    }) else {
-        return false;
-    };
+    for _ in 0..FIND_ATTEMPTS {
+        if text_input_demo_visible(robot) {
+            return true;
+        }
 
-    if click_bounds(robot, tab_bounds).is_err() {
-        return false;
+        if let Some(tab_bounds) = text_input_tab_bounds(robot) {
+            if click_bounds(robot, tab_bounds).is_ok() && text_input_demo_visible(robot) {
+                return true;
+            }
+        }
+
+        let _ = robot.wait_for_idle();
+        std::thread::sleep(FIND_DELAY);
     }
 
-    wait_for_in_semantics(robot, |robot| {
-        find_in_semantics(robot, |elem| find_text(elem, "Text Input Demo"))
-    })
-    .is_some()
+    false
 }

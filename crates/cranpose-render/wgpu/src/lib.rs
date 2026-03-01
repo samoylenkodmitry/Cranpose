@@ -1500,11 +1500,14 @@ impl WgpuTextMeasurer {
             (size, wrapped_ranges)
         };
 
-        let wrapped_lines: Vec<cranpose_ui::text::AnnotatedString> = wrapped_ranges
-            .iter()
-            .map(|(start, end)| text.subsequence(*start..*end))
-            .collect();
-        let wrapped_annotated = join_annotated_lines(&wrapped_lines);
+        let mut builder = cranpose_ui::text::AnnotatedString::builder();
+        for (idx, (start, end)) in wrapped_ranges.iter().enumerate() {
+            builder = builder.append_annotated_subsequence(text, *start..*end);
+            if idx + 1 < wrapped_ranges.len() {
+                builder = builder.append("\n");
+            }
+        }
+        let wrapped_annotated = builder.to_annotated_string();
 
         let line_count = wrapped_ranges.len().max(options.min_lines).max(1);
         let min_height = options.min_lines as f32 * line_height;
@@ -1598,63 +1601,6 @@ fn collect_wrapped_ranges(text: &str, buffer: &Buffer) -> Option<Vec<(usize, usi
         Some(vec![(0, text.len())])
     } else {
         Some(wrapped_ranges)
-    }
-}
-
-fn join_annotated_lines(
-    lines: &[cranpose_ui::text::AnnotatedString],
-) -> cranpose_ui::text::AnnotatedString {
-    if lines.is_empty() {
-        return cranpose_ui::text::AnnotatedString::from("");
-    }
-
-    let mut text = String::new();
-    let mut span_styles = Vec::new();
-    let mut paragraph_styles = Vec::new();
-    let mut string_annotations = Vec::new();
-    let mut link_annotations = Vec::new();
-    let mut offset = 0usize;
-
-    for (idx, line) in lines.iter().enumerate() {
-        text.push_str(line.text.as_str());
-        for span in &line.span_styles {
-            span_styles.push(cranpose_ui::text::RangeStyle {
-                item: span.item.clone(),
-                range: (span.range.start + offset)..(span.range.end + offset),
-            });
-        }
-        for span in &line.paragraph_styles {
-            paragraph_styles.push(cranpose_ui::text::RangeStyle {
-                item: span.item.clone(),
-                range: (span.range.start + offset)..(span.range.end + offset),
-            });
-        }
-        for ann in &line.string_annotations {
-            string_annotations.push(cranpose_ui::text::RangeStyle {
-                item: ann.item.clone(),
-                range: (ann.range.start + offset)..(ann.range.end + offset),
-            });
-        }
-        for ann in &line.link_annotations {
-            link_annotations.push(cranpose_ui::text::RangeStyle {
-                item: ann.item.clone(),
-                range: (ann.range.start + offset)..(ann.range.end + offset),
-            });
-        }
-
-        offset += line.text.len();
-        if idx + 1 < lines.len() {
-            text.push('\n');
-            offset += 1;
-        }
-    }
-
-    cranpose_ui::text::AnnotatedString {
-        text,
-        span_styles,
-        paragraph_styles,
-        string_annotations,
-        link_annotations,
     }
 }
 

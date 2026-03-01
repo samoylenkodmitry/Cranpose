@@ -250,6 +250,46 @@ fn box_content() {
 }
 
 #[composable]
+fn nested_branch_content() {
+    Column(Modifier::empty(), ColumnSpec::default(), || {
+        Box(
+            Modifier::empty().size(Size {
+                width: 40.0,
+                height: 20.0,
+            }),
+            BoxSpec::default(),
+            || {
+                Box(
+                    Modifier::empty().size(Size {
+                        width: 10.0,
+                        height: 10.0,
+                    }),
+                    BoxSpec::default(),
+                    || {},
+                );
+            },
+        );
+        Box(
+            Modifier::empty().size(Size {
+                width: 50.0,
+                height: 20.0,
+            }),
+            BoxSpec::default(),
+            || {
+                Box(
+                    Modifier::empty().size(Size {
+                        width: 11.0,
+                        height: 11.0,
+                    }),
+                    BoxSpec::default(),
+                    || {},
+                );
+            },
+        );
+    });
+}
+
+#[composable]
 fn draw_width_app(width_state: cranpose_core::MutableState<f32>) {
     Box(
         Modifier::empty()
@@ -492,6 +532,43 @@ fn focus_invalidation_without_scene_changes_skips_rebuild() {
         !needs_focus_sync,
         "focus dispatch queue should clear the node dirty flag"
     );
+}
+
+#[test]
+fn draw_refresh_scope_only_contains_dirty_ancestors() {
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, nested_branch_content);
+
+    shell.update();
+    let layout_tree = shell.layout_tree().expect("expected layout tree");
+    let root = node_id_at_path(layout_tree.root(), &[]);
+    let left = node_id_at_path(layout_tree.root(), &[0]);
+    let left_leaf = node_id_at_path(layout_tree.root(), &[0, 0]);
+    let right = node_id_at_path(layout_tree.root(), &[1]);
+    let right_leaf = node_id_at_path(layout_tree.root(), &[1, 0]);
+
+    let dirty_nodes = HashSet::from([left_leaf]);
+    let refresh_scope = {
+        let mut applier = shell.composition.applier_mut();
+        build_draw_refresh_scope(&mut applier, &dirty_nodes)
+    };
+
+    assert!(refresh_scope.contains(&root));
+    assert!(refresh_scope.contains(&left));
+    assert!(refresh_scope.contains(&left_leaf));
+    assert!(!refresh_scope.contains(&right));
+    assert!(!refresh_scope.contains(&right_leaf));
+}
+
+fn node_id_at_path(layout: &cranpose_ui::LayoutBox, path: &[usize]) -> cranpose_core::NodeId {
+    let mut current = layout;
+    for &index in path {
+        current = current
+            .children
+            .get(index)
+            .expect("expected layout child at path");
+    }
+    current.node_id
 }
 
 fn find_rect_width(scene: &cranpose_ui::RecordedRenderScene, color: Color) -> Option<f32> {

@@ -1019,7 +1019,13 @@ where
 
         let dirty_set: HashSet<NodeId> = dirty_nodes.into_iter().collect();
         let mut applier = self.composition.applier_mut();
-        refresh_layout_box_data(&mut applier, layout_tree.root_mut(), &dirty_set);
+        let refresh_scope = build_draw_refresh_scope(&mut applier, &dirty_set);
+        refresh_layout_box_data(
+            &mut applier,
+            layout_tree.root_mut(),
+            &refresh_scope,
+            &dirty_set,
+        );
     }
 
     fn run_render_phase(&mut self) {
@@ -1123,11 +1129,33 @@ fn clear_dispatch_invalidation(
     }
 }
 
+fn build_draw_refresh_scope(
+    applier: &mut MemoryApplier,
+    dirty_nodes: &HashSet<NodeId>,
+) -> HashSet<NodeId> {
+    let mut refresh_scope = HashSet::with_capacity(dirty_nodes.len());
+    for &dirty_node in dirty_nodes {
+        let mut current = Some(dirty_node);
+        while let Some(node_id) = current {
+            if !refresh_scope.insert(node_id) {
+                break;
+            }
+            current = applier.get_mut(node_id).ok().and_then(|node| node.parent());
+        }
+    }
+    refresh_scope
+}
+
 fn refresh_layout_box_data(
     applier: &mut MemoryApplier,
     layout: &mut cranpose_ui::layout::LayoutBox,
+    refresh_scope: &HashSet<NodeId>,
     dirty_nodes: &HashSet<NodeId>,
 ) {
+    if !refresh_scope.contains(&layout.node_id) {
+        return;
+    }
+
     if dirty_nodes.contains(&layout.node_id) {
         if let Ok((modifier, resolved_modifiers, slices)) =
             applier.with_node::<LayoutNode, _>(layout.node_id, |node| {
@@ -1156,7 +1184,7 @@ fn refresh_layout_box_data(
     }
 
     for child in &mut layout.children {
-        refresh_layout_box_data(applier, child, dirty_nodes);
+        refresh_layout_box_data(applier, child, refresh_scope, dirty_nodes);
     }
 }
 
