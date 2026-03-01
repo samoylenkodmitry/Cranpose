@@ -497,7 +497,9 @@ pub struct GpuRenderer {
     image_sampler: wgpu::Sampler,
     font_system: Arc<Mutex<FontSystem>>,
     font_family_resolver: SharedFontFamilyResolver,
-    text_renderer: TextRenderer,
+    text_renderer_pool: Vec<TextRendererSlot>,
+    /// Which slot in `text_renderer_pool` the next prepare→encode pair should use.
+    text_batch_cursor: usize,
     text_atlas: TextAtlas,
     swash_cache: SwashCache,
     // Persistent GPU buffers (reused across frames)
@@ -521,7 +523,6 @@ pub struct GpuRenderer {
     scratch_effect_ranges: Vec<Range<usize>>,
     scratch_layer_events: Vec<LayerEvent>,
     effect_renderer: EffectRenderer,
-    last_prepared_text_batch: Option<PreparedTextBatchSignature>,
     frame_stats: gpu_stats::FrameStats,
     frame_count: u64,
     gpu_stats_enabled: bool,
@@ -634,7 +635,7 @@ impl GpuRenderer {
         );
 
         let swash_cache = SwashCache::new();
-        let glyphon_cache = Cache::new(&device);
+        let glyphon_cache = Arc::new(Cache::new(&device));
         let mut text_atlas = TextAtlas::new(&device, &queue, &glyphon_cache, surface_format);
 
         log::info!(
@@ -642,12 +643,15 @@ impl GpuRenderer {
             surface_format
         );
 
-        let text_renderer = TextRenderer::new(
-            &mut text_atlas,
-            &device,
-            wgpu::MultisampleState::default(),
-            None,
-        );
+        let first_slot = TextRendererSlot {
+            renderer: TextRenderer::new(
+                &mut text_atlas,
+                &device,
+                wgpu::MultisampleState::default(),
+                None,
+            ),
+            last_signature: None,
+        };
         let text_viewport = Viewport::new(&device, &glyphon_cache);
 
         // Create persistent uniform buffer
@@ -710,7 +714,8 @@ impl GpuRenderer {
             image_sampler,
             font_system,
             font_family_resolver,
-            text_renderer,
+            text_renderer_pool: vec![first_slot],
+            text_batch_cursor: 0,
             text_atlas,
             swash_cache,
             uniform_buffer,
@@ -735,7 +740,6 @@ impl GpuRenderer {
             scratch_effect_ranges: Vec::new(),
             scratch_layer_events: Vec::new(),
             effect_renderer,
-            last_prepared_text_batch: None,
             frame_stats: gpu_stats::FrameStats::default(),
             frame_count: 0,
             gpu_stats_enabled: gpu_stats_enabled(),
@@ -864,6 +868,8 @@ impl GpuRenderer {
                 .all(|pair| pair[0].z_index <= pair[1].z_index),
             "shadow draws must be added in z-index order"
         );
+
+        self.text_batch_cursor = 0;
 
         let result = self.render_with_layer_events(
             view,
@@ -1426,7 +1432,7 @@ impl GpuRenderer {
                     let load_op = load_op_for_batch(&mut first_batch);
                     // Text prepare (shaping, atlas upload) must happen before
                     // we record the pass.
-                    self.prepare_text_for_render(
+                    let slot = self.prepare_text_for_render(
                         ordered_items[start..cursor]
                             .iter()
                             .map(|(_, item)| match item {
@@ -1437,7 +1443,7 @@ impl GpuRenderer {
                         height,
                         root_scale,
                     )?;
-                    self.encode_text_pass(&mut encoder, target_view, load_op)?;
+                    self.encode_text_pass(&mut encoder, target_view, load_op, slot)?;
                     encoder_has_work = true;
                     encoder_buffer_usage.mark_batch(BatchKind::Text);
                 }
@@ -1589,23 +1595,27 @@ impl GpuRenderer {
                 );
             }
             if !shadow.texts.is_empty() {
-                if let Err(e) =
-                    self.prepare_text_for_render(shadow.texts.iter(), width, height, root_scale)
-                {
-                    eprintln!("Failed to prepare text for zero-blur shadow: {}", e);
-                } else {
-                    let mut encoder =
-                        self.device
-                            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                                label: Some("Zero Blur Shadow Text Encoder"),
-                            });
-                    if let Err(e) =
-                        self.encode_text_pass(&mut encoder, target_view, wgpu::LoadOp::Load)
-                    {
-                        eprintln!("Failed to encode text for zero-blur shadow: {}", e);
+                match self.prepare_text_for_render(shadow.texts.iter(), width, height, root_scale) {
+                    Ok(slot) => {
+                        let mut encoder =
+                            self.device
+                                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                    label: Some("Zero Blur Shadow Text Encoder"),
+                                });
+                        if let Err(e) = self.encode_text_pass(
+                            &mut encoder,
+                            target_view,
+                            wgpu::LoadOp::Load,
+                            slot,
+                        ) {
+                            eprintln!("Failed to encode text for zero-blur shadow: {}", e);
+                        }
+                        self.queue.submit(std::iter::once(encoder.finish()));
+                        self.frame_stats.bump_submits();
                     }
-                    self.queue.submit(std::iter::once(encoder.finish()));
-                    self.frame_stats.bump_submits();
+                    Err(e) => {
+                        eprintln!("Failed to prepare text for zero-blur shadow: {}", e);
+                    }
                 }
             }
             return;
@@ -1665,21 +1675,23 @@ impl GpuRenderer {
                 wgpu::LoadOp::Load
             };
 
-            if let Err(e) =
-                self.prepare_text_for_render(shifted_texts.iter(), bounds_w, bounds_h, root_scale)
+            match self.prepare_text_for_render(shifted_texts.iter(), bounds_w, bounds_h, root_scale)
             {
-                eprintln!("Failed to prepare text for shadow: {}", e);
-            } else {
-                let mut encoder =
-                    self.device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("Shadow Text Encoder"),
-                        });
-                if let Err(e) = self.encode_text_pass(&mut encoder, &source.view, load) {
-                    eprintln!("Failed to encode text for shadow: {}", e);
+                Ok(slot) => {
+                    let mut encoder =
+                        self.device
+                            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                label: Some("Shadow Text Encoder"),
+                            });
+                    if let Err(e) = self.encode_text_pass(&mut encoder, &source.view, load, slot) {
+                        eprintln!("Failed to encode text for shadow: {}", e);
+                    }
+                    self.queue.submit(std::iter::once(encoder.finish()));
+                    self.frame_stats.bump_submits();
                 }
-                self.queue.submit(std::iter::once(encoder.finish()));
-                self.frame_stats.bump_submits();
+                Err(e) => {
+                    eprintln!("Failed to prepare text for shadow: {}", e);
+                }
             }
         }
 
@@ -2528,17 +2540,39 @@ impl GpuRenderer {
     }
 
     /// Prepare text shaping and atlas uploads for the given text batch.
-    /// After calling this, `encode_text_pass` can record the render pass.
+    ///
+    /// Each call claims the next slot from `text_renderer_pool` (growing the
+    /// pool on demand).  The slot independently caches its batch signature so
+    /// that repeated identical batches at the same position across frames can
+    /// skip the expensive `glyphon::TextRenderer::prepare()` call.
+    ///
+    /// Returns the pool slot index; pass it to `encode_text_pass` to render.
     fn prepare_text_for_render<'a, I>(
         &mut self,
         layer_texts: I,
         width: u32,
         height: u32,
         root_scale: f32,
-    ) -> Result<(), String>
+    ) -> Result<usize, String>
     where
         I: Clone + Iterator<Item = &'a TextDraw>,
     {
+        let slot_index = self.text_batch_cursor;
+        self.text_batch_cursor += 1;
+
+        // Grow pool on demand.
+        while self.text_renderer_pool.len() <= slot_index {
+            self.text_renderer_pool.push(TextRendererSlot {
+                renderer: TextRenderer::new(
+                    &mut self.text_atlas,
+                    &self.device,
+                    wgpu::MultisampleState::default(),
+                    None,
+                ),
+                last_signature: None,
+            });
+        }
+
         let telemetry_enabled = text_render_telemetry_enabled();
         let call_sequence = if telemetry_enabled {
             TEXT_RENDER_CALLS.fetch_add(1, Ordering::Relaxed) + 1
@@ -2548,19 +2582,22 @@ impl GpuRenderer {
 
         let batch_signature =
             prepared_text_batch_signature(layer_texts.clone(), width, height, root_scale);
-        if batch_signature.is_some() && self.last_prepared_text_batch == batch_signature {
+        if batch_signature.is_some()
+            && self.text_renderer_pool[slot_index].last_signature == batch_signature
+        {
             if telemetry_enabled {
                 let skips = TEXT_RENDER_SKIPS.fetch_add(1, Ordering::Relaxed) + 1;
                 if call_sequence.is_multiple_of(20) {
                     log::warn!(
-                        "[text-render-telemetry] calls={} skips={} skip_rate={:.1}% (prepare reused)",
+                        "[text-render-telemetry] calls={} skips={} skip_rate={:.1}% (prepare reused, slot={})",
                         call_sequence,
                         skips,
-                        (skips as f64 / call_sequence as f64) * 100.0
+                        (skips as f64 / call_sequence as f64) * 100.0,
+                        slot_index
                     );
                 }
             }
-            return Ok(());
+            return Ok(slot_index);
         }
 
         let prepare_started = telemetry_enabled.then(std::time::Instant::now);
@@ -2662,7 +2699,8 @@ impl GpuRenderer {
 
         self.text_viewport
             .update(&self.queue, Resolution { width, height });
-        self.text_renderer
+        self.text_renderer_pool[slot_index]
+            .renderer
             .prepare(
                 &self.device,
                 &self.queue,
@@ -2674,32 +2712,34 @@ impl GpuRenderer {
             )
             .map_err(|e| format!("Text prepare error: {:?}", e))?;
 
-        self.last_prepared_text_batch = batch_signature;
+        self.text_renderer_pool[slot_index].last_signature = batch_signature;
         if telemetry_enabled && call_sequence.is_multiple_of(20) {
             let skips = TEXT_RENDER_SKIPS.load(Ordering::Relaxed);
             let elapsed_ms = prepare_started
                 .map(|start| start.elapsed().as_secs_f64() * 1000.0)
                 .unwrap_or(0.0);
             log::warn!(
-                "[text-render-telemetry] calls={} skips={} skip_rate={:.1}% batch_items={} chars={} prepare_ms={:.2}",
+                "[text-render-telemetry] calls={} skips={} skip_rate={:.1}% batch_items={} chars={} prepare_ms={:.2} slot={}",
                 call_sequence,
                 skips,
                 (skips as f64 / call_sequence as f64) * 100.0,
                 valid_items,
                 total_chars,
-                elapsed_ms
+                elapsed_ms,
+                slot_index
             );
         }
-        Ok(())
+        Ok(slot_index)
     }
 
     /// Record a text render pass onto the provided encoder.
-    /// Must be called after `text_renderer.prepare()`.
+    /// `slot_index` must be the value returned by `prepare_text_for_render`.
     fn encode_text_pass(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         target_view: &wgpu::TextureView,
         load_op: wgpu::LoadOp<wgpu::Color>,
+        slot_index: usize,
     ) -> Result<(), String> {
         self.frame_stats.bump_text();
         {
@@ -2718,9 +2758,10 @@ impl GpuRenderer {
                 occlusion_query_set: None,
             });
 
-            self.text_renderer
+            self.text_renderer_pool[slot_index]
+                .renderer
                 .render(&self.text_atlas, &self.text_viewport, &mut text_pass)
-                .map_err(|e| format!("Effect text render error: {:?}", e))?;
+                .map_err(|e| format!("Text render error: {:?}", e))?;
         }
         Ok(())
     }
@@ -2765,6 +2806,17 @@ enum BatchKind {
     Shape,
     Image,
     Text,
+}
+
+/// A pooled text renderer slot that independently caches its last batch signature.
+///
+/// The GPU renderer uses multiple `TextRendererSlot`s (one per text-batch position
+/// within a frame) so that interleaved shape–text–shape–text rendering can skip
+/// per-batch `glyphon::TextRenderer::prepare()` calls when the text draw list at
+/// that position hasn't changed since the previous frame.
+struct TextRendererSlot {
+    renderer: TextRenderer,
+    last_signature: Option<PreparedTextBatchSignature>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
