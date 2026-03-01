@@ -1300,8 +1300,21 @@ impl WgpuTextMeasurer {
         }
     }
 
+    fn text_buffer_key(
+        node_id: Option<NodeId>,
+        text: &str,
+        font_size: f32,
+        style_hash: u64,
+    ) -> TextCacheKey {
+        match node_id {
+            Some(node_id) => TextCacheKey::for_node(node_id, font_size, style_hash),
+            None => TextCacheKey::new(text, font_size, style_hash),
+        }
+    }
+
     fn try_measure_with_options_fast_path(
         &self,
+        node_id: Option<NodeId>,
         text: &cranpose_ui::text::AnnotatedString,
         style: &cranpose_ui::text::TextStyle,
         options: cranpose_ui::text::TextLayoutOptions,
@@ -1346,7 +1359,7 @@ impl WgpuTextMeasurer {
             }
         }
 
-        let text_buffer_key = TextCacheKey::new(text_str, font_size, style_hash);
+        let text_buffer_key = Self::text_buffer_key(node_id, text_str, font_size, style_hash);
         let mut font_system = self.font_system.lock().unwrap();
         let mut text_cache = self.text_cache.lock().unwrap();
         let mut font_family_resolver = self.font_family_resolver.lock().unwrap();
@@ -1409,6 +1422,7 @@ impl WgpuTextMeasurer {
 
     fn try_prepare_with_options_fast_path(
         &self,
+        node_id: Option<NodeId>,
         text: &cranpose_ui::text::AnnotatedString,
         style: &cranpose_ui::text::TextStyle,
         options: cranpose_ui::text::TextLayoutOptions,
@@ -1425,7 +1439,7 @@ impl WgpuTextMeasurer {
         let line_height = resolve_effective_line_height(style, text, font_size);
         let style_hash = style.measurement_hash() ^ text.span_styles_hash();
 
-        let text_buffer_key = TextCacheKey::new(text_str, font_size, style_hash);
+        let text_buffer_key = Self::text_buffer_key(node_id, text_str, font_size, style_hash);
         let mut font_system = self.font_system.lock().unwrap();
         let mut text_cache = self.text_cache.lock().unwrap();
         let mut font_family_resolver = self.font_family_resolver.lock().unwrap();
@@ -1649,6 +1663,15 @@ impl TextMeasurer for WgpuTextMeasurer {
         text: &cranpose_ui::text::AnnotatedString,
         style: &cranpose_ui::text::TextStyle,
     ) -> cranpose_ui::TextMetrics {
+        self.measure_for_node(None, text, style)
+    }
+
+    fn measure_for_node(
+        &self,
+        node_id: Option<NodeId>,
+        text: &cranpose_ui::text::AnnotatedString,
+        style: &cranpose_ui::text::TextStyle,
+    ) -> cranpose_ui::TextMetrics {
         let telemetry = text_measure_telemetry_enabled().then_some(text_measure_telemetry());
         let telemetry_sequence = telemetry
             .map(|t| t.measure_calls.fetch_add(1, Ordering::Relaxed) + 1)
@@ -1691,7 +1714,7 @@ impl TextMeasurer for WgpuTextMeasurer {
         }
 
         // Get or create text buffer
-        let text_buffer_key = TextCacheKey::new(text_str, font_size, style_hash);
+        let text_buffer_key = Self::text_buffer_key(node_id, text_str, font_size, style_hash);
         let mut font_system = self.font_system.lock().unwrap();
         let mut text_cache = self.text_cache.lock().unwrap();
         let mut font_family_resolver = self.font_family_resolver.lock().unwrap();
@@ -1775,12 +1798,23 @@ impl TextMeasurer for WgpuTextMeasurer {
         options: cranpose_ui::text::TextLayoutOptions,
         max_width: Option<f32>,
     ) -> cranpose_ui::TextMetrics {
+        self.measure_with_options_for_node(None, text, style, options, max_width)
+    }
+
+    fn measure_with_options_for_node(
+        &self,
+        node_id: Option<NodeId>,
+        text: &cranpose_ui::text::AnnotatedString,
+        style: &cranpose_ui::text::TextStyle,
+        options: cranpose_ui::text::TextLayoutOptions,
+        max_width: Option<f32>,
+    ) -> cranpose_ui::TextMetrics {
         let telemetry = text_measure_telemetry_enabled().then_some(text_measure_telemetry());
         let telemetry_sequence = telemetry
             .map(|t| t.measure_with_options_calls.fetch_add(1, Ordering::Relaxed) + 1)
             .unwrap_or(0);
         if let Some(metrics) =
-            self.try_measure_with_options_fast_path(text, style, options, max_width)
+            self.try_measure_with_options_fast_path(node_id, text, style, options, max_width)
         {
             if let Some(t) = telemetry {
                 t.measure_fast_path_hits.fetch_add(1, Ordering::Relaxed);
@@ -1792,12 +1826,23 @@ impl TextMeasurer for WgpuTextMeasurer {
             t.measure_fast_path_misses.fetch_add(1, Ordering::Relaxed);
             maybe_report_text_measure_telemetry(telemetry_sequence);
         }
-        self.prepare_with_options(text, style, options, max_width)
+        self.prepare_with_options_for_node(node_id, text, style, options, max_width)
             .metrics
     }
 
     fn prepare_with_options(
         &self,
+        text: &cranpose_ui::text::AnnotatedString,
+        style: &cranpose_ui::text::TextStyle,
+        options: cranpose_ui::text::TextLayoutOptions,
+        max_width: Option<f32>,
+    ) -> cranpose_ui::text::PreparedTextLayout {
+        self.prepare_with_options_for_node(None, text, style, options, max_width)
+    }
+
+    fn prepare_with_options_for_node(
+        &self,
+        node_id: Option<NodeId>,
         text: &cranpose_ui::text::AnnotatedString,
         style: &cranpose_ui::text::TextStyle,
         options: cranpose_ui::text::TextLayoutOptions,
@@ -1843,6 +1888,7 @@ impl TextMeasurer for WgpuTextMeasurer {
         }
 
         let prepared = if let Some(prepared) = self.try_prepare_with_options_fast_path(
+            node_id,
             text,
             style,
             normalized_options,
@@ -1856,7 +1902,9 @@ impl TextMeasurer for WgpuTextMeasurer {
             if let Some(t) = telemetry {
                 t.prepare_fast_path_misses.fetch_add(1, Ordering::Relaxed);
             }
-            self.prepare_with_options_fallback(
+            cranpose_ui::text::measure::prepare_text_layout_with_measurer_for_node(
+                self,
+                node_id,
                 text,
                 style,
                 normalized_options,
@@ -2487,6 +2535,54 @@ mod tests {
         );
         assert_eq!(first_cache_len, 1);
         assert_eq!(second_cache_len, 1);
+    }
+
+    #[test]
+    fn measure_for_node_uses_node_cache_identity() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let (font_system, resolver) = seeded_font_system_and_resolver();
+            let measurer = WgpuTextMeasurer::new(
+                Arc::new(Mutex::new(font_system)),
+                Arc::new(Mutex::new(HashMap::new())),
+                Arc::new(Mutex::new(resolver)),
+            );
+            let text = cranpose_ui::text::AnnotatedString::from("shared node identity");
+            let style = cranpose_ui::text::TextStyle::default();
+            let node_id = 4242;
+
+            let _ = TextMeasurer::measure_for_node(&measurer, Some(node_id), &text, &style);
+
+            let font_size = resolve_font_size(&style);
+            let style_hash = style.measurement_hash() ^ text.span_styles_hash();
+            let expected_key = TextCacheKey::for_node(node_id, font_size, style_hash);
+            let cache = measurer.text_cache.lock().expect("text cache lock");
+
+            tx.send((
+                cache.len(),
+                cache.contains_key(&expected_key),
+                cache
+                    .keys()
+                    .any(|key| matches!(key.key, TextKey::Content(_))),
+            ))
+            .expect("send node cache result");
+        });
+
+        let (cache_len, has_node_key, has_content_key) = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("measure_for_node timed out");
+        assert_eq!(cache_len, 1);
+        assert!(
+            has_node_key,
+            "node-aware measurement should populate node cache key"
+        );
+        assert!(
+            !has_content_key,
+            "node-aware measurement should not populate content cache keys"
+        );
     }
 
     // Font bytes used by tests — the same file the demo app ships.

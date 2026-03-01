@@ -1,4 +1,5 @@
 use crate::text_layout_result::TextLayoutResult;
+use cranpose_core::NodeId;
 use std::cell::RefCell;
 
 use super::layout_options::{TextLayoutOptions, TextOverflow};
@@ -30,6 +31,16 @@ pub struct PreparedTextLayout {
 
 pub trait TextMeasurer: 'static {
     fn measure(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics;
+
+    fn measure_for_node(
+        &self,
+        node_id: Option<NodeId>,
+        text: &crate::text::AnnotatedString,
+        style: &TextStyle,
+    ) -> TextMetrics {
+        let _ = node_id;
+        self.measure(text, style)
+    }
 
     fn get_offset_for_position(
         &self,
@@ -74,6 +85,18 @@ pub trait TextMeasurer: 'static {
             .metrics
     }
 
+    fn measure_with_options_for_node(
+        &self,
+        node_id: Option<NodeId>,
+        text: &crate::text::AnnotatedString,
+        style: &TextStyle,
+        options: TextLayoutOptions,
+        max_width: Option<f32>,
+    ) -> TextMetrics {
+        self.prepare_with_options_for_node(node_id, text, style, options, max_width)
+            .metrics
+    }
+
     fn prepare_with_options(
         &self,
         text: &crate::text::AnnotatedString,
@@ -82,6 +105,17 @@ pub trait TextMeasurer: 'static {
         max_width: Option<f32>,
     ) -> PreparedTextLayout {
         self.prepare_with_options_fallback(text, style, options, max_width)
+    }
+
+    fn prepare_with_options_for_node(
+        &self,
+        node_id: Option<NodeId>,
+        text: &crate::text::AnnotatedString,
+        style: &TextStyle,
+        options: TextLayoutOptions,
+        max_width: Option<f32>,
+    ) -> PreparedTextLayout {
+        prepare_text_layout_with_measurer_for_node(self, node_id, text, style, options, max_width)
     }
 
     fn prepare_with_options_fallback(
@@ -202,6 +236,14 @@ pub fn measure_text(text: &crate::text::AnnotatedString, style: &TextStyle) -> T
     TEXT_MEASURER.with(|m| m.borrow().measure(text, style))
 }
 
+pub fn measure_text_for_node(
+    node_id: Option<NodeId>,
+    text: &crate::text::AnnotatedString,
+    style: &TextStyle,
+) -> TextMetrics {
+    TEXT_MEASURER.with(|m| m.borrow().measure_for_node(node_id, text, style))
+}
+
 pub fn measure_text_with_options(
     text: &crate::text::AnnotatedString,
     style: &TextStyle,
@@ -214,6 +256,24 @@ pub fn measure_text_with_options(
     })
 }
 
+pub fn measure_text_with_options_for_node(
+    node_id: Option<NodeId>,
+    text: &crate::text::AnnotatedString,
+    style: &TextStyle,
+    options: TextLayoutOptions,
+    max_width: Option<f32>,
+) -> TextMetrics {
+    TEXT_MEASURER.with(|m| {
+        m.borrow().measure_with_options_for_node(
+            node_id,
+            text,
+            style,
+            options.normalized(),
+            max_width,
+        )
+    })
+}
+
 pub fn prepare_text_layout(
     text: &crate::text::AnnotatedString,
     style: &TextStyle,
@@ -223,6 +283,24 @@ pub fn prepare_text_layout(
     TEXT_MEASURER.with(|m| {
         m.borrow()
             .prepare_with_options(text, style, options.normalized(), max_width)
+    })
+}
+
+pub fn prepare_text_layout_for_node(
+    node_id: Option<NodeId>,
+    text: &crate::text::AnnotatedString,
+    style: &TextStyle,
+    options: TextLayoutOptions,
+    max_width: Option<f32>,
+) -> PreparedTextLayout {
+    TEXT_MEASURER.with(|m| {
+        m.borrow().prepare_with_options_for_node(
+            node_id,
+            text,
+            style,
+            options.normalized(),
+            max_width,
+        )
     })
 }
 
@@ -249,6 +327,17 @@ pub fn layout_text(text: &crate::text::AnnotatedString, style: &TextStyle) -> Te
 
 fn prepare_text_layout_fallback<M: TextMeasurer + ?Sized>(
     measurer: &M,
+    text: &crate::text::AnnotatedString,
+    style: &TextStyle,
+    options: TextLayoutOptions,
+    max_width: Option<f32>,
+) -> PreparedTextLayout {
+    prepare_text_layout_with_measurer_for_node(measurer, None, text, style, options, max_width)
+}
+
+pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
+    measurer: &M,
+    node_id: Option<NodeId>,
     text: &crate::text::AnnotatedString,
     style: &TextStyle,
     options: TextLayoutOptions,
@@ -312,7 +401,11 @@ fn prepare_text_layout_fallback<M: TextMeasurer + ?Sized>(
         for (line_index, line) in visible_lines.iter_mut().enumerate() {
             let width = visible_annotated_lines
                 .get(line_index)
-                .map(|annotated_line| measurer.measure(annotated_line, style).width)
+                .map(|annotated_line| {
+                    measurer
+                        .measure_for_node(node_id, annotated_line, style)
+                        .width
+                })
                 .unwrap_or_default();
             if width > width_limit + WRAP_EPSILON {
                 if opts.overflow == TextOverflow::Visible {
@@ -337,7 +430,10 @@ fn prepare_text_layout_fallback<M: TextMeasurer + ?Sized>(
 
     let display_annotated = join_annotated_lines(&visible_annotated_lines);
     debug_assert_eq!(display_annotated.text, visible_lines.join("\n"));
-    let line_height = measurer.measure(text, style).line_height.max(0.0);
+    let line_height = measurer
+        .measure_for_node(node_id, text, style)
+        .line_height
+        .max(0.0);
     let display_line_count = visible_lines.len().max(1);
     let layout_line_count = display_line_count.max(opts.min_lines);
 
@@ -346,7 +442,7 @@ fn prepare_text_layout_fallback<M: TextMeasurer + ?Sized>(
     } else {
         visible_annotated_lines
             .iter()
-            .map(|line| measurer.measure(line, style).width)
+            .map(|line| measurer.measure_for_node(node_id, line, style).width)
             .fold(0.0_f32, f32::max)
     };
     let width = if opts.overflow == TextOverflow::Visible {

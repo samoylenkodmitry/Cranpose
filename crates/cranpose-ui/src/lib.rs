@@ -100,7 +100,8 @@ pub use subcompose_layout::{
 };
 pub use text::{
     get_cursor_x_for_offset, get_offset_for_position, layout_text, measure_text,
-    measure_text_with_options, prepare_text_layout, set_text_measurer, LinkAnnotation,
+    measure_text_for_node, measure_text_with_options, measure_text_with_options_for_node,
+    prepare_text_layout, prepare_text_layout_for_node, set_text_measurer, LinkAnnotation,
     ParagraphStyle, PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle,
     PreparedTextLayout, SpanStyle, StringAnnotation, TextDrawStyle, TextLayoutOptions,
     TextMeasurer, TextMetrics, TextOverflow, TextShaping, TextStyle,

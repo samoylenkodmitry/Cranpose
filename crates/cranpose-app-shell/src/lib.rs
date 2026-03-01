@@ -36,6 +36,12 @@ use std::collections::HashSet;
 // Re-export key event types for use by cranpose
 pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType, Modifiers};
 
+#[derive(Copy, Clone)]
+enum DispatchInvalidationKind {
+    Pointer,
+    Focus,
+}
+
 pub struct AppShell<R>
 where
     R: Renderer,
@@ -954,19 +960,22 @@ where
         if has_pending_pointer_repasses() {
             let mut applier = self.composition.applier_mut();
             process_pointer_repasses(|node_id| {
-                // Access the LayoutNode and clear its dirty flag
-                let result = applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
-                    if layout_node.needs_pointer_pass() {
-                        layout_node.clear_needs_pointer_pass();
+                match clear_dispatch_invalidation(
+                    &mut applier,
+                    node_id,
+                    DispatchInvalidationKind::Pointer,
+                ) {
+                    Ok(true) => {
                         log::trace!("Cleared pointer repass flag for node #{}", node_id);
                     }
-                });
-                if let Err(err) = result {
-                    log::debug!(
-                        "Could not process pointer repass for node #{}: {}",
-                        node_id,
-                        err
-                    );
+                    Ok(false) => {}
+                    Err(err) => {
+                        log::debug!(
+                            "Could not process pointer repass for node #{}: {}",
+                            node_id,
+                            err
+                        );
+                    }
                 }
             });
         }
@@ -977,19 +986,22 @@ where
         if has_pending_focus_invalidations() {
             let mut applier = self.composition.applier_mut();
             process_focus_invalidations(|node_id| {
-                // Access the LayoutNode and clear its dirty flag
-                let result = applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
-                    if layout_node.needs_focus_sync() {
-                        layout_node.clear_needs_focus_sync();
+                match clear_dispatch_invalidation(
+                    &mut applier,
+                    node_id,
+                    DispatchInvalidationKind::Focus,
+                ) {
+                    Ok(true) => {
                         log::trace!("Cleared focus sync flag for node #{}", node_id);
                     }
-                });
-                if let Err(err) = result {
-                    log::debug!(
-                        "Could not process focus invalidation for node #{}: {}",
-                        node_id,
-                        err
-                    );
+                    Ok(false) => {}
+                    Err(err) => {
+                        log::debug!(
+                            "Could not process focus invalidation for node #{}: {}",
+                            node_id,
+                            err
+                        );
+                    }
                 }
             });
         }
@@ -1012,16 +1024,16 @@ where
 
     fn run_render_phase(&mut self) {
         let render_dirty = take_render_invalidation();
-        let pointer_dirty = take_pointer_invalidation();
-        let focus_dirty = take_focus_invalidation();
+        take_pointer_invalidation();
+        take_focus_invalidation();
         let draw_repass_pending = cranpose_ui::has_pending_draw_repasses();
         // Tick cursor blink timer - only marks dirty when visibility state changes
         let cursor_blink_dirty = cranpose_ui::tick_cursor_blink();
 
         let render_only_dirty = render_dirty || cursor_blink_dirty;
+        // Pointer/focus queues mutate live node state during dispatch. Direct applier rendering
+        // reads that state on demand, so only real scene dirties require a rebuild here.
         let needs_scene_rebuild = self.scene_dirty
-            || pointer_dirty
-            || focus_dirty
             || draw_repass_pending
             || (self.dev_options.fps_counter && render_only_dirty);
 
@@ -1058,6 +1070,55 @@ where
                 stats.fps, stats.avg_ms, stats.recomps_per_second
             );
             self.renderer.draw_dev_overlay(&text, viewport_size);
+        }
+    }
+}
+
+fn clear_dispatch_invalidation(
+    applier: &mut MemoryApplier,
+    node_id: NodeId,
+    invalidation: DispatchInvalidationKind,
+) -> Result<bool, NodeError> {
+    match invalidation {
+        DispatchInvalidationKind::Pointer => {
+            match applier.with_node::<LayoutNode, _>(node_id, |node| {
+                let needs_pointer_pass = node.needs_pointer_pass();
+                if needs_pointer_pass {
+                    node.clear_needs_pointer_pass();
+                }
+                needs_pointer_pass
+            }) {
+                Ok(cleared) => Ok(cleared),
+                Err(NodeError::TypeMismatch { .. }) => applier
+                    .with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
+                        let needs_pointer_pass = node.needs_pointer_pass();
+                        if needs_pointer_pass {
+                            node.clear_needs_pointer_pass();
+                        }
+                        needs_pointer_pass
+                    }),
+                Err(err) => Err(err),
+            }
+        }
+        DispatchInvalidationKind::Focus => {
+            match applier.with_node::<LayoutNode, _>(node_id, |node| {
+                let needs_focus_sync = node.needs_focus_sync();
+                if needs_focus_sync {
+                    node.clear_needs_focus_sync();
+                }
+                needs_focus_sync
+            }) {
+                Ok(cleared) => Ok(cleared),
+                Err(NodeError::TypeMismatch { .. }) => applier
+                    .with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
+                        let needs_focus_sync = node.needs_focus_sync();
+                        if needs_focus_sync {
+                            node.clear_needs_focus_sync();
+                        }
+                        needs_focus_sync
+                    }),
+                Err(err) => Err(err),
+            }
         }
     }
 }

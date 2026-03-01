@@ -238,6 +238,18 @@ fn tabbed_progress_content() {
 fn empty_content() {}
 
 #[composable]
+fn box_content() {
+    Box(
+        Modifier::empty().size(Size {
+            width: 24.0,
+            height: 24.0,
+        }),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+#[composable]
 fn draw_width_app(width_state: cranpose_core::MutableState<f32>) {
     Box(
         Modifier::empty()
@@ -382,7 +394,7 @@ fn render_invalidation_without_scene_changes_skips_rebuild() {
     let mut shell = AppShell::new(
         CountingRenderer::new(Rc::clone(&rebuilds)),
         root_key,
-        empty_content,
+        box_content,
     );
 
     shell.update();
@@ -395,6 +407,90 @@ fn render_invalidation_without_scene_changes_skips_rebuild() {
         rebuilds.get(),
         0,
         "pure render invalidation should reuse the retained scene"
+    );
+}
+
+#[test]
+fn pointer_invalidation_without_scene_changes_skips_rebuild() {
+    let root_key = location_key(file!(), line!(), column!());
+    let rebuilds = Rc::new(Cell::new(0));
+    let mut shell = AppShell::new(
+        CountingRenderer::new(Rc::clone(&rebuilds)),
+        root_key,
+        box_content,
+    );
+
+    shell.update();
+    rebuilds.set(0);
+
+    let root = shell.composition.root().expect("expected composition root");
+    shell
+        .composition
+        .applier_mut()
+        .with_node::<LayoutNode, _>(root, |node| {
+            node.mark_needs_pointer_pass();
+        })
+        .expect("expected layout root node");
+    cranpose_ui::schedule_pointer_repass(root);
+    cranpose_ui::request_pointer_invalidation();
+
+    shell.process_frame();
+
+    assert_eq!(
+        rebuilds.get(),
+        0,
+        "pure pointer invalidation should reuse the retained scene"
+    );
+    let needs_pointer_pass = shell
+        .composition
+        .applier_mut()
+        .with_node::<LayoutNode, _>(root, |node| node.needs_pointer_pass())
+        .expect("expected layout root node");
+    assert!(
+        !needs_pointer_pass,
+        "pointer dispatch queue should clear the node dirty flag"
+    );
+}
+
+#[test]
+fn focus_invalidation_without_scene_changes_skips_rebuild() {
+    let root_key = location_key(file!(), line!(), column!());
+    let rebuilds = Rc::new(Cell::new(0));
+    let mut shell = AppShell::new(
+        CountingRenderer::new(Rc::clone(&rebuilds)),
+        root_key,
+        box_content,
+    );
+
+    shell.update();
+    rebuilds.set(0);
+
+    let root = shell.composition.root().expect("expected composition root");
+    shell
+        .composition
+        .applier_mut()
+        .with_node::<LayoutNode, _>(root, |node| {
+            node.mark_needs_focus_sync();
+        })
+        .expect("expected layout root node");
+    cranpose_ui::schedule_focus_invalidation(root);
+    cranpose_ui::request_focus_invalidation();
+
+    shell.process_frame();
+
+    assert_eq!(
+        rebuilds.get(),
+        0,
+        "pure focus invalidation should reuse the retained scene"
+    );
+    let needs_focus_sync = shell
+        .composition
+        .applier_mut()
+        .with_node::<LayoutNode, _>(root, |node| node.needs_focus_sync())
+        .expect("expected layout root node");
+    assert!(
+        !needs_focus_sync,
+        "focus dispatch queue should clear the node dirty flag"
     );
 }
 

@@ -25,7 +25,7 @@ use cranpose_foundation::{
     LayoutModifierNode, Measurable, MeasurementProxy, ModifierNode, ModifierNodeContext,
     ModifierNodeElement, NodeCapabilities, NodeState, SemanticsConfiguration, SemanticsNode, Size,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
@@ -43,6 +43,7 @@ pub struct TextModifierNode {
     text: Rc<AnnotatedString>,
     style: TextStyle,
     options: TextLayoutOptions,
+    node_id: Cell<Option<cranpose_core::NodeId>>,
     measure_cache: RefCell<Option<TextMeasureCacheEntry>>,
     state: NodeState,
 }
@@ -59,6 +60,7 @@ impl TextModifierNode {
             text,
             style,
             options: options.normalized(),
+            node_id: Cell::new(None),
             measure_cache: RefCell::new(None),
             state: NodeState::new(),
         }
@@ -88,7 +90,8 @@ impl TextModifierNode {
             }
         }
 
-        let metrics = crate::text::measure_text_with_options(
+        let metrics = crate::text::measure_text_with_options_for_node(
+            self.node_id.get(),
             &self.text,
             &self.style,
             self.options,
@@ -116,10 +119,15 @@ impl DelegatableNode for TextModifierNode {
 
 impl ModifierNode for TextModifierNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
+        self.node_id.set(context.node_id());
         // Invalidate layout and draw when text node is attached
         context.invalidate(InvalidationKind::Layout);
         context.invalidate(InvalidationKind::Draw);
         context.invalidate(InvalidationKind::Semantics);
+    }
+
+    fn on_detach(&mut self) {
+        self.node_id.set(None);
     }
 
     fn as_draw_node(&self) -> Option<&dyn DrawModifierNode> {
@@ -198,6 +206,7 @@ impl LayoutModifierNode for TextModifierNode {
             text: self.text.clone(),
             style: self.style.clone(),
             options: self.options,
+            node_id: self.node_id.get(),
         }))
     }
 }
@@ -210,13 +219,15 @@ struct TextMeasurementProxy {
     text: Rc<AnnotatedString>,
     style: TextStyle,
     options: TextLayoutOptions,
+    node_id: Option<cranpose_core::NodeId>,
 }
 
 impl TextMeasurementProxy {
     /// Measure the text content dimensions.
     /// Matches TextModifierNode::measure_text_content() logic.
     fn measure_text_content(&self, max_width: Option<f32>) -> Size {
-        let metrics = crate::text::measure_text_with_options(
+        let metrics = crate::text::measure_text_with_options_for_node(
+            self.node_id,
             &self.text,
             &self.style,
             self.options,
@@ -614,12 +625,79 @@ impl ModifierNodeElement for TextModifierElement {
 mod tests {
     use super::*;
     use crate::text::TextUnit;
+    use crate::text_layout_result::TextLayoutResult;
+    use cranpose_core::NodeId;
+    use cranpose_foundation::BasicModifierNodeContext;
     use std::collections::hash_map::DefaultHasher;
+    use std::sync::mpsc;
 
     fn hash_of(element: &TextModifierElement) -> u64 {
         let mut hasher = DefaultHasher::new();
         element.hash(&mut hasher);
         hasher.finish()
+    }
+
+    struct RecordingNodeAwareMeasurer {
+        recorded: std::rc::Rc<std::cell::RefCell<Vec<Option<NodeId>>>>,
+    }
+
+    impl crate::text::TextMeasurer for RecordingNodeAwareMeasurer {
+        fn measure(
+            &self,
+            _text: &crate::text::AnnotatedString,
+            _style: &TextStyle,
+        ) -> crate::text::TextMetrics {
+            crate::text::TextMetrics {
+                width: 12.0,
+                height: 18.0,
+                line_height: 18.0,
+                line_count: 1,
+            }
+        }
+
+        fn measure_with_options_for_node(
+            &self,
+            node_id: Option<NodeId>,
+            _text: &crate::text::AnnotatedString,
+            _style: &TextStyle,
+            _options: TextLayoutOptions,
+            _max_width: Option<f32>,
+        ) -> crate::text::TextMetrics {
+            self.recorded.borrow_mut().push(node_id);
+            crate::text::TextMetrics {
+                width: 12.0,
+                height: 18.0,
+                line_height: 18.0,
+                line_count: 1,
+            }
+        }
+
+        fn get_offset_for_position(
+            &self,
+            _text: &crate::text::AnnotatedString,
+            _style: &TextStyle,
+            _x: f32,
+            _y: f32,
+        ) -> usize {
+            0
+        }
+
+        fn get_cursor_x_for_offset(
+            &self,
+            _text: &crate::text::AnnotatedString,
+            _style: &TextStyle,
+            _offset: usize,
+        ) -> f32 {
+            0.0
+        }
+
+        fn layout(
+            &self,
+            _text: &crate::text::AnnotatedString,
+            _style: &TextStyle,
+        ) -> TextLayoutResult {
+            panic!("layout is not used in this test");
+        }
     }
 
     #[test]
@@ -660,5 +738,35 @@ mod tests {
 
         assert_eq!(element_a, element_b);
         assert_eq!(hash_of(&element_a), hash_of(&element_b));
+    }
+
+    #[test]
+    fn measure_uses_attached_node_identity() {
+        let (tx, rx) = mpsc::channel();
+
+        std::thread::spawn(move || {
+            let recorded = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            crate::text::set_text_measurer(RecordingNodeAwareMeasurer {
+                recorded: recorded.clone(),
+            });
+
+            let mut node = TextModifierNode::new(
+                Rc::new(AnnotatedString::from("identity")),
+                TextStyle::default(),
+                TextLayoutOptions::default(),
+            );
+            let mut context = BasicModifierNodeContext::new();
+            context.set_node_id(Some(77));
+            node.on_attach(&mut context);
+
+            let size = node.measure_text_content(Some(96.0));
+            tx.send((recorded.borrow().clone(), size.width, size.height))
+                .expect("send measurement result");
+        });
+
+        let (recorded, width, height) = rx.recv().expect("receive measurement result");
+        assert_eq!(recorded, vec![Some(77)]);
+        assert_eq!(width, 12.0);
+        assert_eq!(height, 18.0);
     }
 }
