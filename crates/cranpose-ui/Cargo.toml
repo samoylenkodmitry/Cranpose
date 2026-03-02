@@ -19,7 +19,6 @@ cranpose-foundation = { workspace = true }
 cranpose-animation = { workspace = true }
 cranpose-ui-layout = { workspace = true }
 cranpose-ui-graphics = { workspace = true }
-indexmap = "=2.7.1"
 smallvec = "1.13"
 futures-task = "0.3"
 # WASM-compatible time - web-time is what winit uses internally

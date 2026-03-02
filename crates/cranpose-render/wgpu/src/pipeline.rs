@@ -1940,7 +1940,7 @@ fn render_node_from_applier(
         let state = node.layout_state();
         let modifier_slices = node.modifier_slices_snapshot();
         let resolved_modifiers = node.resolved_modifiers();
-        let children: Vec<NodeId> = node.children.iter().copied().collect();
+        let children: Vec<NodeId> = node.children.clone();
         (state, modifier_slices, resolved_modifiers, children)
     }) {
         data

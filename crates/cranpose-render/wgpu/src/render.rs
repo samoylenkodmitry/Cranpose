@@ -883,7 +883,31 @@ impl GpuRenderer {
             height,
             root_scale,
         );
+
+        // Trim text renderer pool to the number of slots actually used this frame,
+        // plus a small margin to avoid thrashing on minor batch count fluctuations.
+        const TEXT_POOL_MARGIN: usize = 4;
+        let target_pool_size = self.text_batch_cursor.saturating_add(TEXT_POOL_MARGIN);
+        if self.text_renderer_pool.len() > target_pool_size {
+            self.text_renderer_pool.truncate(target_pool_size);
+        }
+
         if self.gpu_stats_enabled {
+            self.frame_stats
+                .offscreen_pool_size
+                .set(self.effect_renderer.offscreen_pool.pool_size() as u32);
+            self.frame_stats
+                .offscreen_pool_bytes
+                .set(self.effect_renderer.offscreen_pool.estimated_bytes() as u64);
+            self.frame_stats
+                .text_pool_size
+                .set(self.text_renderer_pool.len() as u32);
+            self.frame_stats
+                .image_cache_size
+                .set(self.image_texture_cache.len() as u32);
+            self.frame_stats
+                .text_cache_size
+                .set(self.text_cache.lock().unwrap().len() as u32);
             self.effect_renderer
                 .merge_and_reset_debug_counters(&self.frame_stats);
             self.frame_stats.print_and_reset(&mut self.frame_count);

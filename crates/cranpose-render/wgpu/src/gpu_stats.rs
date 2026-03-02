@@ -19,6 +19,12 @@ pub(crate) struct FrameStats {
     pub shape_passes: Cell<u32>,
     pub image_passes: Cell<u32>,
     pub text_passes: Cell<u32>,
+    // Pool/cache sizes snapshotted at end of frame
+    pub offscreen_pool_size: Cell<u32>,
+    pub offscreen_pool_bytes: Cell<u64>,
+    pub text_pool_size: Cell<u32>,
+    pub image_cache_size: Cell<u32>,
+    pub text_cache_size: Cell<u32>,
 }
 
 impl FrameStats {
@@ -52,20 +58,27 @@ impl FrameStats {
         *frame_count += 1;
         if (*frame_count).is_multiple_of(60) {
             let mb = self.offscreen_total_bytes.get() as f64 / (1024.0 * 1024.0);
+            let pool_mb = self.offscreen_pool_bytes.get() as f64 / (1024.0 * 1024.0);
             eprintln!(
-                "[GPU f#{}] submits={} | offscreen: acq={} new={} {:.1}MB | \
-                 blur={} composite={} effect={} | shape={} image={} text={}",
+                "[GPU f#{}] submits={} | offscreen: acq={} new={} {:.1}MB pool={}({:.1}MB) | \
+                 blur={} composite={} effect={} | shape={} image={} text={} | \
+                 caches: text_pool={} img={} txt={}",
                 frame_count,
                 self.submits.get(),
                 self.offscreen_acquires.get(),
                 self.offscreen_news.get(),
                 mb,
+                self.offscreen_pool_size.get(),
+                pool_mb,
                 self.blur_passes.get(),
                 self.composite_passes.get(),
                 self.effect_applies.get(),
                 self.shape_passes.get(),
                 self.image_passes.get(),
                 self.text_passes.get(),
+                self.text_pool_size.get(),
+                self.image_cache_size.get(),
+                self.text_cache_size.get(),
             );
         }
         self.submits.set(0);

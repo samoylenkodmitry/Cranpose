@@ -5,7 +5,6 @@ use std::rc::Rc;
 use cranpose_core::{
     Composer, NodeError, NodeId, Phase, SlotBackend, SlotId, SlotsHost, SubcomposeState,
 };
-use indexmap::IndexSet;
 
 use crate::modifier::{
     collect_modifier_slices_into, Modifier, ModifierChainHandle, ModifierNodeSlices, Point,
@@ -186,7 +185,7 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
                 register_layout_node(id, &node);
 
                 inner.virtual_nodes.insert(id, Rc::new(node));
-                inner.children.insert(id);
+                inner.children.push(id);
                 (id, false)
             };
 
@@ -491,7 +490,7 @@ impl SubcomposeLayoutNode {
     }
 
     pub fn active_children(&self) -> Vec<NodeId> {
-        self.inner.borrow().children.iter().copied().collect()
+        self.inner.borrow().children.clone()
     }
 
     /// Mark this node as needing measure. Also marks it as needing layout.
@@ -690,11 +689,14 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
             let count = self.virtual_children_count.get();
             self.virtual_children_count.set(count + 1);
         }
-        self.inner.borrow_mut().children.insert(child);
+        self.inner.borrow_mut().children.push(child);
     }
 
     fn remove_child(&mut self, child: NodeId) {
-        if self.inner.borrow_mut().children.shift_remove(&child) && is_virtual_node(child) {
+        let mut inner = self.inner.borrow_mut();
+        let before = inner.children.len();
+        inner.children.retain(|&id| id != child);
+        if inner.children.len() < before && is_virtual_node(child) {
             let count = self.virtual_children_count.get();
             if count > 0 {
                 self.virtual_children_count.set(count - 1);
@@ -707,32 +709,23 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
         if from == to || from >= inner.children.len() {
             return;
         }
-        let mut ordered: Vec<NodeId> = inner.children.iter().copied().collect();
-        let child = ordered.remove(from);
-        let target = to.min(ordered.len());
-        ordered.insert(target, child);
-        inner.children.clear();
-        for id in ordered {
-            inner.children.insert(id);
-        }
+        let child = inner.children.remove(from);
+        let target = to.min(inner.children.len());
+        inner.children.insert(target, child);
     }
 
     fn update_children(&mut self, children: &[NodeId]) {
         let mut inner = self.inner.borrow_mut();
         inner.children.clear();
-        for &child in children {
-            inner.children.insert(child);
-        }
+        inner.children.extend_from_slice(children);
     }
 
     fn children(&self) -> Vec<NodeId> {
         let inner = self.inner.borrow();
-        // Return placement children if available (they represent the actually rendered nodes)
-        // Otherwise fall back to structural children
         if !inner.last_placements.is_empty() {
             inner.last_placements.clone()
         } else {
-            inner.children.iter().copied().collect()
+            inner.children.clone()
         }
     }
 
@@ -911,9 +904,7 @@ impl SubcomposeLayoutNodeHandle {
     {
         let mut inner = self.inner.borrow_mut();
         inner.children.clear();
-        for child in children {
-            inner.children.insert(child);
-        }
+        inner.children.extend(children);
     }
 }
 
@@ -924,7 +915,7 @@ struct SubcomposeLayoutNodeInner {
     modifier_capabilities: NodeCapabilities,
     state: SubcomposeState,
     measure_policy: Rc<MeasurePolicy>,
-    children: IndexSet<NodeId>,
+    children: Vec<NodeId>,
     slots: SlotBackend,
     debug_modifiers: bool,
     // Owns virtual nodes created during subcomposition
@@ -943,7 +934,7 @@ impl SubcomposeLayoutNodeInner {
             modifier_capabilities: NodeCapabilities::default(),
             state: SubcomposeState::default(),
             measure_policy,
-            children: IndexSet::new(),
+            children: Vec::new(),
             slots: SlotBackend::default(),
             debug_modifiers: false,
             virtual_nodes: HashMap::new(),

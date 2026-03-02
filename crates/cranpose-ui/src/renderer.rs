@@ -287,7 +287,7 @@ impl HeadlessRenderer {
         let node_data = match applier.with_node::<LayoutNode, _>(node_id, |node| {
             let state = node.layout_state();
             let modifier_slices = node.modifier_slices_snapshot();
-            let children: Vec<NodeId> = node.children.iter().copied().collect();
+            let children: Vec<NodeId> = node.children.clone();
             (state, modifier_slices, children)
         }) {
             Ok(data) => data,

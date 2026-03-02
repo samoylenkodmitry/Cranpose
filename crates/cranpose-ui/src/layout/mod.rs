@@ -1353,7 +1353,7 @@ impl LayoutNodeSnapshot {
         Self {
             resolved_modifiers: node.resolved_modifiers(),
             measure_policy: Rc::clone(&node.measure_policy),
-            children: node.children.iter().copied().collect(),
+            children: node.children.clone(),
             cache: node.cache_handles(),
             needs_measure: node.needs_measure(),
         }

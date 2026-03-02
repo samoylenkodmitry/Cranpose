@@ -541,8 +541,8 @@ fn selective_measure_with_tree_hierarchy() -> Result<(), NodeError> {
     )));
 
     let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
-    root.children.insert(child_a);
-    root.children.insert(child_b);
+    root.children.push(child_a);
+    root.children.push(child_b);
     let root_id = applier.create(Box::new(root));
 
     // First measure
@@ -597,7 +597,7 @@ fn dirty_child_triggers_parent_remeasure() -> Result<(), NodeError> {
     )));
 
     let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
-    root.children.insert(child);
+    root.children.push(child);
     let root_id = applier.create(Box::new(root));
 
     // Set up parent links
@@ -649,7 +649,7 @@ fn parent_tracking_basic() -> Result<(), NodeError> {
     )));
 
     let mut parent = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
-    parent.children.insert(child);
+    parent.children.push(child);
     let parent_id = applier.create(Box::new(parent));
 
     // Set IDs on nodes
@@ -690,11 +690,11 @@ fn dirty_bubbling_to_root() -> Result<(), NodeError> {
     )));
 
     let mut middle = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
-    middle.children.insert(leaf);
+    middle.children.push(leaf);
     let middle_id = applier.create(Box::new(middle));
 
     let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
-    root.children.insert(middle_id);
+    root.children.push(middle_id);
     let root_id = applier.create(Box::new(root));
 
     // Set up node IDs and parent relationships
@@ -761,7 +761,7 @@ fn tree_needs_layout_api() -> Result<(), NodeError> {
     )));
 
     let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
-    root.children.insert(child);
+    root.children.push(child);
     let root_id = applier.create(Box::new(root));
 
     // Set up parent links
@@ -821,11 +821,11 @@ fn bubbling_stops_at_already_dirty_ancestor() -> Result<(), NodeError> {
     )));
 
     let mut middle = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
-    middle.children.insert(leaf);
+    middle.children.push(leaf);
     let middle_id = applier.create(Box::new(middle));
 
     let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
-    root.children.insert(middle_id);
+    root.children.push(middle_id);
     let root_id = applier.create(Box::new(root));
 
     // Set up relationships
@@ -896,12 +896,12 @@ fn property_change_bubbles_without_manual_call() -> Result<(), NodeError> {
     // Build tree structure
     applier.with_node::<LayoutNode, _>(root_id, |node| {
         node.set_node_id(root_id);
-        node.children.insert(child_id);
+        node.children.push(child_id);
     })?;
     applier.with_node::<LayoutNode, _>(child_id, |node| {
         node.set_node_id(child_id);
         node.set_parent(root_id);
-        node.children.insert(leaf_id);
+        node.children.push(leaf_id);
     })?;
     applier.with_node::<LayoutNode, _>(leaf_id, |node| {
         node.set_node_id(leaf_id);
@@ -1207,8 +1207,8 @@ fn measure_layout_error_preserves_applier_and_slots() -> Result<(), NodeError> {
     )));
 
     let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
-    root.children.insert(child1);
-    root.children.insert(child2);
+    root.children.push(child1);
+    root.children.push(child2);
     let root_id = applier.create(Box::new(root));
 
     // Perform a successful layout first
