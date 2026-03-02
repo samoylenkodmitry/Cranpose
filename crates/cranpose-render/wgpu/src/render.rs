@@ -2602,6 +2602,13 @@ impl GpuRenderer {
         if batch_signature.is_some()
             && self.text_renderer_pool[slot_index].last_signature == batch_signature
         {
+            // Viewport must be updated even on skip: encode_text_pass uses it for
+            // projection. Shadow draws pass offscreen dimensions (bounds_w × bounds_h)
+            // which differ from full-screen resolution used by normal text batches.
+            // Without this update, a skipped shadow text renders with the stale
+            // full-screen viewport, mapping its vertices to wrong coordinates.
+            self.text_viewport
+                .update(&self.queue, Resolution { width, height });
             if telemetry_enabled {
                 let skips = TEXT_RENDER_SKIPS.fetch_add(1, Ordering::Relaxed) + 1;
                 if call_sequence.is_multiple_of(20) {
