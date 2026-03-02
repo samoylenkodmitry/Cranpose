@@ -4,6 +4,7 @@ use std::rc::Rc;
 use cranpose_foundation::{ModifierNodeChain, NodeCapabilities, PointerEvent};
 use cranpose_ui_graphics::{ColorFilter, GraphicsLayer, RenderEffect};
 
+use super::{ModifierChainHandle, Point};
 use crate::draw::DrawCommand;
 use crate::modifier::Modifier;
 use crate::modifier_nodes::{
@@ -14,9 +15,6 @@ use crate::text::{TextLayoutOptions, TextStyle};
 use crate::text_field_modifier_node::TextFieldModifierNode;
 use crate::text_modifier_node::{TextModifierNode, TextPreparedLayoutHandle};
 use cranpose_ui_graphics::EdgeInsets;
-use std::cell::RefCell;
-
-use super::{ModifierChainHandle, Point};
 
 /// Snapshot of modifier node slices that impact draw and pointer subsystems.
 #[derive(Default)]
@@ -267,132 +265,123 @@ pub fn collect_modifier_slices(chain: &ModifierNodeChain) -> ModifierNodeSlices 
 }
 
 /// Collects modifier node slices into an existing buffer to reuse allocations.
+///
+/// Single-pass: iterates the chain once instead of 4 separate capability-filtered
+/// traversals, reducing per-node `RefCell::borrow()` overhead.
 pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut ModifierNodeSlices) {
     slices.clear();
 
-    chain.for_each_node_with_capability(NodeCapabilities::POINTER_INPUT, |_ref, node| {
-        let _any = node.as_any();
+    let caps = chain.capabilities();
+    let has_pointer = caps.intersects(NodeCapabilities::POINTER_INPUT);
+    let has_draw = caps.intersects(NodeCapabilities::DRAW);
+    let has_layout = caps.intersects(NodeCapabilities::LAYOUT);
 
-        // ClickableNode is now handled as a standard PointerInputNode
-        // to support drag cancellation and proper click semantics (Up vs Down)
+    if !has_pointer && !has_draw && !has_layout {
+        return;
+    }
 
-        // Collect general pointer input handlers (non-clickable)
-        if let Some(handler) = node
-            .as_pointer_input_node()
-            .and_then(|n| n.pointer_input_handler())
-        {
-            slices.pointer_inputs.push(handler);
-        }
-    });
+    let mut background_color = None;
+    let mut background_insert_index = None::<usize>;
+    let mut corner_shape = None;
+    let mut padding = EdgeInsets::default();
 
-    // Track background and shape to combine them in draw commands
-    let background_color = RefCell::new(None);
-    let background_insert_index = RefCell::new(None::<usize>);
-    let corner_shape = RefCell::new(None);
+    for node_ref in chain.head_to_tail() {
+        let node_caps = node_ref.kind_set();
 
-    chain.for_each_node_with_capability(NodeCapabilities::DRAW, |_ref, node| {
-        let any = node.as_any();
+        node_ref.with_node(|node| {
+            let any = node.as_any();
 
-        // Collect background color from BackgroundNode
-        if let Some(bg_node) = any.downcast_ref::<BackgroundNode>() {
-            *background_color.borrow_mut() = Some(bg_node.color());
-            *background_insert_index.borrow_mut() = Some(slices.draw_commands.len());
-            // Note: BackgroundNode can have an optional shape, but we primarily track
-            // shape via CornerShapeNode for flexibility
-            if bg_node.shape().is_some() {
-                *corner_shape.borrow_mut() = bg_node.shape();
-            }
-        }
-
-        // Collect corner shape from CornerShapeNode
-        if let Some(shape_node) = any.downcast_ref::<CornerShapeNode>() {
-            *corner_shape.borrow_mut() = Some(shape_node.shape());
-        }
-
-        // Collect draw commands from DrawCommandNode
-        if let Some(commands) = any.downcast_ref::<DrawCommandNode>() {
-            slices
-                .draw_commands
-                .extend(commands.commands().iter().cloned());
-        }
-
-        // Use create_draw_closure() for nodes with dynamic content (cursor blink, selection)
-        // This defers evaluation to render time, enabling live updates.
-        // Fallback to draw() for nodes with static content.
-        if let Some(draw_node) = node.as_draw_node() {
-            if let Some(closure) = draw_node.create_draw_closure() {
-                // Deferred closure - evaluates at render time
-                slices.draw_commands.push(DrawCommand::Overlay(closure));
-            } else {
-                // Static draw - evaluate now
-                use cranpose_ui_graphics::{DrawScope as _, DrawScopeDefault};
-                let mut scope = DrawScopeDefault::new(crate::modifier::Size {
-                    width: 0.0,
-                    height: 0.0,
-                });
-                draw_node.draw(&mut scope);
-                let primitives = scope.into_primitives();
-                if !primitives.is_empty() {
-                    let draw_cmd = Rc::new(move |_size: crate::modifier::Size| primitives.clone());
-                    slices.draw_commands.push(DrawCommand::Overlay(draw_cmd));
+            // POINTER_INPUT collection
+            if has_pointer && node_caps.intersects(NodeCapabilities::POINTER_INPUT) {
+                if let Some(handler) = node
+                    .as_pointer_input_node()
+                    .and_then(|n| n.pointer_input_handler())
+                {
+                    slices.pointer_inputs.push(handler);
                 }
             }
-        }
 
-        // Collect graphics layer from GraphicsLayerNode
-        if let Some(layer_node) = any.downcast_ref::<GraphicsLayerNode>() {
-            slices.push_graphics_layer(layer_node.layer(), layer_node.layer_resolver());
-        }
+            // DRAW collection
+            if has_draw && node_caps.intersects(NodeCapabilities::DRAW) {
+                if let Some(bg_node) = any.downcast_ref::<BackgroundNode>() {
+                    background_color = Some(bg_node.color());
+                    background_insert_index = Some(slices.draw_commands.len());
+                    if bg_node.shape().is_some() {
+                        corner_shape = bg_node.shape();
+                    }
+                }
 
-        if any.is::<ClipToBoundsNode>() {
-            slices.clip_to_bounds = true;
-        }
-    });
+                if let Some(shape_node) = any.downcast_ref::<CornerShapeNode>() {
+                    corner_shape = Some(shape_node.shape());
+                }
 
-    // Collect padding from modifier chain for cursor positioning
-    let mut padding = EdgeInsets::default();
-    chain.for_each_node_with_capability(NodeCapabilities::LAYOUT, |_ref, node| {
-        let any = node.as_any();
-        if let Some(padding_node) = any.downcast_ref::<PaddingNode>() {
-            let p = padding_node.padding();
-            padding.left += p.left;
-            padding.top += p.top;
-            padding.right += p.right;
-            padding.bottom += p.bottom;
-        }
-    });
+                if let Some(commands) = any.downcast_ref::<DrawCommandNode>() {
+                    slices
+                        .draw_commands
+                        .extend(commands.commands().iter().cloned());
+                }
 
-    // Collect text content from TextModifierNode or TextFieldModifierNode (LAYOUT capability)
-    chain.for_each_node_with_capability(NodeCapabilities::LAYOUT, |_ref, node| {
-        let any = node.as_any();
-        if let Some(text_node) = any.downcast_ref::<TextModifierNode>() {
-            // Rightmost text modifier wins
-            slices.text_content = Some(text_node.annotated_text());
-            slices.text_style = Some(text_node.style().clone());
-            slices.text_layout_options = Some(text_node.options());
-            slices.prepared_text_layout = Some(text_node.prepared_layout_handle());
-        }
-        // Also check for TextFieldModifierNode (editable text fields)
-        if let Some(text_field_node) = any.downcast_ref::<TextFieldModifierNode>() {
-            let text = text_field_node.text();
-            slices.text_content = Some(Rc::new(crate::text::AnnotatedString::from(text)));
-            slices.text_style = Some(text_field_node.style().clone());
-            slices.text_layout_options = Some(TextLayoutOptions::default());
-            slices.prepared_text_layout = None;
+                if let Some(draw_node) = node.as_draw_node() {
+                    if let Some(closure) = draw_node.create_draw_closure() {
+                        slices.draw_commands.push(DrawCommand::Overlay(closure));
+                    } else {
+                        use cranpose_ui_graphics::{DrawScope as _, DrawScopeDefault};
+                        let mut scope = DrawScopeDefault::new(crate::modifier::Size {
+                            width: 0.0,
+                            height: 0.0,
+                        });
+                        draw_node.draw(&mut scope);
+                        let primitives = scope.into_primitives();
+                        if !primitives.is_empty() {
+                            let draw_cmd =
+                                Rc::new(move |_size: crate::modifier::Size| primitives.clone());
+                            slices.draw_commands.push(DrawCommand::Overlay(draw_cmd));
+                        }
+                    }
+                }
 
-            // Update content offsets for cursor positioning in collect_draw_primitives()
-            text_field_node.set_content_offset(padding.left);
-            text_field_node.set_content_y_offset(padding.top);
+                if let Some(layer_node) = any.downcast_ref::<GraphicsLayerNode>() {
+                    slices.push_graphics_layer(layer_node.layer(), layer_node.layer_resolver());
+                }
 
-            // Cursor/selection rendering is now handled via DrawModifierNode::collect_draw_primitives()
-            // in the DRAW capability loop above
-        }
-    });
+                if any.is::<ClipToBoundsNode>() {
+                    slices.clip_to_bounds = true;
+                }
+            }
+
+            // LAYOUT collection (padding + text)
+            if has_layout && node_caps.intersects(NodeCapabilities::LAYOUT) {
+                if let Some(padding_node) = any.downcast_ref::<PaddingNode>() {
+                    let p = padding_node.padding();
+                    padding.left += p.left;
+                    padding.top += p.top;
+                    padding.right += p.right;
+                    padding.bottom += p.bottom;
+                }
+
+                if let Some(text_node) = any.downcast_ref::<TextModifierNode>() {
+                    slices.text_content = Some(text_node.annotated_text());
+                    slices.text_style = Some(text_node.style().clone());
+                    slices.text_layout_options = Some(text_node.options());
+                    slices.prepared_text_layout = Some(text_node.prepared_layout_handle());
+                }
+
+                if let Some(text_field_node) = any.downcast_ref::<TextFieldModifierNode>() {
+                    let text = text_field_node.text();
+                    slices.text_content = Some(Rc::new(crate::text::AnnotatedString::from(text)));
+                    slices.text_style = Some(text_field_node.style().clone());
+                    slices.text_layout_options = Some(TextLayoutOptions::default());
+                    slices.prepared_text_layout = None;
+
+                    text_field_node.set_content_offset(padding.left);
+                    text_field_node.set_content_y_offset(padding.top);
+                }
+            }
+        });
+    }
 
     // Convert background + shape into a draw command
-    if let Some(color) = background_color.into_inner() {
-        let shape = corner_shape.into_inner();
-
+    if let Some(color) = background_color {
         let draw_cmd = Rc::new(move |size: crate::modifier::Size| {
             use crate::modifier::{Brush, Rect};
             use cranpose_ui_graphics::DrawPrimitive;
@@ -405,7 +394,7 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
                 height: size.height,
             };
 
-            if let Some(shape) = shape {
+            if let Some(shape) = corner_shape {
                 let radii = shape.resolve(size.width, size.height);
                 vec![DrawPrimitive::RoundRect { rect, brush, radii }]
             } else {
@@ -414,7 +403,6 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
         });
 
         let insert_index = background_insert_index
-            .into_inner()
             .unwrap_or(0)
             .min(slices.draw_commands.len());
         slices

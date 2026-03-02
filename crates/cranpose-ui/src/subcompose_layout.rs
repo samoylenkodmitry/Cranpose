@@ -685,11 +685,15 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
     }
 
     fn insert_child(&mut self, child: NodeId) {
+        let mut inner = self.inner.borrow_mut();
+        if inner.children.contains(&child) {
+            return;
+        }
         if is_virtual_node(child) {
             let count = self.virtual_children_count.get();
             self.virtual_children_count.set(count + 1);
         }
-        self.inner.borrow_mut().children.push(child);
+        inner.children.push(child);
     }
 
     fn remove_child(&mut self, child: NodeId) {

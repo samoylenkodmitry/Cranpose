@@ -41,6 +41,10 @@ static REPORTED_UNSUPPORTED_WGPU_EFFECTS: AtomicBool = AtomicBool::new(false);
 static TEXT_RENDER_TELEMETRY_ENABLED: OnceLock<bool> = OnceLock::new();
 static TEXT_RENDER_CALLS: AtomicU64 = AtomicU64::new(0);
 static TEXT_RENDER_SKIPS: AtomicU64 = AtomicU64::new(0);
+static TEXT_RENDER_ENSURE_RESHAPES: AtomicU64 = AtomicU64::new(0);
+static TEXT_RENDER_ENSURE_REUSES: AtomicU64 = AtomicU64::new(0);
+static TEXT_RENDER_CACHE_HITS: AtomicU64 = AtomicU64::new(0);
+static TEXT_RENDER_CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
 
 fn text_render_telemetry_enabled() -> bool {
     *TEXT_RENDER_TELEMETRY_ENABLED
@@ -2678,7 +2682,7 @@ impl GpuRenderer {
             );
             let key = TextCacheKey::for_node(text_draw.node_id, font_size_px, style_hash);
 
-            let (_, _, _, buffer) = crate::shared_text_buffer_mut(
+            let (cache_hit, _, _, buffer) = crate::shared_text_buffer_mut(
                 &mut text_cache,
                 key.clone(),
                 &mut font_system,
@@ -2686,7 +2690,7 @@ impl GpuRenderer {
                 line_height_px,
             );
 
-            buffer.ensure(
+            let reshaped = buffer.ensure(
                 &mut font_system,
                 &mut font_family_resolver,
                 EnsureTextBufferParams {
@@ -2698,6 +2702,19 @@ impl GpuRenderer {
                     scale: text_draw.scale * root_scale,
                 },
             );
+
+            if telemetry_enabled {
+                if cache_hit {
+                    TEXT_RENDER_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    TEXT_RENDER_CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
+                }
+                if reshaped {
+                    TEXT_RENDER_ENSURE_RESHAPES.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    TEXT_RENDER_ENSURE_REUSES.fetch_add(1, Ordering::Relaxed);
+                }
+            }
 
             text_keys.push(key);
         }
@@ -2791,15 +2808,25 @@ impl GpuRenderer {
             let elapsed_ms = prepare_started
                 .map(|start| start.elapsed().as_secs_f64() * 1000.0)
                 .unwrap_or(0.0);
+            let render_reshapes = TEXT_RENDER_ENSURE_RESHAPES.load(Ordering::Relaxed);
+            let render_reuses = TEXT_RENDER_ENSURE_REUSES.load(Ordering::Relaxed);
+            let render_cache_hits = TEXT_RENDER_CACHE_HITS.load(Ordering::Relaxed);
+            let render_cache_misses = TEXT_RENDER_CACHE_MISSES.load(Ordering::Relaxed);
+            let render_cache_total = render_cache_hits + render_cache_misses;
             log::warn!(
-                "[text-render-telemetry] calls={} skips={} skip_rate={:.1}% batch_items={} chars={} prepare_ms={:.2} slot={}",
+                "[text-render-telemetry] calls={} skips={} skip_rate={:.1}% batch_items={} chars={} prepare_ms={:.2} slot={} \
+                 cache_hit_rate={:.1}% ensure_reshape_rate={:.1}% reshapes={} reuses={}",
                 call_sequence,
                 skips,
                 (skips as f64 / call_sequence as f64) * 100.0,
                 valid_items,
                 total_chars,
                 elapsed_ms,
-                slot_index
+                slot_index,
+                if render_cache_total > 0 { (render_cache_hits as f64 / render_cache_total as f64) * 100.0 } else { 0.0 },
+                if render_reshapes + render_reuses > 0 { (render_reshapes as f64 / (render_reshapes + render_reuses) as f64) * 100.0 } else { 0.0 },
+                render_reshapes,
+                render_reuses,
             );
         }
         Ok(slot_index)

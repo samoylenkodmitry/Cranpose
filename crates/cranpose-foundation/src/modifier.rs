@@ -978,17 +978,37 @@ enum TraversalDirection {
     Backward,
 }
 
-/// Iterator walking a modifier chain either from head-to-tail or tail-to-head.
+/// Iterator walking a modifier chain by indexing into `ordered_nodes`.
+///
+/// This avoids the per-step `RefCell::borrow()` + `NodeLink::clone()` cost
+/// of following the linked-list through `NodeState::child`/`parent`.
 pub struct ModifierChainIter<'a> {
-    next: Option<ModifierChainNodeRef<'a>>,
+    chain: &'a ModifierNodeChain,
+    /// Current position in `ordered_nodes`. For forward iteration, starts at 0
+    /// and increments; for backward, starts at len-1 and decrements.
+    cursor: usize,
+    /// Number of elements remaining (avoids underflow on backward iteration).
+    remaining: usize,
     direction: TraversalDirection,
 }
 
 impl<'a> ModifierChainIter<'a> {
-    fn new(start: Option<ModifierChainNodeRef<'a>>, direction: TraversalDirection) -> Self {
+    fn forward(chain: &'a ModifierNodeChain) -> Self {
         Self {
-            next: start,
-            direction,
+            chain,
+            cursor: 0,
+            remaining: chain.ordered_nodes.len(),
+            direction: TraversalDirection::Forward,
+        }
+    }
+
+    fn backward(chain: &'a ModifierNodeChain) -> Self {
+        let len = chain.ordered_nodes.len();
+        Self {
+            chain,
+            cursor: len.wrapping_sub(1),
+            remaining: len,
+            direction: TraversalDirection::Backward,
         }
     }
 }
@@ -998,19 +1018,26 @@ impl<'a> Iterator for ModifierChainIter<'a> {
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        let current = self.next.take()?;
-        if current.is_sentinel() {
-            self.next = None;
+        if self.remaining == 0 {
             return None;
         }
-        self.next = match self.direction {
-            TraversalDirection::Forward => current.child(),
-            TraversalDirection::Backward => current.parent(),
-        };
-        Some(current)
+        let link = &self.chain.ordered_nodes[self.cursor];
+        let node_ref = self.chain.make_node_ref(link.clone());
+        self.remaining -= 1;
+        match self.direction {
+            TraversalDirection::Forward => self.cursor += 1,
+            TraversalDirection::Backward => self.cursor = self.cursor.wrapping_sub(1),
+        }
+        Some(node_ref)
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
     }
 }
 
+impl<'a> ExactSizeIterator for ModifierChainIter<'a> {}
 impl<'a> std::iter::FusedIterator for ModifierChainIter<'a> {}
 
 #[derive(Debug)]
@@ -1628,12 +1655,12 @@ impl ModifierNodeChain {
 
     /// Iterates over the chain from head to tail, skipping sentinels.
     pub fn head_to_tail(&self) -> ModifierChainIter<'_> {
-        ModifierChainIter::new(self.head().child(), TraversalDirection::Forward)
+        ModifierChainIter::forward(self)
     }
 
     /// Iterates over the chain from tail to head, skipping sentinels.
     pub fn tail_to_head(&self) -> ModifierChainIter<'_> {
-        ModifierChainIter::new(self.tail().parent(), TraversalDirection::Backward)
+        ModifierChainIter::backward(self)
     }
 
     /// Calls `f` for every node in insertion order.

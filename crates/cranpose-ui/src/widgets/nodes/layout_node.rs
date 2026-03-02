@@ -720,6 +720,9 @@ impl Node for LayoutNode {
     }
 
     fn insert_child(&mut self, child: NodeId) {
+        if self.children.contains(&child) {
+            return;
+        }
         if is_virtual_node(child) {
             let count = self.virtual_children_count.get();
             self.virtual_children_count.set(count + 1);
