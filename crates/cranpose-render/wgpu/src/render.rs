@@ -14,8 +14,6 @@ use glyphon::{
     TextBounds, TextRenderer, Viewport,
 };
 use lru::LruCache;
-use rustc_hash::FxHasher;
-use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -40,7 +38,6 @@ static REPORTED_UNSUPPORTED_WGPU_BLEND_MODES: AtomicBool = AtomicBool::new(false
 static REPORTED_UNSUPPORTED_WGPU_EFFECTS: AtomicBool = AtomicBool::new(false);
 static TEXT_RENDER_TELEMETRY_ENABLED: OnceLock<bool> = OnceLock::new();
 static TEXT_RENDER_CALLS: AtomicU64 = AtomicU64::new(0);
-static TEXT_RENDER_SKIPS: AtomicU64 = AtomicU64::new(0);
 
 fn text_render_telemetry_enabled() -> bool {
     *TEXT_RENDER_TELEMETRY_ENABLED
@@ -650,7 +647,6 @@ impl GpuRenderer {
                 wgpu::MultisampleState::default(),
                 None,
             ),
-            last_signature: None,
         };
         let text_viewport = Viewport::new(&device, &glyphon_cache);
 
@@ -2569,7 +2565,6 @@ impl GpuRenderer {
                     wgpu::MultisampleState::default(),
                     None,
                 ),
-                last_signature: None,
             });
         }
 
@@ -2580,25 +2575,13 @@ impl GpuRenderer {
             0
         };
 
-        let batch_signature =
-            prepared_text_batch_signature(layer_texts.clone(), width, height, root_scale);
-        if batch_signature.is_some()
-            && self.text_renderer_pool[slot_index].last_signature == batch_signature
-        {
-            if telemetry_enabled {
-                let skips = TEXT_RENDER_SKIPS.fetch_add(1, Ordering::Relaxed) + 1;
-                if call_sequence.is_multiple_of(20) {
-                    log::warn!(
-                        "[text-render-telemetry] calls={} skips={} skip_rate={:.1}% (prepare reused, slot={})",
-                        call_sequence,
-                        skips,
-                        (skips as f64 / call_sequence as f64) * 100.0,
-                        slot_index
-                    );
-                }
-            }
-            return Ok(slot_index);
-        }
+        // NOTE: We intentionally do NOT skip prepare() even when the batch signature
+        // matches. The text_atlas is shared across all slots and trim() runs every
+        // frame to prevent AtlasFull. If a slot skips prepare(), its glyphs are not
+        // "referenced" for that frame, so trim() evicts them. The slot's cached
+        // vertex buffers then point to freed/reused atlas positions → garbled text.
+        // Re-enabling this optimization requires a way to keep atlas entries alive
+        // for skipped slots (e.g., conditional trim, atlas generation tracking).
 
         let prepare_started = telemetry_enabled.then(std::time::Instant::now);
         let mut font_system = self.font_system.lock().unwrap();
@@ -2712,17 +2695,13 @@ impl GpuRenderer {
             )
             .map_err(|e| format!("Text prepare error: {:?}", e))?;
 
-        self.text_renderer_pool[slot_index].last_signature = batch_signature;
         if telemetry_enabled && call_sequence.is_multiple_of(20) {
-            let skips = TEXT_RENDER_SKIPS.load(Ordering::Relaxed);
             let elapsed_ms = prepare_started
                 .map(|start| start.elapsed().as_secs_f64() * 1000.0)
                 .unwrap_or(0.0);
             log::warn!(
-                "[text-render-telemetry] calls={} skips={} skip_rate={:.1}% batch_items={} chars={} prepare_ms={:.2} slot={}",
+                "[text-render-telemetry] calls={} batch_items={} chars={} prepare_ms={:.2} slot={}",
                 call_sequence,
-                skips,
-                (skips as f64 / call_sequence as f64) * 100.0,
                 valid_items,
                 total_chars,
                 elapsed_ms,
@@ -2816,89 +2795,6 @@ enum BatchKind {
 /// that position hasn't changed since the previous frame.
 struct TextRendererSlot {
     renderer: TextRenderer,
-    last_signature: Option<PreparedTextBatchSignature>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct PreparedTextBatchSignature {
-    hash: u64,
-    width: u32,
-    height: u32,
-    root_scale_bits: u32,
-}
-
-fn hash_f32_bits<H: Hasher>(value: f32, state: &mut H) {
-    value.to_bits().hash(state);
-}
-
-fn hash_optional_rect<H: Hasher>(rect: Option<Rect>, state: &mut H) {
-    match rect {
-        Some(rect) => {
-            1u8.hash(state);
-            hash_f32_bits(rect.x, state);
-            hash_f32_bits(rect.y, state);
-            hash_f32_bits(rect.width, state);
-            hash_f32_bits(rect.height, state);
-        }
-        None => 0u8.hash(state),
-    }
-}
-
-fn prepared_text_batch_signature<'a, I>(
-    layer_texts: I,
-    width: u32,
-    height: u32,
-    root_scale: f32,
-) -> Option<PreparedTextBatchSignature>
-where
-    I: Clone + Iterator<Item = &'a TextDraw>,
-{
-    let mut hasher = FxHasher::default();
-    let mut item_count = 0usize;
-
-    for text_draw in layer_texts {
-        if text_draw.text.is_empty() || text_draw.rect.width <= 0.0 || text_draw.rect.height <= 0.0
-        {
-            continue;
-        }
-
-        item_count += 1;
-        text_draw.text.text.hash(&mut hasher);
-        text_draw.text.text.len().hash(&mut hasher);
-
-        let style_hash =
-            text_draw.text_style.measurement_hash() ^ text_draw.text.span_styles_hash();
-        style_hash.hash(&mut hasher);
-
-        hash_f32_bits(text_draw.rect.x, &mut hasher);
-        hash_f32_bits(text_draw.rect.y, &mut hasher);
-        hash_f32_bits(text_draw.rect.width, &mut hasher);
-        hash_f32_bits(text_draw.rect.height, &mut hasher);
-        hash_optional_rect(text_draw.clip, &mut hasher);
-
-        hash_f32_bits(text_draw.color.r(), &mut hasher);
-        hash_f32_bits(text_draw.color.g(), &mut hasher);
-        hash_f32_bits(text_draw.color.b(), &mut hasher);
-        hash_f32_bits(text_draw.color.a(), &mut hasher);
-        hash_f32_bits(text_draw.font_size, &mut hasher);
-        hash_f32_bits(text_draw.scale, &mut hasher);
-        text_draw.layout_options.hash(&mut hasher);
-    }
-
-    if item_count == 0 {
-        return None;
-    }
-
-    width.hash(&mut hasher);
-    height.hash(&mut hasher);
-    hash_f32_bits(root_scale, &mut hasher);
-
-    Some(PreparedTextBatchSignature {
-        hash: hasher.finish(),
-        width,
-        height,
-        root_scale_bits: root_scale.to_bits(),
-    })
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -3388,26 +3284,6 @@ mod tests {
             z_index,
             clip: None,
         }
-    }
-
-    #[test]
-    fn prepared_text_batch_signature_is_stable_for_equivalent_inputs() {
-        let text = test_text(0);
-        let cloned = text.clone();
-        let sig_a = prepared_text_batch_signature([&text].into_iter(), 1920, 1080, 1.0);
-        let sig_b = prepared_text_batch_signature([&cloned].into_iter(), 1920, 1080, 1.0);
-        assert_eq!(sig_a, sig_b);
-    }
-
-    #[test]
-    fn prepared_text_batch_signature_changes_when_geometry_changes() {
-        let text = test_text(0);
-        let mut moved = text.clone();
-        moved.rect.y = 42.0;
-
-        let original = prepared_text_batch_signature([&text].into_iter(), 1920, 1080, 1.0);
-        let changed = prepared_text_batch_signature([&moved].into_iter(), 1920, 1080, 1.0);
-        assert_ne!(original, changed);
     }
 
     #[test]
