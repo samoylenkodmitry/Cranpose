@@ -220,27 +220,23 @@ fn inspector_metadata_enabled() -> bool {
 }
 
 /// Internal representation of modifier composition structure.
-/// This mirrors Jetpack Compose's CombinedModifier pattern where modifiers
-/// form a persistent tree structure instead of eagerly flattening into vectors.
+///
+/// All modifiers are either empty or a flat vector of elements. The `then()`
+/// method eagerly concatenates elements, eliminating recursive tree traversal
+/// and Rc drop overhead from the old `Combined` variant.
 #[derive(Clone)]
 enum ModifierKind {
     /// Empty modifier (like Modifier.companion in Kotlin)
     Empty,
-    /// Single modifier with elements and inspector metadata
+    /// Flat modifier with all elements and inspector metadata concatenated
     Single {
         elements: Rc<Vec<DynModifierElement>>,
         inspector: Rc<Vec<InspectorMetadata>>,
-    },
-    /// Combined modifier tree node (like CombinedModifier in Kotlin)
-    Combined {
-        outer: Rc<Modifier>,
-        inner: Rc<Modifier>,
     },
 }
 
 const FINGERPRINT_KIND_EMPTY: u8 = 0;
 const FINGERPRINT_KIND_SINGLE: u8 = 1;
-const FINGERPRINT_KIND_COMBINED: u8 = 2;
 
 fn empty_fingerprints() -> (u64, u64) {
     let mut strict_hasher = default::new();
@@ -289,133 +285,48 @@ fn single_fingerprints(elements: &[DynModifierElement]) -> (u64, u64) {
     (strict_hasher.finish(), structural_hasher.finish())
 }
 
-fn combined_fingerprints(outer: &Modifier, inner: &Modifier) -> (u64, u64) {
-    let mut strict_hasher = default::new();
-    let mut structural_hasher = default::new();
-
-    FINGERPRINT_KIND_COMBINED.hash(&mut strict_hasher);
-    outer.strict_fingerprint.hash(&mut strict_hasher);
-    inner.strict_fingerprint.hash(&mut strict_hasher);
-
-    FINGERPRINT_KIND_COMBINED.hash(&mut structural_hasher);
-    outer.structural_fingerprint.hash(&mut structural_hasher);
-    inner.structural_fingerprint.hash(&mut structural_hasher);
-
-    (strict_hasher.finish(), structural_hasher.finish())
-}
-
-/// Iterator over modifier elements that traverses the tree without allocation.
-///
-/// This avoids the O(N) allocation of `Modifier::elements()` by using a stack-based
-/// traversal of the `ModifierKind::Combined` tree structure.
+/// Iterator over modifier elements — simple slice iteration since modifiers
+/// are always flat after `then()` eagerly concatenates.
 pub struct ModifierElementIterator<'a> {
-    /// Stack of modifiers to visit (right-to-left for in-order traversal)
-    stack: Vec<&'a Modifier>,
-    /// Current position within a Single modifier's elements
-    current_elements: Option<(&'a [DynModifierElement], usize)>,
-}
-
-impl<'a> ModifierElementIterator<'a> {
-    fn new(modifier: &'a Modifier) -> Self {
-        let mut iter = Self {
-            stack: Vec::new(),
-            current_elements: None,
-        };
-        iter.push_modifier(modifier);
-        iter
-    }
-
-    fn push_modifier(&mut self, modifier: &'a Modifier) {
-        match &modifier.kind {
-            ModifierKind::Empty => {}
-            ModifierKind::Single { elements, .. } => {
-                if !elements.is_empty() {
-                    self.current_elements = Some((elements.as_slice(), 0));
-                }
-            }
-            ModifierKind::Combined { outer, inner } => {
-                // Push inner first so outer is processed first (stack is LIFO)
-                self.stack.push(inner.as_ref());
-                self.push_modifier(outer.as_ref());
-            }
-        }
-    }
+    inner: std::slice::Iter<'a, DynModifierElement>,
 }
 
 impl<'a> Iterator for ModifierElementIterator<'a> {
     type Item = &'a DynModifierElement;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            // First, try to yield from current elements
-            if let Some((elements, index)) = &mut self.current_elements {
-                if *index < elements.len() {
-                    let element = &elements[*index];
-                    *index += 1;
-                    return Some(element);
-                }
-                self.current_elements = None;
-            }
+        self.inner.next()
+    }
 
-            // Pop next modifier from stack
-            let next_modifier = self.stack.pop()?;
-            self.push_modifier(next_modifier);
-        }
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
     }
 }
 
-/// Iterator over inspector metadata that traverses the tree without allocation.
+impl ExactSizeIterator for ModifierElementIterator<'_> {}
+
+/// Iterator over inspector metadata — simple slice iteration.
 pub(crate) struct ModifierInspectorIterator<'a> {
-    stack: Vec<&'a Modifier>,
-    current_inspector: Option<(&'a [InspectorMetadata], usize)>,
-}
-
-impl<'a> ModifierInspectorIterator<'a> {
-    fn new(modifier: &'a Modifier) -> Self {
-        let mut iter = Self {
-            stack: Vec::new(),
-            current_inspector: None,
-        };
-        iter.push_modifier(modifier);
-        iter
-    }
-
-    fn push_modifier(&mut self, modifier: &'a Modifier) {
-        match &modifier.kind {
-            ModifierKind::Empty => {}
-            ModifierKind::Single { inspector, .. } => {
-                if !inspector.is_empty() {
-                    self.current_inspector = Some((inspector.as_slice(), 0));
-                }
-            }
-            ModifierKind::Combined { outer, inner } => {
-                // Push inner first so outer is processed first (stack is LIFO)
-                self.stack.push(inner.as_ref());
-                self.push_modifier(outer.as_ref());
-            }
-        }
-    }
+    inner: std::slice::Iter<'a, InspectorMetadata>,
 }
 
 impl<'a> Iterator for ModifierInspectorIterator<'a> {
     type Item = &'a InspectorMetadata;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if let Some((inspector, index)) = &mut self.current_inspector {
-                if *index < inspector.len() {
-                    let metadata = &inspector[*index];
-                    *index += 1;
-                    return Some(metadata);
-                }
-                self.current_inspector = None;
-            }
+        self.inner.next()
+    }
 
-            let next_modifier = self.stack.pop()?;
-            self.push_modifier(next_modifier);
-        }
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
     }
 }
+
+impl ExactSizeIterator for ModifierInspectorIterator<'_> {}
 
 /// A modifier chain that can be applied to composable elements.
 ///
@@ -655,11 +566,8 @@ impl Modifier {
 
     /// Concatenates this modifier with another.
     ///
-    /// This creates a persistent tree structure (CombinedModifier pattern) rather than
-    /// eagerly flattening into a vector, enabling O(1) composition and structural sharing.
-    ///
-    /// Mirrors Jetpack Compose: `infix fun then(other: Modifier): Modifier =
-    ///     if (other === Modifier) this else CombinedModifier(this, other)`
+    /// Eagerly concatenates both element vectors into a single flat `Single`
+    /// variant, avoiding recursive Rc tree overhead on drop and comparison.
     pub fn then(&self, next: Modifier) -> Modifier {
         if self.is_trivially_empty() {
             return next;
@@ -667,11 +575,38 @@ impl Modifier {
         if next.is_trivially_empty() {
             return self.clone();
         }
-        let (strict_fingerprint, structural_fingerprint) = combined_fingerprints(self, &next);
+
+        // Collect elements from both sides into a single Vec
+        let (self_elements, self_inspector) = match &self.kind {
+            ModifierKind::Empty => unreachable!(),
+            ModifierKind::Single {
+                elements,
+                inspector,
+                ..
+            } => (elements.as_ref(), inspector.as_ref()),
+        };
+        let (next_elements, next_inspector) = match &next.kind {
+            ModifierKind::Empty => unreachable!(),
+            ModifierKind::Single {
+                elements,
+                inspector,
+                ..
+            } => (elements.as_ref(), inspector.as_ref()),
+        };
+
+        let mut merged_elements = Vec::with_capacity(self_elements.len() + next_elements.len());
+        merged_elements.extend_from_slice(self_elements);
+        merged_elements.extend_from_slice(next_elements);
+
+        let mut merged_inspector = Vec::with_capacity(self_inspector.len() + next_inspector.len());
+        merged_inspector.extend_from_slice(self_inspector);
+        merged_inspector.extend_from_slice(next_inspector);
+
+        let (strict_fingerprint, structural_fingerprint) = single_fingerprints(&merged_elements);
         Modifier {
-            kind: ModifierKind::Combined {
-                outer: Rc::new(self.clone()),
-                inner: Rc::new(next),
+            kind: ModifierKind::Single {
+                elements: Rc::new(merged_elements),
+                inspector: Rc::new(merged_inspector),
             },
             strict_fingerprint,
             structural_fingerprint,
@@ -679,46 +614,40 @@ impl Modifier {
     }
 
     /// Returns an iterator over the modifier elements without allocation.
-    ///
-    /// This is the preferred method for traversing modifier elements as it avoids
-    /// the O(N) allocation of `elements()`. The iterator traverses the tree structure
-    /// in-place using a stack-based approach.
     pub(crate) fn iter_elements(&self) -> ModifierElementIterator<'_> {
-        ModifierElementIterator::new(self)
+        match &self.kind {
+            ModifierKind::Empty => ModifierElementIterator { inner: [].iter() },
+            ModifierKind::Single { elements, .. } => ModifierElementIterator {
+                inner: elements.iter(),
+            },
+        }
     }
 
     pub(crate) fn iter_inspector_metadata(&self) -> ModifierInspectorIterator<'_> {
-        ModifierInspectorIterator::new(self)
+        match &self.kind {
+            ModifierKind::Empty => ModifierInspectorIterator { inner: [].iter() },
+            ModifierKind::Single { inspector, .. } => ModifierInspectorIterator {
+                inner: inspector.iter(),
+            },
+        }
     }
 
-    /// Returns the flattened list of elements in this modifier chain.
+    /// Returns the list of elements in this modifier chain.
     ///
-    /// **Note:** Consider using `iter_elements()` instead to avoid allocation.
-    /// This method flattens the tree structure on-demand, allocating a new Vec.
+    /// **Note:** Consider using `iter_elements()` instead to avoid cloning.
+    #[cfg(test)]
     pub(crate) fn elements(&self) -> Vec<DynModifierElement> {
         match &self.kind {
             ModifierKind::Empty => Vec::new(),
             ModifierKind::Single { elements, .. } => elements.as_ref().clone(),
-            ModifierKind::Combined { outer, inner } => {
-                let mut result = outer.elements();
-                result.extend(inner.elements());
-                result
-            }
         }
     }
 
-    /// Returns the flattened list of inspector metadata in this modifier chain.
-    /// For backward compatibility, this flattens the tree structure on-demand.
-    /// Note: This allocates a new Vec for Combined modifiers.
+    /// Returns the list of inspector metadata in this modifier chain.
     pub(crate) fn inspector_metadata(&self) -> Vec<InspectorMetadata> {
         match &self.kind {
             ModifierKind::Empty => Vec::new(),
             ModifierKind::Single { inspector, .. } => inspector.as_ref().clone(),
-            ModifierKind::Combined { outer, inner } => {
-                let mut result = outer.inspector_metadata();
-                result.extend(inner.inspector_metadata());
-                result
-            }
         }
     }
 
@@ -833,11 +762,6 @@ impl Modifier {
                     structural_fingerprint: self.structural_fingerprint,
                 }
             }
-            ModifierKind::Combined { .. } => {
-                // Combined modifiers shouldn't have inspector metadata added directly
-                // This should only be called on freshly created modifiers
-                panic!("Cannot add inspector metadata to a combined modifier")
-            }
         }
     }
 
@@ -904,22 +828,6 @@ impl Modifier {
 
                 true
             }
-            (
-                ModifierKind::Combined {
-                    outer: o1,
-                    inner: i1,
-                },
-                ModifierKind::Combined {
-                    outer: o2,
-                    inner: i2,
-                },
-            ) => {
-                if Rc::ptr_eq(o1, o2) && Rc::ptr_eq(i1, i2) {
-                    return true;
-                }
-                o1.as_ref().eq_internal(o2.as_ref(), consider_always_update)
-                    && i1.as_ref().eq_internal(i2.as_ref(), consider_always_update)
-            }
             _ => false,
         }
     }
@@ -942,28 +850,6 @@ impl fmt::Display for Modifier {
                     return write!(f, "Modifier.empty");
                 }
                 write!(f, "Modifier[")?;
-                for (index, element) in elements.iter().enumerate() {
-                    if index > 0 {
-                        write!(f, ", ")?;
-                    }
-                    let name = element.inspector_name();
-                    let mut properties = Vec::new();
-                    element.record_inspector_properties(&mut |prop, value| {
-                        properties.push(format!("{prop}={value}"));
-                    });
-                    if properties.is_empty() {
-                        write!(f, "{name}")?;
-                    } else {
-                        write!(f, "{name}({})", properties.join(", "))?;
-                    }
-                }
-                write!(f, "]")
-            }
-            ModifierKind::Combined { outer: _, inner: _ } => {
-                // Flatten the representation for display
-                // This matches Kotlin's CombinedModifier toString behavior
-                write!(f, "[")?;
-                let elements = self.elements();
                 for (index, element) in elements.iter().enumerate() {
                     if index > 0 {
                         write!(f, ", ")?;

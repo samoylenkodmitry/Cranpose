@@ -54,7 +54,9 @@
   * `crates/cranpose-ui/src/modifier/slices.rs` — single-pass `collect_modifier_slices_into`
   * `crates/cranpose-core/src/lib.rs` — `MemoryApplier::get_mut` Vec-first lookup
 
-* [ ] **Consider arena allocation for modifier nodes to reduce drop cost**: low-priority but real (`drop_in_place<ModifierKind> ~0.53%`); bump-allocate modifier nodes per frame/recompose to reduce allocator + drop overhead, improve locality.
+* [ ] **Consider arena allocation for modifier nodes to reduce drop cost**: low-priority but real; bump-allocate modifier `Box<dyn ModifierNode>` instances per frame/recompose to reduce allocator + drop overhead, improve locality.
+
+* [x] **Eliminate `ModifierKind::Combined` recursive Rc tree**: `then()` now eagerly concatenates element and inspector vectors into a single flat `Single` variant instead of wrapping in `Combined { outer: Rc<Modifier>, inner: Rc<Modifier> }`. Eliminates recursive `Rc` drop overhead (`drop_in_place<ModifierKind>` was ~0.29%), recursive `eq_internal` comparison (was ~0.83%), and stack-based tree iterators. `ModifierElementIterator` / `ModifierInspectorIterator` are now simple slice iterators. The `Combined` variant, `combined_fingerprints()`, and `FINGERPRINT_KIND_COMBINED` are removed entirely.
 
 * [x] **Eliminate `Box<dyn Placeable>` allocations in layout (critical architectural win)**: `Placeable` is now a concrete struct (not a trait), and `Measurable::measure()` returns it by value — zero heap allocation on the hot coordinator path (was `Box::new(CoordinatorPlaceable{...})` per node per measure pass). `CoordinatorPlaceable`, `LayoutChildPlaceable`, and `SubcomposePlaceable` implementations removed; the single `Placeable` struct carries an optional `Rc<dyn Fn(f32,f32)>` for place side-effects (only used by `LayoutChildMeasurable`, not the coordinator hot path). `FlexMeasurePolicy` placeables storage changed from `SmallVec<[Option<Box<dyn Placeable>>; 8]>` to `SmallVec<[Option<Placeable>; 8]>`.
 

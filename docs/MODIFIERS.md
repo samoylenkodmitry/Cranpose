@@ -30,7 +30,7 @@ The modifier system is a **node-based architecture** inspired by Jetpack Compose
 ### Key Design Principles
 
 1. **Element-Node Duality**: Immutable `ModifierElement` descriptors create/update stateful `ModifierNode` instances
-2. **Persistent Tree Structure**: Modifiers form a tree via `CombinedModifier`, enabling O(1) composition
+2. **Flat Composition**: `.then()` eagerly concatenates element vectors, keeping modifiers as a single flat list
 3. **Capability Filtering**: Traversal methods accept capability masks to skip irrelevant nodes
 4. **Snapshot-Based Measurement**: Measurement proxies solve borrow-checker constraints
 
@@ -55,28 +55,24 @@ Modifier::empty()
 // - Invalidation is targeted to affected systems
 ```
 
-### CombinedModifier Pattern
+### Flat Modifier Composition
 
-The `Modifier` type uses a persistent tree structure instead of flattening to vectors:
+The `Modifier` type eagerly concatenates elements on `.then()`:
 
 ```rust
 enum ModifierKind {
     Empty,
     Single {
-        elements: Vec<DynModifierElement>,
-        inspector: Option<InspectorInfo>
+        elements: Rc<Vec<DynModifierElement>>,
+        inspector: Rc<Vec<InspectorMetadata>>,
     },
-    Combined {
-        outer: Rc<Modifier>,
-        inner: Rc<Modifier>
-    }
 }
 ```
 
 **Benefits**:
-- O(1) composition via `.then()` (just wraps in `Combined`)
-- Structural sharing across recompositions
-- Matches Jetpack Compose semantics exactly
+- No recursive Rc tree — zero drop overhead, flat comparison
+- Simple slice iteration for element traversal
+- Fingerprint-based fast equality rejection
 
 ---
 
@@ -259,13 +255,9 @@ impl Modifier {
         if self.is_trivially_empty() { return next; }
         if next.is_trivially_empty() { return self.clone(); }
 
-        // Create combined node (persistent structure)
-        Modifier {
-            kind: ModifierKind::Combined {
-                outer: Rc::new(self.clone()),
-                inner: Rc::new(next),
-            }
-        }
+        // Eagerly concatenate elements into a single flat vec
+        let merged = concat_elements(self, &next);
+        Modifier { kind: ModifierKind::Single { elements: Rc::new(merged), .. } }
     }
 }
 ```
@@ -306,20 +298,8 @@ let modifier = Modifier::empty()
     .clickable(|pos| println!("Clicked at {:?}", pos))  // Adds ClickableElement
     .size(100.0, 100.0);              // Adds SizeElement
 
-// Creates tree structure:
-// Combined {
-//   outer: Combined {
-//     outer: Combined {
-//       outer: Combined {
-//         outer: Single(PaddingElement),
-//         inner: Single(BackgroundElement)
-//       },
-//       inner: Single(CornerShapeElement)
-//     },
-//     inner: Single(ClickableElement)
-//   },
-//   inner: Single(SizeElement)
-// }
+// Creates flat element list:
+// Single [PaddingElement, BackgroundElement, CornerShapeElement, ClickableElement, SizeElement]
 ```
 
 ### Fold Operations
@@ -588,7 +568,7 @@ impl LayoutModifierNode for OffsetNode {
 
 - **Capability**: `DRAW`
 - **Behavior**: Stores color/brush, collected in modifier slices
-- **Integration**: Combined with `CornerShapeNode` to create `DrawPrimitive::RoundRect`
+- **Integration**: Used with `CornerShapeNode` to create `DrawPrimitive::RoundRect`
 
 ```rust
 pub struct BackgroundNode {
@@ -612,7 +592,7 @@ pub struct CornerShapeNode {
     shape: RoundedCornerShape,
 }
 
-// Combined in slices:
+// Collected in slices:
 // DrawPrimitive::RoundRect {
 //     bounds: node_bounds,
 //     color: background_color,
@@ -1195,7 +1175,7 @@ let modifier = Modifier::empty()
 
 | Operation | Complexity | Notes |
 |-----------|------------|-------|
-| `modifier.then(other)` | O(1) | Creates `Combined` node, no flattening |
+| `modifier.then(other)` | O(n+m) | Concatenates element vectors (n + m elements) |
 | Chain reconciliation | O(n) | Where n = number of elements, with O(1) lookups via indexing |
 | Node reuse check | O(1) | Hash-based + type-based + key-based index lookups |
 | Capability-filtered traversal | O(m) | Where m = nodes matching capability (aggregation enables early exit) |
@@ -1206,7 +1186,7 @@ let modifier = Modifier::empty()
 
 | Structure | Space | Notes |
 |-----------|-------|-------|
-| `Modifier` tree | O(n) | Persistent structure with structural sharing |
+| `Modifier` | O(n) | Flat element vector per modifier |
 | `ModifierNodeChain` | O(n) | One entry per element |
 | Node instances | O(n) | Reused across recompositions (zero new allocations when stable) |
 | Measurement proxies | O(n) | Temporary allocations during measure phase |
@@ -1218,7 +1198,7 @@ let modifier = Modifier::empty()
 2. **Capability Aggregation**: Chain maintains union of all node capabilities for early exit
 3. **Lazy Evaluation**: Nodes are only created/updated when modifier changes
 4. **Snapshot Proxies**: Measurement proxies capture minimal state to avoid borrow conflicts
-5. **Structural Sharing**: `Combined` modifiers share subtrees via `Rc`
+5. **Flat Composition**: `.then()` concatenates elements eagerly, eliminating recursive Rc overhead
 6. **Slice Caching**: Draw/input capabilities pre-collected to avoid hot-path traversal
 
 ---
@@ -1229,7 +1209,7 @@ The cranpose modifier system achieves **complete parity with Jetpack Compose's M
 
 ✅ **Zero-allocation node reuse** across recompositions
 ✅ **Capability-driven dispatch** for optimal performance
-✅ **O(1) modifier composition** via persistent tree structure
+✅ **Flat modifier composition** with fingerprint-based fast equality
 ✅ **Borrow-checker-safe measurement** via snapshot proxies
 ✅ **Full lifecycle management** (attach/detach/reset)
 ✅ **Targeted invalidation** per subsystem
