@@ -1764,69 +1764,47 @@ impl Applier for MemoryApplier {
     }
 
     fn get_mut(&mut self, id: NodeId) -> Result<&mut dyn Node, NodeError> {
-        // Check HashMap first for high-ID nodes (virtual nodes)
-        if let Some(node) = self.high_id_nodes.get_mut(&id) {
-            return Ok(node.as_mut());
+        // Try Vec first (common case for normal nodes), then HashMap for virtual nodes.
+        if id < self.nodes.len() {
+            let slot = self.nodes[id]
+                .as_deref_mut()
+                .ok_or(NodeError::Missing { id })?;
+            return Ok(slot);
         }
-        // Fall back to Vec for normal IDs
-        let slot = self
-            .nodes
-            .get_mut(id)
-            .ok_or(NodeError::Missing { id })?
-            .as_deref_mut()
-            .ok_or(NodeError::Missing { id })?;
-        Ok(slot)
+        self.high_id_nodes
+            .get_mut(&id)
+            .map(|n| n.as_mut())
+            .ok_or(NodeError::Missing { id })
     }
 
     fn remove(&mut self, id: NodeId) -> Result<(), NodeError> {
-        // Check if this is a high-ID node
-        if self.high_id_nodes.contains_key(&id) {
-            // Get children before removing
-            let children = self
-                .high_id_nodes
-                .get(&id)
-                .map(|n| n.children())
-                .unwrap_or_default();
-
-            // Recursively remove children
-            for child_id in children {
-                let is_owned = self
-                    .get_mut(child_id)
-                    .map(|child| child.parent() == Some(id))
-                    .unwrap_or(false);
-                if is_owned {
-                    let _ = self.remove(child_id);
-                }
-            }
-
-            self.high_id_nodes.remove(&id);
-            return Ok(());
-        }
-
-        // Normal Vec-based removal for low IDs
-        let children = {
+        // Collect children before removing the node.
+        let (children, is_high_id) = if id < self.nodes.len() {
             let slot = self.nodes.get(id).ok_or(NodeError::Missing { id })?;
-            if let Some(node) = slot {
-                node.children()
-            } else {
-                return Err(NodeError::Missing { id });
-            }
+            let node = slot.as_ref().ok_or(NodeError::Missing { id })?;
+            (node.children(), false)
+        } else if let Some(node) = self.high_id_nodes.get(&id) {
+            (node.children(), true)
+        } else {
+            return Err(NodeError::Missing { id });
         };
 
-        // Recursively remove children, BUT ONLY if they are still owned by this node.
+        // Recursively remove children owned by this node.
         for child_id in children {
             let is_owned = self
                 .get_mut(child_id)
                 .map(|child| child.parent() == Some(id))
                 .unwrap_or(false);
-
             if is_owned {
                 let _ = self.remove(child_id);
             }
         }
 
-        let slot = self.nodes.get_mut(id).ok_or(NodeError::Missing { id })?;
-        slot.take();
+        if is_high_id {
+            self.high_id_nodes.remove(&id);
+        } else {
+            self.nodes[id].take();
+        }
         Ok(())
     }
 
