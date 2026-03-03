@@ -29,7 +29,7 @@ Cranpose total self-time: **14.2%** across ~25 functions. Below are the actionab
 
 ## Render pipeline (1.37% cranpose + 10.6% wgpu)
 
-* [ ] **Reduce wgpu render pass churn**: `drop_in_place<RenderPass>` (0.52%), `drop_in_place<Tracker>` (0.30%), `begin_render_pass` (0.34%), `insert_barriers_from_scope` (0.42%), `set_bind_group` (0.54%) — wgpu overhead totals ~10.6%. `render_non_effect_segment` (0.90%) creates/drops render passes. Audit how many render passes per frame and whether adjacent same-target passes can be merged to reduce begin/end/barrier overhead.
+* [x] **Reduce wgpu render pass churn**: Reworked `render_non_effect_segment` around an allocation-free chunk iterator that groups non-conflicting shape/image/text batches into one render pass per encoder chunk. Shapes, images, and text are now prepared before pass recording and then drawn in-order inside a shared `Segment Pass`, while repeated buffer kinds and shadows still force chunk boundaries so GPU buffer rewrites stay correct. The first `LoadOp::Clear` is now consumed only when a chunk actually records work, which also fixes no-op first-batch cases.
 
 * [ ] **Batch `queue.write_buffer` calls**: `Queue::write_buffer` at 0.48%, `Queue::submit` at 1.17%. Each write_buffer is a separate staging copy. Consider using a single staging buffer with sub-allocations and one write per frame instead of many small writes.
 
