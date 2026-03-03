@@ -1,6 +1,5 @@
 use super::*;
 use crate::modifier::{collect_slices_from_modifier, Modifier, PointerInputScope};
-use cranpose_core::NodeId;
 use cranpose_foundation::{
     modifier_element, BasicModifierNodeContext, ModifierNodeChain, NodeCapabilities, PointerButton,
     PointerButtons, PointerEvent, PointerEventKind,

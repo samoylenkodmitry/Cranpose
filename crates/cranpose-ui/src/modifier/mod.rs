@@ -238,51 +238,106 @@ enum ModifierKind {
 const FINGERPRINT_KIND_EMPTY: u8 = 0;
 const FINGERPRINT_KIND_SINGLE: u8 = 1;
 
-fn empty_fingerprints() -> (u64, u64) {
-    let mut strict_hasher = default::new();
-    let mut structural_hasher = default::new();
-    FINGERPRINT_KIND_EMPTY.hash(&mut strict_hasher);
-    FINGERPRINT_KIND_EMPTY.hash(&mut structural_hasher);
-    (strict_hasher.finish(), structural_hasher.finish())
+const FINGERPRINT_EMPTY_STRICT_SEED: u64 = 0x243f_6a88_85a3_08d3;
+const FINGERPRINT_EMPTY_STRUCTURAL_SEED: u64 = 0x1319_8a2e_0370_7344;
+const FINGERPRINT_SINGLE_STRICT_SEED: u64 = 0xa409_3822_299f_31d0;
+const FINGERPRINT_SINGLE_STRUCTURAL_SEED: u64 = 0x082e_fa98_ec4e_6c89;
+const FINGERPRINT_SEQUENCE_MUL: u64 = 0x9e37_79b1_85eb_ca87;
+const FINGERPRINT_STRICT_UPDATE_TAG: u64 = 0xdbe6_d5d5_fe4c_ce2f;
+const FINGERPRINT_STRUCTURAL_DRAW_ONLY_TAG: u64 = 0x94d0_49bb_1331_11eb;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ModifierFingerprints {
+    strict: u64,
+    structural: u64,
 }
 
-fn single_fingerprints(elements: &[DynModifierElement]) -> (u64, u64) {
-    let mut strict_hasher = default::new();
-    let mut structural_hasher = default::new();
+#[inline]
+fn mix_fingerprint_bits(mut value: u64) -> u64 {
+    value ^= value >> 33;
+    value = value.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    value ^= value >> 33;
+    value = value.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+    value ^ (value >> 33)
+}
 
-    FINGERPRINT_KIND_SINGLE.hash(&mut strict_hasher);
-    FINGERPRINT_KIND_SINGLE.hash(&mut structural_hasher);
-    elements.len().hash(&mut strict_hasher);
-    elements.len().hash(&mut structural_hasher);
+#[inline]
+fn fold_fingerprint(state: u64, value: u64) -> u64 {
+    mix_fingerprint_bits(state ^ value.wrapping_add(FINGERPRINT_SEQUENCE_MUL))
+        .wrapping_mul(FINGERPRINT_SEQUENCE_MUL)
+}
 
-    for element in elements {
-        let element_type = element.element_type();
-        let capabilities = element.capabilities();
-        let element_hash = element.hash_code();
-
-        element_type.hash(&mut strict_hasher);
-        capabilities.hash(&mut strict_hasher);
-
-        element_type.hash(&mut structural_hasher);
-        capabilities.hash(&mut structural_hasher);
-
-        let requires_update = element.requires_update();
-        requires_update.hash(&mut strict_hasher);
-        if requires_update {
-            let element_ptr = Rc::as_ptr(element) as *const ();
-            element_ptr.hash(&mut strict_hasher);
-        } else {
-            element_hash.hash(&mut strict_hasher);
-        }
-
-        let is_draw_only = capabilities == NodeCapabilities::DRAW;
-        is_draw_only.hash(&mut structural_hasher);
-        if !is_draw_only {
-            element_hash.hash(&mut structural_hasher);
-        }
+#[inline]
+fn empty_fingerprints() -> ModifierFingerprints {
+    ModifierFingerprints {
+        strict: fold_fingerprint(FINGERPRINT_EMPTY_STRICT_SEED, FINGERPRINT_KIND_EMPTY as u64),
+        structural: fold_fingerprint(
+            FINGERPRINT_EMPTY_STRUCTURAL_SEED,
+            FINGERPRINT_KIND_EMPTY as u64,
+        ),
     }
+}
 
-    (strict_hasher.finish(), structural_hasher.finish())
+#[inline]
+fn single_fingerprint_seed() -> ModifierFingerprints {
+    let strict = fold_fingerprint(
+        FINGERPRINT_SINGLE_STRICT_SEED,
+        FINGERPRINT_KIND_SINGLE as u64,
+    );
+    let structural = fold_fingerprint(
+        FINGERPRINT_SINGLE_STRUCTURAL_SEED,
+        FINGERPRINT_KIND_SINGLE as u64,
+    );
+    ModifierFingerprints { strict, structural }
+}
+
+#[inline]
+fn element_common_fingerprint(element: &DynModifierElement) -> u64 {
+    let mut hasher = default::new();
+    element.element_type().hash(&mut hasher);
+    element.capabilities().bits().hash(&mut hasher);
+    hasher.finish()
+}
+
+#[inline]
+fn element_fingerprints(element: &DynModifierElement) -> ModifierFingerprints {
+    let common = element_common_fingerprint(element);
+    let requires_update = element.requires_update();
+    let strict_payload = if requires_update {
+        let element_ptr = Rc::as_ptr(element) as *const () as usize as u64;
+        element_ptr ^ FINGERPRINT_STRICT_UPDATE_TAG
+    } else {
+        element.hash_code()
+    };
+    let strict = mix_fingerprint_bits(common ^ strict_payload);
+
+    let is_draw_only = element.capabilities() == NodeCapabilities::DRAW;
+    let structural_payload = if is_draw_only {
+        FINGERPRINT_STRUCTURAL_DRAW_ONLY_TAG
+    } else {
+        element.hash_code()
+    };
+    let structural = mix_fingerprint_bits(common ^ structural_payload);
+
+    ModifierFingerprints { strict, structural }
+}
+
+#[inline]
+fn append_fingerprints(
+    mut fingerprints: ModifierFingerprints,
+    elements: &[DynModifierElement],
+) -> ModifierFingerprints {
+    for element in elements {
+        let element_fingerprints = element_fingerprints(element);
+        fingerprints.strict = fold_fingerprint(fingerprints.strict, element_fingerprints.strict);
+        fingerprints.structural =
+            fold_fingerprint(fingerprints.structural, element_fingerprints.structural);
+    }
+    fingerprints
+}
+
+fn single_fingerprints(elements: &[DynModifierElement]) -> ModifierFingerprints {
+    append_fingerprints(single_fingerprint_seed(), elements)
 }
 
 /// Iterator over modifier elements — simple slice iteration since modifiers
@@ -350,15 +405,17 @@ pub struct Modifier {
     kind: ModifierKind,
     strict_fingerprint: u64,
     structural_fingerprint: u64,
+    element_count: usize,
 }
 
 impl Default for Modifier {
     fn default() -> Self {
-        let (strict_fingerprint, structural_fingerprint) = empty_fingerprints();
+        let fingerprints = empty_fingerprints();
         Self {
             kind: ModifierKind::Empty,
-            strict_fingerprint,
-            structural_fingerprint,
+            strict_fingerprint: fingerprints.strict,
+            structural_fingerprint: fingerprints.structural,
+            element_count: 0,
         }
     }
 }
@@ -602,14 +659,21 @@ impl Modifier {
         merged_inspector.extend_from_slice(self_inspector);
         merged_inspector.extend_from_slice(next_inspector);
 
-        let (strict_fingerprint, structural_fingerprint) = single_fingerprints(&merged_elements);
+        let fingerprints = append_fingerprints(
+            ModifierFingerprints {
+                strict: self.strict_fingerprint,
+                structural: self.structural_fingerprint,
+            },
+            next_elements,
+        );
         Modifier {
             kind: ModifierKind::Single {
                 elements: Rc::new(merged_elements),
                 inspector: Rc::new(merged_inspector),
             },
-            strict_fingerprint,
-            structural_fingerprint,
+            strict_fingerprint: fingerprints.strict,
+            structural_fingerprint: fingerprints.structural,
+            element_count: self.element_count + next.element_count,
         }
     }
 
@@ -724,15 +788,16 @@ impl Modifier {
         if elements.is_empty() {
             Self::default()
         } else {
-            let (strict_fingerprint, structural_fingerprint) =
-                single_fingerprints(elements.as_slice());
+            let element_count = elements.len();
+            let fingerprints = single_fingerprints(elements.as_slice());
             Self {
                 kind: ModifierKind::Single {
                     elements: Rc::new(elements),
                     inspector: Rc::new(Vec::new()),
                 },
-                strict_fingerprint,
-                structural_fingerprint,
+                strict_fingerprint: fingerprints.strict,
+                structural_fingerprint: fingerprints.structural,
+                element_count,
             }
         }
     }
@@ -760,6 +825,7 @@ impl Modifier {
                     },
                     strict_fingerprint: self.strict_fingerprint,
                     structural_fingerprint: self.structural_fingerprint,
+                    element_count: self.element_count,
                 }
             }
         }
@@ -774,6 +840,9 @@ impl Modifier {
     }
 
     fn eq_internal(&self, other: &Self, consider_always_update: bool) -> bool {
+        if self.element_count != other.element_count {
+            return false;
+        }
         if consider_always_update {
             if self.strict_fingerprint != other.strict_fingerprint {
                 return false;

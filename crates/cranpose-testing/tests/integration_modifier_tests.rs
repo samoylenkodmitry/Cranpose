@@ -1,7 +1,7 @@
 /// Integration tests for the modifier system in real-world scenarios.
 /// These tests verify that the entire system works together correctly,
 /// not just individual units.
-use cranpose_core::{location_key, Composition, MemoryApplier, NodeId};
+use cranpose_core::{location_key, Composition, MemoryApplier};
 use cranpose_foundation::{
     modifier_element, BasicModifierNodeContext, LayoutModifierNode, ModifierNodeChain,
 };

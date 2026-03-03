@@ -1,8 +1,8 @@
 use super::{
-    inspector_metadata, Alignment, BlendMode, Color, CompositingStrategy, CutDirection,
-    DimensionConstraint, DpOffset, DrawCommand, EdgeInsets, GradientCutMaskSpec,
-    GradientFadeMaskSpec, GraphicsLayer, HorizontalAlignment, LayerShape, Modifier,
-    ModifierChainHandle, Point, RenderEffect, RoundedCornerShape, RuntimeShader,
+    inspector_metadata, modifier_element, Alignment, BlendMode, Color, CompositingStrategy,
+    CutDirection, DimensionConstraint, DpOffset, DrawCommand, DynModifierElement, EdgeInsets,
+    GradientCutMaskSpec, GradientFadeMaskSpec, GraphicsLayer, HorizontalAlignment, LayerShape,
+    Modifier, ModifierChainHandle, Point, RenderEffect, RoundedCornerShape, RuntimeShader,
     SemanticsConfiguration, Shadow, Size, TransformOrigin, VerticalAlignment,
 };
 use cranpose_foundation::{
@@ -87,6 +87,38 @@ fn structural_eq_ignores_always_update_elements() {
 
     assert!(modifier_a.structural_eq(&modifier_b));
     assert_ne!(modifier_a, modifier_b);
+}
+
+#[test]
+fn incremental_single_fingerprints_match_full_pass() {
+    let elements = vec![
+        test_fingerprint_element(1, NodeCapabilities::LAYOUT, false),
+        test_fingerprint_element(2, NodeCapabilities::DRAW, false),
+        test_fingerprint_element(3, NodeCapabilities::DRAW, true),
+        test_fingerprint_element(4, NodeCapabilities::SEMANTICS, false),
+    ];
+
+    let seeded = super::append_fingerprints(super::single_fingerprint_seed(), &elements[..2]);
+    let split = super::append_fingerprints(seeded, &elements[2..]);
+
+    assert_eq!(super::single_fingerprints(&elements), split);
+}
+
+#[test]
+fn modifiers_built_incrementally_match_from_parts() {
+    let elements = vec![
+        test_fingerprint_element(10, NodeCapabilities::LAYOUT, false),
+        test_fingerprint_element(11, NodeCapabilities::DRAW, false),
+        test_fingerprint_element(12, NodeCapabilities::SEMANTICS, false),
+    ];
+
+    let flat = Modifier::from_parts(elements.clone());
+    let incremental = Modifier::from_parts(vec![elements[0].clone()])
+        .then(Modifier::from_parts(vec![elements[1].clone()]))
+        .then(Modifier::from_parts(vec![elements[2].clone()]));
+
+    assert_eq!(incremental, flat);
+    assert!(incremental.structural_eq(&flat));
 }
 
 #[test]
@@ -1214,6 +1246,65 @@ fn modifier_chain_trace_runs_only_when_debug_flag_set() {
     }
 
     assert_eq!(*invocations.lock().unwrap(), 1);
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct TestFingerprintElement {
+    id: u32,
+    capabilities: NodeCapabilities,
+    always_update: bool,
+}
+
+struct TestFingerprintNode {
+    state: NodeState,
+}
+
+impl TestFingerprintNode {
+    fn new(capabilities: NodeCapabilities) -> Self {
+        let node = Self {
+            state: NodeState::new(),
+        };
+        node.state.set_capabilities(capabilities);
+        node
+    }
+}
+
+impl DelegatableNode for TestFingerprintNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
+impl ModifierNode for TestFingerprintNode {}
+
+impl ModifierNodeElement for TestFingerprintElement {
+    type Node = TestFingerprintNode;
+
+    fn create(&self) -> Self::Node {
+        TestFingerprintNode::new(self.capabilities)
+    }
+
+    fn update(&self, _node: &mut Self::Node) {}
+
+    fn capabilities(&self) -> NodeCapabilities {
+        self.capabilities
+    }
+
+    fn always_update(&self) -> bool {
+        self.always_update
+    }
+}
+
+fn test_fingerprint_element(
+    id: u32,
+    capabilities: NodeCapabilities,
+    always_update: bool,
+) -> DynModifierElement {
+    modifier_element(TestFingerprintElement {
+        id,
+        capabilities,
+        always_update,
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

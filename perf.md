@@ -1,73 +1,86 @@
-* [x] **Stop using size-tuned `release` for native perf**: in `Cargo.toml` set up *separate* profiles; current native `release` uses `opt-level = "s"` (evidence: `Cargo.toml:62`). For perf runs/builds use a speed profile (`opt-level=3` etc). Benchmark proof (same harness/env): `CRANPOSE_HEADLESS=1 CRANPOSE_PRESENT_MODE=immediate CRANPOSE_PERF_DURATION_SECS=5` → default `release` **1366.8 FPS (0.73ms)** vs `CARGO_PROFILE_RELEASE_OPT_LEVEL=3` **2003.8 FPS (0.50ms)** = **+46.6%**.
+# Performance Work — Phase 2
 
-* [x] **Fix P0 leak: `SnapshotStateObserver::fast_scopes` grows without bound**: in `snapshot_state_observer.rs` (`get_scope_entry()`), `fast_scopes: Vec<Option<Rc<ScopeEntry>>>` is indexed by `ScopeId` from a global `AtomicUsize` that only increases; every new scope does `fast_scopes.resize_with(id + 1, || None)` → Vec only grows. Fix: reclaim scope IDs (free-list / generation scheme) and/or reset per-composition; ensure scope teardown triggers cleanup.
+Baseline: **1620–2410 FPS** (0.41–0.62ms) on `native-release`, headless robot_perf_harness, 10s run.
+Profile is flat — no single app function above 1.2%. Allocator at ~6%, WGPU at ~11%, nvidia driver at ~5%.
 
-* [x] **Fix P0 leak: observer `scopes` accumulates because clear never happens**: `scopes: Vec<Rc<ScopeEntry>>` keeps entries; `clear(scope)` is never called from composition lifecycle. Fix: when `RecomposeScope` deactivates or its group ends, call `observer.clear(&scope)` (or equivalent) to remove entries; add generation-based cleanup.
+Cranpose total self-time: **14.2%** across ~25 functions. Below are the actionable items.
 
-* [x] **Fix P0 leak: `StateArena::cells` never frees**: `runtime.rs` now uses generation-checked reusable slots plus a free list, but ergonomics are preserved by splitting ownership from handles. `State<T>` / `MutableState<T>` are thin copyable handles again; ownership lives in composition slots, explicit `OwnedMutableState<T>` values, or runtime-owned persistent states created by `mutableStateOf` / `MutableState::with_runtime`. Reclaimable slots are freed when the last owner drops, stale observer tasks cannot touch reused slots, and tests cover both slot reuse and stale-task safety.
+## Agent prompt
 
-* [x] **Fix P0 leak: dead watchers accumulate in `MutableStateInner::watchers`**: in `lib.rs` (~line **3020**, `subscribe_current_scope()`), dead `Weak<RecomposeScopeInner>` only cleaned via `retain()` when that state is read again; states written but not re-read can accumulate dead watchers. Fix: also clean on write/invalidation (ensure `invalidate_watchers()` retention is comprehensive, not only on upgrade path).
+> You are continuing performance optimization on the cranpose Rust UI framework.
+> Read `perf.md` and `AGENTS.md` for context and rules. The profile is flat — there are no single hotspots above 1.2%.
+> The work is to systematically reduce the allocator overhead (6% CPU: malloc 2.85%, cfree 2.17%, realloc+finish_grow 1.2%) and the per-frame cranpose overhead (14.2%).
+> For each item below, do the actual implementation work (code changes, tests, clippy, fmt), not just analysis.
+> After each item, mark it `[x]` in perf.md with a brief description of what changed.
+> Run `cargo test`, `cargo clippy --workspace`, `cargo fmt` after each change.
+> Follow all rules in AGENTS.md strictly: zero warnings, all tests pass, no shortcuts, no half-states.
 
-* [x] **Remove P1 hot-path O(n) work on every state read**: `lib.rs` ~**3020** `subscribe_current_scope()` currently does `watchers.retain(...)` (GC scan O(n)) and then `watchers.iter().any(...)` (dedup O(n)) on every `.value()`/`.with()`. Fix: move GC to invalidation time and use O(1) dedup (e.g., `HashSet<ScopeId>`; or an epoch/tag scheme per scope).
+---
 
-* [x] **Fix P1 O(n²) child diffing in `pop_parent()`**: `lib.rs` ~**2652** used `current.iter().position(...)` inside a loop and cloned both child vectors. The diff now consumes `previous` directly, builds a target-position map once, tracks current child indices incrementally, drops the extra `HashSet`, and has regression coverage for mixed remove/move/insert diffs.
+## Allocator pressure (6% CPU total)
 
-* [x] **Fix P1 O(n²) scope grouping in `process_invalid_scopes()`**: `lib.rs` ~**3740** groups scopes via `scope_groups.iter_mut().find(|(existing, _)| Rc::ptr_eq(existing, &host))` (linear scan per scope). Fix: `HashMap` keyed by stable pointer identity (`Rc::as_ptr()`), O(1) grouping.
+* [ ] **Profile heap allocations to find top callers**: use `valgrind --tool=massif` or add `#[global_allocator]` counting wrapper to identify which code paths are responsible for the bulk of malloc/cfree. The DWARF profile shows `alloc::raw_vec::finish_grow` → Vec resizing is significant. Identify the top 5 allocation sites by volume.
 
-* [x] **Cut allocation pressure: replace `Box<dyn FnMut>` commands with an enum**: `lib.rs` no longer stores hot applier work as `Box<dyn FnMut(&mut dyn Applier)->...>`. The hot emit/move/insert/remove/bubble/update paths now use an inline `Command` enum; the boxed callback path remains only as a cold fallback for externally scheduled node updates.
+* [ ] **Reduce per-frame Vec allocations in layout**: `measure_node` (1.16%) and `measure_through_modifier_chain` (0.67%) are the top cranpose functions. `VecPools` already exists but `drop_in_place<VecPools>` at 0.12% and `drop_in_place<LayoutBox>` at 0.12% suggest Vecs are still being allocated/dropped per frame. Audit the layout pass for Vecs that could be pooled or reused across frames via `clear()` + reuse instead of drop + alloc.
 
-* [x] **Cut recomposition copying: make `snapshot_locals` COW**: `lib.rs` ~**330** cloned locals every boundary via `stack.to_vec()`. Locals now use `Rc<Vec<LocalContext>>`, scope snapshots clone the `Rc`, and providers mutate through `Rc::make_mut` so copying only happens on actual writes.
+* [x] **Pool or arena-allocate modifier chain Vecs**: Made `NodeLink` Copy (since `NodePath` is Copy), eliminated all `.clone()` on NodeLink/NodePath. Replaced heap-allocated `Vec<usize>` path buffer in `rebuild_ordered_nodes` with stack-based `[usize; MAX_DELEGATE_DEPTH]`. `ordered_nodes` Vec already reused via `clear()` + `push()`.
 
-* [x] **Fix pointer latency: stop cloning full hit-region list on every event**: `scene.rs` ~**395** does `let mut hits = self.hits.clone()` (clones all `HitRegion`s + nested vectors). Fix: collect references/indices only, sort refs/indices by z, return refs (or indices).
+* [x] **Eliminate per-frame `single_fingerprints` rehashing**: Replaced full-chain rehashing in `Modifier::then()` with appendable fingerprint state. `Modifier` now tracks `element_count`, `then()` folds only the newly appended elements into the existing strict/structural fingerprints, and unit tests cover split-append vs full-pass fingerprint equivalence plus `Modifier::from_parts()` parity.
 
-* [x] **Stop double-storing hit regions**: `scene.rs` ~**329** clones into `node_index` and also pushes into `hits`. Fix: store hits once in `Vec<HitRegion>` and keep `HashMap<NodeId, usize>` to index into the Vec.
+## Render pipeline (1.37% cranpose + 10.6% wgpu)
 
-* [x] **Avoid per-batch temporary Vec allocations in renderer**: `render.rs` ~**1330** collects batch slices into new Vecs each time (e.g., `shape_batch: Vec<&DrawShape> = ...collect()`). Fix: pass slice ranges `(start,end)` into encode functions, or reuse a scratch Vec cleared between batches.
+* [ ] **Reduce wgpu render pass churn**: `drop_in_place<RenderPass>` (0.52%), `drop_in_place<Tracker>` (0.30%), `begin_render_pass` (0.34%), `insert_barriers_from_scope` (0.42%), `set_bind_group` (0.54%) — wgpu overhead totals ~10.6%. `render_non_effect_segment` (0.90%) creates/drops render passes. Audit how many render passes per frame and whether adjacent same-target passes can be merged to reduce begin/end/barrier overhead.
 
-* [x] **Stop full scene rebuild for “any dirty bit”**: `app-shell/lib.rs` now reuses the retained scene for pure `request_render_invalidation()` frames, cursor blink ticks, pointer invalidations, and focus invalidations. The direct applier renderer reads live node state during traversal, so pointer/focus queue servicing no longer needs a full scene rebuild; `run_dispatch_queues()` also clears those dirty flags for both `LayoutNode` and `SubcomposeLayoutNode`. Remaining future work is the longer-term retained scene graph / dirty-subtree diffing, not the short-term dirty-bit split.
+* [ ] **Batch `queue.write_buffer` calls**: `Queue::write_buffer` at 0.48%, `Queue::submit` at 1.17%. Each write_buffer is a separate staging copy. Consider using a single staging buffer with sub-allocations and one write per frame instead of many small writes.
 
-* [x] **Skip clean subtrees in layout box refresh**: draw repass refresh now precomputes the dirty ancestor scope from the live applier and only descends retained `LayoutTree` branches that intersect that scope. Clean sibling subtrees are skipped entirely, and regression coverage verifies that only the dirty node path is included.
+## Semantics and metadata overhead (1.16%)
 
-* [x] **Text is the main bottleneck: remeasure shaped-buffer reuse after the architectural fixes**: two targeted fixes landed — (1) renderer-side per-batch `TextRenderer` pool so each text batch position independently skips `glyphon::TextRenderer::prepare()` when its content hasn't changed between frames (atlas-safe: per-frame `trim()` is removed entirely so `glyphs_in_use` only grows, preventing eviction of skipped slots' glyphs; the atlas packer grows on demand and stabilizes at ≤512×512 for typical UIs; AtlasFull safety net trims + invalidates all signatures + retries), and (2) `TextFieldModifierNode` now uses `measure_text_for_node(node_id, ...)` for node-identity-based buffer caching plus caches `line_height` for the draw closure. Generic harness now reports `prepare_with_options_calls=16000`, `prepare_fast_path_rate=54.9%`, `prepared_layout_cache_hit_rate=75.5%` (was 46.3%), `size_hit_rate=97.5%` (was 82.0%), `text_cache_hit_rate=16.1%` (was 7.4%), `text_cache_occupancy=256`, `text_cache_evictions=146`, `reshapes=330`, `reuses=0`, and render-side `skip_rate=35.4%` (was 0.0%). Analysis: `reshape_rate=100%` / `reuses=0` is expected — the two-tier cache design routes stable text through the `size_cache` fast path (97.5% hit rate) which returns before `ensure()` is called; the remaining 2.5% reaching `ensure()` are genuine content/style changes that require reshaping. Render-side telemetry added (`CRANPOSE_TEXT_RENDER_TELEMETRY=1` now reports `cache_hit_rate`, `ensure_reshape_rate`, `reshapes`, `reuses`). Known remaining gap on HiDPI (root_scale≠1.0): measurement uses unscaled font_size in cache key while rendering uses `font_size * root_scale`, creating separate entries per text node and doubling cache pressure — fix by unifying cache keys at density-scaled font_size (deferred: low impact on 1x, moderate on 2x+).
+* [ ] **Skip semantics collection when not needed**: `collect_semantics_from_chain` (0.28%) + `build_semantics_node` (0.32%) + `collect_semantics_with_owner` (0.23%) + `collect_runtime_metadata_inner` (0.33%) = 1.16%. If there's no accessibility consumer attached, semantics collection is pure waste. Add a runtime flag or check to skip semantics entirely when no consumer is registered.
 
-* [x] **Unify text identity across measure + render (currently incompatible)**: the text measurement API now carries optional `NodeId`, and `TextModifierNode` passes its attached node identity into WGPU measurement. That makes the shared shaped-buffer cache use the same node key as rendering for actual text nodes, so measure/render reuse is possible on the hot path. Utility text probes that are not tied to a render node (for example cursor math helpers) still use content keys until the broader node-local paragraph work lands.
+## Modifier chain overhead (0.56%)
 
-* [x] **Re-architect text around node-local paragraph state**: `TextModifierNode` now owns a snapshot-safe prepared-layout handle with a small width-bucket cache, and `ModifierNodeSlices` carries that handle into both WGPU and pixels scene building. Measure and render therefore reuse the same prepared layout object for actual text nodes instead of rebuilding from raw content each pass. Text fields and other utility text probes still use their own paths.
+* [x] **Make `NodePath` Copy to eliminate SmallVec clone cost**: `NodeLink::clone` at 0.32% is cloning `SmallVec<[usize; 2]>` inside `NodePath` on each iteration step. `NodePath` has `entry: usize` + `delegates: SmallVec<[usize; 2]>`. If max delegate depth is bounded (which it should be — modifier delegation rarely exceeds 2–3 levels), use `[usize; N]` + `len: u8` to make it Copy. This eliminates the clone cost entirely.
 
-* [x] **Replace shared shaped-buffer cache `HashMap` + arbitrary trim with an LRU**: the shared WGPU text buffer cache is now a real `LruCache` capped at **256** entries, used by both measurement and rendering, with regression coverage for bounded eviction and telemetry for occupancy/evictions.
+* [x] **Reduce `aggregate_child_capabilities` cost**: Extended ordered_nodes to 3-tuple `(NodeLink, NodeCapabilities, NodeCapabilities)` where third element is pre-computed aggregate. `ModifierChainNodeRef` caches it, avoiding RefCell borrows on hot path.
 
-* [x] **Fix wrapped text reshaping even on “fast path”**: `TextModifierNode` no longer caches only final size-by-width. It now keeps prepared wrapped layouts per node and width bucket, and both render backends consume that prepared layout via `ModifierNodeSlices`, so the normal measure-then-render path does not reshape wrapped text twice.
+## Low-priority / future
 
-* [x] **Do the zero/low-copy text wrapping rewrite**: text wrapping now carries byte ranges over the original `AnnotatedString` instead of cloning owned line fragments during split/wrap bookkeeping. `prepare_text_layout_with_measurer_for_node` only materializes the final display lines after wrap points and overflow are finalized, `Builder::append_annotated{,_subsequence}` provides a single shared restitching path for styled ranges, and the WGPU fast-wrap path uses the same range-based assembly instead of cloning wrapped lines and joining them afterward.
+* [ ] **Tame `Mutex<FontSystem>` for future parallelism**: render + measurement share `Arc<Mutex<FontSystem>>`. Single-thread now, blocks future parallel layout.
 
-* [x] **Remove SipHash/`DefaultHasher` from internal hot hashes**: profiler shows hashing cost (e.g., **2.65% CPU**, mostly SipHash: ~**2.05%** `SipHasher::write` + **0.60%** `hash_one`). Replace `std::collections::hash_map::DefaultHasher` with your fast deterministic hasher everywhere internal:
+* [ ] **Dependency-dup cleanup**: `cargo tree --duplicates` shows duplicates (getrandom, smol_str, tiny-skia, ttf-parser). Not a speed lever.
 
-  * `crates/cranpose-ui/src/text/style.rs:393` (`TextStyle::measurement_hash()`)
-  * `crates/cranpose-foundation/src/modifier.rs:883`
-  * `crates/cranpose-ui/src/modifier/mod.rs:243` (and noted `modifier/mod.rs` lines **244–292** hotspot area)
-  * plus other hotspots called out: `scroll.rs`, `text_layout_result.rs`, `pointer_input.rs`
-    Mechanical fix: use `cranpose_core::hash::default::DefaultHasher` (AHasher) + swap hot `HashMap`/`HashSet` to `FxHashMap`/`FxHashSet` where appropriate.
+---
 
-* [x] **Flatten modifier/layout hot reads after text is fixed**: three targeted fixes landed — (1) `ModifierChainIter` now indexes directly into the pre-built `ordered_nodes` instead of following `RefCell`-linked `NodeState::child`/`parent` per step; (2) `collect_modifier_slices_into` collapsed from 4 separate chain traversals into a single pass; (3) `ordered_nodes` now caches `NodeCapabilities` per-entry at build time (`Vec<(NodeLink, NodeCapabilities)>`), so `kind_set()` returns a cached value without borrowing `RefCell<Box<dyn ModifierNode>>` — eliminated 0.62% CPU from the hot iterator path. Additionally, `MemoryApplier::get_mut` was optimized to check Vec bounds first (common case) instead of HashMap lookup first (was 1.01%, now 0.39%). Remaining hotspots (`Modifier::eq_internal` 0.83%, `measure_node` 1.08%) are individually small and require deeper architectural changes.
+## Completed (phase 1)
 
-  * `crates/cranpose-foundation/src/modifier.rs` — `ModifierChainIter` uses `ordered_nodes` with cached capabilities
-  * `crates/cranpose-ui/src/modifier/slices.rs` — single-pass `collect_modifier_slices_into`
-  * `crates/cranpose-core/src/lib.rs` — `MemoryApplier::get_mut` Vec-first lookup
+<details><summary>27 completed items from phase 1</summary>
 
-* [ ] **Consider arena allocation for modifier nodes to reduce drop cost**: low-priority but real; bump-allocate modifier `Box<dyn ModifierNode>` instances per frame/recompose to reduce allocator + drop overhead, improve locality.
+* [x] Stop using size-tuned release for native perf — separate `native-release` profile with `opt-level=3` (+46.6%)
+* [x] Fix P0 leak: SnapshotStateObserver::fast_scopes grows without bound
+* [x] Fix P0 leak: observer scopes accumulates because clear never happens
+* [x] Fix P0 leak: StateArena::cells never frees — generation-checked reusable slots
+* [x] Fix P0 leak: dead watchers accumulate in MutableStateInner::watchers
+* [x] Remove P1 hot-path O(n) work on every state read
+* [x] Fix P1 O(n²) child diffing in pop_parent()
+* [x] Fix P1 O(n²) scope grouping in process_invalid_scopes()
+* [x] Cut allocation pressure: replace Box<dyn FnMut> commands with enum
+* [x] Cut recomposition copying: make snapshot_locals COW
+* [x] Fix pointer latency: stop cloning full hit-region list on every event
+* [x] Stop double-storing hit regions
+* [x] Avoid per-batch temporary Vec allocations in renderer
+* [x] Stop full scene rebuild for "any dirty bit"
+* [x] Skip clean subtrees in layout box refresh
+* [x] Text bottleneck: renderer-side per-batch TextRenderer pool with skip optimization
+* [x] Unify text identity across measure + render
+* [x] Re-architect text around node-local paragraph state
+* [x] Replace shared shaped-buffer cache HashMap with LRU
+* [x] Fix wrapped text reshaping on fast path
+* [x] Zero/low-copy text wrapping rewrite
+* [x] Remove SipHash/DefaultHasher from internal hot hashes
+* [x] Flatten modifier/layout hot reads — cached capabilities, Vec-first get_mut
+* [x] Eliminate ModifierKind::Combined recursive Rc tree
+* [x] Eliminate Box<dyn Placeable> allocations in layout
+* [x] Replace IndexSet<NodeId> children storage with Vec<NodeId>
+* [x] Cap renderer caches and instrument memory growth
 
-* [x] **Eliminate `ModifierKind::Combined` recursive Rc tree**: `then()` now eagerly concatenates element and inspector vectors into a single flat `Single` variant instead of wrapping in `Combined { outer: Rc<Modifier>, inner: Rc<Modifier> }`. Eliminates recursive `Rc` drop overhead (`drop_in_place<ModifierKind>` was ~0.29%), recursive `eq_internal` comparison (was ~0.83%), and stack-based tree iterators. `ModifierElementIterator` / `ModifierInspectorIterator` are now simple slice iterators. The `Combined` variant, `combined_fingerprints()`, and `FINGERPRINT_KIND_COMBINED` are removed entirely.
-
-* [x] **Eliminate `Box<dyn Placeable>` allocations in layout (critical architectural win)**: `Placeable` is now a concrete struct (not a trait), and `Measurable::measure()` returns it by value — zero heap allocation on the hot coordinator path (was `Box::new(CoordinatorPlaceable{...})` per node per measure pass). `CoordinatorPlaceable`, `LayoutChildPlaceable`, and `SubcomposePlaceable` implementations removed; the single `Placeable` struct carries an optional `Rc<dyn Fn(f32,f32)>` for place side-effects (only used by `LayoutChildMeasurable`, not the coordinator hot path). `FlexMeasurePolicy` placeables storage changed from `SmallVec<[Option<Box<dyn Placeable>>; 8]>` to `SmallVec<[Option<Placeable>; 8]>`.
-
-* [x] **Replace `IndexSet<NodeId>` children storage with `Vec<NodeId>`**: `LayoutNode` and `SubcomposeLayoutNode` now use `Vec<NodeId>` instead of `IndexSet<NodeId>`. Eliminates hashing overhead on every insert/remove; `move_child` operates directly on the Vec (remove+insert) instead of collect-clear-reinsert; `children()` returns a cheap clone instead of `iter().copied().collect()`. The `indexmap` direct dependency is removed from `cranpose-ui` (remains as a transitive dep through wgpu/naga).
-
-* [x] **Cap renderer caches and instrument memory growth**: Offscreen texture pool capped at 16 targets (`MAX_POOLED_TARGETS`) — excess targets are dropped on release instead of accumulating (each full-screen RGBA target ~8 MB at 1920×1080). Text renderer pool trimmed each frame to `text_batch_cursor + 4` — excess slots from peak-usage frames are freed. GPU stats (`CRANPOSE_GPU_STATS=1`) now reports per-frame pool/cache sizes: offscreen pool (count + MB), text renderer pool, image cache occupancy, shared text cache occupancy. Image cache already bounded (LRU 256). Shared text cache already bounded (LRU 256). TextAtlas bounded by GPU texture limits.
-
-* [ ] **Tame `Mutex<FontSystem>` bottleneck for future parallelism**: render + measurement share a single `Arc<Mutex<FontSystem>>` (in `render.rs` / `lib.rs`); single-thread now but blocks future parallel layout. Fix later: `RwLock` or per-thread `FontSystem` instances; keep fast path lock-minimal.
-
-* [ ] **Don’t spend cycles on lazy-list measurement yet**: telemetry shows ~**12 visible**, **16 total measured**, **~0.26–0.38ms**, `timed_out=false` → not the first fire.
-
-* [ ] **Defer dependency-dup cleanup**: `cargo tree --duplicates` shows duplicates (`getrandom`, `smol_str`, `tiny-skia`, `ttf-parser`); worth cleaning later but not top speed lever.
-
-* [x] **Execution order (avoid random micro-opts)**: (1) split build profiles for native speed; (2) fix P0 leaks (scope observer + state arena + watcher cleanup); (3) fix state-read O(n) + pop_parent/process_invalid_scopes complexity; (4) re-architect text identity + node-local paragraph + LRU shaped buffers + wrapped layout caching; (5) rerun harness — **1717 FPS (0.58ms)** with `native-release`, text render `skip_rate=41.1%`, `cache_hit_rate=97.9%`, `ensure_reshape_rate=2.2%`. CPU profile is flat: top app hotspot is `measure_node` at 1.08%, no single function dominates. `malloc+cfree` at 5% is the largest systemic cost (already tracked as arena allocation item).
+</details>
