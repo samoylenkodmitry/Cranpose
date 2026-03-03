@@ -996,7 +996,9 @@ fn semantics_tree_derives_roles_from_configuration() -> Result<(), NodeError> {
 
     // Measure and build semantics tree
     let measurements = measure_layout(&mut applier, button_id, Size::new(100.0, 100.0))?;
-    let semantics_tree = measurements.semantics_tree();
+    let semantics_tree = measurements
+        .semantics_tree()
+        .expect("expected semantics tree");
     let root = semantics_tree.root();
 
     // Verify the role was derived from is_button flag
@@ -1011,6 +1013,49 @@ fn semantics_tree_derives_roles_from_configuration() -> Result<(), NodeError> {
 
     // Verify description
     assert_eq!(root.description.as_deref(), Some("My Button"));
+
+    Ok(())
+}
+
+#[test]
+fn measure_layout_can_skip_semantics_until_consumer_is_enabled() -> Result<(), NodeError> {
+    let mut applier = MemoryApplier::new();
+
+    let node = LayoutNode::new(
+        Modifier::empty().semantics(|config| {
+            config.content_description = Some("deferred".into());
+        }),
+        Rc::new(MaxSizePolicy),
+    );
+    let node_id = applier.create(Box::new(node));
+
+    let skipped = super::measure_layout_with_options(
+        &mut applier,
+        node_id,
+        Size::new(100.0, 100.0),
+        MeasureLayoutOptions {
+            collect_semantics: false,
+        },
+    )?;
+    assert!(
+        skipped.semantics_tree().is_none(),
+        "semantics tree should be omitted when collection is disabled"
+    );
+    assert!(
+        applier.with_node::<LayoutNode, _>(node_id, |node| node.needs_semantics())?,
+        "skipping semantics collection must preserve the dirty flag"
+    );
+
+    let collected = measure_layout(&mut applier, node_id, Size::new(100.0, 100.0))?;
+    let root = collected
+        .semantics_tree()
+        .expect("semantics tree should exist once collection is enabled")
+        .root();
+    assert_eq!(root.description.as_deref(), Some("deferred"));
+    assert!(
+        !applier.with_node::<LayoutNode, _>(node_id, |node| node.needs_semantics())?,
+        "collecting semantics should clear the dirty flag"
+    );
 
     Ok(())
 }
@@ -1034,7 +1079,9 @@ fn semantics_configuration_merges_multiple_modifiers() -> Result<(), NodeError> 
 
     // Measure and build semantics tree
     let measurements = measure_layout(&mut applier, node_id, Size::new(100.0, 100.0))?;
-    let semantics_tree = measurements.semantics_tree();
+    let semantics_tree = measurements
+        .semantics_tree()
+        .expect("expected semantics tree");
     let root = semantics_tree.root();
 
     // Both semantics should be merged

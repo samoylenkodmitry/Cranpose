@@ -436,12 +436,16 @@ impl LayoutEngine for MemoryApplier {
 #[derive(Debug, Clone)]
 pub struct LayoutMeasurements {
     root: Rc<MeasuredNode>,
-    semantics: SemanticsTree,
+    semantics: Option<SemanticsTree>,
     layout_tree: LayoutTree,
 }
 
 impl LayoutMeasurements {
-    fn new(root: Rc<MeasuredNode>, semantics: SemanticsTree, layout_tree: LayoutTree) -> Self {
+    fn new(
+        root: Rc<MeasuredNode>,
+        semantics: Option<SemanticsTree>,
+        layout_tree: LayoutTree,
+    ) -> Self {
         Self {
             root,
             semantics,
@@ -454,8 +458,8 @@ impl LayoutMeasurements {
         self.root.size
     }
 
-    pub fn semantics_tree(&self) -> &SemanticsTree {
-        &self.semantics
+    pub fn semantics_tree(&self) -> Option<&SemanticsTree> {
+        self.semantics.as_ref()
     }
 
     /// Consumes the measurements and produces a [`LayoutTree`].
@@ -466,6 +470,19 @@ impl LayoutMeasurements {
     /// Returns a borrowed [`LayoutTree`] for rendering.
     pub fn layout_tree(&self) -> LayoutTree {
         self.layout_tree.clone()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MeasureLayoutOptions {
+    pub collect_semantics: bool,
+}
+
+impl Default for MeasureLayoutOptions {
+    fn default() -> Self {
+        Self {
+            collect_semantics: true,
+        }
     }
 }
 
@@ -500,6 +517,15 @@ pub fn measure_layout(
     applier: &mut MemoryApplier,
     root: NodeId,
     max_size: Size,
+) -> Result<LayoutMeasurements, NodeError> {
+    measure_layout_with_options(applier, root, max_size, MeasureLayoutOptions::default())
+}
+
+pub fn measure_layout_with_options(
+    applier: &mut MemoryApplier,
+    root: NodeId,
+    max_size: Size,
+    options: MeasureLayoutOptions,
 ) -> Result<LayoutMeasurements, NodeError> {
     let constraints = Constraints {
         min_width: 0.0,
@@ -590,10 +616,19 @@ pub fn measure_layout(
         collect_runtime_metadata(&mut applier_ref, &measured)?
     };
 
-    // ---- Semantics snapshot ------------------------------------------------
-    let semantics_snapshot = {
-        let mut applier_ref = applier_host.borrow_typed();
-        collect_semantics_snapshot(&mut applier_ref, &measured)?
+    let semantics = if options.collect_semantics {
+        let semantics_snapshot = {
+            let mut applier_ref = applier_host.borrow_typed();
+            collect_semantics_snapshot(&mut applier_ref, &measured)?
+        };
+
+        Some(SemanticsTree::new(build_semantics_node(
+            &measured,
+            &metadata,
+            &semantics_snapshot,
+        )))
+    } else {
+        None
     };
 
     // Drop builder before guard - slots are already in the shared handle.
@@ -603,9 +638,6 @@ pub fn measure_layout(
     // DO NOT manually unwrap `applier_host` or replace `applier` here.
     // `ApplierSlotGuard::drop` will restore everything when this function returns.
 
-    // Build semantics and layout trees from `measured` + metadata + snapshot
-    let semantics_root = build_semantics_node(&measured, &metadata, &semantics_snapshot);
-    let semantics = SemanticsTree::new(semantics_root);
     let layout_tree = build_layout_tree_from_metadata(&measured, &metadata);
 
     Ok(LayoutMeasurements::new(measured, semantics, layout_tree))
@@ -1891,19 +1923,13 @@ fn collect_runtime_metadata_inner(
     Ok(())
 }
 
-/// Extracts text content from a LayoutNode's modifier chain.
-///
-/// Searches the modifier chain for a TextModifierNode and returns its text content.
-/// This replaces the old approach of checking measure_policy.text_content().
-///
-/// We extract text from the semantics configuration, which TextModifierNode
-/// populates via its SemanticsNode implementation.
-fn extract_text_from_layout_node(layout: &LayoutNode) -> Option<String> {
-    // Use the semantics configuration which collects data from all SemanticsNode instances
-    // in the modifier chain, including TextModifierNode
-    layout
-        .semantics_configuration()
-        .and_then(|config| config.content_description)
+fn role_from_modifier_slices(modifier_slices: &ModifierNodeSlices) -> SemanticsRole {
+    modifier_slices
+        .text_content()
+        .map(|text| SemanticsRole::Text {
+            value: text.to_string(),
+        })
+        .unwrap_or(SemanticsRole::Layout)
 }
 
 fn runtime_metadata_for(
@@ -1915,17 +1941,15 @@ fn runtime_metadata_for(
     // LayoutNode creates a NEW ModifierChainHandle with NEW nodes and NEW handlers,
     // which would lose gesture state like press_position.
     if let Ok(meta) = applier.with_node::<LayoutNode, _>(node_id, |layout| {
-        // Extract text content from the modifier chain instead of measure policy
-        let role = if let Some(text) = extract_text_from_layout_node(layout) {
-            SemanticsRole::Text { value: text }
-        } else {
-            SemanticsRole::Layout
-        };
+        let modifier = layout.modifier.clone();
+        let resolved_modifiers = layout.resolved_modifiers();
+        let modifier_slices = layout.modifier_slices_snapshot();
+        let role = role_from_modifier_slices(&modifier_slices);
 
         RuntimeNodeMetadata {
-            modifier: layout.modifier.clone(),
-            resolved_modifiers: layout.resolved_modifiers(),
-            modifier_slices: layout.modifier_slices_snapshot(),
+            modifier,
+            resolved_modifiers,
+            modifier_slices,
             role,
             button_handler: None,
         }

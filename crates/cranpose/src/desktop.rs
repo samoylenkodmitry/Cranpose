@@ -785,6 +785,8 @@ impl ApplicationHandler for App {
         // Take the content closure (can only be called once)
         let content = self.content.take().expect("content already taken");
         let mut app = AppShell::new(renderer, default_root_key(), content);
+        #[cfg(feature = "robot")]
+        app.set_semantics_enabled(self.robot_controller.is_some());
 
         // Apply dev options (FPS counter, etc.)
         app.set_dev_options(self.settings.dev_options.clone());

@@ -26,8 +26,8 @@ use cranpose_ui::{
     peek_pointer_invalidation, peek_render_invalidation, process_focus_invalidations,
     process_pointer_repasses, request_render_invalidation, take_draw_repass_nodes,
     take_focus_invalidation, take_layout_invalidation, take_pointer_invalidation,
-    take_render_invalidation, HeadlessRenderer, LayoutNode, LayoutTree, SemanticsTree,
-    SubcomposeLayoutNode,
+    take_render_invalidation, HeadlessRenderer, LayoutNode, LayoutTree, MeasureLayoutOptions,
+    SemanticsTree, SubcomposeLayoutNode,
 };
 use cranpose_ui_graphics::{Point, Size};
 use hit_path_tracker::{HitPathTracker, PointerId};
@@ -55,6 +55,7 @@ where
     start_time: Instant,
     layout_tree: Option<LayoutTree>,
     semantics_tree: Option<SemanticsTree>,
+    semantics_enabled: bool,
     layout_dirty: bool,
     scene_dirty: bool,
     is_dirty: bool,
@@ -119,6 +120,7 @@ where
             start_time: Instant::now(),
             layout_tree: None,
             semantics_tree: None,
+            semantics_enabled: false,
             layout_dirty: true,
             scene_dirty: true,
             is_dirty: true,
@@ -779,6 +781,19 @@ where
         self.semantics_tree.as_ref()
     }
 
+    pub fn set_semantics_enabled(&mut self, enabled: bool) {
+        if self.semantics_enabled == enabled {
+            return;
+        }
+        self.semantics_enabled = enabled;
+        if enabled {
+            self.layout_dirty = true;
+            self.mark_dirty();
+        } else {
+            self.semantics_tree = None;
+        }
+    }
+
     fn process_frame(&mut self) {
         // Record frame for FPS tracking
         fps_monitor::record_frame();
@@ -931,9 +946,16 @@ where
             self.layout_dirty = false;
 
             // Ensure slots exist and borrow mutably (handled inside measure_layout via MemoryApplier)
-            match cranpose_ui::measure_layout(&mut applier, root, viewport_size) {
+            match cranpose_ui::measure_layout_with_options(
+                &mut applier,
+                root,
+                viewport_size,
+                MeasureLayoutOptions {
+                    collect_semantics: self.semantics_enabled,
+                },
+            ) {
                 Ok(measurements) => {
-                    self.semantics_tree = Some(measurements.semantics_tree().clone());
+                    self.semantics_tree = measurements.semantics_tree().cloned();
                     self.layout_tree = Some(measurements.into_layout_tree());
                     self.scene_dirty = true;
                 }

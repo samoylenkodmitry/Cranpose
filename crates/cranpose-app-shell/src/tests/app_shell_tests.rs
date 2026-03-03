@@ -250,6 +250,17 @@ fn box_content() {
 }
 
 #[composable]
+fn semantics_content() {
+    Text(
+        "Semantics",
+        Modifier::empty().semantics(|config| {
+            config.content_description = Some("Semantics".into());
+        }),
+        TextStyle::default(),
+    );
+}
+
+#[composable]
 fn nested_branch_content() {
     Column(Modifier::empty(), ColumnSpec::default(), || {
         Box(
@@ -531,6 +542,30 @@ fn focus_invalidation_without_scene_changes_skips_rebuild() {
     assert!(
         !needs_focus_sync,
         "focus dispatch queue should clear the node dirty flag"
+    );
+}
+
+#[test]
+fn semantics_collection_is_opt_in_for_app_shell() {
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, semantics_content);
+
+    assert!(
+        shell.semantics_tree().is_none(),
+        "app shell should skip semantics work until a consumer is enabled"
+    );
+
+    shell.set_semantics_enabled(true);
+    shell.process_frame();
+    assert!(
+        shell.semantics_tree().is_some(),
+        "enabling semantics should rebuild the tree on the next frame"
+    );
+
+    shell.set_semantics_enabled(false);
+    assert!(
+        shell.semantics_tree().is_none(),
+        "disabling semantics should drop the cached tree"
     );
 }
 

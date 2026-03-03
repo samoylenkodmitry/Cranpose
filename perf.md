@@ -35,7 +35,7 @@ Cranpose total self-time: **14.2%** across ~25 functions. Below are the actionab
 
 ## Semantics and metadata overhead (1.16%)
 
-* [ ] **Skip semantics collection when not needed**: `collect_semantics_from_chain` (0.28%) + `build_semantics_node` (0.32%) + `collect_semantics_with_owner` (0.23%) + `collect_runtime_metadata_inner` (0.33%) = 1.16%. If there's no accessibility consumer attached, semantics collection is pure waste. Add a runtime flag or check to skip semantics entirely when no consumer is registered.
+* [x] **Skip semantics collection when not needed**: Added `MeasureLayoutOptions { collect_semantics }` plus `measure_layout_with_options()`, kept `measure_layout()` semantics-on by default, and made `AppShell` opt into semantics only when a runtime consumer enables it. The shell now skips semantics tree construction by default, enables it for robot mode, and preserves `needs_semantics` dirtiness while disabled so enabling later rebuilds correctly. Runtime metadata no longer calls `semantics_configuration()` just to discover text roles; it derives text role from cached modifier slices instead.
 
 ## Modifier chain overhead (0.56%)
 
