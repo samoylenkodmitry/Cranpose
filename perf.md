@@ -19,7 +19,7 @@ Cranpose total self-time: **14.2%** across ~25 functions. Below are the actionab
 
 ## Allocator pressure (6% CPU total)
 
-* [ ] **Profile heap allocations to find top callers**: use `valgrind --tool=massif` or add `#[global_allocator]` counting wrapper to identify which code paths are responsible for the bulk of malloc/cfree. The DWARF profile shows `alloc::raw_vec::finish_grow` → Vec resizing is significant. Identify the top 5 allocation sites by volume.
+* [x] **Profile heap allocations to find top callers**: Reworked `perf_robot_heap.sh` into a repeatable allocator-profiling entry point with `heaptrack` auto-detect, `massif` fallback, and peak-snapshot top-caller extraction from `ms_print`. Added `CRANPOSE_PERF_TIMEOUT_SLACK_SECS` support to `robot_perf_harness` so allocator profilers do not trip the normal watchdog. A 1s `native-release` `massif` run (`perf_heap_profile_*`) peaked at **29.38MB** total heap, and the top allocation branches by volume were: wgpu command encoder begin-encoding / staging path **8.69MB (29.56%)**, long tail of **1845** sub-1% sites **5.85MB (19.91%)**, wgpu surface configure **4.31MB (14.68%)**, EGL make-current **2.83MB (9.63%)**, and EGL context creation **2.32MB (7.89%)**. `alloc::raw_vec::finish_grow` is still present at **0.89MB (3.02%)** across **108** sites, which confirms the Vec-growth cost is diffuse and the next layout pooling pass should target aggregate reuse rather than a single hotspot.
 
 * [ ] **Reduce per-frame Vec allocations in layout**: `measure_node` (1.16%) and `measure_through_modifier_chain` (0.67%) are the top cranpose functions. `VecPools` already exists but `drop_in_place<VecPools>` at 0.12% and `drop_in_place<LayoutBox>` at 0.12% suggest Vecs are still being allocated/dropped per frame. Audit the layout pass for Vecs that could be pooled or reused across frames via `clear()` + reuse instead of drop + alloc.
 
@@ -31,7 +31,7 @@ Cranpose total self-time: **14.2%** across ~25 functions. Below are the actionab
 
 * [x] **Reduce wgpu render pass churn**: Reworked `render_non_effect_segment` around an allocation-free chunk iterator that groups non-conflicting shape/image/text batches into one render pass per encoder chunk. Shapes, images, and text are now prepared before pass recording and then drawn in-order inside a shared `Segment Pass`, while repeated buffer kinds and shadows still force chunk boundaries so GPU buffer rewrites stay correct. The first `LoadOp::Clear` is now consumed only when a chunk actually records work, which also fixes no-op first-batch cases.
 
-* [ ] **Batch `queue.write_buffer` calls**: `Queue::write_buffer` at 0.48%, `Queue::submit` at 1.17%. Each write_buffer is a separate staging copy. Consider using a single staging buffer with sub-allocations and one write per frame instead of many small writes.
+* [x] **Batch `queue.write_buffer` calls**: Added a reusable `Frame Upload Buffer` in the native wgpu renderer and staged hot-path uniform/shape/image uploads into one packed CPU batch per encoder chunk. `render_non_effect_segment()` and offscreen shape rendering now do a single `queue.write_buffer()` to the upload buffer, then `copy_buffer_to_buffer()` into the destination GPU buffers before drawing, eliminating the previous 3-6 small `queue.write_buffer()` calls per shape/image batch while preserving the existing flush boundaries for reused batch buffers. The wasm target keeps direct queue writes because the browser backend regressed with the staged copy path.
 
 ## Semantics and metadata overhead (1.16%)
 

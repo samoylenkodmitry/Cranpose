@@ -35,6 +35,8 @@ const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     b: 24.0 / 255.0,
     a: 1.0,
 };
+#[cfg(not(target_arch = "wasm32"))]
+const INITIAL_UPLOAD_BUFFER_BYTES: u64 = 4 * 1024;
 const MAX_TEXTURE_CACHE_ITEMS: usize = 256;
 static REPORTED_UNSUPPORTED_WGPU_BLEND_MODES: AtomicBool = AtomicBool::new(false);
 static REPORTED_UNSUPPORTED_WGPU_EFFECTS: AtomicBool = AtomicBool::new(false);
@@ -328,6 +330,73 @@ struct ShapeBatchBuffers {
     gradient_capacity: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UploadTarget {
+    Uniform,
+    ShapeVertex,
+    ShapeIndex,
+    ShapeData,
+    ShapeGradient,
+    ImageVertex,
+    ImageIndex,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PendingBufferCopy {
+    source_offset: u64,
+    size: u64,
+    target: UploadTarget,
+}
+
+#[derive(Default)]
+struct StagedBufferUploads {
+    bytes: Vec<u8>,
+    copies: Vec<PendingBufferCopy>,
+}
+
+impl StagedBufferUploads {
+    fn clear(&mut self) {
+        self.bytes.clear();
+        self.copies.clear();
+    }
+
+    fn is_empty(&self) -> bool {
+        self.copies.is_empty()
+    }
+
+    #[cfg(any(test, target_arch = "wasm32"))]
+    fn payload_for_copy(&self, copy: PendingBufferCopy) -> &[u8] {
+        let start = copy.source_offset as usize;
+        let end = start + copy.size as usize;
+        &self.bytes[start..end]
+    }
+
+    fn stage(&mut self, target: UploadTarget, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+
+        debug_assert_eq!(
+            bytes.len() % wgpu::COPY_BUFFER_ALIGNMENT as usize,
+            0,
+            "buffer uploads must be aligned to copy requirements"
+        );
+
+        let aligned_offset = align_usize_to(self.bytes.len(), wgpu::COPY_BUFFER_ALIGNMENT as usize);
+        if aligned_offset > self.bytes.len() {
+            self.bytes.resize(aligned_offset, 0);
+        }
+
+        let source_offset = self.bytes.len() as u64;
+        self.bytes.extend_from_slice(bytes);
+        self.copies.push(PendingBufferCopy {
+            source_offset,
+            size: bytes.len() as u64,
+            target,
+        });
+    }
+}
+
 impl ShapeBatchBuffers {
     fn new(device: &wgpu::Device, bind_group_layout: &wgpu::BindGroupLayout) -> Self {
         // For WebGL uniform buffers, size MUST match shader declaration (200 shapes)
@@ -507,6 +576,8 @@ pub struct GpuRenderer {
     text_atlas: TextAtlas,
     swash_cache: SwashCache,
     // Persistent GPU buffers (reused across frames)
+    #[cfg(not(target_arch = "wasm32"))]
+    upload_buffer: wgpu::Buffer,
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
     shape_buffers: ShapeBatchBuffers,
@@ -526,6 +597,7 @@ pub struct GpuRenderer {
     scratch_segment_items: Vec<(usize, SegmentDrawItem)>,
     scratch_effect_ranges: Vec<Range<usize>>,
     scratch_layer_events: Vec<LayerEvent>,
+    staged_uploads: StagedBufferUploads,
     effect_renderer: EffectRenderer,
     frame_stats: gpu_stats::FrameStats,
     frame_count: u64,
@@ -658,6 +730,14 @@ impl GpuRenderer {
         };
         let text_viewport = Viewport::new(&device, &glyphon_cache);
 
+        #[cfg(not(target_arch = "wasm32"))]
+        let upload_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Frame Upload Buffer"),
+            size: INITIAL_UPLOAD_BUFFER_BYTES,
+            usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         // Create persistent uniform buffer
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Uniform Buffer"),
@@ -722,6 +802,8 @@ impl GpuRenderer {
             text_batch_cursor: 0,
             text_atlas,
             swash_cache,
+            #[cfg(not(target_arch = "wasm32"))]
+            upload_buffer,
             uniform_buffer,
             uniform_bind_group,
             shape_buffers,
@@ -743,6 +825,7 @@ impl GpuRenderer {
             scratch_segment_items: Vec::new(),
             scratch_effect_ranges: Vec::new(),
             scratch_layer_events: Vec::new(),
+            staged_uploads: StagedBufferUploads::default(),
             effect_renderer,
             frame_stats: gpu_stats::FrameStats::default(),
             frame_count: 0,
@@ -1430,138 +1513,252 @@ impl GpuRenderer {
     ) -> Result<bool, String> {
         let mut prepared_batches: [Option<PreparedSegmentBatch>; 3] = [None, None, None];
         let mut prepared_len = 0usize;
+        let mut staged_uploads = std::mem::take(&mut self.staged_uploads);
+        staged_uploads.clear();
+        let result = (|| {
+            if chunk.needs_viewport_uniforms() {
+                self.stage_viewport_uniforms(&mut staged_uploads, width, height, [0.0, 0.0]);
+            }
 
-        if chunk.needs_viewport_uniforms() {
-            self.write_viewport_uniforms(width, height, [0.0, 0.0]);
-        }
+            for batch in chunk.iter() {
+                match batch {
+                    SegmentBatchPlan::Shape {
+                        start,
+                        end,
+                        blend_mode,
+                    } => {
+                        let Some(prepared) = self.prepare_shapes_batch(
+                            ordered_items[start..end]
+                                .iter()
+                                .map(|(_, item)| match item {
+                                    SegmentDrawItem::Shape(shape_index) => &shapes[*shape_index],
+                                    _ => unreachable!("shape batch contains only shape items"),
+                                }),
+                            root_scale,
+                            &mut staged_uploads,
+                        ) else {
+                            continue;
+                        };
+                        prepared_batches[prepared_len] = Some(PreparedSegmentBatch::Shape {
+                            blend_mode,
+                            batch: prepared,
+                        });
+                        prepared_len += 1;
+                    }
+                    SegmentBatchPlan::Image {
+                        start,
+                        end,
+                        blend_mode,
+                    } => {
+                        let image_cmds = self.prepare_image_draw_cmds(
+                            ordered_items[start..end]
+                                .iter()
+                                .map(|(_, item)| match item {
+                                    SegmentDrawItem::Image(image_index) => &images[*image_index],
+                                    _ => unreachable!("image batch contains only image items"),
+                                }),
+                            width,
+                            height,
+                            root_scale,
+                            &mut staged_uploads,
+                        )?;
+                        if image_cmds.is_empty() {
+                            self.scratch_image_cmds = image_cmds;
+                            continue;
+                        }
+                        prepared_batches[prepared_len] = Some(PreparedSegmentBatch::Image {
+                            blend_mode,
+                            image_cmds,
+                        });
+                        prepared_len += 1;
+                    }
+                    SegmentBatchPlan::Text { start, end } => {
+                        let slot = self.prepare_text_for_render(
+                            ordered_items[start..end]
+                                .iter()
+                                .map(|(_, item)| match item {
+                                    SegmentDrawItem::Text(text_index) => &texts[*text_index],
+                                    _ => unreachable!("text batch contains only text items"),
+                                }),
+                            width,
+                            height,
+                            root_scale,
+                        )?;
+                        prepared_batches[prepared_len] =
+                            Some(PreparedSegmentBatch::Text { slot_index: slot });
+                        prepared_len += 1;
+                    }
+                }
+            }
 
-        for batch in chunk.iter() {
-            match batch {
-                SegmentBatchPlan::Shape {
-                    start,
-                    end,
-                    blend_mode,
-                } => {
-                    let Some(prepared) = self.prepare_shapes_batch(
-                        ordered_items[start..end]
-                            .iter()
-                            .map(|(_, item)| match item {
-                                SegmentDrawItem::Shape(shape_index) => &shapes[*shape_index],
-                                _ => unreachable!("shape batch contains only shape items"),
-                            }),
-                        root_scale,
-                    ) else {
-                        continue;
+            if prepared_len == 0 {
+                return Ok(false);
+            }
+
+            self.flush_staged_uploads(encoder, &staged_uploads);
+            let render_result = {
+                let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Segment Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: target_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: load_op,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+
+                let mut result = Ok(());
+                for batch in prepared_batches.iter_mut().filter_map(Option::as_mut) {
+                    let draw_result = match batch {
+                        PreparedSegmentBatch::Shape { blend_mode, batch } => {
+                            self.draw_prepared_shapes(&mut render_pass, *blend_mode, *batch);
+                            Ok(())
+                        }
+                        PreparedSegmentBatch::Image {
+                            blend_mode,
+                            image_cmds,
+                        } => self.draw_prepared_images(&mut render_pass, image_cmds, *blend_mode),
+                        PreparedSegmentBatch::Text { slot_index } => {
+                            self.draw_prepared_text(&mut render_pass, *slot_index)
+                        }
                     };
-                    prepared_batches[prepared_len] = Some(PreparedSegmentBatch::Shape {
-                        blend_mode,
-                        batch: prepared,
-                    });
-                    prepared_len += 1;
-                }
-                SegmentBatchPlan::Image {
-                    start,
-                    end,
-                    blend_mode,
-                } => {
-                    let image_cmds = self.prepare_image_draw_cmds(
-                        ordered_items[start..end]
-                            .iter()
-                            .map(|(_, item)| match item {
-                                SegmentDrawItem::Image(image_index) => &images[*image_index],
-                                _ => unreachable!("image batch contains only image items"),
-                            }),
-                        width,
-                        height,
-                        root_scale,
-                    )?;
-                    if image_cmds.is_empty() {
-                        self.scratch_image_cmds = image_cmds;
-                        continue;
+                    if let Err(err) = draw_result {
+                        result = Err(err);
+                        break;
                     }
-                    prepared_batches[prepared_len] = Some(PreparedSegmentBatch::Image {
-                        blend_mode,
-                        image_cmds,
-                    });
-                    prepared_len += 1;
                 }
-                SegmentBatchPlan::Text { start, end } => {
-                    let slot = self.prepare_text_for_render(
-                        ordered_items[start..end]
-                            .iter()
-                            .map(|(_, item)| match item {
-                                SegmentDrawItem::Text(text_index) => &texts[*text_index],
-                                _ => unreachable!("text batch contains only text items"),
-                            }),
-                        width,
-                        height,
-                        root_scale,
-                    )?;
-                    prepared_batches[prepared_len] =
-                        Some(PreparedSegmentBatch::Text { slot_index: slot });
-                    prepared_len += 1;
+                result
+            };
+
+            for batch in prepared_batches.into_iter().flatten() {
+                if let PreparedSegmentBatch::Image { image_cmds, .. } = batch {
+                    self.scratch_image_cmds = image_cmds;
                 }
             }
+
+            render_result?;
+            Ok(true)
+        })();
+        self.staged_uploads = staged_uploads;
+        result
+    }
+
+    fn viewport_uniforms(width: u32, height: u32, viewport_offset: [f32; 2]) -> Uniforms {
+        Uniforms {
+            viewport: [width as f32, height as f32],
+            viewport_offset,
+        }
+    }
+
+    fn stage_viewport_uniforms(
+        &self,
+        staged_uploads: &mut StagedBufferUploads,
+        width: u32,
+        height: u32,
+        viewport_offset: [f32; 2],
+    ) {
+        let uniforms = Self::viewport_uniforms(width, height, viewport_offset);
+        staged_uploads.stage(UploadTarget::Uniform, bytemuck::bytes_of(&uniforms));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn ensure_upload_buffer_capacity(&mut self, required_bytes: u64) {
+        if required_bytes <= self.upload_buffer.size() {
+            return;
         }
 
-        if prepared_len == 0 {
-            return Ok(false);
+        let new_size = required_bytes
+            .next_power_of_two()
+            .max(INITIAL_UPLOAD_BUFFER_BYTES);
+        self.upload_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Frame Upload Buffer"),
+            size: new_size,
+            usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+    }
+
+    fn flush_staged_uploads(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        staged_uploads: &StagedBufferUploads,
+    ) {
+        if staged_uploads.is_empty() {
+            return;
         }
 
-        let render_result = {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Segment Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: load_op,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = encoder;
+            for copy in &staged_uploads.copies {
+                let payload = staged_uploads.payload_for_copy(*copy);
+                match copy.target {
+                    UploadTarget::Uniform => {
+                        self.queue.write_buffer(&self.uniform_buffer, 0, payload);
+                    }
+                    UploadTarget::ShapeVertex => {
+                        self.queue
+                            .write_buffer(&self.shape_buffers.vertex_buffer, 0, payload);
+                    }
+                    UploadTarget::ShapeIndex => {
+                        self.queue
+                            .write_buffer(&self.shape_buffers.index_buffer, 0, payload);
+                    }
+                    UploadTarget::ShapeData => {
+                        self.queue
+                            .write_buffer(&self.shape_buffers.shape_buffer, 0, payload);
+                    }
+                    UploadTarget::ShapeGradient => {
+                        self.queue
+                            .write_buffer(&self.shape_buffers.gradient_buffer, 0, payload);
+                    }
+                    UploadTarget::ImageVertex => {
+                        self.queue
+                            .write_buffer(&self.image_vertex_buffer, 0, payload);
+                    }
+                    UploadTarget::ImageIndex => {
+                        self.queue
+                            .write_buffer(&self.image_index_buffer, 0, payload);
+                    }
+                }
+            }
+            return;
+        }
 
-            let mut result = Ok(());
-            for batch in prepared_batches.iter_mut().filter_map(Option::as_mut) {
-                let draw_result = match batch {
-                    PreparedSegmentBatch::Shape { blend_mode, batch } => {
-                        self.draw_prepared_shapes(&mut render_pass, *blend_mode, *batch);
-                        Ok(())
-                    }
-                    PreparedSegmentBatch::Image {
-                        blend_mode,
-                        image_cmds,
-                    } => self.draw_prepared_images(&mut render_pass, image_cmds, *blend_mode),
-                    PreparedSegmentBatch::Text { slot_index } => {
-                        self.draw_prepared_text(&mut render_pass, *slot_index)
-                    }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.ensure_upload_buffer_capacity(staged_uploads.bytes.len() as u64);
+            self.queue
+                .write_buffer(&self.upload_buffer, 0, &staged_uploads.bytes);
+
+            for copy in &staged_uploads.copies {
+                let target_buffer = match copy.target {
+                    UploadTarget::Uniform => &self.uniform_buffer,
+                    UploadTarget::ShapeVertex => &self.shape_buffers.vertex_buffer,
+                    UploadTarget::ShapeIndex => &self.shape_buffers.index_buffer,
+                    UploadTarget::ShapeData => &self.shape_buffers.shape_buffer,
+                    UploadTarget::ShapeGradient => &self.shape_buffers.gradient_buffer,
+                    UploadTarget::ImageVertex => &self.image_vertex_buffer,
+                    UploadTarget::ImageIndex => &self.image_index_buffer,
                 };
-                if let Err(err) = draw_result {
-                    result = Err(err);
-                    break;
-                }
-            }
-            result
-        };
-
-        for batch in prepared_batches.into_iter().flatten() {
-            if let PreparedSegmentBatch::Image { image_cmds, .. } = batch {
-                self.scratch_image_cmds = image_cmds;
+                encoder.copy_buffer_to_buffer(
+                    &self.upload_buffer,
+                    copy.source_offset,
+                    target_buffer,
+                    0,
+                    copy.size,
+                );
             }
         }
-
-        render_result?;
-        Ok(true)
     }
 
     fn write_viewport_uniforms(&self, width: u32, height: u32, viewport_offset: [f32; 2]) {
-        let uniforms = Uniforms {
-            viewport: [width as f32, height as f32],
-            viewport_offset,
-        };
+        let uniforms = Self::viewport_uniforms(width, height, viewport_offset);
         self.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
     }
@@ -2101,6 +2298,7 @@ impl GpuRenderer {
         &mut self,
         layer_shapes: I,
         root_scale: f32,
+        staged_uploads: &mut StagedBufferUploads,
     ) -> Option<PreparedShapeBatch>
     where
         I: Iterator<Item = &'a DrawShape>,
@@ -2317,26 +2515,21 @@ impl GpuRenderer {
             self.scratch_gradients.len().max(1),
         );
 
-        // Write data to GPU buffers
-        self.queue.write_buffer(
-            &self.shape_buffers.vertex_buffer,
-            0,
+        staged_uploads.stage(
+            UploadTarget::ShapeVertex,
             bytemuck::cast_slice(&self.scratch_vertices),
         );
-        self.queue.write_buffer(
-            &self.shape_buffers.index_buffer,
-            0,
+        staged_uploads.stage(
+            UploadTarget::ShapeIndex,
             bytemuck::cast_slice(&self.scratch_indices),
         );
-        self.queue.write_buffer(
-            &self.shape_buffers.shape_buffer,
-            0,
+        staged_uploads.stage(
+            UploadTarget::ShapeData,
             bytemuck::cast_slice(&self.scratch_shape_data),
         );
         if !self.scratch_gradients.is_empty() {
-            self.queue.write_buffer(
-                &self.shape_buffers.gradient_buffer,
-                0,
+            staged_uploads.stage(
+                UploadTarget::ShapeGradient,
                 bytemuck::cast_slice(&self.scratch_gradients),
             );
         }
@@ -2383,10 +2576,16 @@ impl GpuRenderer {
     ) where
         I: Iterator<Item = &'a DrawShape>,
     {
-        self.write_viewport_uniforms(width, height, viewport_offset);
-        let Some(batch) = self.prepare_shapes_batch(layer_shapes, root_scale) else {
+        let mut staged_uploads = std::mem::take(&mut self.staged_uploads);
+        staged_uploads.clear();
+        self.stage_viewport_uniforms(&mut staged_uploads, width, height, viewport_offset);
+        let Some(batch) = self.prepare_shapes_batch(layer_shapes, root_scale, &mut staged_uploads)
+        else {
+            self.staged_uploads = staged_uploads;
             return;
         };
+        self.flush_staged_uploads(encoder, &staged_uploads);
+        self.staged_uploads = staged_uploads;
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Shape Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -2444,6 +2643,7 @@ impl GpuRenderer {
         width: u32,
         height: u32,
         root_scale: f32,
+        staged_uploads: &mut StagedBufferUploads,
     ) -> Result<Vec<ImageDrawCmd>, String>
     where
         I: Iterator<Item = &'a ImageDraw>,
@@ -2567,14 +2767,12 @@ impl GpuRenderer {
             });
         }
 
-        self.queue.write_buffer(
-            &self.image_vertex_buffer,
-            0,
+        staged_uploads.stage(
+            UploadTarget::ImageVertex,
             bytemuck::cast_slice(&image_vertices),
         );
-        self.queue.write_buffer(
-            &self.image_index_buffer,
-            0,
+        staged_uploads.stage(
+            UploadTarget::ImageIndex,
             bytemuck::cast_slice(&image_indices),
         );
 
@@ -2876,6 +3074,11 @@ impl GpuRenderer {
 }
 
 fn align_to(value: u32, alignment: u32) -> u32 {
+    debug_assert!(alignment > 0);
+    value.div_ceil(alignment) * alignment
+}
+
+fn align_usize_to(value: usize, alignment: usize) -> usize {
     debug_assert!(alignment > 0);
     value.div_ceil(alignment) * alignment
 }
@@ -4100,6 +4303,44 @@ mod tests {
         assert!(!usage.requires_flush_for_batch(BatchKind::Shape, true));
         assert!(!usage.requires_flush_for_batch(BatchKind::Image, true));
         assert!(!usage.requires_flush_for_batch(BatchKind::Text, true));
+    }
+
+    #[test]
+    fn staged_buffer_uploads_align_new_copies_to_copy_buffer_alignment() {
+        let mut uploads = StagedBufferUploads::default();
+        uploads.bytes.extend_from_slice(&[1, 2]);
+
+        uploads.stage(UploadTarget::ImageIndex, &[3, 4, 5, 6]);
+
+        assert_eq!(uploads.bytes, vec![1, 2, 0, 0, 3, 4, 5, 6]);
+        assert_eq!(
+            uploads.copies,
+            vec![PendingBufferCopy {
+                source_offset: 4,
+                size: 4,
+                target: UploadTarget::ImageIndex,
+            }]
+        );
+    }
+
+    #[test]
+    fn staged_buffer_uploads_ignore_empty_payloads() {
+        let mut uploads = StagedBufferUploads::default();
+
+        uploads.stage(UploadTarget::Uniform, &[]);
+
+        assert!(uploads.is_empty());
+        assert!(uploads.bytes.is_empty());
+    }
+
+    #[test]
+    fn staged_buffer_uploads_return_exact_payload_slice_for_copy() {
+        let mut uploads = StagedBufferUploads::default();
+        uploads.stage(UploadTarget::Uniform, &[1, 2, 3, 4]);
+        uploads.stage(UploadTarget::ImageIndex, &[5, 6, 7, 8]);
+
+        assert_eq!(uploads.payload_for_copy(uploads.copies[0]), &[1, 2, 3, 4]);
+        assert_eq!(uploads.payload_for_copy(uploads.copies[1]), &[5, 6, 7, 8]);
     }
 
     #[test]

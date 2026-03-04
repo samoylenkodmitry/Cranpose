@@ -27,6 +27,7 @@ const DEFAULT_WARMUP_SECS: u64 = 5;
 const DEFAULT_SAMPLE_INTERVAL_MS: u64 = 200;
 /// Memory growth limit - 512MB is realistic for GPU apps with textures, buffers, and scene graphs
 const DEFAULT_MAX_GROWTH_KB: u64 = 512 * 1024;
+const DEFAULT_TIMEOUT_SLACK_SECS: u64 = 20;
 /// Tiered warning thresholds for memory growth
 const WARN_GROWTH_KB: u64 = 100 * 1024; // 100MB - needs attention
 const ALERT_GROWTH_KB: u64 = 300 * 1024; // 300MB - likely issue
@@ -223,6 +224,18 @@ fn env_bool(key: &str, default: bool) -> bool {
         .unwrap_or(default)
 }
 
+fn timeout_slack_secs_from(value: Option<&str>) -> u64 {
+    value
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_TIMEOUT_SLACK_SECS)
+}
+
+fn timeout_budget_secs(duration_secs: u64, warmup_secs: u64, timeout_slack_secs: u64) -> u64 {
+    duration_secs
+        .saturating_add(warmup_secs)
+        .saturating_add(timeout_slack_secs)
+}
+
 #[cfg(target_os = "linux")]
 fn read_rss_kb() -> Option<u64> {
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
@@ -254,6 +267,11 @@ fn main() {
     );
     let max_growth_kb = env_u64("CRANPOSE_MEM_MAX_GROWTH_KB", DEFAULT_MAX_GROWTH_KB);
     let validate_mem = env_bool("CRANPOSE_MEM_VALIDATE", true);
+    let timeout_slack_secs = timeout_slack_secs_from(
+        std::env::var("CRANPOSE_PERF_TIMEOUT_SLACK_SECS")
+            .ok()
+            .as_deref(),
+    );
 
     println!("Duration: {}s (warmup {}s)", duration_secs, warmup_secs);
     println!(
@@ -266,7 +284,7 @@ fn main() {
         .with_size(900, 700)
         .with_headless(env_bool("CRANPOSE_HEADLESS", true))
         .with_test_driver(move |robot| {
-            let timeout_secs = duration_secs + warmup_secs + 20;
+            let timeout_secs = timeout_budget_secs(duration_secs, warmup_secs, timeout_slack_secs);
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_secs(timeout_secs));
                 eprintln!("TIMEOUT: Perf harness exceeded {} seconds", timeout_secs);
@@ -440,4 +458,28 @@ fn fast_fling(
         std::thread::sleep(Duration::from_millis(step_delay_ms));
     }
     robot.mouse_up()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{timeout_budget_secs, timeout_slack_secs_from, DEFAULT_TIMEOUT_SLACK_SECS};
+
+    #[test]
+    fn timeout_slack_uses_default_for_missing_or_invalid_values() {
+        assert_eq!(timeout_slack_secs_from(None), DEFAULT_TIMEOUT_SLACK_SECS);
+        assert_eq!(
+            timeout_slack_secs_from(Some("invalid")),
+            DEFAULT_TIMEOUT_SLACK_SECS
+        );
+    }
+
+    #[test]
+    fn timeout_slack_parses_valid_override() {
+        assert_eq!(timeout_slack_secs_from(Some("180")), 180);
+    }
+
+    #[test]
+    fn timeout_budget_adds_duration_warmup_and_slack() {
+        assert_eq!(timeout_budget_secs(2, 3, 180), 185);
+    }
 }
