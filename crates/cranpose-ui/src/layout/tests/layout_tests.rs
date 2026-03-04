@@ -586,6 +586,63 @@ fn selective_measure_with_tree_hierarchy() -> Result<(), NodeError> {
 }
 
 #[test]
+fn nested_measurement_returns_multiple_scratch_vecs_to_pool() -> Result<(), NodeError> {
+    let mut applier = MemoryApplier::new();
+
+    let leaf_id = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(LeafMeasurePolicy::new(Size {
+            width: 10.0,
+            height: 10.0,
+        })),
+    )));
+
+    let mut child = LayoutNode::new(Modifier::empty().padding(2.0), Rc::new(VerticalStackPolicy));
+    child.children.push(leaf_id);
+    let child_id = applier.create(Box::new(child));
+
+    let mut root = LayoutNode::new(Modifier::empty().padding(4.0), Rc::new(VerticalStackPolicy));
+    root.children.push(child_id);
+    let root_id = applier.create(Box::new(root));
+
+    let guard = ApplierSlotGuard::new(&mut applier);
+    let applier_host = guard.host();
+    let slots_handle = guard.slots_handle();
+    let mut builder =
+        LayoutBuilder::new_with_epoch(Rc::clone(&applier_host), 1, Rc::clone(&slots_handle));
+
+    builder.measure_node(
+        root_id,
+        Constraints {
+            min_width: 0.0,
+            max_width: 100.0,
+            min_height: 0.0,
+            max_height: 100.0,
+        },
+    )?;
+
+    let state = builder.state.borrow();
+    assert!(
+        state.tmp_measurables.available_count() >= 2,
+        "nested measurement should retain multiple measurable scratch vecs"
+    );
+    assert!(
+        state.tmp_records.available_count() >= 2,
+        "nested measurement should retain multiple record scratch vecs"
+    );
+    assert!(
+        state.tmp_child_ids.available_count() >= 2,
+        "nested measurement should retain multiple child-id scratch vecs"
+    );
+    assert!(
+        state.tmp_layout_node_data.available_count() >= 2,
+        "nested measurement should retain multiple modifier scratch vecs"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn dirty_child_triggers_parent_remeasure() -> Result<(), NodeError> {
     use super::bubble_layout_dirty;
     let mut applier = MemoryApplier::new();
