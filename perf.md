@@ -45,7 +45,7 @@ Cranpose total self-time: **14.2%** across ~25 functions. Below are the actionab
 
 ## Low-priority / future
 
-* [ ] **Tame `Mutex<FontSystem>` for future parallelism**: render + measurement share `Arc<Mutex<FontSystem>>`. Single-thread now, blocks future parallel layout.
+* [x] **Tame `Mutex<FontSystem>` for future parallelism**: Replaced the shared render/measurement text backend with phase-local `TextSystemState`s. Layout measurement now owns its own `Arc<Mutex<...>>` text state, while `WgpuRenderer` keeps a separate render-owned font/resolver/text-cache bundle and passes it into `GpuRenderer` without sharing it through `Arc<Mutex<FontSystem>>`. Added a regression test proving `WgpuRenderer::new()` no longer lets a text measurement populate the renderer’s text cache.
 
 * [ ] **Dependency-dup cleanup**: `cargo tree --duplicates` shows duplicates (getrandom, smol_str, tiny-skia, ttf-parser). Not a speed lever.
 

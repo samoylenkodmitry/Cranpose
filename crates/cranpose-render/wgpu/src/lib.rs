@@ -449,9 +449,6 @@ impl SharedTextBuffer {
     }
 }
 
-/// Shared cache for text buffers used by both measurement and rendering.
-pub(crate) type SharedTextCache = Arc<Mutex<LruCache<TextCacheKey, SharedTextBuffer>>>;
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct TypefaceRequest {
     font_family: Option<cranpose_ui::text::FontFamily>,
@@ -793,7 +790,6 @@ fn primary_family_name_from_bytes(bytes: &[u8]) -> Option<String> {
     fallback_family
 }
 
-type SharedFontFamilyResolver = Arc<Mutex<WgpuFontFamilyResolver>>;
 const SHARED_TEXT_CACHE_CAPACITY: usize = 256;
 
 fn new_shared_text_buffer(
@@ -812,10 +808,8 @@ fn new_shared_text_buffer(
     }
 }
 
-pub(crate) fn new_shared_text_cache() -> SharedTextCache {
-    Arc::new(Mutex::new(LruCache::new(
-        NonZeroUsize::new(SHARED_TEXT_CACHE_CAPACITY).unwrap(),
-    )))
+fn new_text_cache() -> LruCache<TextCacheKey, SharedTextBuffer> {
+    LruCache::new(NonZeroUsize::new(SHARED_TEXT_CACHE_CAPACITY).unwrap())
 }
 
 pub(crate) fn shared_text_buffer_mut<'a>(
@@ -844,6 +838,53 @@ pub(crate) fn shared_text_buffer_mut<'a>(
     (false, evicted, len, buffer)
 }
 
+pub(crate) struct TextSystemState {
+    pub(crate) font_system: FontSystem,
+    pub(crate) font_family_resolver: WgpuFontFamilyResolver,
+    pub(crate) text_cache: LruCache<TextCacheKey, SharedTextBuffer>,
+}
+
+impl TextSystemState {
+    fn from_fonts(fonts: &[&[u8]]) -> Self {
+        let mut font_system = FontSystem::new();
+
+        // On Android never load system fonts: modern Android ships variable Roboto
+        // which can cause rasterization corruption or font-ID conflicts with glyphon.
+        #[cfg(target_os = "android")]
+        log::info!("Skipping Android system fonts – using application-provided fonts only");
+
+        load_fonts(&mut font_system, fonts);
+
+        let mut font_family_resolver = WgpuFontFamilyResolver::default();
+        font_family_resolver.prime(&mut font_system);
+        Self::from_parts(font_system, font_family_resolver)
+    }
+
+    fn from_parts(font_system: FontSystem, font_family_resolver: WgpuFontFamilyResolver) -> Self {
+        Self {
+            font_system,
+            font_family_resolver,
+            text_cache: new_text_cache(),
+        }
+    }
+
+    pub(crate) fn parts_mut(
+        &mut self,
+    ) -> (
+        &mut FontSystem,
+        &mut WgpuFontFamilyResolver,
+        &mut LruCache<TextCacheKey, SharedTextBuffer>,
+    ) {
+        (
+            &mut self.font_system,
+            &mut self.font_family_resolver,
+            &mut self.text_cache,
+        )
+    }
+}
+
+type SharedTextSystemState = Arc<Mutex<TextSystemState>>;
+
 /// WGPU-based renderer for GPU-accelerated 2D rendering.
 ///
 /// This renderer supports:
@@ -854,10 +895,7 @@ pub(crate) fn shared_text_buffer_mut<'a>(
 pub struct WgpuRenderer {
     scene: Scene,
     gpu_renderer: Option<GpuRenderer>,
-    font_system: Arc<Mutex<FontSystem>>,
-    font_family_resolver: SharedFontFamilyResolver,
-    /// Shared text buffer cache used by both measurement and rendering
-    text_cache: SharedTextCache,
+    render_text_state: TextSystemState,
     /// Root scale factor for text rendering (use for density scaling)
     root_scale: f32,
 }
@@ -870,35 +908,15 @@ impl WgpuRenderer {
     ///
     /// Call [`init_gpu`][Self::init_gpu] before rendering.
     pub fn new(fonts: &[&[u8]]) -> Self {
-        let mut font_system = FontSystem::new();
-
-        // On Android never load system fonts: modern Android ships variable Roboto
-        // which can cause rasterization corruption or font-ID conflicts with glyphon.
-        #[cfg(target_os = "android")]
-        log::info!("Skipping Android system fonts – using application-provided fonts only");
-
-        load_fonts(&mut font_system, fonts);
-
-        let mut font_family_resolver_impl = WgpuFontFamilyResolver::default();
-        font_family_resolver_impl.prime(&mut font_system);
-
-        let font_system = Arc::new(Mutex::new(font_system));
-        let font_family_resolver = Arc::new(Mutex::new(font_family_resolver_impl));
-        let text_cache = new_shared_text_cache();
-
-        let text_measurer = WgpuTextMeasurer::new(
-            font_system.clone(),
-            text_cache.clone(),
-            font_family_resolver.clone(),
-        );
+        let render_text_state = TextSystemState::from_fonts(fonts);
+        let measure_text_state = Arc::new(Mutex::new(TextSystemState::from_fonts(fonts)));
+        let text_measurer = WgpuTextMeasurer::new(measure_text_state);
         set_text_measurer(text_measurer.clone());
 
         Self {
             scene: Scene::new(),
             gpu_renderer: None,
-            font_system,
-            font_family_resolver,
-            text_cache,
+            render_text_state,
             root_scale: 1.0,
         }
     }
@@ -910,14 +928,7 @@ impl WgpuRenderer {
         queue: Arc<wgpu::Queue>,
         surface_format: wgpu::TextureFormat,
     ) {
-        self.gpu_renderer = Some(GpuRenderer::new(
-            device,
-            queue,
-            surface_format,
-            self.font_system.clone(),
-            self.font_family_resolver.clone(),
-            self.text_cache.clone(),
-        ));
+        self.gpu_renderer = Some(GpuRenderer::new(device, queue, surface_format));
     }
 
     /// Set root scale factor for text rendering (e.g., density scaling on Android)
@@ -935,6 +946,7 @@ impl WgpuRenderer {
         if let Some(gpu_renderer) = &mut self.gpu_renderer {
             gpu_renderer
                 .render(
+                    &mut self.render_text_state,
                     view,
                     &self.scene.shapes,
                     &self.scene.images,
@@ -975,6 +987,7 @@ impl WgpuRenderer {
         if let Some(gpu_renderer) = &mut self.gpu_renderer {
             let pixels = gpu_renderer
                 .render_to_rgba_pixels(
+                    &mut self.render_text_state,
                     &self.scene.shapes,
                     &self.scene.images,
                     &self.scene.texts,
@@ -1304,29 +1317,20 @@ fn attrs_from_text_style(
 
 #[derive(Clone)]
 struct WgpuTextMeasurer {
-    font_system: Arc<Mutex<FontSystem>>,
-    font_family_resolver: SharedFontFamilyResolver,
+    text_state: SharedTextSystemState,
     size_cache: TextSizeCache,
     prepared_layout_cache: PreparedTextLayoutCache,
-    /// Shared buffer cache used by both measurement and rendering
-    text_cache: SharedTextCache,
 }
 
 impl WgpuTextMeasurer {
-    fn new(
-        font_system: Arc<Mutex<FontSystem>>,
-        text_cache: SharedTextCache,
-        font_family_resolver: SharedFontFamilyResolver,
-    ) -> Self {
+    fn new(text_state: SharedTextSystemState) -> Self {
         Self {
-            font_system,
-            font_family_resolver,
+            text_state,
             // Larger cache size (1024) reduces misses, FxHasher for faster lookups
             size_cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(1024).unwrap()))),
             prepared_layout_cache: Rc::new(RefCell::new(LruCache::new(
                 NonZeroUsize::new(256).unwrap(),
             ))),
-            text_cache,
         }
     }
 
@@ -1390,22 +1394,21 @@ impl WgpuTextMeasurer {
         }
 
         let text_buffer_key = Self::text_buffer_key(node_id, text_str, font_size, style_hash);
-        let mut font_system = self.font_system.lock().unwrap();
-        let mut text_cache = self.text_cache.lock().unwrap();
-        let mut font_family_resolver = self.font_family_resolver.lock().unwrap();
+        let mut text_state = self.text_state.lock().unwrap();
+        let (font_system, font_family_resolver, text_cache) = text_state.parts_mut();
 
         let (size, wrapped_line_count) = {
             let (_, _, _, buffer) = shared_text_buffer_mut(
-                &mut text_cache,
+                text_cache,
                 text_buffer_key,
-                &mut font_system,
+                font_system,
                 font_size,
                 line_height,
             );
 
             let _ = buffer.ensure(
-                &mut font_system,
-                &mut font_family_resolver,
+                font_system,
+                font_family_resolver,
                 EnsureTextBufferParams {
                     annotated_text: text,
                     font_size_px: font_size,
@@ -1418,15 +1421,14 @@ impl WgpuTextMeasurer {
 
             buffer
                 .buffer
-                .set_size(&mut font_system, Some(max_width), Some(f32::MAX));
-            buffer.buffer.shape_until_scroll(&mut font_system, false);
+                .set_size(font_system, Some(max_width), Some(f32::MAX));
+            buffer.buffer.shape_until_scroll(font_system, false);
             buffer.cached_size = None;
             let size = buffer.size();
             let line_count = buffer.buffer.layout_runs().count();
             (size, line_count)
         };
-        drop(font_system);
-        drop(text_cache);
+        drop(text_state);
 
         let mut size_cache = self.size_cache.lock().unwrap();
         size_cache.put(cache_key, (text_str.to_string(), size));
@@ -1464,22 +1466,21 @@ impl WgpuTextMeasurer {
         let style_hash = style.measurement_hash() ^ text.span_styles_hash();
 
         let text_buffer_key = Self::text_buffer_key(node_id, text_str, font_size, style_hash);
-        let mut font_system = self.font_system.lock().unwrap();
-        let mut text_cache = self.text_cache.lock().unwrap();
-        let mut font_family_resolver = self.font_family_resolver.lock().unwrap();
+        let mut text_state = self.text_state.lock().unwrap();
+        let (font_system, font_family_resolver, text_cache) = text_state.parts_mut();
 
         let (size, wrapped_ranges) = {
             let (_, _, _, buffer) = shared_text_buffer_mut(
-                &mut text_cache,
+                text_cache,
                 text_buffer_key,
-                &mut font_system,
+                font_system,
                 font_size,
                 line_height,
             );
 
             let _ = buffer.ensure(
-                &mut font_system,
-                &mut font_family_resolver,
+                font_system,
+                font_family_resolver,
                 EnsureTextBufferParams {
                     annotated_text: text,
                     font_size_px: font_size,
@@ -1492,8 +1493,8 @@ impl WgpuTextMeasurer {
 
             buffer
                 .buffer
-                .set_size(&mut font_system, Some(max_width), Some(f32::MAX));
-            buffer.buffer.shape_until_scroll(&mut font_system, false);
+                .set_size(font_system, Some(max_width), Some(f32::MAX));
+            buffer.buffer.shape_until_scroll(font_system, false);
             buffer.cached_size = None;
             let size = buffer.size();
             let wrapped_ranges = collect_wrapped_ranges(text_str, &buffer.buffer)?;
@@ -1609,14 +1610,11 @@ pub fn setup_headless_text_measurer() {
     let mut font_system = FontSystem::new();
     let mut font_family_resolver_impl = WgpuFontFamilyResolver::default();
     font_family_resolver_impl.prime(&mut font_system);
-    let font_system = Arc::new(Mutex::new(font_system));
-    let font_family_resolver = Arc::new(Mutex::new(font_family_resolver_impl));
-    let text_cache = new_shared_text_cache();
-    cranpose_ui::text::set_text_measurer(WgpuTextMeasurer::new(
+    let text_state = Arc::new(Mutex::new(TextSystemState::from_parts(
         font_system,
-        text_cache,
-        font_family_resolver,
-    ));
+        font_family_resolver_impl,
+    )));
+    cranpose_ui::text::set_text_measurer(WgpuTextMeasurer::new(text_state));
 }
 
 // Base font size in logical units (dp) - shared between measurement and rendering
@@ -1679,16 +1677,15 @@ impl TextMeasurer for WgpuTextMeasurer {
 
         // Get or create text buffer
         let text_buffer_key = Self::text_buffer_key(node_id, text_str, font_size, style_hash);
-        let mut font_system = self.font_system.lock().unwrap();
-        let mut text_cache = self.text_cache.lock().unwrap();
-        let mut font_family_resolver = self.font_family_resolver.lock().unwrap();
+        let mut text_state = self.text_state.lock().unwrap();
+        let (font_system, font_family_resolver, text_cache) = text_state.parts_mut();
 
         // Get or create buffer and calculate size
         let size = {
             let (text_cache_hit, evicted, cache_len, buffer) = shared_text_buffer_mut(
-                &mut text_cache,
+                text_cache,
                 text_buffer_key,
-                &mut font_system,
+                font_system,
                 font_size,
                 line_height,
             );
@@ -1707,8 +1704,8 @@ impl TextMeasurer for WgpuTextMeasurer {
 
             // Ensure buffer has the correct text
             let reshaped = buffer.ensure(
-                &mut font_system,
-                &mut font_family_resolver,
+                font_system,
+                font_family_resolver,
                 EnsureTextBufferParams {
                     annotated_text: text,
                     font_size_px: font_size,
@@ -1730,8 +1727,7 @@ impl TextMeasurer for WgpuTextMeasurer {
             buffer.size()
         };
 
-        drop(font_system);
-        drop(text_cache);
+        drop(text_state);
 
         // Cache the size result
         let mut size_cache = self.size_cache.lock().unwrap();
@@ -1903,17 +1899,11 @@ impl TextMeasurer for WgpuTextMeasurer {
 
         let cache_key = TextCacheKey::new(text_str, font_size, style_hash);
 
-        let mut font_system = self.font_system.lock().unwrap();
-        let mut text_cache = self.text_cache.lock().unwrap();
-        let mut font_family_resolver = self.font_family_resolver.lock().unwrap();
+        let mut text_state = self.text_state.lock().unwrap();
+        let (font_system, font_family_resolver, text_cache) = text_state.parts_mut();
 
-        let (text_cache_hit, evicted, cache_len, buffer) = shared_text_buffer_mut(
-            &mut text_cache,
-            cache_key,
-            &mut font_system,
-            font_size,
-            line_height,
-        );
+        let (text_cache_hit, evicted, cache_len, buffer) =
+            shared_text_buffer_mut(text_cache, cache_key, font_system, font_size, line_height);
         if let Some(t) = telemetry {
             if text_cache_hit {
                 t.text_cache_hits.fetch_add(1, Ordering::Relaxed);
@@ -1928,8 +1918,8 @@ impl TextMeasurer for WgpuTextMeasurer {
         }
 
         let reshaped = buffer.ensure(
-            &mut font_system,
-            &mut font_family_resolver,
+            font_system,
+            font_family_resolver,
             EnsureTextBufferParams {
                 annotated_text: text,
                 font_size_px: font_size,
@@ -2082,14 +2072,13 @@ impl TextMeasurer for WgpuTextMeasurer {
         let style_hash = style.measurement_hash() ^ text.span_styles_hash();
 
         let cache_key = TextCacheKey::new(text_str, font_size, style_hash);
-        let mut font_system = self.font_system.lock().unwrap();
-        let mut text_cache = self.text_cache.lock().unwrap();
-        let mut font_family_resolver = self.font_family_resolver.lock().unwrap();
+        let mut text_state = self.text_state.lock().unwrap();
+        let (font_system, font_family_resolver, text_cache) = text_state.parts_mut();
 
         let (text_cache_hit, evicted, cache_len, buffer) = shared_text_buffer_mut(
-            &mut text_cache,
+            text_cache,
             cache_key.clone(),
-            &mut font_system,
+            font_system,
             font_size,
             line_height,
         );
@@ -2106,8 +2095,8 @@ impl TextMeasurer for WgpuTextMeasurer {
                 .store(cache_len as u64, Ordering::Relaxed);
         }
         let reshaped = buffer.ensure(
-            &mut font_system,
-            &mut font_family_resolver,
+            font_system,
+            font_family_resolver,
             EnsureTextBufferParams {
                 annotated_text: text,
                 font_size_px: font_size,
@@ -2244,6 +2233,14 @@ mod tests {
         (font_system, resolver)
     }
 
+    fn seeded_text_state() -> SharedTextSystemState {
+        let (font_system, resolver) = seeded_font_system_and_resolver();
+        Arc::new(Mutex::new(TextSystemState::from_parts(
+            font_system,
+            resolver,
+        )))
+    }
+
     #[test]
     fn attrs_resolution_falls_back_for_missing_named_family() {
         let (mut font_system, mut resolver) = seeded_font_system_and_resolver();
@@ -2373,12 +2370,7 @@ mod tests {
 
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let (font_system, resolver) = seeded_font_system_and_resolver();
-            let measurer = WgpuTextMeasurer::new(
-                Arc::new(Mutex::new(font_system)),
-                new_shared_text_cache(),
-                Arc::new(Mutex::new(resolver)),
-            );
+            let measurer = WgpuTextMeasurer::new(seeded_text_state());
             let text = cranpose_ui::text::AnnotatedString::from("hello\nworld");
             let style = cranpose_ui::text::TextStyle::default();
 
@@ -2418,12 +2410,7 @@ mod tests {
 
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let (font_system, resolver) = seeded_font_system_and_resolver();
-            let measurer = WgpuTextMeasurer::new(
-                Arc::new(Mutex::new(font_system)),
-                new_shared_text_cache(),
-                Arc::new(Mutex::new(resolver)),
-            );
+            let measurer = WgpuTextMeasurer::new(seeded_text_state());
             let text = cranpose_ui::text::AnnotatedString::from("wrap me ".repeat(120));
             let style = cranpose_ui::text::TextStyle::default();
             let options = cranpose_ui::text::TextLayoutOptions {
@@ -2452,12 +2439,7 @@ mod tests {
 
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let (font_system, resolver) = seeded_font_system_and_resolver();
-            let measurer = WgpuTextMeasurer::new(
-                Arc::new(Mutex::new(font_system)),
-                new_shared_text_cache(),
-                Arc::new(Mutex::new(resolver)),
-            );
+            let measurer = WgpuTextMeasurer::new(seeded_text_state());
             let text = cranpose_ui::text::AnnotatedString::from(
                 "This paragraph demonstrates wrapping with a cached prepared layout.",
             );
@@ -2505,12 +2487,7 @@ mod tests {
 
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let (font_system, resolver) = seeded_font_system_and_resolver();
-            let measurer = WgpuTextMeasurer::new(
-                Arc::new(Mutex::new(font_system)),
-                new_shared_text_cache(),
-                Arc::new(Mutex::new(resolver)),
-            );
+            let measurer = WgpuTextMeasurer::new(seeded_text_state());
             let text = cranpose_ui::text::AnnotatedString::from("shared node identity");
             let style = cranpose_ui::text::TextStyle::default();
             let node_id = 4242;
@@ -2520,7 +2497,8 @@ mod tests {
             let font_size = resolve_font_size(&style);
             let style_hash = style.measurement_hash() ^ text.span_styles_hash();
             let expected_key = TextCacheKey::for_node(node_id, font_size, style_hash);
-            let cache = measurer.text_cache.lock().expect("text cache lock");
+            let text_state = measurer.text_state.lock().expect("text state lock");
+            let cache = &text_state.text_cache;
 
             tx.send((
                 cache.len(),
@@ -2543,6 +2521,32 @@ mod tests {
         assert!(
             !has_content_key,
             "node-aware measurement should not populate content cache keys"
+        );
+    }
+
+    #[test]
+    fn renderer_measurement_keeps_render_text_cache_empty() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let renderer = WgpuRenderer::new(&[TEST_FONT]);
+            let text = cranpose_ui::text::AnnotatedString::from("phase local text cache");
+            let style = cranpose_ui::text::TextStyle::default();
+
+            let _ = cranpose_ui::text::measure_text(&text, &style);
+
+            tx.send(renderer.render_text_state.text_cache.len())
+                .expect("send render text cache size");
+        });
+
+        let render_text_cache_len = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("renderer measurement isolation timed out");
+        assert_eq!(
+            render_text_cache_len, 0,
+            "measurement should not populate render-owned text cache"
         );
     }
 

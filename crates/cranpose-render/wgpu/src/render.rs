@@ -4,14 +4,14 @@ use crate::effect_renderer::{EffectRenderer, RoundedCompositeMask};
 use crate::offscreen::OffscreenTarget;
 use crate::scene::{BackdropLayer, DrawShape, EffectLayer, ImageDraw, ShadowDraw, TextDraw};
 use crate::shaders;
-use crate::{EnsureTextBufferParams, SharedFontFamilyResolver, SharedTextCache, TextCacheKey};
+use crate::{EnsureTextBufferParams, TextCacheKey, TextSystemState};
 use bytemuck::{Pod, Zeroable};
 use cranpose_ui_graphics::{
     BlendMode, Brush, Color, ColorFilter, ImageBitmap, Rect, RenderEffect, TileMode,
 };
 use glyphon::{
-    Cache, Color as GlyphonColor, FontSystem, Resolution, SwashCache, TextArea, TextAtlas,
-    TextBounds, TextRenderer, Viewport,
+    Cache, Color as GlyphonColor, Resolution, SwashCache, TextArea, TextAtlas, TextBounds,
+    TextRenderer, Viewport,
 };
 use lru::LruCache;
 use rustc_hash::FxHasher;
@@ -19,7 +19,7 @@ use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::sync::{mpsc, Arc, OnceLock};
 use std::time::Duration;
 
 use crate::gpu_stats;
@@ -568,8 +568,6 @@ pub struct GpuRenderer {
     image_pipeline_dst_out: wgpu::RenderPipeline,
     image_bind_group_layout: wgpu::BindGroupLayout,
     image_sampler: wgpu::Sampler,
-    font_system: Arc<Mutex<FontSystem>>,
-    font_family_resolver: SharedFontFamilyResolver,
     text_renderer_pool: Vec<TextRendererSlot>,
     /// Which slot in `text_renderer_pool` the next prepare→encode pair should use.
     text_batch_cursor: usize,
@@ -584,8 +582,6 @@ pub struct GpuRenderer {
     image_vertex_buffer: wgpu::Buffer,
     image_index_buffer: wgpu::Buffer,
     image_texture_cache: LruCache<u64, CachedImageTexture>,
-    // Shared text cache used by both measurement and rendering
-    text_cache: SharedTextCache,
     text_viewport: Viewport,
     scratch_shape_data: Vec<ShapeData>,
     scratch_gradients: Vec<GradientStop>,
@@ -609,9 +605,6 @@ impl GpuRenderer {
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
         surface_format: wgpu::TextureFormat,
-        font_system: Arc<Mutex<FontSystem>>,
-        font_family_resolver: SharedFontFamilyResolver,
-        text_cache: SharedTextCache,
     ) -> Self {
         let uniform_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -796,8 +789,6 @@ impl GpuRenderer {
             image_pipeline_dst_out,
             image_bind_group_layout,
             image_sampler,
-            font_system,
-            font_family_resolver,
             text_renderer_pool: vec![first_slot],
             text_batch_cursor: 0,
             text_atlas,
@@ -813,7 +804,6 @@ impl GpuRenderer {
                 NonZeroUsize::new(MAX_TEXTURE_CACHE_ITEMS)
                     .expect("image texture cache size must be non-zero"),
             ),
-            text_cache,
             text_viewport,
             scratch_shape_data: Vec::new(),
             scratch_gradients: Vec::new(),
@@ -908,6 +898,7 @@ impl GpuRenderer {
     #[allow(clippy::too_many_arguments)] // Render path needs explicit scene slices and target metadata.
     pub fn render(
         &mut self,
+        text_state: &mut TextSystemState,
         view: &wgpu::TextureView,
         shapes: &[DrawShape],
         images: &[ImageDraw],
@@ -959,6 +950,7 @@ impl GpuRenderer {
         self.text_batch_cursor = 0;
 
         let result = self.render_with_layer_events(
+            text_state,
             view,
             shapes,
             images,
@@ -994,7 +986,7 @@ impl GpuRenderer {
                 .set(self.image_texture_cache.len() as u32);
             self.frame_stats
                 .text_cache_size
-                .set(self.text_cache.lock().unwrap().len() as u32);
+                .set(text_state.text_cache.len() as u32);
             self.effect_renderer
                 .merge_and_reset_debug_counters(&self.frame_stats);
             self.frame_stats.print_and_reset(&mut self.frame_count);
@@ -1005,6 +997,7 @@ impl GpuRenderer {
     #[allow(clippy::too_many_arguments)] // Mirrors render() call site and scene inputs.
     pub fn render_to_rgba_pixels(
         &mut self,
+        text_state: &mut TextSystemState,
         shapes: &[DrawShape],
         images: &[ImageDraw],
         texts: &[TextDraw],
@@ -1036,6 +1029,7 @@ impl GpuRenderer {
         let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         self.render(
+            text_state,
             &output_view,
             shapes,
             images,
@@ -1125,6 +1119,7 @@ impl GpuRenderer {
     #[allow(clippy::too_many_arguments)]
     fn render_with_layer_events(
         &mut self,
+        text_state: &mut TextSystemState,
         surface_view: &wgpu::TextureView,
         shapes: &[DrawShape],
         images: &[ImageDraw],
@@ -1150,6 +1145,7 @@ impl GpuRenderer {
             // without allocating an accumulation buffer or performing the final blit.
             // The clear is folded into the first render pass's LoadOp::Clear.
             self.render_non_effect_segment(
+                text_state,
                 surface_view,
                 shapes,
                 images,
@@ -1169,6 +1165,7 @@ impl GpuRenderer {
             let accum = self.acquire_offscreen(width, height);
 
             self.render_range_with_layer_events_to_target(
+                text_state,
                 &accum,
                 shapes,
                 images,
@@ -1220,6 +1217,7 @@ impl GpuRenderer {
     #[allow(clippy::too_many_arguments)]
     fn render_range_with_layer_events_to_target(
         &mut self,
+        text_state: &mut TextSystemState,
         target: &OffscreenTarget,
         shapes: &[DrawShape],
         images: &[ImageDraw],
@@ -1272,6 +1270,7 @@ impl GpuRenderer {
         for event in &events {
             if event.z_index > cursor_z {
                 self.render_non_effect_segment(
+                    text_state,
                     &target.view,
                     shapes,
                     images,
@@ -1316,6 +1315,7 @@ impl GpuRenderer {
                         continue;
                     }
                     self.render_effect_layer_to_target(
+                        text_state,
                         target,
                         shapes,
                         images,
@@ -1336,6 +1336,7 @@ impl GpuRenderer {
 
         if cursor_z < z_end {
             self.render_non_effect_segment(
+                text_state,
                 &target.view,
                 shapes,
                 images,
@@ -1363,6 +1364,7 @@ impl GpuRenderer {
     #[allow(clippy::too_many_arguments)]
     fn render_non_effect_segment(
         &mut self,
+        text_state: &mut TextSystemState,
         target_view: &wgpu::TextureView,
         shapes: &[DrawShape],
         images: &[ImageDraw],
@@ -1424,6 +1426,7 @@ impl GpuRenderer {
                         wgpu::LoadOp::Load
                     };
                     if self.render_segment_draw_chunk(
+                        text_state,
                         &mut encoder,
                         target_view,
                         &ordered_items,
@@ -1474,6 +1477,7 @@ impl GpuRenderer {
                         encoder_has_work = false;
                     }
                     self.render_shadow_draw(
+                        text_state,
                         target_view,
                         &shadow_draws[index],
                         width,
@@ -1499,6 +1503,7 @@ impl GpuRenderer {
     #[allow(clippy::too_many_arguments)]
     fn render_segment_draw_chunk(
         &mut self,
+        text_state: &mut TextSystemState,
         encoder: &mut wgpu::CommandEncoder,
         target_view: &wgpu::TextureView,
         ordered_items: &[(usize, SegmentDrawItem)],
@@ -1574,6 +1579,7 @@ impl GpuRenderer {
                     }
                     SegmentBatchPlan::Text { start, end } => {
                         let slot = self.prepare_text_for_render(
+                            text_state,
                             ordered_items[start..end]
                                 .iter()
                                 .map(|(_, item)| match item {
@@ -1766,6 +1772,7 @@ impl GpuRenderer {
     /// Renders a shadow via offscreen target + Gaussian blur + composite.
     fn render_shadow_draw(
         &mut self,
+        text_state: &mut TextSystemState,
         target_view: &wgpu::TextureView,
         shadow: &ShadowDraw,
         width: u32,
@@ -1853,7 +1860,13 @@ impl GpuRenderer {
                 );
             }
             if !shadow.texts.is_empty() {
-                match self.prepare_text_for_render(shadow.texts.iter(), width, height, root_scale) {
+                match self.prepare_text_for_render(
+                    text_state,
+                    shadow.texts.iter(),
+                    width,
+                    height,
+                    root_scale,
+                ) {
                     Ok(slot) => {
                         let mut encoder =
                             self.device
@@ -1933,8 +1946,13 @@ impl GpuRenderer {
                 wgpu::LoadOp::Load
             };
 
-            match self.prepare_text_for_render(shifted_texts.iter(), bounds_w, bounds_h, root_scale)
-            {
+            match self.prepare_text_for_render(
+                text_state,
+                shifted_texts.iter(),
+                bounds_w,
+                bounds_h,
+                root_scale,
+            ) {
                 Ok(slot) => {
                     let mut encoder =
                         self.device
@@ -2009,6 +2027,7 @@ impl GpuRenderer {
     #[allow(clippy::too_many_arguments)]
     fn render_effect_layer_to_target(
         &mut self,
+        text_state: &mut TextSystemState,
         target: &OffscreenTarget,
         shapes: &[DrawShape],
         images: &[ImageDraw],
@@ -2073,6 +2092,7 @@ impl GpuRenderer {
         };
 
         let render_result = self.render_range_with_layer_events_to_target(
+            text_state,
             &source,
             shapes,
             images,
@@ -2793,6 +2813,7 @@ impl GpuRenderer {
     /// Returns the pool slot index; pass it to `encode_text_pass` to render.
     fn prepare_text_for_render<'a, I>(
         &mut self,
+        text_state: &mut TextSystemState,
         layer_texts: I,
         width: u32,
         height: u32,
@@ -2855,9 +2876,7 @@ impl GpuRenderer {
         }
 
         let prepare_started = telemetry_enabled.then(std::time::Instant::now);
-        let mut font_system = self.font_system.lock().unwrap();
-        let mut text_cache = self.text_cache.lock().unwrap();
-        let mut font_family_resolver = self.font_family_resolver.lock().unwrap();
+        let (font_system, font_family_resolver, text_cache) = text_state.parts_mut();
 
         let mut text_keys: Vec<TextCacheKey> =
             Vec::with_capacity(layer_texts.clone().size_hint().0);
@@ -2885,16 +2904,16 @@ impl GpuRenderer {
             let key = TextCacheKey::for_node(text_draw.node_id, font_size_px, style_hash);
 
             let (cache_hit, _, _, buffer) = crate::shared_text_buffer_mut(
-                &mut text_cache,
+                text_cache,
                 key.clone(),
-                &mut font_system,
+                font_system,
                 font_size_px,
                 line_height_px,
             );
 
             let reshaped = buffer.ensure(
-                &mut font_system,
-                &mut font_family_resolver,
+                font_system,
+                font_family_resolver,
                 EnsureTextBufferParams {
                     annotated_text: &text_draw.text,
                     font_size_px,
@@ -2969,7 +2988,7 @@ impl GpuRenderer {
         let prepare_result = self.text_renderer_pool[slot_index].renderer.prepare(
             &self.device,
             &self.queue,
-            &mut font_system,
+            font_system,
             &mut self.text_atlas,
             &self.text_viewport,
             text_areas.iter().cloned(),
@@ -2992,7 +3011,7 @@ impl GpuRenderer {
                     .prepare(
                         &self.device,
                         &self.queue,
-                        &mut font_system,
+                        font_system,
                         &mut self.text_atlas,
                         &self.text_viewport,
                         text_areas.iter().cloned(),
