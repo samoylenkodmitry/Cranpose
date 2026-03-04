@@ -1,6 +1,6 @@
+use ab_glyph::{point, Font, FontRef, PxScale, ScaleFont};
 use lru::LruCache;
 use once_cell::sync::Lazy;
-use rusttype::{point, Font, Scale};
 use std::borrow::Borrow;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
@@ -8,6 +8,9 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
+use cranpose_render_common::font_layout::{
+    glyph_pixel_bounds, layout_line_glyphs, vertical_metrics,
+};
 use cranpose_render_common::software_text_raster::rasterize_text_to_image_with_font;
 use cranpose_render_common::text_hyphenation::choose_auto_hyphen_break as choose_shared_auto_hyphen_break;
 use cranpose_ui::text::TextMotion;
@@ -17,12 +20,11 @@ use cranpose_ui_graphics::{BlendMode, Color, ColorFilter, Rect, TileMode};
 use crate::scene::{ImageDraw, Scene, TextDraw};
 use crate::style::point_in_resolved_rounded_rect;
 
-static FONT: Lazy<Font<'static>> = Lazy::new(|| {
-    let f = Font::try_from_bytes(include_bytes!(
+static FONT: Lazy<FontRef<'static>> = Lazy::new(|| {
+    FontRef::try_from_slice(include_bytes!(
         "../../../../apps/desktop-demo/assets/NotoSansMerged.ttf"
-    ) as &[u8])
-    .expect("font");
-    f
+    ))
+    .expect("font")
 });
 static REPORTED_UNSUPPORTED_PIXELS_BLEND_MODES: AtomicBool = AtomicBool::new(false);
 
@@ -30,7 +32,7 @@ fn is_blend_mode_supported(mode: BlendMode) -> bool {
     matches!(mode, BlendMode::SrcOver | BlendMode::DstOut)
 }
 
-pub struct CachedRusttypeTextMeasurer {
+pub struct CachedFontTextMeasurer {
     cache: Mutex<TextMetricsCache>,
 }
 
@@ -106,7 +108,7 @@ impl TextMetricsCache {
     }
 }
 
-impl CachedRusttypeTextMeasurer {
+impl CachedFontTextMeasurer {
     pub(crate) fn new(capacity: usize) -> Self {
         Self {
             cache: Mutex::new(TextMetricsCache::new(capacity)),
@@ -185,7 +187,7 @@ fn resolve_letter_spacing(style: &cranpose_ui::text::TextStyle, font_size: f32) 
     style.resolve_letter_spacing(14.0)
 }
 
-impl TextMeasurer for CachedRusttypeTextMeasurer {
+impl TextMeasurer for CachedFontTextMeasurer {
     fn measure(
         &self,
         text: &cranpose_ui::text::AnnotatedString,
@@ -215,11 +217,10 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
         }
 
         let font_size = resolve_font_size(style);
-        let scale = Scale::uniform(font_size);
         let font = &*FONT;
-        let v_metrics = font.v_metrics(scale);
-        let origin = point(0.0, v_metrics.ascent);
-        let line_height = resolve_line_height(style, (v_metrics.ascent - v_metrics.descent).ceil());
+        let metrics = vertical_metrics(font, font_size);
+        let origin = point(0.0, metrics.ascent);
+        let line_height = resolve_line_height(style, metrics.natural_line_height);
 
         let line_index = (_y / line_height).floor().max(0.0) as usize;
         let lines: Vec<&str> = text.split('\n').collect();
@@ -246,9 +247,9 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
             let mut glyph_x = 0.0f32;
 
             // Measure prefix width to get glyph start position
-            for glyph in font.layout(prefix, scale, origin) {
-                if let Some(bb) = glyph.pixel_bounding_box() {
-                    glyph_x = bb.max.x as f32;
+            for glyph in layout_line_glyphs(font, prefix, font_size, origin) {
+                if let Some(bounds) = glyph_pixel_bounds(font, &glyph) {
+                    glyph_x = bounds.max_x as f32;
                 }
             }
 
@@ -256,9 +257,9 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
             let char_str = &line_text[current_byte_offset..current_byte_offset + c.len_utf8()];
             let char_width = {
                 let mut w = 0.0f32;
-                for glyph in font.layout(char_str, scale, origin) {
-                    if let Some(bb) = glyph.pixel_bounding_box() {
-                        w = (bb.max.x - bb.min.x) as f32;
+                for glyph in layout_line_glyphs(font, char_str, font_size, origin) {
+                    if let Some(bounds) = glyph_pixel_bounds(font, &glyph) {
+                        w = bounds.width() as f32;
                     }
                 }
                 w.max(font_size * 0.5) // Minimum width for whitespace
@@ -321,13 +322,11 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
         };
 
         let font_size = resolve_font_size(style);
-        let scale = Scale::uniform(font_size);
         let font = &*FONT;
-        let v_metrics = font.v_metrics(scale);
-        let natural_line_height = (v_metrics.ascent - v_metrics.descent).ceil();
-        let line_height = resolve_line_height(style, natural_line_height);
+        let metrics = vertical_metrics(font, font_size);
+        let line_height = resolve_line_height(style, metrics.natural_line_height);
         let letter_spacing = resolve_letter_spacing(style, font_size);
-        let _origin = point(0.0, v_metrics.ascent);
+        let scaled_font = font.as_scaled(PxScale::from(font_size));
 
         let mut glyph_x_positions = Vec::new();
         let mut char_to_byte = Vec::new();
@@ -355,8 +354,8 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
                 current_x = 0.0;
             } else {
                 // Get glyph advance
-                let glyph = font.glyph(c).scaled(scale);
-                let glyph_width = glyph.h_metrics().advance_width.max(0.0);
+                let glyph_id = scaled_font.glyph_id(c);
+                let glyph_width = scaled_font.h_advance(glyph_id).max(0.0);
                 let glyph_end = byte_offset + c.len_utf8();
                 if glyph_end > byte_offset {
                     glyph_layouts.push(GlyphLayout {
@@ -369,7 +368,7 @@ impl TextMeasurer for CachedRusttypeTextMeasurer {
                         height: line_height,
                     });
                 }
-                current_x += glyph.h_metrics().advance_width;
+                current_x += scaled_font.h_advance(glyph_id);
                 if let Some((_, next)) = iter.peek() {
                     if *next != '\n' {
                         current_x += letter_spacing;
@@ -421,11 +420,9 @@ fn measure_text_impl(
     style: &cranpose_ui::text::TextStyle,
     font_size: f32,
 ) -> TextMetrics {
-    let scale = Scale::uniform(font_size);
     let font = &*FONT;
-    let v_metrics = font.v_metrics(scale);
-    let natural_line_height = (v_metrics.ascent - v_metrics.descent).ceil();
-    let line_height = resolve_line_height(style, natural_line_height);
+    let metrics = vertical_metrics(font, font_size);
+    let line_height = resolve_line_height(style, metrics.natural_line_height);
     let letter_spacing = resolve_letter_spacing(style, font_size);
 
     // Split by newlines for multiline support
@@ -435,16 +432,16 @@ fn measure_text_impl(
     // Measure max width across all lines
     let mut max_width: f32 = 0.0;
     for line in &lines {
-        let origin = point(0.0, v_metrics.ascent);
+        let origin = point(0.0, metrics.ascent);
         let mut min_x: f32 = f32::INFINITY;
         let mut line_max_x: f32 = 0.0;
         let mut glyph_count = 0_u32;
 
-        for glyph in font.layout(line, scale, origin) {
+        for glyph in layout_line_glyphs(font, line, font_size, origin) {
             glyph_count += 1;
-            if let Some(bb) = glyph.pixel_bounding_box() {
-                min_x = min_x.min(bb.min.x as f32);
-                line_max_x = line_max_x.max(bb.max.x as f32);
+            if let Some(bounds) = glyph_pixel_bounds(font, &glyph) {
+                min_x = min_x.min(bounds.min_x as f32);
+                line_max_x = line_max_x.max(bounds.max_x as f32);
             }
         }
 
@@ -716,7 +713,7 @@ fn draw_text_plain(frame: &mut [u8], width: u32, height: u32, draw: &TextDraw) {
         draw.color,
         draw.font_size,
         text_scale,
-        &FONT,
+        &*FONT,
     ) else {
         return;
     };

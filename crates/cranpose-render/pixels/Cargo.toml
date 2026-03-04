@@ -18,6 +18,6 @@ cranpose-core = { workspace = true }
 cranpose-ui-graphics = { workspace = true }
 cranpose-foundation = { workspace = true }
 once_cell = "1.18"
-rusttype = "0.9"
 log = "0.4"
 lru = "0.12"
+ab_glyph = "0.2.32"

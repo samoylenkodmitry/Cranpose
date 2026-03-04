@@ -1,8 +1,12 @@
+use ab_glyph::{point, Font, Glyph, OutlinedGlyph, ScaleFont};
 use cranpose_ui::text::{Shadow, TextDrawStyle, TextMotion, TextStyle};
 use cranpose_ui_graphics::{Color, ImageBitmap, Rect, TileMode};
-use rusttype::{point, Font, OutlineBuilder, Scale};
 use tiny_skia::{LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
 
+use crate::font_layout::{
+    align_glyph_to_pixel_grid, layout_line_glyphs, pixel_bounds_from_outlined, vertical_metrics,
+    GlyphPixelBounds,
+};
 use crate::Brush;
 
 const COMPOSE_STROKE_MITER_LIMIT: f32 = 4.0;
@@ -31,7 +35,7 @@ pub fn rasterize_text_to_image_with_font(
     fallback_color: Color,
     font_size: f32,
     scale: f32,
-    font: &Font<'_>,
+    font: &impl Font,
 ) -> Option<ImageBitmap> {
     if text.is_empty()
         || rect.width <= 0.0
@@ -86,45 +90,46 @@ pub fn rasterize_text_to_image_with_font(
         rect.y.fract()
     };
 
-    let scale_px = Scale::uniform(font_size * scale);
-    let v_metrics = font.v_metrics(scale_px);
+    let font_px_size = font_size * scale;
+    let metrics = vertical_metrics(font, font_px_size);
     let line_height = style
-        .resolve_line_height(14.0, (v_metrics.ascent - v_metrics.descent).ceil())
+        .resolve_line_height(14.0, metrics.natural_line_height)
         .max(1.0);
 
     for (line_idx, line) in text.split('\n').enumerate() {
-        let baseline_y = v_metrics.ascent + line_idx as f32 * line_height + origin_y;
+        let baseline_y = metrics.ascent + line_idx as f32 * line_height + origin_y;
         let offset = point(origin_x, baseline_y);
 
-        for glyph in font.layout(line, scale_px, offset) {
+        for glyph in layout_line_glyphs(font, line, font_px_size, offset) {
             let glyph = align_glyph_for_text_motion(glyph, static_text_motion);
-            if let Some(bb) = glyph.pixel_bounding_box() {
-                let Some(mask) = build_glyph_mask(&glyph, bb, raster_style) else {
-                    continue;
-                };
+            let Some((outlined, bounds)) = outline_glyph_with_bounds(font, &glyph) else {
+                continue;
+            };
+            let Some(mask) = build_glyph_mask(font, &glyph, &outlined, bounds, raster_style) else {
+                continue;
+            };
 
-                if let Some(shadow) = shadow {
-                    draw_shadow_mask(
-                        &mut canvas,
-                        width,
-                        height,
-                        &mask,
-                        shadow,
-                        scale,
-                        static_text_motion,
-                    );
-                }
-
-                draw_mask_glyph(
+            if let Some(shadow) = shadow {
+                draw_shadow_mask(
                     &mut canvas,
                     width,
                     height,
                     &mask,
-                    brush,
-                    brush_alpha_multiplier,
-                    rect,
+                    shadow,
+                    scale,
+                    static_text_motion,
                 );
             }
+
+            draw_mask_glyph(
+                &mut canvas,
+                width,
+                height,
+                &mask,
+                brush,
+                brush_alpha_multiplier,
+                rect,
+            );
         }
     }
 
@@ -140,26 +145,8 @@ pub fn rasterize_text_to_image_with_font(
     ImageBitmap::from_rgba8(width, height, rgba).ok()
 }
 
-fn align_glyph_for_text_motion(
-    glyph: rusttype::PositionedGlyph<'_>,
-    static_text_motion: bool,
-) -> rusttype::PositionedGlyph<'_> {
-    if !static_text_motion {
-        return glyph;
-    }
-
-    let position = glyph.position();
-    let snapped_x = position.x.round();
-    let snapped_y = position.y.round();
-    if (snapped_x - position.x).abs() < f32::EPSILON
-        && (snapped_y - position.y).abs() < f32::EPSILON
-    {
-        return glyph;
-    }
-
-    glyph
-        .into_unpositioned()
-        .positioned(point(snapped_x, snapped_y))
+fn align_glyph_for_text_motion(glyph: Glyph, static_text_motion: bool) -> Glyph {
+    align_glyph_to_pixel_grid(glyph, static_text_motion)
 }
 
 fn blend_src_over(dst: &mut [f32; 4], src: [f32; 4]) {
@@ -437,29 +424,39 @@ fn gaussian_kernel_1d(sigma: f32) -> Vec<f32> {
     kernel
 }
 
+fn outline_glyph_with_bounds(
+    font: &impl Font,
+    glyph: &Glyph,
+) -> Option<(OutlinedGlyph, GlyphPixelBounds)> {
+    let outlined = font.outline_glyph(glyph.clone())?;
+    let bounds = pixel_bounds_from_outlined(&outlined);
+    Some((outlined, bounds))
+}
+
 fn build_glyph_mask(
-    glyph: &rusttype::PositionedGlyph<'_>,
-    bb: rusttype::Rect<i32>,
+    font: &impl Font,
+    glyph: &Glyph,
+    outlined: &OutlinedGlyph,
+    bounds: GlyphPixelBounds,
     style: GlyphRasterStyle,
 ) -> Option<GlyphMask> {
     match style {
-        GlyphRasterStyle::Fill => build_fill_mask(glyph, bb),
-        GlyphRasterStyle::Stroke { width_px } => build_stroke_mask(glyph, bb, width_px),
+        GlyphRasterStyle::Fill => build_fill_mask(outlined, bounds),
+        GlyphRasterStyle::Stroke { width_px } => {
+            build_stroke_mask(font, glyph, outlined, bounds, width_px)
+        }
     }
 }
 
-fn build_fill_mask(
-    glyph: &rusttype::PositionedGlyph<'_>,
-    bb: rusttype::Rect<i32>,
-) -> Option<GlyphMask> {
-    let mask_width = (bb.max.x - bb.min.x).max(0) as usize;
-    let mask_height = (bb.max.y - bb.min.y).max(0) as usize;
+fn build_fill_mask(outlined: &OutlinedGlyph, bounds: GlyphPixelBounds) -> Option<GlyphMask> {
+    let mask_width = bounds.width();
+    let mask_height = bounds.height();
     if mask_width == 0 || mask_height == 0 {
         return None;
     }
 
     let mut alpha = vec![0.0f32; mask_width * mask_height];
-    glyph.draw(|gx, gy, value| {
+    outlined.draw(|gx, gy, value| {
         let idx = gy as usize * mask_width + gx as usize;
         alpha[idx] = value;
     });
@@ -468,35 +465,32 @@ fn build_fill_mask(
         alpha,
         width: mask_width,
         height: mask_height,
-        origin_x: bb.min.x,
-        origin_y: bb.min.y,
+        origin_x: bounds.min_x,
+        origin_y: bounds.min_y,
     })
 }
 
 fn build_stroke_mask(
-    glyph: &rusttype::PositionedGlyph<'_>,
-    bb: rusttype::Rect<i32>,
+    font: &impl Font,
+    glyph: &Glyph,
+    outlined: &OutlinedGlyph,
+    bounds: GlyphPixelBounds,
     stroke_width_px: f32,
 ) -> Option<GlyphMask> {
     if !stroke_width_px.is_finite() || stroke_width_px <= 0.0 {
-        return build_fill_mask(glyph, bb);
+        return build_fill_mask(outlined, bounds);
     }
 
-    let mask_width = (bb.max.x - bb.min.x).max(0);
-    let mask_height = (bb.max.y - bb.min.y).max(0);
+    let mask_width = bounds.max_x - bounds.min_x;
+    let mask_height = bounds.max_y - bounds.min_y;
     if mask_width <= 0 || mask_height <= 0 {
         return None;
     }
 
-    let mut path_builder = GlyphPathBuilder::default();
-    if !glyph.build_outline(&mut path_builder) {
-        return None;
-    }
-    let path = path_builder.finish()?;
-
     let half_width = stroke_width_px * 0.5;
     let miter_pad = (half_width * COMPOSE_STROKE_MITER_LIMIT).ceil();
     let pad = miter_pad.max(1.0) as i32 + 1;
+    let path = build_outline_path(font, glyph, bounds, pad)?;
     let raster_width = mask_width + pad * 2;
     let raster_height = mask_height + pad * 2;
     if raster_width <= 0 || raster_height <= 0 {
@@ -516,13 +510,7 @@ fn build_stroke_mask(
         ..Stroke::default()
     };
 
-    pixmap.stroke_path(
-        &path,
-        &paint,
-        &stroke,
-        Transform::from_translate(pad as f32, pad as f32),
-        None,
-    );
+    pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
 
     let alpha = pixmap
         .data()
@@ -534,50 +522,112 @@ fn build_stroke_mask(
         alpha,
         width: raster_width as usize,
         height: raster_height as usize,
-        origin_x: bb.min.x - pad,
-        origin_y: bb.min.y - pad,
+        origin_x: bounds.min_x - pad,
+        origin_y: bounds.min_y - pad,
     })
 }
 
-#[derive(Default)]
-struct GlyphPathBuilder {
-    builder: PathBuilder,
-    has_segments: bool,
-}
+fn build_outline_path(
+    font: &impl Font,
+    glyph: &Glyph,
+    bounds: GlyphPixelBounds,
+    pad: i32,
+) -> Option<Path> {
+    let outline = font.outline(glyph.id)?;
+    let scale_factor = font.as_scaled(glyph.scale).scale_factor();
+    let mut builder = PathBuilder::new();
+    let mut has_segments = false;
+    let mut current_end = None;
+    let mut subpath_start = None;
 
-impl GlyphPathBuilder {
-    fn finish(self) -> Option<Path> {
-        if !self.has_segments {
-            return None;
+    for curve in outline.curves {
+        match curve {
+            ab_glyph::OutlineCurve::Line(p0, p1) => {
+                let start = transform_outline_point(p0, scale_factor, glyph, bounds, pad);
+                let end = transform_outline_point(p1, scale_factor, glyph, bounds, pad);
+                if current_end != Some(start) {
+                    if current_end.is_some() {
+                        builder.close();
+                    }
+                    builder.move_to(start.0, start.1);
+                    subpath_start = Some(start);
+                }
+                builder.line_to(end.0, end.1);
+                if subpath_start == Some(end) {
+                    builder.close();
+                    current_end = None;
+                    subpath_start = None;
+                } else {
+                    current_end = Some(end);
+                }
+            }
+            ab_glyph::OutlineCurve::Quad(p0, p1, p2) => {
+                let start = transform_outline_point(p0, scale_factor, glyph, bounds, pad);
+                let control = transform_outline_point(p1, scale_factor, glyph, bounds, pad);
+                let end = transform_outline_point(p2, scale_factor, glyph, bounds, pad);
+                if current_end != Some(start) {
+                    if current_end.is_some() {
+                        builder.close();
+                    }
+                    builder.move_to(start.0, start.1);
+                    subpath_start = Some(start);
+                }
+                builder.quad_to(control.0, control.1, end.0, end.1);
+                if subpath_start == Some(end) {
+                    builder.close();
+                    current_end = None;
+                    subpath_start = None;
+                } else {
+                    current_end = Some(end);
+                }
+            }
+            ab_glyph::OutlineCurve::Cubic(p0, p1, p2, p3) => {
+                let start = transform_outline_point(p0, scale_factor, glyph, bounds, pad);
+                let control1 = transform_outline_point(p1, scale_factor, glyph, bounds, pad);
+                let control2 = transform_outline_point(p2, scale_factor, glyph, bounds, pad);
+                let end = transform_outline_point(p3, scale_factor, glyph, bounds, pad);
+                if current_end != Some(start) {
+                    if current_end.is_some() {
+                        builder.close();
+                    }
+                    builder.move_to(start.0, start.1);
+                    subpath_start = Some(start);
+                }
+                builder.cubic_to(control1.0, control1.1, control2.0, control2.1, end.0, end.1);
+                if subpath_start == Some(end) {
+                    builder.close();
+                    current_end = None;
+                    subpath_start = None;
+                } else {
+                    current_end = Some(end);
+                }
+            }
         }
-        self.builder.finish()
+        has_segments = true;
     }
+
+    if !has_segments {
+        return None;
+    }
+
+    if current_end.is_some() {
+        builder.close();
+    }
+
+    builder.finish()
 }
 
-impl OutlineBuilder for GlyphPathBuilder {
-    fn move_to(&mut self, x: f32, y: f32) {
-        self.builder.move_to(x, y);
-        self.has_segments = true;
-    }
-
-    fn line_to(&mut self, x: f32, y: f32) {
-        self.builder.line_to(x, y);
-        self.has_segments = true;
-    }
-
-    fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
-        self.builder.quad_to(x1, y1, x, y);
-        self.has_segments = true;
-    }
-
-    fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
-        self.builder.cubic_to(x1, y1, x2, y2, x, y);
-        self.has_segments = true;
-    }
-
-    fn close(&mut self) {
-        self.builder.close();
-    }
+fn transform_outline_point(
+    point: ab_glyph::Point,
+    scale_factor: ab_glyph::PxScaleFactor,
+    glyph: &Glyph,
+    bounds: GlyphPixelBounds,
+    pad: i32,
+) -> (f32, f32) {
+    (
+        point.x * scale_factor.horizontal + glyph.position.x - bounds.min_x as f32 + pad as f32,
+        point.y * -scale_factor.vertical + glyph.position.y - bounds.min_y as f32 + pad as f32,
+    )
 }
 
 fn color_to_rgba(color: Color) -> [f32; 4] {
@@ -888,20 +938,18 @@ mod tests {
         rect: Rect,
         font_size: f32,
         stroke_width: f32,
-        font: &Font<'_>,
+        font: &impl Font,
     ) -> ImageBitmap {
         let width = rect.width.ceil().max(1.0) as u32;
         let height = rect.height.ceil().max(1.0) as u32;
         let mut canvas = vec![[0.0f32; 4]; (width * height) as usize];
 
-        let scale_px = Scale::uniform(font_size);
-        let v_metrics = font.v_metrics(scale_px);
-        let baseline = v_metrics.ascent;
-        for glyph in font.layout(text, scale_px, point(0.0, baseline)) {
-            let Some(bb) = glyph.pixel_bounding_box() else {
+        let baseline = vertical_metrics(font, font_size).ascent;
+        for glyph in layout_line_glyphs(font, text, font_size, point(0.0, baseline)) {
+            let Some((outlined, bounds)) = outline_glyph_with_bounds(font, &glyph) else {
                 continue;
             };
-            let Some(fill) = build_fill_mask(&glyph, bb) else {
+            let Some(fill) = build_fill_mask(&outlined, bounds) else {
                 continue;
             };
             let reference = reference_dilation_stroke_mask(&fill, stroke_width);
@@ -927,12 +975,16 @@ mod tests {
         ImageBitmap::from_rgba8(width, height, rgba).expect("reference dilation image")
     }
 
+    fn test_font() -> ab_glyph::FontRef<'static> {
+        ab_glyph::FontRef::try_from_slice(include_bytes!(
+            "../../../../apps/desktop-demo/assets/NotoSansMerged.ttf"
+        ))
+        .expect("font")
+    }
+
     #[test]
     fn rasterized_gradient_text_shows_color_transition() {
-        let font = Font::try_from_bytes(include_bytes!(
-            "../../../../apps/desktop-demo/assets/NotoSansMerged.ttf"
-        ) as &[u8])
-        .expect("font");
+        let font = test_font();
         // Use a gradient sized to the rendered text width so left=red, right=blue.
         // We first do a plain measurement pass to know the text width.
         let plain_style = TextStyle::default();
@@ -999,10 +1051,7 @@ mod tests {
 
     #[test]
     fn rasterized_stroke_and_fill_ink_coverage_differs() {
-        let font = Font::try_from_bytes(include_bytes!(
-            "../../../../apps/desktop-demo/assets/NotoSansMerged.ttf"
-        ) as &[u8])
-        .expect("font");
+        let font = test_font();
         let fill_style = TextStyle::default();
         let stroke_style = TextStyle {
             span_style: SpanStyle {
@@ -1050,10 +1099,7 @@ mod tests {
 
     #[test]
     fn stroke_path_uses_miter_join_for_acute_apexes() {
-        let font = Font::try_from_bytes(include_bytes!(
-            "../../../../apps/desktop-demo/assets/NotoSansMerged.ttf"
-        ) as &[u8])
-        .expect("font");
+        let font = test_font();
         let fill_style = TextStyle::default();
         let stroke_width = 12.0;
         let stroke_style = TextStyle {
@@ -1116,10 +1162,7 @@ mod tests {
 
     #[test]
     fn shadow_blur_radius_changes_spread_for_shared_raster_path() {
-        let font = Font::try_from_bytes(include_bytes!(
-            "../../../../apps/desktop-demo/assets/NotoSansMerged.ttf"
-        ) as &[u8])
-        .expect("font");
+        let font = test_font();
         let base_shadow = Shadow {
             color: Color(0.0, 0.0, 0.0, 0.9),
             offset: Point::new(5.5, 4.25),
@@ -1185,10 +1228,7 @@ mod tests {
 
     #[test]
     fn text_motion_changes_fractional_shadow_sampling() {
-        let font = Font::try_from_bytes(include_bytes!(
-            "../../../../apps/desktop-demo/assets/NotoSansMerged.ttf"
-        ) as &[u8])
-        .expect("font");
+        let font = test_font();
         let base_shadow = Shadow {
             color: Color(0.0, 0.0, 0.0, 0.9),
             offset: Point::new(3.35, 2.65),
@@ -1251,18 +1291,13 @@ mod tests {
 
     #[test]
     fn static_text_motion_aligns_glyph_positions_to_pixel_grid() {
-        let font = Font::try_from_bytes(include_bytes!(
-            "../../../../apps/desktop-demo/assets/NotoSansMerged.ttf"
-        ) as &[u8])
-        .expect("font");
-        let scale = Scale::uniform(17.0);
-
-        let base_glyph = font
-            .layout("A", scale, point(0.0, 13.37))
+        let font = test_font();
+        let base_glyph = layout_line_glyphs(&font, "A", 17.0, point(0.0, 13.37))
+            .into_iter()
             .next()
             .expect("glyph");
         let static_aligned = align_glyph_for_text_motion(base_glyph, true);
-        let static_position = static_aligned.position();
+        let static_position = static_aligned.position;
         assert!(
             (static_position.x - static_position.x.round()).abs() < f32::EPSILON,
             "static text should snap glyph x to pixel grid"
@@ -1272,12 +1307,12 @@ mod tests {
             "static text should snap glyph y to pixel grid"
         );
 
-        let animated_source = font
-            .layout("A", scale, point(0.0, 13.37))
+        let animated_source = layout_line_glyphs(&font, "A", 17.0, point(0.0, 13.37))
+            .into_iter()
             .next()
             .expect("glyph");
         let animated_aligned = align_glyph_for_text_motion(animated_source, false);
-        let animated_position = animated_aligned.position();
+        let animated_position = animated_aligned.position;
         assert!(
             (animated_position.y - 13.37).abs() < 1e-3,
             "animated text should preserve fractional glyph position"

@@ -69,83 +69,66 @@ impl HttpClient for DefaultHttpClient {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn fetch_text_native(url: &str) -> Result<String, HttpError> {
-    use std::sync::OnceLock;
-    use std::time::Duration;
-
-    static CLIENT: OnceLock<Result<reqwest::blocking::Client, HttpError>> = OnceLock::new();
-    let client = CLIENT
-        .get_or_init(|| {
-            reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(10))
-                .user_agent("cranpose/0.1")
-                .build()
-                .map_err(|err| HttpError::ClientInit(err.to_string()))
-        })
-        .as_ref()
-        .map_err(|err| err.clone())?;
-
-    let response = client
-        .get(url)
-        .send()
-        .map_err(|err| HttpError::RequestFailed {
+    native_response(url)?
+        .text()
+        .map_err(|err| HttpError::BodyReadFailed {
             url: url.to_string(),
             message: err.to_string(),
-        })?;
-
-    let status = response.status();
-    if !status.is_success() {
-        return Err(HttpError::HttpStatus {
-            url: url.to_string(),
-            status: status.as_u16(),
-        });
-    }
-
-    response.text().map_err(|err| HttpError::BodyReadFailed {
-        url: url.to_string(),
-        message: err.to_string(),
-    })
+        })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn fetch_bytes_native(url: &str) -> Result<Vec<u8>, HttpError> {
-    use std::sync::OnceLock;
-    use std::time::Duration;
-
-    static CLIENT: OnceLock<Result<reqwest::blocking::Client, HttpError>> = OnceLock::new();
-    let client = CLIENT
-        .get_or_init(|| {
-            reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(10))
-                .user_agent("cranpose/0.1")
-                .build()
-                .map_err(|err| HttpError::ClientInit(err.to_string()))
-        })
-        .as_ref()
-        .map_err(|err| err.clone())?;
-
-    let response = client
-        .get(url)
-        .send()
-        .map_err(|err| HttpError::RequestFailed {
-            url: url.to_string(),
-            message: err.to_string(),
-        })?;
-
-    let status = response.status();
-    if !status.is_success() {
-        return Err(HttpError::HttpStatus {
-            url: url.to_string(),
-            status: status.as_u16(),
-        });
-    }
-
-    response
+    native_response(url)?
         .bytes()
         .map(|bytes| bytes.to_vec())
         .map_err(|err| HttpError::BodyReadFailed {
             url: url.to_string(),
             message: err.to_string(),
         })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn native_response(url: &str) -> Result<reqwest::blocking::Response, HttpError> {
+    let response = native_client()?
+        .get(url)
+        .send()
+        .map_err(|err| HttpError::RequestFailed {
+            url: url.to_string(),
+            message: err.to_string(),
+        })?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(HttpError::HttpStatus {
+            url: url.to_string(),
+            status: status.as_u16(),
+        });
+    }
+
+    Ok(response)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn native_client() -> Result<&'static reqwest::blocking::Client, HttpError> {
+    use std::sync::OnceLock;
+
+    static CLIENT: OnceLock<Result<reqwest::blocking::Client, HttpError>> = OnceLock::new();
+    CLIENT
+        .get_or_init(build_native_client)
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn build_native_client() -> Result<reqwest::blocking::Client, HttpError> {
+    use std::time::Duration;
+
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .user_agent("cranpose/0.1")
+        .build()
+        .map_err(|err| HttpError::ClientInit(err.to_string()))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -290,6 +273,8 @@ mod tests {
     use cranpose_core::CompositionLocalProvider;
     use std::cell::RefCell;
     use std::rc::Rc;
+    #[cfg(not(target_arch = "wasm32"))]
+    use std::thread;
 
     struct TestHttpClient;
 
@@ -343,5 +328,43 @@ mod tests {
         let current = captured.borrow().as_ref().expect("client captured").clone();
         assert!(Arc::ptr_eq(&current, &custom_client));
         assert!(!Arc::ptr_eq(&current, &default_client));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_http_client_builds() {
+        build_native_client().expect("native HTTP client should initialize");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn default_http_client_fetches_text_from_local_server() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind local test server");
+        let address = listener
+            .local_addr()
+            .expect("read local test server address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept local test request");
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request).expect("read local test request");
+            let body = "cranpose-http-test";
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .expect("write local test response");
+        });
+
+        let url = format!("http://{address}");
+        let text = pollster::block_on(default_http_client().get_text(&url))
+            .expect("fetch text from local test server");
+        server.join().expect("join local test server");
+
+        assert_eq!(text, "cranpose-http-test");
     }
 }
