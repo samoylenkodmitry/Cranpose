@@ -11,7 +11,7 @@ publish = false
 wasm-opt = ["-Oz", "--all-features"]
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["cdylib", "staticlib", "rlib"]
 path = "src/lib.rs"
 
 [[bin]]
@@ -25,6 +25,7 @@ renderer-pixels = ["cranpose/renderer-pixels"]
 renderer-wgpu = ["cranpose/renderer-wgpu"]
 desktop = ["cranpose/desktop"]
 android = ["cranpose/android"]
+ios = ["cranpose/ios"]
 web = ["cranpose/web", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:wasm-logger"]
 logging = ["dep:env_logger"]
 

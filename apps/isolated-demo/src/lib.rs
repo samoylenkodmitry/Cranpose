@@ -1,7 +1,21 @@
-#[cfg(any(target_os = "android", all(feature = "web", target_arch = "wasm32")))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "ios",
+    all(feature = "web", target_arch = "wasm32")
+))]
 mod app;
-#[cfg(any(target_os = "android", all(feature = "web", target_arch = "wasm32")))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "ios",
+    all(feature = "web", target_arch = "wasm32")
+))]
 mod fonts;
+
+#[cfg(target_os = "ios")]
+#[no_mangle]
+pub extern "C" fn ios_main() {
+    app::create_app().run(app::IsolatedDemoApp);
+}
 
 #[cfg(target_os = "android")]
 #[no_mangle]

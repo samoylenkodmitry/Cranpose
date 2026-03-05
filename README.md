@@ -10,7 +10,7 @@
 
 <img width="1536" height="1024" alt="ChatGPT Image Jan 18, 2026, 10_53_13 AM" src="https://github.com/user-attachments/assets/2ce48dfe-a048-4b9d-8812-a0e4534691f8" />
 
-Cranpose is a declarative UI framework for Rust, inspired by Jetpack Compose. It enables developers to build user interfaces for Desktop, Android, and Web (WASM) using a single Rust codebase.
+Cranpose is a declarative UI framework for Rust, inspired by Jetpack Compose. It enables developers to build user interfaces for Desktop (Linux, macOS, Windows), Android, iOS, and Web (WASM) from a single Rust codebase.
 
 ## Quick Start via Isolated Demo
 
@@ -125,30 +125,33 @@ Pre-built binaries for all platforms are available on the [Releases](https://git
 
 ## Building
 
+The [`apps/isolated-demo`](apps/isolated-demo) starter project shows the complete cross-platform setup. It depends only on published crates from crates.io.
+
 ### Desktop (Linux/macOS/Windows)
 ```bash
-cargo run --bin desktop-app
+cd apps/isolated-demo
+cargo run --features desktop,renderer-wgpu
 ```
 
 ### Android
 ```bash
 # Prerequisites: cargo install cargo-ndk
-cd apps/android-demo/android
-./gradlew installDebug
+cd apps/isolated-demo/android
+./gradlew :app:assembleRelease
 ```
-See [`apps/android-demo/README.md`](apps/android-demo/README.md) for details.
 
 ### iOS
-Open `apps/ios-demo/ios/CranposeDemo.xcodeproj` in Xcode, then build and run on a simulator or device. The Xcode project invokes `cargo build` via a build phase script.
+Open `apps/isolated-demo/ios/CranposeIsolatedDemo.xcodeproj` in Xcode, then build and run on a simulator or device. The Xcode project invokes `cargo build` via a build phase script.
 
 ### Web (WASM)
 ```bash
 # Prerequisites: cargo install wasm-pack
-cd apps/desktop-demo
+cd apps/isolated-demo
 ./build-web.sh
 python3 -m http.server 8080
 ```
-See [`apps/desktop-demo/README.md`](apps/desktop-demo/README.md) for details.
+
+See [`apps/isolated-demo/README.md`](apps/isolated-demo/README.md) for full details.
 
 ## License
 This project is available under the terms of the Apache License (Version 2.0). See [`LICENSE-APACHE`](LICENSE-APACHE) for the full license text.
