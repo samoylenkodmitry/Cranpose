@@ -110,32 +110,45 @@ fn TodoApp() {
 }
 ```
 
-## Platform Support and Building
+## Platform Support
 
-### Desktop
-Supported on Linux, macOS, and Windows via `winit` and `wgpu`.
+| Platform | Backend | Status |
+|---|---|---|
+| Linux x86_64 | Vulkan via wgpu | Supported |
+| macOS aarch64 | Metal via wgpu | Supported |
+| Windows x86_64 | DX12/Vulkan via wgpu | Supported |
+| Android | Vulkan/GLES via wgpu | Supported |
+| iOS | Metal via wgpu | Supported |
+| Web (WASM) | WebGPU/WebGL2 via wgpu | Supported |
+
+Pre-built binaries for all platforms are available on the [Releases](https://github.com/samoylenkodmitry/Cranpose/releases) page.
+
+## Building
+
+### Desktop (Linux/macOS/Windows)
 ```bash
 cargo run --bin desktop-app
 ```
 
 ### Android
-Supported using `cargo-ndk` and `android-activity`.
 ```bash
 # Prerequisites: cargo install cargo-ndk
 cd apps/android-demo/android
 ./gradlew installDebug
 ```
-Refer to [`apps/android-demo/README.md`](apps/android-demo/README.md) for full configuration details.
+See [`apps/android-demo/README.md`](apps/android-demo/README.md) for details.
+
+### iOS
+Open `apps/ios-demo/ios/CranposeDemo.xcodeproj` in Xcode, then build and run on a simulator or device. The Xcode project invokes `cargo build` via a build phase script.
 
 ### Web (WASM)
-Supported via `wasm-bindgen` and WebGL2.
 ```bash
 # Prerequisites: cargo install wasm-pack
 cd apps/desktop-demo
 ./build-web.sh
 python3 -m http.server 8080
 ```
-Refer to [`apps/desktop-demo/README.md`](apps/desktop-demo/README.md) for web build details.
+See [`apps/desktop-demo/README.md`](apps/desktop-demo/README.md) for details.
 
 ## License
 This project is available under the terms of the Apache License (Version 2.0). See [`LICENSE-APACHE`](LICENSE-APACHE) for the full license text.
