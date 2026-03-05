@@ -25,6 +25,11 @@ jobs:
             target: aarch64-apple-darwin
             artifact_name: cranpose-demo-macos-aarch64
 
+          - name: ios-sim-aarch64
+            runner: macos-latest
+            target: aarch64-apple-ios-sim
+            artifact_name: cranpose-demo-ios-sim-aarch64
+
           - name: windows-x86_64
             runner: windows-latest
             target: x86_64-pc-windows-msvc
@@ -49,7 +54,8 @@ jobs:
             libwayland-dev libxkbcommon-dev \
             libx11-dev libxrandr-dev libxcursor-dev libxi-dev libgl-dev
 
-      - name: Build
+      - name: Build desktop
+        if: "!contains(matrix.target, 'ios')"
         run: >
           cargo build --release
           -p desktop-app
@@ -57,8 +63,68 @@ jobs:
           --features desktop,renderer-wgpu
           --no-default-features
 
+      - name: Build iOS
+        if: contains(matrix.target, 'ios')
+        run: >
+          cargo build --release
+          -p desktop-app --lib
+          --target ${{ matrix.target }}
+          --features ios,renderer-wgpu
+          --no-default-features
+
+      - name: Package iOS Simulator .app bundle
+        if: contains(matrix.target, 'ios')
+        run: |
+          mkdir -p CranposeDemo.app
+          # Compile main.m and link with the Rust static lib into an iOS Simulator executable
+          xcrun --sdk iphonesimulator clang \
+            -target arm64-apple-ios15.0-simulator \
+            -isysroot $(xcrun --sdk iphonesimulator --show-sdk-path) \
+            -fobjc-arc \
+            apps/ios-demo/ios/CranposeDemo/main.m \
+            -Ltarget/${{ matrix.target }}/release \
+            -ldesktop_app \
+            -framework Metal -framework QuartzCore -framework UIKit \
+            -framework CoreGraphics -framework Foundation \
+            -o CranposeDemo.app/CranposeDemo
+          cat > CranposeDemo.app/Info.plist <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+            "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleIdentifier</key>
+            <string>com.cranpose.demo</string>
+            <key>CFBundleName</key>
+            <string>Cranpose Demo</string>
+            <key>CFBundleExecutable</key>
+            <string>CranposeDemo</string>
+            <key>CFBundleVersion</key>
+            <string>1</string>
+            <key>CFBundleShortVersionString</key>
+            <string>1.0</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+            <key>MinimumOSVersion</key>
+            <string>15.0</string>
+            <key>UIDeviceFamily</key>
+            <array>
+              <integer>1</integer>
+              <integer>2</integer>
+            </array>
+            <key>DTPlatformName</key>
+            <string>iphonesimulator</string>
+            <key>UIRequiredDeviceCapabilities</key>
+            <array>
+              <string>arm64</string>
+            </array>
+          </dict>
+          </plist>
+          PLIST
+          tar czf ${{ matrix.artifact_name }}.tar.gz CranposeDemo.app
+
       - name: Package macOS .app bundle
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && !contains(matrix.target, 'ios')
         run: |
           mkdir -p CranposeDemo.app/Contents/MacOS
           mkdir -p CranposeDemo.app/Contents/Resources
