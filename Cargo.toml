@@ -25,7 +25,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.0.51"
+version = "0.0.52"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/samoylenkodmitry/cranpose"
@@ -38,25 +38,25 @@ categories = ["gui"]
 [workspace.dependencies]
 # Force android-activity to use native-activity feature across all workspace crates
 android-activity = { version = "0.6", features = ["native-activity"] }
-cranpose-animation = { path = "crates/cranpose-animation", version = "0.0.51" }
-cranpose = { path = "crates/cranpose", version = "0.0.51" }
-cranpose-app-shell = { path = "crates/cranpose-app-shell", version = "0.0.51" }
-cranpose-assets = { path = "crates/cranpose-assets", version = "0.0.51" }
-cranpose-core = { path = "crates/cranpose-core", version = "0.0.51" }
-cranpose-foundation = { path = "crates/cranpose-foundation", version = "0.0.51" }
-cranpose-macros = { path = "crates/cranpose-macros", version = "0.0.51" }
-cranpose-platform-android = { path = "crates/cranpose-platform/android", version = "0.0.51" }
-cranpose-platform-desktop-winit = { path = "crates/cranpose-platform/desktop-winit", version = "0.0.51" }
-cranpose-platform-web = { path = "crates/cranpose-platform/web", version = "0.0.51" }
-cranpose-render-common = { path = "crates/cranpose-render/common", version = "0.0.51" }
-cranpose-render-pixels = { path = "crates/cranpose-render/pixels", version = "0.0.51" }
-cranpose-render-wgpu = { path = "crates/cranpose-render/wgpu", version = "0.0.51" }
-cranpose-runtime-std = { path = "crates/cranpose-runtime-std", version = "0.0.51" }
-cranpose-services = { path = "crates/cranpose-services", version = "0.0.51" }
-cranpose-testing = { path = "crates/cranpose-testing", version = "0.0.51" }
-cranpose-ui = { path = "crates/cranpose-ui", version = "0.0.51" }
-cranpose-ui-graphics = { path = "crates/cranpose-ui-graphics", version = "0.0.51" }
-cranpose-ui-layout = { path = "crates/cranpose-ui-layout", version = "0.0.51" }
+cranpose-animation = { path = "crates/cranpose-animation", version = "0.0.52" }
+cranpose = { path = "crates/cranpose", version = "0.0.52" }
+cranpose-app-shell = { path = "crates/cranpose-app-shell", version = "0.0.52" }
+cranpose-assets = { path = "crates/cranpose-assets", version = "0.0.52" }
+cranpose-core = { path = "crates/cranpose-core", version = "0.0.52" }
+cranpose-foundation = { path = "crates/cranpose-foundation", version = "0.0.52" }
+cranpose-macros = { path = "crates/cranpose-macros", version = "0.0.52" }
+cranpose-platform-android = { path = "crates/cranpose-platform/android", version = "0.0.52" }
+cranpose-platform-desktop-winit = { path = "crates/cranpose-platform/desktop-winit", version = "0.0.52" }
+cranpose-platform-web = { path = "crates/cranpose-platform/web", version = "0.0.52" }
+cranpose-render-common = { path = "crates/cranpose-render/common", version = "0.0.52" }
+cranpose-render-pixels = { path = "crates/cranpose-render/pixels", version = "0.0.52" }
+cranpose-render-wgpu = { path = "crates/cranpose-render/wgpu", version = "0.0.52" }
+cranpose-runtime-std = { path = "crates/cranpose-runtime-std", version = "0.0.52" }
+cranpose-services = { path = "crates/cranpose-services", version = "0.0.52" }
+cranpose-testing = { path = "crates/cranpose-testing", version = "0.0.52" }
+cranpose-ui = { path = "crates/cranpose-ui", version = "0.0.52" }
+cranpose-ui-graphics = { path = "crates/cranpose-ui-graphics", version = "0.0.52" }
+cranpose-ui-layout = { path = "crates/cranpose-ui-layout", version = "0.0.52" }
 
 # Distribution profile optimized for runtime speed.
 [profile.release]
