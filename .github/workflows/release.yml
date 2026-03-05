@@ -1,0 +1,136 @@
+name: Release Artifacts
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: cranpose-demo-linux-x86_64
+
+          - name: macos-x86_64
+            runner: macos-13
+            target: x86_64-apple-darwin
+            artifact_name: cranpose-demo-macos-x86_64
+
+          - name: macos-aarch64
+            runner: macos-14
+            target: aarch64-apple-darwin
+            artifact_name: cranpose-demo-macos-aarch64
+
+          - name: windows-x86_64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: cranpose-demo-windows-x86_64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwayland-dev libxkbcommon-dev \
+            libx11-dev libxrandr-dev libxcursor-dev libxi-dev libgl-dev
+
+      - name: Build
+        run: >
+          cargo build --release
+          -p desktop-app
+          --target ${{ matrix.target }}
+          --features desktop,renderer-wgpu
+          --no-default-features
+
+      - name: Package macOS .app bundle
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p CranposeDemo.app/Contents/MacOS
+          mkdir -p CranposeDemo.app/Contents/Resources
+          cp target/${{ matrix.target }}/release/desktop-app \
+             CranposeDemo.app/Contents/MacOS/CranposeDemo
+          cat > CranposeDemo.app/Contents/Info.plist <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+            "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleIdentifier</key>
+            <string>com.cranpose.desktop-demo</string>
+            <key>CFBundleName</key>
+            <string>Cranpose Demo</string>
+            <key>CFBundleExecutable</key>
+            <string>CranposeDemo</string>
+            <key>CFBundleVersion</key>
+            <string>1</string>
+            <key>CFBundleShortVersionString</key>
+            <string>1.0</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+            <key>LSMinimumSystemVersion</key>
+            <string>12.0</string>
+            <key>NSHighResolutionCapable</key>
+            <true/>
+          </dict>
+          </plist>
+          PLIST
+          tar czf ${{ matrix.artifact_name }}.tar.gz CranposeDemo.app
+
+      - name: Package Linux binary
+        if: runner.os == 'Linux'
+        run: |
+          tar czf ${{ matrix.artifact_name }}.tar.gz \
+            -C target/${{ matrix.target }}/release desktop-app
+
+      - name: Package Windows binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive `
+            -Path target\${{ matrix.target }}\release\desktop-app.exe `
+            -DestinationPath ${{ matrix.artifact_name }}.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            *.tar.gz
+            *.zip
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

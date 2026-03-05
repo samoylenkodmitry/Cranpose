@@ -69,7 +69,11 @@ where
     /// - Handler closures are preserved (same Rc), so internal state survives
     hit_path_tracker: HitPathTracker,
     /// Persistent clipboard for desktop (Linux X11 requires clipboard to stay alive)
-    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        not(target_os = "android"),
+        not(target_os = "ios")
+    ))]
     clipboard: Option<arboard::Clipboard>,
     /// Dev options for debugging and performance monitoring
     dev_options: DevOptions,
@@ -126,7 +130,11 @@ where
             is_dirty: true,
             buttons_pressed: PointerButtons::NONE,
             hit_path_tracker: HitPathTracker::new(),
-            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
+            #[cfg(all(
+                not(target_arch = "wasm32"),
+                not(target_os = "android"),
+                not(target_os = "ios")
+            ))]
             clipboard: arboard::Clipboard::new().ok(),
             dev_options: DevOptions::default(),
         };
@@ -558,7 +566,11 @@ where
         if event.event_type == KeyDown && event.modifiers.command_or_ctrl() {
             // Desktop-only clipboard handling via arboard
             // Use persistent self.clipboard to keep content alive on Linux X11
-            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
+            #[cfg(all(
+                not(target_arch = "wasm32"),
+                not(target_os = "android"),
+                not(target_os = "ios")
+            ))]
             {
                 match event.key_code {
                     // Ctrl+C - Copy
@@ -696,7 +708,11 @@ where
         }
     }
 
-    #[cfg(all(not(target_os = "linux"), not(target_arch = "wasm32")))]
+    #[cfg(all(
+        not(target_os = "linux"),
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
     pub fn get_primary_selection(&mut self) -> Option<String> {
         None
     }

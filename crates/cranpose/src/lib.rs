@@ -2,9 +2,14 @@
 
 //! High level utilities for running Cranpose applications with minimal boilerplate.
 
-#[cfg(not(any(feature = "desktop", feature = "android", feature = "web")))]
+#[cfg(not(any(
+    feature = "desktop",
+    feature = "android",
+    feature = "web",
+    feature = "ios"
+)))]
 compile_error!(
-    "cranpose must be built with at least one of `desktop`, `android`, or `web` features."
+    "cranpose must be built with at least one of `desktop`, `android`, `web`, or `ios` features."
 );
 
 #[cfg(not(any(feature = "renderer-pixels", feature = "renderer-wgpu")))]

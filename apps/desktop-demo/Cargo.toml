@@ -21,7 +21,7 @@ wasm-opt = ["-Oz", "--all-features"]
 # in apps/android-demo/android/app/src/main/AndroidManifest.xml.
 # Cargo converts hyphens to underscores: "desktop-app" → "libdesktop_app.so"
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["cdylib", "staticlib", "rlib"]
 path = "src/lib.rs"
 
 [[bin]]
@@ -34,7 +34,8 @@ default = ["renderer-wgpu", "desktop"]
 renderer-pixels = ["cranpose/renderer-pixels"]
 renderer-wgpu = ["cranpose/renderer-wgpu"]
 desktop = ["cranpose/desktop"]
-android = ["cranpose/android"]
+ios = ["cranpose/ios"]
+android =["cranpose/android"]
 web = ["cranpose/web", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:wasm-logger"]
 # Enable real app robot testing
 robot-app = ["logging", "cranpose-ui/test-helpers"]

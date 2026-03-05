@@ -25,6 +25,13 @@ pub fn entry_point() {
     create_app().run(app::combined_app);
 }
 
+/// iOS entry point — called from Xcode project's main.m
+#[cfg(target_os = "ios")]
+#[no_mangle]
+pub extern "C" fn ios_main() {
+    entry_point();
+}
+
 /// Android entry point
 #[cfg(target_os = "android")]
 #[no_mangle]

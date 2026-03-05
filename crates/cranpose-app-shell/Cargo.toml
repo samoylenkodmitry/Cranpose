@@ -26,5 +26,5 @@ web-time = "1.1"
 cranpose-macros = { workspace = true }
 
 # Clipboard support (desktop only - not available on WASM or Android)
-[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(target_os = "ios")))'.dependencies]
 arboard = { version = "3.4", default-features = false }

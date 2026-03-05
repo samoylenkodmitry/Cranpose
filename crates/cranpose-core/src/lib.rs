@@ -23,7 +23,7 @@ pub mod internal {
     pub use crate::frame_clock::{FrameCallbackRegistration, FrameClock};
 }
 pub use launched_effect::{
-    CancelToken, LaunchedEffectScope, __launched_effect_async_impl, __launched_effect_impl,
+    __launched_effect_async_impl, __launched_effect_impl, CancelToken, LaunchedEffectScope,
 };
 pub use owned::Owned;
 pub use platform::{Clock, RuntimeScheduler};

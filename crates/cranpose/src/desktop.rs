@@ -942,7 +942,11 @@ impl ApplicationHandler for App {
                 if let Some((x, y)) = self.last_cursor_position {
                     app.set_cursor(x, y);
                 }
-                #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
+                #[cfg(all(
+                    not(target_arch = "wasm32"),
+                    not(target_os = "android"),
+                    not(target_os = "ios")
+                ))]
                 if let Some(text) = app.get_primary_selection() {
                     app.on_paste(&text);
                 }
