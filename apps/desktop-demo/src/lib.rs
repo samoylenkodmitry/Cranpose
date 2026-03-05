@@ -14,7 +14,7 @@ fn create_app() -> AppLauncher {
         .with_title("Cranpose Demo")
         .with_size(800, 600)
         .with_fonts(DEMO_FONTS)
-        .with_fps_counter(true) // Show FPS overlay in corner
+        .with_fps_counter(cfg!(debug_assertions))
 }
 
 /// Shared entry point for desktop
