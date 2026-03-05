@@ -1077,9 +1077,7 @@ where
         let render_only_dirty = render_dirty || cursor_blink_dirty;
         // Pointer/focus queues mutate live node state during dispatch. Direct applier rendering
         // reads that state on demand, so only real scene dirties require a rebuild here.
-        let needs_scene_rebuild = self.scene_dirty
-            || draw_repass_pending
-            || (self.dev_options.fps_counter && render_only_dirty);
+        let needs_scene_rebuild = self.scene_dirty || draw_repass_pending || render_only_dirty;
 
         if !needs_scene_rebuild {
             return;

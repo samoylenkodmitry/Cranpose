@@ -439,7 +439,7 @@ fn draw_repass_updates_render_data_without_layout() {
 }
 
 #[test]
-fn render_invalidation_without_scene_changes_skips_rebuild() {
+fn render_invalidation_without_scene_changes_rebuilds_scene() {
     let root_key = location_key(file!(), line!(), column!());
     let rebuilds = Rc::new(Cell::new(0));
     let mut shell = AppShell::new(
@@ -456,8 +456,8 @@ fn render_invalidation_without_scene_changes_skips_rebuild() {
 
     assert_eq!(
         rebuilds.get(),
-        0,
-        "pure render invalidation should reuse the retained scene"
+        1,
+        "pure render invalidation should rebuild scene for render-only updates"
     );
 }
 
