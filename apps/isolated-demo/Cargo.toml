@@ -30,14 +30,14 @@ web = ["cranpose/web", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:wasm
 logging = ["dep:env_logger"]
 
 [dependencies]
-cranpose = { version = "0.0.32", default-features = false }
+cranpose = { version = "0.0.54", default-features = false }
 log = "0.4"
 instant = { version = "0.1", features = ["wasm-bindgen"] }
 wasm-bindgen = { version = "0.2", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
 wasm-logger = { version = "0.2", optional = true }
 getrandom = { version = "0.3", features = ["wasm_js"] }
-cranpose-core = "0.0.32"
+cranpose-core = "0.0.54"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 env_logger = { version = "0.10", optional = true }
