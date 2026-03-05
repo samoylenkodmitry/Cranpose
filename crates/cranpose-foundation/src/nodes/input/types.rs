@@ -18,6 +18,7 @@ pub enum PointerEventKind {
     Move,
     Up,
     Cancel,
+    Scroll,
 }
 
 #[repr(u8)]
@@ -76,6 +77,11 @@ pub struct PointerEvent {
     pub phase: PointerPhase,
     pub position: Point,
     pub global_position: Point,
+    /// Scroll delta in logical pixels.
+    ///
+    /// This is non-zero for [`PointerEventKind::Scroll`] events and zero for
+    /// button/move events.
+    pub scroll_delta: Point,
     pub buttons: PointerButtons,
     /// Tracks whether this event has been consumed by a handler.
     /// Shared via Rc<Cell> so consumption can be tracked across copies.
@@ -92,12 +98,20 @@ impl PointerEvent {
                 PointerEventKind::Move => PointerPhase::Move,
                 PointerEventKind::Up => PointerPhase::End,
                 PointerEventKind::Cancel => PointerPhase::Cancel,
+                PointerEventKind::Scroll => PointerPhase::Move,
             },
             position,
             global_position,
+            scroll_delta: Point { x: 0.0, y: 0.0 },
             buttons: PointerButtons::NONE,
             consumed: Rc::new(Cell::new(false)),
         }
+    }
+
+    /// Set the scroll delta for this event.
+    pub fn with_scroll_delta(mut self, scroll_delta: Point) -> Self {
+        self.scroll_delta = scroll_delta;
+        self
     }
 
     /// Set the buttons state for this event
@@ -130,6 +144,7 @@ impl PointerEvent {
             phase: self.phase,
             position,
             global_position: self.global_position,
+            scroll_delta: self.scroll_delta,
             buttons: self.buttons,
             consumed: self.consumed.clone(),
         }

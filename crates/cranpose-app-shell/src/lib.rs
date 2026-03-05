@@ -506,6 +506,60 @@ where
         }
     }
 
+    /// Dispatches a mouse wheel / trackpad scroll event to hovered pointer handlers.
+    ///
+    /// Returns `true` if a handler consumed the event.
+    pub fn pointer_scrolled(&mut self, delta_x: f32, delta_y: f32) -> bool {
+        enter_event_handler();
+        let result = run_in_mutable_snapshot(|| self.pointer_scrolled_inner(delta_x, delta_y))
+            .unwrap_or(false);
+        exit_event_handler();
+        if input_pipeline_debug_enabled() {
+            eprintln!(
+                "[CRANPOSE_INPUT_DEBUG] pointer_scrolled ({:.2},{:.2}) -> {}",
+                delta_x, delta_y, result
+            );
+        }
+        result
+    }
+
+    fn pointer_scrolled_inner(&mut self, delta_x: f32, delta_y: f32) -> bool {
+        if delta_x.abs() <= f32::EPSILON && delta_y.abs() <= f32::EPSILON {
+            return false;
+        }
+
+        let hits = self.renderer.scene().hit_test(self.cursor.0, self.cursor.1);
+        if hits.is_empty() {
+            return false;
+        }
+
+        let event = PointerEvent::new(
+            PointerEventKind::Scroll,
+            Point {
+                x: self.cursor.0,
+                y: self.cursor.1,
+            },
+            Point {
+                x: self.cursor.0,
+                y: self.cursor.1,
+            },
+        )
+        .with_buttons(self.buttons_pressed)
+        .with_scroll_delta(Point {
+            x: delta_x,
+            y: delta_y,
+        });
+
+        for hit in hits {
+            hit.dispatch(event.clone());
+            if event.is_consumed() {
+                break;
+            }
+        }
+
+        event.is_consumed()
+    }
+
     /// Cancels any active gesture, dispatching Cancel events to cached targets.
     /// Call this when:
     /// - Window loses focus

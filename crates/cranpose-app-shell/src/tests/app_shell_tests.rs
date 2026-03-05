@@ -2,14 +2,24 @@ use super::*;
 use cranpose_core::{
     __launched_effect_async_impl as launched_effect_async_impl, location_key, useState,
 };
+use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_macros::composable;
 use cranpose_ui::{
     Box, BoxSpec, Brush, Color, Column, ColumnSpec, HeadlessRenderer, Modifier, Rect, RenderOp,
     Row, RowSpec, Size, Text, TextStyle,
 };
-use cranpose_ui_graphics::DrawPrimitive;
+use cranpose_ui_graphics::{DrawPrimitive, Point};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::{Mutex, MutexGuard, OnceLock};
+
+fn test_guard() -> MutexGuard<'static, ()> {
+    static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    TEST_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("test lock poisoned")
+}
 
 #[derive(Default, Clone)]
 struct TestHitTarget;
@@ -39,6 +49,54 @@ impl RenderScene for TestScene {
     }
 }
 
+#[derive(Clone)]
+struct RecordingHitTarget {
+    node_id: cranpose_core::NodeId,
+    consume: bool,
+    events: Rc<RefCell<Vec<PointerEvent>>>,
+}
+
+impl HitTestTarget for RecordingHitTarget {
+    fn dispatch(&self, event: PointerEvent) {
+        self.events.borrow_mut().push(event.clone());
+        if self.consume {
+            event.consume();
+        }
+    }
+
+    fn node_id(&self) -> cranpose_core::NodeId {
+        self.node_id
+    }
+}
+
+#[derive(Default)]
+struct RecordingScene {
+    hits: Vec<RecordingHitTarget>,
+}
+
+impl RecordingScene {
+    fn with_hits(hits: Vec<RecordingHitTarget>) -> Self {
+        Self { hits }
+    }
+}
+
+impl RenderScene for RecordingScene {
+    type HitTarget = RecordingHitTarget;
+
+    fn clear(&mut self) {}
+
+    fn hit_test(&self, _x: f32, _y: f32) -> Vec<Self::HitTarget> {
+        self.hits.clone()
+    }
+
+    fn find_target(&self, node_id: cranpose_core::NodeId) -> Option<Self::HitTarget> {
+        self.hits
+            .iter()
+            .find(|target| target.node_id == node_id)
+            .cloned()
+    }
+}
+
 #[derive(Default)]
 struct TestRenderer {
     scene: TestScene,
@@ -46,6 +104,46 @@ struct TestRenderer {
 
 impl Renderer for TestRenderer {
     type Scene = TestScene;
+    type Error = ();
+
+    fn scene(&self) -> &Self::Scene {
+        &self.scene
+    }
+
+    fn scene_mut(&mut self) -> &mut Self::Scene {
+        &mut self.scene
+    }
+
+    fn rebuild_scene(
+        &mut self,
+        _layout_tree: &LayoutTree,
+        _viewport: Size,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn rebuild_scene_from_applier(
+        &mut self,
+        _applier: &mut cranpose_core::MemoryApplier,
+        _root: cranpose_core::NodeId,
+        _viewport: Size,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+struct ScrollDispatchRenderer {
+    scene: RecordingScene,
+}
+
+impl ScrollDispatchRenderer {
+    fn new(scene: RecordingScene) -> Self {
+        Self { scene }
+    }
+}
+
+impl Renderer for ScrollDispatchRenderer {
+    type Scene = RecordingScene;
     type Error = ();
 
     fn scene(&self) -> &Self::Scene {
@@ -355,6 +453,7 @@ impl cranpose_ui::text_field_focus::FocusedTextFieldHandler for DeleteSurroundin
 
 #[test]
 fn layout_recovers_after_tab_switching_updates() {
+    let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
     let mut shell = AppShell::new(TestRenderer::default(), root_key, || {
         tabbed_progress_content()
@@ -371,6 +470,7 @@ fn layout_recovers_after_tab_switching_updates() {
 
 #[test]
 fn ime_delete_surrounding_marks_dirty() {
+    let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
     let mut shell = AppShell::new(TestRenderer::default(), root_key, empty_content);
     shell.update();
@@ -389,7 +489,57 @@ fn ime_delete_surrounding_marks_dirty() {
 }
 
 #[test]
+fn pointer_scrolled_dispatches_to_hovered_targets_and_respects_consumption() {
+    let _guard = test_guard();
+    let consumed_events = Rc::new(RefCell::new(Vec::new()));
+    let skipped_events = Rc::new(RefCell::new(Vec::new()));
+    let scene = RecordingScene::with_hits(vec![
+        RecordingHitTarget {
+            node_id: 1,
+            consume: true,
+            events: consumed_events.clone(),
+        },
+        RecordingHitTarget {
+            node_id: 2,
+            consume: false,
+            events: skipped_events.clone(),
+        },
+    ]);
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(ScrollDispatchRenderer::new(scene), root_key, empty_content);
+    shell.set_cursor(20.0, 30.0);
+    consumed_events.borrow_mut().clear();
+    skipped_events.borrow_mut().clear();
+
+    let consumed = shell.pointer_scrolled(12.0, -18.0);
+    assert!(consumed, "wheel dispatch should report consumption");
+    assert_eq!(consumed_events.borrow().len(), 1);
+    assert_eq!(skipped_events.borrow().len(), 0);
+
+    let events = consumed_events.borrow();
+    let event = events.first().expect("expected scroll event");
+    assert_eq!(event.kind, PointerEventKind::Scroll);
+    assert_eq!(event.scroll_delta, Point { x: 12.0, y: -18.0 });
+    assert_eq!(event.global_position, Point { x: 20.0, y: 30.0 });
+}
+
+#[test]
+fn pointer_scrolled_returns_false_without_hit_targets() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, empty_content);
+    shell.set_cursor(5.0, 7.0);
+
+    assert!(
+        !shell.pointer_scrolled(0.0, 32.0),
+        "wheel dispatch should return false when no handlers are hit"
+    );
+}
+
+#[test]
 fn draw_repass_updates_render_data_without_layout() {
+    let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
     let state_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
         Rc::new(RefCell::new(None));
@@ -440,6 +590,7 @@ fn draw_repass_updates_render_data_without_layout() {
 
 #[test]
 fn render_invalidation_without_scene_changes_rebuilds_scene() {
+    let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
     let rebuilds = Rc::new(Cell::new(0));
     let mut shell = AppShell::new(
@@ -463,6 +614,7 @@ fn render_invalidation_without_scene_changes_rebuilds_scene() {
 
 #[test]
 fn pointer_invalidation_without_scene_changes_skips_rebuild() {
+    let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
     let rebuilds = Rc::new(Cell::new(0));
     let mut shell = AppShell::new(
@@ -505,6 +657,7 @@ fn pointer_invalidation_without_scene_changes_skips_rebuild() {
 
 #[test]
 fn focus_invalidation_without_scene_changes_skips_rebuild() {
+    let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
     let rebuilds = Rc::new(Cell::new(0));
     let mut shell = AppShell::new(
@@ -547,6 +700,7 @@ fn focus_invalidation_without_scene_changes_skips_rebuild() {
 
 #[test]
 fn semantics_collection_is_opt_in_for_app_shell() {
+    let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
     let mut shell = AppShell::new(TestRenderer::default(), root_key, semantics_content);
 
@@ -571,6 +725,7 @@ fn semantics_collection_is_opt_in_for_app_shell() {
 
 #[test]
 fn draw_refresh_scope_only_contains_dirty_ancestors() {
+    let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
     let mut shell = AppShell::new(TestRenderer::default(), root_key, nested_branch_content);
 

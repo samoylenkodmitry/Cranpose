@@ -901,6 +901,31 @@ impl ApplicationHandler for App {
                 // Track current keyboard modifiers for key events
                 self.current_modifiers = modifiers.state();
             }
+            WindowEvent::MouseWheel { delta, .. } => {
+                if let Some((x, y)) = self.last_cursor_position {
+                    app.set_cursor(x, y);
+                }
+
+                let mut logical_delta = platform.scroll_delta(delta);
+                let alt_pressed = self
+                    .current_modifiers
+                    .contains(winit::keyboard::ModifiersState::ALT);
+                if alt_pressed {
+                    if logical_delta.x.abs() <= f32::EPSILON {
+                        logical_delta.x = logical_delta.y;
+                    }
+                    logical_delta.y = 0.0;
+                }
+
+                if desktop_input_debug_enabled() {
+                    eprintln!(
+                        "[CRANPOSE_INPUT_DEBUG] desktop wheel delta ({:.2},{:.2}) alt={}",
+                        logical_delta.x, logical_delta.y, alt_pressed
+                    );
+                }
+
+                app.pointer_scrolled(logical_delta.x, logical_delta.y);
+            }
             WindowEvent::PointerButton {
                 state,
                 button: ButtonSource::Mouse(MouseButton::Left),

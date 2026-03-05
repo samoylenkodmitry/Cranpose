@@ -1368,6 +1368,7 @@ fn counter_app() {
                                                     });
                                                 }
                                                 PointerEventKind::Cancel => pointer_down.set(false),
+                                                PointerEventKind::Scroll => {}
                                             }
                                         }
                                     })

@@ -2295,6 +2295,7 @@ fn DraggableOverlay(
                                     PointerEventKind::Up | PointerEventKind::Cancel => {
                                         drag_offset = None;
                                     }
+                                    PointerEventKind::Scroll => {}
                                 }
                             }
                         })

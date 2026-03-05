@@ -1,6 +1,9 @@
 use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_ui_graphics::Point;
 use winit::dpi::PhysicalPosition;
+use winit::event::MouseScrollDelta;
+
+const LINE_SCROLL_DELTA_PIXELS: f32 = 40.0;
 
 pub struct DesktopWinitPlatform {
     scale_factor: f64,
@@ -30,10 +33,47 @@ impl DesktopWinitPlatform {
         let logical = self.pointer_position(position);
         PointerEvent::new(kind, logical, logical)
     }
+
+    pub fn scroll_delta(&self, delta: MouseScrollDelta) -> Point {
+        match delta {
+            MouseScrollDelta::LineDelta(x, y) => Point {
+                x: x * LINE_SCROLL_DELTA_PIXELS,
+                y: y * LINE_SCROLL_DELTA_PIXELS,
+            },
+            MouseScrollDelta::PixelDelta(delta) => Point {
+                x: (delta.x / self.scale_factor) as f32,
+                y: (delta.y / self.scale_factor) as f32,
+            },
+        }
+    }
 }
 
 impl Default for DesktopWinitPlatform {
     fn default() -> Self {
         Self::new(1.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn line_scroll_delta_is_scaled_to_pixels() {
+        let platform = DesktopWinitPlatform::new(1.0);
+        let delta = platform.scroll_delta(MouseScrollDelta::LineDelta(1.0, -2.0));
+        assert_eq!(delta.x, 40.0);
+        assert_eq!(delta.y, -80.0);
+    }
+
+    #[test]
+    fn pixel_scroll_delta_is_converted_to_logical_space() {
+        let platform = DesktopWinitPlatform::new(2.0);
+        let delta = platform.scroll_delta(MouseScrollDelta::PixelDelta(PhysicalPosition {
+            x: 24.0,
+            y: -10.0,
+        }));
+        assert_eq!(delta.x, 12.0);
+        assert_eq!(delta.y, -5.0);
     }
 }

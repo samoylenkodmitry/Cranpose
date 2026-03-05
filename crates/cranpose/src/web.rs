@@ -11,7 +11,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
-use web_sys::{HtmlCanvasElement, MouseEvent, PointerEvent};
+use web_sys::{HtmlCanvasElement, MouseEvent, PointerEvent, WheelEvent};
+
+const WEB_WHEEL_LINE_DELTA_PIXELS: f32 = 40.0;
 
 /// Runs a web Compose application with wgpu rendering.
 ///
@@ -183,6 +185,50 @@ pub async fn run(
             }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("mouseup", closure.as_ref().unchecked_ref())?;
+        closure.forget();
+    }
+
+    {
+        let app = app.clone();
+        let platform = platform.clone();
+        let wheel_canvas = canvas.clone();
+        let closure = Closure::wrap(Box::new(move |event: WheelEvent| {
+            let x = event.offset_x() as f64;
+            let y = event.offset_y() as f64;
+            let logical = platform.borrow().pointer_position(x, y);
+
+            let mut delta_x = event.delta_x() as f32;
+            let mut delta_y = event.delta_y() as f32;
+            match event.delta_mode() {
+                WheelEvent::DOM_DELTA_PIXEL => {}
+                WheelEvent::DOM_DELTA_LINE => {
+                    delta_x *= WEB_WHEEL_LINE_DELTA_PIXELS;
+                    delta_y *= WEB_WHEEL_LINE_DELTA_PIXELS;
+                }
+                WheelEvent::DOM_DELTA_PAGE => {
+                    let page_width = wheel_canvas.client_width().max(1) as f32;
+                    let page_height = wheel_canvas.client_height().max(1) as f32;
+                    delta_x *= page_width;
+                    delta_y *= page_height;
+                }
+                _ => {}
+            }
+
+            if event.alt_key() {
+                if delta_x.abs() <= f32::EPSILON {
+                    delta_x = delta_y;
+                }
+                delta_y = 0.0;
+            }
+
+            if let Ok(mut app_mut) = app.try_borrow_mut() {
+                app_mut.set_cursor(logical.x, logical.y);
+                if app_mut.pointer_scrolled(delta_x, delta_y) {
+                    event.prevent_default();
+                }
+            }
+        }) as Box<dyn FnMut(_)>);
+        canvas.add_event_listener_with_callback("wheel", closure.as_ref().unchecked_ref())?;
         closure.forget();
     }
 

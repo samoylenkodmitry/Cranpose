@@ -480,6 +480,42 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
     fn on_cancel(&self) -> bool {
         self.finish_gesture(false)
     }
+
+    /// Handles mouse wheel / trackpad scroll event.
+    ///
+    /// Returns `true` when the target consumed any delta.
+    fn on_scroll(&self, axis_delta: f32) -> bool {
+        if axis_delta.abs() <= f32::EPSILON {
+            return false;
+        }
+
+        {
+            // Wheel scroll should take over immediately and stop any active drag/fling state.
+            let mut gs = self.gesture_state.borrow_mut();
+            if let Some(fling) = gs.fling_animation.take() {
+                fling.cancel();
+            }
+            gs.drag_down_position = None;
+            gs.last_position = None;
+            gs.is_dragging = false;
+            gs.gesture_start_time = None;
+            gs.last_velocity_sample_ms = None;
+            gs.velocity_tracker.reset();
+        }
+
+        let delta = if self.reverse_scrolling {
+            -axis_delta
+        } else {
+            axis_delta
+        };
+        let consumed = self.scroll_target.apply_delta(delta);
+        if consumed.abs() > 0.001 {
+            self.scroll_target.invalidate();
+            true
+        } else {
+            false
+        }
+    }
 }
 
 // ============================================================================
@@ -608,6 +644,11 @@ fn scroll_impl(
                             }
                             PointerEventKind::Up => detector.on_up(),
                             PointerEventKind::Cancel => detector.on_cancel(),
+                            PointerEventKind::Scroll => detector.on_scroll(if is_vertical {
+                                event.scroll_delta.y
+                            } else {
+                                event.scroll_delta.x
+                            }),
                         };
 
                         if should_consume {
@@ -701,6 +742,11 @@ fn lazy_scroll_impl(state: LazyListState, is_vertical: bool, reverse_scrolling: 
                             }
                             PointerEventKind::Up => detector.on_up(),
                             PointerEventKind::Cancel => detector.on_cancel(),
+                            PointerEventKind::Scroll => detector.on_scroll(if is_vertical {
+                                event.scroll_delta.y
+                            } else {
+                                event.scroll_delta.x
+                            }),
                         };
 
                         if should_consume {
