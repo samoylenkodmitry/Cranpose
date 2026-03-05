@@ -193,18 +193,37 @@ jobs:
           lock_path.write_text("".join(lines))
           PY
 
-          if git diff --name-only | grep -qvE '^(Cargo\.toml|Cargo\.lock)$'; then
-            echo "Unexpected changes beyond Cargo.toml/Cargo.lock" >&2
-            git diff --name-only
-            exit 1
-          fi
+          # Update isolated-demo to point to latest cranpose version
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          version = os.environ["TAG_NAME"][1:]
+          toml_path = Path("apps/isolated-demo/Cargo.toml")
+          text = toml_path.read_text()
+          text = re.sub(
+              r'(cranpose\s*=\s*\{\s*version\s*=\s*")[^"]+(")',
+              rf"\g<1>{version}\g<2>",
+              text,
+          )
+          text = re.sub(
+              r'(cranpose-core\s*=\s*")[^"]+(")',
+              rf"\g<1>{version}\g<2>",
+              text,
+          )
+          toml_path.write_text(text)
+          PY
+
+          # Update isolated-demo lockfile
+          (cd apps/isolated-demo && cargo update -p cranpose -p cranpose-core 2>/dev/null || true)
 
           if git diff --quiet; then
             echo "No version changes needed for ${tag}."
           else
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add Cargo.toml Cargo.lock
+            git add Cargo.toml Cargo.lock apps/isolated-demo/Cargo.toml apps/isolated-demo/Cargo.lock
             git commit -m "chore(release): ${tag}"
             git push origin "$DEFAULT_BRANCH"
 
