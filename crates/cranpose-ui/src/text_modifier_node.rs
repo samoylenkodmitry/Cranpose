@@ -25,8 +25,9 @@ use cranpose_foundation::{
     LayoutModifierNode, Measurable, MeasurementProxy, ModifierNode, ModifierNodeContext,
     ModifierNodeElement, NodeCapabilities, NodeState, SemanticsConfiguration, SemanticsNode, Size,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 /// Node that stores text content and handles measurement, drawing, and semantics.
 ///
@@ -39,71 +40,172 @@ use std::hash::{Hash, Hasher};
 /// `compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/modifiers/TextStringSimpleNode.kt`
 #[derive(Debug)]
 pub struct TextModifierNode {
-    text: AnnotatedString,
-    style: TextStyle,
-    options: TextLayoutOptions,
-    measure_cache: RefCell<Option<TextMeasureCacheEntry>>,
+    layout: Rc<TextPreparedLayoutOwner>,
     state: NodeState,
 }
 
-#[derive(Clone, Copy, Debug)]
-struct TextMeasureCacheEntry {
+const PREPARED_LAYOUT_CACHE_CAPACITY: usize = 4;
+
+#[derive(Clone, Debug)]
+struct TextPreparedLayoutCacheEntry {
     max_width_bits: Option<u32>,
-    size: Size,
+    layout: crate::text::PreparedTextLayout,
 }
 
-impl TextModifierNode {
-    pub fn new(text: AnnotatedString, style: TextStyle, options: TextLayoutOptions) -> Self {
+#[derive(Debug)]
+struct TextPreparedLayoutOwner {
+    text: Rc<AnnotatedString>,
+    style: TextStyle,
+    options: TextLayoutOptions,
+    node_id: Cell<Option<cranpose_core::NodeId>>,
+    cache: RefCell<Vec<TextPreparedLayoutCacheEntry>>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TextPreparedLayoutHandle {
+    owner: Rc<TextPreparedLayoutOwner>,
+}
+
+impl TextPreparedLayoutOwner {
+    fn new(
+        text: Rc<AnnotatedString>,
+        style: TextStyle,
+        options: TextLayoutOptions,
+        node_id: Option<cranpose_core::NodeId>,
+    ) -> Self {
         Self {
             text,
             style,
             options: options.normalized(),
-            measure_cache: RefCell::new(None),
+            node_id: Cell::new(node_id),
+            cache: RefCell::new(Vec::new()),
+        }
+    }
+
+    fn text(&self) -> &str {
+        self.text.text.as_str()
+    }
+
+    fn annotated_text(&self) -> Rc<AnnotatedString> {
+        self.text.clone()
+    }
+
+    fn annotated_string(&self) -> AnnotatedString {
+        (*self.text).clone()
+    }
+
+    fn style(&self) -> &TextStyle {
+        &self.style
+    }
+
+    fn options(&self) -> TextLayoutOptions {
+        self.options
+    }
+
+    fn node_id(&self) -> Option<cranpose_core::NodeId> {
+        self.node_id.get()
+    }
+
+    fn set_node_id(&self, node_id: Option<cranpose_core::NodeId>) {
+        if self.node_id.replace(node_id) != node_id {
+            self.cache.borrow_mut().clear();
+        }
+    }
+
+    fn prepare(&self, max_width: Option<f32>) -> crate::text::PreparedTextLayout {
+        let normalized_max_width = max_width.filter(|width| width.is_finite() && *width > 0.0);
+        let max_width_bits = normalized_max_width.map(f32::to_bits);
+
+        {
+            let mut cache = self.cache.borrow_mut();
+            if let Some(index) = cache
+                .iter()
+                .position(|entry| entry.max_width_bits == max_width_bits)
+            {
+                let entry = cache.remove(index);
+                let prepared = entry.layout.clone();
+                cache.insert(0, entry);
+                return prepared;
+            }
+        }
+
+        let prepared = crate::text::prepare_text_layout_for_node(
+            self.node_id(),
+            self.text.as_ref(),
+            &self.style,
+            self.options,
+            normalized_max_width,
+        );
+
+        let mut cache = self.cache.borrow_mut();
+        cache.insert(
+            0,
+            TextPreparedLayoutCacheEntry {
+                max_width_bits,
+                layout: prepared.clone(),
+            },
+        );
+        cache.truncate(PREPARED_LAYOUT_CACHE_CAPACITY);
+        prepared
+    }
+
+    fn measure_text_content(&self, max_width: Option<f32>) -> Size {
+        let prepared = self.prepare(max_width);
+        Size {
+            width: prepared.metrics.width,
+            height: prepared.metrics.height,
+        }
+    }
+}
+
+impl TextPreparedLayoutHandle {
+    fn new(owner: Rc<TextPreparedLayoutOwner>) -> Self {
+        Self { owner }
+    }
+
+    pub(crate) fn prepare(&self, max_width: Option<f32>) -> crate::text::PreparedTextLayout {
+        self.owner.prepare(max_width)
+    }
+
+    fn measure_text_content(&self, max_width: Option<f32>) -> Size {
+        self.owner.measure_text_content(max_width)
+    }
+}
+
+impl TextModifierNode {
+    pub fn new(text: Rc<AnnotatedString>, style: TextStyle, options: TextLayoutOptions) -> Self {
+        Self {
+            layout: Rc::new(TextPreparedLayoutOwner::new(text, style, options, None)),
             state: NodeState::new(),
         }
     }
 
     pub fn text(&self) -> &str {
-        &self.text.text
+        self.layout.text()
+    }
+
+    pub fn annotated_text(&self) -> Rc<AnnotatedString> {
+        self.layout.annotated_text()
     }
 
     pub fn annotated_string(&self) -> AnnotatedString {
-        self.text.clone()
+        self.layout.annotated_string()
     }
 
     pub fn style(&self) -> &TextStyle {
-        &self.style
+        self.layout.style()
     }
 
     pub fn options(&self) -> TextLayoutOptions {
-        self.options
+        self.layout.options()
     }
 
     fn measure_text_content(&self, max_width: Option<f32>) -> Size {
-        let cache_key = max_width.map(f32::to_bits);
-        if let Some(cache) = self.measure_cache.borrow().as_ref() {
-            if cache.max_width_bits == cache_key {
-                return cache.size;
-            }
-        }
+        self.layout.measure_text_content(max_width)
+    }
 
-        let metrics = crate::text::measure_text_with_options(
-            &self.text,
-            &self.style,
-            self.options,
-            max_width,
-        );
-        let size = Size {
-            width: metrics.width,
-            height: metrics.height,
-        };
-        self.measure_cache
-            .borrow_mut()
-            .replace(TextMeasureCacheEntry {
-                max_width_bits: cache_key,
-                size,
-            });
-        size
+    pub(crate) fn prepared_layout_handle(&self) -> TextPreparedLayoutHandle {
+        TextPreparedLayoutHandle::new(self.layout.clone())
     }
 }
 
@@ -115,10 +217,15 @@ impl DelegatableNode for TextModifierNode {
 
 impl ModifierNode for TextModifierNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
+        self.layout.set_node_id(context.node_id());
         // Invalidate layout and draw when text node is attached
         context.invalidate(InvalidationKind::Layout);
         context.invalidate(InvalidationKind::Draw);
         context.invalidate(InvalidationKind::Semantics);
+    }
+
+    fn on_detach(&mut self) {
+        self.layout.set_node_id(None);
     }
 
     fn as_draw_node(&self) -> Option<&dyn DrawModifierNode> {
@@ -194,9 +301,7 @@ impl LayoutModifierNode for TextModifierNode {
 
     fn create_measurement_proxy(&self) -> Option<Box<dyn MeasurementProxy>> {
         Some(Box::new(TextMeasurementProxy {
-            text: self.text.clone(),
-            style: self.style.clone(),
-            options: self.options,
+            layout: self.prepared_layout_handle(),
         }))
     }
 }
@@ -206,25 +311,14 @@ impl LayoutModifierNode for TextModifierNode {
 /// Phase 2: Instead of reconstructing nodes via `TextModifierNode::new()`, this proxy
 /// directly implements measurement logic using the snapshotted text content.
 struct TextMeasurementProxy {
-    text: AnnotatedString,
-    style: TextStyle,
-    options: TextLayoutOptions,
+    layout: TextPreparedLayoutHandle,
 }
 
 impl TextMeasurementProxy {
     /// Measure the text content dimensions.
     /// Matches TextModifierNode::measure_text_content() logic.
     fn measure_text_content(&self, max_width: Option<f32>) -> Size {
-        let metrics = crate::text::measure_text_with_options(
-            &self.text,
-            &self.style,
-            self.options,
-            max_width,
-        );
-        Size {
-            width: metrics.width,
-            height: metrics.height,
-        }
+        self.layout.measure_text_content(max_width)
     }
 }
 
@@ -289,7 +383,7 @@ impl DrawModifierNode for TextModifierNode {
 impl SemanticsNode for TextModifierNode {
     fn merge_semantics(&self, config: &mut SemanticsConfiguration) {
         // Provide text content for accessibility
-        config.content_description = Some(self.text.text.clone());
+        config.content_description = Some(self.text().to_string());
     }
 }
 
@@ -303,13 +397,13 @@ impl SemanticsNode for TextModifierNode {
 /// Matches Jetpack Compose: `TextStringSimpleElement` in BasicText.kt
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextModifierElement {
-    text: AnnotatedString,
+    text: Rc<AnnotatedString>,
     style: TextStyle,
     options: TextLayoutOptions,
 }
 
 impl TextModifierElement {
-    pub fn new(text: AnnotatedString, style: TextStyle, options: TextLayoutOptions) -> Self {
+    pub fn new(text: Rc<AnnotatedString>, style: TextStyle, options: TextLayoutOptions) -> Self {
         Self {
             text,
             style,
@@ -579,22 +673,17 @@ impl ModifierNodeElement for TextModifierElement {
     }
 
     fn update(&self, node: &mut Self::Node) {
-        let mut changed = false;
-        if node.text != self.text {
-            node.text = self.text.clone();
-            changed = true;
-        }
-        if node.style != self.style {
-            node.style = self.style.clone();
-            changed = true;
-        }
-        if node.options != self.options {
-            node.options = self.options;
-            changed = true;
-        }
-
-        if changed {
-            node.measure_cache.borrow_mut().take();
+        let current = node.layout.as_ref();
+        if current.text != self.text
+            || current.style != self.style
+            || current.options != self.options
+        {
+            node.layout = Rc::new(TextPreparedLayoutOwner::new(
+                self.text.clone(),
+                self.style.clone(),
+                self.options,
+                current.node_id(),
+            ));
             // Text/Style changed - need to invalidate layout, draw, and semantics
             // Note: In the full implementation, we would call context.invalidate here
             // but update() doesn't currently have access to context.
@@ -613,7 +702,11 @@ impl ModifierNodeElement for TextModifierElement {
 mod tests {
     use super::*;
     use crate::text::TextUnit;
+    use crate::text_layout_result::TextLayoutResult;
+    use cranpose_core::NodeId;
+    use cranpose_foundation::BasicModifierNodeContext;
     use std::collections::hash_map::DefaultHasher;
+    use std::sync::mpsc;
 
     fn hash_of(element: &TextModifierElement) -> u64 {
         let mut hasher = DefaultHasher::new();
@@ -621,9 +714,76 @@ mod tests {
         hasher.finish()
     }
 
+    struct RecordingPreparedLayoutMeasurer {
+        recorded: std::rc::Rc<std::cell::RefCell<Vec<Option<NodeId>>>>,
+    }
+
+    impl crate::text::TextMeasurer for RecordingPreparedLayoutMeasurer {
+        fn measure(
+            &self,
+            _text: &crate::text::AnnotatedString,
+            _style: &TextStyle,
+        ) -> crate::text::TextMetrics {
+            crate::text::TextMetrics {
+                width: 12.0,
+                height: 18.0,
+                line_height: 18.0,
+                line_count: 1,
+            }
+        }
+
+        fn prepare_with_options_for_node(
+            &self,
+            node_id: Option<NodeId>,
+            text: &crate::text::AnnotatedString,
+            _style: &TextStyle,
+            _options: TextLayoutOptions,
+            _max_width: Option<f32>,
+        ) -> crate::text::PreparedTextLayout {
+            self.recorded.borrow_mut().push(node_id);
+            crate::text::PreparedTextLayout {
+                text: text.clone(),
+                metrics: crate::text::TextMetrics {
+                    width: 12.0,
+                    height: 18.0,
+                    line_height: 18.0,
+                    line_count: 1,
+                },
+                did_overflow: false,
+            }
+        }
+
+        fn get_offset_for_position(
+            &self,
+            _text: &crate::text::AnnotatedString,
+            _style: &TextStyle,
+            _x: f32,
+            _y: f32,
+        ) -> usize {
+            0
+        }
+
+        fn get_cursor_x_for_offset(
+            &self,
+            _text: &crate::text::AnnotatedString,
+            _style: &TextStyle,
+            _offset: usize,
+        ) -> f32 {
+            0.0
+        }
+
+        fn layout(
+            &self,
+            _text: &crate::text::AnnotatedString,
+            _style: &TextStyle,
+        ) -> TextLayoutResult {
+            panic!("layout is not used in this test");
+        }
+    }
+
     #[test]
     fn hash_changes_when_style_changes() {
-        let text = AnnotatedString::from("Hello");
+        let text = Rc::new(AnnotatedString::from("Hello"));
         let element_a = TextModifierElement::new(
             text.clone(),
             TextStyle::default(),
@@ -653,11 +813,79 @@ mod tests {
             ..Default::default()
         };
         let options = TextLayoutOptions::default();
-        let text = AnnotatedString::from("Hash me");
+        let text = Rc::new(AnnotatedString::from("Hash me"));
         let element_a = TextModifierElement::new(text.clone(), style.clone(), options);
         let element_b = TextModifierElement::new(text, style, options);
 
         assert_eq!(element_a, element_b);
         assert_eq!(hash_of(&element_a), hash_of(&element_b));
+    }
+
+    #[test]
+    fn measure_uses_attached_node_identity() {
+        let (tx, rx) = mpsc::channel();
+
+        std::thread::spawn(move || {
+            let recorded = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            crate::text::set_text_measurer(RecordingPreparedLayoutMeasurer {
+                recorded: recorded.clone(),
+            });
+
+            let mut node = TextModifierNode::new(
+                Rc::new(AnnotatedString::from("identity")),
+                TextStyle::default(),
+                TextLayoutOptions::default(),
+            );
+            let mut context = BasicModifierNodeContext::new();
+            context.set_node_id(Some(77));
+            node.on_attach(&mut context);
+
+            let size = node.measure_text_content(Some(96.0));
+            tx.send((recorded.borrow().clone(), size.width, size.height))
+                .expect("send measurement result");
+        });
+
+        let (recorded, width, height) = rx.recv().expect("receive measurement result");
+        assert_eq!(recorded, vec![Some(77)]);
+        assert_eq!(width, 12.0);
+        assert_eq!(height, 18.0);
+    }
+
+    #[test]
+    fn prepared_layout_cache_reuses_node_snapshot() {
+        let (tx, rx) = mpsc::channel();
+
+        std::thread::spawn(move || {
+            let recorded = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            crate::text::set_text_measurer(RecordingPreparedLayoutMeasurer {
+                recorded: recorded.clone(),
+            });
+
+            let mut node = TextModifierNode::new(
+                Rc::new(AnnotatedString::from("reuse")),
+                TextStyle::default(),
+                TextLayoutOptions::default(),
+            );
+            let mut context = BasicModifierNodeContext::new();
+            context.set_node_id(Some(88));
+            node.on_attach(&mut context);
+
+            let measured = node.measure_text_content(Some(120.0));
+            let prepared = node.prepared_layout_handle().prepare(Some(120.0));
+            tx.send((
+                recorded.borrow().clone(),
+                measured.width,
+                measured.height,
+                prepared.metrics.width,
+                prepared.metrics.height,
+            ))
+            .expect("send cached layout result");
+        });
+
+        let (recorded, measured_width, measured_height, prepared_width, prepared_height) =
+            rx.recv().expect("receive cached layout result");
+        assert_eq!(recorded, vec![Some(88)]);
+        assert_eq!(measured_width, prepared_width);
+        assert_eq!(measured_height, prepared_height);
     }
 }

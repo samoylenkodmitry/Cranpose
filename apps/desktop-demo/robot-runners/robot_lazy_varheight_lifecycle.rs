@@ -78,7 +78,9 @@ fn variable_height_lazy_list(state: LazyListState, stats: MutableState<Lifecycle
 
 #[composable]
 fn varheight_test_app() {
-    let stats: MutableState<LifecycleStats> = cranpose_core::useState(LifecycleStats::default);
+    let stats: MutableState<LifecycleStats> =
+        cranpose_core::remember(|| cranpose_core::mutableStateOf(LifecycleStats::default()))
+            .with(|state| *state);
     let state = remember_lazy_list_state();
 
     Column(
@@ -105,7 +107,7 @@ fn varheight_test_app() {
                 TextStyle::default(),
             );
 
-            variable_height_lazy_list(state.clone(), stats);
+            variable_height_lazy_list(state, stats);
         },
     );
 }

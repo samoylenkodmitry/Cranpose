@@ -246,290 +246,259 @@ pub fn mineswapper2_tab() {
             .rounded_corners(24.0)
             .padding(20.0),
         ColumnSpec::default(),
-        {
-            let header_game_state = game_state;
-            let header_flag_mode = flag_mode;
-            let header_preset_state = preset_state;
-            let content_game_state = game_state;
-            let content_flag_mode = flag_mode;
-            move || {
-                Row(
-                    Modifier::empty().fill_max_width().padding(8.0),
-                    RowSpec::new()
-                        .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
-                        .vertical_alignment(VerticalAlignment::CenterVertically),
-                    {
-                        let game_state = header_game_state;
-                        let flag_mode = header_flag_mode;
-                        let preset_state = header_preset_state;
-                        move || {
+        move || {
+            Row(
+                Modifier::empty().fill_max_width().padding(8.0),
+                RowSpec::new()
+                    .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
+                    .vertical_alignment(VerticalAlignment::CenterVertically),
+                move || {
+                    Text(
+                        "Mineswapper 2",
+                        Modifier::empty()
+                            .padding(10.0)
+                            .background(Color(1.0, 1.0, 1.0, 0.08))
+                            .rounded_corners(14.0),
+                        TextStyle::default(),
+                    );
+
+                    Spacer(Size {
+                        width: 0.0,
+                        height: 0.0,
+                    });
+
+                    Row(
+                        Modifier::empty(),
+                        RowSpec::new()
+                            .horizontal_arrangement(LinearArrangement::SpacedBy(8.0))
+                            .vertical_alignment(VerticalAlignment::CenterVertically),
+                        {
+                            move || {
+                                for preset in GRID_PRESETS {
+                                    let is_active = preset_state.get() == preset;
+                                    Button(
+                                        Modifier::empty()
+                                            .rounded_corners(12.0)
+                                            .draw_behind(move |scope| {
+                                                scope.draw_round_rect(
+                                                    Brush::solid(if is_active {
+                                                        Color(0.28, 0.48, 0.88, 1.0)
+                                                    } else {
+                                                        Color(0.20, 0.24, 0.34, 0.8)
+                                                    }),
+                                                    CornerRadii::uniform(12.0),
+                                                );
+                                            })
+                                            .padding(8.0),
+                                        move || {
+                                            preset_state.set(preset);
+                                            game_state.set(MineswapperGame::new_from_preset(
+                                                preset,
+                                                random_seed(),
+                                            ));
+                                        },
+                                        {
+                                            let label = preset.name;
+                                            move || {
+                                                Text(
+                                                    label,
+                                                    Modifier::empty().padding(4.0),
+                                                    TextStyle::default(),
+                                                );
+                                            }
+                                        },
+                                    );
+                                }
+                            }
+                        },
+                    );
+
+                    Button(
+                        Modifier::empty()
+                            .rounded_corners(14.0)
+                            .draw_behind(|scope| {
+                                scope.draw_round_rect(
+                                    Brush::solid(Color(0.2, 0.45, 0.9, 1.0)),
+                                    CornerRadii::uniform(14.0),
+                                );
+                            })
+                            .padding(10.0),
+                        {
+                            move || {
+                                let preset = preset_state.get();
+                                game_state
+                                    .set(MineswapperGame::new_from_preset(preset, random_seed()))
+                            }
+                        },
+                        || {
                             Text(
-                                "Mineswapper 2",
-                                Modifier::empty()
-                                    .padding(10.0)
-                                    .background(Color(1.0, 1.0, 1.0, 0.08))
-                                    .rounded_corners(14.0),
+                                "New Game",
+                                Modifier::empty().padding(4.0),
                                 TextStyle::default(),
                             );
+                        },
+                    );
+                    Button(
+                        Modifier::empty()
+                            .rounded_corners(14.0)
+                            .draw_behind(|scope| {
+                                scope.draw_round_rect(
+                                    Brush::solid(Color(0.45, 0.25, 0.45, 1.0)),
+                                    CornerRadii::uniform(14.0),
+                                );
+                            })
+                            .padding(10.0),
+                        move || {
+                            let next_mode = match flag_mode.get() {
+                                MineswapperTool::Reveal => MineswapperTool::Flag,
+                                MineswapperTool::Flag => MineswapperTool::Reveal,
+                            };
+                            flag_mode.set(next_mode);
+                        },
+                        {
+                            move || {
+                                let label = match flag_mode.get() {
+                                    MineswapperTool::Flag => "Flag mode",
+                                    MineswapperTool::Reveal => "Reveal mode",
+                                };
+                                Text(label, Modifier::empty().padding(4.0), TextStyle::default());
+                            }
+                        },
+                    );
+                },
+            );
 
-                            Spacer(Size {
-                                width: 0.0,
-                                height: 0.0,
-                            });
+            Spacer(Size {
+                width: 0.0,
+                height: 12.0,
+            });
 
-                            Row(
-                                Modifier::empty(),
-                                RowSpec::new()
-                                    .horizontal_arrangement(LinearArrangement::SpacedBy(8.0))
-                                    .vertical_alignment(VerticalAlignment::CenterVertically),
-                                {
-                                    move || {
-                                        for preset in GRID_PRESETS {
-                                            let is_active = preset_state.get() == preset;
-                                            Button(
-                                                Modifier::empty()
-                                                    .rounded_corners(12.0)
-                                                    .draw_behind(move |scope| {
-                                                        scope.draw_round_rect(
-                                                            Brush::solid(if is_active {
-                                                                Color(0.28, 0.48, 0.88, 1.0)
-                                                            } else {
-                                                                Color(0.20, 0.24, 0.34, 0.8)
-                                                            }),
-                                                            CornerRadii::uniform(12.0),
-                                                        );
-                                                    })
-                                                    .padding(8.0),
-                                                move || {
-                                                    preset_state.set(preset);
-                                                    game_state.set(
-                                                        MineswapperGame::new_from_preset(
-                                                            preset,
-                                                            random_seed(),
-                                                        ),
-                                                    );
-                                                },
-                                                {
-                                                    let label = preset.name;
-                                                    move || {
-                                                        Text(
-                                                            label,
-                                                            Modifier::empty().padding(4.0),
-                                                            TextStyle::default(),
-                                                        );
-                                                    }
-                                                },
-                                            );
-                                        }
-                                    }
-                                },
-                            );
+            let game = game_state.get();
+            let flag_mode_value = flag_mode.get();
+            let status_text = if game.is_lost {
+                "You hit a mine!"
+            } else if game.is_won {
+                "You cleared the field!"
+            } else if flag_mode_value == MineswapperTool::Flag {
+                "Flag cells you suspect contain mines"
+            } else {
+                "Reveal safe cells to clear the board"
+            };
 
-                            Button(
-                                Modifier::empty()
-                                    .rounded_corners(14.0)
-                                    .draw_behind(|scope| {
-                                        scope.draw_round_rect(
-                                            Brush::solid(Color(0.2, 0.45, 0.9, 1.0)),
-                                            CornerRadii::uniform(14.0),
-                                        );
-                                    })
-                                    .padding(10.0),
-                                {
-                                    move || {
-                                        let preset = preset_state.get();
-                                        game_state.set(MineswapperGame::new_from_preset(
-                                            preset,
-                                            random_seed(),
-                                        ))
-                                    }
-                                },
-                                || {
-                                    Text(
-                                        "New Game",
-                                        Modifier::empty().padding(4.0),
-                                        TextStyle::default(),
-                                    );
-                                },
-                            );
+            Text(
+                format!(
+                    "{} — Mines: {} | Flags: {} | Seed: {}",
+                    preset_state.get().name,
+                    game.mines,
+                    game.flags_placed(),
+                    game.seed % 100000
+                ),
+                Modifier::empty()
+                    .padding(8.0)
+                    .background(Color(0.15, 0.22, 0.34, 0.7))
+                    .rounded_corners(12.0),
+                TextStyle::default(),
+            );
 
-                            let mode_toggle = flag_mode;
-                            Button(
-                                Modifier::empty()
-                                    .rounded_corners(14.0)
-                                    .draw_behind(|scope| {
-                                        scope.draw_round_rect(
-                                            Brush::solid(Color(0.45, 0.25, 0.45, 1.0)),
-                                            CornerRadii::uniform(14.0),
-                                        );
-                                    })
-                                    .padding(10.0),
-                                move || {
-                                    let next_mode = match mode_toggle.get() {
-                                        MineswapperTool::Reveal => MineswapperTool::Flag,
-                                        MineswapperTool::Flag => MineswapperTool::Reveal,
-                                    };
-                                    mode_toggle.set(next_mode);
-                                },
-                                {
-                                    let mode_label = flag_mode;
-                                    move || {
-                                        let label = match mode_label.get() {
-                                            MineswapperTool::Flag => "Flag mode",
-                                            MineswapperTool::Reveal => "Reveal mode",
-                                        };
-                                        Text(
-                                            label,
-                                            Modifier::empty().padding(4.0),
-                                            TextStyle::default(),
-                                        );
-                                    }
-                                },
-                            );
-                        }
-                    },
-                );
+            Spacer(Size {
+                width: 0.0,
+                height: 8.0,
+            });
 
-                Spacer(Size {
-                    width: 0.0,
-                    height: 12.0,
-                });
+            Text(
+                status_text,
+                Modifier::empty()
+                    .padding(8.0)
+                    .background(Color(0.12, 0.16, 0.28, 0.6))
+                    .rounded_corners(12.0),
+                TextStyle::default(),
+            );
 
-                let game = content_game_state.get();
-                let flag_mode_value = content_flag_mode.get();
-                let status_text = if game.is_lost {
-                    "You hit a mine!"
-                } else if game.is_won {
-                    "You cleared the field!"
-                } else if flag_mode_value == MineswapperTool::Flag {
-                    "Flag cells you suspect contain mines"
-                } else {
-                    "Reveal safe cells to clear the board"
-                };
+            Spacer(Size {
+                width: 0.0,
+                height: 16.0,
+            });
 
-                Text(
-                    format!(
-                        "{} — Mines: {} | Flags: {} | Seed: {}",
-                        preset_state.get().name,
-                        game.mines,
-                        game.flags_placed(),
-                        game.seed % 100000
-                    ),
-                    Modifier::empty()
-                        .padding(8.0)
-                        .background(Color(0.15, 0.22, 0.34, 0.7))
-                        .rounded_corners(12.0),
-                    TextStyle::default(),
-                );
+            let grid_width = game.width;
+            let grid_height = game.height;
 
-                Spacer(Size {
-                    width: 0.0,
-                    height: 8.0,
-                });
-
-                Text(
-                    status_text,
-                    Modifier::empty()
-                        .padding(8.0)
-                        .background(Color(0.12, 0.16, 0.28, 0.6))
-                        .rounded_corners(12.0),
-                    TextStyle::default(),
-                );
-
-                Spacer(Size {
-                    width: 0.0,
-                    height: 16.0,
-                });
-
-                let grid_width = game.width;
-                let grid_height = game.height;
-                let grid_state = content_game_state;
-                let grid_flag_mode = content_flag_mode;
-
-                Column(
-                    Modifier::empty()
-                        .background(Color(0.06, 0.08, 0.16, 0.9))
-                        .rounded_corners(18.0)
-                        .padding(12.0),
-                    ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(6.0)),
-                    move || {
-                        for y in 0..grid_height {
-                            let game_state = grid_state;
-                            let flag_mode = grid_flag_mode;
-                            Row(
-                                Modifier::empty().fill_max_width().padding(2.0),
-                                RowSpec::new()
-                                    .horizontal_arrangement(LinearArrangement::SpacedBy(6.0))
-                                    .vertical_alignment(VerticalAlignment::CenterVertically),
-                                move || {
-                                    for x in 0..grid_width {
-                                        let game_snapshot = game_state.get();
-                                        let cell = *game_snapshot.cell_at(x, y);
-                                        let display = if cell.is_revealed {
-                                            if cell.is_mine {
-                                                "💣".to_string()
-                                            } else if cell.adjacent == 0 {
-                                                "".to_string()
-                                            } else {
-                                                cell.adjacent.to_string()
-                                            }
-                                        } else if cell.is_flagged {
-                                            "🚩".to_string()
-                                        } else {
+            Column(
+                Modifier::empty()
+                    .background(Color(0.06, 0.08, 0.16, 0.9))
+                    .rounded_corners(18.0)
+                    .padding(12.0),
+                ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(6.0)),
+                move || {
+                    for y in 0..grid_height {
+                        Row(
+                            Modifier::empty().fill_max_width().padding(2.0),
+                            RowSpec::new()
+                                .horizontal_arrangement(LinearArrangement::SpacedBy(6.0))
+                                .vertical_alignment(VerticalAlignment::CenterVertically),
+                            move || {
+                                for x in 0..grid_width {
+                                    let game_snapshot = game_state.get();
+                                    let cell = *game_snapshot.cell_at(x, y);
+                                    let display = if cell.is_revealed {
+                                        if cell.is_mine {
+                                            "💣".to_string()
+                                        } else if cell.adjacent == 0 {
                                             "".to_string()
-                                        };
-
-                                        let background = if cell.is_revealed {
-                                            if cell.is_mine {
-                                                Color(0.6, 0.18, 0.2, 0.9)
-                                            } else {
-                                                Color(0.18, 0.26, 0.34, 0.9)
-                                            }
-                                        } else if cell.is_flagged {
-                                            Color(0.26, 0.20, 0.32, 0.9)
                                         } else {
-                                            Color(0.12, 0.14, 0.22, 0.9)
-                                        };
+                                            cell.adjacent.to_string()
+                                        }
+                                    } else if cell.is_flagged {
+                                        "🚩".to_string()
+                                    } else {
+                                        "".to_string()
+                                    };
 
-                                        let game_action = game_state;
-                                        let mode_state = flag_mode;
-                                        Button(
-                                            Modifier::empty()
-                                                .size_points(36.0, 36.0)
-                                                .rounded_corners(8.0)
-                                                .draw_behind(move |scope| {
-                                                    scope.draw_round_rect(
-                                                        Brush::solid(background),
-                                                        CornerRadii::uniform(8.0),
-                                                    );
-                                                }),
-                                            move || match mode_state.get() {
-                                                MineswapperTool::Flag => {
-                                                    game_action
-                                                        .update(|game| game.toggle_flag(x, y));
-                                                }
-                                                MineswapperTool::Reveal => {
-                                                    game_action.update(|game| game.reveal(x, y));
-                                                }
-                                            },
-                                            {
-                                                let display_text = display;
-                                                move || {
-                                                    Text(
-                                                        display_text.clone(),
-                                                        Modifier::empty().padding(4.0),
-                                                        TextStyle::default(),
-                                                    );
-                                                }
-                                            },
-                                        );
-                                    }
-                                },
-                            );
-                        }
-                    },
-                );
-            }
+                                    let background = if cell.is_revealed {
+                                        if cell.is_mine {
+                                            Color(0.6, 0.18, 0.2, 0.9)
+                                        } else {
+                                            Color(0.18, 0.26, 0.34, 0.9)
+                                        }
+                                    } else if cell.is_flagged {
+                                        Color(0.26, 0.20, 0.32, 0.9)
+                                    } else {
+                                        Color(0.12, 0.14, 0.22, 0.9)
+                                    };
+                                    Button(
+                                        Modifier::empty()
+                                            .size_points(36.0, 36.0)
+                                            .rounded_corners(8.0)
+                                            .draw_behind(move |scope| {
+                                                scope.draw_round_rect(
+                                                    Brush::solid(background),
+                                                    CornerRadii::uniform(8.0),
+                                                );
+                                            }),
+                                        move || match flag_mode.get() {
+                                            MineswapperTool::Flag => {
+                                                game_state.update(|game| game.toggle_flag(x, y));
+                                            }
+                                            MineswapperTool::Reveal => {
+                                                game_state.update(|game| game.reveal(x, y));
+                                            }
+                                        },
+                                        {
+                                            let display_text = display.clone();
+                                            move || {
+                                                Text(
+                                                    display_text.clone(),
+                                                    Modifier::empty().padding(4.0),
+                                                    TextStyle::default(),
+                                                );
+                                            }
+                                        },
+                                    );
+                                }
+                            },
+                        );
+                    }
+                },
+            );
         },
     );
 }

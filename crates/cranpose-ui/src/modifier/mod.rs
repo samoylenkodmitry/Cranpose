@@ -13,6 +13,8 @@ use std::rc::Rc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::OnceLock;
 
+use cranpose_core::hash::default;
+
 mod alignment;
 mod background;
 mod blur;
@@ -218,202 +220,168 @@ fn inspector_metadata_enabled() -> bool {
 }
 
 /// Internal representation of modifier composition structure.
-/// This mirrors Jetpack Compose's CombinedModifier pattern where modifiers
-/// form a persistent tree structure instead of eagerly flattening into vectors.
+///
+/// All modifiers are either empty or a flat vector of elements. The `then()`
+/// method eagerly concatenates elements, eliminating recursive tree traversal
+/// and Rc drop overhead from the old `Combined` variant.
 #[derive(Clone)]
 enum ModifierKind {
     /// Empty modifier (like Modifier.companion in Kotlin)
     Empty,
-    /// Single modifier with elements and inspector metadata
+    /// Flat modifier with all elements and inspector metadata concatenated
     Single {
         elements: Rc<Vec<DynModifierElement>>,
         inspector: Rc<Vec<InspectorMetadata>>,
-    },
-    /// Combined modifier tree node (like CombinedModifier in Kotlin)
-    Combined {
-        outer: Rc<Modifier>,
-        inner: Rc<Modifier>,
     },
 }
 
 const FINGERPRINT_KIND_EMPTY: u8 = 0;
 const FINGERPRINT_KIND_SINGLE: u8 = 1;
-const FINGERPRINT_KIND_COMBINED: u8 = 2;
 
-fn empty_fingerprints() -> (u64, u64) {
-    let mut strict_hasher = std::collections::hash_map::DefaultHasher::new();
-    let mut structural_hasher = std::collections::hash_map::DefaultHasher::new();
-    FINGERPRINT_KIND_EMPTY.hash(&mut strict_hasher);
-    FINGERPRINT_KIND_EMPTY.hash(&mut structural_hasher);
-    (strict_hasher.finish(), structural_hasher.finish())
+const FINGERPRINT_EMPTY_STRICT_SEED: u64 = 0x243f_6a88_85a3_08d3;
+const FINGERPRINT_EMPTY_STRUCTURAL_SEED: u64 = 0x1319_8a2e_0370_7344;
+const FINGERPRINT_SINGLE_STRICT_SEED: u64 = 0xa409_3822_299f_31d0;
+const FINGERPRINT_SINGLE_STRUCTURAL_SEED: u64 = 0x082e_fa98_ec4e_6c89;
+const FINGERPRINT_SEQUENCE_MUL: u64 = 0x9e37_79b1_85eb_ca87;
+const FINGERPRINT_STRICT_UPDATE_TAG: u64 = 0xdbe6_d5d5_fe4c_ce2f;
+const FINGERPRINT_STRUCTURAL_DRAW_ONLY_TAG: u64 = 0x94d0_49bb_1331_11eb;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ModifierFingerprints {
+    strict: u64,
+    structural: u64,
 }
 
-fn single_fingerprints(elements: &[DynModifierElement]) -> (u64, u64) {
-    let mut strict_hasher = std::collections::hash_map::DefaultHasher::new();
-    let mut structural_hasher = std::collections::hash_map::DefaultHasher::new();
+#[inline]
+fn mix_fingerprint_bits(mut value: u64) -> u64 {
+    value ^= value >> 33;
+    value = value.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    value ^= value >> 33;
+    value = value.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+    value ^ (value >> 33)
+}
 
-    FINGERPRINT_KIND_SINGLE.hash(&mut strict_hasher);
-    FINGERPRINT_KIND_SINGLE.hash(&mut structural_hasher);
-    elements.len().hash(&mut strict_hasher);
-    elements.len().hash(&mut structural_hasher);
+#[inline]
+fn fold_fingerprint(state: u64, value: u64) -> u64 {
+    mix_fingerprint_bits(state ^ value.wrapping_add(FINGERPRINT_SEQUENCE_MUL))
+        .wrapping_mul(FINGERPRINT_SEQUENCE_MUL)
+}
 
+#[inline]
+fn empty_fingerprints() -> ModifierFingerprints {
+    ModifierFingerprints {
+        strict: fold_fingerprint(FINGERPRINT_EMPTY_STRICT_SEED, FINGERPRINT_KIND_EMPTY as u64),
+        structural: fold_fingerprint(
+            FINGERPRINT_EMPTY_STRUCTURAL_SEED,
+            FINGERPRINT_KIND_EMPTY as u64,
+        ),
+    }
+}
+
+#[inline]
+fn single_fingerprint_seed() -> ModifierFingerprints {
+    let strict = fold_fingerprint(
+        FINGERPRINT_SINGLE_STRICT_SEED,
+        FINGERPRINT_KIND_SINGLE as u64,
+    );
+    let structural = fold_fingerprint(
+        FINGERPRINT_SINGLE_STRUCTURAL_SEED,
+        FINGERPRINT_KIND_SINGLE as u64,
+    );
+    ModifierFingerprints { strict, structural }
+}
+
+#[inline]
+fn element_common_fingerprint(element: &DynModifierElement) -> u64 {
+    let mut hasher = default::new();
+    element.element_type().hash(&mut hasher);
+    element.capabilities().bits().hash(&mut hasher);
+    hasher.finish()
+}
+
+#[inline]
+fn element_fingerprints(element: &DynModifierElement) -> ModifierFingerprints {
+    let common = element_common_fingerprint(element);
+    let requires_update = element.requires_update();
+    let strict_payload = if requires_update {
+        let element_ptr = Rc::as_ptr(element) as *const () as usize as u64;
+        element_ptr ^ FINGERPRINT_STRICT_UPDATE_TAG
+    } else {
+        element.hash_code()
+    };
+    let strict = mix_fingerprint_bits(common ^ strict_payload);
+
+    let is_draw_only = element.capabilities() == NodeCapabilities::DRAW;
+    let structural_payload = if is_draw_only {
+        FINGERPRINT_STRUCTURAL_DRAW_ONLY_TAG
+    } else {
+        element.hash_code()
+    };
+    let structural = mix_fingerprint_bits(common ^ structural_payload);
+
+    ModifierFingerprints { strict, structural }
+}
+
+#[inline]
+fn append_fingerprints(
+    mut fingerprints: ModifierFingerprints,
+    elements: &[DynModifierElement],
+) -> ModifierFingerprints {
     for element in elements {
-        let element_type = element.element_type();
-        let capabilities = element.capabilities();
-        let element_hash = element.hash_code();
-
-        element_type.hash(&mut strict_hasher);
-        capabilities.hash(&mut strict_hasher);
-
-        element_type.hash(&mut structural_hasher);
-        capabilities.hash(&mut structural_hasher);
-
-        let requires_update = element.requires_update();
-        requires_update.hash(&mut strict_hasher);
-        if requires_update {
-            let element_ptr = Rc::as_ptr(element) as *const ();
-            element_ptr.hash(&mut strict_hasher);
-        } else {
-            element_hash.hash(&mut strict_hasher);
-        }
-
-        let is_draw_only = capabilities == NodeCapabilities::DRAW;
-        is_draw_only.hash(&mut structural_hasher);
-        if !is_draw_only {
-            element_hash.hash(&mut structural_hasher);
-        }
+        let element_fingerprints = element_fingerprints(element);
+        fingerprints.strict = fold_fingerprint(fingerprints.strict, element_fingerprints.strict);
+        fingerprints.structural =
+            fold_fingerprint(fingerprints.structural, element_fingerprints.structural);
     }
-
-    (strict_hasher.finish(), structural_hasher.finish())
+    fingerprints
 }
 
-fn combined_fingerprints(outer: &Modifier, inner: &Modifier) -> (u64, u64) {
-    let mut strict_hasher = std::collections::hash_map::DefaultHasher::new();
-    let mut structural_hasher = std::collections::hash_map::DefaultHasher::new();
-
-    FINGERPRINT_KIND_COMBINED.hash(&mut strict_hasher);
-    outer.strict_fingerprint.hash(&mut strict_hasher);
-    inner.strict_fingerprint.hash(&mut strict_hasher);
-
-    FINGERPRINT_KIND_COMBINED.hash(&mut structural_hasher);
-    outer.structural_fingerprint.hash(&mut structural_hasher);
-    inner.structural_fingerprint.hash(&mut structural_hasher);
-
-    (strict_hasher.finish(), structural_hasher.finish())
+fn single_fingerprints(elements: &[DynModifierElement]) -> ModifierFingerprints {
+    append_fingerprints(single_fingerprint_seed(), elements)
 }
 
-/// Iterator over modifier elements that traverses the tree without allocation.
-///
-/// This avoids the O(N) allocation of `Modifier::elements()` by using a stack-based
-/// traversal of the `ModifierKind::Combined` tree structure.
+/// Iterator over modifier elements — simple slice iteration since modifiers
+/// are always flat after `then()` eagerly concatenates.
 pub struct ModifierElementIterator<'a> {
-    /// Stack of modifiers to visit (right-to-left for in-order traversal)
-    stack: Vec<&'a Modifier>,
-    /// Current position within a Single modifier's elements
-    current_elements: Option<(&'a [DynModifierElement], usize)>,
-}
-
-impl<'a> ModifierElementIterator<'a> {
-    fn new(modifier: &'a Modifier) -> Self {
-        let mut iter = Self {
-            stack: Vec::new(),
-            current_elements: None,
-        };
-        iter.push_modifier(modifier);
-        iter
-    }
-
-    fn push_modifier(&mut self, modifier: &'a Modifier) {
-        match &modifier.kind {
-            ModifierKind::Empty => {}
-            ModifierKind::Single { elements, .. } => {
-                if !elements.is_empty() {
-                    self.current_elements = Some((elements.as_slice(), 0));
-                }
-            }
-            ModifierKind::Combined { outer, inner } => {
-                // Push inner first so outer is processed first (stack is LIFO)
-                self.stack.push(inner.as_ref());
-                self.push_modifier(outer.as_ref());
-            }
-        }
-    }
+    inner: std::slice::Iter<'a, DynModifierElement>,
 }
 
 impl<'a> Iterator for ModifierElementIterator<'a> {
     type Item = &'a DynModifierElement;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            // First, try to yield from current elements
-            if let Some((elements, index)) = &mut self.current_elements {
-                if *index < elements.len() {
-                    let element = &elements[*index];
-                    *index += 1;
-                    return Some(element);
-                }
-                self.current_elements = None;
-            }
+        self.inner.next()
+    }
 
-            // Pop next modifier from stack
-            let next_modifier = self.stack.pop()?;
-            self.push_modifier(next_modifier);
-        }
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
     }
 }
 
-/// Iterator over inspector metadata that traverses the tree without allocation.
+impl ExactSizeIterator for ModifierElementIterator<'_> {}
+
+/// Iterator over inspector metadata — simple slice iteration.
 pub(crate) struct ModifierInspectorIterator<'a> {
-    stack: Vec<&'a Modifier>,
-    current_inspector: Option<(&'a [InspectorMetadata], usize)>,
-}
-
-impl<'a> ModifierInspectorIterator<'a> {
-    fn new(modifier: &'a Modifier) -> Self {
-        let mut iter = Self {
-            stack: Vec::new(),
-            current_inspector: None,
-        };
-        iter.push_modifier(modifier);
-        iter
-    }
-
-    fn push_modifier(&mut self, modifier: &'a Modifier) {
-        match &modifier.kind {
-            ModifierKind::Empty => {}
-            ModifierKind::Single { inspector, .. } => {
-                if !inspector.is_empty() {
-                    self.current_inspector = Some((inspector.as_slice(), 0));
-                }
-            }
-            ModifierKind::Combined { outer, inner } => {
-                // Push inner first so outer is processed first (stack is LIFO)
-                self.stack.push(inner.as_ref());
-                self.push_modifier(outer.as_ref());
-            }
-        }
-    }
+    inner: std::slice::Iter<'a, InspectorMetadata>,
 }
 
 impl<'a> Iterator for ModifierInspectorIterator<'a> {
     type Item = &'a InspectorMetadata;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if let Some((inspector, index)) = &mut self.current_inspector {
-                if *index < inspector.len() {
-                    let metadata = &inspector[*index];
-                    *index += 1;
-                    return Some(metadata);
-                }
-                self.current_inspector = None;
-            }
+        self.inner.next()
+    }
 
-            let next_modifier = self.stack.pop()?;
-            self.push_modifier(next_modifier);
-        }
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
     }
 }
+
+impl ExactSizeIterator for ModifierInspectorIterator<'_> {}
 
 /// A modifier chain that can be applied to composable elements.
 ///
@@ -437,15 +405,17 @@ pub struct Modifier {
     kind: ModifierKind,
     strict_fingerprint: u64,
     structural_fingerprint: u64,
+    element_count: usize,
 }
 
 impl Default for Modifier {
     fn default() -> Self {
-        let (strict_fingerprint, structural_fingerprint) = empty_fingerprints();
+        let fingerprints = empty_fingerprints();
         Self {
             kind: ModifierKind::Empty,
-            strict_fingerprint,
-            structural_fingerprint,
+            strict_fingerprint: fingerprints.strict,
+            structural_fingerprint: fingerprints.structural,
+            element_count: 0,
         }
     }
 }
@@ -653,11 +623,8 @@ impl Modifier {
 
     /// Concatenates this modifier with another.
     ///
-    /// This creates a persistent tree structure (CombinedModifier pattern) rather than
-    /// eagerly flattening into a vector, enabling O(1) composition and structural sharing.
-    ///
-    /// Mirrors Jetpack Compose: `infix fun then(other: Modifier): Modifier =
-    ///     if (other === Modifier) this else CombinedModifier(this, other)`
+    /// Eagerly concatenates both element vectors into a single flat `Single`
+    /// variant, avoiding recursive Rc tree overhead on drop and comparison.
     pub fn then(&self, next: Modifier) -> Modifier {
         if self.is_trivially_empty() {
             return next;
@@ -665,58 +632,86 @@ impl Modifier {
         if next.is_trivially_empty() {
             return self.clone();
         }
-        let (strict_fingerprint, structural_fingerprint) = combined_fingerprints(self, &next);
-        Modifier {
-            kind: ModifierKind::Combined {
-                outer: Rc::new(self.clone()),
-                inner: Rc::new(next),
+
+        // Collect elements from both sides into a single Vec
+        let (self_elements, self_inspector) = match &self.kind {
+            ModifierKind::Empty => unreachable!(),
+            ModifierKind::Single {
+                elements,
+                inspector,
+                ..
+            } => (elements.as_ref(), inspector.as_ref()),
+        };
+        let (next_elements, next_inspector) = match &next.kind {
+            ModifierKind::Empty => unreachable!(),
+            ModifierKind::Single {
+                elements,
+                inspector,
+                ..
+            } => (elements.as_ref(), inspector.as_ref()),
+        };
+
+        let mut merged_elements = Vec::with_capacity(self_elements.len() + next_elements.len());
+        merged_elements.extend_from_slice(self_elements);
+        merged_elements.extend_from_slice(next_elements);
+
+        let mut merged_inspector = Vec::with_capacity(self_inspector.len() + next_inspector.len());
+        merged_inspector.extend_from_slice(self_inspector);
+        merged_inspector.extend_from_slice(next_inspector);
+
+        let fingerprints = append_fingerprints(
+            ModifierFingerprints {
+                strict: self.strict_fingerprint,
+                structural: self.structural_fingerprint,
             },
-            strict_fingerprint,
-            structural_fingerprint,
+            next_elements,
+        );
+        Modifier {
+            kind: ModifierKind::Single {
+                elements: Rc::new(merged_elements),
+                inspector: Rc::new(merged_inspector),
+            },
+            strict_fingerprint: fingerprints.strict,
+            structural_fingerprint: fingerprints.structural,
+            element_count: self.element_count + next.element_count,
         }
     }
 
     /// Returns an iterator over the modifier elements without allocation.
-    ///
-    /// This is the preferred method for traversing modifier elements as it avoids
-    /// the O(N) allocation of `elements()`. The iterator traverses the tree structure
-    /// in-place using a stack-based approach.
     pub(crate) fn iter_elements(&self) -> ModifierElementIterator<'_> {
-        ModifierElementIterator::new(self)
+        match &self.kind {
+            ModifierKind::Empty => ModifierElementIterator { inner: [].iter() },
+            ModifierKind::Single { elements, .. } => ModifierElementIterator {
+                inner: elements.iter(),
+            },
+        }
     }
 
     pub(crate) fn iter_inspector_metadata(&self) -> ModifierInspectorIterator<'_> {
-        ModifierInspectorIterator::new(self)
+        match &self.kind {
+            ModifierKind::Empty => ModifierInspectorIterator { inner: [].iter() },
+            ModifierKind::Single { inspector, .. } => ModifierInspectorIterator {
+                inner: inspector.iter(),
+            },
+        }
     }
 
-    /// Returns the flattened list of elements in this modifier chain.
+    /// Returns the list of elements in this modifier chain.
     ///
-    /// **Note:** Consider using `iter_elements()` instead to avoid allocation.
-    /// This method flattens the tree structure on-demand, allocating a new Vec.
+    /// **Note:** Consider using `iter_elements()` instead to avoid cloning.
+    #[cfg(test)]
     pub(crate) fn elements(&self) -> Vec<DynModifierElement> {
         match &self.kind {
             ModifierKind::Empty => Vec::new(),
             ModifierKind::Single { elements, .. } => elements.as_ref().clone(),
-            ModifierKind::Combined { outer, inner } => {
-                let mut result = outer.elements();
-                result.extend(inner.elements());
-                result
-            }
         }
     }
 
-    /// Returns the flattened list of inspector metadata in this modifier chain.
-    /// For backward compatibility, this flattens the tree structure on-demand.
-    /// Note: This allocates a new Vec for Combined modifiers.
+    /// Returns the list of inspector metadata in this modifier chain.
     pub(crate) fn inspector_metadata(&self) -> Vec<InspectorMetadata> {
         match &self.kind {
             ModifierKind::Empty => Vec::new(),
             ModifierKind::Single { inspector, .. } => inspector.as_ref().clone(),
-            ModifierKind::Combined { outer, inner } => {
-                let mut result = outer.inspector_metadata();
-                result.extend(inner.inspector_metadata());
-                result
-            }
         }
     }
 
@@ -793,15 +788,16 @@ impl Modifier {
         if elements.is_empty() {
             Self::default()
         } else {
-            let (strict_fingerprint, structural_fingerprint) =
-                single_fingerprints(elements.as_slice());
+            let element_count = elements.len();
+            let fingerprints = single_fingerprints(elements.as_slice());
             Self {
                 kind: ModifierKind::Single {
                     elements: Rc::new(elements),
                     inspector: Rc::new(Vec::new()),
                 },
-                strict_fingerprint,
-                structural_fingerprint,
+                strict_fingerprint: fingerprints.strict,
+                structural_fingerprint: fingerprints.structural,
+                element_count,
             }
         }
     }
@@ -829,12 +825,8 @@ impl Modifier {
                     },
                     strict_fingerprint: self.strict_fingerprint,
                     structural_fingerprint: self.structural_fingerprint,
+                    element_count: self.element_count,
                 }
-            }
-            ModifierKind::Combined { .. } => {
-                // Combined modifiers shouldn't have inspector metadata added directly
-                // This should only be called on freshly created modifiers
-                panic!("Cannot add inspector metadata to a combined modifier")
             }
         }
     }
@@ -848,6 +840,9 @@ impl Modifier {
     }
 
     fn eq_internal(&self, other: &Self, consider_always_update: bool) -> bool {
+        if self.element_count != other.element_count {
+            return false;
+        }
         if consider_always_update {
             if self.strict_fingerprint != other.strict_fingerprint {
                 return false;
@@ -902,22 +897,6 @@ impl Modifier {
 
                 true
             }
-            (
-                ModifierKind::Combined {
-                    outer: o1,
-                    inner: i1,
-                },
-                ModifierKind::Combined {
-                    outer: o2,
-                    inner: i2,
-                },
-            ) => {
-                if Rc::ptr_eq(o1, o2) && Rc::ptr_eq(i1, i2) {
-                    return true;
-                }
-                o1.as_ref().eq_internal(o2.as_ref(), consider_always_update)
-                    && i1.as_ref().eq_internal(i2.as_ref(), consider_always_update)
-            }
             _ => false,
         }
     }
@@ -940,28 +919,6 @@ impl fmt::Display for Modifier {
                     return write!(f, "Modifier.empty");
                 }
                 write!(f, "Modifier[")?;
-                for (index, element) in elements.iter().enumerate() {
-                    if index > 0 {
-                        write!(f, ", ")?;
-                    }
-                    let name = element.inspector_name();
-                    let mut properties = Vec::new();
-                    element.record_inspector_properties(&mut |prop, value| {
-                        properties.push(format!("{prop}={value}"));
-                    });
-                    if properties.is_empty() {
-                        write!(f, "{name}")?;
-                    } else {
-                        write!(f, "{name}({})", properties.join(", "))?;
-                    }
-                }
-                write!(f, "]")
-            }
-            ModifierKind::Combined { outer: _, inner: _ } => {
-                // Flatten the representation for display
-                // This matches Kotlin's CombinedModifier toString behavior
-                write!(f, "[")?;
-                let elements = self.elements();
                 for (index, element) in elements.iter().enumerate() {
                     if index > 0 {
                         write!(f, ", ")?;

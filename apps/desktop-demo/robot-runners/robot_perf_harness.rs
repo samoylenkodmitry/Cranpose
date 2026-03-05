@@ -27,6 +27,7 @@ const DEFAULT_WARMUP_SECS: u64 = 5;
 const DEFAULT_SAMPLE_INTERVAL_MS: u64 = 200;
 /// Memory growth limit - 512MB is realistic for GPU apps with textures, buffers, and scene graphs
 const DEFAULT_MAX_GROWTH_KB: u64 = 512 * 1024;
+const DEFAULT_TIMEOUT_SLACK_SECS: u64 = 20;
 /// Tiered warning thresholds for memory growth
 const WARN_GROWTH_KB: u64 = 100 * 1024; // 100MB - needs attention
 const ALERT_GROWTH_KB: u64 = 300 * 1024; // 300MB - likely issue
@@ -51,85 +52,94 @@ fn PerfHarnessApp() {
             .padding(12.0)
             .background(Color(0.08, 0.08, 0.1, 1.0)),
         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
-        move || {
-            let input_state = input_state.clone();
-            let input_state_for_row = input_state.clone();
-            Text(
-                "Perf Harness".to_string(),
-                Modifier::empty(),
-                TextStyle::default(),
-            );
-            Row(
-                Modifier::empty(),
-                RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
-                move || {
-                    let input_state = input_state_for_row.clone();
-                    Button(
-                        Modifier::empty().background(Color(0.2, 0.4, 0.7, 1.0)),
-                        move || {
-                            toggle.set(!toggle.get());
-                            counter.set(counter.get().saturating_add(1));
-                        },
-                        || {
-                            Text(
-                                "Toggle".to_string(),
-                                Modifier::empty(),
-                                TextStyle::default(),
-                            );
-                        },
-                    );
-                    Button(
-                        Modifier::empty().background(Color(0.25, 0.5, 0.4, 1.0)),
-                        move || {
-                            dense.set(!dense.get());
-                        },
-                        || {
-                            Text(
-                                "Density".to_string(),
-                                Modifier::empty(),
-                                TextStyle::default(),
-                            );
-                        },
-                    );
-                    {
-                        let input_state = input_state.clone();
-                        Button(
-                            Modifier::empty().background(Color(0.5, 0.3, 0.5, 1.0)),
-                            move || {
-                                let next = input_version.get().saturating_add(1);
-                                input_version.set(next);
-                                input_state.set_text(format!("Input {}", next));
-                            },
-                            || {
-                                Text("Text+".to_string(), Modifier::empty(), TextStyle::default());
-                            },
-                        );
-                    }
-                    Text(
-                        format!("Counter: {}", counter.get()),
-                        Modifier::empty().padding(4.0),
-                        TextStyle::default(),
-                    );
-                },
-            );
+        {
+            let text_field_state = input_state.clone();
+            move || {
+                Text(
+                    "Perf Harness".to_string(),
+                    Modifier::empty(),
+                    TextStyle::default(),
+                );
 
-            let toggle_label = if toggle.get() { "ON" } else { "OFF" };
-            Text(
-                format!("Toggle State: {}", toggle_label),
-                Modifier::empty().padding(2.0),
-                TextStyle::default(),
-            );
-            let density_label = if dense.get() { "ON" } else { "OFF" };
-            Text(
-                format!("Density: {}", density_label),
-                Modifier::empty().padding(2.0),
-                TextStyle::default(),
-            );
-            {
-                let input_state = input_state.clone();
-                let state = input_state.clone();
+                Row(
+                    Modifier::empty(),
+                    RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
+                    {
+                        let input_state = text_field_state.clone();
+                        move || {
+                            Button(
+                                Modifier::empty().background(Color(0.2, 0.4, 0.7, 1.0)),
+                                move || {
+                                    toggle.set(!toggle.get());
+                                    counter.set(counter.get().saturating_add(1));
+                                },
+                                || {
+                                    Text(
+                                        "Toggle".to_string(),
+                                        Modifier::empty(),
+                                        TextStyle::default(),
+                                    );
+                                },
+                            );
+
+                            Button(
+                                Modifier::empty().background(Color(0.25, 0.5, 0.4, 1.0)),
+                                move || {
+                                    dense.set(!dense.get());
+                                },
+                                || {
+                                    Text(
+                                        "Density".to_string(),
+                                        Modifier::empty(),
+                                        TextStyle::default(),
+                                    );
+                                },
+                            );
+
+                            {
+                                let input_state = input_state.clone();
+                                Button(
+                                    Modifier::empty().background(Color(0.5, 0.3, 0.5, 1.0)),
+                                    move || {
+                                        let next = input_version.get().saturating_add(1);
+                                        input_version.set(next);
+                                        input_state.set_text(format!("Input {}", next));
+                                    },
+                                    || {
+                                        Text(
+                                            "Text+".to_string(),
+                                            Modifier::empty(),
+                                            TextStyle::default(),
+                                        );
+                                    },
+                                );
+                            }
+
+                            Text(
+                                format!("Counter: {}", counter.get()),
+                                Modifier::empty().padding(4.0),
+                                TextStyle::default(),
+                            );
+                        }
+                    },
+                );
+
+                let toggle_label = if toggle.get() { "ON" } else { "OFF" };
+                Text(
+                    format!("Toggle State: {}", toggle_label),
+                    Modifier::empty().padding(2.0),
+                    TextStyle::default(),
+                );
+
+                let density_label = if dense.get() { "ON" } else { "OFF" };
+                Text(
+                    format!("Density: {}", density_label),
+                    Modifier::empty().padding(2.0),
+                    TextStyle::default(),
+                );
+
                 BasicTextField(
-                    state,
+                    text_field_state.clone(),
                     Modifier::empty()
                         .fill_max_width()
                         .padding(6.0)
@@ -137,61 +147,61 @@ fn PerfHarnessApp() {
                         .rounded_corners(6.0),
                     TextStyle::default(),
                 );
-            }
 
-            LazyColumn(
-                Modifier::empty()
-                    .fill_max_width()
-                    .height(360.0)
-                    .background(Color(0.05, 0.05, 0.08, 1.0)),
-                list_state,
-                LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(4.0)),
-                |scope| {
-                    scope.items(
-                        item_count,
-                        Some(|i: usize| i as u64),
-                        None::<fn(usize) -> u64>,
-                        move |i| {
-                            let bg = if i % 2 == 0 {
-                                Color(0.12, 0.14, 0.2, 1.0)
-                            } else {
-                                Color(0.1, 0.12, 0.18, 1.0)
-                            };
-                            Box(
-                                Modifier::empty()
-                                    .fill_max_width()
-                                    .height(item_height)
-                                    .padding(6.0)
-                                    .background(bg)
-                                    .rounded_corners(4.0),
-                                BoxSpec::new(),
-                                move || {
-                                    Row(
-                                        Modifier::empty(),
-                                        RowSpec::new().horizontal_arrangement(
-                                            LinearArrangement::SpacedBy(8.0),
-                                        ),
-                                        move || {
-                                            Text(
-                                                format!("Item {}", i),
-                                                Modifier::empty(),
-                                                TextStyle::default(),
-                                            );
-                                            if dense_mode {
+                LazyColumn(
+                    Modifier::empty()
+                        .fill_max_width()
+                        .height(360.0)
+                        .background(Color(0.05, 0.05, 0.08, 1.0)),
+                    list_state,
+                    LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(4.0)),
+                    |scope| {
+                        scope.items(
+                            item_count,
+                            Some(|i: usize| i as u64),
+                            None::<fn(usize) -> u64>,
+                            move |i| {
+                                let bg = if i % 2 == 0 {
+                                    Color(0.12, 0.14, 0.2, 1.0)
+                                } else {
+                                    Color(0.1, 0.12, 0.18, 1.0)
+                                };
+                                Box(
+                                    Modifier::empty()
+                                        .fill_max_width()
+                                        .height(item_height)
+                                        .padding(6.0)
+                                        .background(bg)
+                                        .rounded_corners(4.0),
+                                    BoxSpec::new(),
+                                    move || {
+                                        Row(
+                                            Modifier::empty(),
+                                            RowSpec::new().horizontal_arrangement(
+                                                LinearArrangement::SpacedBy(8.0),
+                                            ),
+                                            move || {
                                                 Text(
-                                                    format!("Detail {}", i * 3),
+                                                    format!("Item {}", i),
                                                     Modifier::empty(),
                                                     TextStyle::default(),
                                                 );
-                                            }
-                                        },
-                                    );
-                                },
-                            );
-                        },
-                    );
-                },
-            );
+                                                if dense_mode {
+                                                    Text(
+                                                        format!("Detail {}", i * 3),
+                                                        Modifier::empty(),
+                                                        TextStyle::default(),
+                                                    );
+                                                }
+                                            },
+                                        );
+                                    },
+                                );
+                            },
+                        );
+                    },
+                );
+            }
         },
     );
 }
@@ -212,6 +222,18 @@ fn env_bool(key: &str, default: bool) -> bool {
             _ => default,
         })
         .unwrap_or(default)
+}
+
+fn timeout_slack_secs_from(value: Option<&str>) -> u64 {
+    value
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_TIMEOUT_SLACK_SECS)
+}
+
+fn timeout_budget_secs(duration_secs: u64, warmup_secs: u64, timeout_slack_secs: u64) -> u64 {
+    duration_secs
+        .saturating_add(warmup_secs)
+        .saturating_add(timeout_slack_secs)
 }
 
 #[cfg(target_os = "linux")]
@@ -245,6 +267,11 @@ fn main() {
     );
     let max_growth_kb = env_u64("CRANPOSE_MEM_MAX_GROWTH_KB", DEFAULT_MAX_GROWTH_KB);
     let validate_mem = env_bool("CRANPOSE_MEM_VALIDATE", true);
+    let timeout_slack_secs = timeout_slack_secs_from(
+        std::env::var("CRANPOSE_PERF_TIMEOUT_SLACK_SECS")
+            .ok()
+            .as_deref(),
+    );
 
     println!("Duration: {}s (warmup {}s)", duration_secs, warmup_secs);
     println!(
@@ -257,7 +284,7 @@ fn main() {
         .with_size(900, 700)
         .with_headless(env_bool("CRANPOSE_HEADLESS", true))
         .with_test_driver(move |robot| {
-            let timeout_secs = duration_secs + warmup_secs + 20;
+            let timeout_secs = timeout_budget_secs(duration_secs, warmup_secs, timeout_slack_secs);
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_secs(timeout_secs));
                 eprintln!("TIMEOUT: Perf harness exceeded {} seconds", timeout_secs);
@@ -431,4 +458,28 @@ fn fast_fling(
         std::thread::sleep(Duration::from_millis(step_delay_ms));
     }
     robot.mouse_up()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{timeout_budget_secs, timeout_slack_secs_from, DEFAULT_TIMEOUT_SLACK_SECS};
+
+    #[test]
+    fn timeout_slack_uses_default_for_missing_or_invalid_values() {
+        assert_eq!(timeout_slack_secs_from(None), DEFAULT_TIMEOUT_SLACK_SECS);
+        assert_eq!(
+            timeout_slack_secs_from(Some("invalid")),
+            DEFAULT_TIMEOUT_SLACK_SECS
+        );
+    }
+
+    #[test]
+    fn timeout_slack_parses_valid_override() {
+        assert_eq!(timeout_slack_secs_from(Some("180")), 180);
+    }
+
+    #[test]
+    fn timeout_budget_adds_duration_warmup_and_slack() {
+        assert_eq!(timeout_budget_secs(2, 3, 180), 185);
+    }
 }

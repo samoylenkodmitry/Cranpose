@@ -14,7 +14,7 @@ description = "Multiplatform system services for Cranpose (HTTP, URI, and OS int
 [dependencies]
 cranpose-core = { workspace = true, features = ["internal"] }
 cranpose-macros = { workspace = true }
-thiserror = "2.0.18"
+thiserror = "1.0.69"
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 open = "5.3.3"
@@ -32,7 +32,7 @@ web-sys = { version = "0.3", features = [
 ] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-reqwest = { version = "0.12.24", default-features = false, features = ["blocking", "rustls-tls"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["blocking", "rustls-tls-webpki-roots"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 webbrowser = "1.0.6"

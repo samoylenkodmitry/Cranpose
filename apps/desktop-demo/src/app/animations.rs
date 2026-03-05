@@ -12,7 +12,7 @@ use cranpose_ui::{
 };
 use cranpose_ui::{LazyColumn, LazyColumnSpec};
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct PulseSample {
     value: cranpose_core::State<f32>,
 }
@@ -70,6 +70,9 @@ pub(crate) fn AnimationsTab() {
         Modifier::empty().fill_max_width().padding(16.0),
         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(16.0)),
         move || {
+            let pulse_value = pulse.value;
+            let slide_value = slide.value;
+            let scale_value = scale.value;
             Text(
                 "Animations Showcase",
                 Modifier::empty().padding(4.0),
@@ -83,7 +86,7 @@ pub(crate) fn AnimationsTab() {
                     let section_style = section_style.clone();
                     move || {
                         Text("Pulse Alpha", Modifier::empty(), section_style.clone());
-                        let alpha = 0.2 + 0.8 * pulse.value.value();
+                        let alpha = 0.2 + 0.8 * pulse_value.value();
                         Row(
                             Modifier::empty()
                                 .fill_max_width()
@@ -116,7 +119,7 @@ pub(crate) fn AnimationsTab() {
                     let section_style = section_style.clone();
                     move || {
                         Text("Slide Offset", Modifier::empty(), section_style.clone());
-                        let offset_x = 8.0 + 140.0 * slide.value.value();
+                        let offset_x = 8.0 + 140.0 * slide_value.value();
                         Row(
                             Modifier::empty()
                                 .fill_max_width()
@@ -167,7 +170,6 @@ pub(crate) fn AnimationsTab() {
                             Modifier::empty(),
                             section_style.clone(),
                         );
-                        let scale_for_layer = scale.value;
                         Row(
                             Modifier::empty()
                                 .fill_max_width()
@@ -179,15 +181,12 @@ pub(crate) fn AnimationsTab() {
                             move || {
                                 Row(
                                     Modifier::empty()
-                                        .graphics_layer({
-                                            let scale_state = scale_for_layer;
-                                            move || {
-                                                let progress = scale_state.value();
-                                                GraphicsLayer {
-                                                    alpha: 0.4 + 0.6 * progress,
-                                                    scale: 0.85 + 0.3 * progress,
-                                                    ..Default::default()
-                                                }
+                                        .graphics_layer(move || {
+                                            let progress = scale_value.value();
+                                            GraphicsLayer {
+                                                alpha: 0.4 + 0.6 * progress,
+                                                scale: 0.85 + 0.3 * progress,
+                                                ..Default::default()
                                             }
                                         })
                                         .width(36.0)

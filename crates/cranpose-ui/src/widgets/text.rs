@@ -15,20 +15,20 @@ use crate::text_modifier_node::TextModifierElement;
 use crate::widgets::Layout;
 use cranpose_core::{MutableState, NodeId, State};
 use cranpose_foundation::modifier_element;
-use std::rc::Rc; // Added Rc import
+use std::rc::Rc;
 
 #[derive(Clone)]
-pub struct DynamicTextSource(Rc<dyn Fn() -> crate::text::AnnotatedString>);
+pub struct DynamicTextSource(Rc<dyn Fn() -> Rc<crate::text::AnnotatedString>>);
 
 impl DynamicTextSource {
     pub fn new<F>(resolver: F) -> Self
     where
-        F: Fn() -> crate::text::AnnotatedString + 'static,
+        F: Fn() -> Rc<crate::text::AnnotatedString> + 'static,
     {
         Self(Rc::new(resolver))
     }
 
-    fn resolve(&self) -> crate::text::AnnotatedString {
+    fn resolve(&self) -> Rc<crate::text::AnnotatedString> {
         (self.0)()
     }
 }
@@ -41,12 +41,12 @@ impl PartialEq for DynamicTextSource {
 
 #[derive(Clone, PartialEq)]
 enum TextSource {
-    Static(crate::text::AnnotatedString),
+    Static(Rc<crate::text::AnnotatedString>),
     Dynamic(DynamicTextSource),
 }
 
 impl TextSource {
-    fn resolve(&self) -> crate::text::AnnotatedString {
+    fn resolve(&self) -> Rc<crate::text::AnnotatedString> {
         match self {
             TextSource::Static(text) => text.clone(),
             TextSource::Dynamic(dynamic) => dynamic.resolve(),
@@ -60,17 +60,23 @@ trait IntoTextSource {
 
 impl IntoTextSource for String {
     fn into_text_source(self) -> TextSource {
-        TextSource::Static(crate::text::AnnotatedString::from(self))
+        TextSource::Static(Rc::new(crate::text::AnnotatedString::from(self)))
     }
 }
 
 impl IntoTextSource for &str {
     fn into_text_source(self) -> TextSource {
-        TextSource::Static(crate::text::AnnotatedString::from(self))
+        TextSource::Static(Rc::new(crate::text::AnnotatedString::from(self)))
     }
 }
 
 impl IntoTextSource for crate::text::AnnotatedString {
+    fn into_text_source(self) -> TextSource {
+        TextSource::Static(Rc::new(self))
+    }
+}
+
+impl IntoTextSource for Rc<crate::text::AnnotatedString> {
     fn into_text_source(self) -> TextSource {
         TextSource::Static(self)
     }
@@ -83,7 +89,9 @@ where
     fn into_text_source(self) -> TextSource {
         let state = self;
         TextSource::Dynamic(DynamicTextSource::new(move || {
-            crate::text::AnnotatedString::from(state.value().to_string())
+            Rc::new(crate::text::AnnotatedString::from(
+                state.value().to_string(),
+            ))
         }))
     }
 }
@@ -95,7 +103,9 @@ where
     fn into_text_source(self) -> TextSource {
         let state = self;
         TextSource::Dynamic(DynamicTextSource::new(move || {
-            crate::text::AnnotatedString::from(state.value().to_string())
+            Rc::new(crate::text::AnnotatedString::from(
+                state.value().to_string(),
+            ))
         }))
     }
 }
@@ -106,7 +116,7 @@ where
 {
     fn into_text_source(self) -> TextSource {
         TextSource::Dynamic(DynamicTextSource::new(move || {
-            crate::text::AnnotatedString::from(self())
+            Rc::new(crate::text::AnnotatedString::from(self()))
         }))
     }
 }

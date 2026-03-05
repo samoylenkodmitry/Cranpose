@@ -541,8 +541,8 @@ fn selective_measure_with_tree_hierarchy() -> Result<(), NodeError> {
     )));
 
     let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
-    root.children.insert(child_a);
-    root.children.insert(child_b);
+    root.children.push(child_a);
+    root.children.push(child_b);
     let root_id = applier.create(Box::new(root));
 
     // First measure
@@ -586,6 +586,63 @@ fn selective_measure_with_tree_hierarchy() -> Result<(), NodeError> {
 }
 
 #[test]
+fn nested_measurement_returns_multiple_scratch_vecs_to_pool() -> Result<(), NodeError> {
+    let mut applier = MemoryApplier::new();
+
+    let leaf_id = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(LeafMeasurePolicy::new(Size {
+            width: 10.0,
+            height: 10.0,
+        })),
+    )));
+
+    let mut child = LayoutNode::new(Modifier::empty().padding(2.0), Rc::new(VerticalStackPolicy));
+    child.children.push(leaf_id);
+    let child_id = applier.create(Box::new(child));
+
+    let mut root = LayoutNode::new(Modifier::empty().padding(4.0), Rc::new(VerticalStackPolicy));
+    root.children.push(child_id);
+    let root_id = applier.create(Box::new(root));
+
+    let guard = ApplierSlotGuard::new(&mut applier);
+    let applier_host = guard.host();
+    let slots_handle = guard.slots_handle();
+    let mut builder =
+        LayoutBuilder::new_with_epoch(Rc::clone(&applier_host), 1, Rc::clone(&slots_handle));
+
+    builder.measure_node(
+        root_id,
+        Constraints {
+            min_width: 0.0,
+            max_width: 100.0,
+            min_height: 0.0,
+            max_height: 100.0,
+        },
+    )?;
+
+    let state = builder.state.borrow();
+    assert!(
+        state.tmp_measurables.available_count() >= 2,
+        "nested measurement should retain multiple measurable scratch vecs"
+    );
+    assert!(
+        state.tmp_records.available_count() >= 2,
+        "nested measurement should retain multiple record scratch vecs"
+    );
+    assert!(
+        state.tmp_child_ids.available_count() >= 2,
+        "nested measurement should retain multiple child-id scratch vecs"
+    );
+    assert!(
+        state.tmp_layout_node_data.available_count() >= 2,
+        "nested measurement should retain multiple modifier scratch vecs"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn dirty_child_triggers_parent_remeasure() -> Result<(), NodeError> {
     use super::bubble_layout_dirty;
     let mut applier = MemoryApplier::new();
@@ -597,7 +654,7 @@ fn dirty_child_triggers_parent_remeasure() -> Result<(), NodeError> {
     )));
 
     let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
-    root.children.insert(child);
+    root.children.push(child);
     let root_id = applier.create(Box::new(root));
 
     // Set up parent links
@@ -649,7 +706,7 @@ fn parent_tracking_basic() -> Result<(), NodeError> {
     )));
 
     let mut parent = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
-    parent.children.insert(child);
+    parent.children.push(child);
     let parent_id = applier.create(Box::new(parent));
 
     // Set IDs on nodes
@@ -690,11 +747,11 @@ fn dirty_bubbling_to_root() -> Result<(), NodeError> {
     )));
 
     let mut middle = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
-    middle.children.insert(leaf);
+    middle.children.push(leaf);
     let middle_id = applier.create(Box::new(middle));
 
     let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
-    root.children.insert(middle_id);
+    root.children.push(middle_id);
     let root_id = applier.create(Box::new(root));
 
     // Set up node IDs and parent relationships
@@ -761,7 +818,7 @@ fn tree_needs_layout_api() -> Result<(), NodeError> {
     )));
 
     let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
-    root.children.insert(child);
+    root.children.push(child);
     let root_id = applier.create(Box::new(root));
 
     // Set up parent links
@@ -821,11 +878,11 @@ fn bubbling_stops_at_already_dirty_ancestor() -> Result<(), NodeError> {
     )));
 
     let mut middle = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
-    middle.children.insert(leaf);
+    middle.children.push(leaf);
     let middle_id = applier.create(Box::new(middle));
 
     let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
-    root.children.insert(middle_id);
+    root.children.push(middle_id);
     let root_id = applier.create(Box::new(root));
 
     // Set up relationships
@@ -896,12 +953,12 @@ fn property_change_bubbles_without_manual_call() -> Result<(), NodeError> {
     // Build tree structure
     applier.with_node::<LayoutNode, _>(root_id, |node| {
         node.set_node_id(root_id);
-        node.children.insert(child_id);
+        node.children.push(child_id);
     })?;
     applier.with_node::<LayoutNode, _>(child_id, |node| {
         node.set_node_id(child_id);
         node.set_parent(root_id);
-        node.children.insert(leaf_id);
+        node.children.push(leaf_id);
     })?;
     applier.with_node::<LayoutNode, _>(leaf_id, |node| {
         node.set_node_id(leaf_id);
@@ -996,7 +1053,9 @@ fn semantics_tree_derives_roles_from_configuration() -> Result<(), NodeError> {
 
     // Measure and build semantics tree
     let measurements = measure_layout(&mut applier, button_id, Size::new(100.0, 100.0))?;
-    let semantics_tree = measurements.semantics_tree();
+    let semantics_tree = measurements
+        .semantics_tree()
+        .expect("expected semantics tree");
     let root = semantics_tree.root();
 
     // Verify the role was derived from is_button flag
@@ -1011,6 +1070,49 @@ fn semantics_tree_derives_roles_from_configuration() -> Result<(), NodeError> {
 
     // Verify description
     assert_eq!(root.description.as_deref(), Some("My Button"));
+
+    Ok(())
+}
+
+#[test]
+fn measure_layout_can_skip_semantics_until_consumer_is_enabled() -> Result<(), NodeError> {
+    let mut applier = MemoryApplier::new();
+
+    let node = LayoutNode::new(
+        Modifier::empty().semantics(|config| {
+            config.content_description = Some("deferred".into());
+        }),
+        Rc::new(MaxSizePolicy),
+    );
+    let node_id = applier.create(Box::new(node));
+
+    let skipped = super::measure_layout_with_options(
+        &mut applier,
+        node_id,
+        Size::new(100.0, 100.0),
+        MeasureLayoutOptions {
+            collect_semantics: false,
+        },
+    )?;
+    assert!(
+        skipped.semantics_tree().is_none(),
+        "semantics tree should be omitted when collection is disabled"
+    );
+    assert!(
+        applier.with_node::<LayoutNode, _>(node_id, |node| node.needs_semantics())?,
+        "skipping semantics collection must preserve the dirty flag"
+    );
+
+    let collected = measure_layout(&mut applier, node_id, Size::new(100.0, 100.0))?;
+    let root = collected
+        .semantics_tree()
+        .expect("semantics tree should exist once collection is enabled")
+        .root();
+    assert_eq!(root.description.as_deref(), Some("deferred"));
+    assert!(
+        !applier.with_node::<LayoutNode, _>(node_id, |node| node.needs_semantics())?,
+        "collecting semantics should clear the dirty flag"
+    );
 
     Ok(())
 }
@@ -1034,7 +1136,9 @@ fn semantics_configuration_merges_multiple_modifiers() -> Result<(), NodeError> 
 
     // Measure and build semantics tree
     let measurements = measure_layout(&mut applier, node_id, Size::new(100.0, 100.0))?;
-    let semantics_tree = measurements.semantics_tree();
+    let semantics_tree = measurements
+        .semantics_tree()
+        .expect("expected semantics tree");
     let root = semantics_tree.root();
 
     // Both semantics should be merged
@@ -1207,8 +1311,8 @@ fn measure_layout_error_preserves_applier_and_slots() -> Result<(), NodeError> {
     )));
 
     let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
-    root.children.insert(child1);
-    root.children.insert(child2);
+    root.children.push(child1);
+    root.children.push(child2);
     let root_id = applier.create(Box::new(root));
 
     // Perform a successful layout first

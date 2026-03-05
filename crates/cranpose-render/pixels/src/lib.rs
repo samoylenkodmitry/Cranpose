@@ -27,7 +27,7 @@ impl Default for PixelsRenderer {
 
 impl PixelsRenderer {
     pub fn new() -> Self {
-        set_text_measurer(draw::CachedRusttypeTextMeasurer::new(64));
+        set_text_measurer(draw::CachedFontTextMeasurer::new(64));
         Self {
             scene: Scene::new(),
         }

@@ -26,8 +26,8 @@ use cranpose_ui::{
     peek_pointer_invalidation, peek_render_invalidation, process_focus_invalidations,
     process_pointer_repasses, request_render_invalidation, take_draw_repass_nodes,
     take_focus_invalidation, take_layout_invalidation, take_pointer_invalidation,
-    take_render_invalidation, HeadlessRenderer, LayoutNode, LayoutTree, SemanticsTree,
-    SubcomposeLayoutNode,
+    take_render_invalidation, HeadlessRenderer, LayoutNode, LayoutTree, MeasureLayoutOptions,
+    SemanticsTree, SubcomposeLayoutNode,
 };
 use cranpose_ui_graphics::{Point, Size};
 use hit_path_tracker::{HitPathTracker, PointerId};
@@ -35,6 +35,12 @@ use std::collections::HashSet;
 
 // Re-export key event types for use by cranpose
 pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType, Modifiers};
+
+#[derive(Copy, Clone)]
+enum DispatchInvalidationKind {
+    Pointer,
+    Focus,
+}
 
 pub struct AppShell<R>
 where
@@ -49,6 +55,7 @@ where
     start_time: Instant,
     layout_tree: Option<LayoutTree>,
     semantics_tree: Option<SemanticsTree>,
+    semantics_enabled: bool,
     layout_dirty: bool,
     scene_dirty: bool,
     is_dirty: bool,
@@ -113,6 +120,7 @@ where
             start_time: Instant::now(),
             layout_tree: None,
             semantics_tree: None,
+            semantics_enabled: false,
             layout_dirty: true,
             scene_dirty: true,
             is_dirty: true,
@@ -773,6 +781,19 @@ where
         self.semantics_tree.as_ref()
     }
 
+    pub fn set_semantics_enabled(&mut self, enabled: bool) {
+        if self.semantics_enabled == enabled {
+            return;
+        }
+        self.semantics_enabled = enabled;
+        if enabled {
+            self.layout_dirty = true;
+            self.mark_dirty();
+        } else {
+            self.semantics_tree = None;
+        }
+    }
+
     fn process_frame(&mut self) {
         // Record frame for FPS tracking
         fps_monitor::record_frame();
@@ -925,9 +946,16 @@ where
             self.layout_dirty = false;
 
             // Ensure slots exist and borrow mutably (handled inside measure_layout via MemoryApplier)
-            match cranpose_ui::measure_layout(&mut applier, root, viewport_size) {
+            match cranpose_ui::measure_layout_with_options(
+                &mut applier,
+                root,
+                viewport_size,
+                MeasureLayoutOptions {
+                    collect_semantics: self.semantics_enabled,
+                },
+            ) {
                 Ok(measurements) => {
-                    self.semantics_tree = Some(measurements.semantics_tree().clone());
+                    self.semantics_tree = measurements.semantics_tree().cloned();
                     self.layout_tree = Some(measurements.into_layout_tree());
                     self.scene_dirty = true;
                 }
@@ -954,19 +982,22 @@ where
         if has_pending_pointer_repasses() {
             let mut applier = self.composition.applier_mut();
             process_pointer_repasses(|node_id| {
-                // Access the LayoutNode and clear its dirty flag
-                let result = applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
-                    if layout_node.needs_pointer_pass() {
-                        layout_node.clear_needs_pointer_pass();
+                match clear_dispatch_invalidation(
+                    &mut applier,
+                    node_id,
+                    DispatchInvalidationKind::Pointer,
+                ) {
+                    Ok(true) => {
                         log::trace!("Cleared pointer repass flag for node #{}", node_id);
                     }
-                });
-                if let Err(err) = result {
-                    log::debug!(
-                        "Could not process pointer repass for node #{}: {}",
-                        node_id,
-                        err
-                    );
+                    Ok(false) => {}
+                    Err(err) => {
+                        log::debug!(
+                            "Could not process pointer repass for node #{}: {}",
+                            node_id,
+                            err
+                        );
+                    }
                 }
             });
         }
@@ -977,19 +1008,22 @@ where
         if has_pending_focus_invalidations() {
             let mut applier = self.composition.applier_mut();
             process_focus_invalidations(|node_id| {
-                // Access the LayoutNode and clear its dirty flag
-                let result = applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
-                    if layout_node.needs_focus_sync() {
-                        layout_node.clear_needs_focus_sync();
+                match clear_dispatch_invalidation(
+                    &mut applier,
+                    node_id,
+                    DispatchInvalidationKind::Focus,
+                ) {
+                    Ok(true) => {
                         log::trace!("Cleared focus sync flag for node #{}", node_id);
                     }
-                });
-                if let Err(err) = result {
-                    log::debug!(
-                        "Could not process focus invalidation for node #{}: {}",
-                        node_id,
-                        err
-                    );
+                    Ok(false) => {}
+                    Err(err) => {
+                        log::debug!(
+                            "Could not process focus invalidation for node #{}: {}",
+                            node_id,
+                            err
+                        );
+                    }
                 }
             });
         }
@@ -1007,21 +1041,31 @@ where
 
         let dirty_set: HashSet<NodeId> = dirty_nodes.into_iter().collect();
         let mut applier = self.composition.applier_mut();
-        refresh_layout_box_data(&mut applier, layout_tree.root_mut(), &dirty_set);
+        let refresh_scope = build_draw_refresh_scope(&mut applier, &dirty_set);
+        refresh_layout_box_data(
+            &mut applier,
+            layout_tree.root_mut(),
+            &refresh_scope,
+            &dirty_set,
+        );
     }
 
     fn run_render_phase(&mut self) {
         let render_dirty = take_render_invalidation();
-        let pointer_dirty = take_pointer_invalidation();
-        let focus_dirty = take_focus_invalidation();
+        take_pointer_invalidation();
+        take_focus_invalidation();
         let draw_repass_pending = cranpose_ui::has_pending_draw_repasses();
         // Tick cursor blink timer - only marks dirty when visibility state changes
         let cursor_blink_dirty = cranpose_ui::tick_cursor_blink();
-        if render_dirty || pointer_dirty || focus_dirty || cursor_blink_dirty || draw_repass_pending
-        {
-            self.scene_dirty = true;
-        }
-        if !self.scene_dirty {
+
+        let render_only_dirty = render_dirty || cursor_blink_dirty;
+        // Pointer/focus queues mutate live node state during dispatch. Direct applier rendering
+        // reads that state on demand, so only real scene dirties require a rebuild here.
+        let needs_scene_rebuild = self.scene_dirty
+            || draw_repass_pending
+            || (self.dev_options.fps_counter && render_only_dirty);
+
+        if !needs_scene_rebuild {
             return;
         }
         self.scene_dirty = false;
@@ -1058,11 +1102,82 @@ where
     }
 }
 
+fn clear_dispatch_invalidation(
+    applier: &mut MemoryApplier,
+    node_id: NodeId,
+    invalidation: DispatchInvalidationKind,
+) -> Result<bool, NodeError> {
+    match invalidation {
+        DispatchInvalidationKind::Pointer => {
+            match applier.with_node::<LayoutNode, _>(node_id, |node| {
+                let needs_pointer_pass = node.needs_pointer_pass();
+                if needs_pointer_pass {
+                    node.clear_needs_pointer_pass();
+                }
+                needs_pointer_pass
+            }) {
+                Ok(cleared) => Ok(cleared),
+                Err(NodeError::TypeMismatch { .. }) => applier
+                    .with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
+                        let needs_pointer_pass = node.needs_pointer_pass();
+                        if needs_pointer_pass {
+                            node.clear_needs_pointer_pass();
+                        }
+                        needs_pointer_pass
+                    }),
+                Err(err) => Err(err),
+            }
+        }
+        DispatchInvalidationKind::Focus => {
+            match applier.with_node::<LayoutNode, _>(node_id, |node| {
+                let needs_focus_sync = node.needs_focus_sync();
+                if needs_focus_sync {
+                    node.clear_needs_focus_sync();
+                }
+                needs_focus_sync
+            }) {
+                Ok(cleared) => Ok(cleared),
+                Err(NodeError::TypeMismatch { .. }) => applier
+                    .with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
+                        let needs_focus_sync = node.needs_focus_sync();
+                        if needs_focus_sync {
+                            node.clear_needs_focus_sync();
+                        }
+                        needs_focus_sync
+                    }),
+                Err(err) => Err(err),
+            }
+        }
+    }
+}
+
+fn build_draw_refresh_scope(
+    applier: &mut MemoryApplier,
+    dirty_nodes: &HashSet<NodeId>,
+) -> HashSet<NodeId> {
+    let mut refresh_scope = HashSet::with_capacity(dirty_nodes.len());
+    for &dirty_node in dirty_nodes {
+        let mut current = Some(dirty_node);
+        while let Some(node_id) = current {
+            if !refresh_scope.insert(node_id) {
+                break;
+            }
+            current = applier.get_mut(node_id).ok().and_then(|node| node.parent());
+        }
+    }
+    refresh_scope
+}
+
 fn refresh_layout_box_data(
     applier: &mut MemoryApplier,
     layout: &mut cranpose_ui::layout::LayoutBox,
+    refresh_scope: &HashSet<NodeId>,
     dirty_nodes: &HashSet<NodeId>,
 ) {
+    if !refresh_scope.contains(&layout.node_id) {
+        return;
+    }
+
     if dirty_nodes.contains(&layout.node_id) {
         if let Ok((modifier, resolved_modifiers, slices)) =
             applier.with_node::<LayoutNode, _>(layout.node_id, |node| {
@@ -1091,7 +1206,7 @@ fn refresh_layout_box_data(
     }
 
     for child in &mut layout.children {
-        refresh_layout_box_data(applier, child, dirty_nodes);
+        refresh_layout_box_data(applier, child, refresh_scope, dirty_nodes);
     }
 }
 

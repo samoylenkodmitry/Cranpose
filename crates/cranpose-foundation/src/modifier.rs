@@ -9,14 +9,13 @@
 
 use std::any::{type_name, Any, TypeId};
 use std::cell::{Cell, RefCell};
-use std::collections::hash_map::DefaultHasher;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::{BitOr, BitOrAssign};
 use std::rc::Rc;
 
+use cranpose_core::hash::default;
 use rustc_hash::FxHashMap;
-use smallvec::SmallVec;
 
 pub use cranpose_ui_graphics::DrawScope;
 pub use cranpose_ui_graphics::Size;
@@ -160,11 +159,15 @@ impl ModifierNodeContext for BasicModifierNodeContext {
 }
 
 /// Path to a node within a modifier chain, supporting delegate navigation.
-/// Uses SmallVec to avoid heap allocation for paths with 0-2 delegates.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Fixed-size Copy type — delegate depth is bounded at 3 in practice
+/// (modifier delegation rarely exceeds 2–3 levels).
+const MAX_DELEGATE_DEPTH: usize = 3;
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct NodePath {
     entry: usize,
-    delegates: SmallVec<[usize; 2]>,
+    delegate_buf: [u8; MAX_DELEGATE_DEPTH],
+    delegate_len: u8,
 }
 
 impl NodePath {
@@ -172,15 +175,31 @@ impl NodePath {
     fn root(entry: usize) -> Self {
         Self {
             entry,
-            delegates: SmallVec::new(),
+            delegate_buf: [0; MAX_DELEGATE_DEPTH],
+            delegate_len: 0,
         }
     }
 
     #[inline]
     fn from_slice(entry: usize, path: &[usize]) -> Self {
+        debug_assert!(
+            path.len() <= MAX_DELEGATE_DEPTH,
+            "delegate depth {} exceeds MAX_DELEGATE_DEPTH {}",
+            path.len(),
+            MAX_DELEGATE_DEPTH
+        );
+        debug_assert!(
+            path.iter().all(|&i| i <= u8::MAX as usize),
+            "delegate index exceeds u8 range"
+        );
+        let mut delegate_buf = [0u8; MAX_DELEGATE_DEPTH];
+        for (i, &v) in path.iter().enumerate().take(MAX_DELEGATE_DEPTH) {
+            delegate_buf[i] = v as u8;
+        }
         Self {
             entry,
-            delegates: SmallVec::from_slice(path),
+            delegate_buf,
+            delegate_len: path.len().min(MAX_DELEGATE_DEPTH) as u8,
         }
     }
 
@@ -190,12 +209,12 @@ impl NodePath {
     }
 
     #[inline]
-    fn delegates(&self) -> &[usize] {
-        &self.delegates
+    fn delegates(&self) -> &[u8] {
+        &self.delegate_buf[..self.delegate_len as usize]
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) enum NodeLink {
     Head,
     Tail,
@@ -270,7 +289,7 @@ impl NodeState {
 
     #[inline]
     pub(crate) fn parent_link(&self) -> Option<NodeLink> {
-        self.parent.borrow().clone()
+        *self.parent.borrow()
     }
 
     pub(crate) fn set_child_link(&self, child: Option<NodeLink>) {
@@ -279,7 +298,7 @@ impl NodeState {
 
     #[inline]
     pub(crate) fn child_link(&self) -> Option<NodeLink> {
-        self.child.borrow().clone()
+        *self.child.borrow()
     }
 
     pub fn set_attached(&self, attached: bool) {
@@ -882,7 +901,7 @@ struct TypedModifierElement<E: ModifierNodeElement> {
 
 impl<E: ModifierNodeElement> TypedModifierElement<E> {
     fn new(element: E) -> Self {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = default::new();
         element.hash(&mut hasher);
         Self {
             element,
@@ -978,17 +997,37 @@ enum TraversalDirection {
     Backward,
 }
 
-/// Iterator walking a modifier chain either from head-to-tail or tail-to-head.
+/// Iterator walking a modifier chain by indexing into `ordered_nodes`.
+///
+/// This avoids the per-step `RefCell::borrow()` + `NodeLink::clone()` cost
+/// of following the linked-list through `NodeState::child`/`parent`.
 pub struct ModifierChainIter<'a> {
-    next: Option<ModifierChainNodeRef<'a>>,
+    chain: &'a ModifierNodeChain,
+    /// Current position in `ordered_nodes`. For forward iteration, starts at 0
+    /// and increments; for backward, starts at len-1 and decrements.
+    cursor: usize,
+    /// Number of elements remaining (avoids underflow on backward iteration).
+    remaining: usize,
     direction: TraversalDirection,
 }
 
 impl<'a> ModifierChainIter<'a> {
-    fn new(start: Option<ModifierChainNodeRef<'a>>, direction: TraversalDirection) -> Self {
+    fn forward(chain: &'a ModifierNodeChain) -> Self {
         Self {
-            next: start,
-            direction,
+            chain,
+            cursor: 0,
+            remaining: chain.ordered_nodes.len(),
+            direction: TraversalDirection::Forward,
+        }
+    }
+
+    fn backward(chain: &'a ModifierNodeChain) -> Self {
+        let len = chain.ordered_nodes.len();
+        Self {
+            chain,
+            cursor: len.wrapping_sub(1),
+            remaining: len,
+            direction: TraversalDirection::Backward,
         }
     }
 }
@@ -998,19 +1037,26 @@ impl<'a> Iterator for ModifierChainIter<'a> {
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        let current = self.next.take()?;
-        if current.is_sentinel() {
-            self.next = None;
+        if self.remaining == 0 {
             return None;
         }
-        self.next = match self.direction {
-            TraversalDirection::Forward => current.child(),
-            TraversalDirection::Backward => current.parent(),
-        };
-        Some(current)
+        let (link, caps, agg) = self.chain.ordered_nodes[self.cursor];
+        let node_ref = self.chain.make_node_ref_with_caps(link, caps, agg);
+        self.remaining -= 1;
+        match self.direction {
+            TraversalDirection::Forward => self.cursor += 1,
+            TraversalDirection::Backward => self.cursor = self.cursor.wrapping_sub(1),
+        }
+        Some(node_ref)
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
     }
 }
 
+impl<'a> ExactSizeIterator for ModifierChainIter<'a> {}
 impl<'a> std::iter::FusedIterator for ModifierChainIter<'a> {}
 
 #[derive(Debug)]
@@ -1171,7 +1217,8 @@ pub struct ModifierNodeChain {
     head_aggregate_child_capabilities: NodeCapabilities,
     head_sentinel: Box<SentinelNode>,
     tail_sentinel: Box<SentinelNode>,
-    ordered_nodes: Vec<NodeLink>,
+    /// (link, own_capabilities, aggregate_child_capabilities)
+    ordered_nodes: Vec<(NodeLink, NodeCapabilities, NodeCapabilities)>,
     // Scratch buffers reused during update to avoid repeated allocations
     scratch_old_used: Vec<bool>,
     scratch_match_order: Vec<Option<usize>>,
@@ -1203,6 +1250,10 @@ impl ModifierNode for SentinelNode {}
 pub struct ModifierChainNodeRef<'a> {
     chain: &'a ModifierNodeChain,
     link: NodeLink,
+    /// Capabilities cached from `ordered_nodes` build time — avoids RefCell borrow in kind_set().
+    cached_capabilities: Option<NodeCapabilities>,
+    /// Aggregate child capabilities cached from `ordered_nodes` — avoids RefCell borrow.
+    cached_aggregate_child: Option<NodeCapabilities>,
 }
 
 impl Default for ModifierNodeChain {
@@ -1628,12 +1679,12 @@ impl ModifierNodeChain {
 
     /// Iterates over the chain from head to tail, skipping sentinels.
     pub fn head_to_tail(&self) -> ModifierChainIter<'_> {
-        ModifierChainIter::new(self.head().child(), TraversalDirection::Forward)
+        ModifierChainIter::forward(self)
     }
 
     /// Iterates over the chain from tail to head, skipping sentinels.
     pub fn tail_to_head(&self) -> ModifierChainIter<'_> {
-        ModifierChainIter::new(self.tail().parent(), TraversalDirection::Backward)
+        ModifierChainIter::backward(self)
     }
 
     /// Calls `f` for every node in insertion order.
@@ -1730,7 +1781,7 @@ impl ModifierNodeChain {
             }
         }
 
-        self.ordered_nodes.iter().find_map(|link| {
+        self.ordered_nodes.iter().find_map(|(link, _caps, _agg)| {
             if matches!(link, NodeLink::Entry(path) if path.delegates().is_empty()) {
                 return None;
             }
@@ -1743,7 +1794,7 @@ impl ModifierNodeChain {
                 }
             };
             if matches_target {
-                Some(self.make_node_ref(link.clone()))
+                Some(self.make_node_ref(*link))
             } else {
                 None
             }
@@ -1792,32 +1843,28 @@ impl ModifierNodeChain {
     where
         F: FnMut(&dyn ModifierNode, NodeCapabilities),
     {
-        for link in &self.ordered_nodes {
+        for (link, cached_caps, _agg) in &self.ordered_nodes {
             match link {
                 NodeLink::Head => {
-                    let node = self.head_sentinel.as_ref();
-                    f(node, node.node_state().capabilities());
+                    f(self.head_sentinel.as_ref(), *cached_caps);
                 }
                 NodeLink::Tail => {
-                    let node = self.tail_sentinel.as_ref();
-                    f(node, node.node_state().capabilities());
+                    f(self.tail_sentinel.as_ref(), *cached_caps);
                 }
                 NodeLink::Entry(path) => {
                     let node_borrow = self.entries[path.entry()].node.borrow();
-                    // Navigate through delegates if path has them
                     if path.delegates().is_empty() {
-                        f(&**node_borrow, node_borrow.node_state().capabilities());
+                        f(&**node_borrow, *cached_caps);
                     } else {
-                        // Navigate to the delegate node
                         let mut current: &dyn ModifierNode = &**node_borrow;
                         for &delegate_index in path.delegates() {
-                            if let Some(delegate) = nth_delegate(current, delegate_index) {
+                            if let Some(delegate) = nth_delegate(current, delegate_index as usize) {
                                 current = delegate;
                             } else {
                                 return; // Invalid delegate path
                             }
                         }
-                        f(current, current.node_state().capabilities());
+                        f(current, *cached_caps);
                     }
                 }
             }
@@ -1830,36 +1877,30 @@ impl ModifierNodeChain {
         F: FnMut(&mut dyn ModifierNode, NodeCapabilities),
     {
         for index in 0..self.ordered_nodes.len() {
-            let link = self.ordered_nodes[index].clone();
+            let (link, cached_caps, _agg) = self.ordered_nodes[index];
             match link {
                 NodeLink::Head => {
-                    let node = self.head_sentinel.as_mut();
-                    let capabilities = node.node_state().capabilities();
-                    f(node, capabilities);
+                    f(self.head_sentinel.as_mut(), cached_caps);
                 }
                 NodeLink::Tail => {
-                    let node = self.tail_sentinel.as_mut();
-                    let capabilities = node.node_state().capabilities();
-                    f(node, capabilities);
+                    f(self.tail_sentinel.as_mut(), cached_caps);
                 }
                 NodeLink::Entry(path) => {
                     let mut node_borrow = self.entries[path.entry()].node.borrow_mut();
-                    // Navigate through delegates if path has them
                     if path.delegates().is_empty() {
-                        let capabilities = node_borrow.node_state().capabilities();
-                        f(&mut **node_borrow, capabilities);
+                        f(&mut **node_borrow, cached_caps);
                     } else {
-                        // Navigate to the delegate node mutably
                         let mut current: &mut dyn ModifierNode = &mut **node_borrow;
                         for &delegate_index in path.delegates() {
-                            if let Some(delegate) = nth_delegate_mut(current, delegate_index) {
+                            if let Some(delegate) =
+                                nth_delegate_mut(current, delegate_index as usize)
+                            {
                                 current = delegate;
                             } else {
                                 return; // Invalid delegate path
                             }
                         }
-                        let capabilities = current.node_state().capabilities();
-                        f(current, capabilities);
+                        f(current, cached_caps);
                     }
                 }
             }
@@ -1867,7 +1908,26 @@ impl ModifierNodeChain {
     }
 
     fn make_node_ref(&self, link: NodeLink) -> ModifierChainNodeRef<'_> {
-        ModifierChainNodeRef { chain: self, link }
+        ModifierChainNodeRef {
+            chain: self,
+            link,
+            cached_capabilities: None,
+            cached_aggregate_child: None,
+        }
+    }
+
+    fn make_node_ref_with_caps(
+        &self,
+        link: NodeLink,
+        caps: NodeCapabilities,
+        aggregate_child: NodeCapabilities,
+    ) -> ModifierChainNodeRef<'_> {
+        ModifierChainNodeRef {
+            chain: self,
+            link,
+            cached_capabilities: Some(caps),
+            cached_aggregate_child: Some(aggregate_child),
+        }
     }
 
     fn sync_chain_links(&mut self) {
@@ -1895,30 +1955,24 @@ impl ModifierNodeChain {
         }
 
         let mut previous = NodeLink::Head;
-        for link in self.ordered_nodes.iter().cloned() {
+        for (link, _caps, _agg) in self.ordered_nodes.iter().copied() {
             // Set child link on previous
             match &previous {
-                NodeLink::Head => self
-                    .head_sentinel
-                    .node_state()
-                    .set_child_link(Some(link.clone())),
-                NodeLink::Tail => self
-                    .tail_sentinel
-                    .node_state()
-                    .set_child_link(Some(link.clone())),
+                NodeLink::Head => self.head_sentinel.node_state().set_child_link(Some(link)),
+                NodeLink::Tail => self.tail_sentinel.node_state().set_child_link(Some(link)),
                 NodeLink::Entry(path) => {
                     let node_borrow = self.entries[path.entry()].node.borrow();
                     // Navigate to delegate if needed
                     if path.delegates().is_empty() {
-                        node_borrow.node_state().set_child_link(Some(link.clone()));
+                        node_borrow.node_state().set_child_link(Some(link));
                     } else {
                         let mut current: &dyn ModifierNode = &**node_borrow;
                         for &delegate_index in path.delegates() {
-                            if let Some(delegate) = nth_delegate(current, delegate_index) {
+                            if let Some(delegate) = nth_delegate(current, delegate_index as usize) {
                                 current = delegate;
                             }
                         }
-                        current.node_state().set_child_link(Some(link.clone()));
+                        current.node_state().set_child_link(Some(link));
                     }
                 }
             }
@@ -1927,26 +1981,24 @@ impl ModifierNodeChain {
                 NodeLink::Head => self
                     .head_sentinel
                     .node_state()
-                    .set_parent_link(Some(previous.clone())),
+                    .set_parent_link(Some(previous)),
                 NodeLink::Tail => self
                     .tail_sentinel
                     .node_state()
-                    .set_parent_link(Some(previous.clone())),
+                    .set_parent_link(Some(previous)),
                 NodeLink::Entry(path) => {
                     let node_borrow = self.entries[path.entry()].node.borrow();
                     // Navigate to delegate if needed
                     if path.delegates().is_empty() {
-                        node_borrow
-                            .node_state()
-                            .set_parent_link(Some(previous.clone()));
+                        node_borrow.node_state().set_parent_link(Some(previous));
                     } else {
                         let mut current: &dyn ModifierNode = &**node_borrow;
                         for &delegate_index in path.delegates() {
-                            if let Some(delegate) = nth_delegate(current, delegate_index) {
+                            if let Some(delegate) = nth_delegate(current, delegate_index as usize) {
                                 current = delegate;
                             }
                         }
-                        current.node_state().set_parent_link(Some(previous.clone()));
+                        current.node_state().set_parent_link(Some(previous));
                     }
                 }
             }
@@ -1973,7 +2025,7 @@ impl ModifierNodeChain {
                 } else {
                     let mut current: &dyn ModifierNode = &**node_borrow;
                     for &delegate_index in path.delegates() {
-                        if let Some(delegate) = nth_delegate(current, delegate_index) {
+                        if let Some(delegate) = nth_delegate(current, delegate_index as usize) {
                             current = delegate;
                         }
                     }
@@ -1983,37 +2035,38 @@ impl ModifierNodeChain {
         }
         self.tail_sentinel
             .node_state()
-            .set_parent_link(Some(previous.clone()));
+            .set_parent_link(Some(previous));
         self.tail_sentinel.node_state().set_child_link(None);
 
         let mut aggregate = NodeCapabilities::empty();
-        for link in self.ordered_nodes.iter().rev() {
+        for (link, cached_caps, cached_aggregate) in self.ordered_nodes.iter_mut().rev() {
+            aggregate |= *cached_caps;
+            *cached_aggregate = aggregate;
+            // Also update NodeState for code that reads through DelegatableNode
             match link {
                 NodeLink::Head => {
-                    let state = self.head_sentinel.node_state();
-                    aggregate |= state.capabilities();
-                    state.set_aggregate_child_capabilities(aggregate);
+                    self.head_sentinel
+                        .node_state()
+                        .set_aggregate_child_capabilities(aggregate);
                 }
                 NodeLink::Tail => {
-                    let state = self.tail_sentinel.node_state();
-                    aggregate |= state.capabilities();
-                    state.set_aggregate_child_capabilities(aggregate);
+                    self.tail_sentinel
+                        .node_state()
+                        .set_aggregate_child_capabilities(aggregate);
                 }
                 NodeLink::Entry(path) => {
                     let node_borrow = self.entries[path.entry()].node.borrow();
-                    // Navigate to delegate if needed
                     let state = if path.delegates().is_empty() {
                         node_borrow.node_state()
                     } else {
                         let mut current: &dyn ModifierNode = &**node_borrow;
                         for &delegate_index in path.delegates() {
-                            if let Some(delegate) = nth_delegate(current, delegate_index) {
+                            if let Some(delegate) = nth_delegate(current, delegate_index as usize) {
                                 current = delegate;
                             }
                         }
                         current.node_state()
                     };
-                    aggregate |= state.capabilities();
                     state.set_aggregate_child_capabilities(aggregate);
                 }
             }
@@ -2031,25 +2084,38 @@ impl ModifierNodeChain {
 
     fn rebuild_ordered_nodes(&mut self) {
         self.ordered_nodes.clear();
+        let mut path_buf = [0usize; MAX_DELEGATE_DEPTH];
         for (index, entry) in self.entries.iter().enumerate() {
-            let mut path = Vec::new();
             let node_borrow = entry.node.borrow();
-            Self::enumerate_link_order(&**node_borrow, index, &mut path, &mut self.ordered_nodes);
+            Self::enumerate_link_order(
+                &**node_borrow,
+                index,
+                &mut path_buf,
+                0,
+                &mut self.ordered_nodes,
+            );
         }
     }
 
     fn enumerate_link_order(
         node: &dyn ModifierNode,
         entry: usize,
-        path: &mut Vec<usize>,
-        out: &mut Vec<NodeLink>,
+        path_buf: &mut [usize; MAX_DELEGATE_DEPTH],
+        path_len: usize,
+        out: &mut Vec<(NodeLink, NodeCapabilities, NodeCapabilities)>,
     ) {
-        out.push(NodeLink::Entry(NodePath::from_slice(entry, path)));
+        let caps = node.node_state().capabilities();
+        out.push((
+            NodeLink::Entry(NodePath::from_slice(entry, &path_buf[..path_len])),
+            caps,
+            NodeCapabilities::empty(),
+        ));
         let mut delegate_index = 0usize;
         node.for_each_delegate(&mut |child| {
-            path.push(delegate_index);
-            Self::enumerate_link_order(child, entry, path, out);
-            path.pop();
+            if path_len < MAX_DELEGATE_DEPTH {
+                path_buf[path_len] = delegate_index;
+                Self::enumerate_link_order(child, entry, path_buf, path_len + 1, out);
+            }
             delegate_index += 1;
         });
     }
@@ -2071,7 +2137,7 @@ impl<'a> ModifierChainNodeRef<'a> {
                     // Navigate to the delegate node
                     let mut current: &dyn ModifierNode = &**node_borrow;
                     for &delegate_index in path.delegates() {
-                        if let Some(delegate) = nth_delegate(current, delegate_index) {
+                        if let Some(delegate) = nth_delegate(current, delegate_index as usize) {
                             current = delegate;
                         } else {
                             // Fallback to root node state if delegate path is invalid
@@ -2099,7 +2165,7 @@ impl<'a> ModifierChainNodeRef<'a> {
                     // Navigate to the delegate node
                     let mut current: &dyn ModifierNode = &**node_borrow;
                     for &delegate_index in path.delegates() {
-                        if let Some(delegate) = nth_delegate(current, delegate_index) {
+                        if let Some(delegate) = nth_delegate(current, delegate_index as usize) {
                             current = delegate;
                         } else {
                             // Return None if delegate path is invalid
@@ -2127,7 +2193,11 @@ impl<'a> ModifierChainNodeRef<'a> {
     }
 
     /// Returns the capability mask for this specific node.
+    #[inline]
     pub fn kind_set(&self) -> NodeCapabilities {
+        if let Some(caps) = self.cached_capabilities {
+            return caps;
+        }
         match &self.link {
             NodeLink::Head | NodeLink::Tail => NodeCapabilities::empty(),
             NodeLink::Entry(_) => self.with_state(|state| state.capabilities()),
@@ -2151,7 +2221,11 @@ impl<'a> ModifierChainNodeRef<'a> {
     }
 
     /// Returns the aggregated capability mask for the subtree rooted at this node.
+    #[inline]
     pub fn aggregate_child_capabilities(&self) -> NodeCapabilities {
+        if let Some(agg) = self.cached_aggregate_child {
+            return agg;
+        }
         if self.is_tail() {
             NodeCapabilities::empty()
         } else {

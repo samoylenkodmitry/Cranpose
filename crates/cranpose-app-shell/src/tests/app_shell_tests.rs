@@ -114,6 +114,52 @@ impl Renderer for RecordingRenderer {
     }
 }
 
+struct CountingRenderer {
+    scene: TestScene,
+    rebuilds: Rc<Cell<usize>>,
+}
+
+impl CountingRenderer {
+    fn new(rebuilds: Rc<Cell<usize>>) -> Self {
+        Self {
+            scene: TestScene,
+            rebuilds,
+        }
+    }
+}
+
+impl Renderer for CountingRenderer {
+    type Scene = TestScene;
+    type Error = ();
+
+    fn scene(&self) -> &Self::Scene {
+        &self.scene
+    }
+
+    fn scene_mut(&mut self) -> &mut Self::Scene {
+        &mut self.scene
+    }
+
+    fn rebuild_scene(
+        &mut self,
+        _layout_tree: &LayoutTree,
+        _viewport: Size,
+    ) -> Result<(), Self::Error> {
+        self.rebuilds.set(self.rebuilds.get() + 1);
+        Ok(())
+    }
+
+    fn rebuild_scene_from_applier(
+        &mut self,
+        _applier: &mut cranpose_core::MemoryApplier,
+        _root: cranpose_core::NodeId,
+        _viewport: Size,
+    ) -> Result<(), Self::Error> {
+        self.rebuilds.set(self.rebuilds.get() + 1);
+        Ok(())
+    }
+}
+
 #[composable]
 fn tabbed_progress_content() {
     let progress = useState(|| 0.6f32);
@@ -190,6 +236,69 @@ fn tabbed_progress_content() {
 
 #[composable]
 fn empty_content() {}
+
+#[composable]
+fn box_content() {
+    Box(
+        Modifier::empty().size(Size {
+            width: 24.0,
+            height: 24.0,
+        }),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+#[composable]
+fn semantics_content() {
+    Text(
+        "Semantics",
+        Modifier::empty().semantics(|config| {
+            config.content_description = Some("Semantics".into());
+        }),
+        TextStyle::default(),
+    );
+}
+
+#[composable]
+fn nested_branch_content() {
+    Column(Modifier::empty(), ColumnSpec::default(), || {
+        Box(
+            Modifier::empty().size(Size {
+                width: 40.0,
+                height: 20.0,
+            }),
+            BoxSpec::default(),
+            || {
+                Box(
+                    Modifier::empty().size(Size {
+                        width: 10.0,
+                        height: 10.0,
+                    }),
+                    BoxSpec::default(),
+                    || {},
+                );
+            },
+        );
+        Box(
+            Modifier::empty().size(Size {
+                width: 50.0,
+                height: 20.0,
+            }),
+            BoxSpec::default(),
+            || {
+                Box(
+                    Modifier::empty().size(Size {
+                        width: 11.0,
+                        height: 11.0,
+                    }),
+                    BoxSpec::default(),
+                    || {},
+                );
+            },
+        );
+    });
+}
 
 #[composable]
 fn draw_width_app(width_state: cranpose_core::MutableState<f32>) {
@@ -304,7 +413,7 @@ fn draw_repass_updates_render_data_without_layout() {
     let width_state = state_holder
         .borrow()
         .as_ref()
-        .copied()
+        .cloned()
         .expect("width state should be captured");
     width_state.set(120.0);
 
@@ -327,6 +436,174 @@ fn draw_repass_updates_render_data_without_layout() {
         (updated_width - 120.0).abs() < 0.1,
         "updated width should reflect latest state"
     );
+}
+
+#[test]
+fn render_invalidation_without_scene_changes_skips_rebuild() {
+    let root_key = location_key(file!(), line!(), column!());
+    let rebuilds = Rc::new(Cell::new(0));
+    let mut shell = AppShell::new(
+        CountingRenderer::new(Rc::clone(&rebuilds)),
+        root_key,
+        box_content,
+    );
+
+    shell.update();
+    rebuilds.set(0);
+
+    cranpose_ui::request_render_invalidation();
+    shell.run_render_phase();
+
+    assert_eq!(
+        rebuilds.get(),
+        0,
+        "pure render invalidation should reuse the retained scene"
+    );
+}
+
+#[test]
+fn pointer_invalidation_without_scene_changes_skips_rebuild() {
+    let root_key = location_key(file!(), line!(), column!());
+    let rebuilds = Rc::new(Cell::new(0));
+    let mut shell = AppShell::new(
+        CountingRenderer::new(Rc::clone(&rebuilds)),
+        root_key,
+        box_content,
+    );
+
+    shell.update();
+    rebuilds.set(0);
+
+    let root = shell.composition.root().expect("expected composition root");
+    shell
+        .composition
+        .applier_mut()
+        .with_node::<LayoutNode, _>(root, |node| {
+            node.mark_needs_pointer_pass();
+        })
+        .expect("expected layout root node");
+    cranpose_ui::schedule_pointer_repass(root);
+    cranpose_ui::request_pointer_invalidation();
+
+    shell.process_frame();
+
+    assert_eq!(
+        rebuilds.get(),
+        0,
+        "pure pointer invalidation should reuse the retained scene"
+    );
+    let needs_pointer_pass = shell
+        .composition
+        .applier_mut()
+        .with_node::<LayoutNode, _>(root, |node| node.needs_pointer_pass())
+        .expect("expected layout root node");
+    assert!(
+        !needs_pointer_pass,
+        "pointer dispatch queue should clear the node dirty flag"
+    );
+}
+
+#[test]
+fn focus_invalidation_without_scene_changes_skips_rebuild() {
+    let root_key = location_key(file!(), line!(), column!());
+    let rebuilds = Rc::new(Cell::new(0));
+    let mut shell = AppShell::new(
+        CountingRenderer::new(Rc::clone(&rebuilds)),
+        root_key,
+        box_content,
+    );
+
+    shell.update();
+    rebuilds.set(0);
+
+    let root = shell.composition.root().expect("expected composition root");
+    shell
+        .composition
+        .applier_mut()
+        .with_node::<LayoutNode, _>(root, |node| {
+            node.mark_needs_focus_sync();
+        })
+        .expect("expected layout root node");
+    cranpose_ui::schedule_focus_invalidation(root);
+    cranpose_ui::request_focus_invalidation();
+
+    shell.process_frame();
+
+    assert_eq!(
+        rebuilds.get(),
+        0,
+        "pure focus invalidation should reuse the retained scene"
+    );
+    let needs_focus_sync = shell
+        .composition
+        .applier_mut()
+        .with_node::<LayoutNode, _>(root, |node| node.needs_focus_sync())
+        .expect("expected layout root node");
+    assert!(
+        !needs_focus_sync,
+        "focus dispatch queue should clear the node dirty flag"
+    );
+}
+
+#[test]
+fn semantics_collection_is_opt_in_for_app_shell() {
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, semantics_content);
+
+    assert!(
+        shell.semantics_tree().is_none(),
+        "app shell should skip semantics work until a consumer is enabled"
+    );
+
+    shell.set_semantics_enabled(true);
+    shell.process_frame();
+    assert!(
+        shell.semantics_tree().is_some(),
+        "enabling semantics should rebuild the tree on the next frame"
+    );
+
+    shell.set_semantics_enabled(false);
+    assert!(
+        shell.semantics_tree().is_none(),
+        "disabling semantics should drop the cached tree"
+    );
+}
+
+#[test]
+fn draw_refresh_scope_only_contains_dirty_ancestors() {
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, nested_branch_content);
+
+    shell.update();
+    let layout_tree = shell.layout_tree().expect("expected layout tree");
+    let root = node_id_at_path(layout_tree.root(), &[]);
+    let left = node_id_at_path(layout_tree.root(), &[0]);
+    let left_leaf = node_id_at_path(layout_tree.root(), &[0, 0]);
+    let right = node_id_at_path(layout_tree.root(), &[1]);
+    let right_leaf = node_id_at_path(layout_tree.root(), &[1, 0]);
+
+    let dirty_nodes = HashSet::from([left_leaf]);
+    let refresh_scope = {
+        let mut applier = shell.composition.applier_mut();
+        build_draw_refresh_scope(&mut applier, &dirty_nodes)
+    };
+
+    assert!(refresh_scope.contains(&root));
+    assert!(refresh_scope.contains(&left));
+    assert!(refresh_scope.contains(&left_leaf));
+    assert!(!refresh_scope.contains(&right));
+    assert!(!refresh_scope.contains(&right_leaf));
+}
+
+fn node_id_at_path(layout: &cranpose_ui::LayoutBox, path: &[usize]) -> cranpose_core::NodeId {
+    let mut current = layout;
+    for &index in path {
+        current = current
+            .children
+            .get(index)
+            .expect("expected layout child at path");
+    }
+    current.node_id
 }
 
 fn find_rect_width(scene: &cranpose_ui::RecordedRenderScene, color: Color) -> Option<f32> {

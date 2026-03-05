@@ -19,6 +19,8 @@ use cranpose_testing::{find_button_in_semantics, find_in_semantics, find_text};
 use desktop_app::app;
 use std::time::Duration;
 
+mod text_input_robot_helpers;
+
 fn main() {
     env_logger::init();
     println!("=== Robot Text Input Value Disappear Bug Test ===");
@@ -57,11 +59,7 @@ fn main() {
                 let cy = y + h / 2.0;
                 println!("  Found 'Text Input' tab at ({:.1}, {:.1})", cx, cy);
 
-                let _ = robot.click(cx, cy);
-                std::thread::sleep(Duration::from_millis(500));
-                let _ = robot.wait_for_idle();
-
-                if find_in_semantics(&robot, |elem| find_text(elem, "Text Input Demo")).is_some() {
+                if text_input_robot_helpers::open_text_input_tab(&robot) {
                     println!("  ✓ Switched to Text Input tab\n");
                 } else {
                     println!("  ✗ FAIL: Could not verify Text Input tab\n");
@@ -96,7 +94,9 @@ fn main() {
             println!("--- Step 3: Click on 'Type here...' input field ---");
 
             if let Some((x, y, w, h)) =
-                find_in_semantics(&robot, |elem| find_text(elem, "Type here..."))
+                text_input_robot_helpers::wait_for_in_semantics(&robot, |robot| {
+                    find_in_semantics(robot, |elem| find_text(elem, "Type here..."))
+                })
             {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;

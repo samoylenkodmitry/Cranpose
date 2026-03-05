@@ -163,10 +163,7 @@ fn main() {
                 let (_, before_y) = before.unwrap();
 
                 // Perform a slow drag (below fling threshold)
-                let start_x = center_x;
-                let start_y = lower_y;
-
-                let _ = robot.mouse_move(start_x, start_y);
+                let _ = robot.mouse_move(center_x, lower_y);
                 std::thread::sleep(Duration::from_millis(50));
                 let _ = robot.mouse_down();
                 std::thread::sleep(Duration::from_millis(100));
@@ -174,8 +171,8 @@ fn main() {
                 // Slow drag - 10 steps over 500ms
                 for i in 1..=10 {
                     let progress = i as f32 / 10.0;
-                    let new_y = start_y - (drag_distance * progress);
-                    let _ = robot.mouse_move(start_x, new_y);
+                    let new_y = lower_y - (drag_distance * progress);
+                    let _ = robot.mouse_move(center_x, new_y);
                     std::thread::sleep(Duration::from_millis(50)); // 50ms per step = slow
                 }
 
@@ -207,10 +204,7 @@ fn main() {
             // TEST 3: Scroll back to top for next tests
             // =========================================================
             test!("Scroll back to top", {
-                let start_x = center_x;
-                let start_y = upper_y;
-
-                let _ = robot.mouse_move(start_x, start_y);
+                let _ = robot.mouse_move(center_x, upper_y);
                 std::thread::sleep(Duration::from_millis(50));
                 let _ = robot.mouse_down();
                 std::thread::sleep(Duration::from_millis(50));
@@ -218,8 +212,8 @@ fn main() {
                 // Drag down to scroll back up
                 for i in 1..=10 {
                     let progress = i as f32 / 10.0;
-                    let new_y = start_y + (drag_distance * progress);
-                    let _ = robot.mouse_move(start_x, new_y);
+                    let new_y = upper_y + (drag_distance * progress);
+                    let _ = robot.mouse_move(center_x, new_y);
                     std::thread::sleep(Duration::from_millis(30));
                 }
 
@@ -244,10 +238,7 @@ fn main() {
                 let before = find_item(&robot, "Item #0");
                 let before_y = before.map(|(_, y)| y).unwrap_or(100.0);
 
-                let start_x = center_x;
-                let start_y = lower_y;
-
-                let _ = robot.mouse_move(start_x, start_y);
+                let _ = robot.mouse_move(center_x, lower_y);
                 std::thread::sleep(Duration::from_millis(50));
                 let _ = robot.mouse_down();
                 std::thread::sleep(Duration::from_millis(20));
@@ -255,8 +246,8 @@ fn main() {
                 // Fast swipe - 5 steps in 50ms = 10ms per step
                 for i in 1..=5 {
                     let progress = i as f32 / 5.0;
-                    let new_y = start_y - (drag_distance * progress);
-                    let _ = robot.mouse_move(start_x, new_y);
+                    let new_y = lower_y - (drag_distance * progress);
+                    let _ = robot.mouse_move(center_x, new_y);
                     std::thread::sleep(Duration::from_millis(10));
                 }
 
@@ -306,15 +297,13 @@ fn main() {
 
                 // Find any visible item
                 // Do first scroll
-                let scroll_x = center_x;
-                let scroll_start_y = lower_y;
                 let scroll_end_y = (lower_y - 50.0).max(upper_y);
 
-                let _ = robot.mouse_move(scroll_x, scroll_start_y);
+                let _ = robot.mouse_move(center_x, lower_y);
                 std::thread::sleep(Duration::from_millis(30));
                 let _ = robot.mouse_down();
                 std::thread::sleep(Duration::from_millis(30));
-                let _ = robot.mouse_move(scroll_x, scroll_end_y);
+                let _ = robot.mouse_move(center_x, scroll_end_y);
                 std::thread::sleep(Duration::from_millis(30));
                 let _ = robot.mouse_up();
                 std::thread::sleep(Duration::from_millis(300));
@@ -325,7 +314,7 @@ fn main() {
                 let after_first_y = after_first.as_ref().map(|(y, _)| *y).unwrap_or(300.0);
 
                 // Do second scroll - START position should NOT jump back
-                let _ = robot.mouse_move(scroll_x, scroll_start_y);
+                let _ = robot.mouse_move(center_x, lower_y);
                 std::thread::sleep(Duration::from_millis(30));
                 let _ = robot.mouse_down();
                 std::thread::sleep(Duration::from_millis(30));

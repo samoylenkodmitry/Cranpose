@@ -93,11 +93,16 @@ impl OffscreenTarget {
 /// Pool of reusable offscreen render targets.
 ///
 /// Targets are returned to the pool after use and reused when a suitable size
-/// is available, avoiding per-frame GPU texture allocation.
+/// is available, avoiding per-frame GPU texture allocation. Capped to prevent
+/// unbounded GPU memory growth from accumulating targets of varying sizes.
 pub(crate) struct OffscreenPool {
     available: Vec<OffscreenTarget>,
     format: wgpu::TextureFormat,
 }
+
+/// Maximum pooled targets. Each target is a GPU texture (4 bytes/pixel RGBA).
+/// At 1920×1080 each is ~8 MB, so 16 targets ≈ 128 MB worst case.
+const MAX_POOLED_TARGETS: usize = 16;
 
 impl OffscreenPool {
     pub fn new(format: wgpu::TextureFormat) -> Self {
@@ -105,6 +110,19 @@ impl OffscreenPool {
             available: Vec::new(),
             format,
         }
+    }
+
+    /// Number of targets currently in the pool.
+    pub fn pool_size(&self) -> usize {
+        self.available.len()
+    }
+
+    /// Approximate GPU memory held by pooled targets (bytes).
+    pub fn estimated_bytes(&self) -> usize {
+        self.available
+            .iter()
+            .map(|t| (t.width as usize) * (t.height as usize) * 4)
+            .sum()
     }
 
     /// Acquire an offscreen target for the given dimensions.
@@ -136,8 +154,13 @@ impl OffscreenPool {
     }
 
     /// Return a target to the pool for future reuse.
+    ///
+    /// Drops the target instead of pooling if the pool is already at capacity.
     pub fn release(&mut self, target: OffscreenTarget) {
-        self.available.push(target);
+        if self.available.len() < MAX_POOLED_TARGETS {
+            self.available.push(target);
+        }
+        // else: target is dropped, freeing GPU memory
     }
 
     /// The bind group layout for sampling offscreen textures.

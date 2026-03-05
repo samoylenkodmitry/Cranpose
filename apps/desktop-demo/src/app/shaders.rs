@@ -183,7 +183,6 @@ fn ValueSlider(
                         );
                     })
                     .pointer_input((), {
-                        let slider_value_state = value;
                         move |scope: PointerInputScope| async move {
                             scope
                                 .await_pointer_event_scope(|await_scope| async move {
@@ -195,13 +194,13 @@ fn ValueSlider(
                                                 dragging = true;
                                                 let raw =
                                                     (event.position.x / width).clamp(0.0, 1.0);
-                                                slider_value_state.set(slider_value(raw, min, max));
+                                                value.set(slider_value(raw, min, max));
                                                 event.consume();
                                             }
                                             PointerEventKind::Move if dragging => {
                                                 let raw =
                                                     (event.position.x / width).clamp(0.0, 1.0);
-                                                slider_value_state.set(slider_value(raw, min, max));
+                                                value.set(slider_value(raw, min, max));
                                                 event.consume();
                                             }
                                             PointerEventKind::Up | PointerEventKind::Cancel => {
@@ -406,13 +405,12 @@ fn InteractiveEffectsDemo() {
                                             Text(
                                                 text,
                                                 Modifier::empty().padding(4.0).draw_behind({
-                                                    let c = color;
                                                     move |scope| {
                                                         scope.draw_round_rect(
                                                             Brush::solid(Color(
-                                                                c.0 * 0.3,
-                                                                c.1 * 0.3,
-                                                                c.2 * 0.3,
+                                                                color.0 * 0.3,
+                                                                color.1 * 0.3,
+                                                                color.2 * 0.3,
                                                                 0.8,
                                                             )),
                                                             CornerRadii::uniform(6.0),
@@ -636,12 +634,9 @@ fn RotationAndTransformOriginCard(checkerboard: ImageBitmap, preview_w: f32, pre
         BoxSpec::default(),
         move || {
             let panel_bitmap_outer = panel_bitmap.clone();
-            let rotation_z_outer = rotation_z;
-            let origin_x_outer = origin_x;
-            let origin_y_outer = origin_y;
-            let rotation_z_value = rotation_z_outer.get();
-            let origin_x_value = origin_x_outer.get();
-            let origin_y_value = origin_y_outer.get();
+            let rotation_z_value = rotation_z.get();
+            let origin_x_value = origin_x.get();
+            let origin_y_value = origin_y.get();
             Box(
                 Modifier::empty()
                     .size_points(preview_w, preview_h)
@@ -684,18 +679,13 @@ fn RotationAndTransformOriginCard(checkerboard: ImageBitmap, preview_w: f32, pre
                             Modifier::empty()
                                 .absolute_offset(28.0, 16.0)
                                 .size_points(124.0, 62.0)
-                                .graphics_layer({
-                                    let rotation_z = rotation_z_outer;
-                                    let origin_x = origin_x_outer;
-                                    let origin_y = origin_y_outer;
-                                    move || GraphicsLayer {
-                                        rotation_z: rotation_z.get(),
-                                        transform_origin: TransformOrigin::new(
-                                            origin_x.get(),
-                                            origin_y.get(),
-                                        ),
-                                        ..Default::default()
-                                    }
+                                .graphics_layer(move || GraphicsLayer {
+                                    rotation_z: rotation_z.get(),
+                                    transform_origin: TransformOrigin::new(
+                                        origin_x.get(),
+                                        origin_y.get(),
+                                    ),
+                                    ..Default::default()
                                 })
                                 .rounded_corners(12.0),
                             Alignment::CENTER,
@@ -746,9 +736,9 @@ fn RotationAndTransformOriginCard(checkerboard: ImageBitmap, preview_w: f32, pre
                         Modifier::empty(),
                         TextStyle { span_style: SpanStyle { color: Some(Color(0.75, 0.82, 0.95, 0.95)), ..Default::default() }, ..Default::default() },
                     );
-                    ValueSlider("rotation_z", rotation_z_outer, -180.0, 180.0, 196.0);
-                    ValueSlider("origin_x", origin_x_outer, 0.0, 1.0, 196.0);
-                    ValueSlider("origin_y", origin_y_outer, 0.0, 1.0, 196.0);
+                    ValueSlider("rotation_z", rotation_z, -180.0, 180.0, 196.0);
+                    ValueSlider("origin_x", origin_x, 0.0, 1.0, 196.0);
+                    ValueSlider("origin_y", origin_y, 0.0, 1.0, 196.0);
                 },
             );
         },
@@ -783,12 +773,8 @@ fn RotationAndCameraDistanceCard(checkerboard: ImageBitmap, preview_w: f32, prev
         move || {
             let near_bitmap_outer = near_bitmap.clone();
             let far_bitmap_outer = far_bitmap.clone();
-            let rotation_x_outer = rotation_x;
-            let rotation_y_outer = rotation_y;
-            let near_distance_outer = near_distance;
-            let far_distance_outer = far_distance;
-            let near_distance_value = near_distance_outer.get();
-            let far_distance_value = far_distance_outer.get();
+            let near_distance_value = near_distance.get();
+            let far_distance_value = far_distance.get();
             Box(
                 Modifier::empty()
                     .size_points(preview_w, preview_h)
@@ -814,16 +800,11 @@ fn RotationAndCameraDistanceCard(checkerboard: ImageBitmap, preview_w: f32, prev
                             Modifier::empty()
                                 .absolute_offset(10.0, 16.0)
                                 .size_points(74.0, 56.0)
-                                .graphics_layer({
-                                    let rotation_x = rotation_x_outer;
-                                    let rotation_y = rotation_y_outer;
-                                    let near_distance = near_distance_outer;
-                                    move || GraphicsLayer {
-                                        rotation_x: rotation_x.get(),
-                                        rotation_y: rotation_y.get(),
-                                        camera_distance: near_distance.get().max(1.0),
-                                        ..Default::default()
-                                    }
+                                .graphics_layer(move || GraphicsLayer {
+                                    rotation_x: rotation_x.get(),
+                                    rotation_y: rotation_y.get(),
+                                    camera_distance: near_distance.get().max(1.0),
+                                    ..Default::default()
                                 })
                                 .rounded_corners(10.0),
                             Alignment::CENTER,
@@ -855,16 +836,11 @@ fn RotationAndCameraDistanceCard(checkerboard: ImageBitmap, preview_w: f32, prev
                             Modifier::empty()
                                 .absolute_offset(102.0, 16.0)
                                 .size_points(74.0, 56.0)
-                                .graphics_layer({
-                                    let rotation_x = rotation_x_outer;
-                                    let rotation_y = rotation_y_outer;
-                                    let far_distance = far_distance_outer;
-                                    move || GraphicsLayer {
-                                        rotation_x: rotation_x.get(),
-                                        rotation_y: rotation_y.get(),
-                                        camera_distance: far_distance.get().max(1.0),
-                                        ..Default::default()
-                                    }
+                                .graphics_layer(move || GraphicsLayer {
+                                    rotation_x: rotation_x.get(),
+                                    rotation_y: rotation_y.get(),
+                                    camera_distance: far_distance.get().max(1.0),
+                                    ..Default::default()
                                 })
                                 .rounded_corners(10.0),
                             Alignment::CENTER,
@@ -919,10 +895,10 @@ fn RotationAndCameraDistanceCard(checkerboard: ImageBitmap, preview_w: f32, prev
                             ..Default::default()
                         },
                     );
-                    ValueSlider("rotation_x", rotation_x_outer, -75.0, 75.0, 196.0);
-                    ValueSlider("rotation_y", rotation_y_outer, -75.0, 75.0, 196.0);
-                    ValueSlider("camera_near", near_distance_outer, 1.0, 28.0, 196.0);
-                    ValueSlider("camera_far", far_distance_outer, 1.0, 52.0, 196.0);
+                    ValueSlider("rotation_x", rotation_x, -75.0, 75.0, 196.0);
+                    ValueSlider("rotation_y", rotation_y, -75.0, 75.0, 196.0);
+                    ValueSlider("camera_near", near_distance, 1.0, 28.0, 196.0);
+                    ValueSlider("camera_far", far_distance, 1.0, 52.0, 196.0);
                 },
             );
         },
@@ -956,12 +932,9 @@ fn ShapeAndClipCard(checkerboard: ImageBitmap, preview_w: f32, preview_h: f32) {
         move || {
             let panel_bitmap_outer = panel_bitmap.clone();
             let overflow_badge_outer = overflow_badge.clone();
-            let corner_radius_outer = corner_radius;
-            let overflow_x_outer = overflow_x;
-            let overflow_y_outer = overflow_y;
-            let corner_radius_value = corner_radius_outer.get();
-            let overflow_x_value = overflow_x_outer.get();
-            let overflow_y_value = overflow_y_outer.get();
+            let corner_radius_value = corner_radius.get();
+            let overflow_x_value = overflow_x.get();
+            let overflow_y_value = overflow_y.get();
             Box(
                 Modifier::empty()
                     .size_points(preview_w, preview_h)
@@ -985,15 +958,12 @@ fn ShapeAndClipCard(checkerboard: ImageBitmap, preview_w: f32, preview_h: f32) {
                             Modifier::empty()
                                 .absolute_offset(8.0, 14.0)
                                 .size_points(84.0, 66.0)
-                                .graphics_layer({
-                                    let corner_radius = corner_radius_outer;
-                                    move || GraphicsLayer {
-                                        shape: LayerShape::Rounded(RoundedCornerShape::uniform(
-                                            corner_radius.get(),
-                                        )),
-                                        clip: false,
-                                        ..Default::default()
-                                    }
+                                .graphics_layer(move || GraphicsLayer {
+                                    shape: LayerShape::Rounded(RoundedCornerShape::uniform(
+                                        corner_radius.get(),
+                                    )),
+                                    clip: false,
+                                    ..Default::default()
                                 }),
                             BoxSpec::default(),
                             {
@@ -1052,15 +1022,12 @@ fn ShapeAndClipCard(checkerboard: ImageBitmap, preview_w: f32, preview_h: f32) {
                             Modifier::empty()
                                 .absolute_offset(98.0, 14.0)
                                 .size_points(84.0, 66.0)
-                                .graphics_layer({
-                                    let corner_radius = corner_radius_outer;
-                                    move || GraphicsLayer {
-                                        shape: LayerShape::Rounded(RoundedCornerShape::uniform(
-                                            corner_radius.get(),
-                                        )),
-                                        clip: true,
-                                        ..Default::default()
-                                    }
+                                .graphics_layer(move || GraphicsLayer {
+                                    shape: LayerShape::Rounded(RoundedCornerShape::uniform(
+                                        corner_radius.get(),
+                                    )),
+                                    clip: true,
+                                    ..Default::default()
                                 }),
                             BoxSpec::default(),
                             {
@@ -1144,9 +1111,9 @@ fn ShapeAndClipCard(checkerboard: ImageBitmap, preview_w: f32, preview_h: f32) {
                             ..Default::default()
                         },
                     );
-                    ValueSlider("corner_radius", corner_radius_outer, 0.0, 32.0, 196.0);
-                    ValueSlider("overflow_x", overflow_x_outer, 18.0, 60.0, 196.0);
-                    ValueSlider("overflow_y", overflow_y_outer, 20.0, 48.0, 196.0);
+                    ValueSlider("corner_radius", corner_radius, 0.0, 32.0, 196.0);
+                    ValueSlider("overflow_x", overflow_x, 18.0, 60.0, 196.0);
+                    ValueSlider("overflow_y", overflow_y, 20.0, 48.0, 196.0);
                 },
             );
         },
@@ -1177,11 +1144,7 @@ fn ShadowFieldsCard(checkerboard: ImageBitmap, preview_w: f32, preview_h: f32) {
         BoxSpec::default(),
         move || {
             let panel_bitmap_outer = panel_bitmap.clone();
-            let shadow_elevation_outer = shadow_elevation;
-            let ambient_alpha_outer = ambient_alpha;
-            let spot_alpha_outer = spot_alpha;
-            let corner_radius_outer = corner_radius;
-            let corner_radius_value = corner_radius_outer.get();
+            let corner_radius_value = corner_radius.get();
             Box(
                 Modifier::empty()
                     .size_points(preview_w, preview_h)
@@ -1241,25 +1204,14 @@ fn ShadowFieldsCard(checkerboard: ImageBitmap, preview_w: f32, preview_h: f32) {
                             Modifier::empty()
                                 .absolute_offset(104.0, 18.0)
                                 .size_points(68.0, 56.0)
-                                .graphics_layer({
-                                    let shadow_elevation = shadow_elevation_outer;
-                                    let ambient_alpha = ambient_alpha_outer;
-                                    let spot_alpha = spot_alpha_outer;
-                                    let corner_radius = corner_radius_outer;
-                                    move || GraphicsLayer {
-                                        shadow_elevation: shadow_elevation.get(),
-                                        ambient_shadow_color: Color(
-                                            0.0,
-                                            0.0,
-                                            0.0,
-                                            ambient_alpha.get(),
-                                        ),
-                                        spot_shadow_color: Color(0.0, 0.0, 0.0, spot_alpha.get()),
-                                        shape: LayerShape::Rounded(RoundedCornerShape::uniform(
-                                            corner_radius.get(),
-                                        )),
-                                        ..Default::default()
-                                    }
+                                .graphics_layer(move || GraphicsLayer {
+                                    shadow_elevation: shadow_elevation.get(),
+                                    ambient_shadow_color: Color(0.0, 0.0, 0.0, ambient_alpha.get()),
+                                    spot_shadow_color: Color(0.0, 0.0, 0.0, spot_alpha.get()),
+                                    shape: LayerShape::Rounded(RoundedCornerShape::uniform(
+                                        corner_radius.get(),
+                                    )),
+                                    ..Default::default()
                                 })
                                 .rounded_corners(corner_radius_value),
                             Alignment::CENTER,
@@ -1307,10 +1259,10 @@ fn ShadowFieldsCard(checkerboard: ImageBitmap, preview_w: f32, preview_h: f32) {
                             ..Default::default()
                         },
                     );
-                    ValueSlider("shadow_elevation", shadow_elevation_outer, 0.0, 32.0, 196.0);
-                    ValueSlider("ambient_alpha", ambient_alpha_outer, 0.0, 1.0, 196.0);
-                    ValueSlider("spot_alpha", spot_alpha_outer, 0.0, 1.0, 196.0);
-                    ValueSlider("corner_radius", corner_radius_outer, 0.0, 20.0, 196.0);
+                    ValueSlider("shadow_elevation", shadow_elevation, 0.0, 32.0, 196.0);
+                    ValueSlider("ambient_alpha", ambient_alpha, 0.0, 1.0, 196.0);
+                    ValueSlider("spot_alpha", spot_alpha, 0.0, 1.0, 196.0);
+                    ValueSlider("corner_radius", corner_radius, 0.0, 20.0, 196.0);
                 },
             );
         },
@@ -1353,37 +1305,17 @@ fn ComposeShadowApiCard(preview_w: f32, preview_h: f32) {
             .padding(8.0),
         BoxSpec::default(),
         move || {
-            let drop_radius_outer = drop_radius;
-            let drop_spread_outer = drop_spread;
-            let drop_offset_x_outer = drop_offset_x;
-            let drop_offset_y_outer = drop_offset_y;
-            let drop_alpha_outer = drop_alpha;
-            let drop_color_mix_outer = drop_color_mix;
-            let drop_brush_mix_outer = drop_brush_mix;
-            let drop_blend_mode_outer = drop_blend_mode;
-            let inner_radius_outer = inner_radius;
-            let inner_spread_outer = inner_spread;
-            let inner_offset_x_outer = inner_offset_x;
-            let inner_offset_y_outer = inner_offset_y;
-            let inner_alpha_outer = inner_alpha;
-            let inner_color_mix_outer = inner_color_mix;
-            let inner_brush_mix_outer = inner_brush_mix;
-            let inner_blend_mode_outer = inner_blend_mode;
-            let corner_radius_outer = corner_radius;
-            let controls_state_outer = controls_state;
-            let corner_radius_value = corner_radius_outer.get();
-            let preview_w_value = preview_w;
-            let preview_h_value = preview_h;
+            let corner_radius_value = corner_radius.get();
 
             Box(
                 Modifier::empty()
-                    .size_points(preview_w_value, preview_h_value)
+                    .size_points(preview_w, preview_h)
                     .draw_behind(move |scope| {
                         scope.draw_round_rect(
                             Brush::linear_gradient_range(
                                 vec![Color(0.08, 0.10, 0.16, 1.0), Color(0.14, 0.17, 0.24, 1.0)],
                                 Point::new(0.0, 0.0),
-                                Point::new(preview_w_value, preview_h_value),
+                                Point::new(preview_w, preview_h),
                             ),
                             CornerRadii::uniform(12.0),
                         );
@@ -1398,38 +1330,28 @@ fn ComposeShadowApiCard(preview_w: f32, preview_h: f32) {
                         Modifier::empty()
                             .absolute_offset(10.0, 20.0)
                             .size_points(50.0, 42.0)
-                            .drop_shadow(shape, {
-                                let drop_radius = drop_radius_outer;
-                                let drop_spread = drop_spread_outer;
-                                let drop_offset_x = drop_offset_x_outer;
-                                let drop_offset_y = drop_offset_y_outer;
-                                let drop_alpha = drop_alpha_outer;
-                                let drop_color_mix = drop_color_mix_outer;
-                                let drop_brush_mix = drop_brush_mix_outer;
-                                let drop_blend_mode = drop_blend_mode_outer;
-                                move |shadow| {
-                                    shadow.radius = drop_radius.get();
-                                    shadow.spread = drop_spread.get();
-                                    shadow.offset =
-                                        Point::new(drop_offset_x.get(), drop_offset_y.get());
-                                    shadow.alpha = drop_alpha.get();
-                                    shadow.color = mix_color(
-                                        Color(0.0, 0.0, 0.0, 1.0),
-                                        Color(0.08, 0.15, 0.36, 1.0),
-                                        drop_color_mix.get(),
-                                    );
-                                    let brush_mix = drop_brush_mix.get().clamp(0.0, 1.0);
-                                    shadow.brush =
-                                        (brush_mix > 0.01).then_some(Brush::vertical_gradient(
-                                            vec![
-                                                shadow.color.with_alpha(0.2 + brush_mix * 0.5),
-                                                shadow.color.with_alpha(0.95),
-                                            ],
-                                            0.0,
-                                            42.0,
-                                        ));
-                                    shadow.blend_mode = shadow_blend_mode(drop_blend_mode.get());
-                                }
+                            .drop_shadow(shape, move |shadow| {
+                                shadow.radius = drop_radius.get();
+                                shadow.spread = drop_spread.get();
+                                shadow.offset =
+                                    Point::new(drop_offset_x.get(), drop_offset_y.get());
+                                shadow.alpha = drop_alpha.get();
+                                shadow.color = mix_color(
+                                    Color(0.0, 0.0, 0.0, 1.0),
+                                    Color(0.08, 0.15, 0.36, 1.0),
+                                    drop_color_mix.get(),
+                                );
+                                let brush_mix = drop_brush_mix.get().clamp(0.0, 1.0);
+                                shadow.brush =
+                                    (brush_mix > 0.01).then_some(Brush::vertical_gradient(
+                                        vec![
+                                            shadow.color.with_alpha(0.2 + brush_mix * 0.5),
+                                            shadow.color.with_alpha(0.95),
+                                        ],
+                                        0.0,
+                                        42.0,
+                                    ));
+                                shadow.blend_mode = shadow_blend_mode(drop_blend_mode.get());
                             })
                             .background(Color(0.95, 0.36, 0.32, 1.0))
                             .rounded_corners(corner_radius_value),
@@ -1454,40 +1376,30 @@ fn ComposeShadowApiCard(preview_w: f32, preview_h: f32) {
                             .size_points(50.0, 42.0)
                             .background(Color(0.95, 0.36, 0.32, 1.0))
                             .rounded_corners(corner_radius_value)
-                            .inner_shadow(shape, {
-                                let inner_radius = inner_radius_outer;
-                                let inner_spread = inner_spread_outer;
-                                let inner_offset_x = inner_offset_x_outer;
-                                let inner_offset_y = inner_offset_y_outer;
-                                let inner_alpha = inner_alpha_outer;
-                                let inner_color_mix = inner_color_mix_outer;
-                                let inner_brush_mix = inner_brush_mix_outer;
-                                let inner_blend_mode = inner_blend_mode_outer;
-                                move |shadow| {
-                                    shadow.radius = inner_radius.get();
-                                    shadow.spread = inner_spread.get();
-                                    shadow.offset =
-                                        Point::new(inner_offset_x.get(), inner_offset_y.get());
-                                    shadow.alpha = inner_alpha.get();
-                                    shadow.color = mix_color(
-                                        Color(0.02, 0.02, 0.04, 1.0),
-                                        Color(0.05, 0.14, 0.36, 1.0),
-                                        inner_color_mix.get(),
-                                    );
-                                    let brush_mix = inner_brush_mix.get().clamp(0.0, 1.0);
-                                    shadow.brush =
-                                        (brush_mix > 0.01).then_some(Brush::vertical_gradient(
-                                            vec![
-                                                shadow.color.with_alpha(0.35 + brush_mix * 0.45),
-                                                shadow
-                                                    .color
-                                                    .with_alpha(0.04 + (1.0 - brush_mix) * 0.18),
-                                            ],
-                                            0.0,
-                                            42.0,
-                                        ));
-                                    shadow.blend_mode = shadow_blend_mode(inner_blend_mode.get());
-                                }
+                            .inner_shadow(shape, move |shadow| {
+                                shadow.radius = inner_radius.get();
+                                shadow.spread = inner_spread.get();
+                                shadow.offset =
+                                    Point::new(inner_offset_x.get(), inner_offset_y.get());
+                                shadow.alpha = inner_alpha.get();
+                                shadow.color = mix_color(
+                                    Color(0.02, 0.02, 0.04, 1.0),
+                                    Color(0.05, 0.14, 0.36, 1.0),
+                                    inner_color_mix.get(),
+                                );
+                                let brush_mix = inner_brush_mix.get().clamp(0.0, 1.0);
+                                shadow.brush =
+                                    (brush_mix > 0.01).then_some(Brush::vertical_gradient(
+                                        vec![
+                                            shadow.color.with_alpha(0.35 + brush_mix * 0.45),
+                                            shadow
+                                                .color
+                                                .with_alpha(0.04 + (1.0 - brush_mix) * 0.18),
+                                        ],
+                                        0.0,
+                                        42.0,
+                                    ));
+                                shadow.blend_mode = shadow_blend_mode(inner_blend_mode.get());
                             }),
                         BoxSpec::default(),
                         move || {},
@@ -1561,7 +1473,7 @@ fn ComposeShadowApiCard(preview_w: f32, preview_h: f32) {
                     })
                     .rounded_corners(8.0)
                     .padding(6.0),
-                controls_state_outer,
+                controls_state,
                 LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(6.0)),
                 move |scope| {
                     scope.item(Some(0), None, move || {
@@ -1591,46 +1503,35 @@ fn ComposeShadowApiCard(preview_w: f32, preview_h: f32) {
                         );
                     });
 
-                    let drop_radius_item = drop_radius_outer;
                     scope.item(Some(2), None, move || {
-                        ValueSlider("drop_radius", drop_radius_item, 0.0, 40.0, 220.0);
+                        ValueSlider("drop_radius", drop_radius, 0.0, 40.0, 220.0);
                     });
-                    let drop_spread_item = drop_spread_outer;
                     scope.item(Some(3), None, move || {
-                        ValueSlider("drop_spread", drop_spread_item, -8.0, 18.0, 220.0);
+                        ValueSlider("drop_spread", drop_spread, -8.0, 18.0, 220.0);
                     });
-                    let drop_offset_x_item = drop_offset_x_outer;
                     scope.item(Some(4), None, move || {
-                        ValueSlider("drop_offset_x", drop_offset_x_item, -20.0, 20.0, 220.0);
+                        ValueSlider("drop_offset_x", drop_offset_x, -20.0, 20.0, 220.0);
                     });
-                    let drop_offset_y_item = drop_offset_y_outer;
                     scope.item(Some(5), None, move || {
-                        ValueSlider("drop_offset_y", drop_offset_y_item, -20.0, 24.0, 220.0);
+                        ValueSlider("drop_offset_y", drop_offset_y, -20.0, 24.0, 220.0);
                     });
-                    let drop_alpha_item = drop_alpha_outer;
                     scope.item(Some(6), None, move || {
-                        ValueSlider("drop_alpha", drop_alpha_item, 0.0, 1.0, 220.0);
+                        ValueSlider("drop_alpha", drop_alpha, 0.0, 1.0, 220.0);
                     });
-                    let drop_color_mix_item = drop_color_mix_outer;
                     scope.item(Some(7), None, move || {
-                        ValueSlider("drop_color_mix", drop_color_mix_item, 0.0, 1.0, 220.0);
+                        ValueSlider("drop_color_mix", drop_color_mix, 0.0, 1.0, 220.0);
                     });
-                    let drop_brush_mix_item = drop_brush_mix_outer;
                     scope.item(Some(8), None, move || {
-                        ValueSlider("drop_brush_mix", drop_brush_mix_item, 0.0, 1.0, 220.0);
+                        ValueSlider("drop_brush_mix", drop_brush_mix, 0.0, 1.0, 220.0);
                     });
-                    let drop_blend_mode_item = drop_blend_mode_outer;
                     scope.item(Some(9), None, move || {
-                        ValueSlider("drop_blend_mode", drop_blend_mode_item, 0.0, 3.0, 220.0);
+                        ValueSlider("drop_blend_mode", drop_blend_mode, 0.0, 3.0, 220.0);
                     });
-                    let drop_blend_mode_label_item = drop_blend_mode_outer;
                     scope.item(Some(10), None, move || {
                         Text(
                             format!(
                                 "drop blend: {}",
-                                shadow_blend_mode_label(shadow_blend_mode(
-                                    drop_blend_mode_label_item.get()
-                                ))
+                                shadow_blend_mode_label(shadow_blend_mode(drop_blend_mode.get()))
                             ),
                             Modifier::empty(),
                             TextStyle {
@@ -1643,46 +1544,35 @@ fn ComposeShadowApiCard(preview_w: f32, preview_h: f32) {
                         );
                     });
 
-                    let inner_radius_item = inner_radius_outer;
                     scope.item(Some(11), None, move || {
-                        ValueSlider("inner_radius", inner_radius_item, 0.0, 24.0, 220.0);
+                        ValueSlider("inner_radius", inner_radius, 0.0, 24.0, 220.0);
                     });
-                    let inner_spread_item = inner_spread_outer;
                     scope.item(Some(12), None, move || {
-                        ValueSlider("inner_spread", inner_spread_item, -10.0, 10.0, 220.0);
+                        ValueSlider("inner_spread", inner_spread, -10.0, 10.0, 220.0);
                     });
-                    let inner_offset_x_item = inner_offset_x_outer;
                     scope.item(Some(13), None, move || {
-                        ValueSlider("inner_offset_x", inner_offset_x_item, -18.0, 18.0, 220.0);
+                        ValueSlider("inner_offset_x", inner_offset_x, -18.0, 18.0, 220.0);
                     });
-                    let inner_offset_y_item = inner_offset_y_outer;
                     scope.item(Some(14), None, move || {
-                        ValueSlider("inner_offset_y", inner_offset_y_item, -18.0, 18.0, 220.0);
+                        ValueSlider("inner_offset_y", inner_offset_y, -18.0, 18.0, 220.0);
                     });
-                    let inner_alpha_item = inner_alpha_outer;
                     scope.item(Some(15), None, move || {
-                        ValueSlider("inner_alpha", inner_alpha_item, 0.0, 1.0, 220.0);
+                        ValueSlider("inner_alpha", inner_alpha, 0.0, 1.0, 220.0);
                     });
-                    let inner_color_mix_item = inner_color_mix_outer;
                     scope.item(Some(16), None, move || {
-                        ValueSlider("inner_color_mix", inner_color_mix_item, 0.0, 1.0, 220.0);
+                        ValueSlider("inner_color_mix", inner_color_mix, 0.0, 1.0, 220.0);
                     });
-                    let inner_brush_mix_item = inner_brush_mix_outer;
                     scope.item(Some(17), None, move || {
-                        ValueSlider("inner_brush_mix", inner_brush_mix_item, 0.0, 1.0, 220.0);
+                        ValueSlider("inner_brush_mix", inner_brush_mix, 0.0, 1.0, 220.0);
                     });
-                    let inner_blend_mode_item = inner_blend_mode_outer;
                     scope.item(Some(18), None, move || {
-                        ValueSlider("inner_blend_mode", inner_blend_mode_item, 0.0, 3.0, 220.0);
+                        ValueSlider("inner_blend_mode", inner_blend_mode, 0.0, 3.0, 220.0);
                     });
-                    let inner_blend_mode_label_item = inner_blend_mode_outer;
                     scope.item(Some(19), None, move || {
                         Text(
                             format!(
                                 "inner blend: {}",
-                                shadow_blend_mode_label(shadow_blend_mode(
-                                    inner_blend_mode_label_item.get()
-                                ))
+                                shadow_blend_mode_label(shadow_blend_mode(inner_blend_mode.get()))
                             ),
                             Modifier::empty(),
                             TextStyle {
@@ -1694,9 +1584,8 @@ fn ComposeShadowApiCard(preview_w: f32, preview_h: f32) {
                             },
                         );
                     });
-                    let corner_radius_item = corner_radius_outer;
                     scope.item(Some(20), None, move || {
-                        ValueSlider("corner_radius", corner_radius_item, 0.0, 20.0, 220.0);
+                        ValueSlider("corner_radius", corner_radius, 0.0, 20.0, 220.0);
                     });
                 },
             );
@@ -1979,7 +1868,6 @@ fn DstOutDrawWithContentCard(
                     // graphicsLayer { compositingStrategy = Offscreen } +
                     // drawWithContent { drawContent(); drawRect(Brush.verticalGradient(...), DstOut) }
                     .graphics_layer({
-                        let preview_alpha = preview_alpha;
                         move || GraphicsLayer {
                             alpha: preview_alpha.get().clamp(0.0, 1.0),
                             compositing_strategy: CompositingStrategy::Offscreen,
@@ -1987,9 +1875,6 @@ fn DstOutDrawWithContentCard(
                         }
                     })
                     .draw_with_content({
-                        let preview_alpha = preview_alpha;
-                        let fade_start = fade_start;
-                        let fade_end = fade_end;
                         move |scope| {
                             scope.draw_content();
                             if preview_alpha.get() > 0.0 {
@@ -2259,7 +2144,6 @@ fn NestedLayerEventDemo(
                         .absolute_offset(24.0, 24.0)
                         .size_points(parent_w, parent_h)
                         .graphics_layer({
-                            let parent_blur_radius = parent_blur_radius;
                             move || GraphicsLayer {
                                 render_effect: Some(RenderEffect::blur_xy(
                                     parent_blur_radius.get(),
@@ -2276,59 +2160,61 @@ fn NestedLayerEventDemo(
                             );
                         }),
                     BoxSpec::default(),
-                    move || {
-                        Text(
-                            "Parent render_effect",
-                            Modifier::empty()
-                                .absolute_offset(10.0, 8.0)
-                                .draw_behind(|scope| {
-                                    scope.draw_round_rect(
-                                        Brush::solid(Color(0.0, 0.0, 0.0, 0.55)),
-                                        CornerRadii::uniform(7.0),
-                                    );
-                                }),
-                            TextStyle {
-                                span_style: SpanStyle {
-                                    color: Some(Color(1.0, 1.0, 1.0, 0.95)),
-                                    ..Default::default()
-                                },
-                                ..Default::default()
-                            },
-                        );
-
-                        Box(
-                            Modifier::empty()
-                                .absolute_offset(108.0, 36.0)
-                                .size_points(92.0, 64.0)
-                                .backdrop_effect(RenderEffect::blur(
-                                    child_backdrop_blur_radius.get(),
-                                ))
-                                .draw_behind(|scope| {
-                                    scope.draw_round_rect(
-                                        Brush::solid(Color(0.6, 1.0, 0.7, 0.28)),
-                                        CornerRadii::uniform(12.0),
-                                    );
-                                }),
-                            BoxSpec::new().content_alignment(Alignment::CENTER),
-                            || {
-                                Text(
-                                    "Child backdrop",
-                                    Modifier::empty().draw_behind(|scope| {
+                    {
+                        move || {
+                            Text(
+                                "Parent render_effect",
+                                Modifier::empty()
+                                    .absolute_offset(10.0, 8.0)
+                                    .draw_behind(|scope| {
                                         scope.draw_round_rect(
-                                            Brush::solid(Color(0.0, 0.0, 0.0, 0.45)),
-                                            CornerRadii::uniform(6.0),
+                                            Brush::solid(Color(0.0, 0.0, 0.0, 0.55)),
+                                            CornerRadii::uniform(7.0),
                                         );
                                     }),
-                                    TextStyle {
-                                        span_style: SpanStyle {
-                                            color: Some(Color(1.0, 1.0, 1.0, 0.95)),
-                                            ..Default::default()
-                                        },
+                                TextStyle {
+                                    span_style: SpanStyle {
+                                        color: Some(Color(1.0, 1.0, 1.0, 0.95)),
                                         ..Default::default()
                                     },
-                                );
-                            },
-                        );
+                                    ..Default::default()
+                                },
+                            );
+
+                            Box(
+                                Modifier::empty()
+                                    .absolute_offset(108.0, 36.0)
+                                    .size_points(92.0, 64.0)
+                                    .backdrop_effect(RenderEffect::blur(
+                                        child_backdrop_blur_radius.get(),
+                                    ))
+                                    .draw_behind(|scope| {
+                                        scope.draw_round_rect(
+                                            Brush::solid(Color(0.6, 1.0, 0.7, 0.28)),
+                                            CornerRadii::uniform(12.0),
+                                        );
+                                    }),
+                                BoxSpec::new().content_alignment(Alignment::CENTER),
+                                || {
+                                    Text(
+                                        "Child backdrop",
+                                        Modifier::empty().draw_behind(|scope| {
+                                            scope.draw_round_rect(
+                                                Brush::solid(Color(0.0, 0.0, 0.0, 0.45)),
+                                                CornerRadii::uniform(6.0),
+                                            );
+                                        }),
+                                        TextStyle {
+                                            span_style: SpanStyle {
+                                                color: Some(Color(1.0, 1.0, 1.0, 0.95)),
+                                                ..Default::default()
+                                            },
+                                            ..Default::default()
+                                        },
+                                    );
+                                },
+                            );
+                        }
                     },
                 );
             }

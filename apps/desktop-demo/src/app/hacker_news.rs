@@ -190,7 +190,6 @@ fn launch_load_more(
         };
 
         let ids_for_task = ids.clone();
-        let ids_for_result = ids;
         let client = client.clone();
         scope.launch_background(
             move |token| async move {
@@ -203,7 +202,7 @@ fn launch_load_more(
                 Ok(new_stories) => {
                     state.update(|current| {
                         if let NewsState::Success(data) = current {
-                            if data.ids != ids_for_result || data.next_index != start {
+                            if data.ids != ids || data.next_index != start {
                                 return;
                             }
                             let updated = data.clone().append_page(new_stories, end);
@@ -215,7 +214,7 @@ fn launch_load_more(
                     log::error!("Failed to load more stories: {}", err);
                     state.update(|current| {
                         if let NewsState::Success(data) = current {
-                            if data.ids != ids_for_result || data.next_index != start {
+                            if data.ids != ids || data.next_index != start {
                                 return;
                             }
                             *current = NewsState::Success(data.clone().with_loading_more(false));
@@ -253,8 +252,6 @@ pub fn hacker_news_tab() {
         LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(12.0)),
         move |scope| {
             scope.item(Some(0), None, {
-                let trigger_state = refresh_trigger;
-                let auto_guard = auto_load_guard;
                 move || {
                     Row(
                         Modifier::empty()
@@ -295,9 +292,11 @@ pub fn hacker_news_tab() {
                                         );
                                     })
                                     .padding(6.0),
-                                move || {
-                                    trigger_state.update(|v| *v = v.wrapping_add(1));
-                                    auto_guard.set(0);
+                                {
+                                    move || {
+                                        refresh_trigger.update(|v| *v = v.wrapping_add(1));
+                                        auto_load_guard.set(0);
+                                    }
                                 },
                                 || {
                                     Text(
@@ -392,8 +391,6 @@ pub fn hacker_news_tab() {
                     });
 
                     scope.item(Some(2), None, {
-                        let trigger = refresh_trigger;
-                        let auto_guard = auto_load_guard;
                         move || {
                             Button(
                                 Modifier::empty()
@@ -401,8 +398,8 @@ pub fn hacker_news_tab() {
                                     .background(Color(0.8, 0.8, 0.8, 1.0))
                                     .rounded_corners(4.0),
                                 move || {
-                                    trigger.update(|v| *v = v.wrapping_add(1));
-                                    auto_guard.set(0);
+                                    refresh_trigger.update(|v| *v = v.wrapping_add(1));
+                                    auto_load_guard.set(0);
                                 },
                                 || {
                                     Text(

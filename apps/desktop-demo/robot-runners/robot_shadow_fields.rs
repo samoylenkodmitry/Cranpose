@@ -99,12 +99,11 @@ fn build_diff_image(
         return None;
     }
     let mut out: RgbaImage = ImageBuffer::new(before.width, before.height);
-    let inner = ring_rect;
     let outer = (
-        inner.0 - SHADOW_RING_MARGIN,
-        inner.1 - SHADOW_RING_MARGIN,
-        inner.2 + SHADOW_RING_MARGIN * 2.0,
-        inner.3 + SHADOW_RING_MARGIN * 2.0,
+        ring_rect.0 - SHADOW_RING_MARGIN,
+        ring_rect.1 - SHADOW_RING_MARGIN,
+        ring_rect.2 + SHADOW_RING_MARGIN * 2.0,
+        ring_rect.3 + SHADOW_RING_MARGIN * 2.0,
     );
 
     for y in 0..before.height {
@@ -116,7 +115,7 @@ fn build_diff_image(
             let da = before.pixels[idx + 3].abs_diff(after.pixels[idx + 3]);
             let dmax = dr.max(dg).max(db).max(da);
             let in_outer = rect_contains(outer, x as f32, y as f32);
-            let in_inner = rect_contains(inner, x as f32, y as f32);
+            let in_inner = rect_contains(ring_rect, x as f32, y as f32);
             let px = if in_outer && !in_inner {
                 if dmax > CHANNEL_THRESHOLD {
                     let intensity = dmax.max(80);

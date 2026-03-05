@@ -3,7 +3,7 @@ use super::font::{FontFamily, FontStyle, FontSynthesis, FontWeight};
 use super::paragraph::{Hyphens, LineBreak, TextAlign, TextDirection, TextIndent};
 use super::unit::TextUnit;
 use crate::modifier::{Brush, Color};
-use std::collections::hash_map::DefaultHasher;
+use cranpose_core::hash::default;
 use std::hash::{Hash, Hasher};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -391,7 +391,7 @@ impl TextStyle {
     }
 
     pub fn measurement_hash(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = default::new();
         let span = &self.span_style;
         let paragraph = &self.paragraph_style;
 

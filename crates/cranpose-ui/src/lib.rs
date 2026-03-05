@@ -51,9 +51,9 @@ pub use layout::{
         Alignment, Arrangement, HorizontalAlignment, LinearArrangement, Measurable, Placeable,
         VerticalAlignment,
     },
-    measure_layout, tree_needs_layout, LayoutBox, LayoutEngine, LayoutMeasurements, LayoutNodeData,
-    LayoutNodeKind, LayoutTree, SemanticsAction, SemanticsCallback, SemanticsNode, SemanticsRole,
-    SemanticsTree,
+    measure_layout, measure_layout_with_options, tree_needs_layout, LayoutBox, LayoutEngine,
+    LayoutMeasurements, LayoutNodeData, LayoutNodeKind, LayoutTree, MeasureLayoutOptions,
+    SemanticsAction, SemanticsCallback, SemanticsNode, SemanticsRole, SemanticsTree,
 };
 pub use modifier::{
     collect_modifier_slices, collect_slices_from_modifier, BlendMode, Brush, Color,
@@ -100,7 +100,8 @@ pub use subcompose_layout::{
 };
 pub use text::{
     get_cursor_x_for_offset, get_offset_for_position, layout_text, measure_text,
-    measure_text_with_options, prepare_text_layout, set_text_measurer, LinkAnnotation,
+    measure_text_for_node, measure_text_with_options, measure_text_with_options_for_node,
+    prepare_text_layout, prepare_text_layout_for_node, set_text_measurer, LinkAnnotation,
     ParagraphStyle, PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle,
     PreparedTextLayout, SpanStyle, StringAnnotation, TextDrawStyle, TextLayoutOptions,
     TextMeasurer, TextMetrics, TextOverflow, TextShaping, TextStyle,

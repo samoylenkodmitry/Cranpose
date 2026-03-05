@@ -19,6 +19,7 @@ const VIEWPORT_TAG: &str = "MarkdownListViewport";
 const SCROLLBAR_TAG: &str = "MarkdownScrollbarRail";
 const DEFAULT_TOP_SENTINEL: &str = "Line 001";
 const DEFAULT_DEEP_SENTINEL: &str = "Line 240";
+const MIN_EXPECTED_LINE_ADVANCE: usize = 20;
 
 struct MockMarkdownClient {
     body: String,
@@ -152,6 +153,61 @@ fn sentinel_bounds(robot: &cranpose::Robot, text: &str) -> Option<(f32, f32, f32
     find_in_semantics(robot, |elem| find_text(elem, text))
 }
 
+fn intersects(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> bool {
+    let ax2 = a.0 + a.2;
+    let ay2 = a.1 + a.3;
+    let bx2 = b.0 + b.2;
+    let by2 = b.1 + b.3;
+    a.0 < bx2 && ax2 > b.0 && a.1 < by2 && ay2 > b.1
+}
+
+fn markdown_line_number(text: &str) -> Option<usize> {
+    let trimmed = text.trim();
+    let line = trimmed
+        .strip_prefix("- Line ")
+        .or_else(|| trimmed.strip_prefix("• Line "))?;
+    line.trim().parse::<usize>().ok()
+}
+
+fn collect_visible_markdown_lines(
+    elem: &cranpose::SemanticElement,
+    viewport_bounds: (f32, f32, f32, f32),
+    out: &mut Vec<(f32, usize)>,
+) {
+    let bounds = (
+        elem.bounds.x,
+        elem.bounds.y,
+        elem.bounds.width,
+        elem.bounds.height,
+    );
+    if intersects(bounds, viewport_bounds) {
+        if let Some(text) = elem.text.as_deref().and_then(markdown_line_number) {
+            out.push((bounds.1, text));
+        }
+    }
+    for child in &elem.children {
+        collect_visible_markdown_lines(child, viewport_bounds, out);
+    }
+}
+
+fn visible_markdown_line_range(
+    robot: &cranpose::Robot,
+    viewport_bounds: (f32, f32, f32, f32),
+) -> Option<(usize, usize)> {
+    let semantics = robot.get_semantics().ok()?;
+    let mut visible_lines = Vec::new();
+    for elem in &semantics {
+        collect_visible_markdown_lines(elem, viewport_bounds, &mut visible_lines);
+    }
+    if visible_lines.is_empty() {
+        return None;
+    }
+    visible_lines.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let first = visible_lines.first().map(|(_, line)| *line)?;
+    let last = visible_lines.iter().map(|(_, line)| *line).max()?;
+    Some((first, last))
+}
+
 fn main() {
     env_logger::init();
     println!("=== Markdown Scrollbar Robot Test ===");
@@ -242,12 +298,15 @@ fn main() {
                 rail_bounds.3
             );
 
+            let before_line_range = visible_markdown_line_range(&robot, viewport_bounds);
             let before_bottom_visible = if deep_sentinel.is_empty() {
                 false
             } else {
                 find_in_semantics(&robot, |elem| find_text(elem, &deep_sentinel)).is_some()
             };
-            println!("before_drag bottom_visible={before_bottom_visible}");
+            println!(
+                "before_drag bottom_visible={before_bottom_visible} line_range={before_line_range:?}"
+            );
 
             let mut after_bottom_visible = false;
             for loop_idx in 0..drag_loops {
@@ -262,11 +321,23 @@ fn main() {
                 }
             }
 
-            println!("after_drag bottom_visible={after_bottom_visible}");
-            if drag_loops > 0 && !deep_sentinel.is_empty() && !after_bottom_visible {
+            let after_line_range = visible_markdown_line_range(&robot, viewport_bounds);
+            println!(
+                "after_drag bottom_visible={after_bottom_visible} line_range={after_line_range:?}"
+            );
+
+            let moved_forward = match (before_line_range, after_line_range) {
+                (Some((before_first, _)), Some((after_first, after_last))) => {
+                    after_first >= before_first.saturating_add(MIN_EXPECTED_LINE_ADVANCE)
+                        || after_last >= before_first.saturating_add(MIN_EXPECTED_LINE_ADVANCE)
+                }
+                _ => false,
+            };
+
+            if drag_loops > 0 && !after_bottom_visible && !moved_forward {
                 fail_and_exit(
                     &robot,
-                    "scrollbar drag did not move viewport to later markdown lines",
+                    "scrollbar drag did not move viewport forward enough",
                 );
             }
 

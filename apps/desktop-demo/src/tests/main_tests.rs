@@ -48,28 +48,25 @@ fn async_runtime_test_content(
                                         );
                                     })),
                                 RowSpec::default(),
-                                {
-                                    let progress_fraction = progress_value;
-                                    move || {
-                                        if progress_fraction > 0.0 {
-                                            Row(
-                                                Modifier::empty()
-                                                    .fill_max_width_fraction(progress_fraction)
-                                                    .then(Modifier::empty().height(26.0))
-                                                    .then(Modifier::empty().rounded_corners(13.0))
-                                                    .then(Modifier::empty().draw_behind(|scope| {
-                                                        scope.draw_round_rect(
-                                                            Brush::linear_gradient(vec![
-                                                                Color(0.25, 0.55, 0.95, 1.0),
-                                                                Color(0.15, 0.35, 0.80, 1.0),
-                                                            ]),
-                                                            CornerRadii::uniform(13.0),
-                                                        );
-                                                    })),
-                                                RowSpec::default(),
-                                                || {},
-                                            );
-                                        }
+                                move || {
+                                    if progress_value > 0.0 {
+                                        Row(
+                                            Modifier::empty()
+                                                .fill_max_width_fraction(progress_value)
+                                                .then(Modifier::empty().height(26.0))
+                                                .then(Modifier::empty().rounded_corners(13.0))
+                                                .then(Modifier::empty().draw_behind(|scope| {
+                                                    scope.draw_round_rect(
+                                                        Brush::linear_gradient(vec![
+                                                            Color(0.25, 0.55, 0.95, 1.0),
+                                                            Color(0.15, 0.35, 0.80, 1.0),
+                                                        ]),
+                                                        CornerRadii::uniform(13.0),
+                                                    );
+                                                })),
+                                            RowSpec::default(),
+                                            || {},
+                                        );
                                     }
                                 },
                             );
@@ -118,7 +115,8 @@ fn async_runtime_freezes_without_conditional_key() {
     let is_running = MutableState::with_runtime(true, runtime.clone());
     let reset_signal = MutableState::with_runtime(0u64, runtime.clone());
 
-    let mut render = move || async_runtime_test_content(animation, stats, is_running, reset_signal);
+    let mut render =
+        { move || async_runtime_test_content(animation, stats, is_running, reset_signal) };
 
     composition
         .render(location_key(file!(), line!(), column!()), &mut render)
@@ -186,17 +184,12 @@ fn async_runtime_tab_content_renders_static_states() {
     let is_running_state = MutableState::with_runtime(false, runtime.clone());
     let reset_signal_state = MutableState::with_runtime(0u64, runtime);
 
-    let animation_for_render = animation_state;
-    let stats_for_render = stats_state;
-    let is_running_for_render = is_running_state;
-    let reset_for_render = reset_signal_state;
-
     let mut render = move || {
         AsyncRuntimeTabContent(
-            animation_for_render,
-            stats_for_render,
-            is_running_for_render,
-            reset_for_render,
+            animation_state,
+            stats_state,
+            is_running_state,
+            reset_signal_state,
         )
     };
 

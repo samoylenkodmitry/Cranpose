@@ -53,7 +53,7 @@ pub struct LazyLayoutStats {
 /// Contains the current scroll position represented by the first visible item
 /// index and the first visible item scroll offset.
 ///
-/// This is a Copy type that holds reactive state. Reading `index` or `scroll_offset`
+/// This is a `Copy` type that holds reactive state. Reading `index` or `scroll_offset`
 /// during composition creates a snapshot dependency for automatic recomposition.
 ///
 /// Matches Jetpack Compose's `LazyListScrollPosition` design.
@@ -524,6 +524,11 @@ impl LazyListState {
     /// registered by LazyColumnImpl/LazyRowImpl with schedule_layout_repass(node_id),
     /// which provides O(subtree) performance instead of O(entire app).
     pub fn dispatch_scroll_delta(&self, delta: f32) -> f32 {
+        // Guard against stale handles: fling animation frame callbacks can fire
+        // after a tab switch disposes the composition group that owns this state.
+        if !self.inner.is_alive() {
+            return 0.0;
+        }
         let has_scroll_bounds = self
             .inner
             .with(|rc| rc.borrow().layout_info.total_items_count > 0);
@@ -837,6 +842,9 @@ impl LazyListState {
     }
 
     fn invalidate(&self) {
+        if !self.inner.is_alive() {
+            return;
+        }
         // Clone callbacks to avoid holding the borrow while calling them
         // This prevents re-entrancy issues if a callback triggers another state update
         let callbacks: Vec<_> = self.inner.with(|rc| {

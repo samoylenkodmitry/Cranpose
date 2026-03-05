@@ -17,7 +17,8 @@ pub use font::{
 pub use layout_options::{TextLayoutOptions, TextOverflow};
 pub use measure::{
     get_cursor_x_for_offset, get_offset_for_position, layout_text, measure_text,
-    measure_text_with_options, prepare_text_layout, set_text_measurer, PreparedTextLayout,
+    measure_text_for_node, measure_text_with_options, measure_text_with_options_for_node,
+    prepare_text_layout, prepare_text_layout_for_node, set_text_measurer, PreparedTextLayout,
     TextMeasurer, TextMetrics,
 };
 pub use paragraph::{

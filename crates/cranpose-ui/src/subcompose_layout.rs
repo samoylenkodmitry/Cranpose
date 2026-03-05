@@ -5,7 +5,6 @@ use std::rc::Rc;
 use cranpose_core::{
     Composer, NodeError, NodeId, Phase, SlotBackend, SlotId, SlotsHost, SubcomposeState,
 };
-use indexmap::IndexSet;
 
 use crate::modifier::{
     collect_modifier_slices_into, Modifier, ModifierChainHandle, ModifierNodeSlices, Point,
@@ -85,35 +84,11 @@ impl PartialEq for SubcomposeChild {
 }
 
 /// A measured child that is ready to be placed.
-#[derive(Clone, Copy, Debug)]
-pub struct SubcomposePlaceable {
-    node_id: NodeId,
-    size: Size,
-}
-
-impl SubcomposePlaceable {
-    pub fn new(node_id: NodeId, size: Size) -> Self {
-        Self { node_id, size }
-    }
-}
-
-impl cranpose_ui_layout::Placeable for SubcomposePlaceable {
-    fn place(&self, _x: f32, _y: f32) {
-        // No-op: in SubcomposeLayout, placement is handled by returning a list of Placements
-    }
-
-    fn width(&self) -> f32 {
-        self.size.width
-    }
-
-    fn height(&self) -> f32 {
-        self.size.height
-    }
-
-    fn node_id(&self) -> NodeId {
-        self.node_id
-    }
-}
+///
+/// This is a type alias for the concrete `Placeable` struct from `cranpose_ui_layout`.
+/// In subcompose layouts, placement is handled by returning a list of `Placement`s,
+/// so the `place()` callback is not used.
+pub type SubcomposePlaceable = cranpose_ui_layout::Placeable;
 
 /// Base trait for measurement scopes.
 pub trait SubcomposeLayoutScope {
@@ -210,7 +185,7 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
                 register_layout_node(id, &node);
 
                 inner.virtual_nodes.insert(id, Rc::new(node));
-                inner.children.insert(id);
+                inner.children.push(id);
                 (id, false)
             };
 
@@ -260,16 +235,16 @@ impl<'a> SubcomposeMeasureScope for SubcomposeMeasureScopeImpl<'a> {
     fn measure(&mut self, child: SubcomposeChild, constraints: Constraints) -> SubcomposePlaceable {
         if self.error.borrow().is_some() {
             // Already in error state - return zero-size placeable
-            return SubcomposePlaceable::new(child.node_id, Size::default());
+            return SubcomposePlaceable::value(0.0, 0.0, child.node_id);
         }
 
         if let Err(err) = self.composer.apply_pending_commands() {
             self.record_error(err);
-            return SubcomposePlaceable::new(child.node_id, Size::default());
+            return SubcomposePlaceable::value(0.0, 0.0, child.node_id);
         }
 
         let size = (self.measurer)(child.node_id, constraints);
-        SubcomposePlaceable::new(child.node_id, size)
+        SubcomposePlaceable::value(size.width, size.height, child.node_id)
     }
 
     fn node_has_no_parent(&self, node_id: NodeId) -> bool {
@@ -515,7 +490,7 @@ impl SubcomposeLayoutNode {
     }
 
     pub fn active_children(&self) -> Vec<NodeId> {
-        self.inner.borrow().children.iter().copied().collect()
+        self.inner.borrow().children.clone()
     }
 
     /// Mark this node as needing measure. Also marks it as needing layout.
@@ -710,15 +685,22 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
     }
 
     fn insert_child(&mut self, child: NodeId) {
+        let mut inner = self.inner.borrow_mut();
+        if inner.children.contains(&child) {
+            return;
+        }
         if is_virtual_node(child) {
             let count = self.virtual_children_count.get();
             self.virtual_children_count.set(count + 1);
         }
-        self.inner.borrow_mut().children.insert(child);
+        inner.children.push(child);
     }
 
     fn remove_child(&mut self, child: NodeId) {
-        if self.inner.borrow_mut().children.shift_remove(&child) && is_virtual_node(child) {
+        let mut inner = self.inner.borrow_mut();
+        let before = inner.children.len();
+        inner.children.retain(|&id| id != child);
+        if inner.children.len() < before && is_virtual_node(child) {
             let count = self.virtual_children_count.get();
             if count > 0 {
                 self.virtual_children_count.set(count - 1);
@@ -731,32 +713,23 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
         if from == to || from >= inner.children.len() {
             return;
         }
-        let mut ordered: Vec<NodeId> = inner.children.iter().copied().collect();
-        let child = ordered.remove(from);
-        let target = to.min(ordered.len());
-        ordered.insert(target, child);
-        inner.children.clear();
-        for id in ordered {
-            inner.children.insert(id);
-        }
+        let child = inner.children.remove(from);
+        let target = to.min(inner.children.len());
+        inner.children.insert(target, child);
     }
 
     fn update_children(&mut self, children: &[NodeId]) {
         let mut inner = self.inner.borrow_mut();
         inner.children.clear();
-        for &child in children {
-            inner.children.insert(child);
-        }
+        inner.children.extend_from_slice(children);
     }
 
     fn children(&self) -> Vec<NodeId> {
         let inner = self.inner.borrow();
-        // Return placement children if available (they represent the actually rendered nodes)
-        // Otherwise fall back to structural children
         if !inner.last_placements.is_empty() {
             inner.last_placements.clone()
         } else {
-            inner.children.iter().copied().collect()
+            inner.children.clone()
         }
     }
 
@@ -935,9 +908,7 @@ impl SubcomposeLayoutNodeHandle {
     {
         let mut inner = self.inner.borrow_mut();
         inner.children.clear();
-        for child in children {
-            inner.children.insert(child);
-        }
+        inner.children.extend(children);
     }
 }
 
@@ -948,7 +919,7 @@ struct SubcomposeLayoutNodeInner {
     modifier_capabilities: NodeCapabilities,
     state: SubcomposeState,
     measure_policy: Rc<MeasurePolicy>,
-    children: IndexSet<NodeId>,
+    children: Vec<NodeId>,
     slots: SlotBackend,
     debug_modifiers: bool,
     // Owns virtual nodes created during subcomposition
@@ -967,7 +938,7 @@ impl SubcomposeLayoutNodeInner {
             modifier_capabilities: NodeCapabilities::default(),
             state: SubcomposeState::default(),
             measure_policy,
-            children: IndexSet::new(),
+            children: Vec::new(),
             slots: SlotBackend::default(),
             debug_modifiers: false,
             virtual_nodes: HashMap::new(),

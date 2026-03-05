@@ -9,6 +9,7 @@ use cranpose_ui_graphics::{
     RoundedCornerShape,
 };
 use std::cell::RefCell;
+use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -182,7 +183,7 @@ pub struct Scene {
     pub effect_layers: Vec<EffectLayer>,
     pub backdrop_layers: Vec<BackdropLayer>,
     pub next_z: usize,
-    pub node_index: HashMap<NodeId, HitRegion>,
+    pub node_index: HashMap<NodeId, usize>,
 }
 
 impl Scene {
@@ -349,9 +350,9 @@ impl Scene {
             z_index,
             hit_clip,
         };
-        // Populate both the list and the index for O(1) lookup
-        self.node_index.insert(node_id, hit_region.clone());
+        let hit_index = self.hits.len();
         self.hits.push(hit_region);
+        self.node_index.insert(node_id, hit_index);
     }
 
     pub fn push_shadow_draw(&mut self, mut draw: ShadowDraw) {
@@ -393,17 +394,25 @@ impl RenderScene for Scene {
     }
 
     fn hit_test(&self, x: f32, y: f32) -> Vec<Self::HitTarget> {
-        let mut hits = self.hits.clone();
-        hits.retain(|hit| hit.contains(x, y));
+        let mut hit_indices: Vec<usize> = self
+            .hits
+            .iter()
+            .enumerate()
+            .filter_map(|(index, hit)| hit.contains(x, y).then_some(index))
+            .collect();
 
-        // Sort by z-index descending (top to bottom)
-        hits.sort_by(|a, b| b.z_index.cmp(&a.z_index));
-        hits
+        hit_indices.sort_by_key(|&index| Reverse(self.hits[index].z_index));
+        hit_indices
+            .into_iter()
+            .map(|index| self.hits[index].clone())
+            .collect()
     }
 
     fn find_target(&self, node_id: NodeId) -> Option<Self::HitTarget> {
-        // O(1) lookup using the node index
-        self.node_index.get(&node_id).cloned()
+        self.node_index
+            .get(&node_id)
+            .and_then(|&index| self.hits.get(index))
+            .cloned()
     }
 }
 
@@ -495,6 +504,45 @@ mod tests {
 
         assert!(scene.hit_test(60.0, 20.0).is_empty());
         assert_eq!(scene.hit_test(20.0, 20.0).len(), 1);
+    }
+
+    #[test]
+    fn hit_test_sorts_by_z_without_duplicating_hit_storage() {
+        let mut scene = Scene::new();
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 50.0,
+            height: 50.0,
+        };
+
+        scene.push_hit(
+            1,
+            rect,
+            None,
+            Vec::new(),
+            vec![Rc::new(|_event: PointerEvent| {})],
+            None,
+        );
+        scene.push_hit(
+            2,
+            rect,
+            None,
+            Vec::new(),
+            vec![Rc::new(|_event: PointerEvent| {})],
+            None,
+        );
+
+        assert_eq!(scene.node_index.get(&1), Some(&0));
+        assert_eq!(scene.node_index.get(&2), Some(&1));
+
+        let hits = scene.hit_test(10.0, 10.0);
+        assert_eq!(
+            hits.iter().map(|hit| hit.node_id).collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+        assert_eq!(scene.find_target(1).map(|hit| hit.node_id), Some(1));
+        assert_eq!(scene.find_target(2).map(|hit| hit.node_id), Some(2));
     }
 
     #[test]

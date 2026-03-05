@@ -110,6 +110,8 @@ pub struct TextFieldModifierNode {
     node_state: NodeState,
     /// Measured size cache
     measured_size: Cell<Size>,
+    /// Cached line height from last measurement (shared with draw closure)
+    measured_line_height: Rc<Cell<f32>>,
     /// Cached pointer input handler
     cached_handler: Rc<dyn Fn(PointerEvent)>,
 }
@@ -150,6 +152,7 @@ impl TextFieldModifierNode {
                 width: 0.0,
                 height: 0.0,
             }),
+            measured_line_height: Rc::new(Cell::new(DEFAULT_LINE_HEIGHT)),
             cached_handler,
         }
     }
@@ -306,6 +309,10 @@ impl TextFieldModifierNode {
         self.state.text()
     }
 
+    pub fn style(&self) -> &TextStyle {
+        &self.style
+    }
+
     /// Returns the current selection.
     pub fn selection(&self) -> TextRange {
         self.state.selection()
@@ -364,13 +371,16 @@ impl TextFieldModifierNode {
         self.refs.content_y_offset.set(offset);
     }
 
-    /// Measures the text content.
+    /// Measures the text content using node-identity-based caching.
     fn measure_text_content(&self) -> Size {
         let text = self.state.text();
-        let metrics = crate::text::measure_text(
+        let node_id = self.refs.node_id.get();
+        let metrics = crate::text::measure_text_for_node(
+            node_id,
             &crate::text::AnnotatedString::from(text.as_str()),
             &self.style,
         );
+        self.measured_line_height.set(metrics.line_height);
         Size {
             width: metrics.width,
             height: metrics.height,
@@ -540,7 +550,8 @@ impl DrawModifierNode for TextFieldModifierNode {
         let content_y_offset = self.refs.content_y_offset.clone();
         let cursor_brush = self.cursor_brush.clone();
         let selection_brush = self.selection_brush.clone();
-        let style = self.style.clone(); // Capture style
+        let style = self.style.clone();
+        let cached_line_height = self.measured_line_height.clone();
 
         Some(Rc::new(move |_size| {
             // Check focus at DRAW time
@@ -554,11 +565,9 @@ impl DrawModifierNode for TextFieldModifierNode {
             let selection = state.selection();
             let padding_left = content_offset.get();
             let padding_top = content_y_offset.get();
-            let line_height = crate::text::measure_text(
-                &crate::text::AnnotatedString::from(text.as_str()),
-                &style,
-            )
-            .line_height;
+            // Reuse line_height from the most recent layout measurement
+            // instead of re-measuring the full text.
+            let line_height = cached_line_height.get();
 
             // Draw selection highlight
             if !selection.collapsed() {

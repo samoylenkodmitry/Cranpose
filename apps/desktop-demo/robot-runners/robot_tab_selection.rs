@@ -182,22 +182,18 @@ fn main() {
 
             // Summary
             println!("\n=== Test Summary ===");
-            let test3_pass = async_content_visible;
-            let test5_pass = showcase_content_visible;
-            let test7_pass = counter_content_visible;
-
-            if test3_pass && test5_pass && test7_pass {
+            if async_content_visible && showcase_content_visible && counter_content_visible {
                 println!("✓ ALL TESTS PASSED");
                 println!("  Tab selection state changes are working correctly!");
             } else {
                 println!("✗ SOME TESTS FAILED");
-                if !test3_pass {
+                if !async_content_visible {
                     println!("  - Async Runtime tab content did not appear");
                 }
-                if !test5_pass {
+                if !showcase_content_visible {
                     println!("  - Modifiers Showcase tab content did not appear");
                 }
-                if !test7_pass {
+                if !counter_content_visible {
                     println!("  - Counter App tab content did not appear when switching back");
                 }
                 println!("\n  This indicates a regression in state change propagation.");

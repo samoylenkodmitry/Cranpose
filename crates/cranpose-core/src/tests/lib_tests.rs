@@ -437,6 +437,126 @@ fn mutable_state_snapshot_handles_reentrant_drop_reads() {
 }
 
 #[test]
+fn state_arena_reuses_slot_after_last_owner_drops() {
+    let (handle, _runtime) = runtime_handle();
+    let first = OwnedMutableState::with_runtime(1i32, handle.clone());
+    let first_handle = first.handle();
+    let first_id = first_handle.state_id_for_test();
+
+    assert_eq!(handle.state_arena_stats(), (1, 0));
+
+    let _: MutableState<i32> = first_handle;
+    assert_eq!(handle.state_arena_stats(), (1, 0));
+    drop(first);
+    assert_eq!(handle.state_arena_stats(), (1, 1));
+
+    let second = OwnedMutableState::with_runtime(2i32, handle.clone());
+    let second_id = second.handle().state_id_for_test();
+
+    assert_eq!(second.value(), 2);
+    assert_eq!(second_id.slot(), first_id.slot());
+    assert_ne!(second_id, first_id);
+    assert_eq!(handle.state_arena_stats(), (1, 0));
+}
+
+#[test]
+fn stale_state_observer_task_does_not_invalidate_reused_slot() {
+    let runtime = TestRuntime::new();
+    let handle = runtime.handle();
+    let stale = OwnedMutableState::with_runtime(0i32, handle.clone());
+    let stale_handle = stale.handle();
+    let stale_id = stale_handle.state_id_for_test();
+
+    stale_handle.set_value(1);
+    drop(stale);
+    assert_eq!(handle.state_arena_stats(), (1, 1));
+
+    let fresh = OwnedMutableState::with_runtime(2i32, handle.clone());
+    let fresh_handle = fresh.handle();
+    let fresh_id = fresh_handle.state_id_for_test();
+    let scope = RecomposeScope::new_for_test(handle.clone());
+
+    assert_eq!(fresh_id.slot(), stale_id.slot());
+    assert_ne!(fresh_id, stale_id);
+
+    fresh_handle.subscribe_scope_for_test(&scope);
+    assert!(!scope.is_invalid());
+
+    handle.drain_ui();
+
+    assert!(!scope.is_invalid());
+    assert_eq!(fresh_handle.watcher_count(), 1);
+}
+
+#[test]
+fn persistent_state_handles_stay_valid_without_explicit_owner() {
+    let (handle, _runtime) = runtime_handle();
+    let state = MutableState::with_runtime(7i32, handle.clone());
+    let _: MutableState<i32> = state;
+
+    assert_eq!(state.value(), 7);
+    assert_eq!(handle.state_arena_stats(), (1, 0));
+
+    let retained = state.retain();
+    assert_eq!(retained.value(), 7);
+    drop(retained);
+    assert_eq!(handle.state_arena_stats(), (1, 0));
+}
+
+#[test]
+fn runtime_registry_stays_alive_until_last_runtime_clone_drops() {
+    let runtime = Runtime::new(Arc::new(TestScheduler));
+    let runtime_clone = runtime.clone();
+    let handle = runtime.handle();
+    let state = MutableState::with_runtime(11i32, handle.clone());
+
+    drop(runtime);
+
+    assert_eq!(state.value(), 11);
+    assert!(crate::runtime::runtime_handle_by_id(handle.id()).is_some());
+
+    drop(runtime_clone);
+
+    assert!(crate::runtime::runtime_handle_by_id(handle.id()).is_none());
+}
+
+#[test]
+fn disposable_effect_cleanup_can_update_use_state_during_group_removal() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let show = MutableState::with_runtime(true, runtime);
+    let cleanup_calls = Rc::new(Cell::new(0usize));
+    let key = location_key(file!(), line!(), column!());
+
+    let render = |composition: &mut Composition<MemoryApplier>| {
+        let cleanup_calls = Rc::clone(&cleanup_calls);
+        composition
+            .render(key, move || {
+                if show.get() {
+                    let local = useState(|| 0usize);
+                    let cleanup_calls = Rc::clone(&cleanup_calls);
+                    DisposableEffect!((), move |_| {
+                        let cleanup_calls = Rc::clone(&cleanup_calls);
+                        DisposableEffectResult::new(move || {
+                            local.set(local.get() + 1);
+                            cleanup_calls.set(cleanup_calls.get() + local.get());
+                        })
+                    });
+                } else {
+                    cranpose_test_node(TestTextNode::default);
+                }
+            })
+            .expect("render succeeds");
+    };
+
+    render(&mut composition);
+    show.set(false);
+    render(&mut composition);
+
+    assert_eq!(cleanup_calls.get(), 1);
+}
+
+#[test]
 fn launched_effect_runs_and_cancels() {
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
@@ -975,55 +1095,57 @@ fn launched_effect_async_keeps_frames_after_backward_forward_flip() {
     let animation = MutableState::with_runtime(TestAnimation::default(), runtime.clone());
     let stats = MutableState::with_runtime(TestFrameStats::default(), runtime.clone());
 
-    let mut render = move || {
-        cranpose_core::LaunchedEffectAsync!((), move |scope| {
-            Box::pin(async move {
-                let clock = scope.runtime().frame_clock();
-                let mut last_time: Option<u64> = None;
-                while scope.is_active() {
-                    let nanos = clock.next_frame().await;
-                    if !scope.is_active() {
-                        break;
-                    }
-
-                    if let Some(previous) = last_time {
-                        let mut delta = nanos.saturating_sub(previous);
-                        if delta == 0 {
-                            delta = 16_666_667;
+    let mut render = {
+        move || {
+            cranpose_core::LaunchedEffectAsync!((), move |scope| {
+                Box::pin(async move {
+                    let clock = scope.runtime().frame_clock();
+                    let mut last_time: Option<u64> = None;
+                    while scope.is_active() {
+                        let nanos = clock.next_frame().await;
+                        if !scope.is_active() {
+                            break;
                         }
-                        let dt_ms = delta as f32 / 1_000_000.0;
-                        stats.update(|state| {
-                            state.frames = state.frames.wrapping_add(1);
-                            state.last_frame_ms = dt_ms;
-                        });
-                        animation.update(|anim| {
-                            let next = anim.progress + 0.1 * anim.direction * (dt_ms / 600.0);
-                            if next >= 1.0 {
-                                anim.progress = 1.0;
-                                anim.direction = -1.0;
-                            } else if next <= 0.0 {
-                                anim.progress = 0.0;
-                                anim.direction = 1.0;
-                            } else {
-                                anim.progress = next;
+
+                        if let Some(previous) = last_time {
+                            let mut delta = nanos.saturating_sub(previous);
+                            if delta == 0 {
+                                delta = 16_666_667;
                             }
-                        });
+                            let dt_ms = delta as f32 / 1_000_000.0;
+                            stats.update(|state| {
+                                state.frames = state.frames.wrapping_add(1);
+                                state.last_frame_ms = dt_ms;
+                            });
+                            animation.update(|anim| {
+                                let next = anim.progress + 0.1 * anim.direction * (dt_ms / 600.0);
+                                if next >= 1.0 {
+                                    anim.progress = 1.0;
+                                    anim.direction = -1.0;
+                                } else if next <= 0.0 {
+                                    anim.progress = 0.0;
+                                    anim.direction = 1.0;
+                                } else {
+                                    anim.progress = next;
+                                }
+                            });
+                        }
+
+                        last_time = Some(nanos);
                     }
-
-                    last_time = Some(nanos);
-                }
-            })
-        });
-
-        let snapshot = animation.value();
-        if snapshot.progress > 0.0 {
-            cranpose_core::with_current_composer(|composer| {
-                composer.emit_node(|| TestDummyNode);
+                })
             });
-        }
 
-        // Touch stats to subscribe the current scope.
-        let _stats = stats.value();
+            let snapshot = animation.value();
+            if snapshot.progress > 0.0 {
+                cranpose_core::with_current_composer(|composer| {
+                    composer.emit_node(|| TestDummyNode);
+                });
+            }
+
+            // Touch stats to subscribe the current scope.
+            let _stats = stats.value();
+        }
     };
 
     let key = location_key(file!(), line!(), column!());
@@ -1854,11 +1976,11 @@ fn apply_child_diff(
         frame.new_children = new_children;
     }
     composer.pop_parent();
-    let mut commands = composer.take_commands();
+    let commands = composer.take_commands();
     drop(composer);
     teardown_composer(slots, applier, slots_host, applier_host);
-    for command in commands.iter_mut() {
-        command(applier).expect("apply diff command");
+    for command in commands {
+        command.apply(applier).expect("apply diff command");
     }
     applier
         .with_node(parent_id, |node: &mut RecordingNode| {
@@ -2000,6 +2122,75 @@ fn insert_and_remove_emit_expected_ops() {
         .with_node(parent_id, |node: &mut RecordingNode| node.children.clone())
         .expect("read children after remove");
     assert_eq!(after_remove_children, vec![child_a, child_c]);
+    assert_eq!(applier.len(), initial_len);
+}
+
+#[test]
+fn child_diff_handles_interleaved_remove_move_and_insert() {
+    let mut slots = SlotBackend::default();
+    let mut applier = MemoryApplier::new();
+    let runtime = Runtime::new(Arc::new(TestScheduler));
+    let parent_id = applier.create(Box::new(RecordingNode::default()));
+
+    let child_a = applier.create(Box::new(TrackingChild {
+        label: "a".to_string(),
+        mount_count: 1,
+        parent: Some(parent_id),
+    }));
+    let child_b = applier.create(Box::new(TrackingChild {
+        label: "b".to_string(),
+        mount_count: 1,
+        parent: Some(parent_id),
+    }));
+    let child_c = applier.create(Box::new(TrackingChild {
+        label: "c".to_string(),
+        mount_count: 1,
+        parent: Some(parent_id),
+    }));
+    let child_d = applier.create(Box::new(TrackingChild {
+        label: "d".to_string(),
+        mount_count: 1,
+        parent: Some(parent_id),
+    }));
+
+    applier
+        .with_node(parent_id, |node: &mut RecordingNode| {
+            node.children = vec![child_a, child_b, child_c, child_d];
+            node.operations.clear();
+        })
+        .expect("seed parent state");
+    let initial_len = applier.len();
+
+    let child_e = applier.create(Box::new(TrackingChild {
+        label: "e".to_string(),
+        mount_count: 1,
+        parent: Some(parent_id),
+    }));
+    assert_eq!(applier.len(), initial_len + 1);
+
+    let operations = apply_child_diff(
+        &mut slots,
+        &mut applier,
+        &runtime,
+        parent_id,
+        vec![child_a, child_b, child_c, child_d],
+        vec![child_d, child_a, child_e, child_c],
+    );
+
+    assert_eq!(
+        operations,
+        vec![
+            Operation::Remove(child_b),
+            Operation::Move { from: 2, to: 0 },
+            Operation::Insert(child_e),
+            Operation::Move { from: 3, to: 2 },
+        ]
+    );
+
+    let final_children = applier
+        .with_node(parent_id, |node: &mut RecordingNode| node.children.clone())
+        .expect("read final children");
+    assert_eq!(final_children, vec![child_d, child_a, child_e, child_c]);
     assert_eq!(applier.len(), initial_len);
 }
 
@@ -2623,6 +2814,22 @@ fn stats_watchers_survive_conditional_toggle() {
         stats.watcher_count() > 0,
         "restoring progress should keep stats watcher"
     );
+}
+
+#[test]
+fn state_write_prunes_dropped_watchers() {
+    let runtime = TestRuntime::new();
+    let handle = runtime.handle();
+    let state = MutableState::with_runtime(0i32, handle.clone());
+    let scope = RecomposeScope::new_for_test(handle);
+
+    state.subscribe_scope_for_test(&scope);
+    assert_eq!(state.watcher_count(), 1);
+
+    drop(scope);
+    state.set_value(1);
+
+    assert_eq!(state.watcher_count(), 0);
 }
 
 // ============================================================================
@@ -4428,4 +4635,53 @@ fn multiple_frame_callbacks_state_visibility() {
         15,
         "Sequential frame callback state changes should accumulate correctly"
     );
+}
+
+/// Verifies that `MutableState::set` on a released state handle does not panic.
+///
+/// This reproduces a real crash: a SideEffect closure captures a `MutableState`
+/// handle whose underlying `OwnedMutableState` is dropped (by group disposal)
+/// before the side effect runs. The `set` call must silently skip the write.
+#[test]
+fn test_stale_state_handle_set_does_not_panic() {
+    let _guard = reset_snapshot_runtime();
+    let test_runtime = crate::runtime::TestRuntime::new();
+    let handle = test_runtime.handle();
+
+    // Allocate a state and get a handle, then release the underlying cell.
+    let lease = handle.alloc_state(42u32);
+    let state: MutableState<u32> = MutableState::from_lease(&lease);
+    assert_eq!(state.get(), 42);
+
+    // Drop the lease → releases the state arena slot
+    drop(lease);
+
+    // Setting a released state should NOT panic — it should be a no-op
+    state.set(99);
+}
+
+/// Verifies that `MutableState::try_with` and `is_alive` work correctly
+/// on released state handles.
+///
+/// This reproduces a real crash: a fling animation frame callback captures a
+/// `MutableState` handle. A tab switch disposes the composition group (releasing
+/// the state), but the frame callback still fires and tries to read the state.
+#[test]
+fn test_stale_state_handle_try_with_returns_none() {
+    let _guard = reset_snapshot_runtime();
+    let test_runtime = crate::runtime::TestRuntime::new();
+    let handle = test_runtime.handle();
+
+    let lease = handle.alloc_state(42u32);
+    let state: MutableState<u32> = MutableState::from_lease(&lease);
+    assert!(state.is_alive());
+    assert_eq!(state.try_value(), Some(42));
+    assert_eq!(state.try_with(|v| *v + 1), Some(43));
+
+    // Drop the lease → releases the state arena slot
+    drop(lease);
+
+    assert!(!state.is_alive());
+    assert_eq!(state.try_value(), None);
+    assert_eq!(state.try_with(|v| *v + 1), None);
 }

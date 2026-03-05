@@ -53,7 +53,7 @@ fn lazy_column_unbounded_height_matches_effective_viewport() {
         result
     };
 
-    let list_state = LAST_LAZY_STATE.with(|cell| cell.borrow().expect("state captured"));
+    let list_state = LAST_LAZY_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
     let expected_height = list_state.layout_info().viewport_size;
     let actual_height = measurements.root_size().height;
 

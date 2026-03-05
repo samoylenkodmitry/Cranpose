@@ -201,10 +201,9 @@ fn TabButton(tab: DemoTab, active_tab: cranpose_core::MutableState<DemoTab>, pad
             })
             .padding(padding),
         {
-            let tab_state = active_tab;
             move || {
-                if tab_state.get() != tab {
-                    tab_state.set(tab);
+                if active_tab.get() != tab {
+                    active_tab.set(tab);
                 }
             }
         },
@@ -242,11 +241,10 @@ fn TabContent(active_tab: cranpose_core::MutableState<DemoTab>, modifier: Modifi
     let active = active_tab.get();
     cranpose_ui::Box(modifier, BoxSpec::default(), move || {
         cranpose_core::with_key(&active, || {
-            let active_for_content = active;
-            if tab_requires_scroll(active_for_content) {
-                ScrollableTab(move || render_active_tab(active_for_content));
+            if tab_requires_scroll(active) {
+                ScrollableTab(move || render_active_tab(active));
             } else {
-                render_active_tab(active_for_content);
+                render_active_tab(active);
             }
         });
     });
@@ -887,7 +885,6 @@ pub fn AsyncRuntimeTabContent(
             .padding(20.0),
         ColumnSpec::default(),
         {
-            let is_running_state = is_running;
             move || {
                 Text(
                     "Async Runtime Demo",
@@ -943,47 +940,38 @@ pub fn AsyncRuntimeTabContent(
                                         );
                                     }),
                                 RowSpec::default(),
-                                {
-                                    let progress_fraction = progress_value;
-                                    move || {
-                                        // WORKAROUND: Use with_key to prevent slot truncation from destroying
-                                        // sibling component scopes when conditional rendering changes structure.
-                                        // TODO: Remove once proper "gaps" support is implemented in cranpose-core
-                                        cranpose_core::with_key(&(progress_fraction > 0.0), || {
-                                            if progress_fraction > 0.0 {
-                                                Row(
-                                                    Modifier::empty()
-                                                        .fill_max_width_fraction(
-                                                            progress_fraction,
-                                                        )
-                                                        .height(26.0)
-                                                        .then(
-                                                            Modifier::empty()
-                                                                .rounded_corners(13.0),
-                                                        )
-                                                        .semantics(
-                                                            |config: &mut SemanticsConfiguration| {
-                                                                config.content_description = Some(
-                                                                    "AsyncProgressBarFill"
-                                                                        .to_string(),
-                                                                );
-                                                            },
-                                                        )
-                                                        .draw_behind(|scope| {
-                                                            scope.draw_round_rect(
-                                                                Brush::linear_gradient(vec![
-                                                                    Color(0.25, 0.55, 0.95, 1.0),
-                                                                    Color(0.15, 0.35, 0.80, 1.0),
-                                                                ]),
-                                                                CornerRadii::uniform(13.0),
+                                move || {
+                                    // WORKAROUND: Use with_key to prevent slot truncation from destroying
+                                    // sibling component scopes when conditional rendering changes structure.
+                                    // TODO: Remove once proper "gaps" support is implemented in cranpose-core
+                                    cranpose_core::with_key(&(progress_value > 0.0), || {
+                                        if progress_value > 0.0 {
+                                            Row(
+                                                Modifier::empty()
+                                                    .fill_max_width_fraction(progress_value)
+                                                    .height(26.0)
+                                                    .then(Modifier::empty().rounded_corners(13.0))
+                                                    .semantics(
+                                                        |config: &mut SemanticsConfiguration| {
+                                                            config.content_description = Some(
+                                                                "AsyncProgressBarFill".to_string(),
                                                             );
-                                                        }),
-                                                    RowSpec::default(),
-                                                    || {},
-                                                );
-                                            }
-                                        });
-                                    }
+                                                        },
+                                                    )
+                                                    .draw_behind(|scope| {
+                                                        scope.draw_round_rect(
+                                                            Brush::linear_gradient(vec![
+                                                                Color(0.25, 0.55, 0.95, 1.0),
+                                                                Color(0.15, 0.35, 0.80, 1.0),
+                                                            ]),
+                                                            CornerRadii::uniform(13.0),
+                                                        );
+                                                    }),
+                                                RowSpec::default(),
+                                                || {},
+                                            );
+                                        }
+                                    });
                                 },
                             );
                         }
@@ -1023,78 +1011,68 @@ pub fn AsyncRuntimeTabContent(
                     RowSpec::new()
                         .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
                         .vertical_alignment(VerticalAlignment::CenterVertically),
-                    {
-                        let toggle_state = is_running_state;
-                        let animation_state = animation;
-                        let stats_state = stats;
-                        let reset_state = reset_signal;
-                        move || {
-                            let running = toggle_state.get();
-                            let button_color = if running {
-                                Color(0.50, 0.20, 0.35, 1.0)
-                            } else {
-                                Color(0.2, 0.45, 0.9, 1.0)
-                            };
-                            Button(
-                                Modifier::empty()
-                                    .rounded_corners(16.0)
-                                    .draw_behind({
-                                        let color = button_color;
-                                        move |scope| {
-                                            scope.draw_round_rect(
-                                                Brush::solid(color),
-                                                CornerRadii::uniform(16.0),
-                                            );
-                                        }
-                                    })
-                                    .padding(12.0),
-                                move || toggle_state.set(!toggle_state.get()),
-                                {
-                                    let label = if running {
-                                        "Pause animation"
-                                    } else {
-                                        "Resume animation"
-                                    };
-                                    move || {
-                                        Text(
-                                            label,
-                                            Modifier::empty().padding(6.0),
-                                            TextStyle::default(),
-                                        );
-                                    }
-                                },
-                            );
-
-                            let reset_animation = animation_state;
-                            let reset_stats = stats_state;
-                            let reset_tick_state = reset_state;
-                            Button(
-                                Modifier::empty()
-                                    .rounded_corners(16.0)
-                                    .draw_behind(|scope| {
-                                        scope.draw_round_rect(
-                                            Brush::solid(Color(0.16, 0.36, 0.82, 1.0)),
-                                            CornerRadii::uniform(16.0),
-                                        );
-                                    })
-                                    .padding(12.0),
+                    move || {
+                        let running = is_running.get();
+                        let button_color = if running {
+                            Color(0.50, 0.20, 0.35, 1.0)
+                        } else {
+                            Color(0.2, 0.45, 0.9, 1.0)
+                        };
+                        Button(
+                            Modifier::empty()
+                                .rounded_corners(16.0)
+                                .draw_behind(move |scope| {
+                                    scope.draw_round_rect(
+                                        Brush::solid(button_color),
+                                        CornerRadii::uniform(16.0),
+                                    );
+                                })
+                                .padding(12.0),
+                            move || {
+                                is_running.set(!is_running.get());
+                            },
+                            {
+                                let label = if running {
+                                    "Pause animation"
+                                } else {
+                                    "Resume animation"
+                                };
                                 move || {
-                                    reset_animation.set(AnimationState::default());
-                                    reset_stats.set(FrameStats::default());
-                                    if !toggle_state.get() {
-                                        toggle_state.set(true);
-                                    }
-                                    reset_tick_state.update(|tick| *tick = tick.wrapping_add(1));
-                                },
-                                || {
                                     Text(
-                                        "Reset",
+                                        label,
                                         Modifier::empty().padding(6.0),
                                         TextStyle::default(),
                                     );
-                                },
-                            );
-                        }
+                                }
+                            },
+                        );
+
+                        Button(
+                            Modifier::empty()
+                                .rounded_corners(16.0)
+                                .draw_behind(|scope| {
+                                    scope.draw_round_rect(
+                                        Brush::solid(Color(0.16, 0.36, 0.82, 1.0)),
+                                        CornerRadii::uniform(16.0),
+                                    );
+                                })
+                                .padding(12.0),
+                            move || {
+                                animation.set(AnimationState::default());
+                                stats.set(FrameStats::default());
+                                if !is_running.get() {
+                                    is_running.set(true);
+                                }
+                                reset_signal.update(|tick| *tick = tick.wrapping_add(1));
+                            },
+                            || {
+                                Text(
+                                    "Reset",
+                                    Modifier::empty().padding(6.0),
+                                    TextStyle::default(),
+                                );
+                            },
+                        );
                     },
                 );
             }
@@ -1185,44 +1163,40 @@ fn counter_app() {
     };
     let wave_state = animateFloatAsState(target_wave, "wave");
     let fetch_key = fetch_request.get();
-    {
-        let async_message_state = async_message;
-        LaunchedEffect!(fetch_key, move |_scope| {
-            if fetch_key == 0 {
-                return;
-            }
-            let message_for_ui = async_message_state;
-            _scope.launch_background(
-                move |token| async move {
-                    if token.is_cancelled() {
-                        return String::new();
-                    }
-                    // Simulate background work with a delay on native
-                    #[cfg(not(target_arch = "wasm32"))]
-                    {
-                        use instant::Duration;
-                        use std::thread;
-                        for _ in 0..5 {
-                            if token.is_cancelled() {
-                                return String::new();
-                            }
-                            thread::sleep(Duration::from_millis(80));
+    LaunchedEffect!(fetch_key, move |_scope| {
+        if fetch_key == 0 {
+            return;
+        }
+        _scope.launch_background(
+            move |token| async move {
+                if token.is_cancelled() {
+                    return String::new();
+                }
+                // Simulate background work with a delay on native
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    use instant::Duration;
+                    use std::thread;
+                    for _ in 0..5 {
+                        if token.is_cancelled() {
+                            return String::new();
                         }
+                        thread::sleep(Duration::from_millis(80));
                     }
-                    let mut buf = [0u8; 4];
-                    getrandom::fill(&mut buf).expect("getrandom failed");
-                    let val = u32::from_le_bytes(buf) % 1000;
-                    format!("Background fetch #{fetch_key}: {val}")
-                },
-                move |value| {
-                    if value.is_empty() {
-                        return;
-                    }
-                    message_for_ui.set(value);
-                },
-            );
-        });
-    }
+                }
+                let mut buf = [0u8; 4];
+                getrandom::fill(&mut buf).expect("getrandom failed");
+                let val = u32::from_le_bytes(buf) % 1000;
+                format!("Background fetch #{fetch_key}: {val}")
+            },
+            move |value| {
+                if value.is_empty() {
+                    return;
+                }
+                async_message.set(value);
+            },
+        );
+    });
     LaunchedEffect!(counter.get(), |_| println!("effect call"));
 
     let is_even = counter.get() % 2 == 0;
@@ -1274,389 +1248,338 @@ fn counter_app() {
             Modifier::empty()
                 .padding(32.0)
                 .rounded_corners(24.0)
-                .draw_behind({
-                    let wave_for_background = wave_state;
-                    move |scope| {
-                        let phase = wave_for_background.value();
-                        scope.draw_round_rect(
-                            Brush::linear_gradient(vec![
-                                Color(0.12 + phase * 0.2, 0.10, 0.24 + (1.0 - phase) * 0.3, 1.0),
-                                Color(0.08, 0.16 + (1.0 - phase) * 0.3, 0.26 + phase * 0.2, 1.0),
-                            ]),
-                            CornerRadii::uniform(24.0),
-                        );
-                    }
+                .draw_behind(move |scope| {
+                    let phase = wave_state.value();
+                    scope.draw_round_rect(
+                        Brush::linear_gradient(vec![
+                            Color(0.12 + phase * 0.2, 0.10, 0.24 + (1.0 - phase) * 0.3, 1.0),
+                            Color(0.08, 0.16 + (1.0 - phase) * 0.3, 0.26 + phase * 0.2, 1.0),
+                        ]),
+                        CornerRadii::uniform(24.0),
+                    );
                 })
                 .padding(20.0),
             ColumnSpec::default(),
-            {
-                let counter_main = counter;
-                let pointer_position_main = pointer_position;
-                let pointer_down_main = pointer_down;
-                let wave_main = wave_state;
-                move || {
-                    let counter = counter_main;
-                    let pointer_position = pointer_position_main;
-                    let pointer_down = pointer_down_main;
-                    let wave = wave_main;
-                    Text(
-                        "Cranpose Playground",
-                        Modifier::empty()
-                            .padding(12.0)
-                            .then(
-                                Modifier::empty().rounded_corner_shape(RoundedCornerShape::new(
-                                    16.0, 24.0, 16.0, 24.0,
-                                )),
-                            )
-                            .draw_with_content(|scope| {
+            move || {
+                Text(
+                    "Cranpose Playground",
+                    Modifier::empty()
+                        .padding(12.0)
+                        .then(
+                            Modifier::empty().rounded_corner_shape(RoundedCornerShape::new(
+                                16.0, 24.0, 16.0, 24.0,
+                            )),
+                        )
+                        .draw_with_content(|scope| {
+                            scope.draw_round_rect(
+                                Brush::solid(Color(1.0, 1.0, 1.0, 0.1)),
+                                CornerRadii::uniform(20.0),
+                            );
+                        }),
+                    TextStyle::default(),
+                );
+
+                Spacer(Size {
+                    width: 0.0,
+                    height: 12.0,
+                });
+
+                Row(
+                    Modifier::empty().fill_max_width().padding(8.0),
+                    RowSpec::new()
+                        .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
+                        .vertical_alignment(VerticalAlignment::CenterVertically),
+                    move || {
+                        Text(
+                            format!("Counter: {}", counter.get()),
+                            Modifier::empty()
+                                .padding(8.0)
+                                .then(Modifier::empty().background(Color(0.0, 0.0, 0.0, 0.35)))
+                                .rounded_corners(12.0),
+                            TextStyle::default(),
+                        );
+                        Text(
+                            "Wave layer-only animation",
+                            Modifier::empty()
+                                .padding(8.0)
+                                .then(Modifier::empty().background(Color(0.35, 0.55, 0.9, 0.5)))
+                                .rounded_corners(12.0)
+                                .graphics_layer(move || {
+                                    let wave_value = wave_state.value();
+                                    GraphicsLayer {
+                                        alpha: 0.7 + wave_value * 0.3,
+                                        scale: 0.85 + wave_value * 0.3,
+                                        translation_y: (wave_value - 0.5) * 12.0,
+                                        ..Default::default()
+                                    }
+                                }),
+                            TextStyle::default(),
+                        );
+                    },
+                );
+
+                Spacer(Size {
+                    width: 0.0,
+                    height: 16.0,
+                });
+
+                Column(
+                    Modifier::empty()
+                        .rounded_corners(20.0)
+                        .draw_with_cache(|cache| {
+                            cache.on_draw_behind(|scope| {
                                 scope.draw_round_rect(
-                                    Brush::solid(Color(1.0, 1.0, 1.0, 0.1)),
+                                    Brush::solid(Color(0.16, 0.18, 0.26, 0.95)),
                                     CornerRadii::uniform(20.0),
                                 );
-                            }),
-                        TextStyle::default(),
-                    );
-
-                    Spacer(Size {
-                        width: 0.0,
-                        height: 12.0,
-                    });
-
-                    Row(
-                        Modifier::empty().fill_max_width().padding(8.0),
-                        RowSpec::new()
-                            .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
-                            .vertical_alignment(VerticalAlignment::CenterVertically),
-                        {
-                            let counter_display = counter;
-                            let wave_layer_state = wave;
-                            move || {
-                                Text(
-                                    format!("Counter: {}", counter_display.get()),
-                                    Modifier::empty()
-                                        .padding(8.0)
-                                        .then(
-                                            Modifier::empty()
-                                                .background(Color(0.0, 0.0, 0.0, 0.35)),
-                                        )
-                                        .rounded_corners(12.0),
-                                    TextStyle::default(),
-                                );
-                                Text(
-                                    "Wave layer-only animation",
-                                    Modifier::empty()
-                                        .padding(8.0)
-                                        .then(
-                                            Modifier::empty()
-                                                .background(Color(0.35, 0.55, 0.9, 0.5)),
-                                        )
-                                        .rounded_corners(12.0)
-                                        .graphics_layer({
-                                            let wave_for_layer = wave_layer_state;
-                                            move || {
-                                                let wave_value = wave_for_layer.value();
-                                                GraphicsLayer {
-                                                    alpha: 0.7 + wave_value * 0.3,
-                                                    scale: 0.85 + wave_value * 0.3,
-                                                    translation_y: (wave_value - 0.5) * 12.0,
-                                                    ..Default::default()
-                                                }
-                                            }
-                                        }),
-                                    TextStyle::default(),
+                            });
+                        })
+                        .draw_with_content({
+                            let position = pointer_position.get();
+                            let pressed = pointer_down.get();
+                            move |scope| {
+                                let intensity = if pressed { 0.45 } else { 0.25 };
+                                scope.draw_round_rect(
+                                    Brush::radial_gradient(
+                                        vec![
+                                            Color(0.4, 0.6, 1.0, intensity),
+                                            Color(0.2, 0.3, 0.6, 0.0),
+                                        ],
+                                        position,
+                                        120.0,
+                                    ),
+                                    CornerRadii::uniform(20.0),
                                 );
                             }
-                        },
-                    );
-
-                    Spacer(Size {
-                        width: 0.0,
-                        height: 16.0,
-                    });
-
-                    let async_message_state = async_message;
-                    let fetch_request_state = fetch_request;
-                    Column(
-                        Modifier::empty()
-                            .rounded_corners(20.0)
-                            .draw_with_cache(|cache| {
-                                cache.on_draw_behind(|scope| {
-                                    scope.draw_round_rect(
-                                        Brush::solid(Color(0.16, 0.18, 0.26, 0.95)),
-                                        CornerRadii::uniform(20.0),
-                                    );
-                                });
-                            })
-                            .draw_with_content({
-                                let position = pointer_position.get();
-                                let pressed = pointer_down.get();
-                                move |scope| {
-                                    let intensity = if pressed { 0.45 } else { 0.25 };
-                                    scope.draw_round_rect(
-                                        Brush::radial_gradient(
-                                            vec![
-                                                Color(0.4, 0.6, 1.0, intensity),
-                                                Color(0.2, 0.3, 0.6, 0.0),
-                                            ],
-                                            position,
-                                            120.0,
-                                        ),
-                                        CornerRadii::uniform(20.0),
-                                    );
-                                }
-                            })
-                            .pointer_input((), {
-                                let pointer_position_state = pointer_position;
-                                let pointer_down_state = pointer_down;
-                                move |scope: PointerInputScope| async move {
-                                    scope
-                                        .await_pointer_event_scope(|await_scope| async move {
-                                            loop {
-                                                let event = await_scope.await_pointer_event().await;
-                                                match event.kind {
-                                                    PointerEventKind::Down => {
-                                                        pointer_down_state.set(true)
-                                                    }
-                                                    PointerEventKind::Up => {
-                                                        pointer_down_state.set(false)
-                                                    }
-                                                    PointerEventKind::Move => {
-                                                        pointer_position_state.set(Point {
-                                                            x: event.position.x,
-                                                            y: event.position.y,
-                                                        });
-                                                    }
-                                                    PointerEventKind::Cancel => {
-                                                        pointer_down_state.set(false)
-                                                    }
+                        })
+                        .pointer_input((), {
+                            move |scope: PointerInputScope| async move {
+                                scope
+                                    .await_pointer_event_scope(|await_scope| async move {
+                                        loop {
+                                            let event = await_scope.await_pointer_event().await;
+                                            match event.kind {
+                                                PointerEventKind::Down => pointer_down.set(true),
+                                                PointerEventKind::Up => pointer_down.set(false),
+                                                PointerEventKind::Move => {
+                                                    pointer_position.set(Point {
+                                                        x: event.position.x,
+                                                        y: event.position.y,
+                                                    });
                                                 }
+                                                PointerEventKind::Cancel => pointer_down.set(false),
                                             }
+                                        }
+                                    })
+                                    .await;
+                            }
+                        })
+                        .padding(16.0),
+                    ColumnSpec::default(),
+                    move || {
+                        Text(
+                            format!("Pointer: ({:.1}, {:.1})", pointer.x, pointer.y),
+                            Modifier::empty()
+                                .padding(8.0)
+                                .background(Color(0.1, 0.1, 0.15, 0.6))
+                                .rounded_corners(12.0)
+                                .padding(8.0),
+                            TextStyle::default(),
+                        );
+
+                        Spacer(Size {
+                            width: 0.0,
+                            height: 16.0,
+                        });
+
+                        Row(
+                            Modifier::empty()
+                                .padding(8.0)
+                                .rounded_corners(12.0)
+                                .background(Color(0.1, 0.1, 0.15, 0.6))
+                                .padding(8.0),
+                            RowSpec::new()
+                                .horizontal_arrangement(LinearArrangement::SpacedBy(8.0))
+                                .vertical_alignment(VerticalAlignment::CenterVertically),
+                            || {
+                                Button(
+                                    Modifier::empty()
+                                        .width_intrinsic(IntrinsicSize::Max)
+                                        .rounded_corners(12.0)
+                                        .draw_behind(|scope| {
+                                            scope.draw_round_rect(
+                                                Brush::solid(Color(0.3, 0.5, 0.2, 1.0)),
+                                                CornerRadii::uniform(12.0),
+                                            );
                                         })
-                                        .await;
-                                }
-                            })
-                            .padding(16.0),
-                        ColumnSpec::default(),
-                        move || {
-                            Text(
-                                format!("Pointer: ({:.1}, {:.1})", pointer.x, pointer.y),
-                                Modifier::empty()
-                                    .padding(8.0)
-                                    .background(Color(0.1, 0.1, 0.15, 0.6))
-                                    .rounded_corners(12.0)
-                                    .padding(8.0),
-                                TextStyle::default(),
-                            );
-
-                            Spacer(Size {
-                                width: 0.0,
-                                height: 16.0,
-                            });
-
-                            Row(
-                                Modifier::empty()
-                                    .padding(8.0)
-                                    .rounded_corners(12.0)
-                                    .background(Color(0.1, 0.1, 0.15, 0.6))
-                                    .padding(8.0),
-                                RowSpec::new()
-                                    .horizontal_arrangement(LinearArrangement::SpacedBy(8.0))
-                                    .vertical_alignment(VerticalAlignment::CenterVertically),
-                                || {
-                                    Button(
-                                        Modifier::empty()
-                                            .width_intrinsic(IntrinsicSize::Max)
-                                            .rounded_corners(12.0)
-                                            .draw_behind(|scope| {
-                                                scope.draw_round_rect(
-                                                    Brush::solid(Color(0.3, 0.5, 0.2, 1.0)),
-                                                    CornerRadii::uniform(12.0),
-                                                );
-                                            })
-                                            .padding(10.0),
-                                        || {},
-                                        || {
-                                            Text(
-                                                "OK",
-                                                Modifier::empty().padding(4.0).then(
-                                                    Modifier::empty().size(Size {
-                                                        width: 50.0,
-                                                        height: 50.0,
-                                                    }),
-                                                ),
-                                                TextStyle::default(),
+                                        .padding(10.0),
+                                    || {},
+                                    || {
+                                        Text(
+                                            "OK",
+                                            Modifier::empty().padding(4.0).then(
+                                                Modifier::empty().size(Size {
+                                                    width: 50.0,
+                                                    height: 50.0,
+                                                }),
+                                            ),
+                                            TextStyle::default(),
+                                        );
+                                    },
+                                );
+                                Button(
+                                    Modifier::empty()
+                                        .width_intrinsic(IntrinsicSize::Max)
+                                        .rounded_corners(12.0)
+                                        .draw_behind(|scope| {
+                                            scope.draw_round_rect(
+                                                Brush::solid(Color(0.5, 0.3, 0.2, 1.0)),
+                                                CornerRadii::uniform(12.0),
                                             );
-                                        },
-                                    );
-                                    Button(
-                                        Modifier::empty()
-                                            .width_intrinsic(IntrinsicSize::Max)
-                                            .rounded_corners(12.0)
-                                            .draw_behind(|scope| {
-                                                scope.draw_round_rect(
-                                                    Brush::solid(Color(0.5, 0.3, 0.2, 1.0)),
-                                                    CornerRadii::uniform(12.0),
-                                                );
-                                            })
-                                            .padding(10.0),
-                                        || {},
-                                        || {
-                                            Text(
-                                                "Cancel",
-                                                Modifier::empty().padding(4.0),
-                                                TextStyle::default(),
+                                        })
+                                        .padding(10.0),
+                                    || {},
+                                    || {
+                                        Text(
+                                            "Cancel",
+                                            Modifier::empty().padding(4.0),
+                                            TextStyle::default(),
+                                        );
+                                    },
+                                );
+                                Button(
+                                    Modifier::empty()
+                                        .width_intrinsic(IntrinsicSize::Max)
+                                        .rounded_corners(12.0)
+                                        .draw_behind(|scope| {
+                                            scope.draw_round_rect(
+                                                Brush::solid(Color(0.2, 0.3, 0.5, 1.0)),
+                                                CornerRadii::uniform(12.0),
                                             );
-                                        },
-                                    );
-                                    Button(
-                                        Modifier::empty()
-                                            .width_intrinsic(IntrinsicSize::Max)
-                                            .rounded_corners(12.0)
-                                            .draw_behind(|scope| {
-                                                scope.draw_round_rect(
-                                                    Brush::solid(Color(0.2, 0.3, 0.5, 1.0)),
-                                                    CornerRadii::uniform(12.0),
-                                                );
-                                            })
-                                            .padding(10.0),
-                                        || {},
-                                        || {
-                                            Text(
-                                                "Long Button Text",
-                                                Modifier::empty().padding(4.0),
-                                                TextStyle::default(),
-                                            );
-                                        },
-                                    );
-                                },
-                            );
+                                        })
+                                        .padding(10.0),
+                                    || {},
+                                    || {
+                                        Text(
+                                            "Long Button Text",
+                                            Modifier::empty().padding(4.0),
+                                            TextStyle::default(),
+                                        );
+                                    },
+                                );
+                            },
+                        );
 
-                            Spacer(Size {
-                                width: 0.0,
-                                height: 16.0,
-                            });
+                        Spacer(Size {
+                            width: 0.0,
+                            height: 16.0,
+                        });
 
-                            let counter_inc = counter;
-                            let counter_dec = counter;
-                            Row(
-                                Modifier::empty().fill_max_width().padding(8.0),
-                                RowSpec::new()
-                                    .horizontal_arrangement(LinearArrangement::SpacedBy(12.0)),
-                                move || {
-                                    Button(
-                                        Modifier::empty()
-                                            .rounded_corners(16.0)
-                                            .draw_with_cache(|cache| {
-                                                cache.on_draw_behind(|scope| {
-                                                    scope.draw_round_rect(
-                                                        Brush::linear_gradient(vec![
-                                                            Color(0.2, 0.45, 0.9, 1.0),
-                                                            Color(0.15, 0.3, 0.65, 1.0),
-                                                        ]),
-                                                        CornerRadii::uniform(16.0),
-                                                    );
-                                                });
-                                            })
-                                            .padding(12.0),
-                                        {
-                                            let counter = counter_inc;
-                                            move || {
-                                                println!(
-                                                    "Incrementing counter to {}",
-                                                    counter.get() + 1
-                                                );
-                                                counter.set(counter.get() + 1)
-                                            }
-                                        },
-                                        || {
-                                            Text(
-                                                "Increment",
-                                                Modifier::empty().padding(6.0),
-                                                TextStyle::default(),
-                                            );
-                                        },
-                                    );
-                                    Button(
-                                        Modifier::empty()
-                                            .rounded_corners(16.0)
-                                            .draw_behind(|scope| {
+                        Row(
+                            Modifier::empty().fill_max_width().padding(8.0),
+                            RowSpec::new()
+                                .horizontal_arrangement(LinearArrangement::SpacedBy(12.0)),
+                            move || {
+                                Button(
+                                    Modifier::empty()
+                                        .rounded_corners(16.0)
+                                        .draw_with_cache(|cache| {
+                                            cache.on_draw_behind(|scope| {
                                                 scope.draw_round_rect(
-                                                    Brush::solid(Color(0.4, 0.18, 0.3, 1.0)),
+                                                    Brush::linear_gradient(vec![
+                                                        Color(0.2, 0.45, 0.9, 1.0),
+                                                        Color(0.15, 0.3, 0.65, 1.0),
+                                                    ]),
                                                     CornerRadii::uniform(16.0),
                                                 );
-                                            })
-                                            .padding(12.0),
-                                        {
-                                            let counter = counter_dec;
-                                            move || counter.set(counter.get() - 1)
-                                        },
-                                        || {
-                                            Text(
-                                                "Decrement",
-                                                Modifier::empty().padding(6.0),
-                                                TextStyle::default(),
-                                            );
-                                        },
-                                    );
-                                },
-                            );
-
-                            Spacer(Size {
-                                width: 0.0,
-                                height: 20.0,
-                            });
-
-                            let async_message_text = async_message_state;
-                            Text(
-                                async_message_text.get(),
-                                Modifier::empty()
-                                    .padding(10.0)
-                                    .background(Color(0.1, 0.18, 0.32, 0.6))
-                                    .rounded_corners(14.0),
-                                TextStyle::default(),
-                            );
-
-                            Spacer(Size {
-                                width: 0.0,
-                                height: 12.0,
-                            });
-
-                            let async_message_button = async_message_state;
-                            let fetch_request_button = fetch_request_state;
-                            Button(
-                                Modifier::empty()
-                                    .rounded_corners(16.0)
-                                    .draw_with_cache(|cache| {
-                                        cache.on_draw_behind(|scope| {
+                                            });
+                                        })
+                                        .padding(12.0),
+                                    move || {
+                                        println!("Incrementing counter to {}", counter.get() + 1);
+                                        counter.set(counter.get() + 1)
+                                    },
+                                    || {
+                                        Text(
+                                            "Increment",
+                                            Modifier::empty().padding(6.0),
+                                            TextStyle::default(),
+                                        );
+                                    },
+                                );
+                                Button(
+                                    Modifier::empty()
+                                        .rounded_corners(16.0)
+                                        .draw_behind(|scope| {
                                             scope.draw_round_rect(
-                                                Brush::linear_gradient(vec![
-                                                    Color(0.15, 0.35, 0.85, 1.0),
-                                                    Color(0.08, 0.2, 0.55, 1.0),
-                                                ]),
+                                                Brush::solid(Color(0.4, 0.18, 0.3, 1.0)),
                                                 CornerRadii::uniform(16.0),
                                             );
-                                        });
-                                    })
-                                    .padding(12.0),
-                                {
-                                    move || {
-                                        async_message_button.set(
-                                            "Fetching value on background thread...".to_string(),
+                                        })
+                                        .padding(12.0),
+                                    move || counter.set(counter.get() - 1),
+                                    || {
+                                        Text(
+                                            "Decrement",
+                                            Modifier::empty().padding(6.0),
+                                            TextStyle::default(),
                                         );
-                                        fetch_request_button.update(|value| *value += 1);
-                                    }
-                                },
-                                || {
-                                    Text(
-                                        "Fetch async value",
-                                        Modifier::empty().padding(6.0),
-                                        TextStyle::default(),
-                                    );
-                                },
-                            );
-                        },
-                    );
-                }
+                                    },
+                                );
+                            },
+                        );
+
+                        Spacer(Size {
+                            width: 0.0,
+                            height: 20.0,
+                        });
+
+                        Text(
+                            async_message.get(),
+                            Modifier::empty()
+                                .padding(10.0)
+                                .background(Color(0.1, 0.18, 0.32, 0.6))
+                                .rounded_corners(14.0),
+                            TextStyle::default(),
+                        );
+
+                        Spacer(Size {
+                            width: 0.0,
+                            height: 12.0,
+                        });
+
+                        Button(
+                            Modifier::empty()
+                                .rounded_corners(16.0)
+                                .draw_with_cache(|cache| {
+                                    cache.on_draw_behind(|scope| {
+                                        scope.draw_round_rect(
+                                            Brush::linear_gradient(vec![
+                                                Color(0.15, 0.35, 0.85, 1.0),
+                                                Color(0.08, 0.2, 0.55, 1.0),
+                                            ]),
+                                            CornerRadii::uniform(16.0),
+                                        );
+                                    });
+                                })
+                                .padding(12.0),
+                            {
+                                move || {
+                                    async_message
+                                        .set("Fetching value on background thread...".to_string());
+                                    fetch_request.update(|value| *value += 1);
+                                }
+                            },
+                            || {
+                                Text(
+                                    "Fetch async value",
+                                    Modifier::empty().padding(6.0),
+                                    TextStyle::default(),
+                                );
+                            },
+                        );
+                    },
+                );
             },
         );
     });
@@ -1712,68 +1635,65 @@ fn modifier_showcase_tab() {
                     .background(Color(0.08, 0.10, 0.18, 1.0))
                     .rounded_corners(20.0),
                 ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
-                {
-                    let showcase_state = selected_showcase;
-                    move || {
-                        Text(
-                            "Select Showcase",
+                move || {
+                    Text(
+                        "Select Showcase",
+                        Modifier::empty()
+                            .padding(8.0)
+                            .background(Color(1.0, 1.0, 1.0, 0.08))
+                            .rounded_corners(12.0),
+                        TextStyle::default(),
+                    );
+
+                    Spacer(Size {
+                        width: 0.0,
+                        height: 8.0,
+                    });
+
+                    let showcase_types = [
+                        ShowcaseType::SimpleCard,
+                        ShowcaseType::PositionedBoxes,
+                        ShowcaseType::ItemList,
+                        ShowcaseType::ComplexChain,
+                        ShowcaseType::DynamicModifiers,
+                        ShowcaseType::LongList,
+                    ];
+
+                    for showcase_type in showcase_types {
+                        let is_selected = selected_showcase.get() == showcase_type;
+                        Button(
                             Modifier::empty()
-                                .padding(8.0)
-                                .background(Color(1.0, 1.0, 1.0, 0.08))
-                                .rounded_corners(12.0),
-                            TextStyle::default(),
+                                .fill_max_width()
+                                .rounded_corners(10.0)
+                                .draw_behind(move |scope| {
+                                    scope.draw_round_rect(
+                                        Brush::solid(if is_selected {
+                                            Color(0.25, 0.45, 0.85, 1.0)
+                                        } else {
+                                            Color(0.15, 0.18, 0.25, 0.8)
+                                        }),
+                                        CornerRadii::uniform(10.0),
+                                    );
+                                })
+                                .padding(10.0),
+                            {
+                                move || {
+                                    if selected_showcase.get() != showcase_type {
+                                        selected_showcase.set(showcase_type);
+                                    }
+                                }
+                            },
+                            {
+                                let label = showcase_type.label();
+                                move || {
+                                    Text(
+                                        label,
+                                        Modifier::empty().padding(4.0),
+                                        TextStyle::default(),
+                                    );
+                                }
+                            },
                         );
-
-                        Spacer(Size {
-                            width: 0.0,
-                            height: 8.0,
-                        });
-
-                        let showcase_types = [
-                            ShowcaseType::SimpleCard,
-                            ShowcaseType::PositionedBoxes,
-                            ShowcaseType::ItemList,
-                            ShowcaseType::ComplexChain,
-                            ShowcaseType::DynamicModifiers,
-                            ShowcaseType::LongList,
-                        ];
-
-                        for showcase_type in showcase_types {
-                            let is_selected = showcase_state.get() == showcase_type;
-                            Button(
-                                Modifier::empty()
-                                    .fill_max_width()
-                                    .rounded_corners(10.0)
-                                    .draw_behind(move |scope| {
-                                        scope.draw_round_rect(
-                                            Brush::solid(if is_selected {
-                                                Color(0.25, 0.45, 0.85, 1.0)
-                                            } else {
-                                                Color(0.15, 0.18, 0.25, 0.8)
-                                            }),
-                                            CornerRadii::uniform(10.0),
-                                        );
-                                    })
-                                    .padding(10.0),
-                                {
-                                    move || {
-                                        if showcase_state.get() != showcase_type {
-                                            showcase_state.set(showcase_type);
-                                        }
-                                    }
-                                },
-                                {
-                                    let label = showcase_type.label();
-                                    move || {
-                                        Text(
-                                            label,
-                                            Modifier::empty().padding(4.0),
-                                            TextStyle::default(),
-                                        );
-                                    }
-                                },
-                            );
-                        }
                     }
                 },
             );
@@ -1787,19 +1707,16 @@ fn modifier_showcase_tab() {
                     .rounded_corners(20.0)
                     .padding(16.0),
                 ColumnSpec::default(),
-                {
-                    let selected_showcase_inner = selected_showcase;
-                    move || {
-                        let showcase_to_render = selected_showcase_inner.get();
-                        cranpose_core::with_key(&showcase_to_render, || match showcase_to_render {
-                            ShowcaseType::SimpleCard => simple_card_showcase(),
-                            ShowcaseType::PositionedBoxes => positioned_boxes_showcase(),
-                            ShowcaseType::ItemList => item_list_showcase(),
-                            ShowcaseType::ComplexChain => complex_chain_showcase(),
-                            ShowcaseType::DynamicModifiers => dynamic_modifiers_showcase(),
-                            ShowcaseType::LongList => long_list_showcase(),
-                        });
-                    }
+                move || {
+                    let showcase_to_render = selected_showcase.get();
+                    cranpose_core::with_key(&showcase_to_render, || match showcase_to_render {
+                        ShowcaseType::SimpleCard => simple_card_showcase(),
+                        ShowcaseType::PositionedBoxes => positioned_boxes_showcase(),
+                        ShowcaseType::ItemList => item_list_showcase(),
+                        ShowcaseType::ComplexChain => complex_chain_showcase(),
+                        ShowcaseType::DynamicModifiers => dynamic_modifiers_showcase(),
+                        ShowcaseType::LongList => long_list_showcase(),
+                    });
                 },
             );
         },
@@ -2275,11 +2192,8 @@ pub fn dynamic_modifiers_showcase() {
                     );
                 })
                 .padding(10.0),
-            {
-                let frame_state = frame;
-                move || {
-                    frame_state.set(frame_state.get() + 1);
-                }
+            move || {
+                frame.set(frame.get() + 1);
             },
             || {
                 Text(

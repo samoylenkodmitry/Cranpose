@@ -58,7 +58,7 @@ cranpose-ui = { path = "crates/cranpose-ui", version = "0.0.47" }
 cranpose-ui-graphics = { path = "crates/cranpose-ui-graphics", version = "0.0.47" }
 cranpose-ui-layout = { path = "crates/cranpose-ui-layout", version = "0.0.47" }
 
-# Release profile optimizations for smaller binaries
+# Distribution profile optimized for binary size.
 [profile.release]
 opt-level = "s"         # Optimize for size (use "z" only for WASM)
 lto = true              # Link-Time Optimization across crates
@@ -66,6 +66,13 @@ codegen-units = 1       # Better optimization (single codegen unit)
 strip = true            # Strip symbols from binary
 panic = "abort"         # Smaller binaries (no unwinding)
 debug = 0               # No debug info
+
+# Native perf profile optimized for runtime speed and profiling.
+[profile.native-release]
+inherits = "release"
+opt-level = 3
+debug = 1
+strip = "none"
 
 # Maximum size optimization profile (slower builds, smaller binaries)
 [profile.release-small]

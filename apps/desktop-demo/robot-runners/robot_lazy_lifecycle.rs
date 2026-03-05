@@ -71,7 +71,9 @@ fn lifecycle_lazy_list(state: LazyListState, stats: MutableState<LifecycleStats>
 
 #[composable]
 fn lifecycle_test_app() {
-    let stats: MutableState<LifecycleStats> = cranpose_core::useState(LifecycleStats::default);
+    let stats: MutableState<LifecycleStats> =
+        cranpose_core::remember(|| cranpose_core::mutableStateOf(LifecycleStats::default()))
+            .with(|state| *state);
     let state = remember_lazy_list_state();
 
     Column(
@@ -100,7 +102,7 @@ fn lifecycle_test_app() {
             );
 
             // Lazy list - should not recompose when stats change
-            lifecycle_lazy_list(state.clone(), stats);
+            lifecycle_lazy_list(state, stats);
         },
     );
 }

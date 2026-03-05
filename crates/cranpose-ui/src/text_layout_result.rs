@@ -4,7 +4,7 @@
 //! computed during text measurement, enabling O(1) cursor positioning and
 //! selection rendering instead of O(n²) substring measurements.
 
-use std::collections::hash_map::DefaultHasher;
+use cranpose_core::hash::default;
 use std::hash::{Hash, Hasher};
 
 /// Layout information for a single line of text.
@@ -165,7 +165,7 @@ impl TextLayoutResult {
     }
 
     fn hash_text(text: &str) -> u64 {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = default::new();
         text.hash(&mut hasher);
         hasher.finish()
     }

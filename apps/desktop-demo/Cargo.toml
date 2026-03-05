@@ -6,6 +6,10 @@ description = "Cranpose desktop demo application."
 repository = "https://github.com/samoylenkodmitry/cranpose"
 license = "Apache-2.0"
 
+[lints.clippy]
+clone_on_copy = "deny"
+redundant_locals = "deny"
+
 [package.metadata.wasm-pack.profile.release]
 # Enable wasm-opt with size optimization (can reduce WASM size by 20-40%)
 # --all-features enables all standard WASM features that Rust 1.83+ uses by default
@@ -53,7 +57,7 @@ anyhow = "1.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 cranpose-services = { path = "../../crates/cranpose-services" }
-image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+image = { version = "0.24.9", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 zip = { version = "7.4.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 cranpose-ui-graphics = { workspace = true }
 pulldown-cmark = { version = "0.13.1", default-features = false }

@@ -50,8 +50,7 @@ pub(crate) fn web_fetch_example() {
             return;
         }
 
-        let status = fetch_status;
-        status.set(FetchStatus::Loading);
+        fetch_status.set(FetchStatus::Loading);
 
         let client = http_client.clone();
         scope.launch_background(
@@ -62,8 +61,8 @@ pub(crate) fn web_fetch_example() {
                 fetch_ipify(&client).await
             },
             move |fetch_result| match fetch_result {
-                Ok(text) => status.set(FetchStatus::Success(text)),
-                Err(error) => status.set(FetchStatus::Error(error)),
+                Ok(text) => fetch_status.set(FetchStatus::Success(text)),
+                Err(error) => fetch_status.set(FetchStatus::Error(error)),
             },
         );
     });
@@ -76,8 +75,6 @@ pub(crate) fn web_fetch_example() {
             .padding(20.0),
         ColumnSpec::default(),
         {
-            let status_state = fetch_status;
-            let request_state = request_counter;
             let uri_handler = uri_handler.clone();
             move || {
                 let uri_handler = uri_handler.clone();
@@ -163,8 +160,6 @@ pub(crate) fn web_fetch_example() {
                         .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
                         .vertical_alignment(VerticalAlignment::CenterVertically),
                     {
-                        let status_for_button = status_state;
-                        let request_for_button = request_state;
                         move || {
                             Button(
                                 Modifier::empty()
@@ -180,8 +175,8 @@ pub(crate) fn web_fetch_example() {
                                     })
                                     .padding(10.0),
                                 move || {
-                                    status_for_button.set(FetchStatus::Loading);
-                                    request_for_button.update(|tick| *tick = tick.wrapping_add(1));
+                                    fetch_status.set(FetchStatus::Loading);
+                                    request_counter.update(|tick| *tick = tick.wrapping_add(1));
                                 },
                                 || {
                                     Text(
@@ -203,7 +198,7 @@ pub(crate) fn web_fetch_example() {
                     height: 12.0,
                 });
 
-                let status_snapshot = status_state.get();
+                let status_snapshot = fetch_status.get();
                 let (status_label, banner_color) = match &status_snapshot {
                     FetchStatus::Idle => (
                         "Click the button to start an HTTP request",

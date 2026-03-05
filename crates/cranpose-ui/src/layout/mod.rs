@@ -189,6 +189,39 @@ struct ModifierChainMeasurement {
     offset: Point,
 }
 
+type LayoutModifierNodeData = (
+    usize,
+    Rc<RefCell<Box<dyn cranpose_foundation::ModifierNode>>>,
+);
+
+struct ScratchVecPool<T> {
+    available: Vec<Vec<T>>,
+}
+
+impl<T> ScratchVecPool<T> {
+    fn acquire(&mut self) -> Vec<T> {
+        self.available.pop().unwrap_or_default()
+    }
+
+    fn release(&mut self, mut values: Vec<T>) {
+        values.clear();
+        self.available.push(values);
+    }
+
+    #[cfg(test)]
+    fn available_count(&self) -> usize {
+        self.available.len()
+    }
+}
+
+impl<T> Default for ScratchVecPool<T> {
+    fn default() -> Self {
+        Self {
+            available: Vec::new(),
+        }
+    }
+}
+
 /// Discrete event callback reference produced during semantics extraction.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SemanticsCallback {
@@ -436,12 +469,16 @@ impl LayoutEngine for MemoryApplier {
 #[derive(Debug, Clone)]
 pub struct LayoutMeasurements {
     root: Rc<MeasuredNode>,
-    semantics: SemanticsTree,
+    semantics: Option<SemanticsTree>,
     layout_tree: LayoutTree,
 }
 
 impl LayoutMeasurements {
-    fn new(root: Rc<MeasuredNode>, semantics: SemanticsTree, layout_tree: LayoutTree) -> Self {
+    fn new(
+        root: Rc<MeasuredNode>,
+        semantics: Option<SemanticsTree>,
+        layout_tree: LayoutTree,
+    ) -> Self {
         Self {
             root,
             semantics,
@@ -454,8 +491,8 @@ impl LayoutMeasurements {
         self.root.size
     }
 
-    pub fn semantics_tree(&self) -> &SemanticsTree {
-        &self.semantics
+    pub fn semantics_tree(&self) -> Option<&SemanticsTree> {
+        self.semantics.as_ref()
     }
 
     /// Consumes the measurements and produces a [`LayoutTree`].
@@ -466,6 +503,19 @@ impl LayoutMeasurements {
     /// Returns a borrowed [`LayoutTree`] for rendering.
     pub fn layout_tree(&self) -> LayoutTree {
         self.layout_tree.clone()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MeasureLayoutOptions {
+    pub collect_semantics: bool,
+}
+
+impl Default for MeasureLayoutOptions {
+    fn default() -> Self {
+        Self {
+            collect_semantics: true,
+        }
     }
 }
 
@@ -500,6 +550,15 @@ pub fn measure_layout(
     applier: &mut MemoryApplier,
     root: NodeId,
     max_size: Size,
+) -> Result<LayoutMeasurements, NodeError> {
+    measure_layout_with_options(applier, root, max_size, MeasureLayoutOptions::default())
+}
+
+pub fn measure_layout_with_options(
+    applier: &mut MemoryApplier,
+    root: NodeId,
+    max_size: Size,
+    options: MeasureLayoutOptions,
 ) -> Result<LayoutMeasurements, NodeError> {
     let constraints = Constraints {
         min_width: 0.0,
@@ -590,10 +649,19 @@ pub fn measure_layout(
         collect_runtime_metadata(&mut applier_ref, &measured)?
     };
 
-    // ---- Semantics snapshot ------------------------------------------------
-    let semantics_snapshot = {
-        let mut applier_ref = applier_host.borrow_typed();
-        collect_semantics_snapshot(&mut applier_ref, &measured)?
+    let semantics = if options.collect_semantics {
+        let semantics_snapshot = {
+            let mut applier_ref = applier_host.borrow_typed();
+            collect_semantics_snapshot(&mut applier_ref, &measured)?
+        };
+
+        Some(SemanticsTree::new(build_semantics_node(
+            &measured,
+            &metadata,
+            &semantics_snapshot,
+        )))
+    } else {
+        None
     };
 
     // Drop builder before guard - slots are already in the shared handle.
@@ -603,9 +671,6 @@ pub fn measure_layout(
     // DO NOT manually unwrap `applier_host` or replace `applier` here.
     // `ApplierSlotGuard::drop` will restore everything when this function returns.
 
-    // Build semantics and layout trees from `measured` + metadata + snapshot
-    let semantics_root = build_semantics_node(&measured, &metadata, &semantics_snapshot);
-    let semantics = SemanticsTree::new(semantics_root);
     let layout_tree = build_layout_tree_from_metadata(&measured, &metadata);
 
     Ok(LayoutMeasurements::new(measured, semantics, layout_tree))
@@ -648,8 +713,10 @@ struct LayoutBuilderState {
     /// to ensure panic-safety: even if we panic, the guard can restore slots.
     slots: Rc<RefCell<SlotBackend>>,
     cache_epoch: u64,
-    tmp_measurables: Vec<Box<dyn Measurable>>,
-    tmp_records: Vec<(NodeId, ChildRecord)>,
+    tmp_measurables: ScratchVecPool<Box<dyn Measurable>>,
+    tmp_records: ScratchVecPool<(NodeId, ChildRecord)>,
+    tmp_child_ids: ScratchVecPool<NodeId>,
+    tmp_layout_node_data: ScratchVecPool<LayoutModifierNodeData>,
 }
 
 impl LayoutBuilderState {
@@ -665,8 +732,10 @@ impl LayoutBuilderState {
             runtime_handle,
             slots,
             cache_epoch: epoch,
-            tmp_measurables: Vec::new(),
-            tmp_records: Vec::new(),
+            tmp_measurables: ScratchVecPool::default(),
+            tmp_records: ScratchVecPool::default(),
+            tmp_child_ids: ScratchVecPool::default(),
+            tmp_layout_node_data: ScratchVecPool::default(),
         }
     }
 
@@ -905,7 +974,7 @@ impl LayoutBuilderState {
             constraints.max_height,
         );
 
-        let mut children = Vec::new();
+        let mut children = Vec::with_capacity(measure_result.placements.len());
 
         // Update the SubcomposeLayoutNode's size (position will be set by parent's placement)
         if let Ok(mut applier) = applier_host.try_borrow_typed() {
@@ -960,16 +1029,12 @@ impl LayoutBuilderState {
         measurables: &[Box<dyn Measurable>],
         measure_policy: &Rc<dyn MeasurePolicy>,
         constraints: Constraints,
+        layout_node_data: &mut Vec<LayoutModifierNodeData>,
     ) -> ModifierChainMeasurement {
         use cranpose_foundation::NodeCapabilities;
 
         // Collect layout node information from the modifier chain
-        #[allow(clippy::type_complexity)]
-        // Tuple of (index, boxed trait object) is reasonable for modifier nodes
-        let mut layout_node_data: Vec<(
-            usize,
-            Rc<RefCell<Box<dyn cranpose_foundation::ModifierNode>>>,
-        )> = Vec::new();
+        layout_node_data.clear();
         let mut offset = Point::default();
 
         {
@@ -1029,10 +1094,9 @@ impl LayoutBuilderState {
             };
         }
 
-        // Slow path: build coordinator chain for layout modifiers
-        // Reverse order: rightmost modifier is measured first (innermost), leftmost is outer
-        layout_node_data.reverse();
-
+        // Slow path: build coordinator chain for layout modifiers.
+        // Popping from the end preserves the "rightmost modifier measures first" order
+        // without allocating or cloning the collected node list.
         // Create a shared context for this measurement pass to track invalidations
         let shared_context = Rc::new(RefCell::new(LayoutNodeContext::new()));
 
@@ -1047,7 +1111,7 @@ impl LayoutBuilderState {
 
         // Wrap each layout modifier node in a coordinator, building the chain
         let mut current_coordinator = inner_coordinator;
-        for (_, node_rc) in layout_node_data {
+        while let Some((_, node_rc)) = layout_node_data.pop() {
             current_coordinator = Box::new(coordinator::LayoutModifierCoordinator::new(
                 node_rc,
                 current_coordinator,
@@ -1128,7 +1192,6 @@ impl LayoutBuilderState {
         let LayoutNodeSnapshot {
             resolved_modifiers,
             measure_policy,
-            children,
             cache,
             needs_measure,
         } = snapshot;
@@ -1165,9 +1228,15 @@ impl LayoutBuilderState {
         let measure_handle = LayoutMeasureHandle::new(Rc::clone(&state_rc));
         let error = Rc::new(RefCell::new(None));
         let mut pools = VecPools::acquire(Rc::clone(&state_rc));
-        let (measurables, records) = pools.parts();
+        let (measurables, records, child_ids, layout_node_data) = pools.parts();
 
-        for &child_id in children.iter() {
+        applier_host
+            .borrow_typed()
+            .with_node::<LayoutNode, _>(node_id, |node| {
+                child_ids.extend_from_slice(&node.children);
+            })?;
+
+        for &child_id in child_ids.iter() {
             let measured = Rc::new(RefCell::new(None));
             let position = Rc::new(RefCell::new(None));
 
@@ -1245,6 +1314,7 @@ impl LayoutBuilderState {
             measurables.as_slice(),
             &measure_policy,
             chain_constraints,
+            layout_node_data,
         );
 
         if (chain_constraints.max_width != constraints.max_width
@@ -1260,6 +1330,7 @@ impl LayoutBuilderState {
                 measurables.as_slice(),
                 &measure_policy,
                 constraints,
+                layout_node_data,
             );
         }
 
@@ -1281,30 +1352,28 @@ impl LayoutBuilderState {
             )
         };
 
-        let mut measured_children = Vec::new();
-        for &child_id in children.iter() {
-            if let Some((_, record)) = records.iter().find(|(id, _)| *id == child_id) {
-                if let Some(measured) = record.measured.borrow_mut().take() {
-                    let base_position = policy_result
-                        .placements
-                        .iter()
-                        .find(|placement| placement.node_id == child_id)
-                        .map(|placement| Point {
-                            x: placement.x,
-                            y: placement.y,
-                        })
-                        .or_else(|| record.last_position.borrow().as_ref().copied())
-                        .unwrap_or(Point { x: 0.0, y: 0.0 });
-                    // Apply content_offset (from scroll/transforms) to child positioning
-                    let position = Point {
-                        x: content_offset.x + base_position.x,
-                        y: content_offset.y + base_position.y,
-                    };
-                    measured_children.push(MeasuredChild {
-                        node: measured,
-                        offset: position,
-                    });
-                }
+        let mut measured_children = Vec::with_capacity(records.len());
+        for (child_id, record) in records.iter() {
+            if let Some(measured) = record.measured.borrow_mut().take() {
+                let base_position = policy_result
+                    .placements
+                    .iter()
+                    .find(|placement| placement.node_id == *child_id)
+                    .map(|placement| Point {
+                        x: placement.x,
+                        y: placement.y,
+                    })
+                    .or_else(|| record.last_position.borrow().as_ref().copied())
+                    .unwrap_or(Point { x: 0.0, y: 0.0 });
+                // Apply content_offset (from scroll/transforms) to child positioning
+                let position = Point {
+                    x: content_offset.x + base_position.x,
+                    y: content_offset.y + base_position.y,
+                };
+                measured_children.push(MeasuredChild {
+                    node: measured,
+                    offset: position,
+                });
             }
         }
 
@@ -1342,7 +1411,6 @@ impl LayoutBuilderState {
 struct LayoutNodeSnapshot {
     resolved_modifiers: ResolvedModifiers,
     measure_policy: Rc<dyn MeasurePolicy>,
-    children: Vec<NodeId>,
     cache: LayoutNodeCacheHandles,
     /// Whether this specific node needs to be measured (vs using cached measurement)
     needs_measure: bool,
@@ -1353,7 +1421,6 @@ impl LayoutNodeSnapshot {
         Self {
             resolved_modifiers: node.resolved_modifiers(),
             measure_policy: Rc::clone(&node.measure_policy),
-            children: node.children.iter().copied().collect(),
             cache: node.cache_handles(),
             needs_measure: node.needs_measure(),
         }
@@ -1365,22 +1432,27 @@ struct VecPools {
     state: Rc<RefCell<LayoutBuilderState>>,
     measurables: Option<Vec<Box<dyn Measurable>>>,
     records: Option<Vec<(NodeId, ChildRecord)>>,
+    child_ids: Option<Vec<NodeId>>,
+    layout_node_data: Option<Vec<LayoutModifierNodeData>>,
 }
 
 impl VecPools {
     fn acquire(state: Rc<RefCell<LayoutBuilderState>>) -> Self {
-        let measurables = {
+        let (measurables, records, child_ids, layout_node_data) = {
             let mut state_mut = state.borrow_mut();
-            std::mem::take(&mut state_mut.tmp_measurables)
-        };
-        let records = {
-            let mut state_mut = state.borrow_mut();
-            std::mem::take(&mut state_mut.tmp_records)
+            (
+                state_mut.tmp_measurables.acquire(),
+                state_mut.tmp_records.acquire(),
+                state_mut.tmp_child_ids.acquire(),
+                state_mut.tmp_layout_node_data.acquire(),
+            )
         };
         Self {
             state,
             measurables: Some(measurables),
             records: Some(records),
+            child_ids: Some(child_ids),
+            layout_node_data: Some(layout_node_data),
         }
     }
 
@@ -1390,26 +1462,37 @@ impl VecPools {
     ) -> (
         &mut Vec<Box<dyn Measurable>>,
         &mut Vec<(NodeId, ChildRecord)>,
+        &mut Vec<NodeId>,
+        &mut Vec<LayoutModifierNodeData>,
     ) {
         let measurables = self
             .measurables
             .as_mut()
             .expect("measurables already returned");
         let records = self.records.as_mut().expect("records already returned");
-        (measurables, records)
+        let child_ids = self.child_ids.as_mut().expect("child_ids already returned");
+        let layout_node_data = self
+            .layout_node_data
+            .as_mut()
+            .expect("layout_node_data already returned");
+        (measurables, records, child_ids, layout_node_data)
     }
 }
 
 impl Drop for VecPools {
     fn drop(&mut self) {
         let mut state = self.state.borrow_mut();
-        if let Some(mut measurables) = self.measurables.take() {
-            measurables.clear();
-            state.tmp_measurables = measurables;
+        if let Some(measurables) = self.measurables.take() {
+            state.tmp_measurables.release(measurables);
         }
-        if let Some(mut records) = self.records.take() {
-            records.clear();
-            state.tmp_records = records;
+        if let Some(records) = self.records.take() {
+            state.tmp_records.release(records);
+        }
+        if let Some(child_ids) = self.child_ids.take() {
+            state.tmp_child_ids.release(child_ids);
+        }
+        if let Some(layout_node_data) = self.layout_node_data.take() {
+            state.tmp_layout_node_data.release(layout_node_data);
         }
     }
 }
@@ -1595,7 +1678,7 @@ impl LayoutChildMeasurable {
 }
 
 impl Measurable for LayoutChildMeasurable {
-    fn measure(&self, constraints: Constraints) -> Box<dyn Placeable> {
+    fn measure(&self, constraints: Constraints) -> Placeable {
         self.cache.activate(self.cache_epoch);
         let measured_size;
         if let Some(cached) = self.cache.get_measurement(constraints) {
@@ -1633,13 +1716,52 @@ impl Measurable for LayoutChildMeasurable {
             });
         }
 
-        Box::new(LayoutChildPlaceable::new(
-            Rc::clone(&self.applier),
+        // Build the place closure that captures all state needed for placement
+        let applier = Rc::clone(&self.applier);
+        let node_id = self.node_id;
+        let measured = Rc::clone(&self.measured);
+        let last_position = Rc::clone(&self.last_position);
+        let layout_state = self.layout_state.clone();
+
+        let place_fn = Rc::new(move |x: f32, y: f32| {
+            // Retrieve the node's own offset (from modifiers like offset(), padding(), etc.)
+            let internal_offset = measured
+                .borrow()
+                .as_ref()
+                .map(|m| m.offset)
+                .unwrap_or_default();
+
+            let position = Point {
+                x: x + internal_offset.x,
+                y: y + internal_offset.y,
+            };
+            *last_position.borrow_mut() = Some(position);
+
+            // Update retained LayoutNode state
+            if let Some(state) = &layout_state {
+                let mut state = state.borrow_mut();
+                state.position = position;
+                state.is_placed = true;
+            } else if let Ok(mut applier) = applier.try_borrow_typed() {
+                if applier
+                    .with_node::<LayoutNode, _>(node_id, |node| {
+                        node.set_position(position);
+                    })
+                    .is_err()
+                {
+                    let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
+                        node.set_position(position);
+                    });
+                }
+            }
+        });
+
+        Placeable::with_place_fn(
+            measured_size.width,
+            measured_size.height,
             self.node_id,
-            Rc::clone(&self.measured),
-            Rc::clone(&self.last_position),
-            self.layout_state.clone(),
-        ))
+            place_fn,
+        )
     }
 
     fn min_intrinsic_width(&self, height: f32) -> f32 {
@@ -1742,92 +1864,6 @@ impl Measurable for LayoutChildMeasurable {
             })
             .ok()
             .flatten()
-    }
-}
-
-struct LayoutChildPlaceable {
-    applier: Rc<ConcreteApplierHost<MemoryApplier>>,
-    node_id: NodeId,
-    measured: Rc<RefCell<Option<Rc<MeasuredNode>>>>,
-    last_position: Rc<RefCell<Option<Point>>>,
-    layout_state: Option<Rc<RefCell<crate::widgets::nodes::layout_node::LayoutState>>>,
-}
-
-impl LayoutChildPlaceable {
-    fn new(
-        applier: Rc<ConcreteApplierHost<MemoryApplier>>,
-        node_id: NodeId,
-        measured: Rc<RefCell<Option<Rc<MeasuredNode>>>>,
-        last_position: Rc<RefCell<Option<Point>>>,
-        layout_state: Option<Rc<RefCell<crate::widgets::nodes::layout_node::LayoutState>>>,
-    ) -> Self {
-        Self {
-            applier,
-            node_id,
-            measured,
-            last_position,
-            layout_state,
-        }
-    }
-}
-
-impl Placeable for LayoutChildPlaceable {
-    fn place(&self, x: f32, y: f32) {
-        // Retrieve the node's own offset (from modifiers like offset(), padding(), etc.)
-        // This must be added to the placement position (x, y) provided by the parent.
-        let internal_offset = self
-            .measured
-            .borrow()
-            .as_ref()
-            .map(|m| m.offset)
-            .unwrap_or_default();
-
-        let position = Point {
-            x: x + internal_offset.x,
-            y: y + internal_offset.y,
-        };
-        // Update transient storage (for backwards compatibility during transition)
-        *self.last_position.borrow_mut() = Some(position);
-
-        // Update retained LayoutNode state (the new architecture)
-        // PRIORITIZE direct handle to avoid Applier borrow conflicts during layout!
-        if let Some(state) = &self.layout_state {
-            let mut state = state.borrow_mut();
-            state.position = position;
-            state.is_placed = true;
-        } else if let Ok(mut applier) = self.applier.try_borrow_typed() {
-            // Try LayoutNode first, then SubcomposeLayoutNode
-            if applier
-                .with_node::<LayoutNode, _>(self.node_id, |node| {
-                    node.set_position(position);
-                })
-                .is_err()
-            {
-                let _ = applier.with_node::<SubcomposeLayoutNode, _>(self.node_id, |node| {
-                    node.set_position(position);
-                });
-            }
-        }
-    }
-
-    fn width(&self) -> f32 {
-        self.measured
-            .borrow()
-            .as_ref()
-            .map(|node| node.size.width)
-            .unwrap_or(0.0)
-    }
-
-    fn height(&self) -> f32 {
-        self.measured
-            .borrow()
-            .as_ref()
-            .map(|node| node.size.height)
-            .unwrap_or(0.0)
-    }
-
-    fn node_id(&self) -> NodeId {
-        self.node_id
     }
 }
 
@@ -1938,19 +1974,13 @@ fn collect_runtime_metadata_inner(
     Ok(())
 }
 
-/// Extracts text content from a LayoutNode's modifier chain.
-///
-/// Searches the modifier chain for a TextModifierNode and returns its text content.
-/// This replaces the old approach of checking measure_policy.text_content().
-///
-/// We extract text from the semantics configuration, which TextModifierNode
-/// populates via its SemanticsNode implementation.
-fn extract_text_from_layout_node(layout: &LayoutNode) -> Option<String> {
-    // Use the semantics configuration which collects data from all SemanticsNode instances
-    // in the modifier chain, including TextModifierNode
-    layout
-        .semantics_configuration()
-        .and_then(|config| config.content_description)
+fn role_from_modifier_slices(modifier_slices: &ModifierNodeSlices) -> SemanticsRole {
+    modifier_slices
+        .text_content()
+        .map(|text| SemanticsRole::Text {
+            value: text.to_string(),
+        })
+        .unwrap_or(SemanticsRole::Layout)
 }
 
 fn runtime_metadata_for(
@@ -1962,17 +1992,15 @@ fn runtime_metadata_for(
     // LayoutNode creates a NEW ModifierChainHandle with NEW nodes and NEW handlers,
     // which would lose gesture state like press_position.
     if let Ok(meta) = applier.with_node::<LayoutNode, _>(node_id, |layout| {
-        // Extract text content from the modifier chain instead of measure policy
-        let role = if let Some(text) = extract_text_from_layout_node(layout) {
-            SemanticsRole::Text { value: text }
-        } else {
-            SemanticsRole::Layout
-        };
+        let modifier = layout.modifier.clone();
+        let resolved_modifiers = layout.resolved_modifiers();
+        let modifier_slices = layout.modifier_slices_snapshot();
+        let role = role_from_modifier_slices(&modifier_slices);
 
         RuntimeNodeMetadata {
-            modifier: layout.modifier.clone(),
-            resolved_modifiers: layout.resolved_modifiers(),
-            modifier_slices: layout.modifier_slices_snapshot(),
+            modifier,
+            resolved_modifiers,
+            modifier_slices,
             role,
             button_handler: None,
         }

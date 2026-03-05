@@ -11,7 +11,6 @@ use cranpose_foundation::{
     InvalidationKind, ModifierInvalidation, NodeCapabilities, SemanticsConfiguration,
 };
 use cranpose_ui_layout::{Constraints, MeasurePolicy};
-use indexmap::IndexSet;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -190,7 +189,7 @@ pub struct LayoutNode {
     modifier_child_capabilities: NodeCapabilities,
     pub measure_policy: Rc<dyn MeasurePolicy>,
     /// The actual children of this node (folded view - includes virtual nodes as-is)
-    pub children: IndexSet<NodeId>,
+    pub children: Vec<NodeId>,
     cache: LayoutNodeCacheHandles,
     // Dirty flags for selective measure/layout/render
     needs_measure: Cell<bool>,
@@ -249,7 +248,7 @@ impl LayoutNode {
             modifier_capabilities: NodeCapabilities::default(),
             modifier_child_capabilities: NodeCapabilities::default(),
             measure_policy,
-            children: IndexSet::new(),
+            children: Vec::new(),
             cache: LayoutNodeCacheHandles::default(),
             needs_measure: Cell::new(true), // New nodes need initial measure
             needs_layout: Cell::new(true),  // New nodes need initial layout
@@ -721,17 +720,22 @@ impl Node for LayoutNode {
     }
 
     fn insert_child(&mut self, child: NodeId) {
+        if self.children.contains(&child) {
+            return;
+        }
         if is_virtual_node(child) {
             let count = self.virtual_children_count.get();
             self.virtual_children_count.set(count + 1);
         }
-        self.children.insert(child);
+        self.children.push(child);
         self.cache.clear();
         self.mark_needs_measure();
     }
 
     fn remove_child(&mut self, child: NodeId) {
-        if self.children.shift_remove(&child) {
+        let before = self.children.len();
+        self.children.retain(|&id| id != child);
+        if self.children.len() < before {
             if is_virtual_node(child) {
                 let count = self.virtual_children_count.get();
                 if count > 0 {
@@ -747,30 +751,22 @@ impl Node for LayoutNode {
         if from == to || from >= self.children.len() {
             return;
         }
-        let mut ordered: Vec<NodeId> = self.children.iter().copied().collect();
-        let child = ordered.remove(from);
-        let target = to.min(ordered.len());
-        ordered.insert(target, child);
-        self.children.clear();
-        for id in ordered {
-            self.children.insert(id);
-        }
+        let child = self.children.remove(from);
+        let target = to.min(self.children.len());
+        self.children.insert(target, child);
         self.cache.clear();
         self.mark_needs_measure();
-        // Parent doesn't change when moving within same parent
     }
 
     fn update_children(&mut self, children: &[NodeId]) {
         self.children.clear();
-        for &child in children {
-            self.children.insert(child);
-        }
+        self.children.extend_from_slice(children);
         self.cache.clear();
         self.mark_needs_measure();
     }
 
     fn children(&self) -> Vec<NodeId> {
-        self.children.iter().copied().collect()
+        self.children.clone()
     }
 
     fn on_attached_to_parent(&mut self, parent: NodeId) {

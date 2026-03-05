@@ -13,8 +13,8 @@ use std::rc::{Rc, Weak};
 
 use cranpose_core::internal::FrameCallbackRegistration;
 use cranpose_core::{
-    with_current_composer, DisposableEffectResult, MutableState, Owned, RuntimeHandle, SideEffect,
-    State,
+    with_current_composer, DisposableEffectResult, Owned, OwnedMutableState, RuntimeHandle,
+    SideEffect, State,
 };
 
 /// Trait for types that can be linearly interpolated.
@@ -350,7 +350,7 @@ trait InfiniteTransitionAnimation {
 }
 
 struct TransitionAnimationState<T: Lerp + Clone + PartialEq + 'static> {
-    value_state: MutableState<T>,
+    value_state: OwnedMutableState<T>,
     initial_value: RefCell<T>,
     target_value: RefCell<T>,
     spec: RefCell<InfiniteRepeatableSpec<T>>,
@@ -366,7 +366,7 @@ impl<T: Lerp + Clone + PartialEq + 'static> TransitionAnimationState<T> {
         runtime: RuntimeHandle,
     ) -> Self {
         Self {
-            value_state: MutableState::with_runtime(initial_value.clone(), runtime),
+            value_state: OwnedMutableState::with_runtime(initial_value.clone(), runtime),
             initial_value: RefCell::new(initial_value),
             target_value: RefCell::new(target_value),
             spec: RefCell::new(spec),
@@ -473,7 +473,7 @@ pub struct InfiniteTransition {
 struct InfiniteTransitionInner {
     label: String,
     animations: RefCell<Vec<Rc<dyn InfiniteTransitionAnimation>>>,
-    run_token: MutableState<u64>,
+    run_token: OwnedMutableState<u64>,
 }
 
 impl InfiniteTransition {
@@ -482,7 +482,7 @@ impl InfiniteTransition {
             inner: Rc::new(InfiniteTransitionInner {
                 label: label.to_string(),
                 animations: RefCell::new(Vec::new()),
-                run_token: MutableState::with_runtime(0u64, runtime),
+                run_token: OwnedMutableState::with_runtime(0u64, runtime),
             }),
         }
     }
@@ -637,7 +637,7 @@ pub struct Animatable<T: SpringScalar + 'static> {
 }
 
 struct AnimatableInner<T: SpringScalar + 'static> {
-    state: MutableState<T>,
+    state: OwnedMutableState<T>,
     runtime: RuntimeHandle,
     current: T,
     /// Velocity for spring animations (currently unused, reserved for future spring physics)
@@ -654,7 +654,7 @@ impl<T: SpringScalar + 'static> Animatable<T> {
     /// Create a new animatable with the given initial value.
     pub fn new(initial: T, runtime: RuntimeHandle) -> Self {
         let inner = AnimatableInner {
-            state: MutableState::with_runtime(initial.clone(), runtime.clone()),
+            state: OwnedMutableState::with_runtime(initial.clone(), runtime.clone()),
             runtime,
             current: initial.clone(),
             velocity: 0.0,

@@ -74,7 +74,7 @@ impl<'a> NodeCoordinator for LayoutModifierCoordinator<'a> {
 
 impl<'a> Measurable for LayoutModifierCoordinator<'a> {
     /// Measure through this coordinator
-    fn measure(&self, constraints: Constraints) -> Box<dyn Placeable> {
+    fn measure(&self, constraints: Constraints) -> Placeable {
         let node_borrow = self.node.borrow();
 
         let result = {
@@ -105,13 +105,12 @@ impl<'a> Measurable for LayoutModifierCoordinator<'a> {
                 // Pass through the child's accumulated offset (stored from its measure())
                 let child_accumulated = self.wrapped.total_content_offset();
                 self.accumulated_offset.set(child_accumulated);
-                return Box::new(CoordinatorPlaceable {
-                    size: Size {
-                        width: placeable.width(),
-                        height: placeable.height(),
-                    },
-                    content_offset: child_accumulated,
-                });
+                return Placeable::value_with_offset(
+                    placeable.width(),
+                    placeable.height(),
+                    NodeId::default(),
+                    (child_accumulated.x, child_accumulated.y),
+                );
             }
         };
 
@@ -135,10 +134,12 @@ impl<'a> Measurable for LayoutModifierCoordinator<'a> {
         };
         self.accumulated_offset.set(accumulated);
 
-        Box::new(CoordinatorPlaceable {
-            size: result.size,
-            content_offset: accumulated,
-        })
+        Placeable::value_with_offset(
+            result.size.width,
+            result.size.height,
+            NodeId::default(),
+            (accumulated.x, accumulated.y),
+        )
     }
 
     fn min_intrinsic_width(&self, height: f32) -> f32 {
@@ -216,7 +217,7 @@ impl<'a> NodeCoordinator for InnerCoordinator<'a> {
 }
 
 impl<'a> Measurable for InnerCoordinator<'a> {
-    fn measure(&self, constraints: Constraints) -> Box<dyn Placeable> {
+    fn measure(&self, constraints: Constraints) -> Placeable {
         // Execute the measure policy
         let result = self.measure_policy.measure(self.measurables, constraints);
 
@@ -228,10 +229,7 @@ impl<'a> Measurable for InnerCoordinator<'a> {
         *self.result_holder.borrow_mut() = Some(result);
 
         // InnerCoordinator has no offset contribution
-        Box::new(CoordinatorPlaceable {
-            size,
-            content_offset: Point::default(),
-        })
+        Placeable::value(size.width, size.height, NodeId::default())
     }
 
     fn min_intrinsic_width(&self, height: f32) -> f32 {
@@ -252,35 +250,5 @@ impl<'a> Measurable for InnerCoordinator<'a> {
     fn max_intrinsic_height(&self, width: f32) -> f32 {
         self.measure_policy
             .max_intrinsic_height(self.measurables, width)
-    }
-}
-
-/// Placeable implementation for coordinators.
-/// Carries the accumulated content offset from the coordinator chain.
-struct CoordinatorPlaceable {
-    size: Size,
-    /// Accumulated content offset (sum of all offsets from this coordinator down).
-    content_offset: Point,
-}
-
-impl Placeable for CoordinatorPlaceable {
-    fn width(&self) -> f32 {
-        self.size.width
-    }
-
-    fn height(&self) -> f32 {
-        self.size.height
-    }
-
-    fn place(&self, _x: f32, _y: f32) {
-        // Placement is handled externally by the layout system
-    }
-
-    fn node_id(&self) -> NodeId {
-        NodeId::default()
-    }
-
-    fn content_offset(&self) -> (f32, f32) {
-        (self.content_offset.x, self.content_offset.y)
     }
 }

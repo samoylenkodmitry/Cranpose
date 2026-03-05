@@ -182,7 +182,10 @@ fn main() {
                 / items.len().max(1) as f32;
             let max_reasonable_height = avg_height * 2.5;
 
-            let mut has_bounds_mismatch = list_bounds_missing;
+            let mut has_bounds_mismatch = false;
+            if list_bounds_missing {
+                has_bounds_mismatch = true;
+            }
             for (idx, row, group) in &items {
                 println!(
                     "    Item #{}: row=({:.1}, {:.1}, {:.1} x {:.1}) group=({:.1}, {:.1}, {:.1} x {:.1})",
@@ -200,11 +203,10 @@ fn main() {
                 }
 
                 if let Some((list_x, _list_y, list_w, _list_h)) = list_bounds {
-                    let expected = list_w;
-                    if (row.2 - expected).abs() > 2.0 {
+                    if (row.2 - list_w).abs() > 2.0 {
                         println!(
                             "      ⚠️  Width mismatch! Expected {:.1}, got {:.1}",
-                            expected, row.2
+                            list_w, row.2
                         );
                         has_bounds_mismatch = true;
                     }

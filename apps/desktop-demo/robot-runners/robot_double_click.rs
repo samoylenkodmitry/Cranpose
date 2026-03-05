@@ -6,9 +6,11 @@
 //! ```
 
 use cranpose::AppLauncher;
-use cranpose_testing::{find_button, find_button_in_semantics, find_in_semantics, find_text};
+use cranpose_testing::{find_button, find_in_semantics, find_text};
 use desktop_app::app;
 use std::time::Duration;
+
+mod text_input_robot_helpers;
 
 fn main() {
     env_logger::init();
@@ -31,37 +33,21 @@ fn main() {
 
             // Step 1: Switch to Text Input tab
             println!("--- Step 1: Switch to Text Input Tab ---");
-            if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Text Input") {
-                let cx = x + w / 2.0;
-                let cy = y + h / 2.0;
-                let _ = robot.mouse_move(cx, cy);
-                std::thread::sleep(Duration::from_millis(20));
-                let _ = robot.mouse_down();
-                std::thread::sleep(Duration::from_millis(20));
-                let _ = robot.mouse_up();
-                let _ = robot.wait_for_idle();
-                std::thread::sleep(Duration::from_millis(500));
+            if text_input_robot_helpers::open_text_input_tab(&robot) {
                 println!("✓ Clicked Text Input tab\n");
             } else {
                 println!("✗ FAIL: Could not find Text Input tab");
                 let _ = robot.exit();
+                return;
             }
 
             // Step 2: Find text field
             println!("--- Step 2: Find text field ---");
-            let mut text_field_pos: Option<(f32, f32, f32, f32)> = None;
-
-            for attempt in 1..=20 {
-                text_field_pos = find_in_semantics(&robot, |elem| find_text(elem, "Type here..."));
-                if text_field_pos.is_some() {
-                    break;
-                }
-                println!("  Attempt {}/20: not found, waiting...", attempt);
-                let _ = robot.wait_for_idle();
-                std::thread::sleep(Duration::from_millis(200));
-            }
-
-            let (field_x, field_y, field_w, field_h) = if let Some(pos) = text_field_pos {
+            let (field_x, field_y, field_w, field_h) = if let Some(pos) =
+                text_input_robot_helpers::wait_for_in_semantics(&robot, |robot| {
+                    find_in_semantics(robot, |elem| find_text(elem, "Type here..."))
+                })
+            {
                 pos
             } else {
                 println!("✗ FAIL: Could not find text field");
