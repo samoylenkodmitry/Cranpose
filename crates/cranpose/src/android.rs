@@ -246,6 +246,7 @@ pub fn run(
                                     required_features: wgpu::Features::empty(),
                                     required_limits: wgpu::Limits::downlevel_defaults()
                                         .using_resolution(adapter.limits()),
+                                    experimental_features: wgpu::ExperimentalFeatures::disabled(),
                                     memory_hints: wgpu::MemoryHints::default(),
                                     trace: wgpu::Trace::Off,
                                 }),

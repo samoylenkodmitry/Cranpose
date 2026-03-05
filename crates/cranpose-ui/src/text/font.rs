@@ -51,8 +51,9 @@ impl LoadedTypefacePath {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
 pub enum FontFamily {
+    #[default]
     Default,
     SansSerif,
     Serif,
@@ -94,12 +95,6 @@ impl FontFamily {
             Self::Named(name) => Some(name.as_str()),
             _ => None,
         }
-    }
-}
-
-impl Default for FontFamily {
-    fn default() -> Self {
-        Self::Default
     }
 }
 

@@ -196,11 +196,9 @@ fn markdown_to_blocks(markdown: &str) -> Vec<MarkdownBlock> {
                 b.style.heading = Some(level);
                 b.push_inline_style();
             }
-            Event::Start(Tag::Paragraph) => {
-                if b.list_item_depth == 0 {
-                    b.flush_block();
-                    b.push_inline_style();
-                }
+            Event::Start(Tag::Paragraph) if b.list_item_depth == 0 => {
+                b.flush_block();
+                b.push_inline_style();
             }
             Event::Start(Tag::BlockQuote(_)) => {
                 b.flush_block();
@@ -268,11 +266,9 @@ fn markdown_to_blocks(markdown: &str) -> Vec<MarkdownBlock> {
                 b.style.heading = None;
                 b.flush_block();
             }
-            Event::End(TagEnd::Paragraph) => {
-                if b.list_item_depth == 0 {
-                    b.pop_style();
-                    b.flush_block();
-                }
+            Event::End(TagEnd::Paragraph) if b.list_item_depth == 0 => {
+                b.pop_style();
+                b.flush_block();
             }
             Event::End(TagEnd::BlockQuote(_)) => {
                 b.pop_style();

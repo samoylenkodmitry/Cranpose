@@ -135,16 +135,13 @@ pub struct PlatformTextStyle {
     pub paragraph_style: Option<PlatformParagraphStyle>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum TextDrawStyle {
+    #[default]
     Fill,
-    Stroke { width: f32 },
-}
-
-impl Default for TextDrawStyle {
-    fn default() -> Self {
-        Self::Fill
-    }
+    Stroke {
+        width: f32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]

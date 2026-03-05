@@ -142,7 +142,7 @@ fn create_shape_pipeline(
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Render Pipeline Layout"),
         bind_group_layouts: &[uniform_layout, shape_layout],
-        push_constant_ranges: &[],
+        immediate_size: 0,
     });
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -175,7 +175,7 @@ fn create_shape_pipeline(
         },
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     })
 }
@@ -195,7 +195,7 @@ fn create_image_pipeline(
     let image_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Image Pipeline Layout"),
         bind_group_layouts: &[uniform_layout, image_layout],
-        push_constant_ranges: &[],
+        immediate_size: 0,
     });
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -228,7 +228,7 @@ fn create_image_pipeline(
         },
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     })
 }
@@ -758,7 +758,7 @@ impl GpuRenderer {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Nearest,
             min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
 
@@ -1090,7 +1090,10 @@ impl GpuRenderer {
         buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
             let _ = tx.send(result);
         });
-        let _ = self.device.poll(wgpu::PollType::wait_for(submission_index));
+        let _ = self.device.poll(wgpu::PollType::Wait {
+            submission_index: Some(submission_index),
+            timeout: None,
+        });
 
         match rx.recv_timeout(Duration::from_secs(3)) {
             Ok(Ok(())) => {}
@@ -1453,6 +1456,7 @@ impl GpuRenderer {
                                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                                     view: target_view,
                                     resolve_target: None,
+                                    depth_slice: None,
                                     ops: wgpu::Operations {
                                         load: initial_load_op,
                                         store: wgpu::StoreOp::Store,
@@ -1461,6 +1465,7 @@ impl GpuRenderer {
                                 depth_stencil_attachment: None,
                                 timestamp_writes: None,
                                 occlusion_query_set: None,
+                                multiview_mask: None,
                             });
                         }
                         first_batch = false;
@@ -1608,6 +1613,7 @@ impl GpuRenderer {
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: target_view,
                         resolve_target: None,
+                        depth_slice: None,
                         ops: wgpu::Operations {
                             load: load_op,
                             store: wgpu::StoreOp::Store,
@@ -1616,6 +1622,7 @@ impl GpuRenderer {
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
                     occlusion_query_set: None,
+                    multiview_mask: None,
                 });
 
                 let mut result = Ok(());
@@ -2264,6 +2271,7 @@ impl GpuRenderer {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target_view,
                     resolve_target: None,
+                    depth_slice: None,
                     ops: wgpu::Operations {
                         load: load_op,
                         store: wgpu::StoreOp::Store,
@@ -2272,6 +2280,7 @@ impl GpuRenderer {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
         }
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -2611,6 +2620,7 @@ impl GpuRenderer {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: target_view,
                 resolve_target: None,
+                depth_slice: None,
                 ops: wgpu::Operations {
                     load: load_op,
                     store: wgpu::StoreOp::Store,
@@ -2619,6 +2629,7 @@ impl GpuRenderer {
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
         self.draw_prepared_shapes(&mut render_pass, blend_mode, batch);
     }
@@ -3079,6 +3090,7 @@ impl GpuRenderer {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: target_view,
                 resolve_target: None,
+                depth_slice: None,
                 ops: wgpu::Operations {
                     load: load_op,
                     store: wgpu::StoreOp::Store,
@@ -3087,6 +3099,7 @@ impl GpuRenderer {
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
         self.draw_prepared_text(&mut text_pass, slot_index)
     }

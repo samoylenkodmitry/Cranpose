@@ -353,7 +353,7 @@ impl SharedTextBuffer {
             );
             let attrs_ref = attrs.as_attrs();
             self.buffer
-                .set_text(font_system, text_str, &attrs_ref, shaping);
+                .set_text(font_system, text_str, &attrs_ref, shaping, None);
         } else {
             let boundaries = annotated_text.span_boundaries();
             let mut rich_spans: Vec<(usize, usize, AttrsOwned)> =

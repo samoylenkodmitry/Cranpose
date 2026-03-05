@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, MouseButton, WindowEvent};
+use winit::event::{ButtonSource, ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowAttributes, WindowId};
 
@@ -593,7 +593,7 @@ struct App {
     /// Content function to be called (taken on first resume)
     content: Option<Box<dyn FnMut()>>,
     /// Window (created when surfaces can be created)
-    window: Option<Arc<Window>>,
+    window: Option<Arc<dyn Window>>,
     /// WGPU surface
     surface: Option<wgpu::Surface<'static>>,
     /// Surface configuration
@@ -644,7 +644,7 @@ impl App {
 }
 
 impl ApplicationHandler for App {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+    fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
         // Create window if not already created
         if self.window.is_some() {
             return;
@@ -654,20 +654,19 @@ impl ApplicationHandler for App {
         let initial_height = self.settings.initial_height;
         let headless = self.settings.headless;
 
-        let window = Arc::new(
-            event_loop
-                .create_window(
-                    WindowAttributes::default()
-                        .with_title(self.settings.window_title.clone())
-                        .with_inner_size(LogicalSize::new(
-                            initial_width as f64,
-                            initial_height as f64,
-                        ))
-                        // Hide window in headless mode for parallel robot testing
-                        .with_visible(!headless),
-                )
-                .expect("failed to create window"),
-        );
+        let window: Arc<dyn Window> = event_loop
+            .create_window(
+                WindowAttributes::default()
+                    .with_title(self.settings.window_title.clone())
+                    .with_surface_size(LogicalSize::new(
+                        initial_width as f64,
+                        initial_height as f64,
+                    ))
+                    // Hide window in headless mode for parallel robot testing
+                    .with_visible(!headless),
+            )
+            .expect("failed to create window")
+            .into();
 
         // Initialize WGPU
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -749,12 +748,13 @@ impl ApplicationHandler for App {
             label: Some("Main Device"),
             required_features: wgpu::Features::empty(),
             required_limits: wgpu::Limits::default(),
+            experimental_features: wgpu::ExperimentalFeatures::disabled(),
             memory_hints: wgpu::MemoryHints::default(),
             trace: wgpu::Trace::Off,
         }))
         .expect("failed to create device");
 
-        let size = window.inner_size();
+        let size = window.surface_size();
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps
             .formats
@@ -819,7 +819,7 @@ impl ApplicationHandler for App {
 
     fn window_event(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn ActiveEventLoop,
         window_id: WindowId,
         event: WindowEvent,
     ) {
@@ -847,31 +847,29 @@ impl ApplicationHandler for App {
                 }
                 event_loop.exit();
             }
-            WindowEvent::Resized(new_size) => {
-                if new_size.width > 0 && new_size.height > 0 {
-                    surface_config.width = new_size.width;
-                    surface_config.height = new_size.height;
-                    let device = app.renderer().device();
-                    surface.configure(device, surface_config);
+            WindowEvent::SurfaceResized(new_size) if new_size.width > 0 && new_size.height > 0 => {
+                surface_config.width = new_size.width;
+                surface_config.height = new_size.height;
+                let device = app.renderer().device();
+                surface.configure(device, surface_config);
 
-                    let scale_factor = window.scale_factor();
-                    let logical_width = new_size.width as f32 / scale_factor as f32;
-                    let logical_height = new_size.height as f32 / scale_factor as f32;
+                let scale_factor = window.scale_factor();
+                let logical_width = new_size.width as f32 / scale_factor as f32;
+                let logical_height = new_size.height as f32 / scale_factor as f32;
 
-                    app.set_buffer_size(new_size.width, new_size.height);
-                    app.set_viewport(logical_width, logical_height);
-                }
+                app.set_buffer_size(new_size.width, new_size.height);
+                app.set_viewport(logical_width, logical_height);
             }
             WindowEvent::ScaleFactorChanged {
                 scale_factor,
-                mut inner_size_writer,
+                mut surface_size_writer,
             } => {
                 platform.set_scale_factor(scale_factor);
                 app.renderer().set_root_scale(scale_factor as f32);
                 cranpose_ui::set_density(scale_factor as f32);
 
-                let new_size = window.inner_size();
-                let _ = inner_size_writer.request_inner_size(new_size);
+                let new_size = window.surface_size();
+                let _ = surface_size_writer.request_surface_size(new_size);
                 if new_size.width > 0 && new_size.height > 0 {
                     surface_config.width = new_size.width;
                     surface_config.height = new_size.height;
@@ -885,7 +883,7 @@ impl ApplicationHandler for App {
                     app.set_viewport(logical_width, logical_height);
                 }
             }
-            WindowEvent::CursorMoved { position, .. } => {
+            WindowEvent::PointerMoved { position, .. } => {
                 let logical = platform.pointer_position(position);
                 self.last_cursor_position = Some((logical.x, logical.y));
                 if desktop_input_debug_enabled() {
@@ -903,9 +901,9 @@ impl ApplicationHandler for App {
                 // Track current keyboard modifiers for key events
                 self.current_modifiers = modifiers.state();
             }
-            WindowEvent::MouseInput {
+            WindowEvent::PointerButton {
                 state,
-                button: MouseButton::Left,
+                button: ButtonSource::Mouse(MouseButton::Left),
                 ..
             } => {
                 if let Some((x, y)) = self.last_cursor_position {
@@ -934,9 +932,9 @@ impl ApplicationHandler for App {
                 }
             }
             // Middle-click paste from Linux primary selection
-            WindowEvent::MouseInput {
+            WindowEvent::PointerButton {
                 state: ElementState::Pressed,
-                button: MouseButton::Middle,
+                button: ButtonSource::Mouse(MouseButton::Middle),
                 ..
             } => {
                 if let Some((x, y)) = self.last_cursor_position {
@@ -1036,7 +1034,7 @@ impl ApplicationHandler for App {
                         .contains(winit::keyboard::ModifiersState::ALT),
                     meta: self
                         .current_modifiers
-                        .contains(winit::keyboard::ModifiersState::SUPER),
+                        .contains(winit::keyboard::ModifiersState::META),
                 };
 
                 let key_event = KeyEvent::new(key_code, text, modifiers, event_type);
@@ -1075,9 +1073,12 @@ impl ApplicationHandler for App {
                         // IME was disabled - clear any composition state
                         app.on_ime_preedit("", None);
                     }
+                    Ime::DeleteSurrounding { .. } => {
+                        // IME asks to delete surrounding text; not yet handled by app shell.
+                    }
                 }
             }
-            WindowEvent::CursorLeft { .. } => {
+            WindowEvent::PointerLeft { .. } => {
                 app.cancel_gesture();
             }
             WindowEvent::RedrawRequested => {
@@ -1090,7 +1091,7 @@ impl ApplicationHandler for App {
                     Ok(output) => output,
                     Err(wgpu::SurfaceError::Lost) | Err(wgpu::SurfaceError::Outdated) => {
                         // Reconfigure surface with current window size
-                        let size = window.inner_size();
+                        let size = window.surface_size();
                         if size.width > 0 && size.height > 0 {
                             surface_config.width = size.width;
                             surface_config.height = size.height;
@@ -1132,7 +1133,7 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
         let Some(app) = &mut self.app else { return };
         let Some(window) = &self.window else { return };
 
@@ -1449,7 +1450,7 @@ pub fn run(mut settings: AppSettings, content: impl FnMut() + 'static) -> ! {
         app.set_robot_controller(controller);
     }
 
-    let _ = event_loop.run_app(&mut app);
+    let _ = event_loop.run_app(app);
 
     std::process::exit(0)
 }

@@ -214,7 +214,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             } else {
                 let ident = Ident::new(&format!("__arg{}", index), Span::call_site());
                 let original_pat: Box<Pat> = pat.clone();
-                *pat = Box::new(syn::parse_quote! { #ident });
+                **pat = syn::parse_quote! { #ident };
                 param_info.push(ParamInfo {
                     ident,
                     pat: original_pat,
@@ -561,7 +561,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                 })
             })
         });
-        func.block = Box::new(syn::parse2(wrapped).expect("failed to build block"));
+        *func.block = syn::parse2(wrapped).expect("failed to build block");
         TokenStream::from(quote! {
             #recranpose_fn
             #helper_fn
@@ -577,7 +577,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                 })
             })
         });
-        func.block = Box::new(syn::parse2(wrapped).expect("failed to build block"));
+        *func.block = syn::parse2(wrapped).expect("failed to build block");
         TokenStream::from(quote! { #func })
     }
 }

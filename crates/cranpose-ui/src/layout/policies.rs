@@ -441,7 +441,7 @@ impl MeasurePolicy for FlexMeasurePolicy {
 
         // Place children
         let mut placements: SmallVec<[Placement; 8]> = SmallVec::with_capacity(placeables.len());
-        for (placeable, main_pos) in placeables.into_iter().zip(main_positions.into_iter()) {
+        for (placeable, main_pos) in placeables.into_iter().zip(main_positions) {
             let child_cross = self.get_cross_axis_size(placeable.width(), placeable.height());
             let cross_pos = self
                 .cross_axis_alignment

@@ -12,7 +12,7 @@ readme = "README.md"
 description = "Pure math/data for drawing & units in Cranpose"
 
 [dependencies]
-thiserror = "1.0.69"
+thiserror = "2.0.18"
 
 [features]
 default = []

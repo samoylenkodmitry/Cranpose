@@ -52,7 +52,7 @@ pub fn execute_draw_commands(commands: &[DrawCommand], size: Size) -> Vec<DrawPr
     for command in commands {
         match command {
             DrawCommand::Behind(f) | DrawCommand::WithContent(f) | DrawCommand::Overlay(f) => {
-                primitives.extend(f(size).into_iter());
+                primitives.extend(f(size));
             }
         }
     }

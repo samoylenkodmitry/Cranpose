@@ -157,7 +157,7 @@ impl EffectRenderer {
                 &effect_texture_bind_group_layout,
                 &blur_uniform_bind_group_layout,
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let blur_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -188,7 +188,7 @@ impl EffectRenderer {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -205,7 +205,7 @@ impl EffectRenderer {
                     &effect_texture_bind_group_layout,
                     &offset_uniform_bind_group_layout,
                 ],
-                push_constant_ranges: &[],
+                immediate_size: 0,
             });
 
         let offset_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -236,7 +236,7 @@ impl EffectRenderer {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -252,7 +252,7 @@ impl EffectRenderer {
                 &effect_texture_bind_group_layout,
                 &blit_uniform_bind_group_layout,
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -283,7 +283,7 @@ impl EffectRenderer {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
         let blit_pipeline_dst_out =
@@ -326,7 +326,7 @@ impl EffectRenderer {
                 },
                 depth_stencil: None,
                 multisample: wgpu::MultisampleState::default(),
-                multiview: None,
+                multiview_mask: None,
                 cache: None,
             });
 
@@ -564,6 +564,7 @@ impl EffectRenderer {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &intermediate.view,
                     resolve_target: None,
+                    depth_slice: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: wgpu::StoreOp::Store,
@@ -586,6 +587,7 @@ impl EffectRenderer {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: dest_view,
                     resolve_target: None,
+                    depth_slice: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: wgpu::StoreOp::Store,
@@ -647,6 +649,7 @@ impl EffectRenderer {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: dest_view,
                     resolve_target: None,
+                    depth_slice: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: wgpu::StoreOp::Store,
@@ -732,6 +735,7 @@ impl EffectRenderer {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: dest_view,
                     resolve_target: None,
+                    depth_slice: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: wgpu::StoreOp::Store,
@@ -960,6 +964,7 @@ impl EffectRenderer {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: dest_view,
                     resolve_target: None,
+                    depth_slice: None,
                     ops: wgpu::Operations {
                         load: load_op,
                         store: wgpu::StoreOp::Store,
