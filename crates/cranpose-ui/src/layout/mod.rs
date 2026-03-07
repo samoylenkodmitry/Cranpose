@@ -997,8 +997,7 @@ impl LayoutBuilderState {
         }
 
         for placement in measure_result.placements {
-            let child = if let Some(measured) = measured_children_by_id.remove(&placement.node_id)
-            {
+            let child = if let Some(measured) = measured_children_by_id.remove(&placement.node_id) {
                 measured
             } else {
                 // Policies may place subcomposed children without calling `measure()` first

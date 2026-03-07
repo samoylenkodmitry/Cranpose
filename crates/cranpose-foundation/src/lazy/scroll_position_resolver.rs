@@ -93,6 +93,30 @@ impl<'a> ScrollPositionResolver<'a> {
     ///
     /// When offset is large, estimates items to skip to avoid measuring
     /// items that won't be visible.
+    pub(crate) fn normalize_forward_with_cache(
+        &self,
+        mut index: usize,
+        mut offset: f32,
+    ) -> (usize, f32) {
+        if offset <= 0.0 {
+            return (index, offset);
+        }
+
+        while index + 1 < self.items_count {
+            let Some(item_size) = self.state.get_cached_size(index) else {
+                break;
+            };
+            let item_extent = item_size + self.config.spacing;
+            if offset + 0.001 < item_extent {
+                break;
+            }
+            offset -= item_extent;
+            index += 1;
+        }
+
+        (index, offset)
+    }
+
     pub(crate) fn normalize_forward(&self, mut index: usize, mut offset: f32) -> (usize, f32) {
         if offset <= 0.0 {
             return (index, offset);
@@ -201,6 +225,27 @@ mod tests {
             // Should have jumped some items forward
             assert!(index > 0, "Expected forward jump, got index={}", index);
             assert!(offset < 1500.0, "Expected offset reduction");
+        });
+    }
+
+    #[test]
+    fn test_normalize_forward_with_cache_preserves_offset_inside_tall_item() {
+        with_test_runtime(|| {
+            let state = new_lazy_list_state();
+            for (index, size) in [48.0, 56.0, 64.0, 72.0, 80.0].into_iter().enumerate() {
+                state.cache_item_size(index, size);
+            }
+            state.cache_item_size(5, 1_200.0);
+            let config = LazyListMeasureConfig {
+                spacing: 8.0,
+                ..Default::default()
+            };
+            let resolver = ScrollPositionResolver::new(&state, &config, 32, 260.0);
+
+            let (index, offset) = resolver.normalize_forward_with_cache(5, 900.0);
+
+            assert_eq!(index, 5);
+            assert!((offset - 900.0).abs() < 0.001);
         });
     }
 

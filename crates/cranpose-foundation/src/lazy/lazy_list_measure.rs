@@ -175,7 +175,33 @@ where
 
     first_index = first_index.min(items_count.saturating_sub(1));
     first_offset = first_offset.max(0.0);
-    (first_index, first_offset) = resolver.normalize_forward(first_index, first_offset);
+    (first_index, first_offset) = resolver.normalize_forward_with_cache(first_index, first_offset);
+    let item_extent_at = |index: usize, item_size: f32| {
+        let spacing_after = if index + 1 < items_count {
+            config.spacing
+        } else {
+            0.0
+        };
+        item_size + spacing_after
+    };
+    let mut offset_known_within_current_item = state
+        .get_cached_size(first_index)
+        .map(|size| first_offset + 0.001 < item_extent_at(first_index, size))
+        .unwrap_or(false);
+
+    if !offset_known_within_current_item && first_offset > 0.0 && first_index < items_count {
+        let item = measure_item(first_index);
+        let item_extent = item_extent_at(first_index, item.main_axis_size);
+
+        if first_offset + 0.001 < item_extent {
+            pre_measured.push(item);
+            offset_known_within_current_item = true;
+        }
+    }
+
+    if !offset_known_within_current_item {
+        (first_index, first_offset) = resolver.normalize_forward(first_index, first_offset);
+    }
 
     // 3. Measure items (visible + beyond-bounds buffer)
     let pre_measured_queue = VecDeque::from(pre_measured);
@@ -644,6 +670,71 @@ mod tests {
                 );
                 last_index = result.first_visible_item_index;
             }
+        });
+    }
+
+    #[test]
+    fn test_stored_offset_inside_tall_item_does_not_skip_forward_without_pending_scroll() {
+        with_test_runtime(|| {
+            let state = new_lazy_list_state_with_position(0, 900.0);
+            let config = LazyListMeasureConfig {
+                spacing: 8.0,
+                ..Default::default()
+            };
+            let item_sizes: Vec<f32> = (0..32usize)
+                .map(|index| if index == 0 { 1_200.0 } else { 64.0 })
+                .collect();
+
+            let result = measure_lazy_list(item_sizes.len(), &state, 260.0, 320.0, &config, |i| {
+                create_test_item(i, item_sizes[i])
+            });
+
+            assert_eq!(
+                result.first_visible_item_index, 0,
+                "stored in-item offset must not be turned into an average-size forward jump"
+            );
+            assert!(
+                (result.first_visible_item_scroll_offset - 900.0).abs() < 0.01,
+                "expected to preserve the stored in-item scroll offset"
+            );
+        });
+    }
+
+    #[test]
+    fn test_large_offset_inside_cached_tall_item_does_not_skip_forward_without_forward_scroll() {
+        with_test_runtime(|| {
+            let state = new_lazy_list_state_with_position(20, 900.0);
+            let config = LazyListMeasureConfig {
+                spacing: 8.0,
+                ..Default::default()
+            };
+            for index in 0..20 {
+                state.cache_item_size(index, 60.0 + (index % 3) as f32 * 8.0);
+            }
+            state.cache_item_size(20, 1_200.0);
+
+            let item_sizes: Vec<f32> = (0..64usize)
+                .map(|index| {
+                    if index == 20 {
+                        1_200.0
+                    } else {
+                        60.0 + (index % 3) as f32 * 8.0
+                    }
+                })
+                .collect();
+
+            let result = measure_lazy_list(item_sizes.len(), &state, 260.0, 320.0, &config, |i| {
+                create_test_item(i, item_sizes[i])
+            });
+
+            assert_eq!(
+                result.first_visible_item_index, 20,
+                "offset within a tall cached item must not be interpreted as skipping to later average-sized items"
+            );
+            assert!(
+                (result.first_visible_item_scroll_offset - 900.0).abs() < 0.01,
+                "expected to preserve in-item offset inside the tall cached item"
+            );
         });
     }
 
