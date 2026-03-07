@@ -437,10 +437,9 @@ impl SubcomposeLayoutNode {
         inner.set_measure_policy(policy);
         inner.state.invalidate_scopes();
         drop(inner);
+        self.mark_needs_measure();
         if let Some(id) = self.id.get() {
             cranpose_core::bubble_measure_dirty_in_composer(id);
-        } else {
-            self.mark_needs_measure();
         }
     }
 
@@ -978,6 +977,11 @@ impl SubcomposeLayoutNodeInner {
 
     fn set_measure_policy(&mut self, policy: Rc<MeasurePolicy>) {
         self.measure_policy = policy;
+        // The root measurement subcomposition caches its slot table separately
+        // from per-item slot scopes. When a widget updates the data captured by
+        // the measure lambda through shared cells, the next layout pass must not
+        // reuse the previous root measure group wholesale.
+        self.slots = SlotBackend::default();
     }
 
     /// Updates the modifier and collects invalidations without dispatching them.

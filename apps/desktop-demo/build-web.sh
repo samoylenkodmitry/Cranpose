@@ -3,15 +3,25 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-FAST_BUILD=0
+BUILD_MODE=""
+
+if [ "${CI:-}" = "true" ] || [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+    BUILD_MODE="release"
+else
+    BUILD_MODE="fast"
+fi
+
 for arg in "$@"; do
     case "$arg" in
         --fast)
-            FAST_BUILD=1
+            BUILD_MODE="fast"
+            ;;
+        --release|--optimized)
+            BUILD_MODE="release"
             ;;
         *)
             echo "Unknown argument: $arg"
-            echo "Usage: $0 [--fast]"
+            echo "Usage: $0 [--fast|--release]"
             exit 1
             ;;
     esac
@@ -42,7 +52,7 @@ export WASM_PACK_SKIP_UPDATE_CHECK=1
 export WASM_PACK_DISABLE_UPDATE_CHECK=1
 WASM_PACK_LOG_LEVEL="${WASM_PACK_LOG_LEVEL:-error}"
 
-if [ "$FAST_BUILD" -eq 1 ]; then
+if [ "$BUILD_MODE" = "fast" ]; then
     echo "Building WASM module (fast dev build, no wasm-opt)..."
     "$WASM_PACK" --log-level "$WASM_PACK_LOG_LEVEL" build --dev --target web --out-dir pkg --features web,renderer-wgpu --no-default-features
 else
@@ -100,6 +110,13 @@ fi
 
 echo ""
 echo "Build complete! 🎉"
+echo ""
+if [ "$BUILD_MODE" = "fast" ]; then
+    echo "Mode: fast local verification build"
+    echo "For optimized output, rerun with: ./build-web.sh --release"
+else
+    echo "Mode: optimized release build"
+fi
 echo ""
 echo "To run the demo:"
 echo "1. Start a local web server in this directory:"

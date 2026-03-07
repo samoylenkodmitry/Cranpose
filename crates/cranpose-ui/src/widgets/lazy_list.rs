@@ -8,6 +8,7 @@
 
 use std::rc::Rc;
 
+use crate::composable;
 use crate::modifier::Modifier;
 use crate::subcompose_layout::{
     MeasurePolicy, Placement, SubcomposeLayoutNode, SubcomposeLayoutScope, SubcomposeMeasureScope,
@@ -26,7 +27,7 @@ use smallvec::SmallVec;
 pub use cranpose_foundation::lazy::{LazyListItemInfo, LazyListLayoutInfo};
 
 /// Specification for LazyColumn layout behavior.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LazyColumnSpec {
     /// Vertical arrangement for spacing between items.
     pub vertical_arrangement: LinearArrangement,
@@ -83,7 +84,7 @@ impl LazyColumnSpec {
 }
 
 /// Specification for LazyRow layout behavior.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LazyRowSpec {
     /// Horizontal arrangement for spacing between items.
     pub horizontal_arrangement: LinearArrangement,
@@ -313,9 +314,9 @@ fn measure_lazy_list_internal(
         let first_visible = result.visible_items.first().map(|i| i.index).unwrap_or(0);
         let last_visible = result.visible_items.last().map(|i| i.index).unwrap_or(0);
 
-        // Use actual scroll delta for direction (more accurate than index comparison)
-        // Positive delta = scrolling forward (content moving up/left)
-        // Negative delta = scrolling backward (content moving down/right)
+        // Use the raw Cranpose scroll delta for direction.
+        // Negative delta = scrolling forward (content moves up/left),
+        // positive delta = scrolling backward (content moves down/right).
         state.record_scroll_direction(scroll_delta_for_direction);
 
         state.update_prefetch_queue(first_visible, last_visible, items_count);
@@ -417,6 +418,29 @@ fn get_spacing(arrangement: LinearArrangement) -> f32 {
     match arrangement {
         LinearArrangement::SpacedBy(spacing) => spacing,
         _ => 0.0,
+    }
+}
+
+#[derive(Clone)]
+struct LazyListContentHandle(Rc<LazyListIntervalContent>);
+
+impl LazyListContentHandle {
+    fn new(content: LazyListIntervalContent) -> Self {
+        Self(Rc::new(content))
+    }
+
+    fn empty() -> Self {
+        Self::new(LazyListIntervalContent::new())
+    }
+
+    fn content(&self) -> &LazyListIntervalContent {
+        self.0.as_ref()
+    }
+}
+
+impl PartialEq for LazyListContentHandle {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
     }
 }
 
@@ -539,14 +563,14 @@ fn LazyColumnImpl(
     modifier: Modifier,
     state: LazyListState,
     spec: LazyColumnSpec,
-    content: LazyListIntervalContent,
+    content: LazyListContentHandle,
 ) -> NodeId {
     use std::cell::RefCell;
 
     // Use remember to keep a shared RefCell for content that persists across recompositions
     // This allows updating the content on each recomposition while reusing the same node/policy
     let content_cell =
-        cranpose_core::remember(|| Rc::new(RefCell::new(LazyListIntervalContent::new())))
+        cranpose_core::remember(|| Rc::new(RefCell::new(LazyListContentHandle::empty())))
             .with(|cell| cell.clone());
 
     // Update the content on each recomposition
@@ -575,7 +599,14 @@ fn LazyColumnImpl(
             move |scope: &mut SubcomposeMeasureScopeImpl<'_>, constraints: Constraints| {
                 let content = content_ref.borrow();
                 let config = cfg.value();
-                measure_lazy_list_internal(scope, constraints, true, &content, &state, &config)
+                measure_lazy_list_internal(
+                    scope,
+                    constraints,
+                    true,
+                    content.content(),
+                    &state,
+                    &config,
+                )
             },
         );
         policy
@@ -618,13 +649,13 @@ fn LazyRowImpl(
     modifier: Modifier,
     state: LazyListState,
     spec: LazyRowSpec,
-    content: LazyListIntervalContent,
+    content: LazyListContentHandle,
 ) -> NodeId {
     use std::cell::RefCell;
 
     // Use remember to keep a shared RefCell for content that persists across recompositions
     let content_cell =
-        cranpose_core::remember(|| Rc::new(RefCell::new(LazyListIntervalContent::new())))
+        cranpose_core::remember(|| Rc::new(RefCell::new(LazyListContentHandle::empty())))
             .with(|cell| cell.clone());
 
     // Update the content on each recomposition
@@ -651,7 +682,14 @@ fn LazyRowImpl(
             move |scope: &mut SubcomposeMeasureScopeImpl<'_>, constraints: Constraints| {
                 let content = content_ref.borrow();
                 let config = cfg.value();
-                measure_lazy_list_internal(scope, constraints, false, &content, &state, &config)
+                measure_lazy_list_internal(
+                    scope,
+                    constraints,
+                    false,
+                    content.content(),
+                    &state,
+                    &config,
+                )
             },
         );
         policy
@@ -684,6 +722,26 @@ fn LazyRowImpl(
     }));
 
     node_id
+}
+
+#[composable]
+fn LazyColumnNode(
+    modifier: Modifier,
+    state: LazyListState,
+    spec: LazyColumnSpec,
+    content: LazyListContentHandle,
+) -> NodeId {
+    LazyColumnImpl(modifier, state, spec, content)
+}
+
+#[composable]
+fn LazyRowNode(
+    modifier: Modifier,
+    state: LazyListState,
+    spec: LazyRowSpec,
+    content: LazyListContentHandle,
+) -> NodeId {
+    LazyRowImpl(modifier, state, spec, content)
 }
 
 /// A vertically scrolling list that only composes visible items.
@@ -759,7 +817,12 @@ where
 {
     let mut interval_content = LazyListIntervalContent::new();
     content(&mut interval_content);
-    LazyColumnImpl(modifier, state, spec, interval_content)
+    LazyColumnNode(
+        modifier,
+        state,
+        spec,
+        LazyListContentHandle::new(interval_content),
+    )
 }
 
 /// A horizontally scrolling list that only composes visible items.
@@ -783,7 +846,12 @@ where
 {
     let mut interval_content = LazyListIntervalContent::new();
     content(&mut interval_content);
-    LazyRowImpl(modifier, state, spec, interval_content)
+    LazyRowNode(
+        modifier,
+        state,
+        spec,
+        LazyListContentHandle::new(interval_content),
+    )
 }
 
 #[cfg(test)]

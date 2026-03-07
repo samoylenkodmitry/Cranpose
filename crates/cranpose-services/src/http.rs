@@ -1,4 +1,6 @@
 use cranpose_core::{compositionLocalOf, CompositionLocal};
+#[cfg(target_arch = "wasm32")]
+use futures_util::{stream, StreamExt};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -34,6 +36,65 @@ pub trait HttpClient: Send + Sync {
 }
 
 pub type HttpClientRef = Arc<dyn HttpClient>;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn map_ordered_concurrent<I, T, F, Fut>(
+    items: &[I],
+    concurrency: usize,
+    task: F,
+) -> Vec<T>
+where
+    I: Clone + Send,
+    T: Send,
+    F: Fn(I) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = T> + Send,
+{
+    let task = Arc::new(task);
+    let mut results = Vec::with_capacity(items.len());
+
+    for chunk in items.chunks(concurrency.max(1)) {
+        std::thread::scope(|scope| {
+            let mut handles = Vec::with_capacity(chunk.len());
+            for item in chunk.iter().cloned() {
+                let task = Arc::clone(&task);
+                handles.push(scope.spawn(move || pollster::block_on(task(item))));
+            }
+
+            for handle in handles {
+                results.push(
+                    handle
+                        .join()
+                        .unwrap_or_else(|_| panic!("ordered concurrent worker thread panicked")),
+                );
+            }
+        });
+    }
+
+    results
+}
+
+#[cfg(target_arch = "wasm32")]
+pub async fn map_ordered_concurrent<I, T, F, Fut>(
+    items: &[I],
+    concurrency: usize,
+    task: F,
+) -> Vec<T>
+where
+    I: Clone,
+    F: Fn(I) -> Fut + Clone,
+    Fut: Future<Output = T>,
+{
+    let mut results = stream::iter(items.iter().cloned().enumerate().map(|(index, item)| {
+        let task = task.clone();
+        async move { (index, task(item).await) }
+    }))
+    .buffer_unordered(concurrency.max(1))
+    .collect::<Vec<_>>()
+    .await;
+
+    results.sort_by_key(|(index, _)| *index);
+    results.into_iter().map(|(_, value)| value).collect()
+}
 
 struct DefaultHttpClient;
 
@@ -298,6 +359,16 @@ mod tests {
         let client = TestHttpClient;
         let bytes = pollster::block_on(client.get_bytes("https://example.com")).expect("bytes");
         assert_eq!(bytes, b"ok".to_vec());
+    }
+
+    #[test]
+    fn map_ordered_concurrent_preserves_input_order() {
+        let inputs = [3usize, 1, 4, 1, 5];
+        let outputs = pollster::block_on(map_ordered_concurrent(&inputs, 2, |value| async move {
+            value * 10
+        }));
+
+        assert_eq!(outputs, vec![30, 10, 40, 10, 50]);
     }
 
     #[test]

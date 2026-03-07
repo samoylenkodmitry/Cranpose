@@ -289,7 +289,7 @@ pub fn MarkdownViewerRobotApp() {
 fn tab_requires_scroll(tab: DemoTab) -> bool {
     !matches!(
         tab,
-        DemoTab::HackerNews | DemoTab::Winamp | DemoTab::MarkdownViewer
+        DemoTab::HackerNews | DemoTab::LazyList | DemoTab::Winamp | DemoTab::MarkdownViewer
     )
 }
 
@@ -1479,7 +1479,7 @@ fn counter_app() {
                         });
 
                         Row(
-                            Modifier::empty().fill_max_width().padding(8.0),
+                            Modifier::empty().padding(8.0),
                             RowSpec::new()
                                 .horizontal_arrangement(LinearArrangement::SpacedBy(12.0)),
                             move || {

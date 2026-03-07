@@ -8,7 +8,8 @@ pub mod theme;
 pub mod uri_handler;
 
 pub use http::{
-    default_http_client, local_http_client, HttpClient, HttpClientRef, HttpError, HttpFuture,
+    default_http_client, local_http_client, map_ordered_concurrent, HttpClient, HttpClientRef,
+    HttpError, HttpFuture,
 };
 pub use theme::{
     default_system_theme, isSystemInDarkTheme, local_system_theme, ProvideSystemTheme, SystemTheme,

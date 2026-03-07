@@ -4,7 +4,10 @@ use cranpose_animation::{
 };
 use cranpose_core::{self};
 use cranpose_foundation::{lazy::LazyListScope, SemanticsConfiguration};
-use cranpose_services::{isSystemInDarkTheme, local_http_client, local_uri_handler, HttpClientRef};
+use cranpose_services::{
+    isSystemInDarkTheme, local_http_client, local_uri_handler, map_ordered_concurrent,
+    HttpClientRef,
+};
 use cranpose_ui::{
     composable,
     text::{FontWeight, SpanStyle},
@@ -13,13 +16,9 @@ use cranpose_ui::{
     LinearArrangement, Modifier, RoundedCornerShape, Row, RowSpec, Text, TextStyle,
     VerticalAlignment,
 };
-#[cfg(any(target_arch = "wasm32", test))]
-use futures_util::{stream, StreamExt};
 use serde::Deserialize;
 use std::cell::RefCell;
 use std::collections::HashMap;
-#[cfg(any(target_arch = "wasm32", test))]
-use std::future::Future;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -514,68 +513,6 @@ async fn fetch_comment_item(client: &HttpClientRef, id: u64) -> Result<CommentIt
         .map_err(|err| format!("Failed to parse comment {id}: {err}"))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn fetch_items_parallel_native<T, F>(
-    client: &HttpClientRef,
-    ids: &[u64],
-    concurrency: usize,
-    fetcher: F,
-) -> Vec<Result<T, String>>
-where
-    T: Send + 'static,
-    F: Fn(HttpClientRef, u64) -> Result<T, String> + Send + Sync + 'static,
-{
-    let fetcher = Arc::new(fetcher);
-    let mut results = Vec::with_capacity(ids.len());
-
-    for chunk in ids.chunks(concurrency.max(1)) {
-        std::thread::scope(|scope| {
-            let mut handles = Vec::with_capacity(chunk.len());
-            for &id in chunk {
-                let client = client.clone();
-                let fetcher = Arc::clone(&fetcher);
-                handles.push(scope.spawn(move || fetcher(client, id)));
-            }
-
-            for handle in handles {
-                match handle.join() {
-                    Ok(result) => results.push(result),
-                    Err(_) => results.push(Err("Hacker News worker thread panicked".to_string())),
-                }
-            }
-        });
-    }
-
-    results
-}
-
-#[cfg(any(target_arch = "wasm32", test))]
-async fn fetch_items_parallel_async<T, Fut, F>(
-    client: &HttpClientRef,
-    ids: &[u64],
-    concurrency: usize,
-    fetcher: F,
-) -> Vec<Result<T, String>>
-where
-    F: Fn(HttpClientRef, u64) -> Fut + Clone,
-    Fut: Future<Output = Result<T, String>>,
-{
-    let mut results = stream::iter(ids.iter().copied().enumerate().map(|(index, id)| {
-        let client = client.clone();
-        let fetcher = fetcher.clone();
-        async move { (index, fetcher(client, id).await) }
-    }))
-    .buffer_unordered(concurrency.max(1))
-    .collect::<Vec<_>>()
-    .await;
-
-    results.sort_by_key(|(index, _)| *index);
-    results
-        .into_iter()
-        .map(|(_, result)| result)
-        .collect::<Vec<_>>()
-}
-
 async fn fetch_stories_page(
     client: &HttpClientRef,
     ids: &[u64],
@@ -588,47 +525,25 @@ async fn fetch_stories_page(
         .skip(start)
         .take(end.saturating_sub(start))
         .collect::<Vec<_>>();
+    let results = map_ordered_concurrent(&page_ids, STORY_FETCH_CONCURRENCY, {
+        let client = client.clone();
+        move |id| {
+            let client = client.clone();
+            async move { fetch_story(&client, id).await }
+        }
+    })
+    .await;
 
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let results = fetch_items_parallel_native(
-            client,
-            &page_ids,
-            STORY_FETCH_CONCURRENCY,
-            |client, id| pollster::block_on(fetch_story(&client, id)),
-        );
-        Ok(results
-            .into_iter()
-            .filter_map(|result| match result {
-                Ok(story) => Some(story),
-                Err(err) => {
-                    log::warn!("{err}");
-                    None
-                }
-            })
-            .collect())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        let results = fetch_items_parallel_async(
-            client,
-            &page_ids,
-            STORY_FETCH_CONCURRENCY,
-            |client, id| async move { fetch_story(&client, id).await },
-        )
-        .await;
-        Ok(results
-            .into_iter()
-            .filter_map(|result| match result {
-                Ok(story) => Some(story),
-                Err(err) => {
-                    log::warn!("{err}");
-                    None
-                }
-            })
-            .collect())
-    }
+    Ok(results
+        .into_iter()
+        .filter_map(|result| match result {
+            Ok(story) => Some(story),
+            Err(err) => {
+                log::warn!("{err}");
+                None
+            }
+        })
+        .collect())
 }
 
 async fn load_initial_page(client: &HttpClientRef) -> Result<NewsData, String> {
@@ -647,27 +562,17 @@ async fn load_more_page(
     fetch_stories_page(client, &ids, start, end).await
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 async fn fetch_comment_items_batch(
     client: &HttpClientRef,
     ids: &[u64],
 ) -> Vec<Result<CommentItem, String>> {
-    fetch_items_parallel_native(client, ids, COMMENT_FETCH_CONCURRENCY, |client, id| {
-        pollster::block_on(fetch_comment_item(&client, id))
+    map_ordered_concurrent(ids, COMMENT_FETCH_CONCURRENCY, {
+        let client = client.clone();
+        move |id| {
+            let client = client.clone();
+            async move { fetch_comment_item(&client, id).await }
+        }
     })
-}
-
-#[cfg(target_arch = "wasm32")]
-async fn fetch_comment_items_batch(
-    client: &HttpClientRef,
-    ids: &[u64],
-) -> Vec<Result<CommentItem, String>> {
-    fetch_items_parallel_async(
-        client,
-        ids,
-        COMMENT_FETCH_CONCURRENCY,
-        |client, id| async move { fetch_comment_item(&client, id).await },
-    )
     .await
 }
 
@@ -2109,8 +2014,8 @@ pub fn hacker_news_tab() {
 #[cfg(test)]
 mod tests {
     use super::{
-        fetch_items_parallel_async, fetch_stories_page, html_to_plain_text, load_comment_page,
-        load_initial_comment_page, story_comments_url, story_target_url, CommentThreadData, Story,
+        fetch_stories_page, html_to_plain_text, load_comment_page, load_initial_comment_page,
+        story_comments_url, story_target_url, CommentThreadData, Story,
     };
     use cranpose_services::{HttpClient, HttpClientRef, HttpFuture};
     use serde_json::json;
@@ -2296,26 +2201,6 @@ mod tests {
             html_to_plain_text("Hi &amp; <p>bye</p><li>item</li>"),
             "Hi &\nbye\n• item"
         );
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn fetch_items_parallel_async_preserves_input_order() {
-        let client: HttpClientRef = Arc::new(TrackingHttpClient::new());
-        let ids = vec![42, 7, 11, 99];
-        let results = pollster::block_on(fetch_items_parallel_async(
-            &client,
-            &ids,
-            3,
-            |_client, id| async move { Ok::<u64, String>(id) },
-        ));
-
-        let collected = results
-            .into_iter()
-            .map(|result| result.expect("result"))
-            .collect::<Vec<_>>();
-
-        assert_eq!(collected, ids);
     }
 
     #[cfg(not(target_arch = "wasm32"))]

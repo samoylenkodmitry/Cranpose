@@ -44,3 +44,4 @@
 - don't call anything 'migration'. Say no to half-states. Only complete entropy annihilation is allowed.
 - don't hardcode things
 - parallelization and SIMD where appropriate (note: the wasm target must not be forgotten)
+- if you spot you wasted too much time on something, please put the discovered info into TIME_WASTERS.md so save future time for everyone

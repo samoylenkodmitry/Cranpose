@@ -3,7 +3,7 @@
 //! This module contains the lazy list demonstration for the desktop-demo app.
 
 use cranpose_core::{DisposableEffect, DisposableEffectResult, MutableState};
-use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
+use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope, LazyListState};
 use cranpose_foundation::SemanticsConfiguration;
 use cranpose_ui::widgets::{LazyColumn, LazyColumnSpec};
 use cranpose_ui::{
@@ -16,6 +16,28 @@ struct LifecycleStats {
     total_composes: usize,
     total_effects: usize,
     total_disposes: usize,
+}
+
+const MIN_DEMO_ITEM_COUNT: usize = 10;
+const DEFAULT_DEMO_ITEM_COUNT: usize = 100;
+const MAX_DEMO_ITEM_COUNT: usize = 10_000;
+
+fn clamp_demo_item_count(count: usize) -> usize {
+    count.clamp(MIN_DEMO_ITEM_COUNT, MAX_DEMO_ITEM_COUNT)
+}
+
+fn update_demo_item_count(
+    item_count: MutableState<usize>,
+    list_state: LazyListState,
+    next_count: usize,
+) {
+    let clamped_count = clamp_demo_item_count(next_count);
+    item_count.set(clamped_count);
+
+    let last_index = clamped_count.saturating_sub(1);
+    if list_state.first_visible_item_index() > last_index {
+        list_state.scroll_to_item(last_index, 0.0);
+    }
 }
 
 fn item_height(index: usize) -> f32 {
@@ -100,6 +122,26 @@ fn FirstVisibleIndexDisplay(list_state: cranpose_foundation::lazy::LazyListState
             .background(Color(0.4, 0.3, 0.5, 0.8))
             .rounded_corners(8.0),
         TextStyle::default(),
+    );
+}
+
+#[allow(non_snake_case)]
+#[composable]
+fn DemoActionButton<F>(label: &'static str, background: Color, on_click: F)
+where
+    F: FnMut() + 'static,
+{
+    Button(
+        Modifier::empty()
+            .rounded_corners(8.0)
+            .draw_behind(move |scope| {
+                scope.draw_round_rect(Brush::solid(background), CornerRadii::uniform(8.0));
+            })
+            .padding(8.0),
+        on_click,
+        move || {
+            Text(label, Modifier::empty().padding(4.0), TextStyle::default());
+        },
     );
 }
 
@@ -191,17 +233,17 @@ fn LifecycleListItem(index: usize, stats: MutableState<LifecycleStats>) {
 #[composable]
 pub fn lazy_list_example() {
     let list_state = remember_lazy_list_state();
-    let item_count = cranpose_core::useState(|| 100usize);
+    let item_count = cranpose_core::useState(|| DEFAULT_DEMO_ITEM_COUNT);
     let lifecycle_stats =
         cranpose_core::remember(|| cranpose_core::mutableStateOf(LifecycleStats::default()))
             .with(|state| *state);
 
     Column(
         Modifier::empty()
-            .padding(32.0)
+            .padding(24.0)
             .background(Color(0.08, 0.10, 0.18, 1.0))
             .rounded_corners(24.0)
-            .padding(20.0),
+            .padding(16.0),
         ColumnSpec::default(),
         move || {
             Text(
@@ -218,212 +260,116 @@ pub fn lazy_list_example() {
                 height: 16.0,
             });
 
-            // Show info
-            let count = item_count.get();
-            Text(
-                format!("Virtualized list with {} items", count),
-                Modifier::empty()
-                    .padding(8.0)
-                    .background(Color(0.2, 0.3, 0.4, 0.7))
-                    .rounded_corners(12.0),
-                TextStyle::default(),
-            );
-
-            Spacer(Size {
-                width: 0.0,
-                height: 8.0,
-            });
-
-            LifecycleStatsDisplay(lifecycle_stats);
-
-            Spacer(Size {
-                width: 0.0,
-                height: 8.0,
-            });
-
-            // Stats from LazyListState - in its own isolated composable scope
-            // Reactive read happens INSIDE LazyListStatsDisplay, not here
-            LazyListStatsDisplay(list_state);
-
-            Spacer(Size {
-                width: 0.0,
-                height: 8.0,
-            });
-
-            // First visible item index - in its own isolated composable scope
-            // Reactive read happens INSIDE FirstVisibleIndexDisplay, not here
-            FirstVisibleIndexDisplay(list_state);
-
-            Spacer(Size {
-                width: 0.0,
-                height: 16.0,
-            });
-
-            // Controls row
+            let count = clamp_demo_item_count(item_count.get());
             Row(
                 Modifier::empty().fill_max_width(),
-                RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
+                RowSpec::new()
+                    .horizontal_arrangement(LinearArrangement::SpacedBy(16.0))
+                    .vertical_alignment(VerticalAlignment::Top),
                 move || {
-                    Button(
-                        Modifier::empty()
-                            .rounded_corners(8.0)
-                            .draw_behind(|scope| {
-                                scope.draw_round_rect(
-                                    Brush::solid(Color(0.2, 0.5, 0.3, 1.0)),
-                                    CornerRadii::uniform(8.0),
-                                );
-                            })
-                            .padding(10.0),
-                        {
-                            move || {
-                                item_count.set(item_count.get().saturating_add(10));
-                            }
-                        },
-                        || {
+                    Column(
+                        Modifier::empty().weight(1.0),
+                        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
+                        move || {
                             Text(
-                                "Add 10 items",
-                                Modifier::empty().padding(4.0),
+                                format!("Virtualized list with {} items", count),
+                                Modifier::empty()
+                                    .padding(8.0)
+                                    .background(Color(0.2, 0.3, 0.4, 0.7))
+                                    .rounded_corners(12.0),
                                 TextStyle::default(),
                             );
+
+                            LifecycleStatsDisplay(lifecycle_stats);
+
+                            LazyListStatsDisplay(list_state);
+
+                            FirstVisibleIndexDisplay(list_state);
                         },
                     );
 
-                    Button(
-                        Modifier::empty()
-                            .rounded_corners(8.0)
-                            .draw_behind(|scope| {
-                                scope.draw_round_rect(
-                                    Brush::solid(Color(0.6, 0.2, 0.2, 1.0)),
-                                    CornerRadii::uniform(8.0),
-                                );
-                            })
-                            .padding(10.0),
-                        {
-                            move || {
-                                item_count.set(item_count.get().saturating_sub(10).max(10));
-                            }
-                        },
-                        || {
-                            Text(
-                                "Remove 10",
-                                Modifier::empty().padding(4.0),
-                                TextStyle::default(),
-                            );
-                        },
-                    );
-                },
-            );
-            Spacer(Size {
-                width: 0.0,
-                height: 8.0,
-            });
+                    Column(
+                        Modifier::empty(),
+                        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
+                        move || {
+                            Row(
+                                Modifier::empty(),
+                                RowSpec::new()
+                                    .horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
+                                move || {
+                                    DemoActionButton(
+                                        "Add 10 items",
+                                        Color(0.2, 0.5, 0.3, 1.0),
+                                        move || {
+                                            update_demo_item_count(
+                                                item_count,
+                                                list_state,
+                                                item_count.get().saturating_add(10),
+                                            );
+                                        },
+                                    );
 
-            // Extreme demo row
-            Row(
-                Modifier::empty().fill_max_width(),
-                RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
-                move || {
-                    // Set to MAX button
-                    Button(
-                        Modifier::empty()
-                            .rounded_corners(8.0)
-                            .draw_behind(|scope| {
-                                scope.draw_round_rect(
-                                    Brush::solid(Color(0.6, 0.3, 0.6, 1.0)),
-                                    CornerRadii::uniform(8.0),
-                                );
-                            })
-                            .padding(10.0),
-                        {
-                            move || {
-                                item_count.set(usize::MAX);
-                            }
-                        },
-                        || {
-                            Text(
-                                "Set usize::MAX",
-                                Modifier::empty().padding(4.0),
-                                TextStyle::default(),
-                            );
-                        },
-                    );
+                                    DemoActionButton(
+                                        "Remove 10",
+                                        Color(0.6, 0.2, 0.2, 1.0),
+                                        move || {
+                                            update_demo_item_count(
+                                                item_count,
+                                                list_state,
+                                                item_count.get().saturating_sub(10),
+                                            );
+                                        },
+                                    );
 
-                    // Scroll to middle button
-                    Button(
-                        Modifier::empty()
-                            .rounded_corners(8.0)
-                            .draw_behind(|scope| {
-                                scope.draw_round_rect(
-                                    Brush::solid(Color(0.3, 0.4, 0.6, 1.0)),
-                                    CornerRadii::uniform(8.0),
-                                );
-                            })
-                            .padding(10.0),
-                        {
-                            move || {
-                                let count = item_count.get();
-                                let middle = count / 2;
-                                list_state.scroll_to_item(middle, 0.0);
-                            }
-                        },
-                        || {
-                            Text(
-                                "Jump to Middle",
-                                Modifier::empty().padding(4.0),
-                                TextStyle::default(),
+                                    DemoActionButton(
+                                        "Set usize::MAX",
+                                        Color(0.6, 0.3, 0.6, 1.0),
+                                        move || {
+                                            update_demo_item_count(
+                                                item_count,
+                                                list_state,
+                                                MAX_DEMO_ITEM_COUNT,
+                                            );
+                                            list_state.scroll_to_item(0, 0.0);
+                                        },
+                                    );
+                                },
                             );
-                        },
-                    );
 
-                    // Jump to Start button
-                    Button(
-                        Modifier::empty()
-                            .rounded_corners(8.0)
-                            .draw_behind(|scope| {
-                                scope.draw_round_rect(
-                                    Brush::solid(Color(0.2, 0.5, 0.5, 1.0)),
-                                    CornerRadii::uniform(8.0),
-                                );
-                            })
-                            .padding(10.0),
-                        {
-                            move || {
-                                list_state.scroll_to_item(0, 0.0);
-                            }
-                        },
-                        || {
-                            Text(
-                                "⏫ Start",
-                                Modifier::empty().padding(4.0),
-                                TextStyle::default(),
-                            );
-                        },
-                    );
+                            Row(
+                                Modifier::empty(),
+                                RowSpec::new()
+                                    .horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
+                                move || {
+                                    DemoActionButton(
+                                        "Jump to Middle",
+                                        Color(0.3, 0.4, 0.6, 1.0),
+                                        move || {
+                                            let middle =
+                                                clamp_demo_item_count(item_count.get()) / 2;
+                                            list_state.scroll_to_item(middle, 0.0);
+                                        },
+                                    );
 
-                    // Jump to End button
-                    Button(
-                        Modifier::empty()
-                            .rounded_corners(8.0)
-                            .draw_behind(|scope| {
-                                scope.draw_round_rect(
-                                    Brush::solid(Color(0.5, 0.4, 0.2, 1.0)),
-                                    CornerRadii::uniform(8.0),
-                                );
-                            })
-                            .padding(10.0),
-                        {
-                            move || {
-                                let count = item_count.get();
-                                if count > 0 {
-                                    list_state.scroll_to_item(count - 1, 0.0);
-                                }
-                            }
-                        },
-                        || {
-                            Text(
-                                "⏬ End",
-                                Modifier::empty().padding(4.0),
-                                TextStyle::default(),
+                                    DemoActionButton(
+                                        "⏫ Start",
+                                        Color(0.2, 0.5, 0.5, 1.0),
+                                        move || {
+                                            list_state.scroll_to_item(0, 0.0);
+                                        },
+                                    );
+
+                                    DemoActionButton(
+                                        "⏬ End",
+                                        Color(0.5, 0.4, 0.2, 1.0),
+                                        move || {
+                                            let last_index =
+                                                clamp_demo_item_count(item_count.get())
+                                                    .saturating_sub(1);
+                                            list_state.scroll_to_item(last_index, 0.0);
+                                        },
+                                    );
+                                },
                             );
                         },
                     );
@@ -436,31 +382,19 @@ pub fn lazy_list_example() {
             });
 
             // The actual LazyColumn with virtualization using the DSL
-            let count = item_count.get();
+            let count = clamp_demo_item_count(item_count.get());
             let list_container_modifier = Modifier::empty()
                 .semantics(|config: &mut SemanticsConfiguration| {
                     config.content_description = Some("LazyListViewport".to_string());
                 })
                 .fill_max_width()
-                .height(400.0)
+                .weight(1.0)
                 .background(Color(0.06, 0.08, 0.14, 1.0))
-                .rounded_corners(12.0)
-                .pointer_input(list_state.inner_ptr() as usize, {
-                    move |scope| async move {
-                        scope
-                            .await_pointer_event_scope(|await_scope| async move {
-                                loop {
-                                    let event = await_scope.await_pointer_event().await;
-                                    event.consume();
-                                }
-                            })
-                            .await;
-                    }
-                });
+                .rounded_corners(12.0);
 
             Box(list_container_modifier, BoxSpec::default(), move || {
                 LazyColumn(
-                    Modifier::empty().fill_max_width().height(400.0),
+                    Modifier::empty().fill_max_size(),
                     list_state,
                     LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(4.0)),
                     {
@@ -488,4 +422,24 @@ pub fn lazy_list_example() {
             });
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        clamp_demo_item_count, DEFAULT_DEMO_ITEM_COUNT, MAX_DEMO_ITEM_COUNT, MIN_DEMO_ITEM_COUNT,
+    };
+
+    #[test]
+    fn clamp_demo_item_count_limits_values() {
+        assert_eq!(clamp_demo_item_count(0), MIN_DEMO_ITEM_COUNT);
+        assert_eq!(
+            clamp_demo_item_count(DEFAULT_DEMO_ITEM_COUNT),
+            DEFAULT_DEMO_ITEM_COUNT
+        );
+        assert_eq!(
+            clamp_demo_item_count(MAX_DEMO_ITEM_COUNT + 1),
+            MAX_DEMO_ITEM_COUNT
+        );
+    }
 }

@@ -86,6 +86,10 @@ enum RobotCommand {
     },
     MouseDown,
     MouseUp,
+    MouseScroll {
+        delta_x: f32,
+        delta_y: f32,
+    },
     TouchDown {
         x: f32,
         y: f32,
@@ -234,6 +238,22 @@ impl Robot {
         self.tx
             .send(RobotCommand::MouseUp)
             .map_err(|e| format!("Failed to send mouse up command: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::Ok) => Ok(()),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
+    }
+
+    /// Dispatch a mouse wheel / trackpad scroll delta at the current cursor position.
+    ///
+    /// Positive `delta_y` scrolls backward (content moves down), negative `delta_y`
+    /// scrolls forward (content moves up), matching desktop event semantics.
+    pub fn mouse_scroll(&self, delta_x: f32, delta_y: f32) -> Result<(), String> {
+        self.tx
+            .send(RobotCommand::MouseScroll { delta_x, delta_y })
+            .map_err(|e| format!("Failed to send mouse scroll command: {}", e))?;
         match self.rx.recv() {
             Ok(RobotResponse::Ok) => Ok(()),
             Ok(RobotResponse::Error(e)) => Err(e),
@@ -1196,6 +1216,10 @@ impl ApplicationHandler for App {
                         if let Some(recorder) = &mut self.recorder {
                             recorder.record_mouse_up();
                         }
+                        let _ = controller.tx.send(RobotResponse::Ok);
+                    }
+                    RobotCommand::MouseScroll { delta_x, delta_y } => {
+                        app.pointer_scrolled(delta_x, delta_y);
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
 

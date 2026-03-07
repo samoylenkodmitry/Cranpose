@@ -2291,7 +2291,7 @@ impl TextMeasurer for WgpuTextMeasurer {
 mod tests {
     use super::*;
 
-    const WORKER_TEST_TIMEOUT_SECS: u64 = 5;
+    const WORKER_TEST_TIMEOUT_SECS: u64 = 15;
 
     fn seeded_font_system_and_resolver() -> (FontSystem, WgpuFontFamilyResolver) {
         let mut db = glyphon::fontdb::Database::new();

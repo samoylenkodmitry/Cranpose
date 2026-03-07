@@ -29,6 +29,7 @@ Essentially any browser from the last few years works out of the box.
 ```bash
 cd apps/desktop-demo
 ./build-web.sh
+./build-web.sh --release   # optimized output / CI-style build
 
 # Start a local server
 python3 -m http.server 8080
