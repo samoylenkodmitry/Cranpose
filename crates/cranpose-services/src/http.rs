@@ -185,11 +185,57 @@ fn native_client() -> Result<&'static reqwest::blocking::Client, HttpError> {
 fn build_native_client() -> Result<reqwest::blocking::Client, HttpError> {
     use std::time::Duration;
 
-    reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .user_agent("cranpose/0.1")
-        .build()
-        .map_err(|err| HttpError::ClientInit(err.to_string()))
+    configure_native_client_builder(
+        reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .user_agent("cranpose/0.1"),
+    )?
+    .build()
+    .map_err(|err| HttpError::ClientInit(err.to_string()))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn configure_native_client_builder(
+    builder: reqwest::blocking::ClientBuilder,
+) -> Result<reqwest::blocking::ClientBuilder, HttpError> {
+    #[cfg(target_os = "android")]
+    {
+        return Ok(builder.tls_certs_only(android_root_certificates()?));
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        Ok(builder)
+    }
+}
+
+#[cfg(target_os = "android")]
+fn android_root_certificates() -> Result<Vec<reqwest::Certificate>, HttpError> {
+    certificates_from_der_chain(
+        webpki_root_certs::TLS_SERVER_ROOT_CERTS
+            .iter()
+            .map(|certificate| certificate.as_ref()),
+    )
+}
+
+#[cfg(any(test, target_os = "android"))]
+fn certificates_from_der_chain<'a, I>(
+    certificates: I,
+) -> Result<Vec<reqwest::Certificate>, HttpError>
+where
+    I: IntoIterator<Item = &'a [u8]>,
+{
+    certificates
+        .into_iter()
+        .enumerate()
+        .map(|(index, der)| {
+            reqwest::Certificate::from_der(der).map_err(|err| {
+                HttpError::ClientInit(format!(
+                    "Failed to load TLS root certificate {index}: {err}"
+                ))
+            })
+        })
+        .collect()
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -405,6 +451,20 @@ mod tests {
     #[test]
     fn native_http_client_builds() {
         build_native_client().expect("native HTTP client should initialize");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn certificates_from_der_chain_accepts_valid_roots() {
+        let certificates = certificates_from_der_chain(
+            webpki_root_certs::TLS_SERVER_ROOT_CERTS
+                .iter()
+                .take(3)
+                .map(|certificate| certificate.as_ref()),
+        )
+        .expect("root certificates should parse");
+
+        assert_eq!(certificates.len(), 3);
     }
 
     #[cfg(not(target_arch = "wasm32"))]

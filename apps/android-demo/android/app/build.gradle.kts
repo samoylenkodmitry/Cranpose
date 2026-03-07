@@ -13,10 +13,14 @@ fun parseBooleanGradleProperty(raw: String?, propertyName: String): Boolean? {
     }
 }
 
-val isCiBuild = sequenceOf(
-    providers.environmentVariable("CI").orNull,
-    providers.environmentVariable("GITHUB_ACTIONS").orNull,
-).any { it?.equals("true", ignoreCase = true) == true }
+fun environmentFlag(name: String): Boolean {
+    return parseBooleanGradleProperty(
+        providers.environmentVariable(name).orNull,
+        name
+    ) == true
+}
+
+val isCiBuild = environmentFlag("CI") || environmentFlag("GITHUB_ACTIONS")
 val defaultReleaseAbis = listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
 val releaseRustFast = parseBooleanGradleProperty(
     providers.gradleProperty("rustFastRelease").orNull,

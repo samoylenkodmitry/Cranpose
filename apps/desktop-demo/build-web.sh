@@ -3,9 +3,22 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+is_truthy_env() {
+    local value="${1:-}"
+    value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+    case "$value" in
+        1|true|yes|on)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 BUILD_MODE=""
 
-if [ "${CI:-}" = "true" ] || [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+if is_truthy_env "${CI:-}" || is_truthy_env "${GITHUB_ACTIONS:-}"; then
     BUILD_MODE="release"
 else
     BUILD_MODE="fast"
