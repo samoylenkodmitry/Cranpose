@@ -36,7 +36,7 @@ renderer-wgpu = ["cranpose/renderer-wgpu"]
 desktop = ["cranpose/desktop"]
 ios = ["cranpose/ios"]
 android =["cranpose/android"]
-web = ["cranpose/web", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:wasm-logger"]
+web = ["cranpose/web", "dep:wasm-bindgen", "dep:wasm-logger"]
 # Enable real app robot testing
 robot-app = ["logging", "cranpose-ui/test-helpers"]
 # Enable env_logger (adds ~600KB from regex)
@@ -51,7 +51,6 @@ cranpose-foundation = { path = "../../crates/cranpose-foundation" }
 log = "0.4"
 instant = { version = "0.1", features = ["wasm-bindgen"] }
 wasm-bindgen = { version = "0.2", optional = true }
-wasm-bindgen-futures = { version = "0.4", optional = true }
 wasm-logger = { version = "0.2", optional = true }
 getrandom = { version = "0.3", features = ["wasm_js"] }
 anyhow = "1.0"

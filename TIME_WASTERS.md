@@ -1,0 +1,5 @@
+# Time Wasters
+
+- `wild-linker` `0.8.0` is not currently usable here as a direct linker on `x86_64-unknown-linux-gnu`. `cargo build` fails during build-script linking with `wild: error: -m 64 is not yet supported`.
+- Cranelift is not safe for local Cranpose robot builds here. It caused deterministic panics like `state cell missing: slot=9, gen=0, expected=f32` and allocator aborts, while the same suite passed `80/80` on LLVM. The local wrapper no longer enables Cranelift.
+- Parallel execution of robot examples is flaky on this machine even without Cranelift. `16`, `8`, and `4` parallel workers produced intermittent segfaults or timeouts, while sequential execution passed `80/80`, so `run_robot_test.sh` now defaults to sequential mode and leaves `--parallel N` as an explicit opt-in.

@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # Robot test runner with parallel execution support
-# Runs all robot tests in headless mode for parallel execution
+# Runs all robot tests in headless mode
 # Usage: ./run_robot_test.sh [--parallel N] [--sequential]
 #        ./run_robot_test.sh [--example robot_name]
 # 
 # Options:
-#   --parallel N    Run N tests in parallel (default: number of CPU cores)
-#   --sequential    Run tests one at a time (legacy mode)
+#   --parallel N    Run N tests in parallel
+#   --sequential    Run tests one at a time (default)
 #   --example NAME  Run only the named robot example (repeatable)
 #   --help          Show this help message
 
@@ -15,10 +15,21 @@ LOG_FILE="robot_test.log"
 SUMMARY_FILE="robot_test_summary.txt"
 ROBOT_DIR="apps/desktop-demo/robot-runners"
 ROBOT_PROFILE="${CRANPOSE_ROBOT_PROFILE:-robot}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CARGO_RUNNER=("$SCRIPT_DIR/cargo-dev.sh")
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/scripts/dev_build_common.sh"
 
-# Default to parallel execution with number of CPU cores / 2 (GPU-bound work)
-PARALLEL_JOBS=$(( $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4) / 2 ))
-[ "$PARALLEL_JOBS" -lt 1 ] && PARALLEL_JOBS=1
+if [ ! -x "${CARGO_RUNNER[0]}" ]; then
+    CARGO_RUNNER=(cargo)
+fi
+
+# Default to sequential execution for stability. Parallel runs remain opt-in.
+if [ -n "${CRANPOSE_ROBOT_PARALLEL:-}" ]; then
+    PARALLEL_JOBS="$CRANPOSE_ROBOT_PARALLEL"
+else
+    PARALLEL_JOBS=1
+fi
 SELECTED_EXAMPLES=()
 
 profile_output_dir() {
@@ -42,6 +53,10 @@ else
     EXAMPLE_BIN_DIR="target/$PROFILE_DIR/examples"
 fi
 
+enable_local_tmpdir
+enable_local_sccache
+enable_local_cargo_job_limit
+
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -61,8 +76,8 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: $0 [--parallel N] [--sequential] [--example robot_name]"
             echo ""
             echo "Options:"
-            echo "  --parallel N    Run N tests in parallel (default: $(nproc 2>/dev/null || echo 4)/2)"
-            echo "  --sequential    Run tests one at a time (legacy mode)"
+            echo "  --parallel N    Run N tests in parallel"
+            echo "  --sequential    Run tests one at a time (default)"
             echo "  --example NAME  Run only the named robot example (repeatable)"
             echo "  --help          Show this help message"
             exit 0
@@ -125,7 +140,7 @@ else
 fi
 
 echo "Building desktop-app examples with profile '$ROBOT_PROFILE'..."
-cargo build "${BUILD_ARGS[@]}" 2>&1 | tee -a "$LOG_FILE"
+"${CARGO_RUNNER[@]}" build "${BUILD_ARGS[@]}" 2>&1 | tee -a "$LOG_FILE"
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     echo "Build failed!" | tee -a "$LOG_FILE"
@@ -144,7 +159,7 @@ echo "Log file: $LOG_FILE" | tee -a "$LOG_FILE"
 echo "============================================" | tee -a "$LOG_FILE"
 
 # Create temp directory for individual test results
-RESULTS_DIR=$(mktemp -d)
+RESULTS_DIR="$(create_local_temp_dir cranpose-robot-results)"
 cleanup_results_dir() {
     if [ -d "$RESULTS_DIR" ]; then
         rm -r -- "$RESULTS_DIR"
@@ -254,6 +269,7 @@ run_test() {
 
 export -f run_test
 export RESULTS_DIR
+export EXAMPLE_BIN_DIR
 
 # Run tests in parallel using xargs or GNU parallel
 if [ "$PARALLEL_JOBS" -gt 1 ]; then

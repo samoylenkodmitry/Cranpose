@@ -14,18 +14,3 @@ description = "Web platform adapter for Cranpose"
 [dependencies]
 cranpose-foundation = { workspace = true }
 cranpose-ui-graphics = { workspace = true }
-wasm-bindgen = "0.2"
-web-sys = { version = "0.3", features = [
-    "Window",
-    "Document",
-    "Element",
-    "HtmlElement",
-    "HtmlCanvasElement",
-    "MouseEvent",
-    "Touch",
-    "TouchList",
-    "TouchEvent",
-    "PointerEvent",
-    "WheelEvent",
-    "KeyboardEvent",
-] }

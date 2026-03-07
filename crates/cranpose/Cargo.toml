@@ -11,12 +11,15 @@ categories.workspace = true
 readme = "README.md"
 description = "Cranpose runtime and UI facade"
 
+[package.metadata.cargo-machete]
+ignored = ["cranpose-render-pixels", "pixels"]
+
 [features]
 default = ["desktop", "renderer-wgpu"]
 desktop = ["cranpose-platform-desktop-winit", "dep:winit"]
 ios = ["desktop"]
 android =["cranpose-platform-android", "dep:android-activity", "dep:android_logger", "dep:raw-window-handle"]
-web = ["cranpose-platform-web", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys"]
+web = ["cranpose-platform-web", "dep:wasm-bindgen", "dep:web-sys"]
 renderer-pixels = ["cranpose-render-pixels", "dep:pixels"]
 renderer-wgpu = ["cranpose-render-wgpu", "dep:wgpu", "dep:pollster"]
 robot = [] # Enable robot testing support (cranpose-ui now always included)
@@ -38,7 +41,6 @@ android-activity = { workspace = true, optional = true }
 android_logger = { version = "0.15", optional = true }
 raw-window-handle = { version = "0.6", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
-wasm-bindgen-futures = { version = "0.4", optional = true }
 web-sys = { version = "0.3", optional = true, features = [
     "Window",
     "Document",

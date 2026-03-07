@@ -14,7 +14,6 @@ description = "UI primitives for Cranpose"
 [dependencies]
 cranpose-core = { workspace = true, features = ["internal"] }
 cranpose-macros = { workspace = true }
-cranpose-runtime-std = { workspace = true }
 cranpose-foundation = { workspace = true }
 cranpose-animation = { workspace = true }
 cranpose-ui-layout = { workspace = true }

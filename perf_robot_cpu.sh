@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CARGO_RUNNER=("$SCRIPT_DIR/cargo-dev.sh")
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/scripts/dev_build_common.sh"
+
+if [ ! -x "${CARGO_RUNNER[0]}" ]; then
+    CARGO_RUNNER=(cargo)
+fi
+
+enable_local_tmpdir
+enable_local_sccache
+enable_local_cargo_job_limit
+
 PROFILE="native-release"
 EXAMPLE="robot_perf_harness"
 DURATION_SECS="10"
@@ -81,7 +94,7 @@ if [[ "$PROFILE" != "dev" ]]; then
     export "CARGO_PROFILE_${PROFILE_ENV}_STRIP=none"
 fi
 
-cargo build "${BUILD_ARGS[@]}"
+"${CARGO_RUNNER[@]}" build "${BUILD_ARGS[@]}"
 
 BIN="target/${PROFILE_DIR}/examples/${EXAMPLE}"
 if [[ ! -x "$BIN" ]]; then

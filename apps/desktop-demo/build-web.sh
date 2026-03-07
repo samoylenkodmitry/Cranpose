@@ -2,6 +2,8 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/../../scripts/dev_build_common.sh"
 
 is_truthy_env() {
     local value="${1:-}"
@@ -44,14 +46,8 @@ echo "Building Cranpose Demo for Web..."
 echo ""
 
 # Check if wasm-pack is installed (check common locations)
-WASM_PACK=""
-if command -v wasm-pack &> /dev/null; then
-    WASM_PACK="wasm-pack"
-elif [ -f "$HOME/.cargo/bin/wasm-pack" ]; then
-    WASM_PACK="$HOME/.cargo/bin/wasm-pack"
-elif [ -f "~/.cargo/bin/wasm-pack" ]; then
-    WASM_PACK="~/.cargo/bin/wasm-pack"
-else
+WASM_PACK="$(find_local_tool wasm-pack || true)"
+if [ -z "$WASM_PACK" ]; then
     echo "Error: wasm-pack is not installed or not in PATH"
     echo "Install it with: cargo install wasm-pack"
     echo "Or add ~/.cargo/bin to your PATH"
@@ -65,7 +61,20 @@ export WASM_PACK_SKIP_UPDATE_CHECK=1
 export WASM_PACK_DISABLE_UPDATE_CHECK=1
 WASM_PACK_LOG_LEVEL="${WASM_PACK_LOG_LEVEL:-error}"
 
+enable_local_tmpdir
+enable_local_cargo_job_limit
+
 if [ "$BUILD_MODE" = "fast" ]; then
+    enable_local_sccache
+    if [ -n "${TMPDIR:-}" ]; then
+        echo "Using local tmpdir: $TMPDIR"
+    fi
+    if [ -n "${RUSTC_WRAPPER:-}" ]; then
+        echo "Using local rustc wrapper: $RUSTC_WRAPPER"
+    fi
+    if [ -n "${CARGO_BUILD_JOBS:-}" ]; then
+        echo "Using local cargo build jobs: $CARGO_BUILD_JOBS"
+    fi
     echo "Building WASM module (fast dev build, no wasm-opt)..."
     "$WASM_PACK" --log-level "$WASM_PACK_LOG_LEVEL" build --dev --target web --out-dir pkg --features web,renderer-wgpu --no-default-features
 else
@@ -85,6 +94,12 @@ else
     # - LTO enabled for cross-crate optimization
     # - codegen-units=1 for better optimization
     # - wasm-opt runs with -Oz for size optimization
+    if [ -n "${TMPDIR:-}" ]; then
+        echo "Using local tmpdir: $TMPDIR"
+    fi
+    if [ -n "${CARGO_BUILD_JOBS:-}" ]; then
+        echo "Using local cargo build jobs: $CARGO_BUILD_JOBS"
+    fi
     echo "Building WASM module (optimized for size)..."
 
     # Run wasm-pack build, don't exit on error so we can handle it

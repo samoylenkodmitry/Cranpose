@@ -959,7 +959,6 @@ dependencies = [
  "pollster 0.4.0",
  "raw-window-handle",
  "wasm-bindgen",
- "wasm-bindgen-futures",
  "web-sys",
  "wgpu 28.0.0",
  "winit",
@@ -1052,8 +1051,6 @@ version = "0.0.55"
 dependencies = [
  "cranpose-foundation",
  "cranpose-ui-graphics",
- "wasm-bindgen",
- "web-sys",
 ]
 
 [[package]]
@@ -1153,7 +1150,6 @@ dependencies = [
  "cranpose-core",
  "cranpose-foundation",
  "cranpose-macros",
- "cranpose-runtime-std",
  "cranpose-ui-graphics",
  "cranpose-ui-layout",
  "criterion",
@@ -1311,7 +1307,6 @@ dependencies = [
  "serde",
  "serde_json",
  "wasm-bindgen",
- "wasm-bindgen-futures",
  "wasm-logger",
  "zip",
 ]
