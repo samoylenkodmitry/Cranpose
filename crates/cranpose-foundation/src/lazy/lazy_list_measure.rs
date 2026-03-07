@@ -155,6 +155,7 @@ where
     let is_infinite_viewport = viewport.is_infinite();
 
     // 2. Resolve and normalize scroll position
+    let pending_scroll_delta = state.peek_scroll_delta();
     let resolver = ScrollPositionResolver::new(state, config, items_count, effective_viewport_size);
     let (mut first_index, mut first_offset) = resolver.apply_pending_scroll_delta();
 
@@ -229,12 +230,19 @@ where
         let offset = config.before_content_padding - first.offset;
         (first.index, offset.max(0.0))
     } else if unresolved_pass {
-        let next_index = measurement_next_index.min(items_count.saturating_sub(1));
-        if next_index + 1 >= items_count {
-            (next_index, 0.0)
+        if pending_scroll_delta > 0.001 {
+            let preserved_offset =
+                (config.before_content_padding - measurement_start_offset).max(0.0);
+            (measurement_start_index, preserved_offset)
         } else {
-            let next_offset = (config.before_content_padding - measurement_next_offset).max(0.0);
-            (next_index, next_offset)
+            let next_index = measurement_next_index.min(items_count.saturating_sub(1));
+            if next_index + 1 >= items_count {
+                (next_index, 0.0)
+            } else {
+                let next_offset =
+                    (config.before_content_padding - measurement_next_offset).max(0.0);
+                (next_index, next_offset)
+            }
         }
     } else if !visible_items.is_empty() {
         (visible_items[0].index, 0.0)
@@ -351,6 +359,52 @@ mod tests {
 
     fn create_test_item(index: usize, size: f32) -> LazyListMeasuredItem {
         LazyListMeasuredItem::new(index, index as u64, None, size, 100.0)
+    }
+
+    fn exact_scroll_position(
+        item_sizes: &[f32],
+        spacing: f32,
+        viewport_size: f32,
+        deltas: &[f32],
+    ) -> Vec<(usize, f32)> {
+        let total_content = item_sizes
+            .iter()
+            .enumerate()
+            .map(|(index, size)| {
+                let spacing_after = if index + 1 < item_sizes.len() {
+                    spacing
+                } else {
+                    0.0
+                };
+                size + spacing_after
+            })
+            .sum::<f32>();
+        let max_scroll = (total_content - viewport_size).max(0.0);
+        let mut scroll = 0.0f32;
+        let mut positions = Vec::with_capacity(deltas.len());
+
+        for delta in deltas {
+            scroll = (scroll - delta).clamp(0.0, max_scroll);
+
+            let mut remaining = scroll;
+            let mut index = 0usize;
+            while index + 1 < item_sizes.len() {
+                let spacing_after = if index + 1 < item_sizes.len() {
+                    spacing
+                } else {
+                    0.0
+                };
+                let extent = item_sizes[index] + spacing_after;
+                if remaining < extent {
+                    break;
+                }
+                remaining -= extent;
+                index += 1;
+            }
+            positions.push((index, remaining));
+        }
+
+        positions
     }
 
     #[test]
@@ -491,6 +545,162 @@ mod tests {
                 (result.first_visible_item_scroll_offset - 94.0).abs() < 1.0,
                 "expected unresolved offset progress to be preserved"
             );
+        });
+    }
+
+    #[test]
+    fn test_time_budgeted_reverse_scroll_does_not_backtrack() {
+        with_test_runtime(|| {
+            let state = new_lazy_list_state();
+            let config = LazyListMeasureConfig {
+                spacing: 8.0,
+                ..Default::default()
+            };
+            let item_sizes: Vec<f32> = (0..512usize)
+                .map(|index| match index % 7 {
+                    0 => 44.0,
+                    1 => 60.0,
+                    2 => 220.0,
+                    3 => 72.0,
+                    4 => 96.0,
+                    5 => 156.0,
+                    _ => 52.0,
+                })
+                .collect();
+
+            let mut result =
+                measure_lazy_list(item_sizes.len(), &state, 260.0, 320.0, &config, |index| {
+                    std::thread::sleep(std::time::Duration::from_millis(55));
+                    create_test_item(index, item_sizes[index])
+                });
+            assert_eq!(result.first_visible_item_index, 0);
+
+            for _ in 0..4 {
+                state.dispatch_scroll_delta(-320.0);
+                result =
+                    measure_lazy_list(item_sizes.len(), &state, 260.0, 320.0, &config, |index| {
+                        std::thread::sleep(std::time::Duration::from_millis(55));
+                        create_test_item(index, item_sizes[index])
+                    });
+            }
+
+            assert!(
+                result.first_visible_item_index > 0,
+                "expected to advance after forward time-budgeted scrolls"
+            );
+
+            let mut last_index = result.first_visible_item_index;
+            for step in 0..4 {
+                state.dispatch_scroll_delta(80.0);
+                result =
+                    measure_lazy_list(item_sizes.len(), &state, 260.0, 320.0, &config, |index| {
+                        std::thread::sleep(std::time::Duration::from_millis(55));
+                        create_test_item(index, item_sizes[index])
+                    });
+                assert!(
+                    result.first_visible_item_index <= last_index,
+                    "reverse time-budgeted step {step} backtracked from index {last_index} to {}",
+                    result.first_visible_item_index
+                );
+                last_index = result.first_visible_item_index;
+            }
+        });
+    }
+
+    #[test]
+    fn test_backward_scroll_does_not_advance_first_visible_index_for_variable_items() {
+        with_test_runtime(|| {
+            let state = new_lazy_list_state();
+            let config = LazyListMeasureConfig {
+                spacing: 8.0,
+                ..Default::default()
+            };
+            let item_sizes = [48.0, 56.0, 64.0, 72.0, 80.0];
+            let measure_item =
+                |index: usize| create_test_item(index, item_sizes[index % item_sizes.len()]);
+
+            let mut result = measure_lazy_list(200, &state, 260.0, 300.0, &config, measure_item);
+            assert_eq!(result.first_visible_item_index, 0);
+
+            for _ in 0..28 {
+                state.dispatch_scroll_delta(-32.0);
+                result = measure_lazy_list(200, &state, 260.0, 300.0, &config, measure_item);
+            }
+
+            assert!(
+                result.first_visible_item_index >= 12,
+                "expected to scroll well into the list before reversing, got index={}",
+                result.first_visible_item_index
+            );
+
+            let mut last_index = result.first_visible_item_index;
+            for step in 0..24 {
+                state.dispatch_scroll_delta(12.0);
+                result = measure_lazy_list(200, &state, 260.0, 300.0, &config, measure_item);
+                assert!(
+                    result.first_visible_item_index <= last_index,
+                    "backward step {step} advanced from index {last_index} to {}",
+                    result.first_visible_item_index
+                );
+                last_index = result.first_visible_item_index;
+            }
+        });
+    }
+
+    #[test]
+    fn test_matches_exact_model_for_variable_item_reverse_scrolls() {
+        with_test_runtime(|| {
+            let state = new_lazy_list_state();
+            let config = LazyListMeasureConfig {
+                spacing: 8.0,
+                ..Default::default()
+            };
+            let viewport_size = 260.0;
+            let item_sizes: Vec<f32> = (0..240usize)
+                .map(|index| match index % 9 {
+                    0 => 32.0,
+                    1 => 48.0,
+                    2 => 240.0,
+                    3 => 56.0,
+                    4 => 72.0,
+                    5 => 180.0,
+                    6 => 40.0,
+                    7 => 96.0,
+                    _ => 56.0,
+                })
+                .collect();
+            let deltas = [
+                -180.0, -180.0, -220.0, -150.0, -240.0, -120.0, -160.0, 60.0, 60.0, 80.0, -96.0,
+                -96.0, 44.0, 44.0, 44.0, -140.0, -140.0, 72.0, 72.0, 72.0, 72.0,
+            ];
+            let expected =
+                exact_scroll_position(&item_sizes, config.spacing, viewport_size, &deltas);
+
+            for (step, (delta, (expected_index, expected_offset))) in
+                deltas.iter().zip(expected.iter()).enumerate()
+            {
+                state.dispatch_scroll_delta(*delta);
+                let result = measure_lazy_list(
+                    item_sizes.len(),
+                    &state,
+                    viewport_size,
+                    320.0,
+                    &config,
+                    |index| create_test_item(index, item_sizes[index]),
+                );
+
+                assert_eq!(
+                    result.first_visible_item_index, *expected_index,
+                    "step {step} delta={delta} expected first index {} but got {}",
+                    expected_index, result.first_visible_item_index
+                );
+                assert!(
+                    (result.first_visible_item_scroll_offset - *expected_offset).abs() < 0.01,
+                    "step {step} delta={delta} expected offset {:.2} but got {:.2}",
+                    expected_offset,
+                    result.first_visible_item_scroll_offset
+                );
+            }
         });
     }
 }

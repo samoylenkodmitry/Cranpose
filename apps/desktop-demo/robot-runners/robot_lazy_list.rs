@@ -8,7 +8,7 @@
 use cranpose::AppLauncher;
 use cranpose_testing::{
     find_button_in_semantics, find_in_semantics, find_text_by_prefix_in_semantics, find_text_exact,
-    find_text_in_semantics,
+    find_text_in_semantics, root_bounds,
 };
 use cranpose_testing::{find_element_by_text_exact, print_semantics_with_bounds, union_bounds};
 use desktop_app::app;
@@ -133,20 +133,36 @@ fn main() {
                 .and_then(|elements| find_element_by_text_exact(elements, "LazyListViewport"))
                 .map(|elem| (elem.bounds.x, elem.bounds.y, elem.bounds.width, elem.bounds.height));
             let list_bounds_missing = list_bounds.is_none();
+            let initial_first_index = read_stat("FirstIndex: ").unwrap_or(0);
 
             if let Some((x, y, w, h)) = list_bounds {
                 println!(
                     "  ✓ LazyListViewport bounds=({:.1},{:.1},{:.1},{:.1})",
                     x, y, w, h
                 );
-                let expected_height = 400.0;
-                let allowed_delta = 2.0;
-                if (h - expected_height).abs() > allowed_delta {
-                    println!(
-                        "  ⚠️  LazyListViewport height mismatch: expected ~{:.1}, got {:.1}",
-                        expected_height, h
-                    );
+                if h < 150.0 {
+                    println!("  ⚠️  LazyListViewport height is suspiciously small: {:.1}", h);
                     has_issues = true;
+                }
+                if let Some((root_x, root_y, root_w, root_h)) = root_bounds(&robot) {
+                    let min_expected_height = (root_h * 0.35).max(220.0);
+                    if h < min_expected_height {
+                        println!(
+                            "  ⚠️  LazyListViewport is too short for the window: {:.1} < {:.1}",
+                            h, min_expected_height
+                        );
+                        has_issues = true;
+                    }
+                    let right = x + w;
+                    let bottom = y + h;
+                    if x < root_x - 1.0
+                        || y < root_y - 1.0
+                        || right > root_x + root_w + 1.0
+                        || bottom > root_y + root_h + 1.0
+                    {
+                        println!("  ⚠️  LazyListViewport exceeds root bounds");
+                        has_issues = true;
+                    }
                 }
                 if let Some(elements) = semantics.as_deref() {
                     if let Some(list_elem) = find_element_by_text_exact(elements, "LazyListViewport")
@@ -156,6 +172,36 @@ fn main() {
                 }
             } else {
                 println!("  ✗ LazyListViewport semantics not found");
+            }
+
+            println!("\n--- Step 2c: Verify viewport drag scrolls the list ---");
+            if let Some((x, y, w, h)) = list_bounds {
+                robot
+                    .drag(
+                        x + w / 2.0,
+                        y + h * 0.75,
+                        x + w / 2.0,
+                        y + h * 0.25,
+                    )
+                    .ok();
+                std::thread::sleep(Duration::from_millis(200));
+
+                let after_drag_index = read_stat("FirstIndex: ").unwrap_or(initial_first_index);
+                if after_drag_index <= initial_first_index {
+                    println!(
+                        "  ⚠️  Drag did not advance first index: {} -> {}",
+                        initial_first_index, after_drag_index
+                    );
+                    has_issues = true;
+                } else {
+                    println!(
+                        "  ✓ Drag advanced first index: {} -> {}",
+                        initial_first_index, after_drag_index
+                    );
+                }
+            } else {
+                println!("  ✗ Could not verify drag scrolling without LazyListViewport bounds");
+                has_issues = true;
             }
 
             // Step 3: Find all visible items with FULL BOUNDS

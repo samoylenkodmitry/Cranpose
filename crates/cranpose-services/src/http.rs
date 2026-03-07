@@ -1,4 +1,6 @@
 use cranpose_core::{compositionLocalOf, CompositionLocal};
+#[cfg(target_arch = "wasm32")]
+use futures_util::{stream, StreamExt};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -34,6 +36,65 @@ pub trait HttpClient: Send + Sync {
 }
 
 pub type HttpClientRef = Arc<dyn HttpClient>;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn map_ordered_concurrent<I, T, F, Fut>(
+    items: &[I],
+    concurrency: usize,
+    task: F,
+) -> Vec<T>
+where
+    I: Clone + Send,
+    T: Send,
+    F: Fn(I) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = T> + Send,
+{
+    let task = Arc::new(task);
+    let mut results = Vec::with_capacity(items.len());
+
+    for chunk in items.chunks(concurrency.max(1)) {
+        std::thread::scope(|scope| {
+            let mut handles = Vec::with_capacity(chunk.len());
+            for item in chunk.iter().cloned() {
+                let task = Arc::clone(&task);
+                handles.push(scope.spawn(move || pollster::block_on(task(item))));
+            }
+
+            for handle in handles {
+                results.push(
+                    handle
+                        .join()
+                        .unwrap_or_else(|_| panic!("ordered concurrent worker thread panicked")),
+                );
+            }
+        });
+    }
+
+    results
+}
+
+#[cfg(target_arch = "wasm32")]
+pub async fn map_ordered_concurrent<I, T, F, Fut>(
+    items: &[I],
+    concurrency: usize,
+    task: F,
+) -> Vec<T>
+where
+    I: Clone,
+    F: Fn(I) -> Fut + Clone,
+    Fut: Future<Output = T>,
+{
+    let mut results = stream::iter(items.iter().cloned().enumerate().map(|(index, item)| {
+        let task = task.clone();
+        async move { (index, task(item).await) }
+    }))
+    .buffer_unordered(concurrency.max(1))
+    .collect::<Vec<_>>()
+    .await;
+
+    results.sort_by_key(|(index, _)| *index);
+    results.into_iter().map(|(_, value)| value).collect()
+}
 
 struct DefaultHttpClient;
 
@@ -124,11 +185,57 @@ fn native_client() -> Result<&'static reqwest::blocking::Client, HttpError> {
 fn build_native_client() -> Result<reqwest::blocking::Client, HttpError> {
     use std::time::Duration;
 
-    reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .user_agent("cranpose/0.1")
-        .build()
-        .map_err(|err| HttpError::ClientInit(err.to_string()))
+    configure_native_client_builder(
+        reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .user_agent("cranpose/0.1"),
+    )?
+    .build()
+    .map_err(|err| HttpError::ClientInit(err.to_string()))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn configure_native_client_builder(
+    builder: reqwest::blocking::ClientBuilder,
+) -> Result<reqwest::blocking::ClientBuilder, HttpError> {
+    #[cfg(target_os = "android")]
+    {
+        return Ok(builder.tls_certs_only(android_root_certificates()?));
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        Ok(builder)
+    }
+}
+
+#[cfg(target_os = "android")]
+fn android_root_certificates() -> Result<Vec<reqwest::Certificate>, HttpError> {
+    certificates_from_der_chain(
+        webpki_root_certs::TLS_SERVER_ROOT_CERTS
+            .iter()
+            .map(|certificate| certificate.as_ref()),
+    )
+}
+
+#[cfg(any(test, target_os = "android"))]
+fn certificates_from_der_chain<'a, I>(
+    certificates: I,
+) -> Result<Vec<reqwest::Certificate>, HttpError>
+where
+    I: IntoIterator<Item = &'a [u8]>,
+{
+    certificates
+        .into_iter()
+        .enumerate()
+        .map(|(index, der)| {
+            reqwest::Certificate::from_der(der).map_err(|err| {
+                HttpError::ClientInit(format!(
+                    "Failed to load TLS root certificate {index}: {err}"
+                ))
+            })
+        })
+        .collect()
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -301,6 +408,16 @@ mod tests {
     }
 
     #[test]
+    fn map_ordered_concurrent_preserves_input_order() {
+        let inputs = [3usize, 1, 4, 1, 5];
+        let outputs = pollster::block_on(map_ordered_concurrent(&inputs, 2, |value| async move {
+            value * 10
+        }));
+
+        assert_eq!(outputs, vec![30, 10, 40, 10, 50]);
+    }
+
+    #[test]
     fn local_http_client_can_be_overridden() {
         let local = local_http_client();
         let default_client = default_http_client();
@@ -334,6 +451,20 @@ mod tests {
     #[test]
     fn native_http_client_builds() {
         build_native_client().expect("native HTTP client should initialize");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn certificates_from_der_chain_accepts_valid_roots() {
+        let certificates = certificates_from_der_chain(
+            webpki_root_certs::TLS_SERVER_ROOT_CERTS
+                .iter()
+                .take(3)
+                .map(|certificate| certificate.as_ref()),
+        )
+        .expect("root certificates should parse");
+
+        assert_eq!(certificates.len(), 3);
     }
 
     #[cfg(not(target_arch = "wasm32"))]

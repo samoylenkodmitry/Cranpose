@@ -46,6 +46,8 @@ The demo runs in any modern browser using WebGL2 (Chrome, Firefox, Edge, Safari)
 2. **Build:**
    ```bash
    ./build-web.sh
+   # Optimized output:
+   ./build-web.sh --release
    ```
 
 3. **Run:**

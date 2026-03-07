@@ -106,7 +106,7 @@ pub trait SubcomposeLayoutScope {
 pub trait SubcomposeMeasureScope: SubcomposeLayoutScope {
     fn subcompose<Content>(&mut self, slot_id: SlotId, content: Content) -> Vec<SubcomposeChild>
     where
-        Content: FnOnce();
+        Content: FnMut() + 'static;
 
     /// Measures a subcomposed child with the given constraints.
     fn measure(&mut self, child: SubcomposeChild, constraints: Constraints) -> SubcomposePlaceable;
@@ -159,8 +159,10 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
 
     fn perform_subcompose<Content>(&mut self, slot_id: SlotId, content: Content) -> Vec<NodeId>
     where
-        Content: FnOnce(),
+        Content: FnMut() + 'static,
     {
+        let content_holder = self.state.callback_holder(slot_id);
+        content_holder.update(content);
         let mut inner = self.parent_handle.inner.borrow_mut();
 
         // Reuse or create virtual node
@@ -204,11 +206,17 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
         }
 
         let slot_host = self.state.get_or_create_slots(slot_id);
-        let _ = self
+        let holder_for_slot = content_holder.clone();
+        let scopes = self
             .composer
-            .subcompose_slot(&slot_host, Some(virtual_node_id), |_| content());
+            .subcompose_slot(&slot_host, Some(virtual_node_id), move |_| {
+                compose_subcompose_slot_content(holder_for_slot.clone());
+            })
+            .map(|(_, scopes)| scopes)
+            .unwrap_or_default();
 
-        self.state.register_active(slot_id, &[virtual_node_id], &[]);
+        self.state
+            .register_active(slot_id, &[virtual_node_id], &scopes);
 
         // CRITICAL FIX: Read children from the Applier's copy of the virtual node,
         // NOT from inner.virtual_nodes. The Applier's copy received insert_child calls
@@ -226,7 +234,7 @@ impl<'a> SubcomposeLayoutScope for SubcomposeMeasureScopeImpl<'a> {
 impl<'a> SubcomposeMeasureScope for SubcomposeMeasureScopeImpl<'a> {
     fn subcompose<Content>(&mut self, slot_id: SlotId, content: Content) -> Vec<SubcomposeChild>
     where
-        Content: FnOnce(),
+        Content: FnMut() + 'static,
     {
         let nodes = self.perform_subcompose(slot_id, content);
         nodes.into_iter().map(SubcomposeChild::new).collect()
@@ -264,7 +272,7 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
         estimate_size: F,
     ) -> Vec<SubcomposeChild>
     where
-        Content: FnOnce(),
+        Content: FnMut() + 'static,
         F: Fn(usize) -> Size,
     {
         let nodes = self.perform_subcompose(slot_id, content);
@@ -317,6 +325,19 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
     pub fn was_last_slot_reused(&self) -> Option<bool> {
         self.state.was_last_slot_reused()
     }
+}
+
+fn compose_subcompose_slot_content(holder: cranpose_core::CallbackHolder) {
+    cranpose_core::with_current_composer(|composer| {
+        let holder_for_recompose = holder.clone();
+        composer.set_recranpose_callback(move |_composer| {
+            let invoke = holder_for_recompose.clone_rc();
+            invoke();
+        });
+    });
+
+    let invoke = holder.clone_rc();
+    invoke();
 }
 
 /// Trait object representing a reusable measure policy.
@@ -412,7 +433,14 @@ impl SubcomposeLayoutNode {
     }
 
     pub fn set_measure_policy(&mut self, policy: Rc<MeasurePolicy>) {
-        self.inner.borrow_mut().set_measure_policy(policy);
+        let mut inner = self.inner.borrow_mut();
+        inner.set_measure_policy(policy);
+        inner.state.invalidate_scopes();
+        drop(inner);
+        self.mark_needs_measure();
+        if let Some(id) = self.id.get() {
+            cranpose_core::bubble_measure_dirty_in_composer(id);
+        }
     }
 
     pub fn set_modifier(&mut self, modifier: Modifier) {
@@ -868,18 +896,19 @@ impl SubcomposeLayoutNodeHandle {
         //
         // Reference: LazyLayoutMeasureScope.subcompose() in JC reuses existing slots by key,
         // and SubcomposeLayoutState holds `slotIdToNode` map across measurements.
-        let result = composer.subcompose_slot(&slots_host, Some(node_id), |inner_composer| {
-            let mut scope = SubcomposeMeasureScopeImpl::new(
-                inner_composer.clone(),
-                &mut state,
-                constraints_copy,
-                measurer,
-                Rc::clone(&error),
-                self.clone(), // Pass handle
-                node_id,      // Pass root_id
-            );
-            (policy)(&mut scope, constraints_copy)
-        })?;
+        let (result, _) =
+            composer.subcompose_slot(&slots_host, Some(node_id), |inner_composer| {
+                let mut scope = SubcomposeMeasureScopeImpl::new(
+                    inner_composer.clone(),
+                    &mut state,
+                    constraints_copy,
+                    measurer,
+                    Rc::clone(&error),
+                    self.clone(), // Pass handle
+                    node_id,      // Pass root_id
+                );
+                (policy)(&mut scope, constraints_copy)
+            })?;
 
         state.finish_pass();
 
@@ -948,6 +977,11 @@ impl SubcomposeLayoutNodeInner {
 
     fn set_measure_policy(&mut self, policy: Rc<MeasurePolicy>) {
         self.measure_policy = policy;
+        // The root measurement subcomposition caches its slot table separately
+        // from per-item slot scopes. When a widget updates the data captured by
+        // the measure lambda through shared cells, the next layout pass must not
+        // reuse the previous root measure group wholesale.
+        self.slots = SlotBackend::default();
     }
 
     /// Updates the modifier and collects invalidations without dispatching them.

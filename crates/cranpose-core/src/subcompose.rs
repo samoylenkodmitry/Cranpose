@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::rc::Rc;
 
-use crate::{NodeId, RecomposeScope, SlotTable, SlotsHost};
+use crate::{CallbackHolder, NodeId, RecomposeScope, SlotTable, SlotsHost};
 
 /// Identifier for a subcomposed slot.
 ///
@@ -275,6 +275,14 @@ impl NodeSlotMapping {
         }
     }
 
+    fn invalidate_scopes(&self) {
+        for scopes in self.slot_to_scopes.values() {
+            for scope in scopes {
+                scope.invalidate();
+            }
+        }
+    }
+
     fn retain_slots(&mut self, active: &HashSet<SlotId>) -> Vec<NodeId> {
         let mut removed_nodes = Vec::new();
         self.slot_to_nodes.retain(|slot, nodes| {
@@ -315,6 +323,8 @@ pub struct SubcomposeState {
     /// Each SlotId gets its own slot table, avoiding cursor-based conflicts
     /// when items are subcomposed in different orders.
     slot_compositions: HashMap<SlotId, Rc<SlotsHost>>,
+    /// Latest slot root callbacks keyed by slot id.
+    slot_callbacks: HashMap<SlotId, CallbackHolder>,
     /// Maximum number of reusable slots to keep cached per content type.
     max_reusable_per_type: usize,
     /// Maximum number of reusable slots for the untyped pool.
@@ -370,6 +380,7 @@ impl SubcomposeState {
             reusable_count: 0,
             precomposed_count: 0,
             slot_compositions: HashMap::default(),
+            slot_callbacks: HashMap::default(),
             max_reusable_per_type: DEFAULT_MAX_REUSABLE_PER_TYPE,
             max_reusable_untyped: DEFAULT_MAX_REUSABLE_UNTYPED,
             last_slot_reused: None,
@@ -436,6 +447,11 @@ impl SubcomposeState {
                 SlotTable::new(),
             )))
         }))
+    }
+
+    /// Returns the latest callback holder for the given slot, creating one if needed.
+    pub fn callback_holder(&mut self, slot_id: SlotId) -> CallbackHolder {
+        self.slot_callbacks.entry(slot_id).or_default().clone()
     }
 
     /// Records that the nodes in `node_ids` are currently rendering the provided
@@ -684,6 +700,8 @@ impl SubcomposeState {
         // Only truly removed slots (not active, not reusable) should have their compositions cleared.
         self.slot_compositions
             .retain(|slot, _| keep_slots.contains(slot));
+        self.slot_callbacks
+            .retain(|slot, _| keep_slots.contains(slot));
 
         // Clean up content type mappings for inactive slots
         self.slot_content_types
@@ -744,6 +762,15 @@ impl SubcomposeState {
     /// by compatible content types.
     pub fn reusable_slots_count(&self) -> usize {
         self.reusable_count
+    }
+
+    /// Invalidates all tracked subcomposition scopes.
+    ///
+    /// Hosts should call this when parent-captured inputs change without directly invalidating
+    /// the child scopes themselves. The next subcompose pass will then re-run active slot
+    /// content instead of skipping with stale captures.
+    pub fn invalidate_scopes(&self) {
+        self.mapping.invalidate_scopes();
     }
 
     /// Returns whether the last slot registered via [`register_active`] was reused.

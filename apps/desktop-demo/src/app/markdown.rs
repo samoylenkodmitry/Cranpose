@@ -1,3 +1,4 @@
+use super::lazy_scrollbar::{LazyListWithScrollbar, LazyScrollbarStyle};
 use cranpose_foundation::lazy::remember_lazy_list_state;
 use cranpose_foundation::text::TextFieldState;
 use cranpose_foundation::SemanticsConfiguration;
@@ -560,203 +561,9 @@ pub fn markdown_viewer_tab() {
 // Render helpers
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, Debug)]
-struct ScrollbarMetrics {
-    thumb_h: f32,
-    thumb_y: f32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct ScrollbarModel {
-    total_items: usize,
-    average_item_size: f32,
-    max_item_position: f32,
-    thumb_fraction: f32,
-    scroll_fraction: f32,
-}
-
-impl Default for ScrollbarModel {
-    fn default() -> Self {
-        Self {
-            total_items: 0,
-            average_item_size: 1.0,
-            max_item_position: 0.0,
-            thumb_fraction: 1.0,
-            scroll_fraction: 0.0,
-        }
-    }
-}
-
 const MARKDOWN_SCROLLBAR_RAIL_WIDTH: f32 = 16.0;
 const MARKDOWN_SCROLLBAR_THUMB_WIDTH: f32 = 8.0;
 const MARKDOWN_SCROLLBAR_MIN_THUMB_HEIGHT: f32 = 32.0;
-
-fn compute_scrollbar_metrics(
-    rail_height: f32,
-    thumb_fraction: f32,
-    scroll_fraction: f32,
-    min_thumb_height: f32,
-) -> ScrollbarMetrics {
-    let h = rail_height.max(1.0);
-    let thumb_h = (thumb_fraction * h).max(min_thumb_height).min(h);
-    let thumb_range = (h - thumb_h).max(0.0);
-    let thumb_y = scroll_fraction.clamp(0.0, 1.0) * thumb_range;
-    ScrollbarMetrics { thumb_h, thumb_y }
-}
-
-fn compute_scrollbar_model(
-    total_items: usize,
-    viewport_size: f32,
-    average_item_size: f32,
-    first_visible_index: usize,
-    first_visible_offset: f32,
-) -> ScrollbarModel {
-    let average_item_size = average_item_size.max(1.0);
-    let viewport_size = viewport_size.max(1.0);
-
-    if total_items == 0 {
-        return ScrollbarModel {
-            total_items,
-            average_item_size,
-            max_item_position: 0.0,
-            thumb_fraction: 1.0,
-            scroll_fraction: 0.0,
-        };
-    }
-
-    let estimated_visible_items = (viewport_size / average_item_size).max(1.0);
-    let max_item_position = (total_items as f32 - estimated_visible_items).max(0.0);
-    let current_item_position = if max_item_position > 0.0 {
-        (first_visible_index as f32 + (first_visible_offset / average_item_size))
-            .clamp(0.0, max_item_position)
-    } else {
-        0.0
-    };
-
-    let thumb_fraction = (estimated_visible_items / total_items as f32).clamp(0.04, 1.0);
-    let scroll_fraction = if max_item_position > 0.0 {
-        current_item_position / max_item_position
-    } else {
-        0.0
-    };
-
-    ScrollbarModel {
-        total_items,
-        average_item_size,
-        max_item_position,
-        thumb_fraction,
-        scroll_fraction,
-    }
-}
-
-fn scroll_target_for_fraction(model: ScrollbarModel, scroll_fraction: f32) -> (usize, f32) {
-    if model.total_items == 0 || model.max_item_position <= 0.0 {
-        return (0, 0.0);
-    }
-
-    let target_position = scroll_fraction.clamp(0.0, 1.0) * model.max_item_position;
-    let mut index = target_position.floor() as usize;
-    index = index.min(model.total_items.saturating_sub(1));
-    let offset = ((target_position - index as f32) * model.average_item_size).max(0.0);
-    (index, offset)
-}
-
-fn average_visible_item_size(
-    layout_info: &cranpose_foundation::lazy::LazyListLayoutInfo,
-    fallback_average_item_size: f32,
-) -> f32 {
-    if layout_info.visible_items_info.is_empty() {
-        return fallback_average_item_size.max(1.0);
-    }
-
-    let total_size: f32 = layout_info
-        .visible_items_info
-        .iter()
-        .map(|item| item.size.max(1.0))
-        .sum();
-    (total_size / layout_info.visible_items_info.len() as f32).max(1.0)
-}
-
-fn stabilize_scrollbar_model_for_scrollable_content(
-    mut model: ScrollbarModel,
-    can_scroll_forward: bool,
-    can_scroll_backward: bool,
-) -> ScrollbarModel {
-    if model.total_items == 0 {
-        return model;
-    }
-    if model.max_item_position > 0.0 {
-        return model;
-    }
-    if !can_scroll_forward && !can_scroll_backward {
-        return model;
-    }
-
-    // When content barely overflows the viewport, coarse item-based estimation can
-    // produce a full-height thumb even though the list is scrollable.
-    model.max_item_position = 1.0;
-    model.thumb_fraction = model.thumb_fraction.min(0.98);
-    model.scroll_fraction = match (can_scroll_backward, can_scroll_forward) {
-        (false, true) => 0.0,
-        (true, false) => 1.0,
-        (true, true) => 0.5,
-        (false, false) => 0.0,
-    };
-    model
-}
-
-fn read_interaction_scrollbar_model(
-    list_state: cranpose_foundation::lazy::LazyListState,
-) -> (ScrollbarModel, f32) {
-    let info = list_state.layout_info();
-    let model = compute_scrollbar_model(
-        info.total_items_count,
-        info.viewport_size,
-        average_visible_item_size(&info, list_state.average_item_size()),
-        list_state.first_visible_item_index(),
-        list_state.first_visible_item_scroll_offset(),
-    );
-    let model = stabilize_scrollbar_model_for_scrollable_content(
-        model,
-        list_state.can_scroll_forward(),
-        list_state.can_scroll_backward(),
-    );
-    let rail_height = info.viewport_size.max(1.0);
-    (model, rail_height)
-}
-
-/// Isolated observer scope for LazyList scroll reactivity.
-#[allow(non_snake_case)]
-#[composable]
-fn MarkdownScrollbarModelObserver(
-    list_state: cranpose_foundation::lazy::LazyListState,
-    model_state: cranpose_core::MutableState<ScrollbarModel>,
-) {
-    let first_visible_index = list_state.first_visible_item_index();
-    let first_visible_offset = list_state.first_visible_item_scroll_offset();
-    let layout_info = list_state.layout_info();
-    let can_scroll_forward = list_state.can_scroll_forward();
-    let can_scroll_backward = list_state.can_scroll_backward();
-    let avg_item_size = average_visible_item_size(&layout_info, list_state.average_item_size());
-    let next_model = compute_scrollbar_model(
-        layout_info.total_items_count,
-        layout_info.viewport_size,
-        avg_item_size,
-        first_visible_index,
-        first_visible_offset,
-    );
-    let next_model = stabilize_scrollbar_model_for_scrollable_content(
-        next_model,
-        can_scroll_forward,
-        can_scroll_backward,
-    );
-
-    if model_state.get_non_reactive() != next_model {
-        cranpose_core::SideEffect(move || {
-            model_state.set(next_model);
-        });
-    }
-}
 
 #[allow(non_snake_case)]
 #[composable]
@@ -784,192 +591,30 @@ fn MarkdownBlocksList(
     );
 }
 
-#[allow(non_snake_case)]
-#[composable]
-fn MarkdownScrollbarRail(
-    list_state: cranpose_foundation::lazy::LazyListState,
-    model_state: cranpose_core::MutableState<ScrollbarModel>,
-) {
-    let model = model_state.get();
-    let thumb_frac = model.thumb_fraction;
-    let scroll_frac = model.scroll_fraction;
-
-    cranpose_ui::Box(
-        Modifier::empty()
-            .semantics(|config: &mut SemanticsConfiguration| {
-                config.content_description = Some("MarkdownScrollbarRail".to_string());
-            })
-            .width(MARKDOWN_SCROLLBAR_RAIL_WIDTH)
-            .fill_max_height()
-            .background(Color(0.12, 0.15, 0.24, 1.0))
-            .draw_behind(move |scope| {
-                let metrics = compute_scrollbar_metrics(
-                    scope.size().height,
-                    thumb_frac,
-                    scroll_frac,
-                    MARKDOWN_SCROLLBAR_MIN_THUMB_HEIGHT,
-                );
-                let x = (MARKDOWN_SCROLLBAR_RAIL_WIDTH - MARKDOWN_SCROLLBAR_THUMB_WIDTH) * 0.5;
-                scope.draw_rect_at(
-                    cranpose_ui::Rect {
-                        x,
-                        y: metrics.thumb_y,
-                        width: MARKDOWN_SCROLLBAR_THUMB_WIDTH,
-                        height: metrics.thumb_h,
-                    },
-                    Brush::solid(Color(0.55, 0.68, 1.0, 0.90)),
-                );
-            })
-            .pointer_input("scrollbar_drag", move |scope| async move {
-                use cranpose_foundation::{PointerButton, PointerEventKind};
-
-                loop {
-                    scope
-                        .await_pointer_event_scope(|scope| async move {
-                            use instant::Instant;
-                            use std::time::Duration;
-
-                            let mut dragging = false;
-                            let mut drag_grab_offset = 0.0f32;
-                            let mut last_scroll_apply = Instant::now();
-                            let mut last_target: Option<(usize, f32)> = None;
-
-                            loop {
-                                let event = scope.await_pointer_event().await;
-                                match event.kind {
-                                    PointerEventKind::Down => {
-                                        let (model, rail_h) =
-                                            read_interaction_scrollbar_model(list_state);
-                                        let inside_rail = event.position.x >= 0.0
-                                            && event.position.x <= MARKDOWN_SCROLLBAR_RAIL_WIDTH
-                                            && event.position.y >= 0.0
-                                            && event.position.y <= rail_h;
-                                        if !inside_rail
-                                            || !event.buttons.contains(PointerButton::Primary)
-                                        {
-                                            continue;
-                                        }
-                                        let metrics = compute_scrollbar_metrics(
-                                            rail_h,
-                                            model.thumb_fraction,
-                                            model.scroll_fraction,
-                                            MARKDOWN_SCROLLBAR_MIN_THUMB_HEIGHT,
-                                        );
-                                        if model.max_item_position > 0.0 {
-                                            let y = event.position.y.clamp(0.0, rail_h);
-                                            let thumb_range = (rail_h - metrics.thumb_h).max(0.0);
-                                            let target_thumb_y =
-                                                (y - metrics.thumb_h * 0.5).clamp(0.0, thumb_range);
-                                            let target_scroll_fraction = if thumb_range > 0.0 {
-                                                target_thumb_y / thumb_range
-                                            } else {
-                                                0.0
-                                            };
-                                            let (target_idx, target_offset) =
-                                                scroll_target_for_fraction(
-                                                    model,
-                                                    target_scroll_fraction,
-                                                );
-                                            list_state.scroll_to_item(target_idx, target_offset);
-                                            dragging = true;
-                                            drag_grab_offset = metrics.thumb_h * 0.5;
-                                            last_scroll_apply = Instant::now();
-                                            last_target = Some((target_idx, target_offset));
-                                            event.consume();
-                                        }
-                                    }
-                                    PointerEventKind::Move if dragging => {
-                                        if last_scroll_apply.elapsed() < Duration::from_millis(50) {
-                                            event.consume();
-                                            continue;
-                                        }
-                                        let (model, rail_h) =
-                                            read_interaction_scrollbar_model(list_state);
-                                        let metrics = compute_scrollbar_metrics(
-                                            rail_h,
-                                            model.thumb_fraction,
-                                            model.scroll_fraction,
-                                            MARKDOWN_SCROLLBAR_MIN_THUMB_HEIGHT,
-                                        );
-                                        let thumb_range = (rail_h - metrics.thumb_h).max(0.0);
-                                        let target_thumb_y = (event.position.y.clamp(0.0, rail_h)
-                                            - drag_grab_offset)
-                                            .clamp(0.0, thumb_range);
-                                        let target_scroll_fraction = if thumb_range > 0.0 {
-                                            target_thumb_y / thumb_range
-                                        } else {
-                                            0.0
-                                        };
-                                        let (target_idx, target_offset) =
-                                            scroll_target_for_fraction(
-                                                model,
-                                                target_scroll_fraction,
-                                            );
-                                        if model.max_item_position > 0.0 {
-                                            if model.total_items > 5_000 {
-                                                if let Some((last_idx, last_offset)) = last_target {
-                                                    let idx_diff = last_idx.abs_diff(target_idx);
-                                                    let offset_diff =
-                                                        (last_offset - target_offset).abs();
-                                                    if idx_diff < 800
-                                                        && offset_diff
-                                                            < model.average_item_size * 0.5
-                                                    {
-                                                        event.consume();
-                                                        continue;
-                                                    }
-                                                }
-                                            }
-                                            list_state.scroll_to_item(target_idx, target_offset);
-                                            last_scroll_apply = Instant::now();
-                                            last_target = Some((target_idx, target_offset));
-                                        }
-                                        event.consume();
-                                    }
-                                    PointerEventKind::Up | PointerEventKind::Cancel => {
-                                        if dragging {
-                                            event.consume();
-                                        }
-                                        break;
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        })
-                        .await;
-                }
-            }),
-        cranpose_ui::BoxSpec::default(),
-        || {},
-    );
+fn markdown_scrollbar_style() -> LazyScrollbarStyle {
+    LazyScrollbarStyle {
+        rail_width: MARKDOWN_SCROLLBAR_RAIL_WIDTH,
+        thumb_width: MARKDOWN_SCROLLBAR_THUMB_WIDTH,
+        min_thumb_height: MARKDOWN_SCROLLBAR_MIN_THUMB_HEIGHT,
+        rail_color: Color(0.12, 0.15, 0.24, 1.0),
+        thumb_color: Color(0.55, 0.68, 1.0, 0.90),
+    }
 }
 
 #[allow(non_snake_case)]
 #[composable]
 fn render_markdown_blocks(blocks: Rc<[MarkdownBlock]>) {
     let list_state = remember_lazy_list_state();
-    let scrollbar_model_state = cranpose_core::useState(ScrollbarModel::default);
-
-    Row(Modifier::empty().fill_max_size(), RowSpec::new(), {
-        let blocks_for_row = blocks.clone();
+    let blocks_for_list = blocks.clone();
+    LazyListWithScrollbar(
+        Modifier::empty().fill_max_size(),
+        list_state,
+        "MarkdownScrollbarRail",
+        markdown_scrollbar_style(),
         move || {
-            // Wrap LazyColumn in a weighted Box so Row reserves space for the rail.
-            cranpose_ui::Box(
-                Modifier::empty().weight(1.0).fill_max_height(),
-                cranpose_ui::BoxSpec::default(),
-                {
-                    let blocks_for_box = blocks_for_row.clone();
-                    move || {
-                        MarkdownBlocksList(list_state, blocks_for_box.clone());
-                    }
-                },
-            );
-
-            // Isolated reactivity scope: reads first_visible/layout_info and syncs the model state.
-            MarkdownScrollbarModelObserver(list_state, scrollbar_model_state);
-            MarkdownScrollbarRail(list_state, scrollbar_model_state);
-        }
-    });
+            MarkdownBlocksList(list_state, blocks_for_list.clone());
+        },
+    );
 }
 
 #[allow(non_snake_case)]
@@ -1055,6 +700,11 @@ fn render_rule() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::lazy_scrollbar::{
+        average_visible_item_size, compute_scrollbar_metrics, compute_scrollbar_model,
+        scroll_target_for_fraction, stabilize_scrollbar_model_for_scrollable_content,
+        LazyScrollbarModel,
+    };
     use cranpose_ui::text::FontWeight;
 
     #[test]
@@ -1208,17 +858,17 @@ mod tests {
 
     #[test]
     fn scrollbar_metrics_handle_small_rail_height() {
-        let metrics = compute_scrollbar_metrics(16.0, 0.04, 1.0, 32.0);
-        assert_eq!(metrics.thumb_h, 16.0);
-        assert_eq!(metrics.thumb_y, 0.0);
+        let (thumb_h, thumb_y) = compute_scrollbar_metrics(16.0, 0.04, 1.0, 32.0);
+        assert_eq!(thumb_h, 16.0);
+        assert_eq!(thumb_y, 0.0);
     }
 
     #[test]
     fn scrollbar_metrics_clamp_scroll_fraction() {
-        let low = compute_scrollbar_metrics(100.0, 0.5, -10.0, 32.0);
-        let high = compute_scrollbar_metrics(100.0, 0.5, 10.0, 32.0);
-        assert_eq!(low.thumb_y, 0.0);
-        assert_eq!(high.thumb_y, 50.0);
+        let (_, low_y) = compute_scrollbar_metrics(100.0, 0.5, -10.0, 32.0);
+        let (_, high_y) = compute_scrollbar_metrics(100.0, 0.5, 10.0, 32.0);
+        assert_eq!(low_y, 0.0);
+        assert_eq!(high_y, 50.0);
     }
 
     #[test]
@@ -1256,7 +906,7 @@ mod tests {
 
     #[test]
     fn stabilize_scrollbar_model_keeps_thumb_visible_when_scrollable() {
-        let model = ScrollbarModel {
+        let model = LazyScrollbarModel {
             total_items: 18,
             average_item_size: 32.0,
             max_item_position: 0.0,
@@ -1272,7 +922,7 @@ mod tests {
 
     #[test]
     fn stabilize_scrollbar_model_preserves_non_scrollable_model() {
-        let model = ScrollbarModel {
+        let model = LazyScrollbarModel {
             total_items: 5,
             average_item_size: 40.0,
             max_item_position: 0.0,

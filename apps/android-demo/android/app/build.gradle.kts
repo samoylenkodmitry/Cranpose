@@ -4,6 +4,50 @@ plugins {
     id("com.android.application")
 }
 
+fun parseBooleanGradleProperty(raw: String?, propertyName: String): Boolean? {
+    val value = raw?.trim()?.lowercase()?.takeIf { it.isNotEmpty() } ?: return null
+    return when (value) {
+        "true", "1", "yes", "on" -> true
+        "false", "0", "no", "off" -> false
+        else -> throw GradleException("Invalid boolean for $propertyName: $raw")
+    }
+}
+
+fun environmentFlag(name: String): Boolean {
+    return parseBooleanGradleProperty(
+        providers.environmentVariable(name).orNull,
+        name
+    ) == true
+}
+
+val isCiBuild = environmentFlag("CI") || environmentFlag("GITHUB_ACTIONS")
+val defaultReleaseAbis = listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+val releaseRustFast = parseBooleanGradleProperty(
+    providers.gradleProperty("rustFastRelease").orNull,
+    "rustFastRelease"
+) ?: !isCiBuild
+val releaseRustAbis = providers.gradleProperty("rustAbis")
+    .orNull
+    ?.split(',')
+    ?.map(String::trim)
+    ?.filter(String::isNotEmpty)
+    ?.takeIf { it.isNotEmpty() }
+    ?: if (releaseRustFast) {
+        listOf("arm64-v8a")
+    } else {
+        defaultReleaseAbis
+    }
+val releaseRustProfileFlag = providers.gradleProperty("rustCargoProfile")
+    .orNull
+    ?.takeIf { it.isNotBlank() }
+    ?.let { "--profile $it" }
+    ?: if (releaseRustFast) {
+        "--profile release-fast"
+    } else {
+        "--release"
+    }
+val releaseRustTargetArgs = releaseRustAbis.joinToString(" \\\n            ") { "-t $it" }
+
 android {
     namespace = "com.compose_rs.demo"
     compileSdk = 34
@@ -32,9 +76,9 @@ android {
             )
             signingConfig = signingConfigs.getByName("debug")
 
-            // Release builds include all supported ABIs
+            // Local release checks default to one fast ABI. CI/full release keeps all ABIs.
             ndk {
-                abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+                abiFilters += releaseRustAbis
             }
         }
     }
@@ -120,26 +164,39 @@ tasks.register<Exec>("buildRustDebug") {
 
 // Task to build Rust library for Android release builds
 tasks.register<Exec>("buildRustRelease") {
-    description = "Build Rust library for Android (release, all ABIs)"
+    description = "Build Rust library for Android (local-fast by default, full release on CI)"
     group = "rust"
+
+    inputs.files(fileTree("../../../../crates") {
+        include("**/*.rs")
+        include("**/Cargo.toml")
+    })
+    inputs.files(fileTree("../../../../apps/desktop-demo/src") {
+        include("**/*.rs")
+    })
+    inputs.file("../../../../Cargo.toml")
+    inputs.file("../../../../Cargo.lock")
+    outputs.upToDateWhen { false }
 
     // Check cargo-ndk availability
     doFirst {
         checkCargoNdk()
+        val mode = if (releaseRustFast) "fast local release check" else "optimized release"
+        println("Rust Android build mode: $mode")
+        println("Rust Android ABIs: ${releaseRustAbis.joinToString(", ")}")
+        println("Rust cargo profile: $releaseRustProfileFlag")
     }
 
     workingDir = rootProject.projectDir
 
-    // Release builds: all supported ABIs
+    // Local release checks default to release-fast + arm64-v8a.
+    // CI or explicit flags switch back to full optimized multi-ABI release.
     commandLine("sh", "-c", """
         cargo ndk \
-            -t arm64-v8a \
-            -t armeabi-v7a \
-            -t x86 \
-            -t x86_64 \
+            $releaseRustTargetArgs \
             -o target/android \
             build \
-            --release \
+            $releaseRustProfileFlag \
             -p desktop-app \
             --lib \
             --features android,renderer-wgpu \

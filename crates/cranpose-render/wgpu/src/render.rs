@@ -2905,8 +2905,7 @@ impl GpuRenderer {
             total_chars += text_draw.text.text.len();
 
             let font_size_px = text_draw.font_size * text_draw.scale * root_scale;
-            let style_hash =
-                text_draw.text_style.measurement_hash() ^ text_draw.text.span_styles_hash();
+            let style_hash = crate::text_buffer_style_hash(&text_draw.text_style, &text_draw.text);
             let line_height_px = crate::resolve_effective_line_height(
                 &text_draw.text_style,
                 &text_draw.text,
@@ -3358,8 +3357,7 @@ where
         text_draw.text.text.hash(&mut hasher);
         text_draw.text.text.len().hash(&mut hasher);
 
-        let style_hash =
-            text_draw.text_style.measurement_hash() ^ text_draw.text.span_styles_hash();
+        let style_hash = crate::text_buffer_style_hash(&text_draw.text_style, &text_draw.text);
         style_hash.hash(&mut hasher);
 
         hash_f32_bits(text_draw.rect.x, &mut hasher);

@@ -922,26 +922,31 @@ impl LayoutBuilderState {
         let state_rc_clone = Rc::clone(&state_rc);
         let measure_error: Rc<RefCell<Option<NodeError>>> = Rc::new(RefCell::new(None));
         let error_for_measurer = Rc::clone(&measure_error);
-        let measurer = Box::new(
-            move |child_id: NodeId, child_constraints: Constraints| -> Size {
-                match Self::measure_node(Rc::clone(&state_rc_clone), child_id, child_constraints) {
-                    Ok(measured) => measured.size,
-                    Err(err) => {
-                        let mut slot = error_for_measurer.borrow_mut();
-                        if slot.is_none() {
-                            *slot = Some(err);
-                        }
-                        Size::default()
-                    }
-                }
-            },
-        );
+        let state_rc_for_subcompose = Rc::clone(&state_rc_clone);
+        let error_for_subcompose = Rc::clone(&error_for_measurer);
 
         let measure_result = node_handle.measure(
             &composer,
             node_id,
             inner_constraints,
-            measurer,
+            Box::new(
+                move |child_id: NodeId, child_constraints: Constraints| -> Size {
+                    match Self::measure_node(
+                        Rc::clone(&state_rc_for_subcompose),
+                        child_id,
+                        child_constraints,
+                    ) {
+                        Ok(measured) => measured.size,
+                        Err(err) => {
+                            let mut slot = error_for_subcompose.borrow_mut();
+                            if slot.is_none() {
+                                *slot = Some(err);
+                            }
+                            Size::default()
+                        }
+                    }
+                },
+            ),
             Rc::clone(&measure_error),
         )?;
 
@@ -1190,13 +1195,11 @@ impl LayoutBuilderState {
             state.cache_epoch
         };
         let LayoutNodeSnapshot {
-            resolved_modifiers,
             measure_policy,
             cache,
             needs_measure,
         } = snapshot;
         cache.activate(cache_epoch);
-        let layout_props = resolved_modifiers.layout_properties();
 
         if needs_measure {
             // Node has needs_measure=true
@@ -1281,34 +1284,9 @@ impl LayoutBuilderState {
             )));
         }
 
-        // Try to measure through the modifier node chain first.
-        // If a node participates in weight-based sizing, never loosen constraints;
-        // otherwise, use unbounded max on unspecified dimensions to support wrap-content
-        // behavior without fill modifiers forcing parent size.
-        let has_weight = layout_props
-            .weight()
-            .map(|weight| weight.weight > 0.0)
-            .unwrap_or(false);
-        let chain_constraints = if has_weight {
-            constraints
-        } else {
-            Constraints {
-                min_width: constraints.min_width,
-                max_width: if matches!(layout_props.width(), DimensionConstraint::Unspecified) {
-                    f32::INFINITY
-                } else {
-                    constraints.max_width
-                },
-                min_height: constraints.min_height,
-                max_height: if matches!(layout_props.height(), DimensionConstraint::Unspecified) {
-                    f32::INFINITY
-                } else {
-                    constraints.max_height
-                },
-            }
-        };
+        let chain_constraints = constraints;
 
-        let mut modifier_chain_result = Self::measure_through_modifier_chain(
+        let modifier_chain_result = Self::measure_through_modifier_chain(
             &state_rc,
             node_id,
             measurables.as_slice(),
@@ -1316,23 +1294,6 @@ impl LayoutBuilderState {
             chain_constraints,
             layout_node_data,
         );
-
-        if (chain_constraints.max_width != constraints.max_width
-            || chain_constraints.max_height != constraints.max_height)
-            && ((constraints.max_width.is_finite()
-                && modifier_chain_result.result.size.width > constraints.max_width)
-                || (constraints.max_height.is_finite()
-                    && modifier_chain_result.result.size.height > constraints.max_height))
-        {
-            modifier_chain_result = Self::measure_through_modifier_chain(
-                &state_rc,
-                node_id,
-                measurables.as_slice(),
-                &measure_policy,
-                constraints,
-                layout_node_data,
-            );
-        }
 
         // Modifier chain always succeeds - use the node-driven measurement.
         let (width, height, policy_result, content_offset, offset) = {
@@ -1409,7 +1370,6 @@ impl LayoutBuilderState {
 /// selective measure optimization at the individual node level. Even if the tree is partially
 /// dirty (some nodes changed), clean nodes can skip measure and use cached results.
 struct LayoutNodeSnapshot {
-    resolved_modifiers: ResolvedModifiers,
     measure_policy: Rc<dyn MeasurePolicy>,
     cache: LayoutNodeCacheHandles,
     /// Whether this specific node needs to be measured (vs using cached measurement)
@@ -1419,7 +1379,6 @@ struct LayoutNodeSnapshot {
 impl LayoutNodeSnapshot {
     fn from_layout_node(node: &LayoutNode) -> Self {
         Self {
-            resolved_modifiers: node.resolved_modifiers(),
             measure_policy: Rc::clone(&node.measure_policy),
             cache: node.cache_handles(),
             needs_measure: node.needs_measure(),

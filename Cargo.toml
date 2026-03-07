@@ -67,12 +67,28 @@ strip = true            # Strip symbols from binary
 panic = "abort"         # Smaller binaries (no unwinding)
 debug = 0               # No debug info
 
+# Faster local release-style profile for iteration.
+[profile.release-fast]
+inherits = "release"
+opt-level = 2
+lto = "thin"
+codegen-units = 16
+strip = "none"
+debug = 1
+
 # Native perf profile optimized for runtime speed and profiling.
 [profile.native-release]
 inherits = "release"
 opt-level = 3
 debug = 1
 strip = "none"
+
+# Fast profile for local robot runners and headless UI checks.
+[profile.robot]
+inherits = "dev"
+debug = 0
+codegen-units = 256
+incremental = true
 
 # Maximum size optimization profile (slower builds, smaller binaries)
 [profile.release-small]

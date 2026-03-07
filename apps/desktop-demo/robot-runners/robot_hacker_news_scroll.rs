@@ -10,11 +10,12 @@
 //! ```
 
 use cranpose::AppLauncher;
+use cranpose::SemanticElement;
 use cranpose_core::CompositionLocalProvider;
 use cranpose_services::{local_http_client, HttpClient, HttpClientRef, HttpError, HttpFuture};
 use cranpose_testing::{
-    find_button_in_semantics, find_element_by_text_exact, find_in_semantics, find_text_exact,
-    print_semantics_with_bounds,
+    find_button, find_button_in_semantics, find_element_by_text_exact, find_in_semantics,
+    find_text_exact, print_semantics_with_bounds, root_bounds,
 };
 use desktop_app::app;
 use serde_json::json;
@@ -22,6 +23,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 const MOCK_STORY_COUNT: usize = 60;
+const MOCK_COMMENT_COUNT: usize = 40;
 
 struct MockHackerNewsClient {
     ids: Vec<u64>,
@@ -46,18 +48,53 @@ impl MockHackerNewsClient {
             .iter()
             .position(|candidate| *candidate == id)
             .unwrap_or(0);
+        let comment_ids = (1..=MOCK_COMMENT_COUNT)
+            .map(|suffix| id * 100 + suffix as u64)
+            .collect::<Vec<_>>();
         json!({
             "id": id,
             "title": format!("Mock Story #{}", index + 1),
+            "text": format!(
+                "<p>{}</p><p>{}</p><p>{}</p>",
+                "This is a deliberately tall mock story body used to verify that the thread pane remains scrollable after the first comment load.".repeat(2),
+                "The robot test needs enough pre-comment content to catch unbounded first-pass list measurement.".repeat(2),
+                "If scrolling is broken, later comments will never become reachable until the pane is recreated.".repeat(2),
+            ),
             "by": "robot",
             "score": 100 + index as i32,
             "time": 1_700_000_000 + index as i64 * 60,
             "url": format!("https://example.com/story/{}", id),
-            "descendants": index as i32,
-            "kids": [],
+            "descendants": MOCK_COMMENT_COUNT,
+            "kids": comment_ids,
             "type": "story"
         })
         .to_string()
+    }
+
+    fn comment_json(&self, id: u64) -> Option<String> {
+        let story_id = id / 100;
+        let suffix = id % 100;
+        if !self.ids.contains(&story_id) {
+            return None;
+        }
+
+        if suffix == 0 || suffix > MOCK_COMMENT_COUNT as u64 {
+            return None;
+        }
+
+        Some(
+            json!({
+                "id": id,
+                "by": format!("commenter-{suffix}"),
+                "text": format!(
+                    "Mock comment #{suffix}. {}",
+                    "This body is long enough to produce a realistic multi-line row in the thread pane.".repeat((suffix as usize % 3) + 1)
+                ),
+                "kids": [],
+                "type": "comment"
+            })
+            .to_string(),
+        )
     }
 
     fn parse_story_id(url: &str) -> Option<u64> {
@@ -72,7 +109,16 @@ impl HttpClient for MockHackerNewsClient {
         let response = if url.ends_with("/topstories.json") {
             Ok(self.topstories_json())
         } else if let Some(id) = Self::parse_story_id(url) {
-            Ok(self.story_json(id))
+            if let Some(payload) = self.comment_json(id) {
+                Ok(payload)
+            } else if self.ids.contains(&id) {
+                Ok(self.story_json(id))
+            } else {
+                Err(HttpError::RequestFailed {
+                    url: url.to_string(),
+                    message: "Unknown mock item".to_string(),
+                })
+            }
         } else {
             Err(HttpError::RequestFailed {
                 url: url.to_string(),
@@ -81,6 +127,19 @@ impl HttpClient for MockHackerNewsClient {
         };
 
         Box::pin(async move { response })
+    }
+}
+
+fn collect_story_elements<'a>(elem: &'a SemanticElement, stories: &mut Vec<&'a SemanticElement>) {
+    if elem
+        .text
+        .as_deref()
+        .is_some_and(|text| text.starts_with("HackerNewsStory "))
+    {
+        stories.push(elem);
+    }
+    for child in &elem.children {
+        collect_story_elements(child, stories);
     }
 }
 
@@ -106,14 +165,98 @@ fn main() {
                 false
             };
 
+            let click_visible_story_comments_button =
+                |list_bounds: (f32, f32, f32, f32)| -> bool {
+                let Ok(elements) = robot.get_semantics() else {
+                    return false;
+                };
+
+                let (list_x, list_y, list_w, list_h) = list_bounds;
+                let list_right = list_x + list_w;
+                let list_bottom = list_y + list_h;
+                let mut stories = Vec::new();
+                for root in &elements {
+                    collect_story_elements(root, &mut stories);
+                }
+
+                stories.sort_by(|left, right| {
+                    left.bounds
+                        .y
+                        .partial_cmp(&right.bounds.y)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+
+                for story_elem in stories {
+                    let Some((x, y, w, h)) =
+                        find_button(story_elem, &format!("View {MOCK_COMMENT_COUNT} comments"))
+                    else {
+                        continue;
+                    };
+                    let center_x = x + w / 2.0;
+                    let center_y = y + h / 2.0;
+                    if center_x < list_x
+                        || center_x > list_right
+                        || center_y < list_y
+                        || center_y > list_bottom
+                    {
+                        continue;
+                    }
+                    println!(
+                        "  ✓ Clicking visible comments button in {}",
+                        story_elem.text.as_deref().unwrap_or("[unknown story]")
+                    );
+                    robot.click(center_x, center_y).ok();
+                    std::thread::sleep(Duration::from_millis(200));
+                    return true;
+                }
+
+                println!("  ✗ No visible story comments button found inside list viewport");
+                false
+            };
+
             let wait_for_text = |text: &str| -> bool {
-                for _ in 0..40 {
+                for _ in 0..60 {
                     if find_in_semantics(&robot, |elem| find_text_exact(elem, text)).is_some() {
                         return true;
                     }
                     std::thread::sleep(Duration::from_millis(100));
                 }
                 false
+            };
+
+            let semantics_bounds = |label: &str| -> Option<(f32, f32, f32, f32)> {
+                let elements = robot.get_semantics().ok()?;
+                find_element_by_text_exact(&elements, label).map(|elem| {
+                    (
+                        elem.bounds.x,
+                        elem.bounds.y,
+                        elem.bounds.width,
+                        elem.bounds.height,
+                    )
+                })
+            };
+
+            let assert_within_root = |name: &str, bounds: (f32, f32, f32, f32)| {
+                let Some((root_x, root_y, root_w, root_h)) = root_bounds(&robot) else {
+                    println!("  ✗ FAIL: missing root bounds");
+                    robot.exit().ok();
+                    std::process::exit(1);
+                };
+                let (x, y, w, h) = bounds;
+                let root_right = root_x + root_w;
+                let root_bottom = root_y + root_h;
+                let right = x + w;
+                let bottom = y + h;
+                if x < root_x || y < root_y || right > root_right || bottom > root_bottom {
+                    println!(
+                        "  ✗ FAIL: {name} bounds=({x:.1},{y:.1},{w:.1},{h:.1}) exceed root=({root_x:.1},{root_y:.1},{root_w:.1},{root_h:.1})"
+                    );
+                    if let Ok(elements) = robot.get_semantics() {
+                        print_semantics_with_bounds(&elements, 0);
+                    }
+                    robot.exit().ok();
+                    std::process::exit(1);
+                }
             };
 
             // Navigate to Hacker News tab.
@@ -135,19 +278,8 @@ fn main() {
 
             // Ensure list viewport is constrained.
             let semantics = robot.get_semantics().ok();
-            let list_bounds = semantics
-                .as_deref()
-                .and_then(|elements| find_element_by_text_exact(elements, "HackerNewsList"))
-                .map(|elem| {
-                    (
-                        elem.bounds.x,
-                        elem.bounds.y,
-                        elem.bounds.width,
-                        elem.bounds.height,
-                    )
-                });
-
-            let (list_x, list_y, list_w, list_h) = if let Some(bounds) = list_bounds {
+            let (list_x, list_y, list_w, list_h) =
+                if let Some(bounds) = semantics_bounds("HackerNewsList") {
                 bounds
             } else {
                 println!("  ✗ FAIL: HackerNewsList semantics not found");
@@ -177,6 +309,21 @@ fn main() {
                 }
             }
 
+            let list_rail_bounds = if let Some(bounds) = semantics_bounds("HackerNewsListScrollbarRail")
+            {
+                bounds
+            } else {
+                println!("  ✗ FAIL: HackerNewsListScrollbarRail semantics not found");
+                if let Some(elements) = semantics.as_deref() {
+                    print_semantics_with_bounds(elements, 0);
+                }
+                robot.exit().ok();
+                std::process::exit(1);
+            };
+
+            assert_within_root("HackerNewsList", (list_x, list_y, list_w, list_h));
+            assert_within_root("HackerNewsListScrollbarRail", list_rail_bounds);
+
             // Scroll to reveal later stories.
             let start_x = list_x + list_w / 2.0;
             let start_y = list_y + list_h * 0.75;
@@ -203,6 +350,79 @@ fn main() {
             }
 
             println!("  ✓ Scroll revealed later stories");
+            let _ = robot.wait_for_idle();
+            if !click_visible_story_comments_button((list_x, list_y, list_w, list_h)) {
+                println!("FATAL: Could not select the target story");
+                if let Ok(elements) = robot.get_semantics() {
+                    print_semantics_with_bounds(&elements, 0);
+                }
+                robot.exit().ok();
+                std::process::exit(1);
+            }
+
+            if !wait_for_text("commenter-1") {
+                println!("FATAL: Mock comments did not appear");
+                if let Ok(elements) = robot.get_semantics() {
+                    print_semantics_with_bounds(&elements, 0);
+                }
+                robot.exit().ok();
+                std::process::exit(1);
+            }
+
+            let comments_list_bounds =
+                if let Some(bounds) = semantics_bounds("HackerNewsCommentsList") {
+                    bounds
+                } else {
+                    println!("  ✗ FAIL: HackerNewsCommentsList semantics not found");
+                    if let Ok(elements) = robot.get_semantics() {
+                        print_semantics_with_bounds(&elements, 0);
+                    }
+                    robot.exit().ok();
+                    std::process::exit(1);
+                };
+            let comments_rail_bounds =
+                if let Some(bounds) = semantics_bounds("HackerNewsCommentsScrollbarRail") {
+                    bounds
+                } else {
+                    println!("  ✗ FAIL: HackerNewsCommentsScrollbarRail semantics not found");
+                    if let Ok(elements) = robot.get_semantics() {
+                        print_semantics_with_bounds(&elements, 0);
+                    }
+                    robot.exit().ok();
+                    std::process::exit(1);
+                };
+
+            assert_within_root("HackerNewsCommentsList", comments_list_bounds);
+            assert_within_root("HackerNewsCommentsScrollbarRail", comments_rail_bounds);
+            let (comments_x, comments_y, comments_w, comments_h) = comments_list_bounds;
+            let scroll_start_x = comments_x + comments_w * 0.5;
+            let scroll_start_y = comments_y + comments_h * 0.75;
+            let scroll_end_y = comments_y + comments_h * 0.25;
+
+            for _ in 0..4 {
+                robot
+                    .drag(scroll_start_x, scroll_start_y, scroll_start_x, scroll_end_y)
+                    .ok();
+                std::thread::sleep(Duration::from_millis(250));
+                let _ = robot.wait_for_idle();
+            }
+
+            let first_comment_visible =
+                find_in_semantics(&robot, |elem| find_text_exact(elem, "commenter-1")).is_some();
+            let later_comment_visible =
+                find_in_semantics(&robot, |elem| find_text_exact(elem, "commenter-18")).is_some();
+
+            if first_comment_visible && !later_comment_visible {
+                println!("  ✗ FAIL: Comments pane did not scroll after first load");
+                if let Ok(elements) = robot.get_semantics() {
+                    print_semantics_with_bounds(&elements, 0);
+                }
+                robot.exit().ok();
+                std::process::exit(1);
+            }
+
+            println!("  ✓ Comments pane scrolls on the first load");
+            println!("  ✓ Comments pane bounds stay within the window");
             let _ = robot.exit();
         })
         .run({

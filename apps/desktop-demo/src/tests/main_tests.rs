@@ -205,6 +205,14 @@ fn async_runtime_tab_content_renders_static_states() {
 }
 
 #[test]
+fn lazy_list_tab_uses_internal_scroll_container() {
+    assert!(
+        !tab_requires_scroll(DemoTab::LazyList),
+        "Lazy List tab owns an internal lazy list and must not be wrapped in ScrollableTab"
+    );
+}
+
+#[test]
 fn markdown_tab_uses_internal_scroll_container() {
     assert!(
         !tab_requires_scroll(DemoTab::MarkdownViewer),

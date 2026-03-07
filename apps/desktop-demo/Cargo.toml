@@ -81,6 +81,7 @@ console_error_panic_hook = "0.1"
 cranpose-macros = { path = "../../crates/cranpose-macros" }
 cranpose-render-wgpu = { path = "../../crates/cranpose-render/wgpu" }
 cranpose-testing = { path = "../../crates/cranpose-testing" }
+pollster = "0.4.0"
 
 # Robot test runners
 [[example]]
@@ -193,6 +194,11 @@ required-features = ["robot-app"]
 [[example]]
 name = "robot_lazy_list"
 path = "robot-runners/robot_lazy_list.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazy_wheel_backtrack"
+path = "robot-runners/robot_lazy_wheel_backtrack.rs"
 required-features = ["robot-app"]
 
 [[example]]

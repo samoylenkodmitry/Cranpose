@@ -241,6 +241,40 @@ fn viewport_signature(robot: &cranpose::Robot, viewport_bounds: (f32, f32, f32, 
     }
 }
 
+fn extract_markdown_line_number(text: &str) -> Option<u32> {
+    let marker = text.find("Line ")?;
+    let digits = text[marker + 5..]
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+fn top_visible_markdown_line(
+    robot: &cranpose::Robot,
+    viewport_bounds: (f32, f32, f32, f32),
+) -> Option<u32> {
+    let Ok(semantics) = robot.get_semantics() else {
+        return None;
+    };
+
+    let mut samples = Vec::new();
+    for elem in &semantics {
+        collect_visible_text_samples(elem, viewport_bounds, &mut samples);
+    }
+    samples.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+
+    for (_, text) in samples {
+        if let Some(line) = extract_markdown_line_number(&text) {
+            return Some(line);
+        }
+    }
+    None
+}
+
 fn drag_down_until_stalled(
     robot: &cranpose::Robot,
     viewport_bounds: (f32, f32, f32, f32),
@@ -539,6 +573,52 @@ fn main() {
                 rail_bounds.2,
                 rail_bounds.3
             );
+
+            let viewport_center = (
+                viewport_bounds.0 + viewport_bounds.2 * 0.5,
+                viewport_bounds.1 + viewport_bounds.3 * 0.5,
+            );
+            robot
+                .mouse_move(viewport_center.0, viewport_center.1)
+                .unwrap_or_else(|err| fail_and_exit(&robot, &format!("mouse move failed: {err}")));
+
+            let mut down_history = Vec::new();
+            for step in 0..6 {
+                robot.mouse_scroll(0.0, -120.0).unwrap_or_else(|err| {
+                    fail_and_exit(&robot, &format!("forward wheel step {step} failed: {err}"))
+                });
+                std::thread::sleep(Duration::from_millis(120));
+                let _ = robot.wait_for_idle();
+                let top_line = top_visible_markdown_line(&robot, viewport_bounds).unwrap_or_else(|| {
+                    fail_and_exit(&robot, "failed to capture top visible markdown line after forward wheel");
+                });
+                down_history.push(top_line);
+                println!("wheel_down step={step} top_line={top_line}");
+            }
+
+            let mut previous_top_line = *down_history
+                .last()
+                .unwrap_or_else(|| fail_and_exit(&robot, "missing wheel down history"));
+            for step in 0..6 {
+                robot.mouse_scroll(0.0, 120.0).unwrap_or_else(|err| {
+                    fail_and_exit(&robot, &format!("reverse wheel step {step} failed: {err}"))
+                });
+                std::thread::sleep(Duration::from_millis(120));
+                let _ = robot.wait_for_idle();
+                let top_line = top_visible_markdown_line(&robot, viewport_bounds).unwrap_or_else(|| {
+                    fail_and_exit(&robot, "failed to capture top visible markdown line after reverse wheel");
+                });
+                println!("wheel_up step={step} top_line={top_line}");
+                if top_line > previous_top_line {
+                    fail_and_exit(
+                        &robot,
+                        &format!(
+                            "reverse wheel backtracked from top line {previous_top_line} to {top_line}"
+                        ),
+                    );
+                }
+                previous_top_line = top_line;
+            }
 
             let bottom_probe_y_after_scrollbar = force_absolute_bottom_with_scrollbar(
                 &robot,

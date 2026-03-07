@@ -147,6 +147,48 @@ fn measure_subcompose_node(
     *applier_guard = temp_applier;
 }
 
+fn capture_subcompose_child_constraints(
+    composition: &mut Composition<MemoryApplier>,
+    slots: &mut SlotBackend,
+    handle: &cranpose_core::RuntimeHandle,
+    root: NodeId,
+    constraints: Constraints,
+) -> Vec<Constraints> {
+    let mut applier_guard = composition.applier_mut();
+    let mut temp_applier = std::mem::take(&mut *applier_guard);
+    let (composer, slots_host, applier_host) =
+        prepare_measure_composer(slots, &mut temp_applier, handle, Some(root));
+    composer.enter_phase(Phase::Measure);
+    let node_handle = {
+        let mut applier_ref = applier_host.borrow_typed();
+        let node = applier_ref.get_mut(root).expect("node available");
+        let typed = node
+            .as_any_mut()
+            .downcast_mut::<SubcomposeLayoutNode>()
+            .expect("subcompose layout node");
+        typed.handle()
+    };
+    let captured = Rc::new(RefCell::new(Vec::new()));
+    let captured_handle = Rc::clone(&captured);
+    let error = Rc::new(RefCell::new(None));
+    let measurer = Box::new(move |_child_id: NodeId, child_constraints: Constraints| {
+        captured_handle.borrow_mut().push(child_constraints);
+        Size::default()
+    });
+    node_handle
+        .measure(&composer, root, constraints, measurer, Rc::clone(&error))
+        .expect("measure succeeds");
+    assert!(
+        error.borrow().is_none(),
+        "unexpected subcompose measure error"
+    );
+    drop(composer);
+    restore_measure_composer(slots, &mut temp_applier, slots_host, applier_host);
+    *applier_guard = temp_applier;
+    let captured_constraints = captured.borrow().clone();
+    captured_constraints
+}
+
 #[composable]
 fn CounterRow(label: &'static str, count: State<i32>) -> NodeId {
     COUNTER_ROW_INVOCATIONS.with(|calls| calls.set(calls.get() + 1));
@@ -354,6 +396,41 @@ fn box_with_constraints_reacts_to_constraint_changes() {
     }
 
     assert_eq!(invocations.get(), 2);
+}
+
+#[test]
+fn box_with_constraints_measures_children_with_finite_constraints() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let recorded = Rc::new(RefCell::new(Vec::new()));
+    composition
+        .render(location_key(file!(), line!(), column!()), || {
+            BoxWithConstraints(Modifier::empty(), move |_scope| {
+                Text("child", Modifier::empty(), TextStyle::default());
+            });
+        })
+        .expect("render succeeds");
+
+    let root = composition.root().expect("root node");
+    let handle = composition.runtime_handle();
+    let mut slots = SlotBackend::default();
+    let captured = capture_subcompose_child_constraints(
+        &mut composition,
+        &mut slots,
+        &handle,
+        root,
+        Constraints::tight(120.0, 80.0),
+    );
+    *recorded.borrow_mut() = captured;
+
+    assert_eq!(
+        recorded.borrow().as_slice(),
+        &[Constraints {
+            min_width: 0.0,
+            max_width: 120.0,
+            min_height: 0.0,
+            max_height: 80.0,
+        }]
+    );
 }
 
 #[test]
@@ -651,7 +728,7 @@ fn test_fill_max_width_with_background_and_double_padding() {
 }
 
 #[test]
-fn test_fill_max_width_should_not_propagate_to_wrapping_parent() {
+fn fill_max_width_tracks_bounded_parent_width() {
     // Testing the issue where a child with fill_max_width() causes
     // its parent (which should wrap content) to also fill parent
     let mut composition = Composition::new(MemoryApplier::new());
@@ -753,35 +830,27 @@ fn test_fill_max_width_should_not_propagate_to_wrapping_parent() {
     );
     println!("Row (fill_max_width): width={}", row_layout.rect.width);
 
-    // Expected behavior (now FIXED):
-    // - Inner Column wants to wrap content (no size modifier)
-    // - Inner Column queries Row's minimum intrinsic width = 200px
-    // - Inner Column constrains itself to 200px
-    // - Row with fill_max_width() fills that 200px container
-    // - Outer Column (also intrinsic) wraps around Inner Column -> 200px
-
     const EPSILON: f32 = 0.001;
 
-    // All elements should be 200px wide (wrapping to content)
     assert!(
-        (outer_layout.rect.width - 200.0).abs() < EPSILON,
-        "Outer Column should wrap to content (200px), got {}",
+        (outer_layout.rect.width - 800.0).abs() < EPSILON,
+        "Outer Column should respect the bounded parent width (800px), got {}",
         outer_layout.rect.width
     );
     assert!(
-        (inner_layout.rect.width - 200.0).abs() < EPSILON,
-        "Inner Column should wrap to content (200px), got {}",
+        (inner_layout.rect.width - 800.0).abs() < EPSILON,
+        "Inner Column should respect the bounded parent width (800px), got {}",
         inner_layout.rect.width
     );
     assert!(
-        (row_layout.rect.width - 200.0).abs() < EPSILON,
-        "Row should fill its 200px parent, got {}",
+        (row_layout.rect.width - 800.0).abs() < EPSILON,
+        "Row should fill the bounded parent width (800px), got {}",
         row_layout.rect.width
     );
 }
 
 #[test]
-fn wrap_column_with_fill_child_uses_content_width() {
+fn wrap_column_with_fill_child_uses_bounded_width() {
     const EPSILON: f32 = 1e-3;
 
     let mut composition = Composition::new(MemoryApplier::new());
@@ -885,13 +954,13 @@ fn wrap_column_with_fill_child_uses_content_width() {
     .expect("second chip layout");
 
     assert!(
-        (column_layout.rect.width - 140.0).abs() < EPSILON,
-        "Column width should wrap content (140px), got {:.3}",
+        (column_layout.rect.width - 640.0).abs() < EPSILON,
+        "Column width should match the bounded width (640px), got {:.3}",
         column_layout.rect.width
     );
     assert!(
-        (row_layout.rect.width - 120.0).abs() < EPSILON,
-        "Row width should match chip content (120px), got {:.3}",
+        (row_layout.rect.width - 620.0).abs() < EPSILON,
+        "Row width should fill the column's inner width (620px), got {:.3}",
         row_layout.rect.width
     );
     assert!(
