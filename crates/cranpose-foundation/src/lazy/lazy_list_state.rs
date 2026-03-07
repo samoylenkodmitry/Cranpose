@@ -221,11 +221,12 @@ pub struct LazyListState {
     inner: MutableState<Rc<RefCell<LazyListStateInner>>>,
 }
 
-// Implement PartialEq by comparing inner pointers for identity.
-// This allows LazyListState to be used as a composable function parameter.
+// Implement PartialEq by comparing the stable inner state handle identity.
+// This allows LazyListState to be used as a composable function parameter
+// without dereferencing released state cells during parameter updates.
 impl PartialEq for LazyListState {
     fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(self.inner_ptr(), other.inner_ptr())
+        self.inner == other.inner
     }
 }
 
@@ -982,6 +983,7 @@ pub mod test_helpers {
 mod tests {
     use super::test_helpers::{new_lazy_list_state, with_test_runtime};
     use super::{LazyListLayoutInfo, LazyListState};
+    use cranpose_core::{location_key, Composition, MemoryApplier};
     use std::cell::Cell;
     use std::rc::Rc;
 
@@ -1083,6 +1085,41 @@ mod tests {
             assert_eq!(consumed, 0.0);
             assert_eq!(state.peek_scroll_delta(), 0.0);
         });
+    }
+
+    #[test]
+    fn equality_does_not_deref_released_inner_state() {
+        let mut composition = Composition::new(MemoryApplier::new());
+        let key = location_key(file!(), line!(), column!());
+
+        let mut first = None;
+        composition
+            .render(key, || {
+                first = Some(super::remember_lazy_list_state());
+            })
+            .expect("initial render");
+        let first = first.expect("first lazy state");
+
+        composition
+            .render(key, || {})
+            .expect("dispose first lazy state");
+        assert!(
+            !first.inner.is_alive(),
+            "expected first lazy state to be released after disposal"
+        );
+
+        let mut second = None;
+        composition
+            .render(key, || {
+                second = Some(super::remember_lazy_list_state());
+            })
+            .expect("second render");
+        let second = second.expect("second lazy state");
+
+        assert!(
+            first != second,
+            "released lazy state handle must compare by identity without panicking"
+        );
     }
 
     #[test]

@@ -20,6 +20,7 @@ mod animations;
 mod hacker_news;
 mod images;
 pub mod lazy_list;
+mod lazy_scrollbar;
 mod markdown;
 mod mineswapper2;
 mod shaders;
@@ -225,6 +226,7 @@ fn TabBarHorizontal(active_tab: cranpose_core::MutableState<DemoTab>) {
         Modifier::empty()
             .fill_max_width()
             .padding(8.0)
+            .clip_to_bounds()
             .horizontal_scroll(tabs_scroll_state, false),
         RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
         move || {
@@ -239,7 +241,7 @@ fn TabBarHorizontal(active_tab: cranpose_core::MutableState<DemoTab>) {
 #[composable]
 fn TabContent(active_tab: cranpose_core::MutableState<DemoTab>, modifier: Modifier) {
     let active = active_tab.get();
-    cranpose_ui::Box(modifier, BoxSpec::default(), move || {
+    cranpose_ui::Box(modifier.clip_to_bounds(), BoxSpec::default(), move || {
         cranpose_core::with_key(&active, || {
             if tab_requires_scroll(active) {
                 ScrollableTab(move || render_active_tab(active));

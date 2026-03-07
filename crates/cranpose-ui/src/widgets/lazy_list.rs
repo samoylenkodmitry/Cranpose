@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 use crate::modifier::Modifier;
 use crate::subcompose_layout::{
-    Placement, SubcomposeLayoutNode, SubcomposeLayoutScope, SubcomposeMeasureScope,
+    MeasurePolicy, Placement, SubcomposeLayoutNode, SubcomposeLayoutScope, SubcomposeMeasureScope,
     SubcomposeMeasureScopeImpl,
 };
 use crate::widgets::nodes::cranpose_node;
@@ -188,9 +188,13 @@ fn measure_lazy_list_internal(
         // ensuring stale types don't drive incorrect reuse after transitions
         scope.update_content_type(slot_id, content_type);
 
-        let children = scope.subcompose(slot_id, || {
-            content.invoke_content(index);
-        });
+        let item_content = content
+            .with_interval(index, |local_index, interval| {
+                let content = Rc::clone(&interval.content);
+                move || (content)(local_index)
+            })
+            .expect("lazy list interval content must exist for measured item");
+        let children = scope.subcompose(slot_id, item_content);
 
         // Record composition statistics for diagnostics
         let was_reused = scope.was_last_slot_reused().unwrap_or(false);
@@ -339,28 +343,28 @@ fn measure_lazy_list_internal(
 
                 let prefetch_idx = idx;
                 let is_vertical = config.is_vertical;
-                let _ = scope.subcompose_with_size(
-                    slot_id,
-                    || {
-                        content.invoke_content(prefetch_idx);
-                    },
-                    move |_| {
-                        // Use correct axis based on orientation:
-                        // Vertical list: width = cross_axis, height = main_axis (estimated)
-                        // Horizontal list: width = main_axis (estimated), height = cross_axis
-                        if is_vertical {
-                            crate::modifier::Size {
-                                width: cross_axis_size,
-                                height: estimated_size + config.spacing,
-                            }
-                        } else {
-                            crate::modifier::Size {
-                                width: estimated_size + config.spacing,
-                                height: cross_axis_size,
-                            }
+                let item_content = content
+                    .with_interval(prefetch_idx, |local_index, interval| {
+                        let content = Rc::clone(&interval.content);
+                        move || (content)(local_index)
+                    })
+                    .expect("lazy list interval content must exist for prefetched item");
+                let _ = scope.subcompose_with_size(slot_id, item_content, move |_| {
+                    // Use correct axis based on orientation:
+                    // Vertical list: width = cross_axis, height = main_axis (estimated)
+                    // Horizontal list: width = main_axis (estimated), height = cross_axis
+                    if is_vertical {
+                        crate::modifier::Size {
+                            width: cross_axis_size,
+                            height: estimated_size + config.spacing,
                         }
-                    },
-                );
+                    } else {
+                        crate::modifier::Size {
+                            width: estimated_size + config.spacing,
+                            height: cross_axis_size,
+                        }
+                    }
+                });
             }
         }
     }
@@ -564,16 +568,17 @@ fn LazyColumnImpl(
     // Create measure policy with stable identity using remember.
     // The policy reads latest values via state references, so it can be memoized.
     let content_for_policy = content_cell.clone();
-    let policy = cranpose_core::remember(move || {
+    let policy: Rc<MeasurePolicy> = cranpose_core::remember(move || {
         let cfg = config_state;
         let content_ref = content_for_policy.clone();
-        Rc::new(
+        let policy: Rc<MeasurePolicy> = Rc::new(
             move |scope: &mut SubcomposeMeasureScopeImpl<'_>, constraints: Constraints| {
                 let content = content_ref.borrow();
                 let config = cfg.value();
                 measure_lazy_list_internal(scope, constraints, true, &content, &state, &config)
             },
-        )
+        );
+        policy
     })
     .with(|p| p.clone());
 
@@ -583,9 +588,17 @@ fn LazyColumnImpl(
         .lazy_vertical_scroll(state, spec.reverse_layout);
 
     // Create and register the subcompose layout node with the composer
-    let node_id = cranpose_node(move || {
-        SubcomposeLayoutNode::with_content_type_policy(scroll_modifier, policy)
+    let node_id = cranpose_node({
+        let scroll_modifier = scroll_modifier.clone();
+        let policy = Rc::clone(&policy);
+        move || SubcomposeLayoutNode::with_content_type_policy(scroll_modifier, policy)
     });
+    if let Err(err) = cranpose_core::with_node_mut(node_id, |node: &mut SubcomposeLayoutNode| {
+        node.set_modifier(scroll_modifier.clone());
+        node.set_measure_policy(Rc::clone(&policy));
+    }) {
+        debug_assert!(false, "failed to update LazyColumn node: {err}");
+    }
 
     // Register layout invalidation callback with the actual node ID.
     // This uses schedule_layout_repass (O(subtree)) instead of request_layout_invalidation (O(app)).
@@ -631,16 +644,17 @@ fn LazyRowImpl(
 
     // Create measure policy with stable identity using remember.
     let content_for_policy = content_cell.clone();
-    let policy = cranpose_core::remember(move || {
+    let policy: Rc<MeasurePolicy> = cranpose_core::remember(move || {
         let cfg = config_state;
         let content_ref = content_for_policy.clone();
-        Rc::new(
+        let policy: Rc<MeasurePolicy> = Rc::new(
             move |scope: &mut SubcomposeMeasureScopeImpl<'_>, constraints: Constraints| {
                 let content = content_ref.borrow();
                 let config = cfg.value();
                 measure_lazy_list_internal(scope, constraints, false, &content, &state, &config)
             },
-        )
+        );
+        policy
     })
     .with(|p| p.clone());
 
@@ -650,9 +664,17 @@ fn LazyRowImpl(
         .lazy_horizontal_scroll(state, spec.reverse_layout);
 
     // Create and register the subcompose layout node with the composer
-    let node_id = cranpose_node(move || {
-        SubcomposeLayoutNode::with_content_type_policy(scroll_modifier, policy)
+    let node_id = cranpose_node({
+        let scroll_modifier = scroll_modifier.clone();
+        let policy = Rc::clone(&policy);
+        move || SubcomposeLayoutNode::with_content_type_policy(scroll_modifier, policy)
     });
+    if let Err(err) = cranpose_core::with_node_mut(node_id, |node: &mut SubcomposeLayoutNode| {
+        node.set_modifier(scroll_modifier.clone());
+        node.set_measure_policy(Rc::clone(&policy));
+    }) {
+        debug_assert!(false, "failed to update LazyRow node: {err}");
+    }
 
     // Register layout invalidation callback with the actual node ID.
     // This uses schedule_layout_repass (O(subtree)) instead of request_layout_invalidation (O(app)).

@@ -362,7 +362,11 @@ impl LayoutNode {
         if !Rc::ptr_eq(&self.measure_policy, &policy) {
             self.measure_policy = policy;
             self.cache.clear();
-            self.mark_needs_measure();
+            if let Some(id) = self.id.get() {
+                cranpose_core::bubble_measure_dirty_in_composer(id);
+            } else {
+                self.mark_needs_measure();
+            }
         }
     }
 

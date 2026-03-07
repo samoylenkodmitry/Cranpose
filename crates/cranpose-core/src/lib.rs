@@ -1168,6 +1168,24 @@ pub fn bubble_layout_dirty_in_composer<N: Node + 'static>(node_id: NodeId) {
     bubble_layout_dirty_composer::<N>(node_id);
 }
 
+/// Unified API for bubbling measure dirty flags from a node to the root during composition.
+///
+/// This queues a dirty-bubble command on the active composer so measure invalidation
+/// runs during the apply phase, avoiding re-entrant applier borrows while widgets are
+/// mutating nodes via `with_node_mut`.
+pub fn bubble_measure_dirty_in_composer(node_id: NodeId) {
+    with_current_composer(|composer| {
+        composer.commands_mut().push(Command::BubbleDirty {
+            node_id,
+            bubble: DirtyBubble {
+                layout: false,
+                measure: true,
+                semantics: false,
+            },
+        });
+    });
+}
+
 /// Unified API for bubbling semantics dirty flags from a node to the root (Composer context).
 ///
 /// This mirrors [`bubble_layout_dirty_in_composer`] but routes through the semantics
@@ -2476,7 +2494,7 @@ impl Composer {
         slots: &Rc<SlotsHost>,
         root: Option<NodeId>,
         f: impl FnOnce(&Composer) -> R,
-    ) -> Result<R, NodeError> {
+    ) -> Result<(R, Vec<RecomposeScope>), NodeError> {
         let runtime_handle = self.runtime_handle();
         // Reset cursor to 0 but preserve slot data for reuse (like JC's setContentWithReuse)
         // This allows remembered values to be found and reused
@@ -2493,6 +2511,22 @@ impl Composer {
         core.phase.set(phase);
         *core.local_stack.borrow_mut() = locals;
         let composer = Composer::from_core(core);
+        composer.subcompose_stack().push(SubcomposeFrame::default());
+        struct StackGuard {
+            core: Rc<ComposerCore>,
+            leaked: bool,
+        }
+        impl Drop for StackGuard {
+            fn drop(&mut self) {
+                if !self.leaked {
+                    self.core.subcompose_stack.borrow_mut().pop();
+                }
+            }
+        }
+        let mut guard = StackGuard {
+            core: composer.clone_core(),
+            leaked: false,
+        };
         let (result, mut commands, side_effects) = composer.install(|composer| {
             let output = f(composer);
             // CRITICAL FIX: Pop the root parent frame to generate insert_child commands.
@@ -2505,6 +2539,12 @@ impl Composer {
             let side_effects = composer.take_side_effects();
             (output, commands, side_effects)
         });
+        let frame = {
+            let mut stack = guard.core.subcompose_stack.borrow_mut();
+            let frame = stack.pop().expect("subcompose stack underflow");
+            guard.leaked = true;
+            frame
+        };
 
         {
             let mut applier = self.borrow_applier();
@@ -2524,7 +2564,7 @@ impl Composer {
         // in place so they can be found via O(1) HashMap lookup on the next measurement
         // pass. Calling finalize_current_group would convert valid lazy list item
         // groups to gaps if the cursor didn't reach them.
-        Ok(result)
+        Ok((result, frame.scopes))
     }
 
     pub fn skip_current_group(&self) {

@@ -4,6 +4,30 @@ plugins {
     id("com.android.application")
 }
 
+val defaultReleaseAbis = listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+val releaseRustFast = providers.gradleProperty("rustFastRelease").orNull == "true"
+val releaseRustAbis = providers.gradleProperty("rustAbis")
+    .orNull
+    ?.split(',')
+    ?.map(String::trim)
+    ?.filter(String::isNotEmpty)
+    ?.takeIf { it.isNotEmpty() }
+    ?: if (releaseRustFast) {
+        listOf("arm64-v8a")
+    } else {
+        defaultReleaseAbis
+    }
+val releaseRustProfileFlag = providers.gradleProperty("rustCargoProfile")
+    .orNull
+    ?.takeIf { it.isNotBlank() }
+    ?.let { "--profile $it" }
+    ?: if (releaseRustFast) {
+        "--profile release-fast"
+    } else {
+        "--release"
+    }
+val releaseRustTargetArgs = releaseRustAbis.joinToString(" \\\n            ") { "-t $it" }
+
 android {
     namespace = "com.compose_rs.demo"
     compileSdk = 34
@@ -34,7 +58,7 @@ android {
 
             // Release builds include all supported ABIs
             ndk {
-                abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+                abiFilters += releaseRustAbis
             }
         }
     }
@@ -123,6 +147,17 @@ tasks.register<Exec>("buildRustRelease") {
     description = "Build Rust library for Android (release, all ABIs)"
     group = "rust"
 
+    inputs.files(fileTree("../../../../crates") {
+        include("**/*.rs")
+        include("**/Cargo.toml")
+    })
+    inputs.files(fileTree("../../../../apps/desktop-demo/src") {
+        include("**/*.rs")
+    })
+    inputs.file("../../../../Cargo.toml")
+    inputs.file("../../../../Cargo.lock")
+    outputs.upToDateWhen { false }
+
     // Check cargo-ndk availability
     doFirst {
         checkCargoNdk()
@@ -133,13 +168,10 @@ tasks.register<Exec>("buildRustRelease") {
     // Release builds: all supported ABIs
     commandLine("sh", "-c", """
         cargo ndk \
-            -t arm64-v8a \
-            -t armeabi-v7a \
-            -t x86 \
-            -t x86_64 \
+            $releaseRustTargetArgs \
             -o target/android \
             build \
-            --release \
+            $releaseRustProfileFlag \
             -p desktop-app \
             --lib \
             --features android,renderer-wgpu \

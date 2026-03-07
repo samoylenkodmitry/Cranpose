@@ -3,7 +3,7 @@
 #![allow(non_snake_case)]
 
 use super::nodes::LayoutNode;
-use super::scopes::{BoxWithConstraintsScope, BoxWithConstraintsScopeImpl};
+use super::scopes::BoxWithConstraintsScopeImpl;
 use crate::composable;
 use crate::modifier::Modifier;
 use crate::subcompose_layout::{
@@ -72,22 +72,27 @@ where
                 content(scope_for_content);
             })
         };
-        let width_dp = if scope_impl.max_width().0.is_finite() {
-            scope_impl.max_width()
-        } else {
-            scope_impl.min_width()
+        let child_constraints = Constraints {
+            min_width: 0.0,
+            max_width: constraints.max_width,
+            min_height: 0.0,
+            max_height: constraints.max_height,
         };
-        let height_dp = if scope_impl.max_height().0.is_finite() {
-            scope_impl.max_height()
-        } else {
-            scope_impl.min_height()
-        };
-        let width = scope_impl.to_px(width_dp);
-        let height = scope_impl.to_px(height_dp);
-        let placements: Vec<Placement> = measurables
-            .into_iter()
-            .map(|measurable| Placement::new(measurable.node_id(), 0.0, 0.0, 0))
-            .collect();
+
+        let mut width = 0.0_f32;
+        let mut height = 0.0_f32;
+        let mut placements = Vec::with_capacity(measurables.len());
+
+        for measurable in measurables {
+            let placeable = scope.measure(measurable, child_constraints);
+            width = width.max(placeable.width());
+            height = height.max(placeable.height());
+            placeable.place(0.0, 0.0);
+            placements.push(Placement::new(placeable.node_id(), 0.0, 0.0, 0));
+        }
+
+        width = width.clamp(constraints.min_width, constraints.max_width);
+        height = height.clamp(constraints.min_height, constraints.max_height);
         scope.layout(width, height, placements)
     })
 }

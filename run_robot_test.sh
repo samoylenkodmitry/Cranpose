@@ -3,19 +3,44 @@
 # Robot test runner with parallel execution support
 # Runs all robot tests in headless mode for parallel execution
 # Usage: ./run_robot_test.sh [--parallel N] [--sequential]
+#        ./run_robot_test.sh [--example robot_name]
 # 
 # Options:
 #   --parallel N    Run N tests in parallel (default: number of CPU cores)
 #   --sequential    Run tests one at a time (legacy mode)
+#   --example NAME  Run only the named robot example (repeatable)
 #   --help          Show this help message
 
 LOG_FILE="robot_test.log"
 SUMMARY_FILE="robot_test_summary.txt"
 ROBOT_DIR="apps/desktop-demo/robot-runners"
+ROBOT_PROFILE="${CRANPOSE_ROBOT_PROFILE:-robot}"
 
 # Default to parallel execution with number of CPU cores / 2 (GPU-bound work)
 PARALLEL_JOBS=$(( $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4) / 2 ))
 [ "$PARALLEL_JOBS" -lt 1 ] && PARALLEL_JOBS=1
+SELECTED_EXAMPLES=()
+
+profile_output_dir() {
+    case "$1" in
+        dev)
+            echo "debug"
+            ;;
+        release)
+            echo "release"
+            ;;
+        *)
+            echo "$1"
+            ;;
+    esac
+}
+
+PROFILE_DIR=$(profile_output_dir "$ROBOT_PROFILE")
+if [ -n "${CARGO_BUILD_TARGET:-}" ]; then
+    EXAMPLE_BIN_DIR="target/$CARGO_BUILD_TARGET/$PROFILE_DIR/examples"
+else
+    EXAMPLE_BIN_DIR="target/$PROFILE_DIR/examples"
+fi
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -28,12 +53,17 @@ while [[ $# -gt 0 ]]; do
             PARALLEL_JOBS=1
             shift
             ;;
+        --example)
+            SELECTED_EXAMPLES+=("$2")
+            shift 2
+            ;;
         --help)
-            echo "Usage: $0 [--parallel N] [--sequential]"
+            echo "Usage: $0 [--parallel N] [--sequential] [--example robot_name]"
             echo ""
             echo "Options:"
             echo "  --parallel N    Run N tests in parallel (default: $(nproc 2>/dev/null || echo 4)/2)"
             echo "  --sequential    Run tests one at a time (legacy mode)"
+            echo "  --example NAME  Run only the named robot example (repeatable)"
             echo "  --help          Show this help message"
             exit 0
             ;;
@@ -48,14 +78,6 @@ done
 rm -f "$LOG_FILE" "$SUMMARY_FILE"
 
 echo "Cleaning up..."
-echo "Building desktop-app examples..."
-cargo build --package desktop-app --features robot-app --examples 2>&1 | tee -a "$LOG_FILE"
-
-if [ ${PIPESTATUS[0]} -ne 0 ]; then
-    echo "Build failed!" | tee -a "$LOG_FILE"
-    exit 1
-fi
-
 # Dynamically discover all robot tests from the robot-runners directory
 # Exclude utility modules (files that don't have a main function)
 EXAMPLES=()
@@ -73,6 +95,40 @@ done
 
 if [ ${#EXAMPLES[@]} -eq 0 ]; then
     echo "No robot tests found in $ROBOT_DIR" | tee -a "$LOG_FILE"
+    exit 1
+fi
+
+if [ ${#SELECTED_EXAMPLES[@]} -gt 0 ]; then
+    FILTERED_EXAMPLES=()
+    for requested in "${SELECTED_EXAMPLES[@]}"; do
+        found=false
+        for example in "${EXAMPLES[@]}"; do
+            if [ "$example" = "$requested" ]; then
+                FILTERED_EXAMPLES+=("$example")
+                found=true
+                break
+            fi
+        done
+        if [ "$found" = false ]; then
+            echo "Unknown robot example: $requested" | tee -a "$LOG_FILE"
+            exit 1
+        fi
+    done
+    EXAMPLES=("${FILTERED_EXAMPLES[@]}")
+fi
+
+BUILD_ARGS=(--profile "$ROBOT_PROFILE" --package desktop-app --features robot-app)
+if [ ${#EXAMPLES[@]} -eq 1 ]; then
+    BUILD_ARGS+=(--example "${EXAMPLES[0]}")
+else
+    BUILD_ARGS+=(--examples)
+fi
+
+echo "Building desktop-app examples with profile '$ROBOT_PROFILE'..."
+cargo build "${BUILD_ARGS[@]}" 2>&1 | tee -a "$LOG_FILE"
+
+if [ ${PIPESTATUS[0]} -ne 0 ]; then
+    echo "Build failed!" | tee -a "$LOG_FILE"
     exit 1
 fi
 
@@ -101,6 +157,20 @@ run_test() {
     local example="$1"
     local result_file="$RESULTS_DIR/$example.result"
     local output_file="$RESULTS_DIR/$example.output"
+    local example_bin="$EXAMPLE_BIN_DIR/$example"
+
+    if [ ! -x "$example_bin" ] && [ -x "${example_bin}.exe" ]; then
+        example_bin="${example_bin}.exe"
+    fi
+
+    if [ ! -x "$example_bin" ]; then
+        echo "FAIL:missing_binary" > "$result_file"
+        {
+            echo "Expected robot binary not found:"
+            echo "  $example_bin"
+        } > "$output_file"
+        return
+    fi
     
     # Run with timeout, capture exit code and output
     local timeout_secs=60
@@ -156,10 +226,10 @@ run_test() {
     esac
 
     if command -v timeout >/dev/null 2>&1; then
-        CRANPOSE_HEADLESS=1 timeout "${timeout_secs}s" cargo run --package desktop-app --example "$example" --features robot-app > "$output_file" 2>&1
+        CRANPOSE_HEADLESS=1 timeout "${timeout_secs}s" "$example_bin" > "$output_file" 2>&1
         local exit_code=$?
     else
-        CRANPOSE_HEADLESS=1 cargo run --package desktop-app --example "$example" --features robot-app > "$output_file" 2>&1
+        CRANPOSE_HEADLESS=1 "$example_bin" > "$output_file" 2>&1
         local exit_code=$?
     fi
 

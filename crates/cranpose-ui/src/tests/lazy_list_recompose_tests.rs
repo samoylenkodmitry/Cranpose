@@ -75,3 +75,57 @@ fn lazy_list_item_recomposes_on_state_change() {
         "expected updated text to recompose inside lazy list item"
     );
 }
+
+#[composable]
+#[allow(non_snake_case)]
+fn ThemedLazyList(theme_state: MutableState<bool>) {
+    let list_state = remember_lazy_list_state();
+    let label = if theme_state.value() {
+        "Use Light".to_string()
+    } else {
+        "Use Dark".to_string()
+    };
+    LazyColumn(
+        Modifier::empty(),
+        list_state,
+        LazyColumnSpec::default(),
+        |scope| {
+            let label = label.clone();
+            scope.item(Some(0), None, move || {
+                Text(label.clone(), Modifier::empty(), TextStyle::default());
+            });
+        },
+    );
+}
+
+#[test]
+fn lazy_list_item_recomposes_when_composable_parent_capture_changes() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let theme_state = MutableState::with_runtime(false, runtime.clone());
+
+    let key = location_key(file!(), line!(), column!());
+    composition
+        .render(key, || {
+            ThemedLazyList(theme_state);
+        })
+        .expect("initial render");
+
+    let root = composition.root().expect("lazy list root");
+    let texts = render_texts(&mut composition, root);
+    assert!(
+        texts.iter().any(|text| text == "Use Dark"),
+        "expected initial parent-captured text to be rendered in lazy list item"
+    );
+
+    theme_state.set(true);
+    composition
+        .process_invalid_scopes()
+        .expect("recompose lazy list composable parent capture");
+
+    let texts = render_texts(&mut composition, root);
+    assert!(
+        texts.iter().any(|text| text == "Use Light"),
+        "expected lazy list item to refresh when composable parent-captured state changes"
+    );
+}

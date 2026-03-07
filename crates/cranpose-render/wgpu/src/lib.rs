@@ -304,6 +304,69 @@ fn select_text_shaping(
     }
 }
 
+fn hash_f32_bits<H: Hasher>(value: f32, state: &mut H) {
+    value.to_bits().hash(state);
+}
+
+fn hash_color<H: Hasher>(color: cranpose_ui_graphics::Color, state: &mut H) {
+    hash_f32_bits(color.r(), state);
+    hash_f32_bits(color.g(), state);
+    hash_f32_bits(color.b(), state);
+    hash_f32_bits(color.a(), state);
+}
+
+fn glyph_foreground_color(
+    span_style: &cranpose_ui::text::SpanStyle,
+) -> Option<cranpose_ui_graphics::Color> {
+    let has_solid_foreground = span_style.color.is_some()
+        || matches!(
+            span_style.brush.as_ref(),
+            Some(cranpose_ui::Brush::Solid(_))
+        );
+    has_solid_foreground
+        .then(|| span_style.resolve_foreground_color(cranpose_ui_graphics::Color::WHITE))
+}
+
+fn hash_optional_glyph_foreground_color<H: Hasher>(
+    span_style: &cranpose_ui::text::SpanStyle,
+    state: &mut H,
+) {
+    match glyph_foreground_color(span_style) {
+        Some(color) => {
+            1u8.hash(state);
+            hash_color(color, state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
+fn text_span_buffer_hash(text: &cranpose_ui::text::AnnotatedString) -> u64 {
+    let mut hasher = FxHasher::default();
+    text.span_styles.len().hash(&mut hasher);
+    for span in &text.span_styles {
+        span.range.start.hash(&mut hasher);
+        span.range.end.hash(&mut hasher);
+        let span_style = cranpose_ui::text::TextStyle {
+            span_style: span.item.clone(),
+            ..Default::default()
+        };
+        span_style.measurement_hash().hash(&mut hasher);
+        hash_optional_glyph_foreground_color(&span.item, &mut hasher);
+    }
+    hasher.finish()
+}
+
+fn text_buffer_style_hash(
+    style: &cranpose_ui::text::TextStyle,
+    text: &cranpose_ui::text::AnnotatedString,
+) -> u64 {
+    let mut hasher = FxHasher::default();
+    style.measurement_hash().hash(&mut hasher);
+    hash_optional_glyph_foreground_color(&style.span_style, &mut hasher);
+    text_span_buffer_hash(text).hash(&mut hasher);
+    hasher.finish()
+}
+
 impl SharedTextBuffer {
     /// Ensure the buffer has the correct text and font_size, only reshaping if needed
     pub(crate) fn ensure(
@@ -1272,7 +1335,7 @@ fn attrs_from_text_style(
     let line_height_px = unscaled_line_height * scale;
     attrs = attrs.metrics(glyphon::Metrics::new(font_size_px, line_height_px));
 
-    if let Some(color) = &span_style.color {
+    if let Some(color) = glyph_foreground_color(span_style) {
         let r = (color.0 * 255.0).clamp(0.0, 255.0) as u8;
         let g = (color.1 * 255.0).clamp(0.0, 255.0) as u8;
         let b = (color.2 * 255.0).clamp(0.0, 255.0) as u8;
@@ -1363,16 +1426,17 @@ impl WgpuTextMeasurer {
         let text_str = text.text.as_str();
         let font_size = resolve_font_size(style);
         let line_height = resolve_effective_line_height(style, text, font_size);
-        let style_hash = style.measurement_hash()
+        let size_style_hash = style.measurement_hash()
             ^ text.span_styles_hash()
             ^ (max_width.to_bits() as u64).rotate_left(17)
             ^ 0x9f4c_3314_2d5b_79e1;
+        let buffer_style_hash = text_buffer_style_hash(style, text);
         let size_int = (font_size * 100.0) as i32;
 
         let mut hasher = FxHasher::default();
         text_str.hash(&mut hasher);
         let text_hash = hasher.finish();
-        let cache_key = (text_hash, size_int, style_hash);
+        let cache_key = (text_hash, size_int, size_style_hash);
 
         {
             let mut cache = self.size_cache.lock().unwrap();
@@ -1393,7 +1457,8 @@ impl WgpuTextMeasurer {
             }
         }
 
-        let text_buffer_key = Self::text_buffer_key(node_id, text_str, font_size, style_hash);
+        let text_buffer_key =
+            Self::text_buffer_key(node_id, text_str, font_size, buffer_style_hash);
         let mut text_state = self.text_state.lock().unwrap();
         let (font_system, font_family_resolver, text_cache) = text_state.parts_mut();
 
@@ -1413,7 +1478,7 @@ impl WgpuTextMeasurer {
                     annotated_text: text,
                     font_size_px: font_size,
                     line_height_px: line_height,
-                    style_hash,
+                    style_hash: buffer_style_hash,
                     style,
                     scale: 1.0,
                 },
@@ -1463,7 +1528,7 @@ impl WgpuTextMeasurer {
         let text_str = text.text.as_str();
         let font_size = resolve_font_size(style);
         let line_height = resolve_effective_line_height(style, text, font_size);
-        let style_hash = style.measurement_hash() ^ text.span_styles_hash();
+        let style_hash = text_buffer_style_hash(style, text);
 
         let text_buffer_key = Self::text_buffer_key(node_id, text_str, font_size, style_hash);
         let mut text_state = self.text_state.lock().unwrap();
@@ -1641,7 +1706,8 @@ impl TextMeasurer for WgpuTextMeasurer {
         let text_str = text.text.as_str();
         let font_size = resolve_font_size(style);
         let line_height = resolve_effective_line_height(style, text, font_size);
-        let style_hash = style.measurement_hash() ^ text.span_styles_hash();
+        let size_style_hash = style.measurement_hash() ^ text.span_styles_hash();
+        let buffer_style_hash = text_buffer_style_hash(style, text);
         let size_int = (font_size * 100.0) as i32;
 
         // Calculate hash to avoid allocating String for lookup
@@ -1649,7 +1715,7 @@ impl TextMeasurer for WgpuTextMeasurer {
         let mut hasher = FxHasher::default();
         text_str.hash(&mut hasher);
         let text_hash = hasher.finish();
-        let cache_key = (text_hash, size_int, style_hash);
+        let cache_key = (text_hash, size_int, size_style_hash);
 
         // Check size cache first (fastest path)
         {
@@ -1676,7 +1742,8 @@ impl TextMeasurer for WgpuTextMeasurer {
         }
 
         // Get or create text buffer
-        let text_buffer_key = Self::text_buffer_key(node_id, text_str, font_size, style_hash);
+        let text_buffer_key =
+            Self::text_buffer_key(node_id, text_str, font_size, buffer_style_hash);
         let mut text_state = self.text_state.lock().unwrap();
         let (font_system, font_family_resolver, text_cache) = text_state.parts_mut();
 
@@ -1710,7 +1777,7 @@ impl TextMeasurer for WgpuTextMeasurer {
                     annotated_text: text,
                     font_size_px: font_size,
                     line_height_px: line_height,
-                    style_hash,
+                    style_hash: buffer_style_hash,
                     style,
                     scale: 1.0,
                 },
@@ -1813,7 +1880,7 @@ impl TextMeasurer for WgpuTextMeasurer {
         let normalized_max_width = max_width.filter(|w| w.is_finite() && *w > 0.0);
         let text_str = text.text.as_str();
         let font_size = resolve_font_size(style);
-        let style_hash = style.measurement_hash() ^ text.span_styles_hash();
+        let style_hash = text_buffer_style_hash(style, text);
         let size_int = (font_size * 100.0) as i32;
 
         let mut hasher = FxHasher::default();
@@ -1892,7 +1959,7 @@ impl TextMeasurer for WgpuTextMeasurer {
         let text_str = text.text.as_str();
         let font_size = resolve_font_size(style);
         let line_height = resolve_effective_line_height(style, text, font_size);
-        let style_hash = style.measurement_hash() ^ text.span_styles_hash();
+        let style_hash = text_buffer_style_hash(style, text);
         if text_str.is_empty() {
             return 0;
         }
@@ -2069,7 +2136,7 @@ impl TextMeasurer for WgpuTextMeasurer {
 
         let font_size = resolve_font_size(style);
         let line_height = resolve_effective_line_height(style, text, font_size);
-        let style_hash = style.measurement_hash() ^ text.span_styles_hash();
+        let style_hash = text_buffer_style_hash(style, text);
 
         let cache_key = TextCacheKey::new(text_str, font_size, style_hash);
         let mut text_state = self.text_state.lock().unwrap();
@@ -2224,6 +2291,8 @@ impl TextMeasurer for WgpuTextMeasurer {
 mod tests {
     use super::*;
 
+    const WORKER_TEST_TIMEOUT_SECS: u64 = 5;
+
     fn seeded_font_system_and_resolver() -> (FontSystem, WgpuFontFamilyResolver) {
         let mut db = glyphon::fontdb::Database::new();
         db.load_font_data(TEST_FONT.to_vec());
@@ -2334,6 +2403,72 @@ mod tests {
     }
 
     #[test]
+    fn attrs_from_text_style_applies_alpha_to_foreground_color() {
+        let (mut font_system, mut resolver) = seeded_font_system_and_resolver();
+        let style = cranpose_ui::text::TextStyle::from_span_style(cranpose_ui::text::SpanStyle {
+            color: Some(cranpose_ui::Color(0.2, 0.4, 0.6, 1.0)),
+            alpha: Some(0.25),
+            ..Default::default()
+        });
+
+        let attrs = attrs_from_text_style(&style, 14.0, 1.0, &mut font_system, &mut resolver);
+
+        assert_eq!(
+            attrs.color_opt,
+            Some(glyphon::Color::rgba(51, 102, 153, 63)),
+            "glyph attrs must track alpha-adjusted foreground color"
+        );
+    }
+
+    #[test]
+    fn text_buffer_style_hash_changes_when_top_level_color_changes() {
+        let text = cranpose_ui::text::AnnotatedString::from("theme");
+        let dark = cranpose_ui::text::TextStyle::from_span_style(cranpose_ui::text::SpanStyle {
+            color: Some(cranpose_ui::Color::BLACK),
+            ..Default::default()
+        });
+        let light = cranpose_ui::text::TextStyle::from_span_style(cranpose_ui::text::SpanStyle {
+            color: Some(cranpose_ui::Color::WHITE),
+            ..Default::default()
+        });
+
+        assert_ne!(
+            text_buffer_style_hash(&dark, &text),
+            text_buffer_style_hash(&light, &text),
+            "color-only theme flips must invalidate glyph buffer caches"
+        );
+    }
+
+    #[test]
+    fn text_buffer_style_hash_changes_when_span_alpha_changes() {
+        let mut opaque = cranpose_ui::text::AnnotatedString::from("theme");
+        opaque.span_styles.push(cranpose_ui::text::RangeStyle {
+            item: cranpose_ui::text::SpanStyle {
+                color: Some(cranpose_ui::Color::BLACK),
+                alpha: Some(1.0),
+                ..Default::default()
+            },
+            range: 0..5,
+        });
+
+        let mut translucent = cranpose_ui::text::AnnotatedString::from("theme");
+        translucent.span_styles.push(cranpose_ui::text::RangeStyle {
+            item: cranpose_ui::text::SpanStyle {
+                color: Some(cranpose_ui::Color::BLACK),
+                alpha: Some(0.2),
+                ..Default::default()
+            },
+            range: 0..5,
+        });
+
+        assert_ne!(
+            text_buffer_style_hash(&cranpose_ui::text::TextStyle::default(), &opaque),
+            text_buffer_style_hash(&cranpose_ui::text::TextStyle::default(), &translucent),
+            "span alpha changes must invalidate glyph buffer caches"
+        );
+    }
+
+    #[test]
     fn select_text_shaping_uses_basic_for_simple_text_when_requested() {
         let style =
             cranpose_ui::text::TextStyle::from_paragraph_style(cranpose_ui::text::ParagraphStyle {
@@ -2395,7 +2530,7 @@ mod tests {
             measured_height,
             measured_lines,
         ) = rx
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(Duration::from_secs(WORKER_TEST_TIMEOUT_SECS))
             .expect("layout timed out; possible recursive mutex acquisition");
 
         assert!((layout_width - measured_width).abs() < 0.5);
@@ -2426,7 +2561,7 @@ mod tests {
         });
 
         let (width, line_count) = rx
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(Duration::from_secs(WORKER_TEST_TIMEOUT_SECS))
             .expect("measure_with_options timed out");
         assert!(width <= 120.5, "wrapped width should honor max width");
         assert!(line_count > 1, "wrapped text should produce multiple lines");
@@ -2469,7 +2604,7 @@ mod tests {
         });
 
         let (same_layout, wrapped_text, first_cache_len, second_cache_len) = rx
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(Duration::from_secs(WORKER_TEST_TIMEOUT_SECS))
             .expect("prepare_with_options timed out");
         assert!(same_layout, "cached prepared layout should be identical");
         assert!(
@@ -2495,7 +2630,7 @@ mod tests {
             let _ = TextMeasurer::measure_for_node(&measurer, Some(node_id), &text, &style);
 
             let font_size = resolve_font_size(&style);
-            let style_hash = style.measurement_hash() ^ text.span_styles_hash();
+            let style_hash = text_buffer_style_hash(&style, &text);
             let expected_key = TextCacheKey::for_node(node_id, font_size, style_hash);
             let text_state = measurer.text_state.lock().expect("text state lock");
             let cache = &text_state.text_cache;
@@ -2511,7 +2646,7 @@ mod tests {
         });
 
         let (cache_len, has_node_key, has_content_key) = rx
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(Duration::from_secs(WORKER_TEST_TIMEOUT_SECS))
             .expect("measure_for_node timed out");
         assert_eq!(cache_len, 1);
         assert!(
@@ -2542,7 +2677,7 @@ mod tests {
         });
 
         let render_text_cache_len = rx
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(Duration::from_secs(WORKER_TEST_TIMEOUT_SECS))
             .expect("renderer measurement isolation timed out");
         assert_eq!(
             render_text_cache_len, 0,

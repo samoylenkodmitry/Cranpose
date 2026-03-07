@@ -107,12 +107,12 @@ fn FirstVisibleIndexDisplay(list_state: cranpose_foundation::lazy::LazyListState
 #[composable]
 fn LifecycleListItem(index: usize, stats: MutableState<LifecycleStats>) {
     println!("Cranpose item id={index}");
-    cranpose_core::SideEffect(move || {
-        stats.update(|current| current.total_composes += 1);
-    });
 
     DisposableEffect!(index, move |_key| {
-        stats.update(|current| current.total_effects += 1);
+        stats.update(|current| {
+            current.total_composes += 1;
+            current.total_effects += 1;
+        });
         DisposableEffectResult::new(move || {
             println!("Dispose item id={index}");
             stats.update(|current| current.total_disposes += 1);
