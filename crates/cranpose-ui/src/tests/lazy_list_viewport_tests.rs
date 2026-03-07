@@ -1,9 +1,12 @@
 use super::*;
 use cranpose_core::NodeId;
-use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
+use cranpose_foundation::lazy::{
+    remember_lazy_list_state, remember_lazy_list_state_with_position, LazyListScope,
+};
 use cranpose_ui_graphics::Rect;
 use cranpose_ui_graphics::Size as ViewportSize;
 use std::cell::RefCell;
+use std::rc::Rc;
 
 thread_local! {
     static LAST_LAZY_STATE: RefCell<Option<LazyListState>> = const { RefCell::new(None) };
@@ -112,6 +115,38 @@ fn collect_visible_item_texts(
     }
     items.sort_by(|left, right| left.1.partial_cmp(&right.1).expect("finite y"));
     items
+}
+
+fn find_nearest_draw_ancestor_for_text<'a>(
+    node: &'a crate::LayoutBox,
+    text: &str,
+) -> Option<&'a crate::LayoutBox> {
+    fn visit<'a>(
+        node: &'a crate::LayoutBox,
+        text: &str,
+        draw_ancestors: &mut Vec<&'a crate::LayoutBox>,
+    ) -> Option<&'a crate::LayoutBox> {
+        let has_draw_content = !node.node_data.modifier_slices().draw_commands().is_empty();
+        if has_draw_content {
+            draw_ancestors.push(node);
+        }
+
+        let result = if node.node_data.modifier_slices().text_content() == Some(text) {
+            draw_ancestors.last().copied()
+        } else {
+            node.children
+                .iter()
+                .find_map(|child| visit(child, text, draw_ancestors))
+        };
+
+        if has_draw_content {
+            draw_ancestors.pop();
+        }
+
+        result
+    }
+
+    visit(node, text, &mut Vec::new())
 }
 
 #[test]
@@ -440,6 +475,116 @@ fn lazy_column_variable_height_bursty_reverse_scroll_keeps_rendered_items_ordere
 
         last_top_item = Some(visible[0].0);
     }
+
+    LAST_LAZY_STATE.with(|cell| {
+        *cell.borrow_mut() = None;
+    });
+}
+
+#[test]
+fn lazy_column_tall_text_item_keeps_rendered_height_in_sync_with_lazy_measurement() {
+    let tall_body = Rc::new(
+        "This comment body is intentionally long so the first lazy item becomes taller than the viewport once it wraps to the available width. "
+            .repeat(20),
+    );
+
+    let mut composition = run_test_composition({
+        let tall_body = Rc::clone(&tall_body);
+        move || {
+            let list_state = remember_lazy_list_state_with_position(0, 180.0);
+            LAST_LAZY_STATE.with(|cell| {
+                *cell.borrow_mut() = Some(list_state);
+            });
+
+            LazyColumn(
+                Modifier::empty(),
+                list_state,
+                LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(12.0)),
+                {
+                    let tall_body = Rc::clone(&tall_body);
+                    move |scope| {
+                        scope.item(Some(0), None, {
+                            let tall_body = Rc::clone(&tall_body);
+                            move || {
+                                Column(
+                                    Modifier::empty()
+                                        .fill_max_width()
+                                        .background(Color(0.18, 0.24, 0.32, 1.0))
+                                        .padding(12.0),
+                                    ColumnSpec::new()
+                                        .vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
+                                    {
+                                        let tall_body = Rc::clone(&tall_body);
+                                        move || {
+                                            Text(
+                                                "Tall item".to_string(),
+                                                Modifier::empty(),
+                                                TextStyle::default(),
+                                            );
+                                            Text(
+                                                (*tall_body).clone(),
+                                                Modifier::empty(),
+                                                TextStyle::default(),
+                                            );
+                                        }
+                                    },
+                                );
+                            }
+                        });
+
+                        scope.item(Some(1), None, move || {
+                            Column(
+                                Modifier::empty()
+                                    .fill_max_width()
+                                    .background(Color(0.26, 0.32, 0.18, 1.0))
+                                    .padding(12.0),
+                                ColumnSpec::default(),
+                                move || {
+                                    Text(
+                                        "Next item".to_string(),
+                                        Modifier::empty(),
+                                        TextStyle::default(),
+                                    );
+                                },
+                            );
+                        });
+                    }
+                },
+            );
+        }
+    });
+
+    let root = composition.root().expect("lazy column root");
+    let viewport_size = ViewportSize {
+        width: 240.0,
+        height: 260.0,
+    };
+    let layout = measure_tree(&mut composition, root, viewport_size);
+    let list_state = LAST_LAZY_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
+    let layout_info = list_state.layout_info();
+    let measured_first = layout_info
+        .visible_items_info
+        .iter()
+        .find(|item| item.index == 0)
+        .expect("first item should remain visible after initial scroll offset");
+
+    let first_box = find_nearest_draw_ancestor_for_text(layout.root(), "Tall item")
+        .expect("tall item box should be present");
+    let second_box = find_nearest_draw_ancestor_for_text(layout.root(), "Next item")
+        .expect("second item box should be present");
+    let rendered_gap = second_box.rect.y - (first_box.rect.y + first_box.rect.height);
+
+    assert!(
+        (first_box.rect.height - measured_first.size).abs() < 1.0,
+        "lazy list measured the first item at {:.1}px but rendered it at {:.1}px",
+        measured_first.size,
+        first_box.rect.height
+    );
+    assert!(
+        (rendered_gap - 12.0).abs() < 1.0,
+        "expected only list spacing between first and second items, got gap {:.1}px",
+        rendered_gap
+    );
 
     LAST_LAZY_STATE.with(|cell| {
         *cell.borrow_mut() = None;

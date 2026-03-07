@@ -924,6 +924,8 @@ impl LayoutBuilderState {
         let error_for_measurer = Rc::clone(&measure_error);
         let state_rc_for_subcompose = Rc::clone(&state_rc_clone);
         let error_for_subcompose = Rc::clone(&error_for_measurer);
+        let measured_children = Rc::new(RefCell::new(HashMap::default()));
+        let measured_children_for_subcompose = Rc::clone(&measured_children);
 
         let measure_result = node_handle.measure(
             &composer,
@@ -936,7 +938,12 @@ impl LayoutBuilderState {
                         child_id,
                         child_constraints,
                     ) {
-                        Ok(measured) => measured.size,
+                        Ok(measured) => {
+                            measured_children_for_subcompose
+                                .borrow_mut()
+                                .insert(child_id, Rc::clone(&measured));
+                            measured.size
+                        }
                         Err(err) => {
                             let mut slot = error_for_subcompose.borrow_mut();
                             if slot.is_none() {
@@ -980,6 +987,7 @@ impl LayoutBuilderState {
         );
 
         let mut children = Vec::with_capacity(measure_result.placements.len());
+        let mut measured_children_by_id = measured_children.borrow_mut();
 
         // Update the SubcomposeLayoutNode's size (position will be set by parent's placement)
         if let Ok(mut applier) = applier_host.try_borrow_typed() {
@@ -989,8 +997,17 @@ impl LayoutBuilderState {
         }
 
         for placement in measure_result.placements {
-            let child =
-                Self::measure_node(Rc::clone(&state_rc), placement.node_id, inner_constraints)?;
+            let child = if let Some(measured) = measured_children_by_id.remove(&placement.node_id)
+            {
+                measured
+            } else {
+                // Policies may place subcomposed children without calling `measure()` first
+                // (for example, when they only need a slot's rendered content). Keep the
+                // existing fallback for that case, but preserve the policy-time measurement
+                // whenever it exists so we don't silently remeasure lazy items with the
+                // container's tighter constraints.
+                Self::measure_node(Rc::clone(&state_rc), placement.node_id, inner_constraints)?
+            };
             let position = Point {
                 x: padding.left + placement.x,
                 y: padding.top + placement.y,
