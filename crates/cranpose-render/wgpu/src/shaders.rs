@@ -530,3 +530,61 @@ fn blit_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 "#
     )
 }
+
+pub fn projective_blit_shader() -> String {
+    r#"
+struct VertexInput {
+    @location(0) position: vec2<f32>,
+}
+
+struct VertexOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) world_pos: vec2<f32>,
+}
+
+struct ProjectiveBlitUniforms {
+    viewport: vec2<f32>,
+    source_size: vec2<f32>,
+    inverse_row0: vec4<f32>,
+    inverse_row1: vec4<f32>,
+    inverse_row2: vec4<f32>,
+    alpha: vec4<f32>,
+}
+
+@group(0) @binding(0) var input_texture: texture_2d<f32>;
+@group(0) @binding(1) var input_sampler: sampler;
+@group(1) @binding(0) var<uniform> blit: ProjectiveBlitUniforms;
+
+@vertex
+fn projective_blit_vs(input: VertexInput) -> VertexOutput {
+    var output: VertexOutput;
+    let x = (input.position.x / blit.viewport.x) * 2.0 - 1.0;
+    let y = 1.0 - (input.position.y / blit.viewport.y) * 2.0;
+    output.clip_position = vec4<f32>(x, y, 0.0, 1.0);
+    output.world_pos = input.position;
+    return output;
+}
+
+@fragment
+fn projective_blit_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+    let p = vec3<f32>(input.world_pos, 1.0);
+    let denom = dot(blit.inverse_row2.xyz, p);
+    if (abs(denom) <= 0.00001) {
+        discard;
+    }
+
+    let source_x = dot(blit.inverse_row0.xyz, p) / denom;
+    let source_y = dot(blit.inverse_row1.xyz, p) / denom;
+    if (source_x < 0.0 || source_y < 0.0 || source_x > blit.source_size.x || source_y > blit.source_size.y) {
+        discard;
+    }
+
+    let uv = vec2<f32>(
+        source_x / max(blit.source_size.x, 0.00001),
+        source_y / max(blit.source_size.y, 0.00001),
+    );
+    return textureSample(input_texture, input_sampler, uv) * blit.alpha.x;
+}
+"#
+    .to_string()
+}

@@ -17,6 +17,7 @@ use cranpose_ui::text::TextMotion;
 use cranpose_ui::{Brush, TextMeasurer, TextMetrics};
 use cranpose_ui_graphics::{BlendMode, Color, ColorFilter, Rect, TileMode};
 
+use crate::pipeline;
 use crate::scene::{ImageDraw, Scene, TextDraw};
 use crate::style::point_in_resolved_rounded_rect;
 
@@ -466,6 +467,16 @@ fn measure_text_impl(
 }
 
 pub fn draw_scene(frame: &mut [u8], width: u32, height: u32, scene: &Scene) {
+    if let Some(graph) = scene.graph.as_ref() {
+        let raster_scene = pipeline::build_draw_scene(graph);
+        draw_flat_scene(frame, width, height, &raster_scene);
+        return;
+    }
+
+    draw_flat_scene(frame, width, height, scene);
+}
+
+fn draw_flat_scene(frame: &mut [u8], width: u32, height: u32, scene: &Scene) {
     for chunk in frame.chunks_exact_mut(4) {
         chunk.copy_from_slice(&[18, 18, 24, 255]);
     }
@@ -976,6 +987,10 @@ fn lerp_color(a: Color, b: Color, t: f32) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cranpose_render_common::graph::{
+        CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
+        PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
+    };
 
     fn count_non_background_pixels(frame: &[u8], width: u32, height: u32) -> usize {
         count_non_background_pixels_in_band(frame, width, 0, height)
@@ -1143,6 +1158,54 @@ mod tests {
         assert!(
             second_line_ink > 20,
             "expected second line ink, got {second_line_ink}"
+        );
+    }
+
+    #[test]
+    fn draw_scene_renders_graph_backed_scene_without_flat_primitives() {
+        let mut scene = Scene::new();
+        scene.graph = Some(RenderGraph::new(LayerNode {
+            node_id: None,
+            local_bounds: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 16.0,
+                height: 16.0,
+            },
+            placement: cranpose_ui_graphics::Point::default(),
+            content_offset: cranpose_ui_graphics::Point::default(),
+            transform_to_parent: ProjectiveTransform::identity(),
+            graphics_layer: cranpose_ui_graphics::GraphicsLayer::default(),
+            clip_to_bounds: false,
+            shadow_clip: None,
+            hit_test: None,
+            isolation: IsolationReasons::default(),
+            cache_policy: CachePolicy::None,
+            children: vec![RenderNode::Primitive(PrimitiveEntry {
+                phase: PrimitivePhase::BeforeChildren,
+                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                    primitive: cranpose_ui_graphics::DrawPrimitive::Rect {
+                        rect: Rect {
+                            x: 2.0,
+                            y: 3.0,
+                            width: 6.0,
+                            height: 5.0,
+                        },
+                        brush: Brush::solid(Color::WHITE),
+                    },
+                    clip: None,
+                }),
+            })],
+        }));
+
+        let width = 20;
+        let height = 20;
+        let mut frame = vec![0u8; (width * height * 4) as usize];
+        draw_scene(&mut frame, width, height, &scene);
+
+        assert!(
+            count_non_background_pixels(&frame, width, height) > 0,
+            "graph-backed scenes should render even when flat primitive arrays are empty"
         );
     }
 

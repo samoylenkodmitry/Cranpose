@@ -8,6 +8,7 @@ pub(crate) mod gpu_stats;
 mod offscreen;
 mod pipeline;
 mod render;
+mod render_support;
 mod scene;
 mod shader_cache;
 mod shaders;
@@ -1007,21 +1008,20 @@ impl WgpuRenderer {
         height: u32,
     ) -> Result<(), WgpuRendererError> {
         if let Some(gpu_renderer) = &mut self.gpu_renderer {
-            gpu_renderer
-                .render(
-                    &mut self.render_text_state,
-                    view,
-                    &self.scene.shapes,
-                    &self.scene.images,
-                    &self.scene.texts,
-                    &self.scene.shadow_draws,
-                    &self.scene.effect_layers,
-                    &self.scene.backdrop_layers,
-                    width,
-                    height,
-                    self.root_scale,
-                )
-                .map_err(WgpuRendererError::Wgpu)
+            let graph = self
+                .scene
+                .graph
+                .as_ref()
+                .ok_or_else(|| WgpuRendererError::Wgpu("scene graph is missing".to_string()))?;
+            let result = gpu_renderer.render(
+                &mut self.render_text_state,
+                view,
+                graph,
+                width,
+                height,
+                self.root_scale,
+            );
+            result.map_err(WgpuRendererError::Wgpu)
         } else {
             Err(WgpuRendererError::Wgpu(
                 "GPU renderer not initialized. Call init_gpu() first.".to_string(),
@@ -1048,15 +1048,15 @@ impl WgpuRenderer {
         root_scale: f32,
     ) -> Result<CapturedFrame, WgpuRendererError> {
         if let Some(gpu_renderer) = &mut self.gpu_renderer {
+            let graph = self
+                .scene
+                .graph
+                .as_ref()
+                .ok_or_else(|| WgpuRendererError::Wgpu("scene graph is missing".to_string()))?;
             let pixels = gpu_renderer
                 .render_to_rgba_pixels(
                     &mut self.render_text_state,
-                    &self.scene.shapes,
-                    &self.scene.images,
-                    &self.scene.texts,
-                    &self.scene.shadow_draws,
-                    &self.scene.effect_layers,
-                    &self.scene.backdrop_layers,
+                    graph,
                     width,
                     height,
                     root_scale,

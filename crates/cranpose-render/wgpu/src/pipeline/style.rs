@@ -1,16 +1,21 @@
 pub(crate) use cranpose_render_common::style_shared::{
     apply_layer_affine_to_rect, apply_layer_to_brush, apply_layer_to_color, apply_layer_to_quad,
-    apply_layer_to_rect, combine_layers, compose_color_filters, layer_uniform_scale,
-    primitives_for_placement, quad_bounds, scale_corner_radii, DrawPlacement, NodeStyle,
+    apply_layer_to_rect, layer_uniform_scale, quad_bounds, scale_corner_radii,
 };
+#[cfg(test)]
+pub(crate) use cranpose_render_common::style_shared::{
+    compose_color_filters, primitives_for_placement, DrawPlacement,
+};
+#[cfg(test)]
 use cranpose_ui::DrawCommand;
-use cranpose_ui_graphics::{
-    BlendMode, CornerRadii, DrawPrimitive, GraphicsLayer, Rect, RoundedCornerShape,
-    ShadowPrimitive, Size,
-};
+#[cfg(test)]
+use cranpose_ui_graphics::{BlendMode, DrawPrimitive, GraphicsLayer, ShadowPrimitive, Size};
+use cranpose_ui_graphics::{CornerRadii, Rect, RoundedCornerShape};
 
+#[cfg(test)]
 use crate::scene::{DrawShape, Scene, ShadowDraw};
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_draw_commands(
     commands: &[DrawCommand],

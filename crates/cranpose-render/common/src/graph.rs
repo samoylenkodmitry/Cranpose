@@ -1,0 +1,420 @@
+use std::rc::Rc;
+
+use cranpose_core::NodeId;
+use cranpose_foundation::PointerEvent;
+use cranpose_ui::text::AnnotatedString;
+use cranpose_ui::{
+    GraphicsLayer, Point, Rect, RenderEffect, RoundedCornerShape, TextLayoutOptions, TextStyle,
+};
+use cranpose_ui_graphics::{BlendMode, ColorFilter, DrawPrimitive};
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ProjectiveTransform {
+    matrix: [[f32; 3]; 3],
+}
+
+impl ProjectiveTransform {
+    pub const fn identity() -> Self {
+        Self {
+            matrix: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        }
+    }
+
+    pub fn translation(tx: f32, ty: f32) -> Self {
+        Self {
+            matrix: [[1.0, 0.0, tx], [0.0, 1.0, ty], [0.0, 0.0, 1.0]],
+        }
+    }
+
+    pub fn from_rect_to_quad(rect: Rect, quad: [[f32; 2]; 4]) -> Self {
+        if rect.width.abs() <= f32::EPSILON || rect.height.abs() <= f32::EPSILON {
+            return Self::translation(quad[0][0], quad[0][1]);
+        }
+
+        let source = [
+            [rect.x, rect.y],
+            [rect.x + rect.width, rect.y],
+            [rect.x, rect.y + rect.height],
+            [rect.x + rect.width, rect.y + rect.height],
+        ];
+        let Some(coefficients) = solve_homography(source, quad) else {
+            return Self::identity();
+        };
+
+        Self {
+            matrix: [
+                [coefficients[0], coefficients[1], coefficients[2]],
+                [coefficients[3], coefficients[4], coefficients[5]],
+                [coefficients[6], coefficients[7], 1.0],
+            ],
+        }
+    }
+
+    /// Returns the composed transform that applies `self` first and `next` second.
+    pub fn then(self, next: Self) -> Self {
+        Self {
+            matrix: multiply_matrices(next.matrix, self.matrix),
+        }
+    }
+
+    pub fn inverse(self) -> Option<Self> {
+        let m = self.matrix;
+        let a = m[0][0];
+        let b = m[0][1];
+        let c = m[0][2];
+        let d = m[1][0];
+        let e = m[1][1];
+        let f = m[1][2];
+        let g = m[2][0];
+        let h = m[2][1];
+        let i = m[2][2];
+
+        let cofactor00 = e * i - f * h;
+        let cofactor01 = -(d * i - f * g);
+        let cofactor02 = d * h - e * g;
+        let cofactor10 = -(b * i - c * h);
+        let cofactor11 = a * i - c * g;
+        let cofactor12 = -(a * h - b * g);
+        let cofactor20 = b * f - c * e;
+        let cofactor21 = -(a * f - c * d);
+        let cofactor22 = a * e - b * d;
+
+        let determinant = a * cofactor00 + b * cofactor01 + c * cofactor02;
+        if determinant.abs() <= f32::EPSILON {
+            return None;
+        }
+        let inverse_determinant = 1.0 / determinant;
+
+        Some(Self {
+            matrix: [
+                [
+                    cofactor00 * inverse_determinant,
+                    cofactor10 * inverse_determinant,
+                    cofactor20 * inverse_determinant,
+                ],
+                [
+                    cofactor01 * inverse_determinant,
+                    cofactor11 * inverse_determinant,
+                    cofactor21 * inverse_determinant,
+                ],
+                [
+                    cofactor02 * inverse_determinant,
+                    cofactor12 * inverse_determinant,
+                    cofactor22 * inverse_determinant,
+                ],
+            ],
+        })
+    }
+
+    pub fn matrix(self) -> [[f32; 3]; 3] {
+        self.matrix
+    }
+
+    pub fn map_point(self, point: Point) -> Point {
+        let x = point.x;
+        let y = point.y;
+        let w = self.matrix[2][0] * x + self.matrix[2][1] * y + self.matrix[2][2];
+        let safe_w = if w.abs() <= f32::EPSILON { 1.0 } else { w };
+
+        Point {
+            x: (self.matrix[0][0] * x + self.matrix[0][1] * y + self.matrix[0][2]) / safe_w,
+            y: (self.matrix[1][0] * x + self.matrix[1][1] * y + self.matrix[1][2]) / safe_w,
+        }
+    }
+
+    pub fn map_rect(self, rect: Rect) -> [[f32; 2]; 4] {
+        [
+            self.map_point(Point {
+                x: rect.x,
+                y: rect.y,
+            }),
+            self.map_point(Point {
+                x: rect.x + rect.width,
+                y: rect.y,
+            }),
+            self.map_point(Point {
+                x: rect.x,
+                y: rect.y + rect.height,
+            }),
+            self.map_point(Point {
+                x: rect.x + rect.width,
+                y: rect.y + rect.height,
+            }),
+        ]
+        .map(|point| [point.x, point.y])
+    }
+
+    pub fn bounds_for_rect(self, rect: Rect) -> Rect {
+        quad_bounds(self.map_rect(rect))
+    }
+}
+
+impl Default for ProjectiveTransform {
+    fn default() -> Self {
+        Self::identity()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct IsolationReasons {
+    pub explicit_offscreen: bool,
+    pub effect: bool,
+    pub backdrop: bool,
+    pub group_opacity: bool,
+    pub blend_mode: bool,
+}
+
+impl IsolationReasons {
+    pub fn has_any(self) -> bool {
+        self.explicit_offscreen
+            || self.effect
+            || self.backdrop
+            || self.group_opacity
+            || self.blend_mode
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CachePolicy {
+    #[default]
+    None,
+    Auto,
+}
+
+#[derive(Clone)]
+pub struct HitTestNode {
+    pub shape: Option<RoundedCornerShape>,
+    pub click_actions: Vec<Rc<dyn Fn(Point)>>,
+    pub pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
+    pub clip: Option<Rect>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DrawPrimitiveNode {
+    pub primitive: DrawPrimitive,
+    pub clip: Option<Rect>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextPrimitiveNode {
+    pub node_id: NodeId,
+    pub rect: Rect,
+    pub text: AnnotatedString,
+    pub text_style: TextStyle,
+    pub font_size: f32,
+    pub layout_options: TextLayoutOptions,
+    pub clip: Option<Rect>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrimitivePhase {
+    BeforeChildren,
+    AfterChildren,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PrimitiveNode {
+    Draw(DrawPrimitiveNode),
+    Text(Box<TextPrimitiveNode>),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PrimitiveEntry {
+    pub phase: PrimitivePhase,
+    pub node: PrimitiveNode,
+}
+
+#[derive(Clone)]
+pub struct LayerNode {
+    pub node_id: Option<NodeId>,
+    pub local_bounds: Rect,
+    pub placement: Point,
+    pub content_offset: Point,
+    pub transform_to_parent: ProjectiveTransform,
+    pub graphics_layer: GraphicsLayer,
+    pub clip_to_bounds: bool,
+    pub shadow_clip: Option<Rect>,
+    pub hit_test: Option<HitTestNode>,
+    pub isolation: IsolationReasons,
+    pub cache_policy: CachePolicy,
+    pub children: Vec<RenderNode>,
+}
+
+impl LayerNode {
+    pub fn clip_rect(&self) -> Option<Rect> {
+        (self.clip_to_bounds || self.graphics_layer.clip).then_some(self.local_bounds)
+    }
+
+    pub fn effect(&self) -> Option<&RenderEffect> {
+        self.graphics_layer.render_effect.as_ref()
+    }
+
+    pub fn backdrop(&self) -> Option<&RenderEffect> {
+        self.graphics_layer.backdrop_effect.as_ref()
+    }
+
+    pub fn opacity(&self) -> f32 {
+        self.graphics_layer.alpha
+    }
+
+    pub fn blend_mode(&self) -> BlendMode {
+        self.graphics_layer.blend_mode
+    }
+
+    pub fn color_filter(&self) -> Option<ColorFilter> {
+        self.graphics_layer.color_filter
+    }
+}
+
+#[derive(Clone)]
+pub enum RenderNode {
+    Primitive(PrimitiveEntry),
+    Layer(Box<LayerNode>),
+}
+
+#[derive(Clone)]
+pub struct RenderGraph {
+    pub root: LayerNode,
+}
+
+impl RenderGraph {
+    pub fn new(root: LayerNode) -> Self {
+        Self { root }
+    }
+}
+
+pub fn quad_bounds(quad: [[f32; 2]; 4]) -> Rect {
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+
+    for [x, y] in quad {
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x);
+        max_y = max_y.max(y);
+    }
+
+    Rect {
+        x: min_x,
+        y: min_y,
+        width: (max_x - min_x).max(0.0),
+        height: (max_y - min_y).max(0.0),
+    }
+}
+
+fn multiply_matrices(lhs: [[f32; 3]; 3], rhs: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
+    let mut out = [[0.0; 3]; 3];
+    for row in 0..3 {
+        for col in 0..3 {
+            out[row][col] =
+                lhs[row][0] * rhs[0][col] + lhs[row][1] * rhs[1][col] + lhs[row][2] * rhs[2][col];
+        }
+    }
+    out
+}
+
+fn solve_homography(source: [[f32; 2]; 4], target: [[f32; 2]; 4]) -> Option<[f32; 8]> {
+    let mut matrix = [[0.0f32; 9]; 8];
+    for (index, (src, dst)) in source.into_iter().zip(target).enumerate() {
+        let row = index * 2;
+        let x = src[0];
+        let y = src[1];
+        let u = dst[0];
+        let v = dst[1];
+
+        matrix[row] = [x, y, 1.0, 0.0, 0.0, 0.0, -u * x, -u * y, u];
+        matrix[row + 1] = [0.0, 0.0, 0.0, x, y, 1.0, -v * x, -v * y, v];
+    }
+
+    for pivot in 0..8 {
+        let mut pivot_row = pivot;
+        let mut pivot_value = matrix[pivot][pivot].abs();
+        let mut candidate = pivot + 1;
+        while candidate < 8 {
+            let candidate_value = matrix[candidate][pivot].abs();
+            if candidate_value > pivot_value {
+                pivot_row = candidate;
+                pivot_value = candidate_value;
+            }
+            candidate += 1;
+        }
+
+        if pivot_value <= f32::EPSILON {
+            return None;
+        }
+
+        if pivot_row != pivot {
+            matrix.swap(pivot, pivot_row);
+        }
+
+        let divisor = matrix[pivot][pivot];
+        let mut col = pivot;
+        while col < 9 {
+            matrix[pivot][col] /= divisor;
+            col += 1;
+        }
+
+        for row in 0..8 {
+            if row == pivot {
+                continue;
+            }
+            let factor = matrix[row][pivot];
+            if factor.abs() <= f32::EPSILON {
+                continue;
+            }
+            let mut col = pivot;
+            while col < 9 {
+                matrix[row][col] -= factor * matrix[pivot][col];
+                col += 1;
+            }
+        }
+    }
+
+    let mut solution = [0.0f32; 8];
+    for index in 0..8 {
+        solution[index] = matrix[index][8];
+    }
+    Some(solution)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn projective_transform_translation_maps_points() {
+        let transform = ProjectiveTransform::translation(7.0, -3.5);
+        let mapped = transform.map_point(Point { x: 2.0, y: 4.0 });
+        assert!((mapped.x - 9.0).abs() < 1e-6);
+        assert!((mapped.y - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn projective_transform_then_composes_in_parent_order() {
+        let child = ProjectiveTransform::translation(4.0, 2.0);
+        let parent = ProjectiveTransform::translation(10.0, -1.0);
+        let composed = child.then(parent);
+        let mapped = composed.map_point(Point { x: 1.0, y: 1.0 });
+        assert!((mapped.x - 15.0).abs() < 1e-6);
+        assert!((mapped.y - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn homography_maps_rect_corners_to_target_quad() {
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 20.0,
+            height: 10.0,
+        };
+        let quad = [[5.0, 7.0], [25.0, 6.0], [7.0, 20.0], [28.0, 21.0]];
+        let transform = ProjectiveTransform::from_rect_to_quad(rect, quad);
+        let mapped = transform.map_rect(rect);
+        for (expected, actual) in quad.into_iter().zip(mapped) {
+            assert!((expected[0] - actual[0]).abs() < 1e-4);
+            assert!((expected[1] - actual[1]).abs() < 1e-4);
+        }
+    }
+}

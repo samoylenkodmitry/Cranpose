@@ -2,7 +2,7 @@
 
 use cranpose_core::NodeId;
 use cranpose_foundation::{PointerEvent, PointerEventKind};
-use cranpose_render_common::{HitTestTarget, RenderScene};
+use cranpose_render_common::{graph::RenderGraph, HitTestTarget, RenderScene};
 use cranpose_ui::{TextLayoutOptions, TextStyle};
 use cranpose_ui_graphics::{
     BlendMode, Brush, Color, ColorFilter, ImageBitmap, Point, Rect, RenderEffect,
@@ -175,6 +175,7 @@ pub struct BackdropLayer {
 }
 
 pub struct Scene {
+    pub graph: Option<RenderGraph>,
     pub shapes: Vec<DrawShape>,
     pub images: Vec<ImageDraw>,
     pub texts: Vec<TextDraw>,
@@ -189,6 +190,7 @@ pub struct Scene {
 impl Scene {
     pub fn new() -> Self {
         Self {
+            graph: None,
             shapes: Vec::new(),
             images: Vec::new(),
             texts: Vec::new(),
@@ -382,6 +384,7 @@ impl RenderScene for Scene {
     type HitTarget = HitRegion;
 
     fn clear(&mut self) {
+        self.graph = None;
         self.shapes.clear();
         self.images.clear();
         self.texts.clear();
