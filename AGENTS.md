@@ -45,3 +45,4 @@
 - don't hardcode things
 - parallelization and SIMD where appropriate (note: the wasm target must not be forgotten)
 - if you spot you wasted too much time on something, please put the discovered info into TIME_WASTERS.md so save future time for everyone
+- not "if you want to"; should be "the proper fix for production-grade ui-framework"; not "I WANT"; should be "this is wrong, this is right, this is the cause, this has to be re-architectured and be rewritten"

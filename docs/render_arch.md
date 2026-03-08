@@ -1,0 +1,638 @@
+# Cranpose Rendering Architecture
+
+This is the authoritative rendering document for Cranpose.
+
+It replaces:
+
+- `docs/GRAPHICS.md`
+- `docs/GPU_RENDERER_USAGE.md`
+
+This document is intentionally architecture-first. It describes:
+
+- the current renderer shape of the repo
+- the structural cause of translation-dependent rendering bugs
+- the production-grade target architecture
+- the exact rewrite seams in the current file layout
+- the validation strategy required to land the rewrite without relying on manual visual inspection
+
+## Scope
+
+The public graphics API lives primarily in `cranpose-ui-graphics`, and the current execution paths live in:
+
+- `crates/cranpose-render/common`
+- `crates/cranpose-render/wgpu`
+- `crates/cranpose-render/pixels`
+- `crates/cranpose-ui`
+- `apps/desktop-demo`
+
+The desktop demo currently defaults to the WGPU backend via `apps/desktop-demo/Cargo.toml`.
+The pixels backend remains a CPU renderer and a useful reference path, but it must not define the long-term architecture.
+
+## Current File Map
+
+| Area | Files | Current Role | Architectural Problem |
+|---|---|---|---|
+| Reproducer surface | `apps/desktop-demo/src/app/lazy_list.rs` | Lazy list demo used to expose scroll-phase instability | Shows the bug; it is not the cause |
+| Scroll layout | `crates/cranpose-ui/src/scroll.rs` | Applies scroll as layout `placement_offset` via `LayoutModifierMeasureResult` | Motion becomes child placement before rendering |
+| Lazy list placement | `crates/cranpose-ui/src/widgets/lazy_list.rs` | Emits float `Placement::new(...)` values for visible item roots | Item subtree motion is already flattened into child positions |
+| Shared transform helpers | `crates/cranpose-render/common/src/style_shared.rs` | Combines `GraphicsLayer` and applies transform/color/brush changes | `apply_layer_to_rect` and `apply_layer_to_quad` collapse subtree transform into primitive geometry too early |
+| Renderer contract | `crates/cranpose-render/common/src/lib.rs` | Shared renderer traits (`Renderer`, `RenderScene`) | No shared hierarchical scene contract yet |
+| WGPU scene build | `crates/cranpose-render/wgpu/src/pipeline.rs` | Traverses applier state and emits flat scene draw records | Builds a flat scene. Contains a dead-code `render_layout_tree` path (marked `#[allow(dead_code)]`); only the applier path (`render_from_applier`) is active |
+| WGPU scene storage | `crates/cranpose-render/wgpu/src/scene.rs` | Stores `shapes`, `images`, `texts`, `shadow_draws`, `effect_layers`, `backdrop_layers` | Layering is encoded as z-ranges over flat arrays rather than explicit parent/child structure |
+| WGPU execution | `crates/cranpose-render/wgpu/src/render.rs` | Renders flat draw lists, effects, and backdrops | Effect isolation uses full-frame offscreens and z-range replay, not stable local layers |
+| Effect infrastructure | `crates/cranpose-render/wgpu/src/effect_renderer.rs` | Blur, offset, runtime shader, blit, offscreen pool | Useful building blocks, but still fed by the wrong scene model |
+| WGPU shaders | `crates/cranpose-render/wgpu/src/shaders.rs` | Shape/image WGSL shaders | Coverage and clipping happen in device space; plain rects already use hard-coverage branches to fight seams |
+| Pixels backend | `crates/cranpose-render/pixels/src/draw.rs` | CPU raster path | Shares the same flatten-first mental model, so it cannot be the architecture answer either |
+
+## Current API Reality
+
+The exposed graphics API is broader than the current renderer semantics.
+
+The repo already exposes:
+
+- `GraphicsLayer`
+- `RenderEffect`
+- `backdrop_effect`
+- `Brush` gradients
+- `ColorFilter`
+- draw commands for shapes, images, and text
+
+What matters is not API presence. What matters is whether the renderer preserves the correct semantics when those APIs are moved, clipped, blended, blurred, or cached.
+
+The current reality is:
+
+| Capability | Current API Surface | Current Execution Reality |
+|---|---|---|
+| Translation / scale / rotation / perspective | Exposed | Transform is flattened into child geometry during scene build via `combine_layers` + `apply_layer_affine_to_rect` |
+| Subtree alpha / blend | Exposed | Isolation exists only as a flat z-range replay mechanism; not a real layer model |
+| Blur / offset / runtime shader | Exposed | Implemented through offscreen passes, but fed by flat scene ranges and full-frame targets (all offscreens are viewport-sized) |
+| Backdrop effect | Exposed | Implemented as a special event in a flat z-ordered scene |
+| Text / shapes / images | Exposed | Rasterized directly in device space after transform flattening |
+| Blend modes | Exposed | Current WGPU execution is only production-credible for `SrcOver` and `DstOut`; unsupported modes fall back |
+
+This is why API parity claims are not enough. A production UI renderer is judged by execution semantics under motion and composition.
+
+## Root Cause
+
+The current architecture is wrong for production-grade UI rendering.
+
+The core failure is this:
+
+1. Scroll applies `placement_offset` via `ScrollNode::measure()`, which becomes part of child node positions.
+2. Scene building via `render_node_from_applier` reads each node's absolute position and combines it with the accumulated `GraphicsLayer` state.
+3. `combine_layers` accumulates parent translation/scale/rotation into a single `GraphicsLayer` per node.
+4. `apply_layer_affine_to_rect` / `apply_layer_to_quad` bake that accumulated transform directly into every child primitive's device-space coordinates.
+5. The renderer rasterizes each primitive at those device-space coordinates.
+6. Effects and backdrop are then layered back on top as flat z-range events over the flat arrays.
+
+That guarantees phase-dependent output.
+
+The same subtree can produce a different picture when the parent translation changes by a fraction, because:
+
+- sibling primitives are no longer preserved as one local picture
+- clip bounds are recomputed in device space
+- effect bounds are recomputed in device space
+- coverage is evaluated primitive-by-primitive against the pixel grid
+- full-frame offscreen replays re-sample content at the wrong granularity
+
+This is why the bug is not "about scroll". Scroll is only the easiest way to produce fractional parent translation continuously.
+
+The architecture failure is renderer-side:
+
+- subtree motion is not represented as subtree motion
+- it is represented as rewritten child coordinates
+
+That is the wrong model.
+
+## Non-Negotiable Rendering Invariants
+
+The rewrite must satisfy these invariants:
+
+1. Rigid subtree motion preserves the subtree picture.
+   After compensating for parent translation, the subtree image is identical.
+
+2. Parent translation does not change child-relative spacing.
+   A 4 px gap inside a moving subtree stays a 4 px gap.
+
+3. Blur, shader effects, backdrop, and subtree alpha operate on layer results, not on ad hoc primitive groups.
+
+4. Offscreen rendering is bounded by real layer bounds, not the full frame, unless the effect itself truly needs the full frame.
+
+5. The same scene model is consumed by both renderer backends.
+
+6. There is one scene-building implementation.
+   The dead-code `render_layout_tree` path in `pipeline.rs` must be removed as part of cleanup.
+
+7. No "fix" may rely on snapping scroll, snapping child positions, or papering over the bug in lazy list logic.
+
+## Proper Architecture
+
+The correct model is a hierarchical render graph with an explicit compositor.
+
+The renderer must do two different jobs:
+
+1. Paint content in stable local coordinates.
+2. Composite that content with transforms, clips, alpha, blend, and effects.
+
+### Target Scene Model
+
+The current flat `Scene` in `crates/cranpose-render/wgpu/src/scene.rs` should be replaced by a hierarchical graph conceptually shaped like this:
+
+```rust
+enum RenderNode {
+    Primitive(PrimitiveNode),
+    Layer(LayerNode),
+}
+
+enum PrimitiveNode {
+    Shape(ShapePrimitive),
+    Text(TextPrimitive),
+    Image(ImagePrimitive),
+}
+
+struct LayerNode {
+    node_id: Option<NodeId>,
+    local_bounds: Rect,
+    transform_to_parent: Transform,
+    clip: Option<ClipNode>,
+    opacity: f32,
+    blend_mode: BlendMode,
+    effect: Option<RenderEffect>,
+    backdrop: Option<RenderEffect>,
+    isolation_reasons: IsolationReasons,
+    cache_policy: CachePolicy,
+    children: Vec<RenderNode>,
+}
+```
+
+The exact Rust type names can differ. The architectural requirements cannot.
+
+### What Must Move Out Of Primitive Records
+
+These values must stop being baked into every primitive draw record:
+
+- parent translation
+- parent alpha
+- parent clip result
+- parent effect bounds
+- parent backdrop order
+
+Primitives should keep:
+
+- stable local geometry
+- stable local brush/image/text inputs
+- primitive-local clip or mask references
+
+Layers should own:
+
+- transform
+- opacity
+- blend mode
+- effect
+- backdrop
+- cache policy
+- isolation decision
+
+### Transform Model
+
+The transform representation must become explicit instead of implicit.
+
+Today `crates/cranpose-render/common/src/style_shared.rs` uses:
+
+- `combine_layers(...)` — accumulates parent+child `GraphicsLayer` fields (translation, scale, rotation) into a single struct
+- `apply_layer_affine_to_rect(...)` — bakes accumulated translation and scale into primitive coordinates
+- `apply_layer_to_quad(...)` — bakes accumulated transform including rotation and perspective into quad vertices
+- `apply_layer_to_rect(...)` — convenience wrapper: `quad_bounds(apply_layer_to_quad(...))`
+
+Those helpers are useful for transform math, but they are currently used to flatten hierarchy into final geometry.
+
+The rewrite should preserve transform as data:
+
+- compose transforms when traversing the graph
+- compute device bounds for culling and surface allocation
+- do not rewrite descendants into final device-space rectangles as the primary representation
+
+The key mechanism: primitives must carry local-space vertex data. The parent transform must be applied as a GPU uniform matrix (or per-instance data) at draw time. This is what makes subtree pictures stable under parent translation — the GPU applies the transform after rasterization coverage is computed in local space.
+
+Because `GraphicsLayer` already exposes scale, translation, rotation, and perspective, the target transform type should be a real transform object (3x2 affine or 4x4 matrix), not just offset plus scale.
+
+## Composition Model
+
+### Direct Path
+
+Some layers can still draw without offscreen isolation:
+
+- opaque content
+- no effect
+- no backdrop
+- no subtree alpha isolation requirement
+- no special blend mode
+- no cache boundary
+
+For the direct path, the compositor concatenates the layer's transform into the GPU uniform and draws primitives directly to the parent target. This path exists for performance.
+
+### Isolated Path
+
+A layer must isolate when semantics require it, including:
+
+- subtree blur
+- runtime shader effect
+- backdrop sampling
+- subtree alpha over overlapping children
+- nontrivial blend mode
+- explicit offscreen compositing strategy
+- raster cache boundary for rigid motion
+
+Isolation here means:
+
+1. Render the subtree once in local coordinates into a bounded offscreen target.
+2. Apply the effect in local layer space.
+3. Composite the resulting texture into the parent using the layer transform.
+
+### Backdrop Path
+
+Backdrop is a compositor feature, not a primitive feature.
+
+The proper backdrop sequence is:
+
+1. Composite prior content behind the layer.
+2. Snapshot only the backdrop region required by the layer bounds.
+3. Filter that backdrop snapshot.
+4. Composite the filtered backdrop result.
+5. Composite the layer's own content above it.
+
+The current `BackdropLayer` event approach in `crates/cranpose-render/wgpu/src/render.rs` proves the repo already needs compositor ordering. The graph model should encode it directly instead of reconstructing it from flat z-ranges.
+
+## Why This Fixes The Scroll/Lazy Bug
+
+Today a lazy list item is not preserved as a picture. Its children are redrawn at their final translated coordinates every frame.
+
+The proper architecture changes that:
+
+- the lazy list item subtree is painted in local coordinates
+- the compositor moves the subtree as one unit
+- the spacing inside the item is frozen in the local raster result
+
+That is what prevents the pixel-wide gap from changing when the list moves by a fraction.
+
+For production use, scroll and lazy content should normally move cached item layers or cached tiles, not force every descendant primitive to re-rasterize at a new device-space phase.
+
+## Effects, Transparency, And Shader Semantics
+
+Blur, backdrop, transparency, and runtime shaders are not special exceptions. They are the reason the layer/compositor architecture is required.
+
+### Content Blur
+
+Correct model:
+
+- render subtree into a bounded local offscreen
+- blur that surface
+- composite the result with the layer transform
+
+Wrong model:
+
+- blur individual descendants independently
+- or blur a flat z-range as if it were a real retained layer
+
+### Backdrop Blur / Backdrop Shader
+
+Correct model:
+
+- sample already-composited background in the layer bounds
+- filter that background snapshot
+- composite the layer content on top
+
+Wrong model:
+
+- try to encode backdrop as a regular primitive draw
+
+### Transparency
+
+Correct model:
+
+- use premultiplied alpha everywhere
+- modulate directly only when semantics are provably equivalent
+- isolate the subtree when overlap would otherwise change the result
+
+Wrong model:
+
+- multiply alpha into descendants and hope it matches group opacity in all cases
+
+### Runtime Shader Effects
+
+Correct model:
+
+- shader input is a layer texture or a backdrop snapshot
+- uniforms live in layer space
+- bounds are explicit and bounded
+
+Wrong model:
+
+- tie shader meaning to flattened device-space child primitives
+
+## Performance
+
+The proper architecture can be faster than the current one, but only if isolation is selective and caching is real.
+
+### Where The Win Comes From
+
+- less CPU churn from rewriting descendant geometry every frame
+- cleaner batching because transforms become layer or instance data
+- bounded offscreen surfaces instead of full-frame effect surfaces
+- real raster cache for scrollable and repeatedly transformed subtrees
+- cleaner invalidation because content identity and transform identity are separate
+- cheaper list scrolling because cached rows can be composited rather than repainted
+
+### Where It Can Lose
+
+- if every node becomes an offscreen layer
+- if cache bounds are loose
+- if large backdrop or blur surfaces are re-rendered unnecessarily
+- if layer invalidation is too coarse
+
+### Performance Rules For The Rewrite
+
+1. Do not isolate every layer.
+2. Do not allocate full-frame offscreens for ordinary subtree effects.
+3. Cache stable subtrees.
+4. Bound all cache entries tightly.
+5. Track the total offscreen pixel budget per frame.
+6. Keep the direct path for simple content.
+
+### Expected High-Value Cache Boundaries
+
+- lazy list items
+- generic scroll container tiles for very large content
+- effect-heavy cards
+- text-heavy composite widgets
+- explicitly offscreen layers
+
+## Rewrite Plan
+
+This rewrite is significant. That is correct. The current architecture is already the wrong foundation.
+
+Each phase replaces the previous architecture entirely. No phase may leave the repo in a half-state where both old and new models coexist in production paths.
+
+### Phase 1: Freeze The Failure With Tests
+
+Add automated failures before touching the renderer:
+
+- a WGPU capture test for two separated rounded blocks inside one translated subtree
+- a WGPU capture test for text plus decoration plus shadow inside one translated subtree
+- a lazy-list-specific test that verifies the gap between `Item #N` and `Hello #N` stays constant across fractional scroll offsets
+- a backdrop plus translated-content capture test
+- equivalent CPU-path expectations where the backend claims the same semantics
+
+Validation target:
+
+- failing tests reproduce the current instability without depending on a human looking at screenshots
+
+### Phase 2: Hierarchical Scene Graph And Scene Builder
+
+Replace the flat scene model and scene builder in one step. Introducing the graph types without simultaneously switching the builder to emit them would create a half-state.
+
+Files:
+
+- `crates/cranpose-render/common/src/lib.rs` — shared graph types
+- new shared graph types in `crates/cranpose-render/common`
+- `crates/cranpose-render/wgpu/src/scene.rs` — replace flat `Scene`
+- `crates/cranpose-render/wgpu/src/pipeline.rs` — `render_from_applier` emits graph nodes instead of flat draw lists; delete dead-code `render_layout_tree` path
+
+Work:
+
+- define render-graph node types, transform types, clip types, effect descriptors, cache hints, and isolation reasons
+- replace the flat `Scene` struct (flat arrays + z-indices) with the hierarchical `RenderNode` graph
+- modify `render_node_from_applier` to emit `LayerNode` / `PrimitiveNode` instead of calling `scene.push_shape_with_geometry` etc.
+- stop using `apply_layer_to_rect` / `apply_layer_to_quad` as the primary output representation — preserve local primitive coordinates and explicit layer transforms
+- keep hit-testing identity attached to the graph
+- delete the dead `render_layout_tree` / `render_layout_node` code path
+
+Validation target:
+
+- unit tests for graph construction, transform composition, layer bounds propagation, and isolation reason derivation
+- new tests confirm parent translation changes only layer transform data, not child local geometry
+- existing scene-build unit tests still pass after being ported
+
+### Phase 3: Compositor And Local-Coordinate Rendering
+
+Replace the z-range event replay renderer with graph traversal, and simultaneously port primitive paint to use local coordinates with GPU transform uniforms. These are one unit of work: the compositor decides how to draw each layer, and each layer's primitives must be in local coordinates for the compositor's transform to be meaningful.
+
+Files:
+
+- `crates/cranpose-render/wgpu/src/render.rs`
+- `crates/cranpose-render/wgpu/src/shaders.rs`
+- `crates/cranpose-render/wgpu/src/effect_renderer.rs`
+
+Work:
+
+- replace z-range event replay with graph traversal
+- compute per-layer device bounds for culling and bounded offscreen allocation
+- choose direct draw vs isolated offscreen per layer based on isolation reasons
+- render shapes, images, and text using local geometry with a compositor-provided transform uniform (3x2 affine or 4x4 matrix) — this is the mechanism that makes subtree pictures stable
+- make offscreen allocation bounded by computed layer bounds instead of full-frame
+- preserve backdrop ordering in the traversal itself
+
+Validation target:
+
+- translation-invariance capture tests from Phase 1 stop failing
+- ordinary static rendering remains pixel-correct
+- tests confirm bounded offscreen allocation for small isolated layers
+- tests confirm nested isolated layers and nested backdrop layers produce correct ordering
+
+### Phase 4: Effect Correctness At Layer Boundaries
+
+Make effects operate on bounded local layer surfaces instead of full-frame z-range replays.
+
+Files:
+
+- `crates/cranpose-render/wgpu/src/effect_renderer.rs`
+- `crates/cranpose-render/wgpu/src/render.rs`
+
+Work:
+
+- make blur operate on bounded local layer surfaces
+- make runtime shader effects consume local layer inputs
+- make backdrop consume bounded backdrop snapshots
+- enforce premultiplied alpha semantics through the effect pipeline
+
+Validation target:
+
+- capture tests for blur, alpha, and backdrop match layer semantics
+- no effect path allocates a full-frame target when layer bounds are small
+
+### Phase 5: Raster Cache And Motion-Aware Reuse
+
+Files:
+
+- `crates/cranpose-render/wgpu/src/render.rs`
+- `crates/cranpose-render/wgpu/src/lib.rs`
+- cache support types in `crates/cranpose-render/common`
+
+Work:
+
+- define cache keys from stable subtree identity, content hash, effect parameters, local bounds, and scale bucket
+- cache isolated layer results
+- reuse cached textures during scroll and rigid translation
+- instrument hit rate, evictions, and offscreen pixel cost
+
+Validation target:
+
+- lazy list scroll uses cache reuse instead of repainting every descendant
+- performance counters show reduced uploads and reduced isolated repaints in scroll-heavy scenes
+
+### Phase 6: Port The Pixels Backend And Clean Up
+
+Port the pixels backend to consume the same hierarchical graph and remove all remnants of the flat scene architecture.
+
+Files:
+
+- `crates/cranpose-render/pixels/src/draw.rs`
+- `crates/cranpose-render/common/src/style_shared.rs`
+- related pixels scene code
+
+Work:
+
+- consume the same hierarchical graph in the pixels backend
+- keep local/layer semantics aligned with WGPU
+- accept feature gaps only where the backend truly cannot execute a feature, but do not accept a different scene model
+- delete any remaining flat-scene-only structures
+- delete transform-flattening helpers that no longer belong in scene output (`apply_layer_to_rect`, `apply_layer_to_quad`, `apply_layer_affine_to_rect` as scene-output functions — keep them if still needed for hit-testing or bounds computation)
+- remove code paths that preserve the previous architecture
+
+Validation target:
+
+- shared semantic tests pass for both backends wherever the feature contract overlaps
+- there is one renderer architecture left in the repo, not two competing ones
+
+## Validation Strategy
+
+The validation must not depend on human eyes.
+
+### 1. Scene-Structure Unit Tests
+
+Add unit tests that assert:
+
+- translated parent layers do not rewrite child local geometry
+- layer bounds are propagated correctly
+- isolation reasons are stable
+- backdrop dependencies are explicit
+- cache policy selection is deterministic
+
+These belong close to the scene builder and graph types.
+
+### 2. WGPU Capture Tests
+
+Use `capture_frame(...)` / `capture_frame_with_scale(...)` from `crates/cranpose-render/wgpu/src/lib.rs`.
+
+Add tests for:
+
+- rigid subtree translation invariance
+- translated rounded blocks with fixed gap
+- text plus shadow plus decoration under translation
+- subtree alpha correctness
+- bounded blur correctness
+- bounded backdrop correctness
+
+Important rule:
+
+- compare normalized subtree output, not just whole-frame raw pixels at different translations
+
+Whole-frame pixels at different absolute positions are not the right assertion. The correct assertion is that the subtree picture is preserved after compensating for the parent transform.
+
+### 3. Robot Regression Tests
+
+Use the desktop robot harness and keep the checks measurable.
+
+Required robot coverage:
+
+- lazy list fractional scroll regression
+- translated text/shadow/decorations regression
+- backdrop drag regression
+- scroll visual regression
+
+Relevant existing paths:
+
+- `apps/desktop-demo/robot-runners/robot_scroll_visual.rs`
+- `apps/desktop-demo/robot-runners/robot_lazylist_redraw_bug.rs`
+- `apps/desktop-demo/robot-runners/robot_shader_backdrop_drag.rs`
+- `apps/desktop-demo/robot-runners/robot_lazy_list.rs`
+
+The robot assertions should measure:
+
+- stable pixel gap between blocks across fractional scroll deltas
+- stable local bounds for translated cards
+- no frame-to-frame picture drift inside a rigidly moving subtree
+
+### 4. Performance Validation
+
+The rewrite is only acceptable if correctness improves without turning the renderer into an offscreen-everything system.
+
+Collect before/after data for:
+
+- lazy list scroll
+- text-heavy list scroll
+- backdrop blur panel
+- simple opaque scene
+
+Use:
+
+- `./perf_robot_cpu.sh`
+- `./perf_robot_heap.sh`
+- renderer counters already present in `crates/cranpose-render/wgpu/src/render.rs`
+- text telemetry in `crates/cranpose-render/wgpu/src/lib.rs`
+
+Add counters for:
+
+- number of isolated layers
+- isolated layer pixel area
+- cache hit rate
+- cache miss rate
+- cache evictions
+- per-frame offscreen allocations
+- per-frame upload bytes
+- compositor submits
+
+Acceptance criteria:
+
+- rigid-motion regressions are gone
+- small isolated effects do not allocate full-frame surfaces
+- simple opaque scenes do not regress materially
+- scroll-heavy scenes show cache reuse and reduced repaint work
+
+### 5. Full Repository Gates
+
+Every landing step must pass:
+
+```bash
+cargo fmt
+cargo test > 1.tmp 2>&1
+cargo clippy > 2.tmp 2>&1
+cargo tree --duplicates
+apps/desktop-demo/build-web.sh
+cd apps/android-demo/android && ./gradlew :app:assembleRelease
+./run_robot_test.sh --sequential
+```
+
+`cargo tree --duplicates` is an inspection gate, not permission to rewrite dependencies without review.
+
+## Shortcuts That Must Be Rejected
+
+These are not acceptable fixes:
+
+- snapping scroll offsets
+- snapping translated children to integer pixels as a global policy
+- changing lazy list placement math to hide renderer instability
+- using multisampling as the primary fix
+- isolating every node
+- keeping both the flat scene and the hierarchical scene in parallel long-term
+
+These can sometimes hide symptoms. They do not fix the architecture.
+
+## Immediate Next Step
+
+The correct next implementation step is Phase 1:
+
+- write failing automated tests for rigid subtree translation invariance
+- then replace the flat scene architecture with a hierarchical layer/compositor architecture
+
+Anything smaller is a local patch against the wrong model.
