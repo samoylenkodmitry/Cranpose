@@ -817,9 +817,10 @@ impl EffectRenderer {
 
     /// Apply a custom RuntimeShader effect to a source texture.
     ///
-    /// `layer_pixel_rect` is `[x, y, width, height]` of the effect layer in
-    /// viewport pixels, injected at uniform slot 62 (indices 248..252) so the
-    /// shader can compute correct dp→pixel scaling and local coordinates.
+    /// `layer_pixel_rect` is `[x, y, width, height]` in the current effect
+    /// input surface's pixel space, injected at uniform slot 62
+    /// (indices 248..252) so the shader can compute correct dp->pixel scaling
+    /// and local coordinates.
     pub fn apply_shader(
         &mut self,
         device: &wgpu::Device,
@@ -904,7 +905,8 @@ impl EffectRenderer {
     /// Recursively apply a RenderEffect chain.
     ///
     /// For Chain effects, applies first then second using ping-pong offscreen targets.
-    /// `layer_pixel_rect` is forwarded to shader effects for coordinate mapping.
+    /// `layer_pixel_rect` is forwarded to shader effects for coordinate mapping
+    /// in the current input surface.
     pub fn apply_effect(
         &mut self,
         device: &wgpu::Device,
@@ -992,22 +994,6 @@ impl EffectRenderer {
     ) {
         self.composite_to_view_scissored_with_alpha(
             device, queue, source, dest_view, alpha, load_op, None,
-        );
-    }
-
-    /// Composite an offscreen target onto a destination view using premultiplied alpha blending
-    /// with an optional scissor region.
-    pub fn composite_to_view_scissored(
-        &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        source: &OffscreenTarget,
-        dest_view: &wgpu::TextureView,
-        load_op: wgpu::LoadOp<wgpu::Color>,
-        scissor: Option<(u32, u32, u32, u32)>,
-    ) {
-        self.composite_to_view_scissored_with_alpha(
-            device, queue, source, dest_view, 1.0, load_op, scissor,
         );
     }
 

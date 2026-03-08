@@ -4,9 +4,11 @@
 use std::{ops::Range, rc::Rc};
 
 use cranpose_core::{MemoryApplier, NodeId};
+use cranpose_render_common::geometry::{expand_blurred_rect, union_rect};
 use cranpose_render_common::hit_graph::{
     collect_hits_from_graph as collect_common_hits, HitGraphSink,
 };
+use cranpose_render_common::layer_shadow::layer_shadow_geometry;
 use cranpose_render_common::primitive_emit::{
     emit_draw_primitive, DrawPrimitiveSink, ImageDrawParams, ShapeDrawParams,
 };
@@ -354,21 +356,12 @@ pub(crate) fn push_layer_shadow(
     transformed_bounds: Rect,
     clip: Option<Rect>,
 ) {
-    if layer.shadow_elevation <= 0.0 {
-        return;
-    }
-
-    let scale = layer_uniform_scale(layer).max(0.1);
-    let elevation = layer.shadow_elevation * scale;
-    let spread = (elevation * 0.24).max(0.8);
-    let spot_offset_x = elevation * 0.18;
-    let spot_offset_y = elevation * 0.62;
-    let ambient_blur_radius = (elevation * 0.95).max(0.5);
-    let spot_blur_radius = (elevation * 0.72).max(0.5);
+    let shadow_geometry = layer_shadow_geometry(layer, transformed_bounds);
 
     let resolved_shape = match layer.shape {
         LayerShape::Rectangle => None,
         LayerShape::Rounded(shape) => {
+            let scale = layer_uniform_scale(layer).max(0.1);
             let resolved = shape.resolve(layer_bounds.width, layer_bounds.height);
             Some(RoundedCornerShape::with_radii(scale_corner_radii(
                 resolved, scale,
@@ -376,48 +369,33 @@ pub(crate) fn push_layer_shadow(
         }
     };
 
-    let ambient_alpha = (layer.ambient_shadow_color.a() * 0.44).clamp(0.0, 1.0);
-    if ambient_alpha > f32::EPSILON {
+    if let Some(ambient_pass) = shadow_geometry.ambient {
         let ambient = Color(
             layer.ambient_shadow_color.r(),
             layer.ambient_shadow_color.g(),
             layer.ambient_shadow_color.b(),
-            ambient_alpha,
+            ambient_pass.alpha,
         );
-        let ambient_rect = Rect {
-            x: transformed_bounds.x - spread,
-            y: transformed_bounds.y - spread,
-            width: transformed_bounds.width + spread * 2.0,
-            height: transformed_bounds.height + spread * 2.0,
-        };
         scene.push_shadow_draw(ShadowDraw {
-            shapes: vec![shadow_shape(ambient_rect, ambient, resolved_shape)],
+            shapes: vec![shadow_shape(ambient_pass.rect, ambient, resolved_shape)],
             texts: vec![],
-            blur_radius: ambient_blur_radius,
+            blur_radius: ambient_pass.blur_radius,
             clip,
             z_index: 0, // populated by Scene::push_shadow_draw()
         });
     }
 
-    let spot_alpha = (layer.spot_shadow_color.a() * 0.62).clamp(0.0, 1.0);
-    if spot_alpha > f32::EPSILON {
+    if let Some(spot_pass) = shadow_geometry.spot {
         let spot = Color(
             layer.spot_shadow_color.r(),
             layer.spot_shadow_color.g(),
             layer.spot_shadow_color.b(),
-            spot_alpha,
+            spot_pass.alpha,
         );
-        let spot_spread = spread * 0.72;
-        let spot_rect = Rect {
-            x: transformed_bounds.x + spot_offset_x - spot_spread,
-            y: transformed_bounds.y + spot_offset_y - spot_spread,
-            width: transformed_bounds.width + spot_spread * 2.0,
-            height: transformed_bounds.height + spot_spread * 2.0,
-        };
         scene.push_shadow_draw(ShadowDraw {
-            shapes: vec![shadow_shape(spot_rect, spot, resolved_shape)],
+            shapes: vec![shadow_shape(spot_pass.rect, spot, resolved_shape)],
             texts: vec![],
-            blur_radius: spot_blur_radius,
+            blur_radius: spot_pass.blur_radius,
             clip,
             z_index: 0, // populated by Scene::push_shadow_draw()
         });
@@ -982,9 +960,233 @@ fn text_for_gpu_mask_batch(
     mask_text
 }
 
+trait TextStyleDrawSink {
+    fn current_z(&self) -> usize;
+
+    fn push_shape(
+        &mut self,
+        rect: Rect,
+        brush: Brush,
+        shape: Option<RoundedCornerShape>,
+        clip: Option<Rect>,
+        blend_mode: BlendMode,
+    );
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_text(
+        &mut self,
+        node_id: NodeId,
+        rect: Rect,
+        text: Rc<cranpose_ui::text::AnnotatedString>,
+        color: Color,
+        text_style: TextStyle,
+        font_size: f32,
+        scale: f32,
+        layout_options: TextLayoutOptions,
+        clip: Option<Rect>,
+    );
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_shadow_text(
+        &mut self,
+        node_id: NodeId,
+        rect: Rect,
+        text: Rc<cranpose_ui::text::AnnotatedString>,
+        color: Color,
+        text_style: TextStyle,
+        font_size: f32,
+        scale: f32,
+        layout_options: TextLayoutOptions,
+        blur_radius: f32,
+        clip: Option<Rect>,
+    );
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_effect_layer(
+        &mut self,
+        rect: Rect,
+        clip: Option<Rect>,
+        effect: Option<RenderEffect>,
+        blend_mode: BlendMode,
+        composite_alpha: f32,
+        z_start: usize,
+        z_end: usize,
+    );
+}
+
+impl TextStyleDrawSink for Scene {
+    fn current_z(&self) -> usize {
+        self.next_z
+    }
+
+    fn push_shape(
+        &mut self,
+        rect: Rect,
+        brush: Brush,
+        shape: Option<RoundedCornerShape>,
+        clip: Option<Rect>,
+        blend_mode: BlendMode,
+    ) {
+        Scene::push_shape(self, rect, brush, shape, clip, blend_mode);
+    }
+
+    fn push_text(
+        &mut self,
+        node_id: NodeId,
+        rect: Rect,
+        text: Rc<cranpose_ui::text::AnnotatedString>,
+        color: Color,
+        text_style: TextStyle,
+        font_size: f32,
+        scale: f32,
+        layout_options: TextLayoutOptions,
+        clip: Option<Rect>,
+    ) {
+        Scene::push_text(
+            self,
+            node_id,
+            rect,
+            text,
+            color,
+            text_style,
+            font_size,
+            scale,
+            layout_options,
+            clip,
+        );
+    }
+
+    fn push_shadow_text(
+        &mut self,
+        node_id: NodeId,
+        rect: Rect,
+        text: Rc<cranpose_ui::text::AnnotatedString>,
+        color: Color,
+        text_style: TextStyle,
+        font_size: f32,
+        scale: f32,
+        layout_options: TextLayoutOptions,
+        blur_radius: f32,
+        clip: Option<Rect>,
+    ) {
+        self.push_shadow_draw(ShadowDraw {
+            shapes: vec![],
+            texts: vec![TextDraw {
+                node_id,
+                rect,
+                text,
+                color,
+                text_style,
+                font_size,
+                scale,
+                layout_options,
+                z_index: 0,
+                clip,
+            }],
+            blur_radius,
+            clip,
+            z_index: 0,
+        });
+    }
+
+    fn push_effect_layer(
+        &mut self,
+        rect: Rect,
+        clip: Option<Rect>,
+        effect: Option<RenderEffect>,
+        blend_mode: BlendMode,
+        composite_alpha: f32,
+        z_start: usize,
+        z_end: usize,
+    ) {
+        self.effect_layers.push(EffectLayer {
+            rect,
+            clip,
+            effect,
+            blend_mode,
+            composite_alpha,
+            z_start,
+            z_end,
+        });
+    }
+}
+
+#[derive(Default)]
+struct TextBoundsCollector {
+    bounds: Option<Rect>,
+    next_z: usize,
+}
+
+impl TextStyleDrawSink for TextBoundsCollector {
+    fn current_z(&self) -> usize {
+        self.next_z
+    }
+
+    fn push_shape(
+        &mut self,
+        rect: Rect,
+        _brush: Brush,
+        _shape: Option<RoundedCornerShape>,
+        _clip: Option<Rect>,
+        _blend_mode: BlendMode,
+    ) {
+        self.bounds = union_rect(self.bounds, rect);
+        self.next_z += 1;
+    }
+
+    fn push_text(
+        &mut self,
+        _node_id: NodeId,
+        rect: Rect,
+        _text: Rc<cranpose_ui::text::AnnotatedString>,
+        _color: Color,
+        _text_style: TextStyle,
+        _font_size: f32,
+        _scale: f32,
+        _layout_options: TextLayoutOptions,
+        _clip: Option<Rect>,
+    ) {
+        self.bounds = union_rect(self.bounds, rect);
+        self.next_z += 1;
+    }
+
+    fn push_shadow_text(
+        &mut self,
+        _node_id: NodeId,
+        rect: Rect,
+        _text: Rc<cranpose_ui::text::AnnotatedString>,
+        _color: Color,
+        _text_style: TextStyle,
+        _font_size: f32,
+        _scale: f32,
+        _layout_options: TextLayoutOptions,
+        blur_radius: f32,
+        clip: Option<Rect>,
+    ) {
+        let shadow_bounds = expand_blurred_rect(rect, blur_radius, clip);
+        if let Some(shadow_bounds) = shadow_bounds {
+            self.bounds = union_rect(self.bounds, shadow_bounds);
+        }
+        self.next_z += 1;
+    }
+
+    fn push_effect_layer(
+        &mut self,
+        rect: Rect,
+        _clip: Option<Rect>,
+        _effect: Option<RenderEffect>,
+        _blend_mode: BlendMode,
+        _composite_alpha: f32,
+        _z_start: usize,
+        _z_end: usize,
+    ) {
+        self.bounds = union_rect(self.bounds, rect);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-fn push_span_gpu_text_material_draws(
-    scene: &mut Scene,
+fn push_span_gpu_text_material_draws<S: TextStyleDrawSink>(
+    sink: &mut S,
     node_id: NodeId,
     text_rect: Rect,
     content_layer: &GraphicsLayer,
@@ -1022,9 +1224,9 @@ fn push_span_gpu_text_material_draws(
     mask_text_style.span_style.draw_style = Some(TextDrawStyle::Fill);
 
     for (visible_ranges, effect, effect_rect) in batch_effects {
-        let z_start = scene.next_z;
+        let z_start = sink.current_z();
         let mask_text = text_for_gpu_mask_batch(text, &visible_ranges);
-        scene.push_text(
+        sink.push_text(
             node_id,
             text_rect,
             Rc::new(mask_text),
@@ -1035,23 +1237,23 @@ fn push_span_gpu_text_material_draws(
             options,
             text_clip,
         );
-        scene.effect_layers.push(EffectLayer {
-            rect: effect_rect,
-            clip: text_clip,
-            effect: Some(effect),
-            blend_mode: BlendMode::SrcOver,
-            composite_alpha: 1.0,
+        sink.push_effect_layer(
+            effect_rect,
+            text_clip,
+            Some(effect),
+            BlendMode::SrcOver,
+            1.0,
             z_start,
-            z_end: scene.next_z,
-        });
+            sink.current_z(),
+        );
     }
 
     true
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn push_text_style_draws(
-    scene: &mut Scene,
+fn emit_text_style_draws<S: TextStyleDrawSink>(
+    sink: &mut S,
     node_id: NodeId,
     rect: Rect,
     text_rect: Rect,
@@ -1081,7 +1283,7 @@ pub(crate) fn push_text_style_draws(
 
     if let Some(background) = text_style.span_style.background {
         let brush = apply_layer_to_brush(Brush::solid(background), content_layer);
-        scene.push_shape(
+        sink.push_shape(
             transformed_shifted_text_rect,
             brush,
             None,
@@ -1120,31 +1322,22 @@ pub(crate) fn push_text_style_draws(
         let mut shadow_text_style = transformed_text_style.clone();
         shadow_text_style.span_style.brush = None;
         let blur_radius = shadow.blur_radius.max(0.0) * text_scale;
-
-        let shadow_text = TextDraw {
+        sink.push_shadow_text(
             node_id,
-            rect: transformed_shadow_rect,
-            text: Rc::new(text.clone()),
-            color: apply_layer_to_color(shadow.color, content_layer),
-            text_style: shadow_text_style,
+            transformed_shadow_rect,
+            Rc::new(text.clone()),
+            apply_layer_to_color(shadow.color, content_layer),
+            shadow_text_style,
             font_size,
-            scale: text_scale,
-            layout_options: options,
-            z_index: 0,
-            clip: text_clip,
-        };
-
-        scene.push_shadow_draw(ShadowDraw {
-            shapes: vec![],
-            texts: vec![shadow_text],
+            text_scale,
+            options,
             blur_radius,
-            clip: text_clip,
-            z_index: 0,
-        });
+            text_clip,
+        );
     }
 
     push_text_decorations(
-        scene,
+        sink,
         rect,
         shifted_text_rect,
         content_layer,
@@ -1157,7 +1350,7 @@ pub(crate) fn push_text_style_draws(
     let has_span_foreground_overrides = text_has_span_foreground_overrides(text);
     if has_span_foreground_overrides
         && push_span_gpu_text_material_draws(
-            scene,
+            sink,
             node_id,
             snapped_shifted_text_rect,
             content_layer,
@@ -1180,7 +1373,7 @@ pub(crate) fn push_text_style_draws(
             transformed_text_color,
             text_scale,
         ) {
-            let z_start = scene.next_z;
+            let z_start = sink.current_z();
             let mut mask_text_style = transformed_text_style.clone();
             mask_text_style.span_style.brush = None;
             mask_text_style.span_style.alpha = None;
@@ -1188,7 +1381,7 @@ pub(crate) fn push_text_style_draws(
             mask_text_style.span_style.draw_style = Some(TextDrawStyle::Fill);
             let mask_text = text_for_gpu_mask(text);
 
-            scene.push_text(
+            sink.push_text(
                 node_id,
                 snapped_shifted_text_rect,
                 Rc::new(mask_text),
@@ -1200,20 +1393,20 @@ pub(crate) fn push_text_style_draws(
                 text_clip,
             );
 
-            scene.effect_layers.push(EffectLayer {
-                rect: effect_rect,
-                clip: text_clip,
-                effect: Some(effect),
-                blend_mode: BlendMode::SrcOver,
-                composite_alpha: 1.0,
+            sink.push_effect_layer(
+                effect_rect,
+                text_clip,
+                Some(effect),
+                BlendMode::SrcOver,
+                1.0,
                 z_start,
-                z_end: scene.next_z,
-            });
+                sink.current_z(),
+            );
             return;
         }
     }
 
-    scene.push_text(
+    sink.push_text(
         node_id,
         snapped_shifted_text_rect,
         Rc::new(text.clone()),
@@ -1227,8 +1420,63 @@ pub(crate) fn push_text_style_draws(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn push_text_decorations(
+pub(crate) fn push_text_style_draws(
     scene: &mut Scene,
+    node_id: NodeId,
+    rect: Rect,
+    text_rect: Rect,
+    content_layer: &GraphicsLayer,
+    text: &cranpose_ui::text::AnnotatedString,
+    text_style: &TextStyle,
+    font_size: f32,
+    options: TextLayoutOptions,
+    text_clip: Option<Rect>,
+) {
+    emit_text_style_draws(
+        scene,
+        node_id,
+        rect,
+        text_rect,
+        content_layer,
+        text,
+        text_style,
+        font_size,
+        options,
+        text_clip,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn estimate_text_style_draw_bounds(
+    node_id: NodeId,
+    rect: Rect,
+    text_rect: Rect,
+    content_layer: &GraphicsLayer,
+    text: &cranpose_ui::text::AnnotatedString,
+    text_style: &TextStyle,
+    font_size: f32,
+    options: TextLayoutOptions,
+    text_clip: Option<Rect>,
+) -> Option<Rect> {
+    let mut collector = TextBoundsCollector::default();
+    emit_text_style_draws(
+        &mut collector,
+        node_id,
+        rect,
+        text_rect,
+        content_layer,
+        text,
+        text_style,
+        font_size,
+        options,
+        text_clip,
+    );
+    collector.bounds
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_text_decorations<S: TextStyleDrawSink>(
+    sink: &mut S,
     rect: Rect,
     text_rect: Rect,
     content_layer: &GraphicsLayer,
@@ -1276,7 +1524,7 @@ fn push_text_decorations(
                 height: thickness,
             };
             let transformed = apply_layer_to_rect(underline_rect, rect, content_layer);
-            scene.push_shape(
+            sink.push_shape(
                 transformed,
                 brush.clone(),
                 None,
@@ -1293,7 +1541,7 @@ fn push_text_decorations(
                 height: thickness,
             };
             let transformed = apply_layer_to_rect(strike_rect, rect, content_layer);
-            scene.push_shape(transformed, brush, None, text_clip, BlendMode::SrcOver);
+            sink.push_shape(transformed, brush, None, text_clip, BlendMode::SrcOver);
         }
     }
 }
@@ -1926,6 +2174,42 @@ mod tests {
         )
     }
 
+    fn scene_bounds_for_test(scene: &Scene) -> Option<Rect> {
+        let mut bounds = None;
+        for shape in &scene.shapes {
+            bounds = union_rect(bounds, shape.rect);
+        }
+        for image in &scene.images {
+            bounds = union_rect(bounds, image.rect);
+        }
+        for text in &scene.texts {
+            bounds = union_rect(bounds, text.rect);
+        }
+        for shadow in &scene.shadow_draws {
+            let mut shadow_bounds = None;
+            for (shape, _) in &shadow.shapes {
+                shadow_bounds = union_rect(shadow_bounds, shape.rect);
+            }
+            for text in &shadow.texts {
+                shadow_bounds = union_rect(shadow_bounds, text.rect);
+            }
+            if let Some(shadow_bounds) = shadow_bounds {
+                let shadow_bounds =
+                    expand_blurred_rect(shadow_bounds, shadow.blur_radius, shadow.clip);
+                if let Some(shadow_bounds) = shadow_bounds {
+                    bounds = union_rect(bounds, shadow_bounds);
+                }
+            }
+        }
+        for layer in &scene.effect_layers {
+            bounds = union_rect(bounds, layer.rect);
+        }
+        for layer in &scene.backdrop_layers {
+            bounds = union_rect(bounds, layer.rect);
+        }
+        bounds
+    }
+
     #[test]
     fn auto_alpha_triggers_isolation_with_composite_alpha() {
         let layer = GraphicsLayer {
@@ -2538,6 +2822,72 @@ mod tests {
             scene.effect_layers.is_empty(),
             "hard shadow should not allocate blur effect layer"
         );
+    }
+
+    #[test]
+    fn estimate_text_style_draw_bounds_matches_scene_emission() {
+        let mut scene = Scene::new();
+        let style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                brush: Some(Brush::linear_gradient_range(
+                    vec![Color(0.2, 0.9, 1.0, 1.0), Color(1.0, 0.6, 0.4, 1.0)],
+                    Point::new(0.0, 0.0),
+                    Point::new(140.0, 0.0),
+                )),
+                shadow: Some(cranpose_ui::text::Shadow {
+                    color: Color(0.0, 0.0, 0.0, 0.85),
+                    offset: Point::new(2.5, 1.5),
+                    blur_radius: 3.0,
+                }),
+                text_decoration: Some(TextDecoration::UNDERLINE),
+                baseline_shift: Some(cranpose_ui::text::BaselineShift::SUPERSCRIPT),
+                ..Default::default()
+            },
+            paragraph_style: cranpose_ui::ParagraphStyle {
+                text_motion: Some(TextMotion::Static),
+                ..Default::default()
+            },
+        };
+        let text = cranpose_ui::text::AnnotatedString::from("Layer text bounds");
+        let rect = Rect {
+            x: 8.25,
+            y: 12.5,
+            width: 180.0,
+            height: 30.0,
+        };
+        let clip = Some(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 140.0,
+            height: 48.0,
+        });
+
+        push_text_style_draws(
+            &mut scene,
+            31 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            &text,
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            clip,
+        );
+
+        let estimated = estimate_text_style_draw_bounds(
+            31 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            &text,
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            clip,
+        );
+
+        assert_eq!(estimated, scene_bounds_for_test(&scene));
     }
 
     #[test]

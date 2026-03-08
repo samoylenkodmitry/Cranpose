@@ -93,6 +93,19 @@ impl Rect {
             })
         }
     }
+
+    pub fn union(&self, other: Rect) -> Rect {
+        let left = self.x.min(other.x);
+        let top = self.y.min(other.y);
+        let right = (self.x + self.width).max(other.x + other.width);
+        let bottom = (self.y + self.height).max(other.y + other.height);
+        Rect {
+            x: left,
+            y: top,
+            width: (right - left).max(0.0),
+            height: (bottom - top).max(0.0),
+        }
+    }
 }
 
 /// Padding values for each edge of a rectangle.
@@ -687,6 +700,32 @@ mod tests {
             }
             other => panic!("expected blended primitive, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn rect_union_encloses_both_inputs() {
+        let lhs = Rect {
+            x: 10.0,
+            y: 5.0,
+            width: 8.0,
+            height: 4.0,
+        };
+        let rhs = Rect {
+            x: 4.0,
+            y: 7.0,
+            width: 10.0,
+            height: 6.0,
+        };
+
+        assert_eq!(
+            lhs.union(rhs),
+            Rect {
+                x: 4.0,
+                y: 5.0,
+                width: 14.0,
+                height: 8.0,
+            }
+        );
     }
 
     #[test]

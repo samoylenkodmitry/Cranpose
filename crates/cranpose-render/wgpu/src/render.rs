@@ -2,27 +2,25 @@
 
 use crate::effect_renderer::{EffectRenderer, RoundedCompositeMask};
 use crate::offscreen::OffscreenTarget;
-use crate::render_support::{
-    effective_layer_isolation, layer_for_content, push_draw_primitive, push_layer_shadow,
-    push_text_style_draws, resolve_clip,
-};
 use crate::scene::{BackdropLayer, DrawShape, EffectLayer, ImageDraw, ShadowDraw, TextDraw};
 use crate::shaders;
 use crate::{EnsureTextBufferParams, TextCacheKey, TextSystemState};
 use bytemuck::{Pod, Zeroable};
+use cranpose_render_common::geometry::{blur_extent_margin, expand_blurred_rect, union_rect};
 use cranpose_render_common::graph::{
     quad_bounds, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
     RenderGraph, RenderNode,
 };
+use cranpose_render_common::layer_shadow::layer_shadow_geometry;
 use cranpose_render_common::primitive_emit::{
     emit_draw_primitive, resolve_primitive_clip, DrawPrimitiveSink, ImageDrawParams,
     PrimitiveClipSpace, ShapeDrawParams,
 };
-use cranpose_render_common::style_shared::{apply_layer_to_rect, layer_uniform_scale};
+use cranpose_render_common::style_shared::apply_layer_to_rect;
 use cranpose_ui_graphics::{
     BlendMode, Brush, Color, ColorFilter, ImageBitmap, Rect, RenderEffect, TileMode,
 };
-use cranpose_ui_graphics::{CompositingStrategy, GraphicsLayer, Point};
+use cranpose_ui_graphics::{GraphicsLayer, Point};
 use glyphon::{
     Cache, Color as GlyphonColor, Resolution, SwashCache, TextArea, TextAtlas, TextBounds,
     TextRenderer, Viewport,
@@ -38,6 +36,10 @@ use std::time::Duration;
 
 use crate::gpu_stats;
 use crate::gpu_stats::gpu_stats_enabled;
+use crate::pipeline::{
+    effective_layer_isolation, estimate_text_style_draw_bounds, layer_for_content,
+    push_draw_primitive, push_layer_shadow, push_text_style_draws, resolve_clip,
+};
 
 // Chunked rendering constants for robustness with large scenes
 // Note: Limited to 256 for WebGL compatibility (uniform buffer size limit)
@@ -633,36 +635,11 @@ struct ChildLayerComposite<'a> {
 }
 
 fn local_content_layer(layer: &GraphicsLayer) -> GraphicsLayer {
-    let mut local = layer.clone();
-    local.scale = 1.0;
-    local.scale_x = 1.0;
-    local.scale_y = 1.0;
-    local.rotation_x = 0.0;
-    local.rotation_y = 0.0;
-    local.rotation_z = 0.0;
-    local.translation_x = 0.0;
-    local.translation_y = 0.0;
-    local.render_effect = None;
-    local.backdrop_effect = None;
-    local.blend_mode = BlendMode::SrcOver;
-    local.clip = false;
-    local.compositing_strategy = CompositingStrategy::Auto;
-    local
-}
-
-fn union_rect(lhs: Option<Rect>, rhs: Rect) -> Option<Rect> {
-    if rhs.width <= 0.0 || rhs.height <= 0.0 {
-        return lhs;
+    GraphicsLayer {
+        alpha: layer.alpha,
+        color_filter: layer.color_filter,
+        ..GraphicsLayer::default()
     }
-    Some(match lhs {
-        Some(current) => Rect {
-            x: current.x.min(rhs.x),
-            y: current.y.min(rhs.y),
-            width: (current.x + current.width).max(rhs.x + rhs.width) - current.x.min(rhs.x),
-            height: (current.y + current.height).max(rhs.y + rhs.height) - current.y.min(rhs.y),
-        },
-        None => rhs,
-    })
 }
 
 fn scene_bounds(scene: &crate::scene::Scene) -> Option<Rect> {
@@ -698,65 +675,39 @@ fn shadow_draws_bounds(shadow_draws: &[ShadowDraw]) -> Option<Rect> {
         for text in &shadow.texts {
             shadow_bounds = union_rect(shadow_bounds, text.rect);
         }
-        if let Some(mut shadow_bounds) = shadow_bounds {
-            let blur_margin = (shadow.blur_radius * 3.0).max(1.0);
-            shadow_bounds.x -= blur_margin;
-            shadow_bounds.y -= blur_margin;
-            shadow_bounds.width += blur_margin * 2.0;
-            shadow_bounds.height += blur_margin * 2.0;
-            if let Some(clip) = shadow.clip {
-                if let Some(intersection) = shadow_bounds.intersect(clip) {
-                    shadow_bounds = intersection;
-                }
+        if let Some(shadow_bounds) = shadow_bounds {
+            if let Some(expanded) =
+                expand_blurred_rect(shadow_bounds, shadow.blur_radius, shadow.clip)
+            {
+                bounds = union_rect(bounds, expanded);
             }
-            bounds = union_rect(bounds, shadow_bounds);
         }
     }
     bounds
 }
 
-fn expand_blurred_bounds(mut bounds: Rect, blur_radius: f32, clip: Option<Rect>) -> Option<Rect> {
-    let blur_margin = (blur_radius * 3.0).max(1.0);
-    bounds.x -= blur_margin;
-    bounds.y -= blur_margin;
-    bounds.width += blur_margin * 2.0;
-    bounds.height += blur_margin * 2.0;
-    if let Some(clip) = clip {
-        bounds = bounds.intersect(clip)?;
-    }
-    Some(bounds)
-}
-
-#[derive(Default)]
-struct GeometryBoundsCollector {
+struct BoundsCollector {
     bounds: Option<Rect>,
+    collect_shadows: bool,
 }
 
-impl DrawPrimitiveSink for GeometryBoundsCollector {
-    fn push_shape(&mut self, params: ShapeDrawParams) {
-        self.bounds = union_rect(self.bounds, params.rect);
+impl BoundsCollector {
+    fn geometry_only() -> Self {
+        Self {
+            bounds: None,
+            collect_shadows: false,
+        }
     }
 
-    fn push_image(&mut self, params: ImageDrawParams) {
-        self.bounds = union_rect(self.bounds, params.rect);
-    }
-
-    fn push_shadow(
-        &mut self,
-        _shadow_primitive: cranpose_ui_graphics::ShadowPrimitive,
-        _layer_bounds: Rect,
-        _layer: &GraphicsLayer,
-        _clip: Option<Rect>,
-    ) {
+    fn including_shadows() -> Self {
+        Self {
+            bounds: None,
+            collect_shadows: true,
+        }
     }
 }
 
-#[derive(Default)]
-struct PrimitiveBoundsCollector {
-    bounds: Option<Rect>,
-}
-
-impl DrawPrimitiveSink for PrimitiveBoundsCollector {
+impl DrawPrimitiveSink for BoundsCollector {
     fn push_shape(&mut self, params: ShapeDrawParams) {
         self.bounds = union_rect(self.bounds, params.rect);
     }
@@ -772,6 +723,9 @@ impl DrawPrimitiveSink for PrimitiveBoundsCollector {
         layer: &GraphicsLayer,
         clip: Option<Rect>,
     ) {
+        if !self.collect_shadows {
+            return;
+        }
         if let Some(bounds) =
             estimate_shadow_primitive_bounds(shadow_primitive, layer_bounds, layer, clip)
         {
@@ -792,7 +746,7 @@ fn estimate_shadow_primitive_bounds(
             blur_radius,
             blend_mode,
         } => {
-            let mut collector = GeometryBoundsCollector::default();
+            let mut collector = BoundsCollector::geometry_only();
             emit_draw_primitive(
                 *shape,
                 layer_bounds,
@@ -801,7 +755,7 @@ fn estimate_shadow_primitive_bounds(
                 &mut collector,
                 Some(blend_mode),
             );
-            expand_blurred_bounds(collector.bounds?, blur_radius, clip)
+            expand_blurred_rect(collector.bounds?, blur_radius, clip)
         }
         cranpose_ui_graphics::ShadowPrimitive::Inner {
             fill,
@@ -810,7 +764,7 @@ fn estimate_shadow_primitive_bounds(
             blend_mode,
             clip_rect,
         } => {
-            let mut collector = GeometryBoundsCollector::default();
+            let mut collector = BoundsCollector::geometry_only();
             emit_draw_primitive(
                 *fill,
                 layer_bounds,
@@ -837,7 +791,7 @@ fn estimate_shadow_primitive_bounds(
             let effective_clip = clip.map_or(Some(transformed_clip), |parent_clip| {
                 parent_clip.intersect(transformed_clip)
             });
-            expand_blurred_bounds(collector.bounds?, blur_radius, effective_clip)
+            expand_blurred_rect(collector.bounds?, blur_radius, effective_clip)
         }
     }
 }
@@ -849,7 +803,7 @@ fn estimate_draw_primitive_bounds(
     clip: Option<Rect>,
     blend_mode: Option<BlendMode>,
 ) -> Option<Rect> {
-    let mut collector = PrimitiveBoundsCollector::default();
+    let mut collector = BoundsCollector::including_shadows();
     emit_draw_primitive(
         primitive,
         layer_bounds,
@@ -878,9 +832,7 @@ fn estimate_text_primitive_bounds(
         return None;
     }
 
-    let mut scene = crate::scene::Scene::new();
-    push_text_style_draws(
-        &mut scene,
+    estimate_text_style_draw_bounds(
         text.node_id,
         layer.local_bounds,
         text.rect,
@@ -890,8 +842,7 @@ fn estimate_text_primitive_bounds(
         text.font_size,
         text.layout_options,
         text_clip,
-    );
-    scene_bounds(&scene)
+    )
 }
 
 fn estimate_layer_shadow_bounds(
@@ -899,44 +850,15 @@ fn estimate_layer_shadow_bounds(
     transformed_bounds: Rect,
     clip: Option<Rect>,
 ) -> Option<Rect> {
-    if layer.shadow_elevation <= 0.0 {
-        return None;
-    }
-
-    let scale = layer_uniform_scale(layer).max(0.1);
-    let elevation = layer.shadow_elevation * scale;
-    let spread = (elevation * 0.24).max(0.8);
-    let spot_offset_x = elevation * 0.18;
-    let spot_offset_y = elevation * 0.62;
-    let ambient_blur_radius = (elevation * 0.95).max(0.5);
-    let spot_blur_radius = (elevation * 0.72).max(0.5);
-    let ambient_alpha = (layer.ambient_shadow_color.a() * 0.44).clamp(0.0, 1.0);
-    let spot_alpha = (layer.spot_shadow_color.a() * 0.62).clamp(0.0, 1.0);
     let mut bounds = None;
 
-    if ambient_alpha > f32::EPSILON {
-        let ambient_rect = Rect {
-            x: transformed_bounds.x - spread,
-            y: transformed_bounds.y - spread,
-            width: transformed_bounds.width + spread * 2.0,
-            height: transformed_bounds.height + spread * 2.0,
-        };
-        if let Some(ambient_bounds) = expand_blurred_bounds(ambient_rect, ambient_blur_radius, clip)
-        {
-            bounds = union_rect(bounds, ambient_bounds);
-        }
-    }
-
-    if spot_alpha > f32::EPSILON {
-        let spot_spread = spread * 0.72;
-        let spot_rect = Rect {
-            x: transformed_bounds.x + spot_offset_x - spot_spread,
-            y: transformed_bounds.y + spot_offset_y - spot_spread,
-            width: transformed_bounds.width + spot_spread * 2.0,
-            height: transformed_bounds.height + spot_spread * 2.0,
-        };
-        if let Some(spot_bounds) = expand_blurred_bounds(spot_rect, spot_blur_radius, clip) {
-            bounds = union_rect(bounds, spot_bounds);
+    let shadow_geometry = layer_shadow_geometry(layer, transformed_bounds);
+    for pass in [shadow_geometry.ambient, shadow_geometry.spot]
+        .into_iter()
+        .flatten()
+    {
+        if let Some(pass_bounds) = expand_blurred_rect(pass.rect, pass.blur_radius, clip) {
+            bounds = union_rect(bounds, pass_bounds);
         }
     }
 
@@ -963,6 +885,19 @@ fn surface_target_size(rect: Rect, root_scale: f32) -> (u32, u32) {
         (rect.width * root_scale).ceil().max(1.0) as u32,
         (rect.height * root_scale).ceil().max(1.0) as u32,
     )
+}
+
+fn surface_pixel_rect(rect: Rect, root_scale: f32) -> Rect {
+    Rect {
+        x: rect.x * root_scale,
+        y: rect.y * root_scale,
+        width: rect.width * root_scale,
+        height: rect.height * root_scale,
+    }
+}
+
+fn local_effect_pixel_rect(width: u32, height: u32) -> [f32; 4] {
+    [0.0, 0.0, width as f32, height as f32]
 }
 
 fn target_quad(width: u32, height: u32) -> [[f32; 2]; 4] {
@@ -1218,6 +1153,84 @@ impl TranslateBy for crate::scene::Scene {
         self.effect_layers.translate_by(delta);
         self.backdrop_layers.translate_by(delta);
     }
+}
+
+struct SceneWindowSource<'a> {
+    shapes: &'a [DrawShape],
+    images: &'a [ImageDraw],
+    texts: &'a [TextDraw],
+    shadow_draws: &'a [ShadowDraw],
+    effect_layers: &'a [EffectLayer],
+    backdrop_layers: &'a [BackdropLayer],
+}
+
+fn build_scene_window(
+    source: SceneWindowSource<'_>,
+    z_start: usize,
+    z_end: usize,
+    window_rect: Rect,
+) -> crate::scene::Scene {
+    let mut scene = crate::scene::Scene::new();
+    scene.shapes = source
+        .shapes
+        .iter()
+        .filter(|shape| shape.z_index >= z_start && shape.z_index < z_end)
+        .cloned()
+        .collect();
+    scene.images = source
+        .images
+        .iter()
+        .filter(|image| image.z_index >= z_start && image.z_index < z_end)
+        .cloned()
+        .collect();
+    scene.texts = source
+        .texts
+        .iter()
+        .filter(|text| text.z_index >= z_start && text.z_index < z_end)
+        .cloned()
+        .collect();
+    scene.shadow_draws = source
+        .shadow_draws
+        .iter()
+        .filter(|shadow| shadow.z_index >= z_start && shadow.z_index < z_end)
+        .cloned()
+        .collect();
+    scene.effect_layers = source
+        .effect_layers
+        .iter()
+        .filter(|layer| effect_layer_in_range(layer, z_start, z_end))
+        .cloned()
+        .collect();
+    scene.backdrop_layers = source
+        .backdrop_layers
+        .iter()
+        .filter(|layer| layer.z_index >= z_start && layer.z_index < z_end)
+        .cloned()
+        .collect();
+    scene.translate_by(Point {
+        x: -window_rect.x,
+        y: -window_rect.y,
+    });
+    scene
+}
+
+fn filtered_effect_layer_index(
+    effect_layers: &[EffectLayer],
+    effect_layer_index: usize,
+    z_start: usize,
+    z_end: usize,
+) -> Option<usize> {
+    let mut filtered_index = 0usize;
+    for (index, layer) in effect_layers.iter().enumerate() {
+        if !effect_layer_in_range(layer, z_start, z_end) {
+            continue;
+        }
+        if index == effect_layer_index {
+            return Some(filtered_index);
+        }
+        filtered_index += 1;
+    }
+    None
 }
 
 fn scaled_quad(quad: [[f32; 2]; 4], scale: f32) -> [[f32; 2]; 4] {
@@ -1869,6 +1882,39 @@ impl GpuRenderer {
         underlay
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn copy_surface_region_to_view(
+        &mut self,
+        source: &OffscreenTarget,
+        source_rect: Rect,
+        dest_view: &wgpu::TextureView,
+        dest_width: u32,
+        dest_height: u32,
+        root_scale: f32,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+    ) -> Result<(), String> {
+        let source_pixel_rect = surface_pixel_rect(source_rect, root_scale);
+        let dest_quad = target_quad(dest_width, dest_height);
+        let inverse = ProjectiveTransform::from_rect_to_quad(source_pixel_rect, dest_quad)
+            .inverse()
+            .ok_or_else(|| "surface region transform is not invertible".to_string())?;
+        self.effect_renderer.composite_to_view_projective(
+            &self.device,
+            &self.queue,
+            source,
+            dest_view,
+            (dest_width, dest_height),
+            (source.width as f32, source.height as f32),
+            inverse.matrix(),
+            dest_quad,
+            1.0,
+            load_op,
+            None,
+            BlendMode::SrcOver,
+        );
+        Ok(())
+    }
+
     fn render_layer_surface(
         &mut self,
         text_state: &mut TextSystemState,
@@ -1974,7 +2020,6 @@ impl GpuRenderer {
             child.backdrop_rect.y += shift.y;
             child.shadow_draws.translate_by(shift);
         }
-        child_layers.sort_by_key(|child| child.z_index);
 
         let (width, height) = surface_target_size(surface_rect, root_scale);
         let target = self.acquire_offscreen(width, height);
@@ -2125,12 +2170,7 @@ impl GpuRenderer {
                     &target,
                     &effected.view,
                     effect,
-                    [
-                        surface_rect.x * root_scale,
-                        surface_rect.y * root_scale,
-                        surface_rect.width * root_scale,
-                        surface_rect.height * root_scale,
-                    ],
+                    local_effect_pixel_rect(width, height),
                 );
                 self.effect_renderer.offscreen_pool.release(target);
                 target = effected;
@@ -2765,7 +2805,7 @@ impl GpuRenderer {
             return;
         };
 
-        let blur_margin = (shadow.blur_radius * 3.0).max(1.0);
+        let blur_margin = blur_extent_margin(shadow.blur_radius);
         let mut blur_bounds = Rect {
             x: shape_bounds.x - blur_margin,
             y: shape_bounds.y - blur_margin,
@@ -2994,41 +3034,67 @@ impl GpuRenderer {
         else {
             return Ok(());
         };
+        let (effect_width, effect_height) = surface_target_size(layer.rect, root_scale);
+        let window_scene = build_scene_window(
+            SceneWindowSource {
+                shapes,
+                images,
+                texts,
+                shadow_draws,
+                effect_layers,
+                backdrop_layers,
+            },
+            layer.z_start,
+            layer.z_end,
+            layer.rect,
+        );
+        let Some(window_effect_index) = filtered_effect_layer_index(
+            effect_layers,
+            effect_layer_index,
+            layer.z_start,
+            layer.z_end,
+        ) else {
+            return Err("effect layer window index is missing".to_string());
+        };
 
-        let source = self.acquire_offscreen(width, height);
-        // The clear is folded into render_range_with_layer_events_to_target's
-        // initial_load_op below, avoiding a standalone clear submit.
+        let source = self.acquire_offscreen(effect_width, effect_height);
 
         // Nested backdrop layers inside this effect-isolated subtree should still
         // be able to sample the true scene content behind the subtree.
         let has_nested_backdrop =
-            has_backdrop_layer_in_range(backdrop_layers, layer.z_start, layer.z_end);
+            has_backdrop_layer_in_range(&window_scene.backdrop_layers, layer.z_start, layer.z_end);
         let layer_underlay = if has_nested_backdrop {
-            let underlay = self.acquire_offscreen(width, height);
+            let underlay = self.acquire_offscreen(effect_width, effect_height);
 
             if let Some(existing_underlay) = backdrop_underlay {
-                self.effect_renderer.composite_to_view(
-                    &self.device,
-                    &self.queue,
+                self.copy_surface_region_to_view(
                     existing_underlay,
+                    layer.rect,
                     &underlay.view,
+                    effect_width,
+                    effect_height,
+                    root_scale,
                     wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                );
-                self.effect_renderer.composite_to_view(
-                    &self.device,
-                    &self.queue,
+                )?;
+                self.copy_surface_region_to_view(
                     target,
+                    layer.rect,
                     &underlay.view,
+                    effect_width,
+                    effect_height,
+                    root_scale,
                     wgpu::LoadOp::Load,
-                );
+                )?;
             } else {
-                self.effect_renderer.composite_to_view(
-                    &self.device,
-                    &self.queue,
+                self.copy_surface_region_to_view(
                     target,
+                    layer.rect,
                     &underlay.view,
+                    effect_width,
+                    effect_height,
+                    root_scale,
                     wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                );
+                )?;
             }
             Some(underlay)
         } else {
@@ -3038,17 +3104,17 @@ impl GpuRenderer {
         let render_result = self.render_range_with_layer_events_to_target(
             text_state,
             &source,
-            shapes,
-            images,
-            texts,
-            shadow_draws,
-            effect_layers,
-            backdrop_layers,
+            &window_scene.shapes,
+            &window_scene.images,
+            &window_scene.texts,
+            &window_scene.shadow_draws,
+            &window_scene.effect_layers,
+            &window_scene.backdrop_layers,
             layer.z_start,
             layer.z_end,
-            Some(effect_layer_index),
-            width,
-            height,
+            Some(window_effect_index),
+            effect_width,
+            effect_height,
             root_scale,
             layer_underlay.as_ref(),
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -3060,14 +3126,7 @@ impl GpuRenderer {
 
         render_result?;
 
-        let dest = self.acquire_offscreen(width, height);
-
-        let layer_pixel_rect = [
-            layer.rect.x * root_scale,
-            layer.rect.y * root_scale,
-            layer.rect.width * root_scale,
-            layer.rect.height * root_scale,
-        ];
+        let dest = self.acquire_offscreen(effect_width, effect_height);
 
         if let Some(effect) = &layer.effect {
             if is_render_effect_supported(effect) {
@@ -3077,7 +3136,7 @@ impl GpuRenderer {
                     &source,
                     &dest.view,
                     effect,
-                    layer_pixel_rect,
+                    local_effect_pixel_rect(effect_width, effect_height),
                 );
             } else {
                 warn_unsupported_effect_once();
@@ -3111,7 +3170,12 @@ impl GpuRenderer {
                 Some(scissor),
                 None,
                 layer_blend_mode,
-                None,
+                Some((
+                    layer.rect.x * root_scale,
+                    layer.rect.y * root_scale,
+                    effect_width as f32,
+                    effect_height as f32,
+                )),
             );
 
         self.effect_renderer.offscreen_pool.release(source);
@@ -3134,57 +3198,78 @@ impl GpuRenderer {
         else {
             return Ok(());
         };
-
-        let snapshot = self.acquire_offscreen(width, height);
+        let (backdrop_width, backdrop_height) = surface_target_size(layer.rect, root_scale);
+        let snapshot = self.acquire_offscreen(backdrop_width, backdrop_height);
         if let Some(underlay) = backdrop_underlay {
-            self.effect_renderer.composite_to_view(
-                &self.device,
-                &self.queue,
+            self.copy_surface_region_to_view(
                 underlay,
+                layer.rect,
                 &snapshot.view,
+                backdrop_width,
+                backdrop_height,
+                root_scale,
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            );
-            self.effect_renderer.composite_to_view(
+            )?;
+            self.copy_surface_region_to_view(
+                target,
+                layer.rect,
+                &snapshot.view,
+                backdrop_width,
+                backdrop_height,
+                root_scale,
+                wgpu::LoadOp::Load,
+            )?;
+        } else {
+            self.copy_surface_region_to_view(
+                target,
+                layer.rect,
+                &snapshot.view,
+                backdrop_width,
+                backdrop_height,
+                root_scale,
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            )?;
+        }
+
+        let dest = self.acquire_offscreen(backdrop_width, backdrop_height);
+        if is_render_effect_supported(&layer.effect) {
+            self.effect_renderer.apply_effect(
                 &self.device,
                 &self.queue,
-                target,
-                &snapshot.view,
-                wgpu::LoadOp::Load,
+                &snapshot,
+                &dest.view,
+                &layer.effect,
+                local_effect_pixel_rect(backdrop_width, backdrop_height),
             );
         } else {
+            warn_unsupported_effect_once();
             self.effect_renderer.composite_to_view(
                 &self.device,
                 &self.queue,
-                target,
-                &snapshot.view,
+                &snapshot,
+                &dest.view,
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             );
         }
 
-        let dest = self.acquire_offscreen(width, height);
-        let layer_pixel_rect = [
-            layer.rect.x * root_scale,
-            layer.rect.y * root_scale,
-            layer.rect.width * root_scale,
-            layer.rect.height * root_scale,
-        ];
-        self.effect_renderer.apply_effect(
-            &self.device,
-            &self.queue,
-            &snapshot,
-            &dest.view,
-            &layer.effect,
-            layer_pixel_rect,
-        );
-
-        self.effect_renderer.composite_to_view_scissored(
-            &self.device,
-            &self.queue,
-            &dest,
-            &target.view,
-            wgpu::LoadOp::Load,
-            Some(scissor),
-        );
+        self.effect_renderer
+            .composite_to_view_scissored_with_alpha_and_mask_and_blend_mode(
+                &self.device,
+                &self.queue,
+                &dest,
+                &target.view,
+                1.0,
+                wgpu::LoadOp::Load,
+                Some(scissor),
+                None,
+                BlendMode::SrcOver,
+                Some((
+                    layer.rect.x * root_scale,
+                    layer.rect.y * root_scale,
+                    backdrop_width as f32,
+                    backdrop_height as f32,
+                )),
+            );
 
         self.effect_renderer.offscreen_pool.release(snapshot);
         self.effect_renderer.offscreen_pool.release(dest);
@@ -5148,6 +5233,177 @@ mod tests {
         assert!(rect.y < 9.0);
         assert!(rect.width > 12.0);
         assert!(rect.height > 8.0);
+    }
+
+    #[test]
+    fn build_scene_window_filters_and_translates_items() {
+        let mut shape = test_shape(6, BlendMode::SrcOver);
+        shape.rect.x = 12.0;
+        shape.rect.y = 25.0;
+        shape.local_rect.x = 12.0;
+        shape.local_rect.y = 25.0;
+        shape.quad = [[12.0, 25.0], [20.0, 25.0], [12.0, 33.0], [20.0, 33.0]];
+        shape.clip = Some(Rect {
+            x: 11.0,
+            y: 24.0,
+            width: 10.0,
+            height: 10.0,
+        });
+
+        let mut image = test_image(8, BlendMode::SrcOver);
+        image.rect.x = 18.0;
+        image.rect.y = 27.0;
+        image.local_rect.x = 18.0;
+        image.local_rect.y = 27.0;
+        image.quad = [[18.0, 27.0], [26.0, 27.0], [18.0, 35.0], [26.0, 35.0]];
+
+        let mut text = test_text(9);
+        text.rect.x = 16.0;
+        text.rect.y = 29.0;
+        text.clip = Some(Rect {
+            x: 15.0,
+            y: 28.0,
+            width: 9.0,
+            height: 6.0,
+        });
+
+        let mut shadow_shape = test_shape(7, BlendMode::SrcOver);
+        shadow_shape.rect.x = 14.0;
+        shadow_shape.rect.y = 26.0;
+        shadow_shape.local_rect.x = 14.0;
+        shadow_shape.local_rect.y = 26.0;
+        shadow_shape.quad = [[14.0, 26.0], [22.0, 26.0], [14.0, 34.0], [22.0, 34.0]];
+        let mut shadow = test_shadow_draw(vec![(shadow_shape, BlendMode::SrcOver)]);
+        shadow.z_index = 7;
+
+        let mut nested_effect = effect_layer(6, 10);
+        nested_effect.rect.x = 13.0;
+        nested_effect.rect.y = 24.0;
+        nested_effect.clip = Some(Rect {
+            x: 15.0,
+            y: 25.0,
+            width: 4.0,
+            height: 5.0,
+        });
+
+        let mut nested_backdrop = backdrop_layer(8);
+        nested_backdrop.rect.x = 17.0;
+        nested_backdrop.rect.y = 26.0;
+        nested_backdrop.clip = Some(Rect {
+            x: 18.0,
+            y: 27.0,
+            width: 3.0,
+            height: 4.0,
+        });
+
+        let window = build_scene_window(
+            SceneWindowSource {
+                shapes: &[test_shape(4, BlendMode::SrcOver), shape],
+                images: &[image],
+                texts: &[text],
+                shadow_draws: &[shadow],
+                effect_layers: &[effect_layer(2, 4), nested_effect.clone()],
+                backdrop_layers: &[backdrop_layer(4), nested_backdrop.clone()],
+            },
+            5,
+            10,
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 20.0,
+                height: 20.0,
+            },
+        );
+
+        assert_eq!(window.shapes.len(), 1);
+        assert_eq!(
+            window.shapes[0].rect,
+            Rect {
+                x: 2.0,
+                y: 5.0,
+                width: 8.0,
+                height: 8.0,
+            }
+        );
+        assert_eq!(
+            window.shapes[0].clip,
+            Some(Rect {
+                x: 1.0,
+                y: 4.0,
+                width: 10.0,
+                height: 10.0,
+            })
+        );
+        assert_eq!(window.images.len(), 1);
+        assert_eq!(window.images[0].rect.x, 8.0);
+        assert_eq!(window.images[0].rect.y, 7.0);
+        assert_eq!(window.texts.len(), 1);
+        assert_eq!(window.texts[0].rect.x, 6.0);
+        assert_eq!(window.texts[0].rect.y, 9.0);
+        assert_eq!(
+            window.texts[0].clip,
+            Some(Rect {
+                x: 5.0,
+                y: 8.0,
+                width: 9.0,
+                height: 6.0,
+            })
+        );
+        assert_eq!(window.shadow_draws.len(), 1);
+        assert_eq!(window.shadow_draws[0].shapes[0].0.rect.x, 4.0);
+        assert_eq!(window.shadow_draws[0].shapes[0].0.rect.y, 6.0);
+        assert_eq!(window.effect_layers.len(), 1);
+        assert_eq!(
+            window.effect_layers[0].rect,
+            Rect {
+                x: 3.0,
+                y: 4.0,
+                width: 10.0,
+                height: 10.0,
+            }
+        );
+        assert_eq!(
+            window.effect_layers[0].clip,
+            Some(Rect {
+                x: 5.0,
+                y: 5.0,
+                width: 4.0,
+                height: 5.0,
+            })
+        );
+        assert_eq!(window.backdrop_layers.len(), 1);
+        assert_eq!(
+            window.backdrop_layers[0].rect,
+            Rect {
+                x: 7.0,
+                y: 6.0,
+                width: 10.0,
+                height: 10.0,
+            }
+        );
+        assert_eq!(
+            window.backdrop_layers[0].clip,
+            Some(Rect {
+                x: 8.0,
+                y: 7.0,
+                width: 3.0,
+                height: 4.0,
+            })
+        );
+    }
+
+    #[test]
+    fn filtered_effect_layer_index_counts_only_window_members() {
+        let effects = vec![
+            effect_layer(0, 2),
+            effect_layer(5, 12),
+            effect_layer(6, 10),
+            effect_layer(14, 20),
+        ];
+
+        assert_eq!(filtered_effect_layer_index(&effects, 1, 5, 12), Some(0));
+        assert_eq!(filtered_effect_layer_index(&effects, 2, 5, 12), Some(1));
+        assert_eq!(filtered_effect_layer_index(&effects, 3, 5, 12), None);
     }
 
     #[test]

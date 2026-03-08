@@ -8,7 +8,6 @@ pub(crate) mod gpu_stats;
 mod offscreen;
 mod pipeline;
 mod render;
-mod render_support;
 mod scene;
 mod shader_cache;
 mod shaders;
