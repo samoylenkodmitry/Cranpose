@@ -20,7 +20,7 @@ use cranpose_render_common::{
     Renderer,
 };
 use cranpose_ui::{set_text_measurer, LayoutTree, TextMeasurer};
-use cranpose_ui_graphics::Size;
+use cranpose_ui_graphics::{RenderHash, Size};
 use glyphon::{
     Attrs, AttrsOwned, Buffer, FamilyOwned, FontSystem, Metrics, Shaping, Style as GlyphonStyle,
     Weight as GlyphonWeight,
@@ -304,17 +304,6 @@ fn select_text_shaping(
     }
 }
 
-fn hash_f32_bits<H: Hasher>(value: f32, state: &mut H) {
-    value.to_bits().hash(state);
-}
-
-fn hash_color<H: Hasher>(color: cranpose_ui_graphics::Color, state: &mut H) {
-    hash_f32_bits(color.r(), state);
-    hash_f32_bits(color.g(), state);
-    hash_f32_bits(color.b(), state);
-    hash_f32_bits(color.a(), state);
-}
-
 fn glyph_foreground_color(
     span_style: &cranpose_ui::text::SpanStyle,
 ) -> Option<cranpose_ui_graphics::Color> {
@@ -334,7 +323,7 @@ fn hash_optional_glyph_foreground_color<H: Hasher>(
     match glyph_foreground_color(span_style) {
         Some(color) => {
             1u8.hash(state);
-            hash_color(color, state);
+            color.render_hash().hash(state);
         }
         None => 0u8.hash(state),
     }

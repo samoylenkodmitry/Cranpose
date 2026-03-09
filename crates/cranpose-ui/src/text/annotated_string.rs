@@ -171,6 +171,26 @@ impl AnnotatedString {
         hasher.finish()
     }
 
+    pub fn render_hash(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.text.hash(&mut hasher);
+        self.span_styles.len().hash(&mut hasher);
+        for span in &self.span_styles {
+            span.range.start.hash(&mut hasher);
+            span.range.end.hash(&mut hasher);
+            span.item.render_hash().hash(&mut hasher);
+        }
+        self.paragraph_styles.len().hash(&mut hasher);
+        for paragraph in &self.paragraph_styles {
+            paragraph.range.start.hash(&mut hasher);
+            paragraph.range.end.hash(&mut hasher);
+            paragraph.item.render_hash().hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
     /// Returns a new `AnnotatedString` containing a substring of the original text
     /// and any styles that overlap with the new range, with indices adjusted.
     pub fn subsequence(&self, range: std::ops::Range<usize>) -> Self {
@@ -725,5 +745,22 @@ mod tests {
         assert_eq!(slice.span_styles[0].range, 3..9);
         assert_eq!(slice.link_annotations.len(), 1);
         assert_eq!(slice.link_annotations[0].range, 9..14);
+    }
+
+    #[test]
+    fn render_hash_changes_for_visual_style_ranges() {
+        let plain = AnnotatedString::builder()
+            .append("Hello")
+            .to_annotated_string();
+        let styled = AnnotatedString::builder()
+            .push_style(SpanStyle {
+                color: Some(crate::modifier::Color(1.0, 0.0, 0.0, 1.0)),
+                ..Default::default()
+            })
+            .append("Hello")
+            .pop()
+            .to_annotated_string();
+
+        assert_ne!(plain.render_hash(), styled.render_hash());
     }
 }

@@ -4,6 +4,7 @@ use super::paragraph::{Hyphens, LineBreak, TextAlign, TextDirection, TextIndent}
 use super::unit::TextUnit;
 use crate::modifier::{Brush, Color};
 use cranpose_core::hash::default;
+use cranpose_ui_graphics::RenderHash;
 use std::hash::{Hash, Hasher};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -248,6 +249,12 @@ impl SpanStyle {
         }
         color
     }
+
+    pub fn render_hash(&self) -> u64 {
+        let mut hasher = default::new();
+        hash_span_style(self, &mut hasher);
+        hasher.finish()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -296,6 +303,12 @@ impl ParagraphStyle {
 
     pub fn plus(&self, other: &ParagraphStyle) -> ParagraphStyle {
         self.merge(other)
+    }
+
+    pub fn render_hash(&self) -> u64 {
+        let mut hasher = default::new();
+        hash_paragraph_style(self, &mut hasher);
+        hasher.finish()
     }
 }
 
@@ -416,6 +429,13 @@ impl TextStyle {
 
         hasher.finish()
     }
+
+    pub fn render_hash(&self) -> u64 {
+        let mut hasher = default::new();
+        hash_span_style(&self.span_style, &mut hasher);
+        hash_paragraph_style(&self.paragraph_style, &mut hasher);
+        hasher.finish()
+    }
 }
 
 fn merge_foreground_style(
@@ -501,6 +521,36 @@ fn hash_f32_bits<H: Hasher>(value: f32, state: &mut H) {
     value.to_bits().hash(state);
 }
 
+fn hash_option_color<H: Hasher>(color: &Option<Color>, state: &mut H) {
+    match color {
+        Some(color) => {
+            1u8.hash(state);
+            color.render_hash().hash(state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
+fn hash_option_brush<H: Hasher>(brush: &Option<Brush>, state: &mut H) {
+    match brush {
+        Some(brush) => {
+            1u8.hash(state);
+            brush.render_hash().hash(state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
+fn hash_option_alpha<H: Hasher>(alpha: &Option<f32>, state: &mut H) {
+    match alpha {
+        Some(alpha) => {
+            1u8.hash(state);
+            hash_f32_bits(*alpha, state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
 fn hash_text_unit<H: Hasher>(unit: TextUnit, state: &mut H) {
     match unit {
         TextUnit::Unspecified => 0u8.hash(state),
@@ -548,6 +598,67 @@ fn hash_option_text_indent<H: Hasher>(indent: &Option<TextIndent>, state: &mut H
         }
         None => 0u8.hash(state),
     }
+}
+
+fn hash_option_shadow<H: Hasher>(shadow: &Option<Shadow>, state: &mut H) {
+    match shadow {
+        Some(shadow) => {
+            1u8.hash(state);
+            shadow.color.render_hash().hash(state);
+            hash_f32_bits(shadow.offset.x, state);
+            hash_f32_bits(shadow.offset.y, state);
+            hash_f32_bits(shadow.blur_radius, state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
+fn hash_option_text_draw_style<H: Hasher>(draw_style: &Option<TextDrawStyle>, state: &mut H) {
+    match draw_style {
+        Some(TextDrawStyle::Fill) => {
+            1u8.hash(state);
+            0u8.hash(state);
+        }
+        Some(TextDrawStyle::Stroke { width }) => {
+            1u8.hash(state);
+            1u8.hash(state);
+            hash_f32_bits(*width, state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
+fn hash_span_style<H: Hasher>(span: &SpanStyle, state: &mut H) {
+    hash_option_color(&span.color, state);
+    hash_option_brush(&span.brush, state);
+    hash_option_alpha(&span.alpha, state);
+    hash_text_unit(span.font_size, state);
+    span.font_weight.hash(state);
+    span.font_style.hash(state);
+    span.font_synthesis.hash(state);
+    span.font_family.hash(state);
+    span.font_feature_settings.hash(state);
+    hash_text_unit(span.letter_spacing, state);
+    hash_option_baseline_shift(&span.baseline_shift, state);
+    hash_option_geometric_transform(&span.text_geometric_transform, state);
+    span.locale_list.hash(state);
+    hash_option_color(&span.background, state);
+    span.text_decoration.hash(state);
+    hash_option_shadow(&span.shadow, state);
+    span.platform_style.hash(state);
+    hash_option_text_draw_style(&span.draw_style, state);
+}
+
+fn hash_paragraph_style<H: Hasher>(paragraph: &ParagraphStyle, state: &mut H) {
+    paragraph.text_align.hash(state);
+    paragraph.text_direction.hash(state);
+    hash_text_unit(paragraph.line_height, state);
+    hash_option_text_indent(&paragraph.text_indent, state);
+    paragraph.platform_style.hash(state);
+    paragraph.line_height_style.hash(state);
+    paragraph.line_break.hash(state);
+    paragraph.hyphens.hash(state);
+    paragraph.text_motion.hash(state);
 }
 
 #[cfg(test)]
@@ -838,5 +949,45 @@ mod tests {
             ..Default::default()
         });
         assert_ne!(style_a.measurement_hash(), style_b.measurement_hash());
+    }
+
+    #[test]
+    fn span_style_render_hash_changes_for_visual_attributes() {
+        let plain = SpanStyle::default();
+        let decorated = SpanStyle {
+            shadow: Some(Shadow {
+                color: Color(1.0, 0.0, 0.0, 0.5),
+                offset: crate::modifier::Point::new(2.0, 3.0),
+                blur_radius: 4.0,
+            }),
+            draw_style: Some(TextDrawStyle::Stroke { width: 2.0 }),
+            ..Default::default()
+        };
+
+        assert_ne!(plain.render_hash(), decorated.render_hash());
+    }
+
+    #[test]
+    fn paragraph_style_render_hash_changes_for_paragraph_attributes() {
+        let base = ParagraphStyle::default();
+        let aligned = ParagraphStyle {
+            text_align: TextAlign::Center,
+            text_direction: TextDirection::Rtl,
+            ..Default::default()
+        };
+
+        assert_ne!(base.render_hash(), aligned.render_hash());
+    }
+
+    #[test]
+    fn text_style_render_hash_includes_visual_attributes() {
+        let base = TextStyle::default();
+        let tinted = TextStyle::from_span_style(SpanStyle {
+            color: Some(Color(0.1, 0.2, 0.3, 1.0)),
+            background: Some(Color(0.9, 0.8, 0.7, 1.0)),
+            ..Default::default()
+        });
+
+        assert_ne!(base.render_hash(), tinted.render_hash());
     }
 }

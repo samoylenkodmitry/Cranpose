@@ -8,17 +8,18 @@ use crate::{EnsureTextBufferParams, TextCacheKey, TextSystemState};
 use bytemuck::{Pod, Zeroable};
 use cranpose_render_common::geometry::{blur_extent_margin, expand_blurred_rect, union_rect};
 use cranpose_render_common::graph::{
-    quad_bounds, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
-    RenderGraph, RenderNode,
+    quad_bounds, CachePolicy, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
+    ProjectiveTransform, RenderGraph, RenderNode,
 };
 use cranpose_render_common::layer_shadow::layer_shadow_geometry;
 use cranpose_render_common::primitive_emit::{
     emit_draw_primitive, resolve_primitive_clip, DrawPrimitiveSink, ImageDrawParams,
     PrimitiveClipSpace, ShapeDrawParams,
 };
+use cranpose_render_common::raster_cache::{LayerRasterCacheKey, ScaleBucket};
 use cranpose_render_common::style_shared::apply_layer_to_rect;
 use cranpose_ui_graphics::{
-    BlendMode, Brush, Color, ColorFilter, ImageBitmap, Rect, RenderEffect, TileMode,
+    BlendMode, Brush, Color, ColorFilter, ImageBitmap, Rect, RenderEffect, RenderHash, TileMode,
 };
 use cranpose_ui_graphics::{GraphicsLayer, Point};
 use glyphon::{
@@ -27,9 +28,11 @@ use glyphon::{
 };
 use lru::LruCache;
 use rustc_hash::FxHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::ops::Range;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, OnceLock};
 use std::time::Duration;
@@ -45,6 +48,8 @@ use crate::pipeline::{
 // Note: Limited to 256 for WebGL compatibility (uniform buffer size limit)
 // WebGL guarantees 16KB uniform buffers, ShapeData is 64 bytes = 256 max shapes
 const HARD_MAX_BUFFER_MB: usize = 64; // Maximum 64MB per buffer
+const MAX_LAYER_SURFACE_CACHE_ITEMS: usize = 256;
+const MAX_LAYER_SURFACE_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     r: 18.0 / 255.0,
     g: 18.0 / 255.0,
@@ -611,17 +616,48 @@ pub struct GpuRenderer {
     scratch_layer_events: Vec<LayerEvent>,
     staged_uploads: StagedBufferUploads,
     effect_renderer: EffectRenderer,
+    layer_surface_cache: LruCache<LayerRasterCacheKey, CachedLayerSurface>,
+    layer_surface_cache_identity: HashMap<usize, LayerRasterCacheKey>,
+    layer_surface_cache_bytes: u64,
     frame_stats: gpu_stats::FrameStats,
     frame_count: u64,
     gpu_stats_enabled: bool,
 }
 
 struct LayerSurface {
-    target: OffscreenTarget,
+    target: LayerSurfaceTexture,
     logical_rect: Rect,
     composite_alpha: f32,
     blend_mode: BlendMode,
     backdrop: Option<RenderEffect>,
+}
+
+enum LayerSurfaceTexture {
+    Owned(OffscreenTarget),
+    Cached(Rc<OffscreenTarget>),
+}
+
+impl LayerSurfaceTexture {
+    fn target(&self) -> &OffscreenTarget {
+        match self {
+            Self::Owned(target) => target,
+            Self::Cached(target) => target.as_ref(),
+        }
+    }
+
+    fn width(&self) -> u32 {
+        self.target().width
+    }
+
+    fn height(&self) -> u32 {
+        self.target().height
+    }
+}
+
+struct CachedLayerSurface {
+    target: Rc<OffscreenTarget>,
+    logical_rect: Rect,
+    byte_size: u64,
 }
 
 struct ChildLayerComposite<'a> {
@@ -887,6 +923,10 @@ fn surface_target_size(rect: Rect, root_scale: f32) -> (u32, u32) {
     )
 }
 
+fn offscreen_byte_size(width: u32, height: u32) -> u64 {
+    (width as u64) * (height as u64) * 4
+}
+
 fn surface_pixel_rect(rect: Rect, root_scale: f32) -> Rect {
     Rect {
         x: rect.x * root_scale,
@@ -907,6 +947,37 @@ fn target_quad(width: u32, height: u32) -> [[f32; 2]; 4] {
         [0.0, height as f32],
         [width as f32, height as f32],
     ]
+}
+
+fn layer_uses_external_backdrop_input(layer: &LayerNode, has_backdrop_underlay: bool) -> bool {
+    has_backdrop_underlay && layer_contains_descendant_backdrop(layer)
+}
+
+fn layer_raster_cache_candidate(
+    layer: &LayerNode,
+    root_scale: f32,
+    has_backdrop_underlay: bool,
+) -> Option<(LayerRasterCacheKey, Rect)> {
+    if layer.cache_policy != CachePolicy::Auto {
+        return None;
+    }
+    if layer_uses_external_backdrop_input(layer, has_backdrop_underlay) {
+        return None;
+    }
+
+    let logical_rect = estimate_layer_surface_rect(layer);
+    let pixel_size = surface_target_size(logical_rect, root_scale);
+    Some((
+        LayerRasterCacheKey::new(
+            layer.node_id,
+            layer_target_content_hash(layer),
+            layer_effect_hash(layer.effect()),
+            logical_rect,
+            pixel_size,
+            ScaleBucket::from_scale(root_scale),
+        ),
+        logical_rect,
+    ))
 }
 
 fn push_local_primitive(
@@ -1454,6 +1525,12 @@ impl GpuRenderer {
             scratch_layer_events: Vec::new(),
             staged_uploads: StagedBufferUploads::default(),
             effect_renderer,
+            layer_surface_cache: LruCache::new(
+                NonZeroUsize::new(MAX_LAYER_SURFACE_CACHE_ITEMS)
+                    .expect("layer surface cache size must be non-zero"),
+            ),
+            layer_surface_cache_identity: HashMap::new(),
+            layer_surface_cache_bytes: 0,
             frame_stats: gpu_stats::FrameStats::default(),
             frame_count: 0,
             gpu_stats_enabled: gpu_stats_enabled(),
@@ -1532,6 +1609,93 @@ impl GpuRenderer {
             .acquire(&self.device, width, height, stats)
     }
 
+    fn release_layer_surface_target(&mut self, target: LayerSurfaceTexture) {
+        if let LayerSurfaceTexture::Owned(target) = target {
+            self.effect_renderer.offscreen_pool.release(target);
+        }
+    }
+
+    fn cached_layer_surface(
+        &mut self,
+        key: &LayerRasterCacheKey,
+    ) -> Option<(Rc<OffscreenTarget>, Rect)> {
+        let cached = self.layer_surface_cache.get(key)?;
+        if self.gpu_stats_enabled {
+            let (width, height) = key.pixel_size();
+            self.frame_stats.record_layer_cache_hit(width, height);
+        }
+        Some((cached.target.clone(), cached.logical_rect))
+    }
+
+    fn remove_cached_layer_surface(&mut self, key: &LayerRasterCacheKey) {
+        let Some(entry) = self.layer_surface_cache.pop(key) else {
+            return;
+        };
+        self.layer_surface_cache_bytes = self
+            .layer_surface_cache_bytes
+            .saturating_sub(entry.byte_size);
+        if let Some(stable_id) = key.stable_id() {
+            if self.layer_surface_cache_identity.get(&stable_id) == Some(key) {
+                self.layer_surface_cache_identity.remove(&stable_id);
+            }
+        }
+    }
+
+    fn insert_cached_layer_surface(
+        &mut self,
+        key: LayerRasterCacheKey,
+        target: OffscreenTarget,
+        logical_rect: Rect,
+    ) -> Rc<OffscreenTarget> {
+        let byte_size = offscreen_byte_size(target.width, target.height);
+        if let Some(stable_id) = key.stable_id() {
+            if let Some(previous_key) = self.layer_surface_cache_identity.insert(stable_id, key) {
+                if previous_key != key {
+                    self.remove_cached_layer_surface(&previous_key);
+                }
+            }
+        }
+
+        while self.layer_surface_cache_bytes + byte_size > MAX_LAYER_SURFACE_CACHE_BYTES {
+            let Some((evicted_key, evicted_entry)) = self.layer_surface_cache.pop_lru() else {
+                break;
+            };
+            self.layer_surface_cache_bytes = self
+                .layer_surface_cache_bytes
+                .saturating_sub(evicted_entry.byte_size);
+            if let Some(stable_id) = evicted_key.stable_id() {
+                if self.layer_surface_cache_identity.get(&stable_id) == Some(&evicted_key) {
+                    self.layer_surface_cache_identity.remove(&stable_id);
+                }
+            }
+            if self.gpu_stats_enabled {
+                self.frame_stats.record_layer_cache_eviction();
+            }
+        }
+
+        let cached = CachedLayerSurface {
+            target: Rc::new(target),
+            logical_rect,
+            byte_size,
+        };
+        let cached_handle = cached.target.clone();
+        if let Some((replaced_key, replaced_entry)) = self.layer_surface_cache.push(key, cached) {
+            self.layer_surface_cache_bytes = self
+                .layer_surface_cache_bytes
+                .saturating_sub(replaced_entry.byte_size);
+            if replaced_key != key && self.gpu_stats_enabled {
+                self.frame_stats.record_layer_cache_eviction();
+            }
+            if let Some(stable_id) = replaced_key.stable_id() {
+                if self.layer_surface_cache_identity.get(&stable_id) == Some(&replaced_key) {
+                    self.layer_surface_cache_identity.remove(&stable_id);
+                }
+            }
+        }
+        self.layer_surface_cache_bytes += byte_size;
+        cached_handle
+    }
+
     #[allow(clippy::too_many_arguments)] // Render path needs explicit scene slices and target metadata.
     pub fn render(
         &mut self,
@@ -1566,6 +1730,12 @@ impl GpuRenderer {
             self.frame_stats
                 .text_pool_size
                 .set(self.text_renderer_pool.len() as u32);
+            self.frame_stats
+                .layer_cache_size
+                .set(self.layer_surface_cache.len() as u32);
+            self.frame_stats
+                .layer_cache_bytes
+                .set(self.layer_surface_cache_bytes);
             self.frame_stats
                 .image_cache_size
                 .set(self.image_texture_cache.len() as u32);
@@ -1704,8 +1874,8 @@ impl GpuRenderer {
         let root_source_rect = Rect {
             x: 0.0,
             y: 0.0,
-            width: root_surface.target.width as f32,
-            height: root_surface.target.height as f32,
+            width: root_surface.target.width() as f32,
+            height: root_surface.target.height() as f32,
         };
         let root_transform = ProjectiveTransform::from_rect_to_quad(root_source_rect, root_quad);
         let root_inverse = root_transform
@@ -1777,7 +1947,7 @@ impl GpuRenderer {
             self.effect_renderer.composite_to_view_projective(
                 &self.device,
                 &self.queue,
-                &root_surface.target,
+                root_surface.target.target(),
                 &composite_target.view,
                 (width, height),
                 (root_source_rect.width, root_source_rect.height),
@@ -1802,7 +1972,7 @@ impl GpuRenderer {
             self.effect_renderer.composite_to_view_projective(
                 &self.device,
                 &self.queue,
-                &root_surface.target,
+                root_surface.target.target(),
                 surface_view,
                 (width, height),
                 (root_source_rect.width, root_source_rect.height),
@@ -1814,9 +1984,7 @@ impl GpuRenderer {
                 supported_blend_mode(root_surface.blend_mode),
             );
         }
-        self.effect_renderer
-            .offscreen_pool
-            .release(root_surface.target);
+        self.release_layer_surface_target(root_surface.target);
         Ok(())
     }
 
@@ -1922,6 +2090,49 @@ impl GpuRenderer {
         root_scale: f32,
         backdrop_underlay: Option<&OffscreenTarget>,
     ) -> Result<LayerSurface, String> {
+        let cache_candidate =
+            layer_raster_cache_candidate(layer, root_scale, backdrop_underlay.is_some());
+        if let Some((cache_key, logical_rect)) = cache_candidate {
+            if let Some((target, logical_rect)) = self.cached_layer_surface(&cache_key) {
+                let isolation = effective_layer_isolation(&layer.graphics_layer);
+                return Ok(LayerSurface {
+                    target: LayerSurfaceTexture::Cached(target),
+                    logical_rect,
+                    composite_alpha: isolation
+                        .as_ref()
+                        .map(|params| params.composite_alpha)
+                        .unwrap_or(1.0),
+                    blend_mode: isolation
+                        .as_ref()
+                        .map(|params| params.blend_mode)
+                        .unwrap_or(BlendMode::SrcOver),
+                    backdrop: layer.backdrop().cloned(),
+                });
+            }
+            if self.gpu_stats_enabled {
+                let (width, height) = cache_key.pixel_size();
+                self.frame_stats.record_layer_cache_miss(width, height);
+            }
+            return self.render_layer_surface_uncached(
+                text_state,
+                layer,
+                root_scale,
+                backdrop_underlay,
+                Some((cache_key, logical_rect)),
+            );
+        }
+
+        self.render_layer_surface_uncached(text_state, layer, root_scale, backdrop_underlay, None)
+    }
+
+    fn render_layer_surface_uncached(
+        &mut self,
+        text_state: &mut TextSystemState,
+        layer: &LayerNode,
+        root_scale: f32,
+        backdrop_underlay: Option<&OffscreenTarget>,
+        cache_candidate: Option<(LayerRasterCacheKey, Rect)>,
+    ) -> Result<LayerSurface, String> {
         let isolation = effective_layer_isolation(&layer.graphics_layer);
         let content_layer = layer_for_content(&layer.graphics_layer, isolation.as_ref());
         let local_layer = local_content_layer(&content_layer);
@@ -1996,14 +2207,18 @@ impl GpuRenderer {
             );
         }
 
-        let mut surface_rect = scene_bounds(&local_scene);
-        for child in &child_layers {
-            surface_rect = union_rect(surface_rect, quad_bounds(child.dest_quad));
-            if let Some(shadow_bounds) = shadow_draws_bounds(&child.shadow_draws) {
-                surface_rect = union_rect(surface_rect, shadow_bounds);
-            }
-        }
-        let surface_rect = surface_rect.unwrap_or(layer.local_bounds);
+        let surface_rect = cache_candidate
+            .map(|(_, logical_rect)| logical_rect)
+            .unwrap_or_else(|| {
+                let mut surface_rect = scene_bounds(&local_scene);
+                for child in &child_layers {
+                    surface_rect = union_rect(surface_rect, quad_bounds(child.dest_quad));
+                    if let Some(shadow_bounds) = shadow_draws_bounds(&child.shadow_draws) {
+                        surface_rect = union_rect(surface_rect, shadow_bounds);
+                    }
+                }
+                surface_rect.unwrap_or(layer.local_bounds)
+            });
         let shift = Point {
             x: -surface_rect.x,
             y: -surface_rect.y,
@@ -2098,8 +2313,8 @@ impl GpuRenderer {
             let source_rect = Rect {
                 x: 0.0,
                 y: 0.0,
-                width: child_surface.target.width as f32,
-                height: child_surface.target.height as f32,
+                width: child_surface.target.width() as f32,
+                height: child_surface.target.height() as f32,
             };
             let inverse = ProjectiveTransform::from_rect_to_quad(
                 source_rect,
@@ -2110,7 +2325,7 @@ impl GpuRenderer {
             self.effect_renderer.composite_to_view_projective(
                 &self.device,
                 &self.queue,
-                &child_surface.target,
+                child_surface.target.target(),
                 &target.view,
                 (width, height),
                 (source_rect.width, source_rect.height),
@@ -2128,9 +2343,7 @@ impl GpuRenderer {
                 }),
                 supported_blend_mode(child_surface.blend_mode),
             );
-            self.effect_renderer
-                .offscreen_pool
-                .release(child_surface.target);
+            self.release_layer_surface_target(child_surface.target);
             if let Some(underlay) = child_underlay {
                 self.effect_renderer.offscreen_pool.release(underlay);
             }
@@ -2179,8 +2392,28 @@ impl GpuRenderer {
             }
         }
 
+        if let Some((cache_key, logical_rect)) = cache_candidate {
+            if offscreen_byte_size(target.width, target.height) <= MAX_LAYER_SURFACE_CACHE_BYTES {
+                let cached_target =
+                    self.insert_cached_layer_surface(cache_key, target, logical_rect);
+                return Ok(LayerSurface {
+                    target: LayerSurfaceTexture::Cached(cached_target),
+                    logical_rect,
+                    composite_alpha: isolation
+                        .as_ref()
+                        .map(|params| params.composite_alpha)
+                        .unwrap_or(1.0),
+                    blend_mode: isolation
+                        .as_ref()
+                        .map(|params| params.blend_mode)
+                        .unwrap_or(BlendMode::SrcOver),
+                    backdrop: layer.backdrop().cloned(),
+                });
+            }
+        }
+
         Ok(LayerSurface {
-            target,
+            target: LayerSurfaceTexture::Owned(target),
             logical_rect: surface_rect,
             composite_alpha: isolation
                 .as_ref()
@@ -4340,21 +4573,249 @@ struct PreparedTextBatchSignature {
     root_scale_bits: u32,
 }
 
-fn hash_f32_bits<H: Hasher>(value: f32, state: &mut H) {
-    value.to_bits().hash(state);
+fn layer_effect_hash(effect: Option<&RenderEffect>) -> u64 {
+    let mut hasher = FxHasher::default();
+    hash_optional_render_effect(effect, &mut hasher);
+    hasher.finish()
+}
+
+fn layer_target_content_hash(layer: &LayerNode) -> u64 {
+    let mut hasher = FxHasher::default();
+    hash_layer_target_content(layer, &mut hasher);
+    hasher.finish()
+}
+
+fn hash_layer_target_content<H: Hasher>(layer: &LayerNode, state: &mut H) {
+    layer.local_bounds.render_hash().hash(state);
+    hash_optional_rect(layer.clip_rect(), state);
+    let isolation = effective_layer_isolation(&layer.graphics_layer);
+    let content_layer = layer_for_content(&layer.graphics_layer, isolation.as_ref());
+    let local_layer = local_content_layer(&content_layer);
+    hash_f32_bits(local_layer.alpha, state);
+    hash_optional_color_filter(local_layer.color_filter, state);
+    layer.children.len().hash(state);
+    for child in &layer.children {
+        match child {
+            RenderNode::Primitive(primitive) => {
+                0u8.hash(state);
+                hash_primitive_entry(primitive, state);
+            }
+            RenderNode::Layer(child_layer) => {
+                1u8.hash(state);
+                hash_child_layer_contribution(child_layer, state);
+            }
+        }
+    }
+}
+
+fn hash_child_layer_contribution<H: Hasher>(layer: &LayerNode, state: &mut H) {
+    hash_projective_transform(layer.transform_to_parent, state);
+    hash_optional_rect(layer.shadow_clip, state);
+    hash_child_shadow_state(layer, state);
+    hash_optional_render_effect(layer.effect(), state);
+    hash_optional_render_effect(layer.backdrop(), state);
+    let isolation = effective_layer_isolation(&layer.graphics_layer);
+    let composite_alpha = isolation
+        .as_ref()
+        .map(|params| params.composite_alpha)
+        .unwrap_or(1.0);
+    let blend_mode = isolation
+        .as_ref()
+        .map(|params| params.blend_mode)
+        .unwrap_or(BlendMode::SrcOver);
+    hash_f32_bits(composite_alpha, state);
+    blend_mode.hash(state);
+    hash_layer_target_content(layer, state);
+}
+
+fn hash_child_shadow_state<H: Hasher>(layer: &LayerNode, state: &mut H) {
+    hash_f32_bits(layer.graphics_layer.shadow_elevation, state);
+    layer
+        .graphics_layer
+        .ambient_shadow_color
+        .render_hash()
+        .hash(state);
+    layer
+        .graphics_layer
+        .spot_shadow_color
+        .render_hash()
+        .hash(state);
+    hash_f32_bits(layer.graphics_layer.scale, state);
+    hash_f32_bits(layer.graphics_layer.scale_x, state);
+    hash_f32_bits(layer.graphics_layer.scale_y, state);
+    layer.graphics_layer.shape.render_hash().hash(state);
+}
+
+fn hash_primitive_entry<H: Hasher>(primitive: &PrimitiveEntry, state: &mut H) {
+    match primitive.phase {
+        PrimitivePhase::BeforeChildren => 0u8.hash(state),
+        PrimitivePhase::AfterChildren => 1u8.hash(state),
+    }
+    match &primitive.node {
+        PrimitiveNode::Draw(draw) => {
+            0u8.hash(state);
+            hash_optional_rect(draw.clip, state);
+            hash_draw_primitive(&draw.primitive, state);
+        }
+        PrimitiveNode::Text(text) => {
+            1u8.hash(state);
+            text.rect.render_hash().hash(state);
+            text.text.render_hash().hash(state);
+            text.text_style.render_hash().hash(state);
+            hash_f32_bits(text.font_size, state);
+            text.layout_options.hash(state);
+            hash_optional_rect(text.clip, state);
+        }
+    }
+}
+
+fn hash_draw_primitive<H: Hasher>(primitive: &cranpose_ui_graphics::DrawPrimitive, state: &mut H) {
+    match primitive {
+        cranpose_ui_graphics::DrawPrimitive::Content => {
+            0u8.hash(state);
+        }
+        cranpose_ui_graphics::DrawPrimitive::Blend {
+            primitive,
+            blend_mode,
+        } => {
+            1u8.hash(state);
+            blend_mode.hash(state);
+            hash_draw_primitive(primitive, state);
+        }
+        cranpose_ui_graphics::DrawPrimitive::Rect { rect, brush } => {
+            2u8.hash(state);
+            rect.render_hash().hash(state);
+            brush.render_hash().hash(state);
+        }
+        cranpose_ui_graphics::DrawPrimitive::RoundRect { rect, brush, radii } => {
+            3u8.hash(state);
+            rect.render_hash().hash(state);
+            brush.render_hash().hash(state);
+            radii.render_hash().hash(state);
+        }
+        cranpose_ui_graphics::DrawPrimitive::Image {
+            rect,
+            image,
+            alpha,
+            color_filter,
+            src_rect,
+        } => {
+            4u8.hash(state);
+            rect.render_hash().hash(state);
+            image.id().hash(state);
+            hash_f32_bits(*alpha, state);
+            hash_optional_color_filter(*color_filter, state);
+            hash_optional_rect(*src_rect, state);
+        }
+        cranpose_ui_graphics::DrawPrimitive::Shadow(shadow) => {
+            5u8.hash(state);
+            hash_shadow_primitive(shadow, state);
+        }
+    }
+}
+
+fn hash_shadow_primitive<H: Hasher>(shadow: &cranpose_ui_graphics::ShadowPrimitive, state: &mut H) {
+    match shadow {
+        cranpose_ui_graphics::ShadowPrimitive::Drop {
+            shape,
+            blur_radius,
+            blend_mode,
+        } => {
+            0u8.hash(state);
+            hash_draw_primitive(shape, state);
+            hash_f32_bits(*blur_radius, state);
+            blend_mode.hash(state);
+        }
+        cranpose_ui_graphics::ShadowPrimitive::Inner {
+            fill,
+            cutout,
+            blur_radius,
+            blend_mode,
+            clip_rect,
+        } => {
+            1u8.hash(state);
+            hash_draw_primitive(fill, state);
+            hash_draw_primitive(cutout, state);
+            hash_f32_bits(*blur_radius, state);
+            blend_mode.hash(state);
+            clip_rect.render_hash().hash(state);
+        }
+    }
+}
+
+fn hash_projective_transform<H: Hasher>(transform: ProjectiveTransform, state: &mut H) {
+    for row in transform.matrix() {
+        for value in row {
+            hash_f32_bits(value, state);
+        }
+    }
+}
+
+fn hash_optional_render_effect<H: Hasher>(effect: Option<&RenderEffect>, state: &mut H) {
+    match effect {
+        Some(effect) => {
+            1u8.hash(state);
+            hash_render_effect(effect, state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
+fn hash_render_effect<H: Hasher>(effect: &RenderEffect, state: &mut H) {
+    match effect {
+        RenderEffect::Blur {
+            radius_x,
+            radius_y,
+            edge_treatment,
+        } => {
+            0u8.hash(state);
+            hash_f32_bits(*radius_x, state);
+            hash_f32_bits(*radius_y, state);
+            edge_treatment.hash(state);
+        }
+        RenderEffect::Offset { offset_x, offset_y } => {
+            1u8.hash(state);
+            hash_f32_bits(*offset_x, state);
+            hash_f32_bits(*offset_y, state);
+        }
+        RenderEffect::Shader { shader } => {
+            2u8.hash(state);
+            shader.source().hash(state);
+            shader.uniforms().len().hash(state);
+            for value in shader.uniforms() {
+                hash_f32_bits(*value, state);
+            }
+        }
+        RenderEffect::Chain { first, second } => {
+            3u8.hash(state);
+            hash_render_effect(first, state);
+            hash_render_effect(second, state);
+        }
+    }
+}
+
+fn hash_optional_color_filter<H: Hasher>(filter: Option<ColorFilter>, state: &mut H) {
+    match filter {
+        Some(filter) => {
+            1u8.hash(state);
+            filter.render_hash().hash(state);
+        }
+        None => 0u8.hash(state),
+    }
 }
 
 fn hash_optional_rect<H: Hasher>(rect: Option<Rect>, state: &mut H) {
     match rect {
         Some(rect) => {
             1u8.hash(state);
-            hash_f32_bits(rect.x, state);
-            hash_f32_bits(rect.y, state);
-            hash_f32_bits(rect.width, state);
-            hash_f32_bits(rect.height, state);
+            rect.render_hash().hash(state);
         }
         None => 0u8.hash(state),
     }
+}
+
+fn hash_f32_bits<H: Hasher>(value: f32, state: &mut H) {
+    value.to_bits().hash(state);
 }
 
 fn prepared_text_batch_signature<'a, I>(
@@ -4828,6 +5289,7 @@ fn inner_shadow_composite_mask(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cranpose_render_common::graph::DrawPrimitiveNode;
     use cranpose_ui_graphics::{Rect, RenderEffect, RoundedCornerShape};
 
     fn chunk(batches: &[SegmentBatchPlan]) -> SegmentDrawChunkPlan {
@@ -4962,6 +5424,17 @@ mod tests {
             cache_policy: cranpose_render_common::graph::CachePolicy::None,
             children,
         }
+    }
+
+    fn cacheable_layer(
+        node_id: cranpose_core::NodeId,
+        local_bounds: Rect,
+        children: Vec<RenderNode>,
+    ) -> LayerNode {
+        let mut layer = test_layer(local_bounds, children);
+        layer.node_id = Some(node_id);
+        layer.cache_policy = cranpose_render_common::graph::CachePolicy::Auto;
+        layer
     }
 
     #[test]
@@ -5233,6 +5706,113 @@ mod tests {
         assert!(rect.y < 9.0);
         assert!(rect.width > 12.0);
         assert!(rect.height > 8.0);
+    }
+
+    #[test]
+    fn layer_raster_cache_candidate_ignores_parent_transform() {
+        let primitive = PrimitiveEntry {
+            phase: PrimitivePhase::BeforeChildren,
+            node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                primitive: cranpose_ui_graphics::DrawPrimitive::Rect {
+                    rect: Rect {
+                        x: 2.0,
+                        y: 3.0,
+                        width: 6.0,
+                        height: 4.0,
+                    },
+                    brush: Brush::solid(Color::BLACK),
+                },
+                clip: None,
+            }),
+        };
+        let base = cacheable_layer(
+            41,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 20.0,
+                height: 20.0,
+            },
+            vec![RenderNode::Primitive(primitive.clone())],
+        );
+        let mut moved = base.clone();
+        moved.transform_to_parent = ProjectiveTransform::translation(32.0, 18.0);
+        moved.placement = Point { x: 32.0, y: 18.0 };
+
+        assert_eq!(
+            layer_raster_cache_candidate(&base, 1.25, false),
+            layer_raster_cache_candidate(&moved, 1.25, false)
+        );
+    }
+
+    #[test]
+    fn layer_raster_cache_candidate_changes_for_child_transform() {
+        let mut child = cacheable_layer(
+            8,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 12.0,
+                height: 10.0,
+            },
+            vec![],
+        );
+        child.transform_to_parent = ProjectiveTransform::translation(4.0, 6.0);
+        let base = cacheable_layer(
+            7,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 20.0,
+                height: 20.0,
+            },
+            vec![RenderNode::Layer(Box::new(child.clone()))],
+        );
+        let mut moved_child = child;
+        moved_child.transform_to_parent = ProjectiveTransform::translation(9.0, 6.0);
+        let moved = cacheable_layer(
+            7,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 20.0,
+                height: 20.0,
+            },
+            vec![RenderNode::Layer(Box::new(moved_child))],
+        );
+
+        assert_ne!(
+            layer_raster_cache_candidate(&base, 1.0, false),
+            layer_raster_cache_candidate(&moved, 1.0, false)
+        );
+    }
+
+    #[test]
+    fn layer_raster_cache_candidate_rejects_external_backdrop_dependency() {
+        let mut child = cacheable_layer(
+            12,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 8.0,
+                height: 8.0,
+            },
+            vec![],
+        );
+        child.graphics_layer.backdrop_effect = Some(RenderEffect::blur(2.0));
+        let parent = cacheable_layer(
+            11,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 16.0,
+                height: 16.0,
+            },
+            vec![RenderNode::Layer(Box::new(child))],
+        );
+
+        assert!(layer_raster_cache_candidate(&parent, 1.0, false).is_some());
+        assert!(layer_raster_cache_candidate(&parent, 1.0, true).is_none());
     }
 
     #[test]
