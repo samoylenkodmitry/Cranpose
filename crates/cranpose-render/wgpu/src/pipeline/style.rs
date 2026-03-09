@@ -17,7 +17,7 @@ use cranpose_ui_graphics::{BlendMode, DrawPrimitive, GraphicsLayer, Size};
 use cranpose_ui_graphics::{CornerRadii, Rect, RoundedCornerShape};
 
 #[cfg(test)]
-use crate::scene::Scene;
+use crate::scene::CompositorScene;
 
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
@@ -28,14 +28,14 @@ pub(crate) fn apply_draw_commands(
     size: Size,
     layer: &GraphicsLayer,
     clip: Option<Rect>,
-    scene: &mut Scene,
+    scene: &mut CompositorScene,
 ) {
     fn emit_primitive(
         primitive: DrawPrimitive,
         layer_bounds: Rect,
         layer: &GraphicsLayer,
         clip: Option<Rect>,
-        scene: &mut Scene,
+        scene: &mut CompositorScene,
         blend_mode: Option<BlendMode>,
     ) {
         match primitive {
@@ -187,7 +187,6 @@ pub(crate) fn point_in_resolved_rounded_rect(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::Scene;
     use cranpose_ui::Brush;
     use cranpose_ui_graphics::{Color, TransformOrigin};
     use std::rc::Rc;
@@ -278,7 +277,7 @@ mod tests {
             scale_y: 0.5,
             ..Default::default()
         };
-        let mut scene = Scene::new();
+        let mut scene = CompositorScene::new();
         let bounds = Rect {
             x: 0.0,
             y: 0.0,

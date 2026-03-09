@@ -2,7 +2,9 @@
 
 use crate::effect_renderer::{EffectRenderer, RoundedCompositeMask};
 use crate::offscreen::OffscreenTarget;
-use crate::scene::{BackdropLayer, DrawShape, EffectLayer, ImageDraw, ShadowDraw, TextDraw};
+use crate::scene::{
+    BackdropLayer, CompositorScene, DrawShape, EffectLayer, ImageDraw, ShadowDraw, TextDraw,
+};
 use crate::shaders;
 use crate::{EnsureTextBufferParams, TextCacheKey, TextSystemState};
 use bytemuck::{Pod, Zeroable};
@@ -673,7 +675,7 @@ struct ChildLayerComposite<'a> {
     needs_nested_underlay: bool,
 }
 
-fn scene_bounds(scene: &crate::scene::Scene) -> Option<Rect> {
+fn scene_bounds(scene: &CompositorScene) -> Option<Rect> {
     let mut bounds = None;
     for shape in &scene.shapes {
         bounds = union_rect(bounds, shape.rect);
@@ -976,7 +978,7 @@ fn layer_raster_cache_candidate(
 }
 
 fn push_local_primitive(
-    local_scene: &mut crate::scene::Scene,
+    local_scene: &mut CompositorScene,
     primitive: &PrimitiveEntry,
     layer: &LayerNode,
     local_layer: &GraphicsLayer,
@@ -1210,7 +1212,7 @@ impl<T: TranslateBy> TranslateBy for Vec<T> {
     }
 }
 
-impl TranslateBy for crate::scene::Scene {
+impl TranslateBy for CompositorScene {
     fn translate_by(&mut self, delta: Point) {
         self.shapes.translate_by(delta);
         self.images.translate_by(delta);
@@ -1235,8 +1237,8 @@ fn build_scene_window(
     z_start: usize,
     z_end: usize,
     window_rect: Rect,
-) -> crate::scene::Scene {
-    let mut scene = crate::scene::Scene::new();
+) -> CompositorScene {
+    let mut scene = CompositorScene::new();
     scene.shapes = source
         .shapes
         .iter()
@@ -1915,7 +1917,7 @@ impl GpuRenderer {
                 )?;
             }
 
-            let mut root_shadow_scene = crate::scene::Scene::new();
+            let mut root_shadow_scene = CompositorScene::new();
             let root_shadow_clip = graph
                 .root
                 .shadow_clip
@@ -2135,7 +2137,7 @@ impl GpuRenderer {
         let local_layer = local_content_layer(&content_layer);
         let visual_clip = layer.clip_rect();
 
-        let mut local_scene = crate::scene::Scene::new();
+        let mut local_scene = CompositorScene::new();
 
         let mut child_layers = Vec::new();
         let mut deferred_primitives = Vec::new();
@@ -2154,7 +2156,7 @@ impl GpuRenderer {
                     PrimitivePhase::AfterChildren => deferred_primitives.push(primitive),
                 },
                 RenderNode::Layer(child_layer) => {
-                    let mut shadow_scene = crate::scene::Scene::new();
+                    let mut shadow_scene = CompositorScene::new();
                     let child_logical_rect = estimate_layer_surface_rect(child_layer.as_ref());
                     let child_bounds = quad_bounds(
                         child_layer

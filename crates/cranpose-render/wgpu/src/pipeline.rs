@@ -29,7 +29,9 @@ use cranpose_ui_graphics::{
     RoundedCornerShape, RuntimeShader, TileMode,
 };
 
-use crate::scene::{ClickAction, DrawShape, EffectLayer, Scene, ShadowDraw, TextDraw};
+use crate::scene::{
+    ClickAction, CompositorScene, DrawShape, EffectLayer, Scene, ShadowDraw, TextDraw,
+};
 
 // Re-use style functions from a local copy
 mod style;
@@ -300,7 +302,7 @@ fn shadow_shape(
             quad: rect_to_quad(rect),
             brush: Brush::solid(color),
             shape,
-            z_index: 0, // populated by Scene::push_shadow_draw()
+            z_index: 0, // populated by CompositorScene::push_shadow_draw()
             clip: None,
             blend_mode: BlendMode::SrcOver,
         },
@@ -309,7 +311,7 @@ fn shadow_shape(
 }
 
 pub(crate) fn push_layer_shadow(
-    scene: &mut Scene,
+    scene: &mut CompositorScene,
     layer: &GraphicsLayer,
     layer_bounds: Rect,
     transformed_bounds: Rect,
@@ -340,7 +342,7 @@ pub(crate) fn push_layer_shadow(
             texts: vec![],
             blur_radius: ambient_pass.blur_radius,
             clip,
-            z_index: 0, // populated by Scene::push_shadow_draw()
+            z_index: 0, // populated by CompositorScene::push_shadow_draw()
         });
     }
 
@@ -356,7 +358,7 @@ pub(crate) fn push_layer_shadow(
             texts: vec![],
             blur_radius: spot_pass.blur_radius,
             clip,
-            z_index: 0, // populated by Scene::push_shadow_draw()
+            z_index: 0, // populated by CompositorScene::push_shadow_draw()
         });
     }
 }
@@ -942,7 +944,7 @@ trait TextStyleDrawSink {
     );
 }
 
-impl TextStyleDrawSink for Scene {
+impl TextStyleDrawSink for CompositorScene {
     fn current_z(&self) -> usize {
         self.next_z
     }
@@ -955,7 +957,7 @@ impl TextStyleDrawSink for Scene {
         clip: Option<Rect>,
         blend_mode: BlendMode,
     ) {
-        Scene::push_shape(self, rect, brush, shape, clip, blend_mode);
+        CompositorScene::push_shape(self, rect, brush, shape, clip, blend_mode);
     }
 
     fn push_text(
@@ -970,7 +972,7 @@ impl TextStyleDrawSink for Scene {
         layout_options: TextLayoutOptions,
         clip: Option<Rect>,
     ) {
-        Scene::push_text(
+        CompositorScene::push_text(
             self,
             node_id,
             rect,
@@ -1349,7 +1351,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn push_text_style_draws(
-    scene: &mut Scene,
+    scene: &mut CompositorScene,
     node_id: NodeId,
     rect: Rect,
     text_rect: Rect,
@@ -1881,11 +1883,11 @@ pub(crate) fn push_draw_primitive(
     layer_bounds: Rect,
     layer: &GraphicsLayer,
     clip: Option<Rect>,
-    scene: &mut Scene,
+    scene: &mut CompositorScene,
     blend_mode: Option<BlendMode>,
 ) {
     struct SceneEmitter<'a> {
-        scene: &'a mut Scene,
+        scene: &'a mut CompositorScene,
     }
 
     impl DrawPrimitiveSink for SceneEmitter<'_> {
@@ -1942,7 +1944,7 @@ fn push_shadow_primitive(
     layer_bounds: Rect,
     layer: &GraphicsLayer,
     clip: Option<Rect>,
-    scene: &mut Scene,
+    scene: &mut CompositorScene,
 ) {
     fn shape_pair_for_primitive(
         prim: DrawPrimitive,
@@ -2024,6 +2026,7 @@ fn push_shadow_primitive(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scene::CompositorScene as Scene;
     use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
     use cranpose_ui::text_layout_result::{
         GlyphLayout, LineLayout, TextLayoutData, TextLayoutResult,
@@ -2235,7 +2238,7 @@ mod tests {
             cache_hashes: LayerRasterCacheHashes::default(),
             children: vec![],
         };
-        let mut scene = Scene::new();
+        let mut scene = crate::scene::Scene::new();
 
         collect_hits_from_graph(
             &layer,
@@ -2246,12 +2249,7 @@ mod tests {
         );
 
         assert_eq!(scene.hits.len(), 1);
-        assert!(scene.shapes.is_empty());
-        assert!(scene.images.is_empty());
-        assert!(scene.texts.is_empty());
-        assert!(scene.shadow_draws.is_empty());
-        assert!(scene.effect_layers.is_empty());
-        assert!(scene.backdrop_layers.is_empty());
+        assert!(scene.graph.is_none());
     }
 
     #[test]

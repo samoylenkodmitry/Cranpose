@@ -13,15 +13,22 @@ mod shader_cache;
 mod shaders;
 
 pub use gpu_stats::FrameStatsSnapshot as RenderStatsSnapshot;
-pub use scene::{BackdropLayer, ClickAction, DrawShape, HitRegion, ImageDraw, Scene, TextDraw};
+pub use scene::{ClickAction, HitRegion, Scene};
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::{
-    text_hyphenation::choose_auto_hyphen_break as choose_shared_auto_hyphen_break, RenderScene,
-    Renderer,
+    graph::{
+        CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
+        PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
+    },
+    raster_cache::LayerRasterCacheHashes,
+    text_hyphenation::choose_auto_hyphen_break as choose_shared_auto_hyphen_break,
+    RenderScene, Renderer,
 };
 use cranpose_ui::{set_text_measurer, LayoutTree, TextMeasurer};
-use cranpose_ui_graphics::{RenderHash, Size};
+use cranpose_ui_graphics::{
+    Brush, Color, CornerRadii, DrawPrimitive, GraphicsLayer, Point, Rect, RenderHash, Size,
+};
 use glyphon::{
     Attrs, AttrsOwned, Buffer, FamilyOwned, FontSystem, Metrics, Shaping, Style as GlyphonStyle,
     Weight as GlyphonWeight,
@@ -1121,54 +1128,100 @@ impl Renderer for WgpuRenderer {
     }
 
     fn draw_dev_overlay(&mut self, text: &str, viewport: Size) {
-        use cranpose_ui_graphics::{BlendMode, Brush, Color, Rect, RoundedCornerShape};
-
-        // Draw FPS text in top-right corner with semi-transparent background
-        // Position: 8px from right edge, 8px from top
+        const DEV_OVERLAY_NODE_ID: NodeId = NodeId::MAX;
         let padding = 8.0;
         let font_size = 14.0;
-
-        // Measure text width (approximate: ~7px per character at 14px font)
         let char_width = 7.0;
         let text_width = text.len() as f32 * char_width;
         let text_height = font_size * 1.4;
-
         let x = viewport.width - text_width - padding * 2.0;
         let y = padding;
 
-        // Add background rectangle (dark semi-transparent)
-        let bg_rect = Rect {
-            x,
-            y,
-            width: text_width + padding,
-            height: text_height + padding / 2.0,
+        let mut overlay_layer = LayerNode {
+            node_id: Some(DEV_OVERLAY_NODE_ID),
+            local_bounds: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: text_width + padding,
+                height: text_height + padding / 2.0,
+            },
+            placement: Point { x, y },
+            content_offset: Point::default(),
+            transform_to_parent: ProjectiveTransform::identity(),
+            graphics_layer: GraphicsLayer::default(),
+            clip_to_bounds: false,
+            shadow_clip: None,
+            hit_test: None,
+            isolation: IsolationReasons::default(),
+            cache_policy: CachePolicy::None,
+            cache_hashes: LayerRasterCacheHashes::default(),
+            children: vec![
+                RenderNode::Primitive(PrimitiveEntry {
+                    phase: PrimitivePhase::BeforeChildren,
+                    node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                        primitive: DrawPrimitive::RoundRect {
+                            rect: Rect {
+                                x: 0.0,
+                                y: 0.0,
+                                width: text_width + padding,
+                                height: text_height + padding / 2.0,
+                            },
+                            brush: Brush::Solid(Color(0.0, 0.0, 0.0, 0.7)),
+                            radii: CornerRadii::uniform(4.0),
+                        },
+                        clip: None,
+                    }),
+                }),
+                RenderNode::Primitive(PrimitiveEntry {
+                    phase: PrimitivePhase::AfterChildren,
+                    node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+                        node_id: DEV_OVERLAY_NODE_ID,
+                        rect: Rect {
+                            x: padding / 2.0,
+                            y: padding / 4.0,
+                            width: text_width,
+                            height: text_height,
+                        },
+                        text: cranpose_ui::text::AnnotatedString::from(text),
+                        text_style: cranpose_ui::TextStyle::default(),
+                        font_size,
+                        layout_options: cranpose_ui::TextLayoutOptions::default(),
+                        clip: None,
+                    })),
+                }),
+            ],
         };
-        self.scene.push_shape(
-            bg_rect,
-            Brush::Solid(Color(0.0, 0.0, 0.0, 0.7)),
-            Some(RoundedCornerShape::uniform(4.0)),
-            None,
-            BlendMode::SrcOver,
-        );
+        overlay_layer.recompute_raster_cache_hashes();
 
-        // Add text (green color for visibility)
-        let text_rect = Rect {
-            x: x + padding / 2.0,
-            y: y + padding / 4.0,
-            width: text_width,
-            height: text_height,
-        };
-        self.scene.push_text(
-            NodeId::MAX,
-            text_rect,
-            Rc::new(cranpose_ui::text::AnnotatedString::from(text)),
-            Color(0.0, 1.0, 0.0, 1.0), // Green
-            cranpose_ui::TextStyle::default(),
-            font_size,
-            1.0,
-            cranpose_ui::TextLayoutOptions::default(),
-            None,
-        );
+        let graph = self.scene.graph.get_or_insert_with(|| {
+            RenderGraph::new(LayerNode {
+                node_id: None,
+                local_bounds: Rect::from_size(viewport),
+                placement: Point::default(),
+                content_offset: Point::default(),
+                transform_to_parent: ProjectiveTransform::identity(),
+                graphics_layer: GraphicsLayer::default(),
+                clip_to_bounds: false,
+                shadow_clip: None,
+                hit_test: None,
+                isolation: IsolationReasons::default(),
+                cache_policy: CachePolicy::None,
+                cache_hashes: LayerRasterCacheHashes::default(),
+                children: Vec::new(),
+            })
+        });
+
+        graph.root.children.retain(|child| {
+            !matches!(
+                child,
+                RenderNode::Layer(layer) if layer.node_id == Some(DEV_OVERLAY_NODE_ID)
+            )
+        });
+        graph
+            .root
+            .children
+            .push(RenderNode::Layer(Box::new(overlay_layer)));
+        graph.root.recompute_raster_cache_hashes();
     }
 }
 

@@ -32,7 +32,7 @@ impl ClickAction {
 }
 
 #[derive(Clone)]
-pub struct DrawShape {
+pub(crate) struct DrawShape {
     pub rect: Rect,
     pub local_rect: Rect,
     pub quad: [[f32; 2]; 4],
@@ -44,7 +44,7 @@ pub struct DrawShape {
 }
 
 #[derive(Clone)]
-pub struct TextDraw {
+pub(crate) struct TextDraw {
     pub node_id: NodeId,
     pub rect: Rect,
     pub text: Rc<cranpose_ui::text::AnnotatedString>,
@@ -58,7 +58,7 @@ pub struct TextDraw {
 }
 
 #[derive(Clone)]
-pub struct ImageDraw {
+pub(crate) struct ImageDraw {
     pub rect: Rect,
     pub local_rect: Rect,
     pub quad: [[f32; 2]; 4],
@@ -132,7 +132,7 @@ impl HitTestTarget for HitRegion {
 
 /// A shadow that requires GPU blur processing.
 #[derive(Clone)]
-pub struct ShadowDraw {
+pub(crate) struct ShadowDraw {
     /// Shapes to render to offscreen target before blur.
     /// Each shape carries its own blend mode (SrcOver for fill, DstOut for cutout).
     pub shapes: Vec<(DrawShape, BlendMode)>,
@@ -148,7 +148,7 @@ pub struct ShadowDraw {
 
 /// A subtree that should be rendered offscreen and processed by a RenderEffect.
 #[derive(Clone)]
-pub struct EffectLayer {
+pub(crate) struct EffectLayer {
     pub rect: Rect,
     pub clip: Option<Rect>,
     /// Optional effect to apply to the offscreen subtree.
@@ -166,7 +166,7 @@ pub struct EffectLayer {
 
 /// A backdrop effect applied to already-rendered content behind a node.
 #[derive(Clone)]
-pub struct BackdropLayer {
+pub(crate) struct BackdropLayer {
     pub rect: Rect,
     pub clip: Option<Rect>,
     pub effect: RenderEffect,
@@ -174,32 +174,26 @@ pub struct BackdropLayer {
     pub z_index: usize,
 }
 
-pub struct Scene {
-    pub graph: Option<RenderGraph>,
+pub(crate) struct CompositorScene {
     pub shapes: Vec<DrawShape>,
     pub images: Vec<ImageDraw>,
     pub texts: Vec<TextDraw>,
     pub shadow_draws: Vec<ShadowDraw>,
-    pub hits: Vec<HitRegion>,
     pub effect_layers: Vec<EffectLayer>,
     pub backdrop_layers: Vec<BackdropLayer>,
     pub next_z: usize,
-    pub node_index: HashMap<NodeId, usize>,
 }
 
-impl Scene {
+impl CompositorScene {
     pub fn new() -> Self {
         Self {
-            graph: None,
             shapes: Vec::new(),
             images: Vec::new(),
             texts: Vec::new(),
             shadow_draws: Vec::new(),
-            hits: Vec::new(),
             effect_layers: Vec::new(),
             backdrop_layers: Vec::new(),
             next_z: 0,
-            node_index: HashMap::new(),
         }
     }
 
@@ -245,30 +239,6 @@ impl Scene {
             clip,
             blend_mode,
         });
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn push_image(
-        &mut self,
-        rect: Rect,
-        image: ImageBitmap,
-        alpha: f32,
-        color_filter: Option<ColorFilter>,
-        clip: Option<Rect>,
-        src_rect: Option<Rect>,
-        blend_mode: BlendMode,
-    ) {
-        self.push_image_with_geometry(
-            rect,
-            rect,
-            rect_to_quad(rect),
-            image,
-            alpha,
-            color_filter,
-            clip,
-            src_rect,
-            blend_mode,
-        );
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -329,6 +299,37 @@ impl Scene {
         });
     }
 
+    pub fn push_shadow_draw(&mut self, mut draw: ShadowDraw) {
+        let z_index = self.next_z;
+        self.next_z += 1;
+        draw.z_index = z_index;
+        self.shadow_draws.push(draw);
+    }
+}
+
+impl Default for CompositorScene {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub struct Scene {
+    pub graph: Option<RenderGraph>,
+    pub hits: Vec<HitRegion>,
+    pub next_hit_z: usize,
+    pub node_index: HashMap<NodeId, usize>,
+}
+
+impl Scene {
+    pub fn new() -> Self {
+        Self {
+            graph: None,
+            hits: Vec::new(),
+            next_hit_z: 0,
+            node_index: HashMap::new(),
+        }
+    }
+
     pub fn push_hit(
         &mut self,
         node_id: NodeId,
@@ -341,8 +342,8 @@ impl Scene {
         if click_actions.is_empty() && pointer_inputs.is_empty() {
             return;
         }
-        let z_index = self.next_z;
-        self.next_z += 1;
+        let z_index = self.next_hit_z;
+        self.next_hit_z += 1;
         let hit_region = HitRegion {
             node_id,
             rect,
@@ -355,13 +356,6 @@ impl Scene {
         let hit_index = self.hits.len();
         self.hits.push(hit_region);
         self.node_index.insert(node_id, hit_index);
-    }
-
-    pub fn push_shadow_draw(&mut self, mut draw: ShadowDraw) {
-        let z_index = self.next_z;
-        self.next_z += 1;
-        draw.z_index = z_index;
-        self.shadow_draws.push(draw);
     }
 }
 
@@ -385,15 +379,9 @@ impl RenderScene for Scene {
 
     fn clear(&mut self) {
         self.graph = None;
-        self.shapes.clear();
-        self.images.clear();
-        self.texts.clear();
-        self.shadow_draws.clear();
         self.hits.clear();
-        self.effect_layers.clear();
-        self.backdrop_layers.clear();
         self.node_index.clear();
-        self.next_z = 0;
+        self.next_hit_z = 0;
     }
 
     fn hit_test(&self, x: f32, y: f32) -> Vec<Self::HitTarget> {
