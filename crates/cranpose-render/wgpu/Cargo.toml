@@ -27,3 +27,6 @@ lru = "0.16"
 rustc-hash = "2.1.1"
 naga = { version = "28.0.0", features = ["wgsl-in"] }
 ttf-parser = "0.25.1"
+
+[dev-dependencies]
+pollster = "0.4.0"

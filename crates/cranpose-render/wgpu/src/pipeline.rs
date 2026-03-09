@@ -9,8 +9,11 @@ use cranpose_render_common::hit_graph::{
     collect_hits_from_graph as collect_common_hits, HitGraphSink,
 };
 use cranpose_render_common::layer_shadow::layer_shadow_geometry;
+#[cfg(test)]
+use cranpose_render_common::primitive_emit::resolve_clip;
 use cranpose_render_common::primitive_emit::{
-    emit_draw_primitive, DrawPrimitiveSink, ImageDrawParams, ShapeDrawParams,
+    draw_shape_params_for_primitive, emit_draw_primitive, DrawPrimitiveSink, ImageDrawParams,
+    ShapeDrawParams,
 };
 use cranpose_render_common::Brush;
 #[cfg(test)]
@@ -22,8 +25,8 @@ use cranpose_ui::{layout_text, measure_text, LayoutBox, TextLayoutOptions};
 #[cfg(test)]
 use cranpose_ui::{EdgeInsets, TextOverflow};
 use cranpose_ui_graphics::{
-    BlendMode, Color, CompositingStrategy, DrawPrimitive, GraphicsLayer, LayerShape, Point, Rect,
-    RenderEffect, RoundedCornerShape, RuntimeShader, TileMode,
+    BlendMode, Color, DrawPrimitive, GraphicsLayer, LayerShape, Point, Rect, RenderEffect,
+    RoundedCornerShape, RuntimeShader, TileMode,
 };
 
 use crate::scene::{ClickAction, DrawShape, EffectLayer, Scene, ShadowDraw, TextDraw};
@@ -31,8 +34,8 @@ use crate::scene::{ClickAction, DrawShape, EffectLayer, Scene, ShadowDraw, TextD
 // Re-use style functions from a local copy
 mod style;
 use style::{
-    apply_layer_affine_to_rect, apply_layer_to_brush, apply_layer_to_color, apply_layer_to_quad,
-    apply_layer_to_rect, layer_uniform_scale, quad_bounds, scale_corner_radii,
+    apply_layer_to_brush, apply_layer_to_color, apply_layer_to_rect, layer_uniform_scale,
+    scale_corner_radii,
 };
 
 #[cfg(test)]
@@ -276,50 +279,6 @@ fn pad_clip_rect(rect: Rect) -> Rect {
     }
 }
 
-#[derive(Clone)]
-pub(crate) struct LayerIsolation {
-    pub(crate) effect: Option<RenderEffect>,
-    pub(crate) blend_mode: BlendMode,
-    pub(crate) composite_alpha: f32,
-}
-
-pub(crate) fn effective_layer_isolation(layer: &GraphicsLayer) -> Option<LayerIsolation> {
-    let has_effect = layer.render_effect.is_some();
-    let has_layer_blend = layer.blend_mode != BlendMode::SrcOver;
-    let requires_isolation = match layer.compositing_strategy {
-        CompositingStrategy::Offscreen => true,
-        CompositingStrategy::Auto => has_effect || has_layer_blend || layer.alpha < 1.0,
-        CompositingStrategy::ModulateAlpha => has_effect || has_layer_blend,
-    };
-
-    if !requires_isolation {
-        return None;
-    }
-
-    let composite_alpha = if layer.compositing_strategy == CompositingStrategy::ModulateAlpha {
-        1.0
-    } else {
-        layer.alpha.clamp(0.0, 1.0)
-    };
-
-    Some(LayerIsolation {
-        effect: layer.render_effect.clone(),
-        blend_mode: layer.blend_mode,
-        composite_alpha,
-    })
-}
-
-pub(crate) fn layer_for_content(
-    layer: &GraphicsLayer,
-    isolation: Option<&LayerIsolation>,
-) -> GraphicsLayer {
-    let mut content = layer.clone();
-    if isolation.is_some() && layer.compositing_strategy != CompositingStrategy::ModulateAlpha {
-        content.alpha = 1.0;
-    }
-    content
-}
-
 pub(crate) fn rect_to_quad(rect: Rect) -> [[f32; 2]; 4] {
     [
         [rect.x, rect.y],
@@ -416,37 +375,6 @@ pub(crate) fn render_layout_tree_with_scale(root: &LayoutBox, scene: &mut Scene,
         Point::default(),
     );
     scene.graph = Some(graph);
-}
-
-fn intersect_rect(a: Rect, b: Rect) -> Option<Rect> {
-    let left = a.x.max(b.x);
-    let top = a.y.max(b.y);
-    let right = (a.x + a.width).min(b.x + b.width);
-    let bottom = (a.y + a.height).min(b.y + b.height);
-    let width = right - left;
-    let height = bottom - top;
-    if width <= 0.0 || height <= 0.0 {
-        None
-    } else {
-        Some(Rect {
-            x: left,
-            y: top,
-            width,
-            height,
-        })
-    }
-}
-
-pub(crate) fn resolve_clip(
-    parent_clip: Option<Rect>,
-    requested_clip: Option<Rect>,
-) -> Option<Rect> {
-    match (parent_clip, requested_clip) {
-        (Some(parent), Some(current)) => intersect_rect(parent, current),
-        (Some(parent), None) => Some(parent),
-        (None, Some(current)) => Some(current),
-        (None, None) => None,
-    }
 }
 
 #[cfg(test)]
@@ -2016,64 +1944,26 @@ fn push_shadow_primitive(
     clip: Option<Rect>,
     scene: &mut Scene,
 ) {
-    fn prim_to_draw_shape(
+    fn shape_pair_for_primitive(
         prim: DrawPrimitive,
         layer_bounds: Rect,
         layer: &GraphicsLayer,
         blend_mode: BlendMode,
     ) -> Option<(DrawShape, BlendMode)> {
-        match prim {
-            DrawPrimitive::Rect {
-                rect: local_rect,
-                brush,
-            } => {
-                let draw_rect = local_rect.translate(layer_bounds.x, layer_bounds.y);
-                let local_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
-                let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
-                let transformed = quad_bounds(quad);
-                let brush = apply_layer_to_brush(brush, layer);
-                Some((
-                    DrawShape {
-                        rect: transformed,
-                        local_rect,
-                        quad,
-                        brush,
-                        shape: None,
-                        z_index: 0,
-                        clip: None,
-                        blend_mode,
-                    },
-                    blend_mode,
-                ))
-            }
-            DrawPrimitive::RoundRect {
-                rect: local_rect,
-                brush,
-                radii,
-            } => {
-                let draw_rect = local_rect.translate(layer_bounds.x, layer_bounds.y);
-                let local_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
-                let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
-                let transformed = quad_bounds(quad);
-                let scaled_radii = scale_corner_radii(radii, layer_uniform_scale(layer));
-                let shape = RoundedCornerShape::with_radii(scaled_radii);
-                let brush = apply_layer_to_brush(brush, layer);
-                Some((
-                    DrawShape {
-                        rect: transformed,
-                        local_rect,
-                        quad,
-                        brush,
-                        shape: Some(shape),
-                        z_index: 0,
-                        clip: None,
-                        blend_mode,
-                    },
-                    blend_mode,
-                ))
-            }
-            _ => None,
-        }
+        let params = draw_shape_params_for_primitive(prim, layer_bounds, layer, None, blend_mode)?;
+        Some((
+            DrawShape {
+                rect: params.rect,
+                local_rect: params.local_rect,
+                quad: params.quad,
+                brush: params.brush,
+                shape: params.shape,
+                z_index: 0,
+                clip: params.clip,
+                blend_mode: params.blend_mode,
+            },
+            params.blend_mode,
+        ))
     }
 
     match shadow_prim {
@@ -2082,7 +1972,8 @@ fn push_shadow_primitive(
             blur_radius,
             blend_mode,
         } => {
-            let Some(shape_pair) = prim_to_draw_shape(*shape, layer_bounds, layer, blend_mode)
+            let Some(shape_pair) =
+                shape_pair_for_primitive(*shape, layer_bounds, layer, blend_mode)
             else {
                 return;
             };
@@ -2101,11 +1992,12 @@ fn push_shadow_primitive(
             blend_mode,
             clip_rect,
         } => {
-            let Some(fill_pair) = prim_to_draw_shape(*fill, layer_bounds, layer, blend_mode) else {
+            let Some(fill_pair) = shape_pair_for_primitive(*fill, layer_bounds, layer, blend_mode)
+            else {
                 return;
             };
             let Some(cutout_pair) =
-                prim_to_draw_shape(*cutout, layer_bounds, layer, BlendMode::DstOut)
+                shape_pair_for_primitive(*cutout, layer_bounds, layer, BlendMode::DstOut)
             else {
                 return;
             };
@@ -2132,6 +2024,7 @@ fn push_shadow_primitive(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
     use cranpose_ui::text_layout_result::{
         GlyphLayout, LineLayout, TextLayoutData, TextLayoutResult,
     };
@@ -2208,71 +2101,6 @@ mod tests {
             bounds = union_rect(bounds, layer.rect);
         }
         bounds
-    }
-
-    #[test]
-    fn auto_alpha_triggers_isolation_with_composite_alpha() {
-        let layer = GraphicsLayer {
-            alpha: 0.5,
-            compositing_strategy: CompositingStrategy::Auto,
-            ..Default::default()
-        };
-        let isolation = effective_layer_isolation(&layer).expect("expected isolation");
-        assert!(isolation.effect.is_none());
-        assert!((isolation.composite_alpha - 0.5).abs() < 1e-6);
-
-        let content = layer_for_content(&layer, Some(&isolation));
-        assert!((content.alpha - 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn modulate_alpha_keeps_in_place_alpha_without_offscreen() {
-        let layer = GraphicsLayer {
-            alpha: 0.5,
-            compositing_strategy: CompositingStrategy::ModulateAlpha,
-            ..Default::default()
-        };
-        assert!(effective_layer_isolation(&layer).is_none());
-    }
-
-    #[test]
-    fn non_src_over_layer_blend_triggers_isolation() {
-        let layer = GraphicsLayer {
-            blend_mode: BlendMode::DstOut,
-            compositing_strategy: CompositingStrategy::Auto,
-            ..Default::default()
-        };
-        let isolation = effective_layer_isolation(&layer).expect("expected blend isolation");
-        assert_eq!(isolation.blend_mode, BlendMode::DstOut);
-        assert!((isolation.composite_alpha - 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn offscreen_isolation_has_no_effect_payload() {
-        let layer = GraphicsLayer {
-            alpha: 1.0,
-            compositing_strategy: CompositingStrategy::Offscreen,
-            ..Default::default()
-        };
-        let isolation = effective_layer_isolation(&layer).expect("expected isolation");
-        assert!(isolation.effect.is_none());
-        assert!((isolation.composite_alpha - 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn render_effect_forces_isolation_even_with_modulate_alpha() {
-        let layer = GraphicsLayer {
-            alpha: 0.4,
-            compositing_strategy: CompositingStrategy::ModulateAlpha,
-            render_effect: Some(RenderEffect::blur(4.0)),
-            ..Default::default()
-        };
-        let isolation = effective_layer_isolation(&layer).expect("expected effect isolation");
-        assert!(isolation.effect.is_some());
-        // ModulateAlpha keeps alpha modulation in-content.
-        assert!((isolation.composite_alpha - 1.0).abs() < 1e-6);
-        let content = layer_for_content(&layer, Some(&isolation));
-        assert!((content.alpha - layer.alpha).abs() < 1e-6);
     }
 
     #[test]
@@ -2404,6 +2232,7 @@ mod tests {
             }),
             isolation: cranpose_render_common::graph::IsolationReasons::default(),
             cache_policy: cranpose_render_common::graph::CachePolicy::None,
+            cache_hashes: LayerRasterCacheHashes::default(),
             children: vec![],
         };
         let mut scene = Scene::new();

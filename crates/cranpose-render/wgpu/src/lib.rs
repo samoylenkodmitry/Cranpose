@@ -12,6 +12,7 @@ mod scene;
 mod shader_cache;
 mod shaders;
 
+pub use gpu_stats::FrameStatsSnapshot as RenderStatsSnapshot;
 pub use scene::{BackdropLayer, ClickAction, DrawShape, HitRegion, ImageDraw, Scene, TextDraw};
 
 use cranpose_core::{MemoryApplier, NodeId};
@@ -1060,6 +1061,12 @@ impl WgpuRenderer {
                 "GPU renderer not initialized. Call init_gpu() first.".to_string(),
             ))
         }
+    }
+
+    pub fn last_frame_stats(&self) -> Option<RenderStatsSnapshot> {
+        self.gpu_renderer
+            .as_ref()
+            .and_then(GpuRenderer::last_frame_stats)
     }
 
     /// Get access to the WGPU device (for surface configuration).
@@ -2278,6 +2285,8 @@ impl TextMeasurer for WgpuTextMeasurer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
 
     const WORKER_TEST_TIMEOUT_SECS: u64 = 15;
 
@@ -2649,9 +2658,6 @@ mod tests {
 
     #[test]
     fn renderer_measurement_keeps_render_text_cache_empty() {
-        use std::sync::mpsc;
-        use std::time::Duration;
-
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let renderer = WgpuRenderer::new(&[TEST_FONT]);

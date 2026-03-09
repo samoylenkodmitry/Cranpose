@@ -13,6 +13,7 @@ use crate::graph::{
     CachePolicy, DrawPrimitiveNode, HitTestNode, IsolationReasons, LayerNode, PrimitiveEntry,
     PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
 };
+use crate::raster_cache::LayerRasterCacheHashes;
 use crate::style_shared::{
     apply_layer_to_quad, combine_layers, primitives_for_placement, DrawPlacement,
 };
@@ -54,7 +55,9 @@ struct SnapshotNodeData {
 
 pub fn build_graph_from_layout_tree(root: &LayoutBox, scale: f32) -> RenderGraph {
     let root_snapshot = layout_box_to_snapshot(root, None);
-    RenderGraph::new(build_layer_node(root_snapshot, scale))
+    RenderGraph {
+        root: build_layer_node(root_snapshot, scale),
+    }
 }
 
 pub fn build_graph_from_applier(
@@ -63,7 +66,9 @@ pub fn build_graph_from_applier(
     scale: f32,
 ) -> Option<RenderGraph> {
     let snapshot = snapshot_from_applier(applier, root)?;
-    Some(RenderGraph::new(build_layer_node(snapshot, scale)))
+    Some(RenderGraph {
+        root: build_layer_node(snapshot, scale),
+    })
 }
 
 fn build_layer_node(snapshot: BuildNodeSnapshot, root_scale: f32) -> LayerNode {
@@ -141,7 +146,7 @@ fn build_layer_node(snapshot: BuildNodeSnapshot, root_scale: f32) -> LayerNode {
         PrimitivePhase::AfterChildren,
     ));
 
-    LayerNode {
+    let mut layer = LayerNode {
         node_id: Some(snapshot.node_id),
         local_bounds,
         placement: snapshot.placement,
@@ -153,8 +158,11 @@ fn build_layer_node(snapshot: BuildNodeSnapshot, root_scale: f32) -> LayerNode {
         hit_test,
         isolation,
         cache_policy,
+        cache_hashes: LayerRasterCacheHashes::default(),
         children,
-    }
+    };
+    layer.recompute_raster_cache_hashes();
+    layer
 }
 
 fn draw_nodes(
@@ -580,6 +588,18 @@ mod tests {
     }
 
     #[test]
+    fn stored_content_hash_ignores_parent_translation() {
+        let static_graph = build_layer_node(snapshot_with_translation(0.0), 1.0);
+        let moved_graph = build_layer_node(snapshot_with_translation(23.5), 1.0);
+
+        assert_eq!(
+            static_graph.target_content_hash(),
+            moved_graph.target_content_hash(),
+            "parent rigid motion must not invalidate the subtree content hash"
+        );
+    }
+
+    #[test]
     fn parent_content_offset_is_encoded_in_child_transform() {
         let child = BuildNodeSnapshot {
             node_id: 2,
@@ -711,6 +731,105 @@ mod tests {
 
         assert_eq!(behind.phase, PrimitivePhase::BeforeChildren);
         assert_eq!(overlay.phase, PrimitivePhase::AfterChildren);
+    }
+
+    #[test]
+    fn stored_content_hash_changes_when_child_transform_changes() {
+        let child = BuildNodeSnapshot {
+            node_id: 2,
+            placement: Point { x: 4.0, y: 5.0 },
+            size: Size {
+                width: 20.0,
+                height: 10.0,
+            },
+            content_offset: Point::default(),
+            measured_max_width: None,
+            resolved_modifiers: ResolvedModifiers::default(),
+            draw_commands: vec![],
+            click_actions: vec![],
+            pointer_inputs: vec![],
+            clip_to_bounds: false,
+            annotated_text: None,
+            text_style: None,
+            text_layout_options: None,
+            graphics_layer: None,
+            children: vec![],
+        };
+        let mut moved_child = child.clone();
+        moved_child.placement.x += 7.0;
+
+        let parent = BuildNodeSnapshot {
+            node_id: 1,
+            placement: Point::default(),
+            size: Size {
+                width: 80.0,
+                height: 50.0,
+            },
+            content_offset: Point::default(),
+            measured_max_width: None,
+            resolved_modifiers: ResolvedModifiers::default(),
+            draw_commands: vec![],
+            click_actions: vec![],
+            pointer_inputs: vec![],
+            clip_to_bounds: false,
+            annotated_text: None,
+            text_style: None,
+            text_layout_options: None,
+            graphics_layer: None,
+            children: vec![child],
+        };
+        let moved_parent = BuildNodeSnapshot {
+            children: vec![moved_child],
+            ..parent.clone()
+        };
+
+        let static_graph = build_layer_node(parent, 1.0);
+        let moved_graph = build_layer_node(moved_parent, 1.0);
+
+        assert_ne!(
+            static_graph.target_content_hash(),
+            moved_graph.target_content_hash(),
+            "moving a child within the parent must invalidate the parent subtree hash"
+        );
+    }
+
+    #[test]
+    fn stored_effect_hash_tracks_local_effect_only() {
+        let base = BuildNodeSnapshot {
+            node_id: 1,
+            placement: Point::default(),
+            size: Size {
+                width: 80.0,
+                height: 50.0,
+            },
+            content_offset: Point::default(),
+            measured_max_width: None,
+            resolved_modifiers: ResolvedModifiers::default(),
+            draw_commands: vec![],
+            click_actions: vec![],
+            pointer_inputs: vec![],
+            clip_to_bounds: false,
+            annotated_text: None,
+            text_style: None,
+            text_layout_options: None,
+            graphics_layer: None,
+            children: vec![],
+        };
+        let mut effected = base.clone();
+        effected.graphics_layer = Some(GraphicsLayer {
+            render_effect: Some(cranpose_ui_graphics::RenderEffect::blur(6.0)),
+            ..GraphicsLayer::default()
+        });
+
+        let base_graph = build_layer_node(base, 1.0);
+        let effected_graph = build_layer_node(effected, 1.0);
+
+        assert_eq!(
+            base_graph.target_content_hash(),
+            effected_graph.target_content_hash(),
+            "post-processing effect parameters belong to the effect hash, not the content hash"
+        );
+        assert_ne!(base_graph.effect_hash(), effected_graph.effect_hash());
     }
 
     #[test]

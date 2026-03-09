@@ -1,6 +1,10 @@
+#[cfg(test)]
 pub(crate) use cranpose_render_common::style_shared::{
-    apply_layer_affine_to_rect, apply_layer_to_brush, apply_layer_to_color, apply_layer_to_quad,
-    apply_layer_to_rect, combine_layers, layer_uniform_scale, quad_bounds, scale_corner_radii,
+    apply_layer_affine_to_rect, apply_layer_to_quad, quad_bounds,
+};
+pub(crate) use cranpose_render_common::style_shared::{
+    apply_layer_to_brush, apply_layer_to_color, apply_layer_to_rect, combine_layers,
+    layer_uniform_scale, scale_corner_radii,
 };
 #[cfg(test)]
 pub(crate) use cranpose_render_common::style_shared::{

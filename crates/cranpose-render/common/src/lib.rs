@@ -3,7 +3,9 @@
 pub mod font_layout;
 pub mod geometry;
 pub mod graph;
+mod graph_hash;
 pub mod hit_graph;
+pub mod layer_composition;
 pub mod layer_shadow;
 pub mod primitive_emit;
 pub mod raster_cache;

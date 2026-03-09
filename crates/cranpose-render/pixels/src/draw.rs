@@ -991,6 +991,7 @@ mod tests {
         CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
         PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
     };
+    use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
 
     fn count_non_background_pixels(frame: &[u8], width: u32, height: u32) -> usize {
         count_non_background_pixels_in_band(frame, width, 0, height)
@@ -1181,6 +1182,7 @@ mod tests {
             hit_test: None,
             isolation: IsolationReasons::default(),
             cache_policy: CachePolicy::None,
+            cache_hashes: LayerRasterCacheHashes::default(),
             children: vec![RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
                 node: PrimitiveNode::Draw(DrawPrimitiveNode {

@@ -8,6 +8,8 @@ use cranpose_ui::{
 };
 use cranpose_ui_graphics::{BlendMode, ColorFilter, DrawPrimitive};
 
+use crate::raster_cache::LayerRasterCacheHashes;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProjectiveTransform {
     matrix: [[f32; 3]; 3],
@@ -237,6 +239,7 @@ pub struct LayerNode {
     pub hit_test: Option<HitTestNode>,
     pub isolation: IsolationReasons,
     pub cache_policy: CachePolicy,
+    pub cache_hashes: LayerRasterCacheHashes,
     pub children: Vec<RenderNode>,
 }
 
@@ -264,6 +267,18 @@ impl LayerNode {
     pub fn color_filter(&self) -> Option<ColorFilter> {
         self.graphics_layer.color_filter
     }
+
+    pub fn target_content_hash(&self) -> u64 {
+        self.cache_hashes.target_content
+    }
+
+    pub fn effect_hash(&self) -> u64 {
+        self.cache_hashes.effect
+    }
+
+    pub fn recompute_raster_cache_hashes(&mut self) {
+        crate::graph_hash::recompute_layer_raster_cache_hashes(self);
+    }
 }
 
 #[derive(Clone)]
@@ -278,7 +293,8 @@ pub struct RenderGraph {
 }
 
 impl RenderGraph {
-    pub fn new(root: LayerNode) -> Self {
+    pub fn new(mut root: LayerNode) -> Self {
+        root.recompute_raster_cache_hashes();
         Self { root }
     }
 }
@@ -382,6 +398,26 @@ fn solve_homography(source: [[f32; 2]; 4], target: [[f32; 2]; 4]) -> Option<[f32
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::raster_cache::LayerRasterCacheHashes;
+    use cranpose_ui_graphics::{Brush, Color, DrawPrimitive};
+
+    fn test_layer(local_bounds: Rect, children: Vec<RenderNode>) -> LayerNode {
+        LayerNode {
+            node_id: None,
+            local_bounds,
+            placement: Point::default(),
+            content_offset: Point::default(),
+            transform_to_parent: ProjectiveTransform::identity(),
+            graphics_layer: GraphicsLayer::default(),
+            clip_to_bounds: false,
+            shadow_clip: None,
+            hit_test: None,
+            isolation: IsolationReasons::default(),
+            cache_policy: CachePolicy::None,
+            cache_hashes: LayerRasterCacheHashes::default(),
+            children,
+        }
+    }
 
     #[test]
     fn projective_transform_translation_maps_points() {
@@ -416,5 +452,43 @@ mod tests {
             assert!((expected[0] - actual[0]).abs() < 1e-4);
             assert!((expected[1] - actual[1]).abs() < 1e-4);
         }
+    }
+
+    #[test]
+    fn render_graph_new_recomputes_manual_layer_hashes() {
+        let primitive = PrimitiveEntry {
+            phase: PrimitivePhase::BeforeChildren,
+            node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                primitive: DrawPrimitive::Rect {
+                    rect: Rect {
+                        x: 1.0,
+                        y: 2.0,
+                        width: 8.0,
+                        height: 6.0,
+                    },
+                    brush: Brush::solid(Color::WHITE),
+                },
+                clip: None,
+            }),
+        };
+        let mut root = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 20.0,
+                height: 20.0,
+            },
+            vec![RenderNode::Primitive(primitive)],
+        );
+        root.graphics_layer.render_effect = Some(RenderEffect::blur(3.0));
+        let mut expected = root.clone();
+        expected.recompute_raster_cache_hashes();
+
+        let graph = RenderGraph::new(root);
+        assert_eq!(
+            graph.root.target_content_hash(),
+            expected.target_content_hash()
+        );
+        assert_eq!(graph.root.effect_hash(), expected.effect_hash());
     }
 }

@@ -21,6 +21,12 @@ impl ScaleBucket {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LayerRasterCacheHashes {
+    pub target_content: u64,
+    pub effect: u64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LayerRasterCacheKey {
     stable_id: Option<NodeId>,

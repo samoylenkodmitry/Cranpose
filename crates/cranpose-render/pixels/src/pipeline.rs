@@ -5,9 +5,10 @@ use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::hit_graph::{
     collect_hits_from_graph as collect_common_hits, HitGraphSink,
 };
+use cranpose_render_common::layer_shadow::layer_shadow_geometry;
 use cranpose_render_common::primitive_emit::{
-    emit_draw_primitive, resolve_primitive_clip, DrawPrimitiveSink, ImageDrawParams,
-    PrimitiveClipSpace, ShapeDrawParams,
+    draw_shape_params_for_primitive, emit_draw_primitive, resolve_clip, resolve_primitive_clip,
+    DrawPrimitiveSink, ImageDrawParams, PrimitiveClipSpace, ShapeDrawParams,
 };
 use cranpose_render_common::Brush;
 #[cfg(test)]
@@ -25,8 +26,8 @@ use cranpose_ui_graphics::{
 
 use crate::scene::{ClickAction, Scene};
 use crate::style::{
-    apply_layer_affine_to_rect, apply_layer_to_brush, apply_layer_to_color, apply_layer_to_quad,
-    apply_layer_to_rect, combine_layers, layer_uniform_scale, quad_bounds, scale_corner_radii,
+    apply_layer_to_brush, apply_layer_to_color, apply_layer_to_rect, combine_layers,
+    layer_uniform_scale, scale_corner_radii,
 };
 
 #[cfg(test)]
@@ -75,7 +76,6 @@ fn report_unsupported_effects(layer: &GraphicsLayer) {
 struct ShadowSample {
     expansion: f32,
     weight: f32,
-    spot_offset_scale: f32,
 }
 
 fn blur_samples(blur_radius: f32) -> Vec<ShadowSample> {
@@ -94,11 +94,7 @@ fn blur_samples(blur_radius: f32) -> Vec<ShadowSample> {
         let center = blur_radius * (t0 + t1) * 0.5;
         let expansion = blur_radius * t1;
         let weight = (-0.5 * (center / sigma).powi(2)).exp().max(0.0001);
-        samples.push(ShadowSample {
-            expansion,
-            weight,
-            spot_offset_scale: 0.35 + t1 * 0.65,
-        });
+        samples.push(ShadowSample { expansion, weight });
         weight_sum += weight;
     }
 
@@ -106,7 +102,6 @@ fn blur_samples(blur_radius: f32) -> Vec<ShadowSample> {
         return vec![ShadowSample {
             expansion: blur_radius,
             weight: 1.0,
-            spot_offset_scale: 1.0,
         }];
     }
 
@@ -117,6 +112,110 @@ fn blur_samples(blur_radius: f32) -> Vec<ShadowSample> {
     samples
 }
 
+fn expanded_shape_rect(shape: &crate::scene::DrawShape, expansion: f32) -> Rect {
+    Rect {
+        x: shape.rect.x - expansion,
+        y: shape.rect.y - expansion,
+        width: (shape.rect.width + expansion * 2.0).max(0.0),
+        height: (shape.rect.height + expansion * 2.0).max(0.0),
+    }
+}
+
+fn push_blurred_shape_samples(
+    scene: &mut Scene,
+    shape: &crate::scene::DrawShape,
+    blend_mode: BlendMode,
+    clip: Option<Rect>,
+    blur_radius: f32,
+) {
+    let samples = blur_samples(blur_radius.max(1.0));
+    if samples.is_empty() {
+        scene.push_shape(
+            shape.rect,
+            shape.brush.clone(),
+            shape.shape,
+            clip,
+            blend_mode,
+        );
+        return;
+    }
+
+    for sample in samples.iter().rev() {
+        scene.push_shape(
+            expanded_shape_rect(shape, sample.expansion),
+            scale_brush_alpha(shape.brush.clone(), sample.weight),
+            shape.shape,
+            clip,
+            blend_mode,
+        );
+    }
+}
+
+fn scale_color_alpha(color: Color, alpha: f32) -> Color {
+    Color(
+        color.r(),
+        color.g(),
+        color.b(),
+        (color.a() * alpha).clamp(0.0, 1.0),
+    )
+}
+
+fn scale_brush_alpha(brush: Brush, alpha: f32) -> Brush {
+    match brush {
+        Brush::Solid(color) => Brush::solid(scale_color_alpha(color, alpha)),
+        Brush::LinearGradient {
+            mut colors,
+            stops,
+            start,
+            end,
+            tile_mode,
+        } => {
+            for color in &mut colors {
+                *color = scale_color_alpha(*color, alpha);
+            }
+            Brush::LinearGradient {
+                colors,
+                stops,
+                start,
+                end,
+                tile_mode,
+            }
+        }
+        Brush::RadialGradient {
+            mut colors,
+            stops,
+            center,
+            radius,
+            tile_mode,
+        } => {
+            for color in &mut colors {
+                *color = scale_color_alpha(*color, alpha);
+            }
+            Brush::RadialGradient {
+                colors,
+                stops,
+                center,
+                radius,
+                tile_mode,
+            }
+        }
+        Brush::SweepGradient {
+            mut colors,
+            stops,
+            center,
+        } => {
+            for color in &mut colors {
+                *color = scale_color_alpha(*color, alpha);
+            }
+            Brush::SweepGradient {
+                colors,
+                stops,
+                center,
+            }
+        }
+    }
+}
+
 fn push_layer_shadow(
     scene: &mut Scene,
     layer: &GraphicsLayer,
@@ -124,20 +223,8 @@ fn push_layer_shadow(
     transformed_bounds: Rect,
     clip: Option<Rect>,
 ) {
-    if layer.shadow_elevation <= 0.0 {
-        return;
-    }
-
+    let shadow_geometry = layer_shadow_geometry(layer, transformed_bounds);
     let scale = layer_uniform_scale(layer).max(0.1);
-    let elevation = layer.shadow_elevation * scale;
-    let spread = (elevation * 0.22).max(0.8);
-    let spot_offset_x = elevation * 0.18;
-    let spot_offset_y = elevation * 0.62;
-    let samples = blur_samples((elevation * 0.95).max(1.0));
-    if samples.is_empty() {
-        return;
-    }
-
     let resolved_shape = match layer.shape {
         LayerShape::Rectangle => None,
         LayerShape::Rounded(shape) => {
@@ -148,59 +235,58 @@ fn push_layer_shadow(
         }
     };
 
-    let ambient_base_alpha = (layer.ambient_shadow_color.a() * 0.48).clamp(0.0, 1.0);
-    let spot_base_alpha = (layer.spot_shadow_color.a() * 0.62).clamp(0.0, 1.0);
-
-    for sample in samples.iter().rev() {
-        let ambient_alpha = (ambient_base_alpha * sample.weight * 1.18).clamp(0.0, 1.0);
-        if ambient_alpha > f32::EPSILON {
-            let ambient = Color(
-                layer.ambient_shadow_color.r(),
-                layer.ambient_shadow_color.g(),
-                layer.ambient_shadow_color.b(),
-                ambient_alpha,
-            );
-            let ambient_expansion = spread + sample.expansion;
-            let ambient_rect = Rect {
-                x: transformed_bounds.x - ambient_expansion,
-                y: transformed_bounds.y - ambient_expansion,
-                width: transformed_bounds.width + ambient_expansion * 2.0,
-                height: transformed_bounds.height + ambient_expansion * 2.0,
-            };
-            scene.push_shape(
-                ambient_rect,
-                Brush::solid(ambient),
-                resolved_shape,
-                clip,
-                BlendMode::SrcOver,
-            );
+    fn shadow_shape(
+        rect: Rect,
+        color: Color,
+        shape: Option<RoundedCornerShape>,
+    ) -> crate::scene::DrawShape {
+        crate::scene::DrawShape {
+            rect,
+            local_rect: rect,
+            quad: [
+                [rect.x, rect.y],
+                [rect.x + rect.width, rect.y],
+                [rect.x, rect.y + rect.height],
+                [rect.x + rect.width, rect.y + rect.height],
+            ],
+            brush: Brush::solid(color),
+            shape,
+            z_index: 0,
+            clip: None,
+            blend_mode: BlendMode::SrcOver,
         }
+    }
 
-        let spot_alpha = (spot_base_alpha * sample.weight * 1.24).clamp(0.0, 1.0);
-        if spot_alpha > f32::EPSILON {
-            let spot = Color(
-                layer.spot_shadow_color.r(),
-                layer.spot_shadow_color.g(),
-                layer.spot_shadow_color.b(),
-                spot_alpha,
-            );
-            let spot_expansion = spread * 0.7 + sample.expansion * 0.78;
-            let spot_dx = spot_offset_x * sample.spot_offset_scale;
-            let spot_dy = spot_offset_y * sample.spot_offset_scale;
-            let spot_rect = Rect {
-                x: transformed_bounds.x + spot_dx - spot_expansion,
-                y: transformed_bounds.y + spot_dy - spot_expansion,
-                width: transformed_bounds.width + spot_expansion * 2.0,
-                height: transformed_bounds.height + spot_expansion * 2.0,
-            };
-            scene.push_shape(
-                spot_rect,
-                Brush::solid(spot),
-                resolved_shape,
-                clip,
-                BlendMode::SrcOver,
-            );
-        }
+    if let Some(ambient_pass) = shadow_geometry.ambient {
+        let ambient = Color(
+            layer.ambient_shadow_color.r(),
+            layer.ambient_shadow_color.g(),
+            layer.ambient_shadow_color.b(),
+            ambient_pass.alpha,
+        );
+        push_blurred_shape_samples(
+            scene,
+            &shadow_shape(ambient_pass.rect, ambient, resolved_shape),
+            BlendMode::SrcOver,
+            clip,
+            ambient_pass.blur_radius,
+        );
+    }
+
+    if let Some(spot_pass) = shadow_geometry.spot {
+        let spot = Color(
+            layer.spot_shadow_color.r(),
+            layer.spot_shadow_color.g(),
+            layer.spot_shadow_color.b(),
+            spot_pass.alpha,
+        );
+        push_blurred_shape_samples(
+            scene,
+            &shadow_shape(spot_pass.rect, spot, resolved_shape),
+            BlendMode::SrcOver,
+            clip,
+            spot_pass.blur_radius,
+        );
     }
 }
 
@@ -214,15 +300,6 @@ pub(crate) fn render_layout_tree(root: &LayoutBox, scene: &mut Scene) {
         Point::default(),
     );
     scene.graph = Some(graph);
-}
-
-fn resolve_clip(parent_clip: Option<Rect>, requested_clip: Option<Rect>) -> Option<Rect> {
-    match (parent_clip, requested_clip) {
-        (Some(parent), Some(current)) => parent.intersect(current),
-        (Some(parent), None) => Some(parent),
-        (None, Some(current)) => Some(current),
-        (None, None) => None,
-    }
 }
 
 #[cfg(test)]
@@ -843,168 +920,26 @@ fn push_shadow_primitive(
     clip: Option<Rect>,
     scene: &mut Scene,
 ) {
-    fn scale_color_alpha(color: Color, alpha: f32) -> Color {
-        Color(
-            color.r(),
-            color.g(),
-            color.b(),
-            (color.a() * alpha).clamp(0.0, 1.0),
-        )
-    }
-
-    fn scale_brush_alpha(brush: Brush, alpha: f32) -> Brush {
-        match brush {
-            Brush::Solid(color) => Brush::solid(scale_color_alpha(color, alpha)),
-            Brush::LinearGradient {
-                mut colors,
-                stops,
-                start,
-                end,
-                tile_mode,
-            } => {
-                for color in &mut colors {
-                    *color = scale_color_alpha(*color, alpha);
-                }
-                Brush::LinearGradient {
-                    colors,
-                    stops,
-                    start,
-                    end,
-                    tile_mode,
-                }
-            }
-            Brush::RadialGradient {
-                mut colors,
-                stops,
-                center,
-                radius,
-                tile_mode,
-            } => {
-                for color in &mut colors {
-                    *color = scale_color_alpha(*color, alpha);
-                }
-                Brush::RadialGradient {
-                    colors,
-                    stops,
-                    center,
-                    radius,
-                    tile_mode,
-                }
-            }
-            Brush::SweepGradient {
-                mut colors,
-                stops,
-                center,
-            } => {
-                for color in &mut colors {
-                    *color = scale_color_alpha(*color, alpha);
-                }
-                Brush::SweepGradient {
-                    colors,
-                    stops,
-                    center,
-                }
-            }
-        }
-    }
-
-    fn expanded_shape_rect(shape: &crate::scene::DrawShape, expansion: f32) -> Rect {
-        Rect {
-            x: shape.rect.x - expansion,
-            y: shape.rect.y - expansion,
-            width: (shape.rect.width + expansion * 2.0).max(0.0),
-            height: (shape.rect.height + expansion * 2.0).max(0.0),
-        }
-    }
-
-    fn push_blurred_shape_samples(
-        scene: &mut Scene,
-        shape: &crate::scene::DrawShape,
-        blend_mode: BlendMode,
-        clip: Option<Rect>,
-        blur_radius: f32,
-    ) {
-        let samples = blur_samples(blur_radius.max(1.0));
-        if samples.is_empty() {
-            scene.push_shape(
-                shape.rect,
-                shape.brush.clone(),
-                shape.shape,
-                clip,
-                blend_mode,
-            );
-            return;
-        }
-
-        for sample in samples.iter().rev() {
-            scene.push_shape(
-                expanded_shape_rect(shape, sample.expansion),
-                scale_brush_alpha(shape.brush.clone(), sample.weight),
-                shape.shape,
-                clip,
-                blend_mode,
-            );
-        }
-    }
-
-    fn prim_to_draw_shape(
+    fn shape_pair_for_primitive(
         prim: DrawPrimitive,
         layer_bounds: Rect,
         layer: &GraphicsLayer,
         blend_mode: BlendMode,
     ) -> Option<(crate::scene::DrawShape, BlendMode)> {
-        match prim {
-            DrawPrimitive::Rect {
-                rect: local_rect,
-                brush,
-            } => {
-                let draw_rect = local_rect.translate(layer_bounds.x, layer_bounds.y);
-                let local_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
-                let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
-                let transformed = quad_bounds(quad);
-                let brush = apply_layer_to_brush(brush, layer);
-                Some((
-                    crate::scene::DrawShape {
-                        rect: transformed,
-                        local_rect,
-                        quad,
-                        brush,
-                        shape: None,
-                        z_index: 0,
-                        clip: None,
-                        blend_mode,
-                    },
-                    blend_mode,
-                ))
-            }
-            DrawPrimitive::RoundRect {
-                rect: local_rect,
-                brush,
-                radii,
-            } => {
-                let draw_rect = local_rect.translate(layer_bounds.x, layer_bounds.y);
-                let local_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
-                let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
-                let transformed = quad_bounds(quad);
-                let scaled_radii = scale_corner_radii(radii, layer_uniform_scale(layer));
-                let shape = RoundedCornerShape::with_radii(scaled_radii);
-                let brush = apply_layer_to_brush(brush, layer);
-                Some((
-                    crate::scene::DrawShape {
-                        rect: transformed,
-                        local_rect,
-                        quad,
-                        brush,
-                        shape: Some(shape),
-                        z_index: 0,
-                        clip: None,
-                        blend_mode,
-                    },
-                    blend_mode,
-                ))
-            }
-            _ => None,
-        }
+        let params = draw_shape_params_for_primitive(prim, layer_bounds, layer, None, blend_mode)?;
+        Some((
+            crate::scene::DrawShape {
+                rect: params.rect,
+                local_rect: params.local_rect,
+                quad: params.quad,
+                brush: params.brush,
+                shape: params.shape,
+                z_index: 0,
+                clip: params.clip,
+                blend_mode: params.blend_mode,
+            },
+            params.blend_mode,
+        ))
     }
 
     match shadow_prim {
@@ -1013,7 +948,8 @@ fn push_shadow_primitive(
             blur_radius,
             blend_mode,
         } => {
-            let Some(shape_pair) = prim_to_draw_shape(*shape, layer_bounds, layer, blend_mode)
+            let Some(shape_pair) =
+                shape_pair_for_primitive(*shape, layer_bounds, layer, blend_mode)
             else {
                 return;
             };
@@ -1026,11 +962,12 @@ fn push_shadow_primitive(
             blend_mode,
             clip_rect,
         } => {
-            let Some(fill_pair) = prim_to_draw_shape(*fill, layer_bounds, layer, blend_mode) else {
+            let Some(fill_pair) = shape_pair_for_primitive(*fill, layer_bounds, layer, blend_mode)
+            else {
                 return;
             };
             let Some(cutout_pair) =
-                prim_to_draw_shape(*cutout, layer_bounds, layer, BlendMode::DstOut)
+                shape_pair_for_primitive(*cutout, layer_bounds, layer, BlendMode::DstOut)
             else {
                 return;
             };
@@ -1131,53 +1068,53 @@ mod tests {
             width: 40.0,
             height: 24.0,
         };
+        let geometry = layer_shadow_geometry(&layer, bounds);
+        let ambient_pass = geometry.ambient.expect("ambient pass");
+        let spot_pass = geometry.spot.expect("spot pass");
+        let ambient_samples = blur_samples(ambient_pass.blur_radius.max(1.0));
+        let spot_samples = blur_samples(spot_pass.blur_radius.max(1.0));
 
         push_layer_shadow(&mut scene, &layer, bounds, bounds, None);
 
         assert!(
-            scene.shapes.len() >= 12,
-            "soft shadow should emit layered ambient + spot geometry"
+            scene.shapes.len() == ambient_samples.len() + spot_samples.len(),
+            "pixels shadow blur should emit one sample per shared ambient/spot pass"
         );
 
-        let ambient = scene
-            .shapes
-            .iter()
-            .min_by(|a, b| a.rect.x.partial_cmp(&b.rect.x).expect("finite x"))
-            .expect("ambient shape expected");
-        assert!(
-            ambient.rect.x <= bounds.x - 6.0,
-            "ambient shadow should clearly expand left"
+        let ambient = &scene.shapes[0];
+        let ambient_expansion = ambient_samples
+            .last()
+            .expect("ambient blur samples")
+            .expansion;
+        assert_eq!(
+            ambient.rect,
+            Rect {
+                x: ambient_pass.rect.x - ambient_expansion,
+                y: ambient_pass.rect.y - ambient_expansion,
+                width: ambient_pass.rect.width + ambient_expansion * 2.0,
+                height: ambient_pass.rect.height + ambient_expansion * 2.0,
+            }
         );
-        assert!(
-            ambient.rect.width >= bounds.width + 12.0,
-            "ambient shadow should clearly expand width"
+
+        let spot = &scene.shapes[ambient_samples.len()];
+        let spot_expansion = spot_samples.last().expect("spot blur samples").expansion;
+        assert_eq!(
+            spot.rect,
+            Rect {
+                x: spot_pass.rect.x - spot_expansion,
+                y: spot_pass.rect.y - spot_expansion,
+                width: spot_pass.rect.width + spot_expansion * 2.0,
+                height: spot_pass.rect.height + spot_expansion * 2.0,
+            }
         );
-        let ambient_peak_alpha = scene
-            .shapes
+        let spot_peak_alpha = scene.shapes[ambient_samples.len()..]
             .iter()
             .filter_map(|shape| match &shape.brush {
                 Brush::Solid(color) => Some(color.a()),
                 _ => None,
             })
             .fold(0.0f32, f32::max);
-        assert!(
-            ambient_peak_alpha > 0.02,
-            "ambient alpha should remain visible"
-        );
-
-        let spot = scene
-            .shapes
-            .iter()
-            .max_by(|a, b| a.rect.y.partial_cmp(&b.rect.y).expect("finite y"))
-            .expect("spot shape expected");
-        assert!(
-            spot.rect.y > bounds.y,
-            "spot shadow should be offset downward from source bounds"
-        );
-        let Brush::Solid(spot_color) = &spot.brush else {
-            panic!("spot shadow must use solid color");
-        };
-        assert!(spot_color.a() > 0.02, "spot alpha should remain visible");
+        assert!(spot_peak_alpha > 0.02, "spot alpha should remain visible");
     }
 
     #[test]

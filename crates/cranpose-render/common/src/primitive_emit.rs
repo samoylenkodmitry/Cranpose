@@ -50,6 +50,48 @@ pub trait DrawPrimitiveSink {
     );
 }
 
+pub fn draw_shape_params_for_primitive(
+    primitive: DrawPrimitive,
+    layer_bounds: Rect,
+    layer: &GraphicsLayer,
+    clip: Option<Rect>,
+    blend_mode: BlendMode,
+) -> Option<ShapeDrawParams> {
+    struct SingleShapeSink {
+        shape: Option<ShapeDrawParams>,
+    }
+
+    impl DrawPrimitiveSink for SingleShapeSink {
+        fn push_shape(&mut self, params: ShapeDrawParams) {
+            if self.shape.is_none() {
+                self.shape = Some(params);
+            }
+        }
+
+        fn push_image(&mut self, _params: ImageDrawParams) {}
+
+        fn push_shadow(
+            &mut self,
+            _shadow_primitive: ShadowPrimitive,
+            _layer_bounds: Rect,
+            _layer: &GraphicsLayer,
+            _clip: Option<Rect>,
+        ) {
+        }
+    }
+
+    let mut sink = SingleShapeSink { shape: None };
+    emit_draw_primitive(
+        primitive,
+        layer_bounds,
+        layer,
+        clip,
+        &mut sink,
+        Some(blend_mode),
+    );
+    sink.shape
+}
+
 pub fn resolve_clip(parent_clip: Option<Rect>, requested_clip: Option<Rect>) -> Option<Rect> {
     match (parent_clip, requested_clip) {
         (Some(parent), Some(current)) => parent.intersect(current),
@@ -167,5 +209,106 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
         DrawPrimitive::Shadow(shadow_primitive) => {
             sink.push_shadow(shadow_primitive, layer_bounds, layer, clip);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cranpose_ui_graphics::{Brush, Color, CornerRadii};
+
+    #[test]
+    fn draw_shape_params_for_primitive_returns_transformed_rect_shape() {
+        let shape = draw_shape_params_for_primitive(
+            DrawPrimitive::Rect {
+                rect: Rect {
+                    x: 2.0,
+                    y: 3.0,
+                    width: 8.0,
+                    height: 5.0,
+                },
+                brush: Brush::solid(Color::WHITE),
+            },
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 40.0,
+                height: 30.0,
+            },
+            &GraphicsLayer::default(),
+            None,
+            BlendMode::SrcOver,
+        )
+        .expect("rect shape");
+
+        assert_eq!(
+            shape.rect,
+            Rect {
+                x: 12.0,
+                y: 23.0,
+                width: 8.0,
+                height: 5.0,
+            }
+        );
+        assert!(shape.shape.is_none());
+    }
+
+    #[test]
+    fn draw_shape_params_for_primitive_resolves_blended_round_rect() {
+        let shape = draw_shape_params_for_primitive(
+            DrawPrimitive::Blend {
+                primitive: Box::new(DrawPrimitive::RoundRect {
+                    rect: Rect {
+                        x: 1.0,
+                        y: 1.0,
+                        width: 10.0,
+                        height: 6.0,
+                    },
+                    brush: Brush::solid(Color::BLACK),
+                    radii: CornerRadii::uniform(4.0),
+                }),
+                blend_mode: BlendMode::DstOut,
+            },
+            Rect::from_size(cranpose_ui_graphics::Size {
+                width: 20.0,
+                height: 20.0,
+            }),
+            &GraphicsLayer::default(),
+            None,
+            BlendMode::SrcOver,
+        )
+        .expect("round rect shape");
+
+        assert_eq!(shape.blend_mode, BlendMode::SrcOver);
+        assert!(shape.shape.is_some());
+    }
+
+    #[test]
+    fn draw_shape_params_for_primitive_rejects_non_shape_primitives() {
+        assert!(draw_shape_params_for_primitive(
+            DrawPrimitive::Image {
+                rect: Rect::from_size(cranpose_ui_graphics::Size {
+                    width: 4.0,
+                    height: 4.0,
+                }),
+                image: cranpose_ui_graphics::ImageBitmap::from_rgba8(
+                    1,
+                    1,
+                    vec![255, 255, 255, 255],
+                )
+                .expect("image"),
+                alpha: 1.0,
+                color_filter: None,
+                src_rect: None,
+            },
+            Rect::from_size(cranpose_ui_graphics::Size {
+                width: 10.0,
+                height: 10.0,
+            }),
+            &GraphicsLayer::default(),
+            None,
+            BlendMode::SrcOver,
+        )
+        .is_none());
     }
 }

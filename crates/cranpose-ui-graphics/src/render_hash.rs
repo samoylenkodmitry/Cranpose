@@ -1,4 +1,7 @@
-use crate::{Brush, Color, ColorFilter, CornerRadii, LayerShape, Point, Rect};
+use crate::{
+    Brush, Color, ColorFilter, CornerRadii, DrawPrimitive, ImageBitmap, LayerShape, Point, Rect,
+    RenderEffect, RuntimeShader, ShadowPrimitive,
+};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -45,6 +48,36 @@ impl RenderHash for Brush {
 impl RenderHash for ColorFilter {
     fn render_hash(&self) -> u64 {
         finish_hash(|state| hash_color_filter(*self, state))
+    }
+}
+
+impl RenderHash for ImageBitmap {
+    fn render_hash(&self) -> u64 {
+        finish_hash(|state| self.id().hash(state))
+    }
+}
+
+impl RenderHash for RuntimeShader {
+    fn render_hash(&self) -> u64 {
+        finish_hash(|state| hash_runtime_shader(self, state))
+    }
+}
+
+impl RenderHash for RenderEffect {
+    fn render_hash(&self) -> u64 {
+        finish_hash(|state| hash_render_effect(self, state))
+    }
+}
+
+impl RenderHash for DrawPrimitive {
+    fn render_hash(&self) -> u64 {
+        finish_hash(|state| hash_draw_primitive(self, state))
+    }
+}
+
+impl RenderHash for ShadowPrimitive {
+    fn render_hash(&self) -> u64 {
+        finish_hash(|state| hash_shadow_primitive(self, state))
     }
 }
 
@@ -180,6 +213,129 @@ fn hash_color_filter<H: Hasher>(filter: ColorFilter, state: &mut H) {
     }
 }
 
+fn hash_runtime_shader<H: Hasher>(shader: &RuntimeShader, state: &mut H) {
+    shader.source().hash(state);
+    shader.uniforms().len().hash(state);
+    for value in shader.uniforms() {
+        hash_f32_bits(*value, state);
+    }
+}
+
+fn hash_render_effect<H: Hasher>(effect: &RenderEffect, state: &mut H) {
+    match effect {
+        RenderEffect::Blur {
+            radius_x,
+            radius_y,
+            edge_treatment,
+        } => {
+            0u8.hash(state);
+            hash_f32_bits(*radius_x, state);
+            hash_f32_bits(*radius_y, state);
+            edge_treatment.hash(state);
+        }
+        RenderEffect::Offset { offset_x, offset_y } => {
+            1u8.hash(state);
+            hash_f32_bits(*offset_x, state);
+            hash_f32_bits(*offset_y, state);
+        }
+        RenderEffect::Shader { shader } => {
+            2u8.hash(state);
+            hash_runtime_shader(shader, state);
+        }
+        RenderEffect::Chain { first, second } => {
+            3u8.hash(state);
+            hash_render_effect(first, state);
+            hash_render_effect(second, state);
+        }
+    }
+}
+
+fn hash_draw_primitive<H: Hasher>(primitive: &DrawPrimitive, state: &mut H) {
+    match primitive {
+        DrawPrimitive::Content => {
+            0u8.hash(state);
+        }
+        DrawPrimitive::Blend {
+            primitive,
+            blend_mode,
+        } => {
+            1u8.hash(state);
+            blend_mode.hash(state);
+            hash_draw_primitive(primitive, state);
+        }
+        DrawPrimitive::Rect { rect, brush } => {
+            2u8.hash(state);
+            hash_rect(*rect, state);
+            hash_brush(brush, state);
+        }
+        DrawPrimitive::RoundRect { rect, brush, radii } => {
+            3u8.hash(state);
+            hash_rect(*rect, state);
+            hash_brush(brush, state);
+            hash_corner_radii(*radii, state);
+        }
+        DrawPrimitive::Image {
+            rect,
+            image,
+            alpha,
+            color_filter,
+            src_rect,
+        } => {
+            4u8.hash(state);
+            hash_rect(*rect, state);
+            image.id().hash(state);
+            hash_f32_bits(*alpha, state);
+            match color_filter {
+                Some(filter) => {
+                    1u8.hash(state);
+                    hash_color_filter(*filter, state);
+                }
+                None => 0u8.hash(state),
+            }
+            match src_rect {
+                Some(rect) => {
+                    1u8.hash(state);
+                    hash_rect(*rect, state);
+                }
+                None => 0u8.hash(state),
+            }
+        }
+        DrawPrimitive::Shadow(shadow) => {
+            5u8.hash(state);
+            hash_shadow_primitive(shadow, state);
+        }
+    }
+}
+
+fn hash_shadow_primitive<H: Hasher>(shadow: &ShadowPrimitive, state: &mut H) {
+    match shadow {
+        ShadowPrimitive::Drop {
+            shape,
+            blur_radius,
+            blend_mode,
+        } => {
+            0u8.hash(state);
+            hash_draw_primitive(shape, state);
+            hash_f32_bits(*blur_radius, state);
+            blend_mode.hash(state);
+        }
+        ShadowPrimitive::Inner {
+            fill,
+            cutout,
+            blur_radius,
+            blend_mode,
+            clip_rect,
+        } => {
+            1u8.hash(state);
+            hash_draw_primitive(fill, state);
+            hash_draw_primitive(cutout, state);
+            hash_f32_bits(*blur_radius, state);
+            blend_mode.hash(state);
+            hash_rect(*clip_rect, state);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,5 +417,55 @@ mod tests {
             ColorFilter::Matrix([1.0; 20]).render_hash(),
             ColorFilter::Matrix([0.0; 20]).render_hash()
         );
+    }
+
+    #[test]
+    fn render_effect_render_hash_tracks_variant_parameters() {
+        assert_ne!(
+            RenderEffect::blur(4.0).render_hash(),
+            RenderEffect::blur(6.0).render_hash()
+        );
+        assert_ne!(
+            RenderEffect::offset(2.0, 1.0).render_hash(),
+            RenderEffect::offset(1.0, 2.0).render_hash()
+        );
+    }
+
+    #[test]
+    fn runtime_shader_render_hash_tracks_uniforms() {
+        let mut base = RuntimeShader::new("// hash");
+        base.set_float(0, 1.0);
+        let mut changed = base.clone();
+        changed.set_float(0, 2.0);
+        assert_ne!(base.render_hash(), changed.render_hash());
+    }
+
+    #[test]
+    fn draw_primitive_render_hash_tracks_nested_structure() {
+        let base = DrawPrimitive::Blend {
+            primitive: Box::new(DrawPrimitive::Rect {
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 12.0,
+                    height: 8.0,
+                },
+                brush: Brush::solid(Color::WHITE),
+            }),
+            blend_mode: crate::BlendMode::SrcOver,
+        };
+        let changed = DrawPrimitive::Blend {
+            primitive: Box::new(DrawPrimitive::Rect {
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 12.0,
+                    height: 8.0,
+                },
+                brush: Brush::solid(Color::BLACK),
+            }),
+            blend_mode: crate::BlendMode::SrcOver,
+        };
+        assert_ne!(base.render_hash(), changed.render_hash());
     }
 }

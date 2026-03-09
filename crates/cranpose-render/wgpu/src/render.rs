@@ -11,9 +11,12 @@ use cranpose_render_common::graph::{
     quad_bounds, CachePolicy, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
     ProjectiveTransform, RenderGraph, RenderNode,
 };
+use cranpose_render_common::layer_composition::{
+    effective_layer_isolation, layer_for_content, local_content_layer,
+};
 use cranpose_render_common::layer_shadow::layer_shadow_geometry;
 use cranpose_render_common::primitive_emit::{
-    emit_draw_primitive, resolve_primitive_clip, DrawPrimitiveSink, ImageDrawParams,
+    emit_draw_primitive, resolve_clip, resolve_primitive_clip, DrawPrimitiveSink, ImageDrawParams,
     PrimitiveClipSpace, ShapeDrawParams,
 };
 use cranpose_render_common::raster_cache::{LayerRasterCacheKey, ScaleBucket};
@@ -40,8 +43,7 @@ use std::time::Duration;
 use crate::gpu_stats;
 use crate::gpu_stats::gpu_stats_enabled;
 use crate::pipeline::{
-    effective_layer_isolation, estimate_text_style_draw_bounds, layer_for_content,
-    push_draw_primitive, push_layer_shadow, push_text_style_draws, resolve_clip,
+    estimate_text_style_draw_bounds, push_draw_primitive, push_layer_shadow, push_text_style_draws,
 };
 
 // Chunked rendering constants for robustness with large scenes
@@ -620,6 +622,7 @@ pub struct GpuRenderer {
     layer_surface_cache_identity: HashMap<usize, LayerRasterCacheKey>,
     layer_surface_cache_bytes: u64,
     frame_stats: gpu_stats::FrameStats,
+    last_frame_stats: Option<gpu_stats::FrameStatsSnapshot>,
     frame_count: u64,
     gpu_stats_enabled: bool,
 }
@@ -668,14 +671,6 @@ struct ChildLayerComposite<'a> {
     backdrop_rect: Rect,
     shadow_draws: Vec<ShadowDraw>,
     needs_nested_underlay: bool,
-}
-
-fn local_content_layer(layer: &GraphicsLayer) -> GraphicsLayer {
-    GraphicsLayer {
-        alpha: layer.alpha,
-        color_filter: layer.color_filter,
-        ..GraphicsLayer::default()
-    }
 }
 
 fn scene_bounds(scene: &crate::scene::Scene) -> Option<Rect> {
@@ -970,8 +965,8 @@ fn layer_raster_cache_candidate(
     Some((
         LayerRasterCacheKey::new(
             layer.node_id,
-            layer_target_content_hash(layer),
-            layer_effect_hash(layer.effect()),
+            layer.target_content_hash(),
+            layer.effect_hash(),
             logical_rect,
             pixel_size,
             ScaleBucket::from_scale(root_scale),
@@ -1532,6 +1527,7 @@ impl GpuRenderer {
             layer_surface_cache_identity: HashMap::new(),
             layer_surface_cache_bytes: 0,
             frame_stats: gpu_stats::FrameStats::default(),
+            last_frame_stats: None,
             frame_count: 0,
             gpu_stats_enabled: gpu_stats_enabled(),
         }
@@ -1599,14 +1595,12 @@ impl GpuRenderer {
     /// Acquire an offscreen target from the pool with stats tracking.
     /// Uses split borrows to avoid conflicting borrows on self.
     fn acquire_offscreen(&mut self, width: u32, height: u32) -> OffscreenTarget {
-        let stats = if self.gpu_stats_enabled {
-            Some(&self.frame_stats)
-        } else {
-            None
-        };
-        self.effect_renderer
-            .offscreen_pool
-            .acquire(&self.device, width, height, stats)
+        self.effect_renderer.offscreen_pool.acquire(
+            &self.device,
+            width,
+            height,
+            Some(&self.frame_stats),
+        )
     }
 
     fn release_layer_surface_target(&mut self, target: LayerSurfaceTexture) {
@@ -1620,10 +1614,8 @@ impl GpuRenderer {
         key: &LayerRasterCacheKey,
     ) -> Option<(Rc<OffscreenTarget>, Rect)> {
         let cached = self.layer_surface_cache.get(key)?;
-        if self.gpu_stats_enabled {
-            let (width, height) = key.pixel_size();
-            self.frame_stats.record_layer_cache_hit(width, height);
-        }
+        let (width, height) = key.pixel_size();
+        self.frame_stats.record_layer_cache_hit(width, height);
         Some((cached.target.clone(), cached.logical_rect))
     }
 
@@ -1668,9 +1660,7 @@ impl GpuRenderer {
                     self.layer_surface_cache_identity.remove(&stable_id);
                 }
             }
-            if self.gpu_stats_enabled {
-                self.frame_stats.record_layer_cache_eviction();
-            }
+            self.frame_stats.record_layer_cache_eviction();
         }
 
         let cached = CachedLayerSurface {
@@ -1683,7 +1673,7 @@ impl GpuRenderer {
             self.layer_surface_cache_bytes = self
                 .layer_surface_cache_bytes
                 .saturating_sub(replaced_entry.byte_size);
-            if replaced_key != key && self.gpu_stats_enabled {
+            if replaced_key != key {
                 self.frame_stats.record_layer_cache_eviction();
             }
             if let Some(stable_id) = replaced_key.stable_id() {
@@ -1720,33 +1710,42 @@ impl GpuRenderer {
             self.text_renderer_pool.truncate(target_pool_size);
         }
 
-        if self.gpu_stats_enabled {
-            self.frame_stats
-                .offscreen_pool_size
-                .set(self.effect_renderer.offscreen_pool.pool_size() as u32);
-            self.frame_stats
-                .offscreen_pool_bytes
-                .set(self.effect_renderer.offscreen_pool.estimated_bytes() as u64);
-            self.frame_stats
-                .text_pool_size
-                .set(self.text_renderer_pool.len() as u32);
-            self.frame_stats
-                .layer_cache_size
-                .set(self.layer_surface_cache.len() as u32);
-            self.frame_stats
-                .layer_cache_bytes
-                .set(self.layer_surface_cache_bytes);
-            self.frame_stats
-                .image_cache_size
-                .set(self.image_texture_cache.len() as u32);
-            self.frame_stats
-                .text_cache_size
-                .set(text_state.text_cache.len() as u32);
-            self.effect_renderer
-                .merge_and_reset_debug_counters(&self.frame_stats);
-            self.frame_stats.print_and_reset(&mut self.frame_count);
-        }
+        self.frame_stats
+            .offscreen_pool_size
+            .set(self.effect_renderer.offscreen_pool.pool_size() as u32);
+        self.frame_stats
+            .offscreen_pool_bytes
+            .set(self.effect_renderer.offscreen_pool.estimated_bytes() as u64);
+        self.frame_stats
+            .text_pool_size
+            .set(self.text_renderer_pool.len() as u32);
+        self.frame_stats
+            .layer_cache_size
+            .set(self.layer_surface_cache.len() as u32);
+        self.frame_stats
+            .layer_cache_bytes
+            .set(self.layer_surface_cache_bytes);
+        self.frame_stats
+            .image_cache_size
+            .set(self.image_texture_cache.len() as u32);
+        self.frame_stats
+            .text_cache_size
+            .set(text_state.text_cache.len() as u32);
+        self.effect_renderer
+            .merge_and_reset_debug_counters(&self.frame_stats);
+        let snapshot = self.frame_stats.snapshot();
+        self.last_frame_stats = Some(snapshot);
+        self.frame_stats.maybe_print_snapshot(
+            snapshot,
+            &mut self.frame_count,
+            self.gpu_stats_enabled,
+        );
+        self.frame_stats.reset();
         result
+    }
+
+    pub fn last_frame_stats(&self) -> Option<gpu_stats::FrameStatsSnapshot> {
+        self.last_frame_stats
     }
 
     #[allow(clippy::too_many_arguments)] // Mirrors render() call site and scene inputs.
@@ -2109,10 +2108,8 @@ impl GpuRenderer {
                     backdrop: layer.backdrop().cloned(),
                 });
             }
-            if self.gpu_stats_enabled {
-                let (width, height) = cache_key.pixel_size();
-                self.frame_stats.record_layer_cache_miss(width, height);
-            }
+            let (width, height) = cache_key.pixel_size();
+            self.frame_stats.record_layer_cache_miss(width, height);
             return self.render_layer_surface_uncached(
                 text_state,
                 layer,
@@ -2237,6 +2234,7 @@ impl GpuRenderer {
         }
 
         let (width, height) = surface_target_size(surface_rect, root_scale);
+        self.frame_stats.record_isolated_layer_render(width, height);
         let target = self.acquire_offscreen(width, height);
 
         let mut cursor_z = 0usize;
@@ -4573,237 +4571,6 @@ struct PreparedTextBatchSignature {
     root_scale_bits: u32,
 }
 
-fn layer_effect_hash(effect: Option<&RenderEffect>) -> u64 {
-    let mut hasher = FxHasher::default();
-    hash_optional_render_effect(effect, &mut hasher);
-    hasher.finish()
-}
-
-fn layer_target_content_hash(layer: &LayerNode) -> u64 {
-    let mut hasher = FxHasher::default();
-    hash_layer_target_content(layer, &mut hasher);
-    hasher.finish()
-}
-
-fn hash_layer_target_content<H: Hasher>(layer: &LayerNode, state: &mut H) {
-    layer.local_bounds.render_hash().hash(state);
-    hash_optional_rect(layer.clip_rect(), state);
-    let isolation = effective_layer_isolation(&layer.graphics_layer);
-    let content_layer = layer_for_content(&layer.graphics_layer, isolation.as_ref());
-    let local_layer = local_content_layer(&content_layer);
-    hash_f32_bits(local_layer.alpha, state);
-    hash_optional_color_filter(local_layer.color_filter, state);
-    layer.children.len().hash(state);
-    for child in &layer.children {
-        match child {
-            RenderNode::Primitive(primitive) => {
-                0u8.hash(state);
-                hash_primitive_entry(primitive, state);
-            }
-            RenderNode::Layer(child_layer) => {
-                1u8.hash(state);
-                hash_child_layer_contribution(child_layer, state);
-            }
-        }
-    }
-}
-
-fn hash_child_layer_contribution<H: Hasher>(layer: &LayerNode, state: &mut H) {
-    hash_projective_transform(layer.transform_to_parent, state);
-    hash_optional_rect(layer.shadow_clip, state);
-    hash_child_shadow_state(layer, state);
-    hash_optional_render_effect(layer.effect(), state);
-    hash_optional_render_effect(layer.backdrop(), state);
-    let isolation = effective_layer_isolation(&layer.graphics_layer);
-    let composite_alpha = isolation
-        .as_ref()
-        .map(|params| params.composite_alpha)
-        .unwrap_or(1.0);
-    let blend_mode = isolation
-        .as_ref()
-        .map(|params| params.blend_mode)
-        .unwrap_or(BlendMode::SrcOver);
-    hash_f32_bits(composite_alpha, state);
-    blend_mode.hash(state);
-    hash_layer_target_content(layer, state);
-}
-
-fn hash_child_shadow_state<H: Hasher>(layer: &LayerNode, state: &mut H) {
-    hash_f32_bits(layer.graphics_layer.shadow_elevation, state);
-    layer
-        .graphics_layer
-        .ambient_shadow_color
-        .render_hash()
-        .hash(state);
-    layer
-        .graphics_layer
-        .spot_shadow_color
-        .render_hash()
-        .hash(state);
-    hash_f32_bits(layer.graphics_layer.scale, state);
-    hash_f32_bits(layer.graphics_layer.scale_x, state);
-    hash_f32_bits(layer.graphics_layer.scale_y, state);
-    layer.graphics_layer.shape.render_hash().hash(state);
-}
-
-fn hash_primitive_entry<H: Hasher>(primitive: &PrimitiveEntry, state: &mut H) {
-    match primitive.phase {
-        PrimitivePhase::BeforeChildren => 0u8.hash(state),
-        PrimitivePhase::AfterChildren => 1u8.hash(state),
-    }
-    match &primitive.node {
-        PrimitiveNode::Draw(draw) => {
-            0u8.hash(state);
-            hash_optional_rect(draw.clip, state);
-            hash_draw_primitive(&draw.primitive, state);
-        }
-        PrimitiveNode::Text(text) => {
-            1u8.hash(state);
-            text.rect.render_hash().hash(state);
-            text.text.render_hash().hash(state);
-            text.text_style.render_hash().hash(state);
-            hash_f32_bits(text.font_size, state);
-            text.layout_options.hash(state);
-            hash_optional_rect(text.clip, state);
-        }
-    }
-}
-
-fn hash_draw_primitive<H: Hasher>(primitive: &cranpose_ui_graphics::DrawPrimitive, state: &mut H) {
-    match primitive {
-        cranpose_ui_graphics::DrawPrimitive::Content => {
-            0u8.hash(state);
-        }
-        cranpose_ui_graphics::DrawPrimitive::Blend {
-            primitive,
-            blend_mode,
-        } => {
-            1u8.hash(state);
-            blend_mode.hash(state);
-            hash_draw_primitive(primitive, state);
-        }
-        cranpose_ui_graphics::DrawPrimitive::Rect { rect, brush } => {
-            2u8.hash(state);
-            rect.render_hash().hash(state);
-            brush.render_hash().hash(state);
-        }
-        cranpose_ui_graphics::DrawPrimitive::RoundRect { rect, brush, radii } => {
-            3u8.hash(state);
-            rect.render_hash().hash(state);
-            brush.render_hash().hash(state);
-            radii.render_hash().hash(state);
-        }
-        cranpose_ui_graphics::DrawPrimitive::Image {
-            rect,
-            image,
-            alpha,
-            color_filter,
-            src_rect,
-        } => {
-            4u8.hash(state);
-            rect.render_hash().hash(state);
-            image.id().hash(state);
-            hash_f32_bits(*alpha, state);
-            hash_optional_color_filter(*color_filter, state);
-            hash_optional_rect(*src_rect, state);
-        }
-        cranpose_ui_graphics::DrawPrimitive::Shadow(shadow) => {
-            5u8.hash(state);
-            hash_shadow_primitive(shadow, state);
-        }
-    }
-}
-
-fn hash_shadow_primitive<H: Hasher>(shadow: &cranpose_ui_graphics::ShadowPrimitive, state: &mut H) {
-    match shadow {
-        cranpose_ui_graphics::ShadowPrimitive::Drop {
-            shape,
-            blur_radius,
-            blend_mode,
-        } => {
-            0u8.hash(state);
-            hash_draw_primitive(shape, state);
-            hash_f32_bits(*blur_radius, state);
-            blend_mode.hash(state);
-        }
-        cranpose_ui_graphics::ShadowPrimitive::Inner {
-            fill,
-            cutout,
-            blur_radius,
-            blend_mode,
-            clip_rect,
-        } => {
-            1u8.hash(state);
-            hash_draw_primitive(fill, state);
-            hash_draw_primitive(cutout, state);
-            hash_f32_bits(*blur_radius, state);
-            blend_mode.hash(state);
-            clip_rect.render_hash().hash(state);
-        }
-    }
-}
-
-fn hash_projective_transform<H: Hasher>(transform: ProjectiveTransform, state: &mut H) {
-    for row in transform.matrix() {
-        for value in row {
-            hash_f32_bits(value, state);
-        }
-    }
-}
-
-fn hash_optional_render_effect<H: Hasher>(effect: Option<&RenderEffect>, state: &mut H) {
-    match effect {
-        Some(effect) => {
-            1u8.hash(state);
-            hash_render_effect(effect, state);
-        }
-        None => 0u8.hash(state),
-    }
-}
-
-fn hash_render_effect<H: Hasher>(effect: &RenderEffect, state: &mut H) {
-    match effect {
-        RenderEffect::Blur {
-            radius_x,
-            radius_y,
-            edge_treatment,
-        } => {
-            0u8.hash(state);
-            hash_f32_bits(*radius_x, state);
-            hash_f32_bits(*radius_y, state);
-            edge_treatment.hash(state);
-        }
-        RenderEffect::Offset { offset_x, offset_y } => {
-            1u8.hash(state);
-            hash_f32_bits(*offset_x, state);
-            hash_f32_bits(*offset_y, state);
-        }
-        RenderEffect::Shader { shader } => {
-            2u8.hash(state);
-            shader.source().hash(state);
-            shader.uniforms().len().hash(state);
-            for value in shader.uniforms() {
-                hash_f32_bits(*value, state);
-            }
-        }
-        RenderEffect::Chain { first, second } => {
-            3u8.hash(state);
-            hash_render_effect(first, state);
-            hash_render_effect(second, state);
-        }
-    }
-}
-
-fn hash_optional_color_filter<H: Hasher>(filter: Option<ColorFilter>, state: &mut H) {
-    match filter {
-        Some(filter) => {
-            1u8.hash(state);
-            filter.render_hash().hash(state);
-        }
-        None => 0u8.hash(state),
-    }
-}
-
 fn hash_optional_rect<H: Hasher>(rect: Option<Rect>, state: &mut H) {
     match rect {
         Some(rect) => {
@@ -5290,6 +5057,7 @@ fn inner_shadow_composite_mask(
 mod tests {
     use super::*;
     use cranpose_render_common::graph::DrawPrimitiveNode;
+    use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
     use cranpose_ui_graphics::{Rect, RenderEffect, RoundedCornerShape};
 
     fn chunk(batches: &[SegmentBatchPlan]) -> SegmentDrawChunkPlan {
@@ -5422,6 +5190,7 @@ mod tests {
             hit_test: None,
             isolation: cranpose_render_common::graph::IsolationReasons::default(),
             cache_policy: cranpose_render_common::graph::CachePolicy::None,
+            cache_hashes: LayerRasterCacheHashes::default(),
             children,
         }
     }
@@ -5434,6 +5203,7 @@ mod tests {
         let mut layer = test_layer(local_bounds, children);
         layer.node_id = Some(node_id);
         layer.cache_policy = cranpose_render_common::graph::CachePolicy::Auto;
+        layer.recompute_raster_cache_hashes();
         layer
     }
 
