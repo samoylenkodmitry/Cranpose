@@ -6,6 +6,7 @@ use cranpose_render_common::hit_graph::{
     collect_hits_from_graph as collect_common_hits, HitGraphSink,
 };
 use cranpose_render_common::layer_shadow::layer_shadow_geometry;
+use cranpose_render_common::layer_transform::{apply_layer_to_rect, layer_uniform_scale};
 use cranpose_render_common::primitive_emit::{
     draw_shape_params_for_primitive, emit_draw_primitive, resolve_clip, resolve_primitive_clip,
     DrawPrimitiveSink, ImageDrawParams, PrimitiveClipSpace, ShapeDrawParams,
@@ -26,8 +27,7 @@ use cranpose_ui_graphics::{
 
 use crate::scene::{ClickAction, RasterScene, Scene};
 use crate::style::{
-    apply_layer_to_brush, apply_layer_to_color, apply_layer_to_rect, combine_layers,
-    layer_uniform_scale, scale_corner_radii,
+    apply_layer_to_brush, apply_layer_to_color, combine_layers, scale_corner_radii,
 };
 
 #[cfg(test)]
@@ -287,10 +287,9 @@ pub(crate) fn render_layout_tree(root: &LayoutBox, scene: &mut Scene) {
     let graph = cranpose_render_common::scene_builder::build_graph_from_layout_tree(root, 1.0);
     collect_hits_from_graph(
         &graph.root,
-        GraphicsLayer::default(),
+        cranpose_render_common::graph::ProjectiveTransform::identity(),
         scene,
         None,
-        Point::default(),
     );
     scene.graph = Some(graph);
 }
@@ -633,20 +632,18 @@ pub(crate) fn render_from_applier(applier: &mut MemoryApplier, root: NodeId, sce
     };
     collect_hits_from_graph(
         &graph.root,
-        GraphicsLayer::default(),
+        cranpose_render_common::graph::ProjectiveTransform::identity(),
         scene,
         None,
-        Point::default(),
     );
     scene.graph = Some(graph);
 }
 
 fn collect_hits_from_graph(
     layer: &cranpose_render_common::graph::LayerNode,
-    parent_layer: GraphicsLayer,
+    parent_transform: cranpose_render_common::graph::ProjectiveTransform,
     scene: &mut Scene,
     parent_hit_clip: Option<Rect>,
-    parent_offset: Point,
 ) {
     struct SceneHitSink<'a> {
         scene: &'a mut Scene,
@@ -678,13 +675,7 @@ fn collect_hits_from_graph(
     }
 
     let mut sink = SceneHitSink { scene };
-    collect_common_hits(
-        layer,
-        parent_layer,
-        &mut sink,
-        parent_hit_clip,
-        parent_offset,
-    );
+    collect_common_hits(layer, parent_transform, &mut sink, parent_hit_clip);
 }
 
 pub(crate) fn build_raster_scene(

@@ -17,12 +17,12 @@ use cranpose_render_common::layer_composition::{
     effective_layer_isolation, layer_for_content, local_content_layer,
 };
 use cranpose_render_common::layer_shadow::layer_shadow_geometry;
+use cranpose_render_common::layer_transform::apply_layer_to_rect;
 use cranpose_render_common::primitive_emit::{
     emit_draw_primitive, resolve_clip, resolve_primitive_clip, DrawPrimitiveSink, ImageDrawParams,
     PrimitiveClipSpace, ShapeDrawParams,
 };
 use cranpose_render_common::raster_cache::{LayerRasterCacheKey, ScaleBucket};
-use cranpose_render_common::style_shared::apply_layer_to_rect;
 use cranpose_ui_graphics::{
     BlendMode, Brush, Color, ColorFilter, ImageBitmap, Rect, RenderEffect, RenderHash, TileMode,
 };

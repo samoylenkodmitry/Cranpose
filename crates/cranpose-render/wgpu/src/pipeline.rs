@@ -9,6 +9,7 @@ use cranpose_render_common::hit_graph::{
     collect_hits_from_graph as collect_common_hits, HitGraphSink,
 };
 use cranpose_render_common::layer_shadow::layer_shadow_geometry;
+use cranpose_render_common::layer_transform::{apply_layer_to_rect, layer_uniform_scale};
 #[cfg(test)]
 use cranpose_render_common::primitive_emit::resolve_clip;
 use cranpose_render_common::primitive_emit::{
@@ -35,10 +36,7 @@ use crate::scene::{
 
 // Re-use style functions from a local copy
 mod style;
-use style::{
-    apply_layer_to_brush, apply_layer_to_color, apply_layer_to_rect, layer_uniform_scale,
-    scale_corner_radii,
-};
+use style::{apply_layer_to_brush, apply_layer_to_color, scale_corner_radii};
 
 #[cfg(test)]
 const TEXT_CLIP_PAD: f32 = 1.0;
@@ -371,10 +369,9 @@ pub(crate) fn render_layout_tree_with_scale(root: &LayoutBox, scene: &mut Scene,
     let graph = cranpose_render_common::scene_builder::build_graph_from_layout_tree(root, scale);
     collect_hits_from_graph(
         &graph.root,
-        GraphicsLayer::default(),
+        cranpose_render_common::graph::ProjectiveTransform::identity(),
         scene,
         None,
-        Point::default(),
     );
     scene.graph = Some(graph);
 }
@@ -1824,20 +1821,18 @@ pub(crate) fn render_from_applier(
     };
     collect_hits_from_graph(
         &graph.root,
-        GraphicsLayer::default(),
+        cranpose_render_common::graph::ProjectiveTransform::identity(),
         scene,
         None,
-        Point::default(),
     );
     scene.graph = Some(graph);
 }
 
 fn collect_hits_from_graph(
     layer: &cranpose_render_common::graph::LayerNode,
-    parent_layer: GraphicsLayer,
+    parent_transform: cranpose_render_common::graph::ProjectiveTransform,
     scene: &mut Scene,
     parent_hit_clip: Option<Rect>,
-    parent_offset: Point,
 ) {
     struct SceneHitSink<'a> {
         scene: &'a mut Scene,
@@ -1869,13 +1864,7 @@ fn collect_hits_from_graph(
     }
 
     let mut sink = SceneHitSink { scene };
-    collect_common_hits(
-        layer,
-        parent_layer,
-        &mut sink,
-        parent_hit_clip,
-        parent_offset,
-    );
+    collect_common_hits(layer, parent_transform, &mut sink, parent_hit_clip);
 }
 
 pub(crate) fn push_draw_primitive(
@@ -2242,10 +2231,9 @@ mod tests {
 
         collect_hits_from_graph(
             &layer,
-            GraphicsLayer::default(),
+            cranpose_render_common::graph::ProjectiveTransform::identity(),
             &mut scene,
             None,
-            Point::default(),
         );
 
         assert_eq!(scene.hits.len(), 1);

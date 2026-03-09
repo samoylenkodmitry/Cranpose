@@ -7,6 +7,7 @@ mod graph_hash;
 pub mod hit_graph;
 pub mod layer_composition;
 pub mod layer_shadow;
+pub mod layer_transform;
 pub mod primitive_emit;
 pub mod raster_cache;
 pub mod scene_builder;

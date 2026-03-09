@@ -1,6 +1,6 @@
 use cranpose_ui_graphics::{GraphicsLayer, Rect};
 
-use crate::style_shared::layer_uniform_scale;
+use crate::layer_transform::layer_uniform_scale;
 
 const MIN_LAYER_SHADOW_SCALE: f32 = 0.1;
 const MIN_LAYER_SHADOW_SPREAD: f32 = 0.8;

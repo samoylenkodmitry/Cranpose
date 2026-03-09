@@ -13,10 +13,9 @@ use crate::graph::{
     CachePolicy, DrawPrimitiveNode, HitTestNode, IsolationReasons, LayerNode, PrimitiveEntry,
     PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
 };
+use crate::layer_transform::layer_transform_to_parent;
 use crate::raster_cache::LayerRasterCacheHashes;
-use crate::style_shared::{
-    apply_layer_to_quad, combine_layers, primitives_for_placement, DrawPlacement,
-};
+use crate::style_shared::{combine_layers, primitives_for_placement, DrawPlacement};
 
 const TEXT_CLIP_PAD: f32 = 1.0;
 
@@ -88,16 +87,8 @@ fn build_layer_node(snapshot: BuildNodeSnapshot, root_scale: f32) -> LayerNode {
             Some(graphics_layer),
         );
     }
-    let placement_rect = Rect {
-        x: snapshot.placement.x,
-        y: snapshot.placement.y,
-        width: snapshot.size.width,
-        height: snapshot.size.height,
-    };
-    let transform_to_parent = ProjectiveTransform::from_rect_to_quad(
-        local_bounds,
-        apply_layer_to_quad(placement_rect, placement_rect, &graphics_layer),
-    );
+    let transform_to_parent =
+        layer_transform_to_parent(local_bounds, snapshot.placement, &graphics_layer);
     let isolation = isolation_reasons(&graphics_layer);
     let cache_policy = if isolation.has_any() {
         CachePolicy::Auto

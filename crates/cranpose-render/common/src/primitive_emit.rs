@@ -3,10 +3,11 @@ use cranpose_ui_graphics::{
     RoundedCornerShape, ShadowPrimitive,
 };
 
-use crate::style_shared::{
-    apply_layer_affine_to_rect, apply_layer_to_brush, apply_layer_to_quad, apply_layer_to_rect,
-    compose_color_filters, layer_uniform_scale, quad_bounds, scale_corner_radii,
+use crate::graph::quad_bounds;
+use crate::layer_transform::{
+    apply_layer_affine_to_rect, apply_layer_to_quad, apply_layer_to_rect, layer_uniform_scale,
 };
+use crate::style_shared::{apply_layer_to_brush, compose_color_filters, scale_corner_radii};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrimitiveClipSpace {
