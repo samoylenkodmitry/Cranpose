@@ -19,7 +19,7 @@ use cranpose_ui_graphics::{BlendMode, DrawPrimitive, GraphicsLayer, ShadowPrimit
 use cranpose_ui_graphics::{CornerRadii, Rect};
 
 #[cfg(test)]
-use crate::scene::Scene;
+use crate::scene::RasterScene;
 
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)] // Render operations need all style and placement parameters
@@ -30,14 +30,14 @@ pub(crate) fn apply_draw_commands(
     size: Size,
     layer: &GraphicsLayer,
     clip: Option<Rect>,
-    scene: &mut Scene,
+    scene: &mut RasterScene,
 ) {
     fn emit_primitive(
         primitive: DrawPrimitive,
         layer_bounds: Rect,
         layer: &GraphicsLayer,
         clip: Option<Rect>,
-        scene: &mut Scene,
+        scene: &mut RasterScene,
         blend_mode: Option<BlendMode>,
     ) {
         match primitive {
@@ -421,7 +421,7 @@ mod tests {
             scale_y: 0.5,
             ..Default::default()
         };
-        let mut scene = Scene::new();
+        let mut scene = RasterScene::new();
         let bounds = Rect {
             x: 0.0,
             y: 0.0,

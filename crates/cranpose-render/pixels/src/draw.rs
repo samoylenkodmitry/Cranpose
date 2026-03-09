@@ -18,7 +18,7 @@ use cranpose_ui::{Brush, TextMeasurer, TextMetrics};
 use cranpose_ui_graphics::{BlendMode, Color, ColorFilter, Rect, TileMode};
 
 use crate::pipeline;
-use crate::scene::{ImageDraw, Scene, TextDraw};
+use crate::scene::{ImageDraw, RasterScene, Scene, TextDraw};
 use crate::style::point_in_resolved_rounded_rect;
 
 static FONT: Lazy<FontRef<'static>> = Lazy::new(|| {
@@ -468,19 +468,21 @@ fn measure_text_impl(
 
 pub fn draw_scene(frame: &mut [u8], width: u32, height: u32, scene: &Scene) {
     if let Some(graph) = scene.graph.as_ref() {
-        let raster_scene = pipeline::build_draw_scene(graph);
-        draw_flat_scene(frame, width, height, &raster_scene);
-        return;
+        let raster_scene = pipeline::build_raster_scene(graph);
+        draw_raster_scene(frame, width, height, &raster_scene);
+    } else {
+        clear_frame(frame);
     }
-
-    draw_flat_scene(frame, width, height, scene);
 }
 
-fn draw_flat_scene(frame: &mut [u8], width: u32, height: u32, scene: &Scene) {
+fn clear_frame(frame: &mut [u8]) {
     for chunk in frame.chunks_exact_mut(4) {
         chunk.copy_from_slice(&[18, 18, 24, 255]);
     }
+}
 
+fn draw_raster_scene(frame: &mut [u8], width: u32, height: u32, scene: &RasterScene) {
+    clear_frame(frame);
     let mut ordered_items =
         Vec::with_capacity(scene.shapes.len() + scene.images.len() + scene.texts.len());
     for (index, shape) in scene.shapes.iter().enumerate() {
@@ -1002,8 +1004,8 @@ mod tests {
         color: Color,
         x: f32,
     ) -> (u32, u32, Vec<u8>) {
-        let mut scene = Scene::new();
-        scene.push_text(
+        let mut raster_scene = RasterScene::new();
+        raster_scene.push_text(
             11,
             Rect {
                 x,
@@ -1023,7 +1025,7 @@ mod tests {
         let width = 360;
         let height = 140;
         let mut frame = vec![0u8; (width * height * 4) as usize];
-        draw_scene(&mut frame, width, height, &scene);
+        draw_raster_scene(&mut frame, width, height, &raster_scene);
         (width, height, frame)
     }
 
@@ -1116,8 +1118,8 @@ mod tests {
 
     #[test]
     fn multiline_text_renders_second_line_pixels() {
-        let mut scene = Scene::new();
-        scene.push_text(
+        let mut raster_scene = RasterScene::new();
+        raster_scene.push_text(
             1,
             Rect {
                 x: 8.0,
@@ -1139,7 +1141,7 @@ mod tests {
         let width = 220;
         let height = 100;
         let mut frame = vec![0u8; (width * height * 4) as usize];
-        draw_scene(&mut frame, width, height, &scene);
+        draw_raster_scene(&mut frame, width, height, &raster_scene);
 
         // Find the y-range of all ink pixels (font-agnostic approach).
         let (ink_top, ink_bottom) =
@@ -1213,8 +1215,8 @@ mod tests {
 
     #[test]
     fn text_clip_bounds_prevent_drawing_outside_scroll_window() {
-        let mut scene = Scene::new();
-        scene.push_text(
+        let mut raster_scene = RasterScene::new();
+        raster_scene.push_text(
             2,
             Rect {
                 x: 8.0,
@@ -1239,7 +1241,7 @@ mod tests {
         let width = 220;
         let height = 100;
         let mut frame = vec![0u8; (width * height * 4) as usize];
-        draw_scene(&mut frame, width, height, &scene);
+        draw_raster_scene(&mut frame, width, height, &raster_scene);
 
         let total_ink = count_non_background_pixels_in_band(&frame, width, 0, height);
         assert_eq!(

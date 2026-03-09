@@ -30,10 +30,8 @@ impl ClickAction {
 }
 
 #[derive(Clone)]
-pub struct DrawShape {
+pub(crate) struct DrawShape {
     pub rect: Rect,
-    pub local_rect: Rect,
-    pub quad: [[f32; 2]; 4],
     pub brush: Brush,
     pub shape: Option<RoundedCornerShape>,
     pub z_index: usize,
@@ -42,7 +40,7 @@ pub struct DrawShape {
 }
 
 #[derive(Clone)]
-pub struct TextDraw {
+pub(crate) struct TextDraw {
     pub node_id: NodeId,
     pub rect: Rect,
     pub text: Rc<cranpose_ui::text::AnnotatedString>,
@@ -56,10 +54,8 @@ pub struct TextDraw {
 }
 
 #[derive(Clone)]
-pub struct ImageDraw {
+pub(crate) struct ImageDraw {
     pub rect: Rect,
-    pub local_rect: Rect,
-    pub quad: [[f32; 2]; 4],
     pub image: ImageBitmap,
     pub alpha: f32,
     pub color_filter: Option<ColorFilter>,
@@ -68,6 +64,120 @@ pub struct ImageDraw {
     pub blend_mode: BlendMode,
     /// Source sub-region in image-pixel coordinates. `None` means full image.
     pub src_rect: Option<Rect>,
+}
+
+pub(crate) struct RasterScene {
+    pub shapes: Vec<DrawShape>,
+    pub images: Vec<ImageDraw>,
+    pub texts: Vec<TextDraw>,
+    pub next_z: usize,
+}
+
+impl RasterScene {
+    pub fn new() -> Self {
+        Self {
+            shapes: Vec::new(),
+            images: Vec::new(),
+            texts: Vec::new(),
+            next_z: 0,
+        }
+    }
+
+    pub fn push_shape(
+        &mut self,
+        rect: Rect,
+        brush: Brush,
+        shape: Option<RoundedCornerShape>,
+        clip: Option<Rect>,
+        blend_mode: BlendMode,
+    ) {
+        let z_index = self.next_z;
+        self.next_z += 1;
+        self.shapes.push(DrawShape {
+            rect,
+            brush,
+            shape,
+            z_index,
+            clip,
+            blend_mode,
+        });
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn push_shape_with_geometry(
+        &mut self,
+        rect: Rect,
+        _local_rect: Rect,
+        _quad: [[f32; 2]; 4],
+        brush: Brush,
+        shape: Option<RoundedCornerShape>,
+        clip: Option<Rect>,
+        blend_mode: BlendMode,
+    ) {
+        self.push_shape(rect, brush, shape, clip, blend_mode);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn push_image_with_geometry(
+        &mut self,
+        rect: Rect,
+        _local_rect: Rect,
+        _quad: [[f32; 2]; 4],
+        image: ImageBitmap,
+        alpha: f32,
+        color_filter: Option<ColorFilter>,
+        clip: Option<Rect>,
+        src_rect: Option<Rect>,
+        blend_mode: BlendMode,
+    ) {
+        let z_index = self.next_z;
+        self.next_z += 1;
+        self.images.push(ImageDraw {
+            rect,
+            image,
+            alpha: alpha.clamp(0.0, 1.0),
+            color_filter,
+            z_index,
+            clip,
+            blend_mode,
+            src_rect,
+        });
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn push_text(
+        &mut self,
+        node_id: NodeId,
+        rect: Rect,
+        text: Rc<cranpose_ui::text::AnnotatedString>,
+        color: Color,
+        text_style: TextStyle,
+        font_size: f32,
+        scale: f32,
+        layout_options: TextLayoutOptions,
+        clip: Option<Rect>,
+    ) {
+        let z_index = self.next_z;
+        self.next_z += 1;
+        self.texts.push(TextDraw {
+            node_id,
+            rect,
+            text,
+            color,
+            text_style,
+            font_size,
+            scale,
+            layout_options,
+            z_index,
+            clip,
+        });
+    }
+}
+
+impl Default for RasterScene {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[derive(Clone)]
@@ -130,11 +240,8 @@ impl HitTestTarget for HitRegion {
 
 pub struct Scene {
     pub graph: Option<RenderGraph>,
-    pub shapes: Vec<DrawShape>,
-    pub images: Vec<ImageDraw>,
-    pub texts: Vec<TextDraw>,
     pub hits: Vec<HitRegion>,
-    pub next_z: usize,
+    pub next_hit_z: usize,
     pub node_index: HashMap<NodeId, usize>,
 }
 
@@ -142,139 +249,10 @@ impl Scene {
     pub fn new() -> Self {
         Self {
             graph: None,
-            shapes: Vec::new(),
-            images: Vec::new(),
-            texts: Vec::new(),
             hits: Vec::new(),
-            next_z: 0,
+            next_hit_z: 0,
             node_index: HashMap::new(),
         }
-    }
-
-    pub fn push_shape(
-        &mut self,
-        rect: Rect,
-        brush: Brush,
-        shape: Option<RoundedCornerShape>,
-        clip: Option<Rect>,
-        blend_mode: BlendMode,
-    ) {
-        self.push_shape_with_geometry(
-            rect,
-            rect,
-            rect_to_quad(rect),
-            brush,
-            shape,
-            clip,
-            blend_mode,
-        );
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn push_shape_with_geometry(
-        &mut self,
-        rect: Rect,
-        local_rect: Rect,
-        quad: [[f32; 2]; 4],
-        brush: Brush,
-        shape: Option<RoundedCornerShape>,
-        clip: Option<Rect>,
-        blend_mode: BlendMode,
-    ) {
-        let z_index = self.next_z;
-        self.next_z += 1;
-        self.shapes.push(DrawShape {
-            rect,
-            local_rect,
-            quad,
-            brush,
-            shape,
-            z_index,
-            clip,
-            blend_mode,
-        });
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn push_image(
-        &mut self,
-        rect: Rect,
-        image: ImageBitmap,
-        alpha: f32,
-        color_filter: Option<ColorFilter>,
-        clip: Option<Rect>,
-        src_rect: Option<Rect>,
-        blend_mode: BlendMode,
-    ) {
-        self.push_image_with_geometry(
-            rect,
-            rect,
-            rect_to_quad(rect),
-            image,
-            alpha,
-            color_filter,
-            clip,
-            src_rect,
-            blend_mode,
-        );
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn push_image_with_geometry(
-        &mut self,
-        rect: Rect,
-        local_rect: Rect,
-        quad: [[f32; 2]; 4],
-        image: ImageBitmap,
-        alpha: f32,
-        color_filter: Option<ColorFilter>,
-        clip: Option<Rect>,
-        src_rect: Option<Rect>,
-        blend_mode: BlendMode,
-    ) {
-        let z_index = self.next_z;
-        self.next_z += 1;
-        self.images.push(ImageDraw {
-            rect,
-            local_rect,
-            quad,
-            image,
-            alpha: alpha.clamp(0.0, 1.0),
-            color_filter,
-            z_index,
-            clip,
-            blend_mode,
-            src_rect,
-        });
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn push_text(
-        &mut self,
-        node_id: NodeId,
-        rect: Rect,
-        text: Rc<cranpose_ui::text::AnnotatedString>,
-        color: Color,
-        text_style: TextStyle,
-        font_size: f32,
-        scale: f32,
-        layout_options: TextLayoutOptions,
-        clip: Option<Rect>,
-    ) {
-        let z_index = self.next_z;
-        self.next_z += 1;
-        self.texts.push(TextDraw {
-            node_id,
-            rect,
-            text,
-            color,
-            text_style,
-            font_size,
-            scale,
-            layout_options,
-            z_index,
-            clip,
-        });
     }
 
     pub fn push_hit(
@@ -289,8 +267,8 @@ impl Scene {
         if click_actions.is_empty() && pointer_inputs.is_empty() {
             return;
         }
-        let z_index = self.next_z;
-        self.next_z += 1;
+        let z_index = self.next_hit_z;
+        self.next_hit_z += 1;
         let hit_region = HitRegion {
             node_id,
             rect,
@@ -312,26 +290,14 @@ impl Default for Scene {
     }
 }
 
-fn rect_to_quad(rect: Rect) -> [[f32; 2]; 4] {
-    [
-        [rect.x, rect.y],
-        [rect.x + rect.width, rect.y],
-        [rect.x, rect.y + rect.height],
-        [rect.x + rect.width, rect.y + rect.height],
-    ]
-}
-
 impl RenderScene for Scene {
     type HitTarget = HitRegion;
 
     fn clear(&mut self) {
         self.graph = None;
-        self.shapes.clear();
-        self.images.clear();
-        self.texts.clear();
         self.hits.clear();
         self.node_index.clear();
-        self.next_z = 0;
+        self.next_hit_z = 0;
     }
 
     fn hit_test(&self, x: f32, y: f32) -> Vec<Self::HitTarget> {

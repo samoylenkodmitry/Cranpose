@@ -24,7 +24,7 @@ use cranpose_ui_graphics::{
     RenderEffect, RoundedCornerShape,
 };
 
-use crate::scene::{ClickAction, Scene};
+use crate::scene::{ClickAction, RasterScene, Scene};
 use crate::style::{
     apply_layer_to_brush, apply_layer_to_color, apply_layer_to_rect, combine_layers,
     layer_uniform_scale, scale_corner_radii,
@@ -122,7 +122,7 @@ fn expanded_shape_rect(shape: &crate::scene::DrawShape, expansion: f32) -> Rect 
 }
 
 fn push_blurred_shape_samples(
-    scene: &mut Scene,
+    scene: &mut RasterScene,
     shape: &crate::scene::DrawShape,
     blend_mode: BlendMode,
     clip: Option<Rect>,
@@ -217,7 +217,7 @@ fn scale_brush_alpha(brush: Brush, alpha: f32) -> Brush {
 }
 
 fn push_layer_shadow(
-    scene: &mut Scene,
+    scene: &mut RasterScene,
     layer: &GraphicsLayer,
     layer_bounds: Rect,
     transformed_bounds: Rect,
@@ -242,13 +242,6 @@ fn push_layer_shadow(
     ) -> crate::scene::DrawShape {
         crate::scene::DrawShape {
             rect,
-            local_rect: rect,
-            quad: [
-                [rect.x, rect.y],
-                [rect.x + rect.width, rect.y],
-                [rect.x, rect.y + rect.height],
-                [rect.x + rect.width, rect.y + rect.height],
-            ],
             brush: Brush::solid(color),
             shape,
             z_index: 0,
@@ -364,7 +357,7 @@ fn resolve_text_color_without_gradient_fallback(text_style: &TextStyle, default:
 
 #[allow(clippy::too_many_arguments)]
 fn push_text_style_draws(
-    scene: &mut Scene,
+    scene: &mut RasterScene,
     node_id: NodeId,
     rect: Rect,
     text_rect: Rect,
@@ -471,7 +464,7 @@ fn push_text_style_draws(
 
 #[allow(clippy::too_many_arguments)]
 fn push_text_decorations(
-    scene: &mut Scene,
+    scene: &mut RasterScene,
     rect: Rect,
     text_rect: Rect,
     content_layer: &GraphicsLayer,
@@ -694,8 +687,10 @@ fn collect_hits_from_graph(
     );
 }
 
-pub(crate) fn build_draw_scene(graph: &cranpose_render_common::graph::RenderGraph) -> Scene {
-    let mut scene = Scene::new();
+pub(crate) fn build_raster_scene(
+    graph: &cranpose_render_common::graph::RenderGraph,
+) -> RasterScene {
+    let mut scene = RasterScene::new();
     populate_draws_from_graph(
         &graph.root,
         GraphicsLayer::default(),
@@ -709,7 +704,7 @@ pub(crate) fn build_draw_scene(graph: &cranpose_render_common::graph::RenderGrap
 fn populate_draws_from_graph(
     layer: &cranpose_render_common::graph::LayerNode,
     parent_layer: GraphicsLayer,
-    scene: &mut Scene,
+    scene: &mut RasterScene,
     parent_visual_clip: Option<Rect>,
     parent_offset: Point,
 ) {
@@ -781,7 +776,7 @@ fn populate_draws_from_graph(
 }
 
 fn render_graph_primitive(
-    scene: &mut Scene,
+    scene: &mut RasterScene,
     primitive: &cranpose_render_common::graph::PrimitiveEntry,
     rect: Rect,
     node_layer: &GraphicsLayer,
@@ -815,7 +810,7 @@ fn render_graph_primitive(
 }
 
 fn render_graph_text(
-    scene: &mut Scene,
+    scene: &mut RasterScene,
     text: &cranpose_render_common::graph::TextPrimitiveNode,
     rect: Rect,
     node_layer: &GraphicsLayer,
@@ -857,11 +852,11 @@ fn push_draw_primitive(
     layer_bounds: Rect,
     layer: &GraphicsLayer,
     clip: Option<Rect>,
-    scene: &mut Scene,
+    scene: &mut RasterScene,
     blend_mode: Option<BlendMode>,
 ) {
     struct SceneEmitter<'a> {
-        scene: &'a mut Scene,
+        scene: &'a mut RasterScene,
     }
 
     impl DrawPrimitiveSink for SceneEmitter<'_> {
@@ -918,7 +913,7 @@ fn push_shadow_primitive(
     layer_bounds: Rect,
     layer: &GraphicsLayer,
     clip: Option<Rect>,
-    scene: &mut Scene,
+    scene: &mut RasterScene,
 ) {
     fn shape_pair_for_primitive(
         prim: DrawPrimitive,
@@ -930,8 +925,6 @@ fn push_shadow_primitive(
         Some((
             crate::scene::DrawShape {
                 rect: params.rect,
-                local_rect: params.local_rect,
-                quad: params.quad,
                 brush: params.brush,
                 shape: params.shape,
                 z_index: 0,
@@ -1023,6 +1016,7 @@ fn push_shadow_primitive(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scene::RasterScene;
 
     #[test]
     fn render_effect_support_matrix_is_explicit() {
@@ -1054,7 +1048,7 @@ mod tests {
 
     #[test]
     fn shadow_geometry_has_visible_expansion_and_offsets() {
-        let mut scene = Scene::new();
+        let mut scene = RasterScene::new();
         let layer = GraphicsLayer {
             shadow_elevation: 10.0,
             ambient_shadow_color: Color(0.2, 0.3, 0.4, 0.8),
@@ -1411,7 +1405,7 @@ mod tests {
 
     #[test]
     fn push_text_style_draws_emits_background_shadow_and_main_text() {
-        let mut scene = Scene::new();
+        let mut scene = RasterScene::new();
         let style = cranpose_ui::TextStyle {
             span_style: cranpose_ui::SpanStyle {
                 color: Some(Color(0.9, 0.95, 1.0, 1.0)),
@@ -1478,7 +1472,7 @@ mod tests {
 
     #[test]
     fn push_text_style_draws_emits_decoration_shapes() {
-        let mut scene = Scene::new();
+        let mut scene = RasterScene::new();
         let style = cranpose_ui::TextStyle {
             span_style: cranpose_ui::SpanStyle {
                 color: Some(Color(0.9, 0.95, 1.0, 1.0)),
@@ -1516,7 +1510,7 @@ mod tests {
 
     #[test]
     fn push_text_style_draws_applies_baseline_shift() {
-        let mut scene = Scene::new();
+        let mut scene = RasterScene::new();
         let style = cranpose_ui::TextStyle {
             span_style: cranpose_ui::SpanStyle {
                 color: Some(Color(0.9, 0.95, 1.0, 1.0)),
@@ -1554,7 +1548,7 @@ mod tests {
 
     #[test]
     fn push_text_style_draws_non_solid_brush_contract_does_not_fallback_to_first_stop() {
-        let mut scene = Scene::new();
+        let mut scene = RasterScene::new();
         let first_stop = Color(1.0, 0.0, 0.0, 1.0);
         let style = cranpose_ui::TextStyle {
             span_style: cranpose_ui::SpanStyle {
@@ -1628,7 +1622,7 @@ mod tests {
 
     #[test]
     fn drop_shadow_primitive_blur_emits_multiple_samples() {
-        let mut scene = Scene::new();
+        let mut scene = RasterScene::new();
         let layer_bounds = Rect {
             x: 0.0,
             y: 0.0,
@@ -1664,7 +1658,7 @@ mod tests {
 
     #[test]
     fn inner_shadow_primitive_blur_emits_multiple_samples() {
-        let mut scene = Scene::new();
+        let mut scene = RasterScene::new();
         let layer_bounds = Rect {
             x: 0.0,
             y: 0.0,
