@@ -4,6 +4,7 @@ pub mod font_layout;
 pub mod geometry;
 pub mod graph;
 mod graph_hash;
+pub mod graph_scene;
 pub mod hit_graph;
 pub mod layer_composition;
 pub mod layer_shadow;
