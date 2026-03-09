@@ -2210,9 +2210,9 @@ mod tests {
                 width: 40.0,
                 height: 24.0,
             },
-            placement: Point { x: 12.0, y: 8.0 },
-            content_offset: Point::default(),
-            transform_to_parent: cranpose_render_common::graph::ProjectiveTransform::identity(),
+            transform_to_parent: cranpose_render_common::graph::ProjectiveTransform::translation(
+                12.0, 8.0,
+            ),
             graphics_layer: GraphicsLayer::default(),
             clip_to_bounds: false,
             shadow_clip: None,

@@ -230,8 +230,6 @@ pub struct PrimitiveEntry {
 pub struct LayerNode {
     pub node_id: Option<NodeId>,
     pub local_bounds: Rect,
-    pub placement: Point,
-    pub content_offset: Point,
     pub transform_to_parent: ProjectiveTransform,
     pub graphics_layer: GraphicsLayer,
     pub clip_to_bounds: bool,
@@ -405,8 +403,6 @@ mod tests {
         LayerNode {
             node_id: None,
             local_bounds,
-            placement: Point::default(),
-            content_offset: Point::default(),
             transform_to_parent: ProjectiveTransform::identity(),
             graphics_layer: GraphicsLayer::default(),
             clip_to_bounds: false,

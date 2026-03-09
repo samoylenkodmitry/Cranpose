@@ -2,9 +2,14 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use cranpose_core::{MemoryApplier, NodeId};
+use cranpose_render_common::graph::{
+    LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph,
+    RenderNode, TextPrimitiveNode,
+};
 use cranpose_render_common::hit_graph::{
     collect_hits_from_graph as collect_common_hits, HitGraphSink,
 };
+use cranpose_render_common::layer_composition::local_content_layer;
 use cranpose_render_common::layer_shadow::layer_shadow_geometry;
 use cranpose_render_common::layer_transform::{apply_layer_to_rect, layer_uniform_scale};
 use cranpose_render_common::primitive_emit::{
@@ -219,7 +224,7 @@ fn scale_brush_alpha(brush: Brush, alpha: f32) -> Brush {
 fn push_layer_shadow(
     scene: &mut RasterScene,
     layer: &GraphicsLayer,
-    layer_bounds: Rect,
+    layer_bounds: RasterLayerBounds,
     transformed_bounds: Rect,
     clip: Option<Rect>,
 ) {
@@ -228,7 +233,10 @@ fn push_layer_shadow(
     let resolved_shape = match layer.shape {
         LayerShape::Rectangle => None,
         LayerShape::Rounded(shape) => {
-            let resolved = shape.resolve(layer_bounds.width, layer_bounds.height);
+            let resolved = shape.resolve(
+                layer_bounds.local_bounds.width,
+                layer_bounds.local_bounds.height,
+            );
             Some(RoundedCornerShape::with_radii(scale_corner_radii(
                 resolved, scale,
             )))
@@ -285,12 +293,7 @@ fn push_layer_shadow(
 
 pub(crate) fn render_layout_tree(root: &LayoutBox, scene: &mut Scene) {
     let graph = cranpose_render_common::scene_builder::build_graph_from_layout_tree(root, 1.0);
-    collect_hits_from_graph(
-        &graph.root,
-        cranpose_render_common::graph::ProjectiveTransform::identity(),
-        scene,
-        None,
-    );
+    collect_hits_from_graph(&graph.root, ProjectiveTransform::identity(), scene, None);
     scene.graph = Some(graph);
 }
 
@@ -630,18 +633,13 @@ pub(crate) fn render_from_applier(applier: &mut MemoryApplier, root: NodeId, sce
     else {
         return;
     };
-    collect_hits_from_graph(
-        &graph.root,
-        cranpose_render_common::graph::ProjectiveTransform::identity(),
-        scene,
-        None,
-    );
+    collect_hits_from_graph(&graph.root, ProjectiveTransform::identity(), scene, None);
     scene.graph = Some(graph);
 }
 
 fn collect_hits_from_graph(
-    layer: &cranpose_render_common::graph::LayerNode,
-    parent_transform: cranpose_render_common::graph::ProjectiveTransform,
+    layer: &LayerNode,
+    parent_transform: ProjectiveTransform,
     scene: &mut Scene,
     parent_hit_clip: Option<Rect>,
 ) {
@@ -678,46 +676,129 @@ fn collect_hits_from_graph(
     collect_common_hits(layer, parent_transform, &mut sink, parent_hit_clip);
 }
 
-pub(crate) fn build_raster_scene(
-    graph: &cranpose_render_common::graph::RenderGraph,
-) -> RasterScene {
+pub(crate) fn build_raster_scene(graph: &RenderGraph) -> RasterScene {
     let mut scene = RasterScene::new();
     populate_draws_from_graph(
         &graph.root,
+        ProjectiveTransform::identity(),
         GraphicsLayer::default(),
         &mut scene,
         None,
-        Point::default(),
     );
     scene
 }
 
-fn populate_draws_from_graph(
-    layer: &cranpose_render_common::graph::LayerNode,
-    parent_layer: GraphicsLayer,
-    scene: &mut RasterScene,
-    parent_visual_clip: Option<Rect>,
-    parent_offset: Point,
-) {
-    let rect = Rect {
-        x: parent_offset.x + layer.placement.x,
-        y: parent_offset.y + layer.placement.y,
-        width: layer.local_bounds.width,
-        height: layer.local_bounds.height,
+#[derive(Clone, Copy)]
+struct RasterLayerBounds {
+    device_origin: Point,
+    local_bounds: Rect,
+}
+
+impl RasterLayerBounds {
+    fn from_transformed_bounds(transformed_bounds: Rect, local_bounds: Rect) -> Self {
+        Self {
+            device_origin: Point::new(transformed_bounds.x, transformed_bounds.y),
+            local_bounds,
+        }
+    }
+
+    // The software raster path anchors local primitive coordinates at a device-space origin and
+    // applies one axis-aligned scale from there. This is not a world-space rect and should only
+    // cross helper boundaries through this explicit conversion.
+    fn raster_rect(self) -> Rect {
+        Rect {
+            x: self.device_origin.x,
+            y: self.device_origin.y,
+            width: self.local_bounds.width,
+            height: self.local_bounds.height,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct RasterLayerMapping {
+    layer_bounds: RasterLayerBounds,
+    transformed_bounds: Rect,
+    content_style: GraphicsLayer,
+    raster_content_layer: GraphicsLayer,
+    shadow_layer: GraphicsLayer,
+}
+
+fn raster_layer_scale(transformed_bounds: Rect, local_bounds: Rect) -> (f32, f32) {
+    // The software raster path only models axis-aligned translation and scale. For rotated or
+    // projective transforms this falls back to the transformed AABB, which is exact for the shared
+    // Pixels/WGPU overlap but intentionally not a full rotation implementation.
+    let scale_x = if local_bounds.width.abs() <= f32::EPSILON {
+        1.0
+    } else {
+        transformed_bounds.width / local_bounds.width
+    };
+    let scale_y = if local_bounds.height.abs() <= f32::EPSILON {
+        1.0
+    } else {
+        transformed_bounds.height / local_bounds.height
+    };
+    (scale_x.max(0.0), scale_y.max(0.0))
+}
+
+fn raster_layer_mapping(
+    layer: &LayerNode,
+    transform: ProjectiveTransform,
+    parent_content_style: GraphicsLayer,
+) -> RasterLayerMapping {
+    let transformed_bounds = transform.bounds_for_rect(layer.local_bounds);
+    let (scale_x, scale_y) = raster_layer_scale(transformed_bounds, layer.local_bounds);
+    let content_style = combine_layers(
+        parent_content_style,
+        Some(local_content_layer(&layer.graphics_layer)),
+    );
+    let layer_bounds =
+        RasterLayerBounds::from_transformed_bounds(transformed_bounds, layer.local_bounds);
+    let raster_content_layer = GraphicsLayer {
+        alpha: content_style.alpha,
+        color_filter: content_style.color_filter,
+        scale_x,
+        scale_y,
+        ..GraphicsLayer::default()
+    };
+    let shadow_layer = GraphicsLayer {
+        scale_x,
+        scale_y,
+        shadow_elevation: layer.graphics_layer.shadow_elevation,
+        ambient_shadow_color: layer.graphics_layer.ambient_shadow_color,
+        spot_shadow_color: layer.graphics_layer.spot_shadow_color,
+        shape: layer.graphics_layer.shape,
+        ..GraphicsLayer::default()
     };
 
-    let node_layer = combine_layers(parent_layer, Some(layer.graphics_layer.clone()));
-    report_unsupported_effects(&node_layer);
-    let transformed_rect = apply_layer_to_rect(rect, rect, &node_layer);
+    RasterLayerMapping {
+        layer_bounds,
+        transformed_bounds,
+        content_style,
+        raster_content_layer,
+        shadow_layer,
+    }
+}
 
-    if transformed_rect.width <= 0.0 || transformed_rect.height <= 0.0 {
+fn populate_draws_from_graph(
+    layer: &LayerNode,
+    parent_transform: ProjectiveTransform,
+    parent_content_style: GraphicsLayer,
+    scene: &mut RasterScene,
+    parent_visual_clip: Option<Rect>,
+) {
+    let transform = layer.transform_to_parent.then(parent_transform);
+    let mapping = raster_layer_mapping(layer, transform, parent_content_style);
+    report_unsupported_effects(&layer.graphics_layer);
+
+    if mapping.transformed_bounds.width <= 0.0 || mapping.transformed_bounds.height <= 0.0 {
         return;
     }
 
-    let content_clip_to_bounds = layer.clip_to_bounds || node_layer.clip;
+    let content_clip_to_bounds = layer.clip_to_bounds || layer.graphics_layer.clip;
     let visual_clip = resolve_clip(
         parent_visual_clip,
-        content_clip_to_bounds.then_some(transformed_rect),
+        content_clip_to_bounds.then_some(mapping.transformed_bounds),
     );
 
     if content_clip_to_bounds && visual_clip.is_none() {
@@ -728,53 +809,68 @@ fn populate_draws_from_graph(
     // Explicit clip-to-bounds modifiers still clip both.
     let shadow_clip = resolve_clip(
         parent_visual_clip,
-        layer.shadow_clip.map(|_| transformed_rect),
+        layer
+            .shadow_clip
+            .map(|clip| transform.bounds_for_rect(clip)),
     );
-    push_layer_shadow(scene, &node_layer, rect, transformed_rect, shadow_clip);
+    push_layer_shadow(
+        scene,
+        &mapping.shadow_layer,
+        mapping.layer_bounds,
+        mapping.transformed_bounds,
+        shadow_clip,
+    );
 
     let mut deferred_primitives = Vec::new();
     for child in &layer.children {
         match child {
-            cranpose_render_common::graph::RenderNode::Primitive(primitive) => {
-                match primitive.phase {
-                    cranpose_render_common::graph::PrimitivePhase::BeforeChildren => {
-                        render_graph_primitive(scene, primitive, rect, &node_layer, visual_clip);
-                    }
-                    cranpose_render_common::graph::PrimitivePhase::AfterChildren => {
-                        deferred_primitives.push(primitive);
-                    }
+            RenderNode::Primitive(primitive) => match primitive.phase {
+                PrimitivePhase::BeforeChildren => {
+                    render_graph_primitive(
+                        scene,
+                        primitive,
+                        mapping.layer_bounds,
+                        &mapping.raster_content_layer,
+                        visual_clip,
+                    );
                 }
-            }
-            cranpose_render_common::graph::RenderNode::Layer(child_layer) => {
-                let child_offset = Point {
-                    x: rect.x + layer.content_offset.x,
-                    y: rect.y + layer.content_offset.y,
-                };
+                PrimitivePhase::AfterChildren => {
+                    deferred_primitives.push(primitive);
+                }
+            },
+            RenderNode::Layer(child_layer) => {
                 populate_draws_from_graph(
                     child_layer,
-                    node_layer.clone(),
+                    transform,
+                    mapping.content_style.clone(),
                     scene,
                     visual_clip,
-                    child_offset,
                 );
             }
         }
     }
 
     for primitive in deferred_primitives {
-        render_graph_primitive(scene, primitive, rect, &node_layer, visual_clip);
+        render_graph_primitive(
+            scene,
+            primitive,
+            mapping.layer_bounds,
+            &mapping.raster_content_layer,
+            visual_clip,
+        );
     }
 }
 
 fn render_graph_primitive(
     scene: &mut RasterScene,
-    primitive: &cranpose_render_common::graph::PrimitiveEntry,
-    rect: Rect,
+    primitive: &PrimitiveEntry,
+    layer_bounds: RasterLayerBounds,
     node_layer: &GraphicsLayer,
     visual_clip: Option<Rect>,
 ) {
+    let rect = layer_bounds.raster_rect();
     match &primitive.node {
-        cranpose_render_common::graph::PrimitiveNode::Draw(draw) => {
+        PrimitiveNode::Draw(draw) => {
             let effective_clip = resolve_primitive_clip(
                 draw.clip,
                 rect,
@@ -794,19 +890,20 @@ fn render_graph_primitive(
                 None,
             );
         }
-        cranpose_render_common::graph::PrimitiveNode::Text(text) => {
-            render_graph_text(scene, text, rect, node_layer, visual_clip)
+        PrimitiveNode::Text(text) => {
+            render_graph_text(scene, text, layer_bounds, node_layer, visual_clip)
         }
     }
 }
 
 fn render_graph_text(
     scene: &mut RasterScene,
-    text: &cranpose_render_common::graph::TextPrimitiveNode,
-    rect: Rect,
+    text: &TextPrimitiveNode,
+    layer_bounds: RasterLayerBounds,
     node_layer: &GraphicsLayer,
     visual_clip: Option<Rect>,
 ) {
+    let rect = layer_bounds.raster_rect();
     let text_rect = Rect {
         x: rect.x + text.rect.x,
         y: rect.y + text.rect.y,
@@ -1008,6 +1105,11 @@ fn push_shadow_primitive(
 mod tests {
     use super::*;
     use crate::scene::RasterScene;
+    use cranpose_render_common::graph::{
+        CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
+        PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
+    };
+    use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
 
     #[test]
     fn render_effect_support_matrix_is_explicit() {
@@ -1059,7 +1161,13 @@ mod tests {
         let ambient_samples = blur_samples(ambient_pass.blur_radius.max(1.0));
         let spot_samples = blur_samples(spot_pass.blur_radius.max(1.0));
 
-        push_layer_shadow(&mut scene, &layer, bounds, bounds, None);
+        push_layer_shadow(
+            &mut scene,
+            &layer,
+            RasterLayerBounds::from_transformed_bounds(bounds, bounds),
+            bounds,
+            None,
+        );
 
         assert!(
             scene.shapes.len() == ambient_samples.len() + spot_samples.len(),
@@ -1100,6 +1208,73 @@ mod tests {
             })
             .fold(0.0f32, f32::max);
         assert!(spot_peak_alpha > 0.02, "spot alpha should remain visible");
+    }
+
+    #[test]
+    fn build_raster_scene_uses_graph_transform_to_parent() {
+        let graph = RenderGraph::new(LayerNode {
+            node_id: None,
+            local_bounds: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 64.0,
+                height: 48.0,
+            },
+            transform_to_parent: ProjectiveTransform::identity(),
+            graphics_layer: GraphicsLayer::default(),
+            clip_to_bounds: false,
+            shadow_clip: None,
+            hit_test: None,
+            isolation: IsolationReasons::default(),
+            cache_policy: CachePolicy::None,
+            cache_hashes: LayerRasterCacheHashes::default(),
+            children: vec![RenderNode::Layer(Box::new(LayerNode {
+                node_id: None,
+                local_bounds: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 24.0,
+                    height: 18.0,
+                },
+                transform_to_parent: ProjectiveTransform::translation(17.0, 11.0),
+                graphics_layer: GraphicsLayer::default(),
+                clip_to_bounds: false,
+                shadow_clip: None,
+                hit_test: None,
+                isolation: IsolationReasons::default(),
+                cache_policy: CachePolicy::None,
+                cache_hashes: LayerRasterCacheHashes::default(),
+                children: vec![RenderNode::Primitive(PrimitiveEntry {
+                    phase: PrimitivePhase::BeforeChildren,
+                    node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                        primitive: DrawPrimitive::Rect {
+                            rect: Rect {
+                                x: 4.0,
+                                y: 3.0,
+                                width: 8.0,
+                                height: 6.0,
+                            },
+                            brush: Brush::solid(Color::WHITE),
+                        },
+                        clip: None,
+                    }),
+                })],
+            }))],
+        });
+
+        let scene = build_raster_scene(&graph);
+        let [shape] = scene.shapes.as_slice() else {
+            panic!("expected exactly one translated child shape");
+        };
+        assert_eq!(
+            shape.rect,
+            Rect {
+                x: 21.0,
+                y: 14.0,
+                width: 8.0,
+                height: 6.0,
+            }
+        );
     }
 
     #[test]

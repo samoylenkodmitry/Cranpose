@@ -140,8 +140,6 @@ fn build_layer_node(snapshot: BuildNodeSnapshot, root_scale: f32) -> LayerNode {
     let mut layer = LayerNode {
         node_id: Some(snapshot.node_id),
         local_bounds,
-        placement: snapshot.placement,
-        content_offset: snapshot.content_offset,
         transform_to_parent,
         graphics_layer,
         clip_to_bounds,

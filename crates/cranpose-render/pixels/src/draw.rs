@@ -1175,8 +1175,6 @@ mod tests {
                 width: 16.0,
                 height: 16.0,
             },
-            placement: cranpose_ui_graphics::Point::default(),
-            content_offset: cranpose_ui_graphics::Point::default(),
             transform_to_parent: ProjectiveTransform::identity(),
             graphics_layer: cranpose_ui_graphics::GraphicsLayer::default(),
             clip_to_bounds: false,

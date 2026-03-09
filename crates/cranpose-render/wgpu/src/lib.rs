@@ -27,7 +27,7 @@ use cranpose_render_common::{
 };
 use cranpose_ui::{set_text_measurer, LayoutTree, TextMeasurer};
 use cranpose_ui_graphics::{
-    Brush, Color, CornerRadii, DrawPrimitive, GraphicsLayer, Point, Rect, RenderHash, Size,
+    Brush, Color, CornerRadii, DrawPrimitive, GraphicsLayer, Rect, RenderHash, Size,
 };
 use glyphon::{
     Attrs, AttrsOwned, Buffer, FamilyOwned, FontSystem, Metrics, Shaping, Style as GlyphonStyle,
@@ -1145,9 +1145,7 @@ impl Renderer for WgpuRenderer {
                 width: text_width + padding,
                 height: text_height + padding / 2.0,
             },
-            placement: Point { x, y },
-            content_offset: Point::default(),
-            transform_to_parent: ProjectiveTransform::identity(),
+            transform_to_parent: ProjectiveTransform::translation(x, y),
             graphics_layer: GraphicsLayer::default(),
             clip_to_bounds: false,
             shadow_clip: None,
@@ -1197,8 +1195,6 @@ impl Renderer for WgpuRenderer {
             RenderGraph::new(LayerNode {
                 node_id: None,
                 local_bounds: Rect::from_size(viewport),
-                placement: Point::default(),
-                content_offset: Point::default(),
                 transform_to_parent: ProjectiveTransform::identity(),
                 graphics_layer: GraphicsLayer::default(),
                 clip_to_bounds: false,

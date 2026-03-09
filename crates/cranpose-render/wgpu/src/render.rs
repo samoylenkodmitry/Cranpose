@@ -5183,8 +5183,6 @@ mod tests {
         LayerNode {
             node_id: None,
             local_bounds,
-            placement: Point::default(),
-            content_offset: Point::default(),
             transform_to_parent: ProjectiveTransform::identity(),
             graphics_layer: GraphicsLayer::default(),
             clip_to_bounds: false,
@@ -5509,7 +5507,6 @@ mod tests {
         );
         let mut moved = base.clone();
         moved.transform_to_parent = ProjectiveTransform::translation(32.0, 18.0);
-        moved.placement = Point { x: 32.0, y: 18.0 };
 
         assert_eq!(
             layer_raster_cache_candidate(&base, 1.25, false),
