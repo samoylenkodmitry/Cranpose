@@ -11,6 +11,7 @@ pub mod layer_shadow;
 pub mod layer_transform;
 pub mod primitive_emit;
 pub mod raster_cache;
+pub mod render_contract;
 pub mod scene_builder;
 pub mod software_text_raster;
 pub mod style_shared;

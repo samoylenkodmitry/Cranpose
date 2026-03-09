@@ -1,3 +1,5 @@
+mod support;
+
 use cranpose_core::NodeId;
 use cranpose_render_common::graph::{
     CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
@@ -5,40 +7,7 @@ use cranpose_render_common::graph::{
 };
 use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
 use cranpose_render_common::Renderer;
-use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui_graphics::{Brush, Color, GraphicsLayer, Point, Rect};
-
-static TEST_FONT: &[u8] = include_bytes!("../../../../apps/desktop-demo/assets/NotoSansMerged.ttf");
-
-fn headless_renderer() -> Result<WgpuRenderer, String> {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::all(),
-        ..Default::default()
-    });
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::LowPower,
-        compatible_surface: None,
-        force_fallback_adapter: false,
-    }))
-    .map_err(|err| format!("adapter request failed: {err:?}"))?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("Raster Cache Test Device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: wgpu::Limits::default(),
-        experimental_features: wgpu::ExperimentalFeatures::disabled(),
-        memory_hints: wgpu::MemoryHints::default(),
-        trace: wgpu::Trace::Off,
-    }))
-    .map_err(|err| format!("device request failed: {err:?}"))?;
-
-    let mut renderer = WgpuRenderer::new(&[TEST_FONT]);
-    renderer.init_gpu(
-        std::sync::Arc::new(device),
-        std::sync::Arc::new(queue),
-        wgpu::TextureFormat::Bgra8UnormSrgb,
-    );
-    Ok(renderer)
-}
 
 fn test_layer(
     node_id: Option<NodeId>,
@@ -112,7 +81,7 @@ fn scroll_like_graph(offsets: &[f32]) -> RenderGraph {
 
 #[test]
 fn capture_frame_reuses_cached_child_layers_during_rigid_scroll() {
-    let mut renderer = match headless_renderer() {
+    let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
