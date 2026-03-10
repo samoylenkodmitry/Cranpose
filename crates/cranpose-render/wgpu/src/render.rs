@@ -1121,7 +1121,16 @@ fn estimate_layer_surface_rect(layer: &LayerNode) -> Rect {
         }
     }
 
-    bounds.unwrap_or(layer.local_bounds)
+    resolved_layer_surface_rect(layer, bounds)
+}
+
+fn resolved_layer_surface_rect(layer: &LayerNode, bounds: Option<Rect>) -> Rect {
+    let rect = bounds.unwrap_or(layer.local_bounds);
+    if layer.effect().is_some() || layer.backdrop().is_some() {
+        union_rect(Some(rect), layer.local_bounds).unwrap_or(rect)
+    } else {
+        rect
+    }
 }
 
 trait TranslateBy {
@@ -2209,14 +2218,14 @@ impl GpuRenderer {
         let surface_rect = cache_candidate
             .map(|(_, logical_rect)| logical_rect)
             .unwrap_or_else(|| {
-                let mut surface_rect = scene_bounds(&local_scene);
+                let mut bounds = scene_bounds(&local_scene);
                 for child in &child_layers {
-                    surface_rect = union_rect(surface_rect, quad_bounds(child.dest_quad));
+                    bounds = union_rect(bounds, quad_bounds(child.dest_quad));
                     if let Some(shadow_bounds) = shadow_draws_bounds(&child.shadow_draws) {
-                        surface_rect = union_rect(surface_rect, shadow_bounds);
+                        bounds = union_rect(bounds, shadow_bounds);
                     }
                 }
-                surface_rect.unwrap_or(layer.local_bounds)
+                resolved_layer_surface_rect(layer, bounds)
             });
         let shift = Point {
             x: -surface_rect.x,
@@ -5059,7 +5068,6 @@ fn inner_shadow_composite_mask(
 mod tests {
     use super::*;
     use cranpose_render_common::graph::DrawPrimitiveNode;
-    use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
     use cranpose_ui_graphics::{Rect, RenderEffect, RoundedCornerShape};
 
     fn chunk(batches: &[SegmentBatchPlan]) -> SegmentDrawChunkPlan {
@@ -5180,19 +5188,12 @@ mod tests {
     }
 
     fn test_layer(local_bounds: Rect, children: Vec<RenderNode>) -> LayerNode {
-        LayerNode {
-            node_id: None,
+        crate::test_support::layer_node(
             local_bounds,
-            transform_to_parent: ProjectiveTransform::identity(),
-            graphics_layer: GraphicsLayer::default(),
-            clip_to_bounds: false,
-            shadow_clip: None,
-            hit_test: None,
-            isolation: cranpose_render_common::graph::IsolationReasons::default(),
-            cache_policy: cranpose_render_common::graph::CachePolicy::None,
-            cache_hashes: LayerRasterCacheHashes::default(),
+            ProjectiveTransform::identity(),
+            GraphicsLayer::default(),
             children,
-        }
+        )
     }
 
     fn cacheable_layer(
@@ -5476,6 +5477,44 @@ mod tests {
         assert!(rect.y < 9.0);
         assert!(rect.width > 12.0);
         assert!(rect.height > 8.0);
+    }
+
+    #[test]
+    fn estimate_layer_surface_rect_respects_local_bounds_for_effect_layers() {
+        let mut layer = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 28.0,
+                height: 28.0,
+            },
+            vec![RenderNode::Primitive(PrimitiveEntry {
+                phase: PrimitivePhase::BeforeChildren,
+                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                    primitive: cranpose_ui_graphics::DrawPrimitive::Rect {
+                        rect: Rect {
+                            x: 10.0,
+                            y: 10.0,
+                            width: 10.0,
+                            height: 10.0,
+                        },
+                        brush: Brush::solid(Color::WHITE),
+                    },
+                    clip: None,
+                }),
+            })],
+        );
+        layer.graphics_layer.render_effect = Some(RenderEffect::blur(12.0));
+
+        assert_eq!(
+            estimate_layer_surface_rect(&layer),
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 28.0,
+                height: 28.0,
+            }
+        );
     }
 
     #[test]

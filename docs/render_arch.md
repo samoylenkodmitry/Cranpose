@@ -28,7 +28,13 @@ The public graphics API lives primarily in `cranpose-ui-graphics`, and the curre
 The desktop demo currently defaults to the WGPU backend via `apps/desktop-demo/Cargo.toml`.
 The pixels backend remains a CPU renderer and a useful reference path, but it must not define the long-term architecture.
 
-## Current File Map
+Status note:
+
+- the next two sections preserve the starting-point diagnosis this rewrite was written against
+- they are not a status snapshot of the current tree
+- current implementation status is tracked in the rewrite-status section below
+
+## Starting-Point File Map
 
 | Area | Files | Current Role | Architectural Problem |
 |---|---|---|---|
@@ -44,7 +50,7 @@ The pixels backend remains a CPU renderer and a useful reference path, but it mu
 | WGPU shaders | `crates/cranpose-render/wgpu/src/shaders.rs` | Shape/image WGSL shaders | Coverage and clipping happen in device space; plain rects already use hard-coverage branches to fight seams |
 | Pixels backend | `crates/cranpose-render/pixels/src/draw.rs` | CPU raster path | Shares the same flatten-first mental model, so it cannot be the architecture answer either |
 
-## Current API Reality
+## Starting-Point API Reality
 
 The exposed graphics API is broader than the current renderer semantics.
 
@@ -367,13 +373,33 @@ The proper architecture can be faster than the current one, but only if isolatio
 - text-heavy composite widgets
 - explicitly offscreen layers
 
+## Rewrite Status
+
+Status snapshot as of 2026-03-09:
+
+| Phase | Status | Notes |
+|---|---|---|
+| Phase 1 | Partial | Shared normalized translation-invariance tests landed for WGPU and Pixels, and real-app robot translation coverage landed. Dedicated WGPU capture assertions for translated backdrop content are still missing, and current translation-diff budgets are still freeze-the-failure thresholds rather than tight final budgets. |
+| Phase 2 | Done | Shared hierarchical graph types, shared scene builder, explicit `transform_to_parent`, graph hashes, and shared graph-scene hit contract are in production paths. |
+| Phase 3 | Done | WGPU renders by graph traversal with local-coordinate primitives, bounded layer surfaces, and compositor-driven transforms instead of flat z-range replay. |
+| Phase 4 | Done | Bounded local-surface effect and backdrop execution landed in WGPU, and WGPU capture coverage now locks subtree alpha, bounded blur, and bounded backdrop semantics to bounded local surfaces. |
+| Phase 5 | Partial | Layer raster cache, stable subtree hashes, and per-frame GPU stats landed. Perf scripts do not yet consume those counters, and the renderer still lacks the planned per-frame upload-bytes counter. |
+| Phase 6 | Mostly done | Pixels and WGPU now share the graph scene contract, shared graph builder, shared transform semantics, and shared render-contract tests. Remaining work is more shared semantic coverage, not another scene-model rewrite. |
+
 ## Rewrite Plan
 
 This rewrite is significant. That is correct. The current architecture is already the wrong foundation.
 
 Each phase replaces the previous architecture entirely. No phase may leave the repo in a half-state where both old and new models coexist in production paths.
 
-### Phase 1: Freeze The Failure With Tests
+### Phase 1: Freeze The Failure With Tests [Partial]
+
+Status:
+
+- done: shared normalized translation-invariance cases for translated subtrees and translated text decorations run against both WGPU and Pixels
+- done: robot translation regression covers decorated text and lazy-list subtree motion in the real desktop app
+- not done: a dedicated WGPU translated-backdrop capture case is still missing
+- not done: current normalized-diff budgets are still loose freeze-the-failure thresholds and must tighten after the remaining capture coverage lands
 
 Add automated failures before touching the renderer:
 
@@ -387,7 +413,12 @@ Validation target:
 
 - failing tests reproduce the current instability without depending on a human looking at screenshots
 
-### Phase 2: Hierarchical Scene Graph And Scene Builder
+### Phase 2: Hierarchical Scene Graph And Scene Builder [Done]
+
+Status:
+
+- done: shared graph types, shared builder, shared graph-scene hit model, and explicit graph-side transform propagation are in place
+- done: the dead layout-tree scene-builder path is gone from production use
 
 Replace the flat scene model and scene builder in one step. Introducing the graph types without simultaneously switching the builder to emit them would create a half-state.
 
@@ -413,7 +444,12 @@ Validation target:
 - new tests confirm parent translation changes only layer transform data, not child local geometry
 - existing scene-build unit tests still pass after being ported
 
-### Phase 3: Compositor And Local-Coordinate Rendering
+### Phase 3: Compositor And Local-Coordinate Rendering [Done]
+
+Status:
+
+- done: WGPU traverses the graph directly, renders primitives in local coordinates, and composites bounded layer surfaces
+- done: direct-path vs isolated-path selection is driven by layer semantics rather than flat z-range replay
 
 Replace the z-range event replay renderer with graph traversal, and simultaneously port primitive paint to use local coordinates with GPU transform uniforms. These are one unit of work: the compositor decides how to draw each layer, and each layer's primitives must be in local coordinates for the compositor's transform to be meaningful.
 
@@ -439,7 +475,12 @@ Validation target:
 - tests confirm bounded offscreen allocation for small isolated layers
 - tests confirm nested isolated layers and nested backdrop layers produce correct ordering
 
-### Phase 4: Effect Correctness At Layer Boundaries
+### Phase 4: Effect Correctness At Layer Boundaries [Done]
+
+Status:
+
+- done: blur, runtime shader effects, and backdrop execution operate on bounded local layer surfaces in WGPU
+- done: explicit WGPU capture assertions cover subtree alpha correctness, bounded blur correctness, and bounded backdrop correctness
 
 Make effects operate on bounded local layer surfaces instead of full-frame z-range replays.
 
@@ -460,7 +501,14 @@ Validation target:
 - capture tests for blur, alpha, and backdrop match layer semantics
 - no effect path allocates a full-frame target when layer bounds are small
 
-### Phase 5: Raster Cache And Motion-Aware Reuse
+### Phase 5: Raster Cache And Motion-Aware Reuse [Partial]
+
+Status:
+
+- done: isolated-layer raster caching, stable subtree cache hashes, and frame-level cache hit/miss/eviction stats landed in WGPU
+- done: rigid-scroll cache reuse is covered by automated tests
+- not done: perf scripts do not yet collect and report renderer counters for the acceptance scenarios
+- not done: the planned per-frame upload-bytes counter is still missing from renderer stats
 
 Files:
 
@@ -480,7 +528,14 @@ Validation target:
 - lazy list scroll uses cache reuse instead of repainting every descendant
 - performance counters show reduced uploads and reduced isolated repaints in scroll-heavy scenes
 
-### Phase 6: Port The Pixels Backend And Clean Up
+### Phase 6: Port The Pixels Backend And Clean Up [Mostly Done]
+
+Status:
+
+- done: Pixels consumes the shared hierarchical graph and the public scene contract is shared between both backends
+- done: flat scene storage no longer defines the backend API surface
+- done: shared render-contract tests run against both backends
+- not done: more shared semantic coverage is still needed so backend-local pixel assertions keep collapsing into common tests
 
 Port the pixels backend to consume the same hierarchical graph and remove all remnants of the flat scene architecture.
 
@@ -508,7 +563,11 @@ Validation target:
 
 The validation must not depend on human eyes.
 
-### 1. Scene-Structure Unit Tests
+### 1. Scene-Structure Unit Tests [Done]
+
+Status:
+
+- done: graph construction, transform propagation, layer bounds, hit semantics, and cache-hash behavior are covered close to the graph and scene-builder code
 
 Add unit tests that assert:
 
@@ -520,7 +579,12 @@ Add unit tests that assert:
 
 These belong close to the scene builder and graph types.
 
-### 2. WGPU Capture Tests
+### 2. WGPU Capture Tests [Done]
+
+Status:
+
+- done: shared WGPU capture coverage exists for rigid translated subtrees, rounded-block spacing, and translated text with shadow and decorations
+- done: explicit capture assertions cover subtree alpha correctness, bounded blur correctness, and bounded backdrop correctness
 
 Use `capture_frame(...)` / `capture_frame_with_scale(...)` from `crates/cranpose-render/wgpu/src/lib.rs`.
 
@@ -539,7 +603,12 @@ Important rule:
 
 Whole-frame pixels at different absolute positions are not the right assertion. The correct assertion is that the subtree picture is preserved after compensating for the parent transform.
 
-### 3. Robot Regression Tests
+### 3. Robot Regression Tests [Done]
+
+Status:
+
+- done: lazy-list fractional scroll, translated text/shadow/decorations, backdrop drag, and scroll visual coverage all run in the desktop robot suite
+- done: the suite now includes a normalized screenshot comparison for rigid subtree motion in the real app
 
 Use the desktop robot harness and keep the checks measurable.
 
@@ -563,7 +632,14 @@ The robot assertions should measure:
 - stable local bounds for translated cards
 - no frame-to-frame picture drift inside a rigidly moving subtree
 
-### 4. Performance Validation
+### 4. Performance Validation [Partial]
+
+Status:
+
+- done: renderer-side counters exist for isolated layers, offscreen acquires, cache hit/miss/evictions, and compositor submits
+- not done: `perf_robot_cpu.sh` and `perf_robot_heap.sh` do not yet capture and summarize those counters for the required scenarios
+- not done: acceptance data for lazy-list scroll, text-heavy scroll, backdrop blur, and simple opaque scenes is not recorded yet
+- not done: the planned per-frame upload-bytes counter still has to be added
 
 The rewrite is only acceptable if correctness improves without turning the renderer into an offscreen-everything system.
 
@@ -599,7 +675,11 @@ Acceptance criteria:
 - simple opaque scenes do not regress materially
 - scroll-heavy scenes show cache reuse and reduced repaint work
 
-### 5. Full Repository Gates
+### 5. Full Repository Gates [Done]
+
+Status:
+
+- done: the landing workflow already uses the repository-wide fmt, test, clippy, wasm, Android, duplicate-tree, and robot gates listed below
 
 Every landing step must pass:
 
@@ -630,9 +710,10 @@ These can sometimes hide symptoms. They do not fix the architecture.
 
 ## Immediate Next Step
 
-The correct next implementation step is Phase 1:
+The correct next implementation steps are the remaining validation gaps:
 
-- write failing automated tests for rigid subtree translation invariance
-- then replace the flat scene architecture with a hierarchical layer/compositor architecture
+- wire renderer counters into `./perf_robot_cpu.sh` and `./perf_robot_heap.sh`
+- record acceptance data for lazy list scroll, text-heavy scroll, backdrop blur, and simple opaque scenes
+- tighten the current translation-invariance diff budgets now that the capture suite is in place
 
-Anything smaller is a local patch against the wrong model.
+Anything smaller is avoidance, not closure.

@@ -235,6 +235,9 @@ run_test() {
         robot_shadow_fields)
             timeout_secs=180
             ;;
+        robot_render_translation_contract)
+            timeout_secs=120
+            ;;
         robot_double_click|robot_multiline_click|robot_multiline_nav)
             timeout_secs=90
             ;;

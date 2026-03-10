@@ -11,6 +11,8 @@ mod render;
 mod scene;
 mod shader_cache;
 mod shaders;
+#[cfg(test)]
+mod test_support;
 
 pub use gpu_stats::FrameStatsSnapshot as RenderStatsSnapshot;
 pub use scene::{ClickAction, HitRegion, Scene};

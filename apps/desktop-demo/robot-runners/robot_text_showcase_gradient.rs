@@ -4,35 +4,12 @@
 //! `cargo run --package desktop-app --example robot_text_showcase_gradient --features robot-app`
 
 use cranpose::AppLauncher;
-use cranpose_testing::{crop_screenshot, find_button_in_semantics, find_in_semantics, find_text};
+use cranpose_testing::{
+    crop_screenshot, find_button_exact_in_semantics, find_button_in_semantics, find_in_semantics,
+    find_text,
+};
 use desktop_app::app;
 use std::time::Duration;
-
-fn has_text_exact(elem: &cranpose::SemanticElement, text: &str) -> bool {
-    if elem.text.as_deref() == Some(text) {
-        return true;
-    }
-    elem.children
-        .iter()
-        .any(|child| has_text_exact(child, text))
-}
-
-fn find_button_exact(elem: &cranpose::SemanticElement, text: &str) -> Option<(f32, f32, f32, f32)> {
-    if elem.clickable && has_text_exact(elem, text) {
-        return Some((
-            elem.bounds.x,
-            elem.bounds.y,
-            elem.bounds.width,
-            elem.bounds.height,
-        ));
-    }
-    for child in &elem.children {
-        if let Some(bounds) = find_button_exact(child, text) {
-            return Some(bounds);
-        }
-    }
-    None
-}
 
 fn fail(robot: &cranpose::Robot, message: &str) -> ! {
     println!("FATAL: {message}");
@@ -65,7 +42,7 @@ fn main() {
             let _ = robot.wait_for_idle();
 
             let Some((text_x, text_y, text_w, text_h)) =
-                find_in_semantics(&robot, |elem| find_button_exact(elem, "Text"))
+                find_button_exact_in_semantics(&robot, "Text")
             else {
                 fail(&robot, "Text tab not found after navigating to right-side tabs");
             };

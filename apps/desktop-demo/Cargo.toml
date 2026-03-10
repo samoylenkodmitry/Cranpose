@@ -505,3 +505,8 @@ required-features = ["robot-app"]
 name = "robot_text_showcase_gradient"
 path = "robot-runners/robot_text_showcase_gradient.rs"
 required-features = ["robot-app"]
+
+[[example]]
+name = "robot_render_translation_contract"
+path = "robot-runners/robot_render_translation_contract.rs"
+required-features = ["robot-app"]
