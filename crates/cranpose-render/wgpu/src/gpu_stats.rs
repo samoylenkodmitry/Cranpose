@@ -11,6 +11,7 @@ pub struct FrameStatsSnapshot {
     pub offscreen_acquires: u32,
     pub offscreen_news: u32,
     pub offscreen_total_bytes: u64,
+    pub upload_bytes: u64,
     pub isolated_layer_renders: u32,
     pub isolated_layer_pixels: u64,
     pub layer_cache_hits: u32,
@@ -45,6 +46,7 @@ impl FrameStatsSnapshot {
 
     fn print(self, frame_count: u64) {
         let mb = self.offscreen_total_bytes as f64 / (1024.0 * 1024.0);
+        let upload_mb = self.upload_bytes as f64 / (1024.0 * 1024.0);
         let pool_mb = self.offscreen_pool_bytes as f64 / (1024.0 * 1024.0);
         let layer_cache_hit_mpx = self.layer_cache_hit_pixels as f64 / 1_000_000.0;
         let layer_cache_miss_mpx = self.layer_cache_miss_pixels as f64 / 1_000_000.0;
@@ -52,6 +54,7 @@ impl FrameStatsSnapshot {
         let isolated_layer_mpx = self.isolated_layer_pixels as f64 / 1_000_000.0;
         eprintln!(
             "[GPU f#{}] submits={} | offscreen: acq={} new={} {:.1}MB pool={}({:.1}MB) | \
+             uploads={:.2}MB | \
              isolated_layers={} area={:.2}MP | \
              layer_cache: hit={} miss={} {:.1}% evict={} hit_px={:.2}MP miss_px={:.2}MP size={}({:.1}MB) | \
              blur={} composite={} effect={} | shape={} image={} text={} | \
@@ -63,6 +66,7 @@ impl FrameStatsSnapshot {
             mb,
             self.offscreen_pool_size,
             pool_mb,
+            upload_mb,
             self.isolated_layer_renders,
             isolated_layer_mpx,
             self.layer_cache_hits,
@@ -94,6 +98,7 @@ pub(crate) struct FrameStats {
     pub offscreen_acquires: Cell<u32>,
     pub offscreen_news: Cell<u32>,
     pub offscreen_total_bytes: Cell<u64>,
+    pub upload_bytes: Cell<u64>,
     pub isolated_layer_renders: Cell<u32>,
     pub isolated_layer_pixels: Cell<u64>,
     pub layer_cache_hits: Cell<u32>,
@@ -130,6 +135,11 @@ impl FrameStats {
         }
         self.offscreen_total_bytes
             .set(self.offscreen_total_bytes.get() + (width as u64) * (height as u64) * 4);
+    }
+
+    pub fn record_upload_bytes(&self, bytes: u64) {
+        self.upload_bytes
+            .set(self.upload_bytes.get().saturating_add(bytes));
     }
 
     pub fn record_isolated_layer_render(&self, width: u32, height: u32) {
@@ -185,6 +195,7 @@ impl FrameStats {
             offscreen_acquires: self.offscreen_acquires.get(),
             offscreen_news: self.offscreen_news.get(),
             offscreen_total_bytes: self.offscreen_total_bytes.get(),
+            upload_bytes: self.upload_bytes.get(),
             isolated_layer_renders: self.isolated_layer_renders.get(),
             isolated_layer_pixels: self.isolated_layer_pixels.get(),
             layer_cache_hits: self.layer_cache_hits.get(),
@@ -213,6 +224,7 @@ impl FrameStats {
         self.offscreen_acquires.set(0);
         self.offscreen_news.set(0);
         self.offscreen_total_bytes.set(0);
+        self.upload_bytes.set(0);
         self.isolated_layer_renders.set(0);
         self.isolated_layer_pixels.set(0);
         self.layer_cache_hits.set(0);
@@ -261,6 +273,7 @@ mod tests {
     #[test]
     fn layer_cache_counters_accumulate_and_reset() {
         let stats = FrameStats::default();
+        stats.record_upload_bytes(512);
         stats.record_layer_cache_hit(10, 20);
         stats.record_layer_cache_hit(3, 4);
         stats.record_layer_cache_miss(5, 6);
@@ -277,6 +290,7 @@ mod tests {
 
         assert_eq!(snapshot.isolated_layer_renders, 1);
         assert_eq!(snapshot.isolated_layer_pixels, 56);
+        assert_eq!(snapshot.upload_bytes, 512);
         assert_eq!(snapshot.layer_cache_hits, 2);
         assert_eq!(snapshot.layer_cache_misses, 1);
         assert_eq!(stats.layer_cache_hits.get(), 2);
@@ -289,6 +303,7 @@ mod tests {
         assert_eq!(stats.layer_cache_evictions.get(), 0);
         assert_eq!(stats.layer_cache_hit_pixels.get(), 0);
         assert_eq!(stats.layer_cache_miss_pixels.get(), 0);
+        assert_eq!(stats.upload_bytes.get(), 0);
         assert_eq!(stats.isolated_layer_renders.get(), 0);
         assert_eq!(stats.isolated_layer_pixels.get(), 0);
     }

@@ -1581,6 +1581,8 @@ impl GpuRenderer {
             },
             size,
         );
+        self.frame_stats
+            .record_upload_bytes(image.pixels().len() as u64);
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2929,6 +2931,7 @@ impl GpuRenderer {
             let _ = encoder;
             for copy in &staged_uploads.copies {
                 let payload = staged_uploads.payload_for_copy(*copy);
+                self.frame_stats.record_upload_bytes(payload.len() as u64);
                 match copy.target {
                     UploadTarget::Uniform => {
                         self.queue.write_buffer(&self.uniform_buffer, 0, payload);
@@ -2965,6 +2968,8 @@ impl GpuRenderer {
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.ensure_upload_buffer_capacity(staged_uploads.bytes.len() as u64);
+            self.frame_stats
+                .record_upload_bytes(staged_uploads.bytes.len() as u64);
             self.queue
                 .write_buffer(&self.upload_buffer, 0, &staged_uploads.bytes);
 
@@ -2991,6 +2996,8 @@ impl GpuRenderer {
 
     fn write_viewport_uniforms(&self, width: u32, height: u32, viewport_offset: [f32; 2]) {
         let uniforms = Self::viewport_uniforms(width, height, viewport_offset);
+        self.frame_stats
+            .record_upload_bytes(std::mem::size_of_val(&uniforms) as u64);
         self.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
     }

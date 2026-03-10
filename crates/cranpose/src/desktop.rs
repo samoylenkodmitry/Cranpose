@@ -5,6 +5,8 @@
 use crate::launcher::AppSettings;
 use cranpose_app_shell::{default_root_key, AppShell};
 use cranpose_platform_desktop_winit::DesktopWinitPlatform;
+#[cfg(feature = "robot")]
+use cranpose_render_wgpu::RenderStatsSnapshot;
 use cranpose_render_wgpu::WgpuRenderer;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -114,6 +116,7 @@ enum RobotCommand {
     WaitForIdle,
     GetSemantics,
     GetScreenshot,
+    GetRenderStats,
     Exit,
 }
 
@@ -124,6 +127,7 @@ enum RobotResponse {
     Ok,
     Semantics(Vec<SemanticElement>),
     Screenshot(RobotScreenshot),
+    RenderStats(Option<RenderStatsSnapshot>),
     Error(String),
 }
 
@@ -476,6 +480,19 @@ impl Robot {
             .map_err(|e| format!("Failed to send screenshot command: {}", e))?;
         match self.rx.recv() {
             Ok(RobotResponse::Screenshot(image)) => Ok(image),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
+    }
+
+    /// Get the most recent renderer frame stats, if available.
+    pub fn get_render_stats(&self) -> Result<Option<RenderStatsSnapshot>, String> {
+        self.tx
+            .send(RobotCommand::GetRenderStats)
+            .map_err(|e| format!("Failed to send render stats command: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::RenderStats(stats)) => Ok(stats),
             Ok(RobotResponse::Error(e)) => Err(e),
             Ok(_) => Err("Unexpected response".to_string()),
             Err(e) => Err(format!("Failed to receive response: {}", e)),
@@ -1249,6 +1266,11 @@ impl ApplicationHandler for App {
                             let _ = controller.tx.send(RobotResponse::Error(err));
                         }
                     },
+                    RobotCommand::GetRenderStats => {
+                        let _ = controller.tx.send(RobotResponse::RenderStats(
+                            app.renderer().last_frame_stats(),
+                        ));
+                    }
                     RobotCommand::TypeText(text) => {
                         use cranpose_app_shell::{KeyEvent, KeyEventType, Modifiers};
 

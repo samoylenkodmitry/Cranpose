@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CARGO_RUNNER=("$SCRIPT_DIR/cargo-dev.sh")
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/scripts/dev_build_common.sh"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/scripts/perf_robot_common.sh"
 
 if [ ! -x "${CARGO_RUNNER[0]}" ]; then
     CARGO_RUNNER=(cargo)
@@ -25,12 +27,14 @@ TIMEOUT_SLACK_SECS="${CRANPOSE_PERF_TIMEOUT_SLACK_SECS:-300}"
 MEM_VALIDATE="${CRANPOSE_MEM_VALIDATE:-1}"
 PRESENT_MODE="${CRANPOSE_PRESENT_MODE:-immediate}"
 HEADLESS="${CRANPOSE_HEADLESS:-1}"
+PERF_SCENARIOS=()
 
 usage() {
     cat <<EOF
-Usage: $0 [--dev|--release|--profile NAME] [--example NAME] [--duration SECS] [--warmup SECS] [--timeout-slack SECS] [--output-prefix NAME] [--tool auto|heaptrack|massif] [--top-callers N]
+Usage: $0 [--dev|--release|--profile NAME] [--example NAME] [--duration SECS] [--warmup SECS] [--timeout-slack SECS] [--output-prefix NAME] [--tool auto|heaptrack|massif] [--top-callers N] [--scenario NAME]
 
-Profiles heap allocations for a robot test binary and writes human-readable reports.
+Profiles heap allocations for robot perf scenarios and writes human-readable reports.
+Scenarios: lazy_list_scroll, text_heavy_scroll, backdrop_blur, opaque_scene
 EOF
 }
 
@@ -183,6 +187,10 @@ while [[ $# -gt 0 ]]; do
             TOP_CALLERS="$2"
             shift 2
             ;;
+        --scenario)
+            append_perf_scenario "$2"
+            shift 2
+            ;;
         --help|-h)
             usage
             exit 0
@@ -223,6 +231,8 @@ if [[ "$TOOL" == "massif" ]]; then
     require_command ms_print
 fi
 
+finalize_perf_scenarios
+
 PROFILE_DIR="debug"
 BUILD_ARGS=(--package desktop-app --example "$EXAMPLE" --features robot-app)
 
@@ -248,37 +258,73 @@ if [[ ! -x "$BIN" ]]; then
     exit 1
 fi
 
-if [[ "$TOOL" == "heaptrack" ]]; then
-    OUTPUT_FILE="${OUTPUT_PREFIX}.data"
-    REPORT_FILE="${OUTPUT_PREFIX}_report.txt"
-    run_target heaptrack --output "$OUTPUT_FILE" "$BIN"
-    heaptrack_print "$OUTPUT_FILE" | tee "$REPORT_FILE"
-    echo "tool: $TOOL"
-    echo "data: $OUTPUT_FILE"
-    echo "report: $REPORT_FILE"
-    exit 0
-fi
+OUTPUT_DIR="$(dirname "$OUTPUT_PREFIX")"
+mkdir -p "$OUTPUT_DIR"
+SUMMARY_REPORT="${OUTPUT_PREFIX}_summary.txt"
 
-MASSIF_OUT="${OUTPUT_PREFIX}.massif.out"
-MASSIF_REPORT="${OUTPUT_PREFIX}_massif_report.txt"
-XTREE_OUT="${OUTPUT_PREFIX}.xtmemory"
-TOP_CALLERS_REPORT="${OUTPUT_PREFIX}_top_callers.txt"
+{
+    echo "Heap perf summary"
+    echo "tool=$TOOL"
+    echo "profile=$PROFILE"
+    echo "example=$EXAMPLE"
+    echo "duration_secs=$DURATION_SECS"
+    echo "warmup_secs=$WARMUP_SECS"
+    echo "scenarios=${PERF_SCENARIOS[*]}"
+    echo
+} > "$SUMMARY_REPORT"
 
-run_target \
-    valgrind \
-    --tool=massif \
-    --massif-out-file="$MASSIF_OUT" \
-    --time-unit=B \
-    --stacks=no \
-    --xtree-memory=full \
-    --xtree-memory-file="$XTREE_OUT" \
-    "$BIN"
+for scenario in "${PERF_SCENARIOS[@]}"; do
+    LOG_FILE="${OUTPUT_PREFIX}_${scenario}.log"
+    echo "Running heap scenario: $scenario ($TOOL)"
 
-ms_print "$MASSIF_OUT" | tee "$MASSIF_REPORT"
-extract_massif_top_callers "$MASSIF_REPORT" "$TOP_CALLERS_REPORT" "$TOP_CALLERS"
+    if [[ "$TOOL" == "heaptrack" ]]; then
+        OUTPUT_FILE="${OUTPUT_PREFIX}_${scenario}.data"
+        REPORT_FILE="${OUTPUT_PREFIX}_${scenario}_report.txt"
+        CRANPOSE_PERF_SCENARIO="$scenario" \
+            run_target heaptrack --output "$OUTPUT_FILE" "$BIN" 2>&1 | tee "$LOG_FILE"
+        heaptrack_print "$OUTPUT_FILE" | tee "$REPORT_FILE"
 
-echo "tool: $TOOL"
-echo "massif data: $MASSIF_OUT"
-echo "massif report: $MASSIF_REPORT"
-echo "xtree data: $XTREE_OUT"
-echo "top callers: $TOP_CALLERS_REPORT"
+        append_perf_summary_block "$SUMMARY_REPORT" "$scenario" "$LOG_FILE"
+        {
+            echo "tool=$TOOL"
+            echo "data=$OUTPUT_FILE"
+            echo "report=$REPORT_FILE"
+            echo "app_log=$LOG_FILE"
+            echo
+        } >> "$SUMMARY_REPORT"
+        continue
+    fi
+
+    MASSIF_OUT="${OUTPUT_PREFIX}_${scenario}.massif.out"
+    MASSIF_REPORT="${OUTPUT_PREFIX}_${scenario}_massif_report.txt"
+    XTREE_OUT="${OUTPUT_PREFIX}_${scenario}.xtmemory"
+    TOP_CALLERS_REPORT="${OUTPUT_PREFIX}_${scenario}_top_callers.txt"
+
+    CRANPOSE_PERF_SCENARIO="$scenario" \
+        run_target \
+            valgrind \
+            --tool=massif \
+            --massif-out-file="$MASSIF_OUT" \
+            --time-unit=B \
+            --stacks=no \
+            --xtree-memory=full \
+            --xtree-memory-file="$XTREE_OUT" \
+            "$BIN" \
+            2>&1 | tee "$LOG_FILE"
+
+    ms_print "$MASSIF_OUT" | tee "$MASSIF_REPORT"
+    extract_massif_top_callers "$MASSIF_REPORT" "$TOP_CALLERS_REPORT" "$TOP_CALLERS"
+
+    append_perf_summary_block "$SUMMARY_REPORT" "$scenario" "$LOG_FILE"
+    {
+        echo "tool=$TOOL"
+        echo "massif_data=$MASSIF_OUT"
+        echo "massif_report=$MASSIF_REPORT"
+        echo "xtree_data=$XTREE_OUT"
+        echo "top_callers=$TOP_CALLERS_REPORT"
+        echo "app_log=$LOG_FILE"
+        echo
+    } >> "$SUMMARY_REPORT"
+done
+
+echo "summary: $SUMMARY_REPORT"

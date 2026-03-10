@@ -56,6 +56,7 @@ pub(crate) struct EffectRenderer {
     pub(crate) debug_blurs: Cell<u32>,
     pub(crate) debug_composites: Cell<u32>,
     pub(crate) debug_effects: Cell<u32>,
+    pub(crate) debug_upload_bytes: Cell<u64>,
 }
 
 /// Blur uniform data matching the WGSL `BlurUniforms` struct.
@@ -589,6 +590,7 @@ impl EffectRenderer {
             debug_blurs: Cell::new(0),
             debug_composites: Cell::new(0),
             debug_effects: Cell::new(0),
+            debug_upload_bytes: Cell::new(0),
         }
     }
 
@@ -605,10 +607,26 @@ impl EffectRenderer {
         stats
             .effect_applies
             .set(stats.effect_applies.get() + self.debug_effects.get());
+        stats.record_upload_bytes(self.debug_upload_bytes.get());
         self.debug_submits.set(0);
         self.debug_blurs.set(0);
         self.debug_composites.set(0);
         self.debug_effects.set(0);
+        self.debug_upload_bytes.set(0);
+    }
+
+    fn write_buffer_at_zero_offset(
+        &self,
+        queue: &wgpu::Queue,
+        buffer: &wgpu::Buffer,
+        bytes: &[u8],
+    ) {
+        queue.write_buffer(buffer, 0, bytes);
+        self.debug_upload_bytes.set(
+            self.debug_upload_bytes
+                .get()
+                .saturating_add(bytes.len() as u64),
+        );
     }
 
     /// Apply a two-pass separable Gaussian blur to a source texture, writing
@@ -679,14 +697,14 @@ impl EffectRenderer {
             tile_mode: tile_mode_value,
             _padding: 0.0,
         };
-        queue.write_buffer(
+        self.write_buffer_at_zero_offset(
+            queue,
             &self.blur_uniform_buffer_horizontal,
-            0,
             bytemuck::bytes_of(&horizontal_uniforms),
         );
-        queue.write_buffer(
+        self.write_buffer_at_zero_offset(
+            queue,
             &self.blur_uniform_buffer_vertical,
-            0,
             bytemuck::bytes_of(&vertical_uniforms),
         );
 
@@ -774,9 +792,9 @@ impl EffectRenderer {
             offset: [offset_x, offset_y],
             _padding: [0.0; 2],
         };
-        queue.write_buffer(
+        self.write_buffer_at_zero_offset(
+            queue,
             &self.offset_uniform_buffer,
-            0,
             bytemuck::bytes_of(&uniforms),
         );
 
@@ -837,9 +855,9 @@ impl EffectRenderer {
         padded[slot + 1] = layer_pixel_rect[1];
         padded[slot + 2] = layer_pixel_rect[2];
         padded[slot + 3] = layer_pixel_rect[3];
-        queue.write_buffer(
+        self.write_buffer_at_zero_offset(
+            queue,
             &self.effect_uniform_buffer,
-            0,
             bytemuck::cast_slice(&padded),
         );
 
@@ -1079,7 +1097,11 @@ impl EffectRenderer {
             mask_radii,
             mask_enabled,
         };
-        queue.write_buffer(&self.blit_uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+        self.write_buffer_at_zero_offset(
+            queue,
+            &self.blit_uniform_buffer,
+            bytemuck::bytes_of(&uniforms),
+        );
 
         let texture_bind_group = source.get_or_create_bind_group(
             device,
@@ -1181,9 +1203,9 @@ impl EffectRenderer {
                 position: [max_x, max_y],
             },
         ];
-        queue.write_buffer(
+        self.write_buffer_at_zero_offset(
+            queue,
             &self.projective_blit_vertex_buffer,
-            0,
             bytemuck::cast_slice(&vertices),
         );
 
@@ -1210,9 +1232,9 @@ impl EffectRenderer {
             ],
             alpha: [alpha.clamp(0.0, 1.0), 0.0, 0.0, 0.0],
         };
-        queue.write_buffer(
+        self.write_buffer_at_zero_offset(
+            queue,
             &self.projective_blit_uniform_buffer,
-            0,
             bytemuck::bytes_of(&uniforms),
         );
 

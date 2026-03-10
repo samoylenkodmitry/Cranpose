@@ -375,7 +375,7 @@ The proper architecture can be faster than the current one, but only if isolatio
 
 ## Rewrite Status
 
-Status snapshot as of 2026-03-09:
+Status snapshot as of 2026-03-10:
 
 | Phase | Status | Notes |
 |---|---|---|
@@ -383,7 +383,7 @@ Status snapshot as of 2026-03-09:
 | Phase 2 | Done | Shared hierarchical graph types, shared scene builder, explicit `transform_to_parent`, graph hashes, and shared graph-scene hit contract are in production paths. |
 | Phase 3 | Done | WGPU renders by graph traversal with local-coordinate primitives, bounded layer surfaces, and compositor-driven transforms instead of flat z-range replay. |
 | Phase 4 | Done | Bounded local-surface effect and backdrop execution landed in WGPU, and WGPU capture coverage now locks subtree alpha, bounded blur, and bounded backdrop semantics to bounded local surfaces. |
-| Phase 5 | Partial | Layer raster cache, stable subtree hashes, and per-frame GPU stats landed. Perf scripts do not yet consume those counters, and the renderer still lacks the planned per-frame upload-bytes counter. |
+| Phase 5 | Partial | Layer raster cache, stable subtree hashes, per-frame GPU stats, per-frame upload-bytes accounting, the scenario-driven perf harness, and perf-script counter summaries landed. Recorded acceptance data and explicit pass/fail judgments for the required scenarios are still pending. |
 | Phase 6 | Mostly done | Pixels and WGPU now share the graph scene contract, shared graph builder, shared transform semantics, and shared render-contract tests. Remaining work is more shared semantic coverage, not another scene-model rewrite. |
 
 ## Rewrite Plan
@@ -507,14 +507,21 @@ Status:
 
 - done: isolated-layer raster caching, stable subtree cache hashes, and frame-level cache hit/miss/eviction stats landed in WGPU
 - done: rigid-scroll cache reuse is covered by automated tests
-- not done: perf scripts do not yet collect and report renderer counters for the acceptance scenarios
-- not done: the planned per-frame upload-bytes counter is still missing from renderer stats
+- done: the perf harness now exposes explicit `lazy_list_scroll`, `text_heavy_scroll`, `backdrop_blur`, and `opaque_scene` scenarios
+- done: the perf harness now emits machine-readable `PERF_MEMORY_SUMMARY`, `PERF_RENDER_SUMMARY`, `PERF_FPS_SUMMARY`, and `PERF_SCENARIO_COMPLETE` lines
+- done: perf scripts now collect and summarize renderer counters for the perf scenarios
+- done: the planned per-frame upload-bytes counter now exists in renderer stats
+- not done: the acceptance numbers from those scenarios are not yet recorded in the document
+- not done: there is not yet a written pass/fail evaluation for each scenario against the acceptance criteria
 
 Files:
 
 - `crates/cranpose-render/wgpu/src/render.rs`
 - `crates/cranpose-render/wgpu/src/lib.rs`
 - cache support types in `crates/cranpose-render/common`
+- `apps/desktop-demo/robot-runners/robot_perf_harness.rs`
+- `perf_robot_cpu.sh`
+- `perf_robot_heap.sh`
 
 Work:
 
@@ -527,6 +534,7 @@ Validation target:
 
 - lazy list scroll uses cache reuse instead of repainting every descendant
 - performance counters show reduced uploads and reduced isolated repaints in scroll-heavy scenes
+- acceptance data for all four scenarios is recorded in this document so the repo has a concrete baseline
 
 ### Phase 6: Port The Pixels Backend And Clean Up [Mostly Done]
 
@@ -636,10 +644,11 @@ The robot assertions should measure:
 
 Status:
 
-- done: renderer-side counters exist for isolated layers, offscreen acquires, cache hit/miss/evictions, and compositor submits
-- not done: `perf_robot_cpu.sh` and `perf_robot_heap.sh` do not yet capture and summarize those counters for the required scenarios
+- done: renderer-side counters exist for isolated layers, offscreen acquires, cache hit/miss/evictions, compositor submits, and per-frame upload bytes
+- done: the robot perf harness now has explicit scenario selection and machine-readable summary output
+- done: `perf_robot_cpu.sh` and `perf_robot_heap.sh` now capture and summarize those counters for the perf scenarios
 - not done: acceptance data for lazy-list scroll, text-heavy scroll, backdrop blur, and simple opaque scenes is not recorded yet
-- not done: the planned per-frame upload-bytes counter still has to be added
+- not done: the document still lacks explicit interpretation of those numbers against the acceptance criteria
 
 The rewrite is only acceptable if correctness improves without turning the renderer into an offscreen-everything system.
 
@@ -654,10 +663,18 @@ Use:
 
 - `./perf_robot_cpu.sh`
 - `./perf_robot_heap.sh`
+- `CRANPOSE_PERF_SCENARIO=<scenario> cargo run -p desktop-app --example robot_perf_harness --features robot-app`
 - renderer counters already present in `crates/cranpose-render/wgpu/src/render.rs`
 - text telemetry in `crates/cranpose-render/wgpu/src/lib.rs`
 
-Add counters for:
+Scenarios:
+
+- `lazy_list_scroll`
+- `text_heavy_scroll`
+- `backdrop_blur`
+- `opaque_scene`
+
+Collected counters now include:
 
 - number of isolated layers
 - isolated layer pixel area
@@ -674,6 +691,13 @@ Acceptance criteria:
 - small isolated effects do not allocate full-frame surfaces
 - simple opaque scenes do not regress materially
 - scroll-heavy scenes show cache reuse and reduced repaint work
+
+Still required to close this section:
+
+- run the CPU perf script and record the summary block for each scenario
+- run the heap perf script and record the summary block for each scenario
+- write down whether each scenario meets the acceptance criteria above
+- keep those recorded numbers up to date when the renderer changes materially
 
 ### 5. Full Repository Gates [Done]
 
@@ -712,8 +736,8 @@ These can sometimes hide symptoms. They do not fix the architecture.
 
 The correct next implementation steps are the remaining validation gaps:
 
-- wire renderer counters into `./perf_robot_cpu.sh` and `./perf_robot_heap.sh`
 - record acceptance data for lazy list scroll, text-heavy scroll, backdrop blur, and simple opaque scenes
+- write explicit pass/fail evaluation for those recorded numbers against the acceptance criteria
 - tighten the current translation-invariance diff budgets now that the capture suite is in place
 
 Anything smaller is avoidance, not closure.
