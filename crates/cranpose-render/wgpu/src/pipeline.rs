@@ -3,6 +3,7 @@
 use std::{ops::Range, rc::Rc};
 
 use cranpose_core::{MemoryApplier, NodeId};
+#[cfg(test)]
 use cranpose_render_common::geometry::{expand_blurred_rect, union_rect};
 use cranpose_render_common::hit_graph::{
     collect_hits_from_graph as collect_common_hits, HitGraphSink,
@@ -1037,12 +1038,14 @@ impl TextStyleDrawSink for CompositorScene {
     }
 }
 
+#[cfg(test)]
 #[derive(Default)]
 struct TextBoundsCollector {
     bounds: Option<Rect>,
     next_z: usize,
 }
 
+#[cfg(test)]
 impl TextStyleDrawSink for TextBoundsCollector {
     fn current_z(&self) -> usize {
         self.next_z
@@ -1372,6 +1375,7 @@ pub(crate) fn push_text_style_draws(
     );
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn estimate_text_style_draw_bounds(
     node_id: NodeId,

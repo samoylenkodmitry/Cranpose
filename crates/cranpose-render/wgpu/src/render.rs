@@ -16,11 +16,8 @@ use cranpose_render_common::graph::{
 use cranpose_render_common::layer_composition::{
     effective_layer_isolation, layer_for_content, local_content_layer,
 };
-use cranpose_render_common::layer_shadow::layer_shadow_geometry;
-use cranpose_render_common::layer_transform::apply_layer_to_rect;
 use cranpose_render_common::primitive_emit::{
-    emit_draw_primitive, resolve_clip, resolve_primitive_clip, DrawPrimitiveSink, ImageDrawParams,
-    PrimitiveClipSpace, ShapeDrawParams,
+    resolve_clip, resolve_primitive_clip, PrimitiveClipSpace,
 };
 use cranpose_render_common::raster_cache::{LayerRasterCacheKey, ScaleBucket};
 use cranpose_ui_graphics::{
@@ -44,9 +41,7 @@ use std::time::Duration;
 
 use crate::gpu_stats;
 use crate::gpu_stats::gpu_stats_enabled;
-use crate::pipeline::{
-    estimate_text_style_draw_bounds, push_draw_primitive, push_layer_shadow, push_text_style_draws,
-};
+use crate::pipeline::{push_draw_primitive, push_layer_shadow, push_text_style_draws};
 
 // Chunked rendering constants for robustness with large scenes
 // Note: Limited to 256 for WebGL compatibility (uniform buffer size limit)
@@ -674,6 +669,11 @@ struct ChildLayerComposite<'a> {
     needs_nested_underlay: bool,
 }
 
+struct CollectedLayer<'a> {
+    scene: CompositorScene,
+    child_layers: Vec<ChildLayerComposite<'a>>,
+}
+
 fn scene_bounds(scene: &CompositorScene) -> Option<Rect> {
     let mut bounds = None;
     for shape in &scene.shapes {
@@ -715,185 +715,6 @@ fn shadow_draws_bounds(shadow_draws: &[ShadowDraw]) -> Option<Rect> {
             }
         }
     }
-    bounds
-}
-
-struct BoundsCollector {
-    bounds: Option<Rect>,
-    collect_shadows: bool,
-}
-
-impl BoundsCollector {
-    fn geometry_only() -> Self {
-        Self {
-            bounds: None,
-            collect_shadows: false,
-        }
-    }
-
-    fn including_shadows() -> Self {
-        Self {
-            bounds: None,
-            collect_shadows: true,
-        }
-    }
-}
-
-impl DrawPrimitiveSink for BoundsCollector {
-    fn push_shape(&mut self, params: ShapeDrawParams) {
-        self.bounds = union_rect(self.bounds, params.rect);
-    }
-
-    fn push_image(&mut self, params: ImageDrawParams) {
-        self.bounds = union_rect(self.bounds, params.rect);
-    }
-
-    fn push_shadow(
-        &mut self,
-        shadow_primitive: cranpose_ui_graphics::ShadowPrimitive,
-        layer_bounds: Rect,
-        layer: &GraphicsLayer,
-        clip: Option<Rect>,
-    ) {
-        if !self.collect_shadows {
-            return;
-        }
-        if let Some(bounds) =
-            estimate_shadow_primitive_bounds(shadow_primitive, layer_bounds, layer, clip)
-        {
-            self.bounds = union_rect(self.bounds, bounds);
-        }
-    }
-}
-
-fn estimate_shadow_primitive_bounds(
-    shadow_primitive: cranpose_ui_graphics::ShadowPrimitive,
-    layer_bounds: Rect,
-    layer: &GraphicsLayer,
-    clip: Option<Rect>,
-) -> Option<Rect> {
-    match shadow_primitive {
-        cranpose_ui_graphics::ShadowPrimitive::Drop {
-            shape,
-            blur_radius,
-            blend_mode,
-        } => {
-            let mut collector = BoundsCollector::geometry_only();
-            emit_draw_primitive(
-                *shape,
-                layer_bounds,
-                layer,
-                clip,
-                &mut collector,
-                Some(blend_mode),
-            );
-            expand_blurred_rect(collector.bounds?, blur_radius, clip)
-        }
-        cranpose_ui_graphics::ShadowPrimitive::Inner {
-            fill,
-            cutout,
-            blur_radius,
-            blend_mode,
-            clip_rect,
-        } => {
-            let mut collector = BoundsCollector::geometry_only();
-            emit_draw_primitive(
-                *fill,
-                layer_bounds,
-                layer,
-                None,
-                &mut collector,
-                Some(blend_mode),
-            );
-            emit_draw_primitive(
-                *cutout,
-                layer_bounds,
-                layer,
-                None,
-                &mut collector,
-                Some(BlendMode::DstOut),
-            );
-            let abs_clip = Rect {
-                x: clip_rect.x + layer_bounds.x,
-                y: clip_rect.y + layer_bounds.y,
-                width: clip_rect.width,
-                height: clip_rect.height,
-            };
-            let transformed_clip = apply_layer_to_rect(abs_clip, layer_bounds, layer);
-            let effective_clip = clip.map_or(Some(transformed_clip), |parent_clip| {
-                parent_clip.intersect(transformed_clip)
-            });
-            expand_blurred_rect(collector.bounds?, blur_radius, effective_clip)
-        }
-    }
-}
-
-fn estimate_draw_primitive_bounds(
-    primitive: cranpose_ui_graphics::DrawPrimitive,
-    layer_bounds: Rect,
-    layer: &GraphicsLayer,
-    clip: Option<Rect>,
-    blend_mode: Option<BlendMode>,
-) -> Option<Rect> {
-    let mut collector = BoundsCollector::including_shadows();
-    emit_draw_primitive(
-        primitive,
-        layer_bounds,
-        layer,
-        clip,
-        &mut collector,
-        blend_mode,
-    );
-    collector.bounds
-}
-
-fn estimate_text_primitive_bounds(
-    text: &cranpose_render_common::graph::TextPrimitiveNode,
-    layer: &LayerNode,
-    local_layer: &GraphicsLayer,
-    visual_clip: Option<Rect>,
-) -> Option<Rect> {
-    let text_clip = resolve_primitive_clip(
-        text.clip,
-        layer.local_bounds,
-        local_layer,
-        visual_clip,
-        PrimitiveClipSpace::Local,
-    );
-    if text.clip.is_some() && text_clip.is_none() {
-        return None;
-    }
-
-    estimate_text_style_draw_bounds(
-        text.node_id,
-        layer.local_bounds,
-        text.rect,
-        local_layer,
-        &text.text,
-        &text.text_style,
-        text.font_size,
-        text.layout_options,
-        text_clip,
-    )
-}
-
-fn estimate_layer_shadow_bounds(
-    layer: &GraphicsLayer,
-    transformed_bounds: Rect,
-    clip: Option<Rect>,
-) -> Option<Rect> {
-    let mut bounds = None;
-
-    let shadow_geometry = layer_shadow_geometry(layer, transformed_bounds);
-    for pass in [shadow_geometry.ambient, shadow_geometry.spot]
-        .into_iter()
-        .flatten()
-    {
-        if let Some(pass_bounds) = expand_blurred_rect(pass.rect, pass.blur_radius, clip) {
-            bounds = union_rect(bounds, pass_bounds);
-        }
-    }
-
     bounds
 }
 
@@ -976,6 +797,50 @@ fn layer_raster_cache_candidate(
     ))
 }
 
+fn direct_translation(transform: ProjectiveTransform) -> Option<Point> {
+    let matrix = transform.matrix();
+    if (matrix[0][0] - 1.0).abs() > f32::EPSILON
+        || matrix[0][1].abs() > f32::EPSILON
+        || matrix[1][0].abs() > f32::EPSILON
+        || (matrix[1][1] - 1.0).abs() > f32::EPSILON
+        || matrix[2][0].abs() > f32::EPSILON
+        || matrix[2][1].abs() > f32::EPSILON
+        || (matrix[2][2] - 1.0).abs() > f32::EPSILON
+    {
+        return None;
+    }
+    Some(Point::new(matrix[0][2], matrix[1][2]))
+}
+
+fn primitive_requires_local_surface(primitive: &PrimitiveEntry) -> bool {
+    match &primitive.node {
+        PrimitiveNode::Draw(draw) => {
+            matches!(
+                draw.primitive,
+                cranpose_ui_graphics::DrawPrimitive::Shadow(_)
+            )
+        }
+        PrimitiveNode::Text(_) => true,
+    }
+}
+
+fn subtree_requires_local_surface(layer: &LayerNode) -> bool {
+    layer.children.iter().any(|child| match child {
+        RenderNode::Primitive(primitive) => primitive_requires_local_surface(primitive),
+        RenderNode::Layer(child_layer) => subtree_requires_local_surface(child_layer),
+    })
+}
+
+fn child_can_render_directly(layer: &LayerNode) -> Option<Point> {
+    if effective_layer_isolation(&layer.graphics_layer).is_some()
+        || layer.backdrop().is_some()
+        || subtree_requires_local_surface(layer)
+    {
+        return None;
+    }
+    direct_translation(layer.transform_to_parent)
+}
+
 fn push_local_primitive(
     local_scene: &mut CompositorScene,
     primitive: &PrimitiveEntry,
@@ -1031,65 +896,167 @@ fn push_local_primitive(
     }
 }
 
-fn estimate_primitive_bounds(
-    primitive: &PrimitiveEntry,
-    layer: &LayerNode,
-    local_layer: &GraphicsLayer,
-    visual_clip: Option<Rect>,
-) -> Option<Rect> {
-    match &primitive.node {
-        PrimitiveNode::Draw(draw) => {
-            let clip = resolve_primitive_clip(
-                draw.clip,
-                layer.local_bounds,
-                local_layer,
-                visual_clip,
-                PrimitiveClipSpace::Local,
-            );
-            if draw.clip.is_some() && clip.is_none() {
-                return None;
-            }
-            estimate_draw_primitive_bounds(
-                draw.primitive.clone(),
-                layer.local_bounds,
-                local_layer,
-                clip,
-                None,
-            )
-        }
-        PrimitiveNode::Text(text) => {
-            estimate_text_primitive_bounds(text, layer, local_layer, visual_clip)
+trait OffsetZIndices {
+    fn offset_z_indices(&mut self, offset: usize);
+}
+
+impl OffsetZIndices for DrawShape {
+    fn offset_z_indices(&mut self, offset: usize) {
+        self.z_index += offset;
+    }
+}
+
+impl OffsetZIndices for ImageDraw {
+    fn offset_z_indices(&mut self, offset: usize) {
+        self.z_index += offset;
+    }
+}
+
+impl OffsetZIndices for TextDraw {
+    fn offset_z_indices(&mut self, offset: usize) {
+        self.z_index += offset;
+    }
+}
+
+impl OffsetZIndices for ShadowDraw {
+    fn offset_z_indices(&mut self, offset: usize) {
+        self.z_index += offset;
+    }
+}
+
+impl OffsetZIndices for EffectLayer {
+    fn offset_z_indices(&mut self, offset: usize) {
+        self.z_start += offset;
+        self.z_end += offset;
+    }
+}
+
+impl OffsetZIndices for BackdropLayer {
+    fn offset_z_indices(&mut self, offset: usize) {
+        self.z_index += offset;
+    }
+}
+
+impl<T: OffsetZIndices> OffsetZIndices for Vec<T> {
+    fn offset_z_indices(&mut self, offset: usize) {
+        for item in self {
+            item.offset_z_indices(offset);
         }
     }
 }
 
-fn estimate_layer_surface_rect(layer: &LayerNode) -> Rect {
+impl OffsetZIndices for CompositorScene {
+    fn offset_z_indices(&mut self, offset: usize) {
+        self.shapes.offset_z_indices(offset);
+        self.images.offset_z_indices(offset);
+        self.texts.offset_z_indices(offset);
+        self.shadow_draws.offset_z_indices(offset);
+        self.effect_layers.offset_z_indices(offset);
+        self.backdrop_layers.offset_z_indices(offset);
+    }
+}
+
+impl<'a> ChildLayerComposite<'a> {
+    fn translate_by(&mut self, delta: Point) {
+        for point in &mut self.dest_quad {
+            point[0] += delta.x;
+            point[1] += delta.y;
+        }
+        self.backdrop_rect.translate_by(delta);
+        self.shadow_draws.translate_by(delta);
+    }
+
+    fn offset_z_indices(&mut self, offset: usize) {
+        self.z_index += offset;
+        self.shadow_draws.offset_z_indices(offset);
+    }
+}
+
+fn merge_child_collection<'a>(
+    parent_scene: &mut CompositorScene,
+    parent_child_layers: &mut Vec<ChildLayerComposite<'a>>,
+    mut child_collection: CollectedLayer<'a>,
+    translation: Point,
+) {
+    let z_offset = parent_scene.next_z;
+    let child_z_span = child_collection.scene.next_z;
+
+    child_collection.scene.translate_by(translation);
+    child_collection.scene.offset_z_indices(z_offset);
+    for child_layer in &mut child_collection.child_layers {
+        child_layer.translate_by(translation);
+        child_layer.offset_z_indices(z_offset);
+    }
+
+    parent_scene.shapes.extend(child_collection.scene.shapes);
+    parent_scene.images.extend(child_collection.scene.images);
+    parent_scene.texts.extend(child_collection.scene.texts);
+    parent_scene
+        .shadow_draws
+        .extend(child_collection.scene.shadow_draws);
+    parent_scene
+        .effect_layers
+        .extend(child_collection.scene.effect_layers);
+    parent_scene
+        .backdrop_layers
+        .extend(child_collection.scene.backdrop_layers);
+    parent_child_layers.extend(child_collection.child_layers);
+    parent_scene.next_z += child_z_span;
+}
+
+fn collect_layer_contents<'a>(
+    layer: &'a LayerNode,
+    inherited_clip: Option<Rect>,
+) -> CollectedLayer<'a> {
     let isolation = effective_layer_isolation(&layer.graphics_layer);
     let content_layer = layer_for_content(&layer.graphics_layer, isolation.as_ref());
     let local_layer = local_content_layer(&content_layer);
-    let visual_clip = layer.clip_rect();
-    let mut bounds = None;
+    let visual_clip = resolve_clip(inherited_clip, layer.clip_rect());
+
+    let mut local_scene = CompositorScene::new();
+    let mut child_layers = Vec::new();
     let mut deferred_primitives = Vec::new();
 
     for child in &layer.children {
         match child {
             RenderNode::Primitive(primitive) => match primitive.phase {
                 PrimitivePhase::BeforeChildren => {
-                    if let Some(primitive_bounds) =
-                        estimate_primitive_bounds(primitive, layer, &local_layer, visual_clip)
-                    {
-                        bounds = union_rect(bounds, primitive_bounds);
-                    }
+                    push_local_primitive(
+                        &mut local_scene,
+                        primitive,
+                        layer,
+                        &local_layer,
+                        visual_clip,
+                    );
                 }
                 PrimitivePhase::AfterChildren => deferred_primitives.push(primitive),
             },
             RenderNode::Layer(child_layer) => {
-                let child_logical_rect = estimate_layer_surface_rect(child_layer.as_ref());
-                bounds = union_rect(
-                    bounds,
-                    quad_bounds(child_layer.transform_to_parent.map_rect(child_logical_rect)),
-                );
+                if let Some(translation) = child_can_render_directly(child_layer.as_ref()) {
+                    let inherited_child_clip =
+                        visual_clip.map(|clip| clip.translate(-translation.x, -translation.y));
+                    let mut child_collection =
+                        collect_layer_contents(child_layer.as_ref(), inherited_child_clip);
+                    let child_shadow_clip =
+                        resolve_clip(inherited_child_clip, child_layer.shadow_clip);
+                    push_layer_shadow(
+                        &mut child_collection.scene,
+                        &child_layer.graphics_layer,
+                        child_layer.local_bounds,
+                        child_layer.local_bounds,
+                        child_shadow_clip,
+                    );
+                    merge_child_collection(
+                        &mut local_scene,
+                        &mut child_layers,
+                        child_collection,
+                        translation,
+                    );
+                    continue;
+                }
 
+                let mut shadow_scene = CompositorScene::new();
+                let child_logical_rect = estimate_layer_surface_rect(child_layer.as_ref());
                 let child_bounds = quad_bounds(
                     child_layer
                         .transform_to_parent
@@ -1101,25 +1068,56 @@ fn estimate_layer_surface_rect(layer: &LayerNode) -> Rect {
                         .shadow_clip
                         .map(|clip| quad_bounds(child_layer.transform_to_parent.map_rect(clip))),
                 );
-                if let Some(shadow_bounds) = estimate_layer_shadow_bounds(
+                push_layer_shadow(
+                    &mut shadow_scene,
                     &child_layer.graphics_layer,
+                    child_layer.local_bounds,
                     child_bounds,
                     child_shadow_clip,
-                ) {
-                    bounds = union_rect(bounds, shadow_bounds);
-                }
+                );
+                child_layers.push(ChildLayerComposite {
+                    z_index: local_scene.next_z,
+                    layer: child_layer.as_ref(),
+                    logical_rect: child_logical_rect,
+                    dest_quad: child_layer.transform_to_parent.map_rect(child_logical_rect),
+                    backdrop_rect: quad_bounds(
+                        child_layer
+                            .transform_to_parent
+                            .map_rect(child_layer.local_bounds),
+                    ),
+                    shadow_draws: shadow_scene.shadow_draws,
+                    needs_nested_underlay: layer_contains_descendant_backdrop(child_layer.as_ref()),
+                });
+                local_scene.next_z += 1;
             }
         }
     }
 
     for primitive in deferred_primitives {
-        if let Some(primitive_bounds) =
-            estimate_primitive_bounds(primitive, layer, &local_layer, visual_clip)
-        {
-            bounds = union_rect(bounds, primitive_bounds);
-        }
+        push_local_primitive(
+            &mut local_scene,
+            primitive,
+            layer,
+            &local_layer,
+            visual_clip,
+        );
     }
 
+    CollectedLayer {
+        scene: local_scene,
+        child_layers,
+    }
+}
+
+fn estimate_layer_surface_rect(layer: &LayerNode) -> Rect {
+    let collected = collect_layer_contents(layer, None);
+    let mut bounds = scene_bounds(&collected.scene);
+    for child in &collected.child_layers {
+        bounds = union_rect(bounds, quad_bounds(child.dest_quad));
+        if let Some(shadow_bounds) = shadow_draws_bounds(&child.shadow_draws) {
+            bounds = union_rect(bounds, shadow_bounds);
+        }
+    }
     resolved_layer_surface_rect(layer, bounds)
 }
 
@@ -2145,78 +2143,11 @@ impl GpuRenderer {
         cache_candidate: Option<(LayerRasterCacheKey, Rect)>,
     ) -> Result<LayerSurface, String> {
         let isolation = effective_layer_isolation(&layer.graphics_layer);
-        let content_layer = layer_for_content(&layer.graphics_layer, isolation.as_ref());
-        let local_layer = local_content_layer(&content_layer);
         let visual_clip = layer.clip_rect();
-
-        let mut local_scene = CompositorScene::new();
-
-        let mut child_layers = Vec::new();
-        let mut deferred_primitives = Vec::new();
-        for child in &layer.children {
-            match child {
-                RenderNode::Primitive(primitive) => match primitive.phase {
-                    PrimitivePhase::BeforeChildren => {
-                        push_local_primitive(
-                            &mut local_scene,
-                            primitive,
-                            layer,
-                            &local_layer,
-                            visual_clip,
-                        );
-                    }
-                    PrimitivePhase::AfterChildren => deferred_primitives.push(primitive),
-                },
-                RenderNode::Layer(child_layer) => {
-                    let mut shadow_scene = CompositorScene::new();
-                    let child_logical_rect = estimate_layer_surface_rect(child_layer.as_ref());
-                    let child_bounds = quad_bounds(
-                        child_layer
-                            .transform_to_parent
-                            .map_rect(child_layer.local_bounds),
-                    );
-                    let child_shadow_clip = resolve_clip(
-                        visual_clip,
-                        child_layer.shadow_clip.map(|clip| {
-                            quad_bounds(child_layer.transform_to_parent.map_rect(clip))
-                        }),
-                    );
-                    push_layer_shadow(
-                        &mut shadow_scene,
-                        &child_layer.graphics_layer,
-                        child_layer.local_bounds,
-                        child_bounds,
-                        child_shadow_clip,
-                    );
-                    child_layers.push(ChildLayerComposite {
-                        z_index: local_scene.next_z,
-                        layer: child_layer.as_ref(),
-                        logical_rect: child_logical_rect,
-                        dest_quad: child_layer.transform_to_parent.map_rect(child_logical_rect),
-                        backdrop_rect: quad_bounds(
-                            child_layer
-                                .transform_to_parent
-                                .map_rect(child_layer.local_bounds),
-                        ),
-                        shadow_draws: shadow_scene.shadow_draws,
-                        needs_nested_underlay: layer_contains_descendant_backdrop(
-                            child_layer.as_ref(),
-                        ),
-                    });
-                    local_scene.next_z += 1;
-                }
-            }
-        }
-
-        for primitive in deferred_primitives {
-            push_local_primitive(
-                &mut local_scene,
-                primitive,
-                layer,
-                &local_layer,
-                visual_clip,
-            );
-        }
+        let CollectedLayer {
+            scene: mut local_scene,
+            child_layers,
+        } = collect_layer_contents(layer, None);
 
         let surface_rect = cache_candidate
             .map(|(_, logical_rect)| logical_rect)
@@ -5431,7 +5362,21 @@ mod tests {
                 width: 10.0,
                 height: 6.0,
             },
-            vec![],
+            vec![RenderNode::Primitive(PrimitiveEntry {
+                phase: PrimitivePhase::BeforeChildren,
+                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                    primitive: cranpose_ui_graphics::DrawPrimitive::Rect {
+                        rect: Rect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 10.0,
+                            height: 6.0,
+                        },
+                        brush: Brush::solid(Color::WHITE),
+                    },
+                    clip: None,
+                }),
+            })],
         );
         child.transform_to_parent = ProjectiveTransform::translation(18.0, 7.0);
 

@@ -101,6 +101,37 @@ fn root_composite_respects_root_scale_on_presented_surface() {
 }
 
 #[test]
+fn translation_only_layers_render_without_nested_offscreens() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping translation-only isolation assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    renderer.scene_mut().graph = Some(translation_only_fixture());
+    let frame = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("translation-only capture should succeed");
+    let stats = renderer
+        .last_frame_stats()
+        .expect("translation-only frame stats");
+
+    assert_red(
+        rgba(&frame, 26, 26),
+        "translation-only nested layers should still draw at the composed position",
+    );
+    assert_eq!(
+        stats.isolated_layer_renders, 1,
+        "translation-only nested layers should collapse into the root target instead of allocating nested offscreens: {stats:?}"
+    );
+}
+
+#[test]
 fn bounded_blur_capture_stays_inside_layer_bounds() {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
@@ -236,12 +267,12 @@ fn translated_backdrop_capture_preserves_local_picture_under_rigid_motion() {
         "translated backdrop frames should execute blur passes: base={base_stats:?} moved={moved_stats:?}"
     );
     assert_eq!(
-        base_stats.isolated_layer_renders, 3,
-        "translated backdrop base frame should render the root surface, the translated subtree surface, and one isolated backdrop child: {base_stats:?}"
+        base_stats.isolated_layer_renders, 2,
+        "translated backdrop base frame should render the root surface and one isolated backdrop child while collapsing the translation-only wrapper layer: {base_stats:?}"
     );
     assert_eq!(
-        moved_stats.isolated_layer_renders, 3,
-        "translated backdrop moved frame should render the root surface, the translated subtree surface, and one isolated backdrop child: {moved_stats:?}"
+        moved_stats.isolated_layer_renders, 2,
+        "translated backdrop moved frame should render the root surface and one isolated backdrop child while collapsing the translation-only wrapper layer: {moved_stats:?}"
     );
 
     let base_normalized = normalize_translated_backdrop_region(&base_frame, base_translation);
@@ -499,6 +530,44 @@ fn root_scale_fixture() -> RenderGraph {
         GraphicsLayer::default(),
         vec![solid_rect(logical_root, Color::RED)],
     ))
+}
+
+fn translation_only_fixture() -> RenderGraph {
+    let inner = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 16.0,
+            height: 16.0,
+        },
+        ProjectiveTransform::translation(10.0, 12.0),
+        GraphicsLayer::default(),
+        vec![solid_rect(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 16.0,
+                height: 16.0,
+            },
+            Color::RED,
+        )],
+    );
+    let middle = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 32.0,
+            height: 32.0,
+        },
+        ProjectiveTransform::translation(8.0, 6.0),
+        GraphicsLayer::default(),
+        vec![RenderNode::Layer(Box::new(inner))],
+    );
+
+    graph(vec![
+        solid_rect(frame_rect(), Color::BLACK),
+        RenderNode::Layer(Box::new(middle)),
+    ])
 }
 
 fn layer(

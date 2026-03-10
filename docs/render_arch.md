@@ -516,7 +516,7 @@ Status:
 - not done: the benchmark harness still has to be applied identically to `main` and `renderer` before any branch-to-branch judgment is valid
 - not done: there is not yet a checked-in comparison table for median `main` vs `renderer` scenario results
 - done: the non-headless Shaders comparison exposed a root presentation-scale bug, and the compositor now scales the root surface to the physical swapchain correctly
-- not done: the same Shaders comparison still shows `renderer` materially slower than `main`, so the remaining over-isolation regression has to be fixed before the final acceptance baseline is credible
+- not done: the same Shaders comparison still shows `renderer` slower than `main` during deep Shaders-tab scroll, and the remaining cost cannot be fixed by collapsing moving text subtrees into parent-space rasterization without breaking translation invariance
 
 Files:
 
@@ -745,34 +745,37 @@ Recording template for the required branch comparison:
 
 Observed non-headless branch gap on 2026-03-10:
 
-- same visual scroll choreography in separate `main` and `renderer` worktrees shows a real regression on the desktop demo `Shaders` tab
+- same visual scroll choreography in separate `main` and `renderer` worktrees showed a real regression on the desktop demo `Shaders` tab
 - first concrete cause already found and fixed: the root isolated surface was being composited into the swapchain in logical coordinates instead of physical coordinates, which presented the whole scene at the wrong on-screen scale on HiDPI displays
-- branch-neutral FPS from that run:
-  - `main`: `shaders_open=92.1 FPS`, `scroll_down_4=10.5 FPS`
-  - `renderer`: `shaders_open=12.2 FPS`, `scroll_down_4=3.7 FPS`
-- renderer-only diagnostic stats from the same surface show the cost model is wrong for this screen:
-  - `submits=724`
-  - `offscreen_acquires=361`
-  - `isolated_layer_renders=336`
-  - `isolated_layer_pixels=34.95 MP`
-  - `composite_passes=370`
-  - `upload_bytes=89.5 KB`
-- saved screenshots and live-window observation from that comparison show the scrolled `renderer` image is visibly softer than `main` across ordinary card text and slider labels in the `Shape + Clip`, `Shadow Fields`, and `Compose 1.9 Shadow API` region, not only inside the explicit blur/backdrop preview widgets
-- the current checked-in robot screenshot path did not expose the same problem because it captures logical scene output rather than the actual presented window; live-window validation has to become part of the acceptance path for this class of bug
+- second concrete cause already found: translation-only wrapper layers were still taking the isolated child-layer path, which forced ordinary card chrome and text through nested offscreens and made the whole scrolled surface visibly softer
+- a broad direct-render collapse for translation-only non-isolating child layers materially reduced the compositor cost on this surface:
+  - before that fix: `submits=724`, `offscreen_acquires=361`, `isolated_layer_renders=336`, `isolated_layer_pixels=34.95 MP`, `composite_passes=370`
+  - during that experiment: `shaders_open=66.3 FPS`, `scroll_down_4=6.9 FPS`, `submits=209`, `offscreen_acquires=83`, `isolated_layer_renders=64`, `isolated_layer_pixels=13.23 MP`, `composite_passes=88`
+- that experiment was rejected because it broke the shared translation-invariance contract for text-bearing subtrees and also broke the desktop robot lazy-list translation contract; moving text, shadow, and decoration draws by post-raster translation is not semantically correct in the current renderer
+- the current checked-in `main` reference run for the same choreography is:
+  - `shaders_open=30.6 FPS`
+  - `scroll_down_4=10.5 FPS`
+- current visual state:
+  - the root-scale bug is gone
+  - the checked-in renderer still shows visible softness on ordinary text and slider labels in the scrolled Shaders cards
+  - the current checked-in non-headless renderer run is `shaders_open=13.5 FPS`, `scroll_down_4=4.4 FPS`, `submits=545`, `offscreen_acquires=250`, `isolated_layer_renders=225`, `isolated_layer_pixels=34.07 MP`, `composite_passes=263`
+  - the remaining gap is still both visual softness and scroll-time cost, but the rejected direct-collapse experiment showed that the cost can drop sharply if the wrapper-layer isolation problem is solved without violating translation invariance
+- the current checked-in robot screenshot path still does not expose physical-window presentation bugs because it captures logical scene output rather than the actual presented window; live-window validation still has to become part of the acceptance path for this class of bug
 
 Mitigation plan for the Shaders-tab regression:
 
-- instrument the Shaders tab at layer granularity so each isolated render on that surface can be attributed to a concrete subtree and isolation reason
-- identify why ordinary card chrome, labels, and sliders are entering isolated composition on this screen; they should stay on the direct path unless they actually own effect/backdrop/alpha semantics
-- reduce isolation granularity so only effect-bearing preview subtrees isolate; parent containers that merely group effect demos must not force whole-card or whole-section offscreen composition
-- audit local-surface resolution and parent-to-child compositing on the scrolled Shaders cards so rigid scroll does not resample ordinary text and slider content into a softer picture
+- instrument the remaining Shaders-tab isolated renders at subtree granularity so each one is attributed to a concrete card or preview and an explicit isolation reason
+- identify wrapper layers that exist only to position or group descendants and collapse those wrappers without collapsing the descendant text/effect surfaces themselves into parent-space rasterization
+- keep text-bearing, shadow-bearing, and effect-bearing moving subtrees on local surfaces; their rigid motion has to be expressed by compositing cached child surfaces, not by translating already-rasterized text draws inside the parent scene
+- reduce repeated repaint work for those remaining cached child surfaces during rigid scroll so the deep-scroll path approaches the rejected experiment's cost model without sacrificing translation invariance
+- keep auditing local-surface resolution and parent-to-child compositing on the scrolled Shaders cards so ordinary text and slider content stop looking softer than `main`
 - replace the current logical-scene screenshot path with a true presented-window capture path, or add that as a second explicit robot capture mode, so future non-headless branch comparisons can lock down physical-window scale and viewport correctness
 - add automated capture coverage for the Shaders tab surface itself so this regression is locked down as a render failure, not just a human visual complaint
 - rerun the non-headless `main` vs `renderer` comparison after the fix, then record the formal median baseline table and pass/fail verdicts for the four Phase 5 scenarios
 
 Still required to close this section:
 
-- fix the remaining Shaders-tab isolation/resampling regression identified above
+- reduce the remaining Shaders-tab scroll-time isolation and repaint cost identified above until the deep-scroll path is no worse than `main`, without regressing the translation-invariance contract
 - add a physical-window capture path for desktop robot validation so presentation-scale bugs are observable in automated artifacts
 - create a comparison-safe benchmark baseline on `main` using the same harness code as `renderer`
 - record medians from repeated runs, not single-run spot checks
@@ -816,9 +819,10 @@ These can sometimes hide symptoms. They do not fix the architecture.
 
 ## Immediate Next Step
 
-The correct next implementation steps are now the concrete Shaders-tab regression and then the remaining validation gaps:
+The correct next implementation steps are now the narrowed Shaders-tab perf gap and then the remaining validation gaps:
 
-- fix the Shaders-tab over-isolation / resampling regression exposed by the non-headless `main` vs `renderer` comparison
+- attribute the remaining Shaders-tab isolated renders to concrete preview subtrees and remove only wrapper isolation that can be removed without collapsing moving text/effect subtrees into parent-space rasterization
+- reduce deep-scroll repaint cost on the Shaders tab by reusing cached child surfaces during rigid motion, not by translating already-rasterized text draws in the parent scene
 - add a presented-window capture mode for desktop robot validation; the current logical-scene screenshot path is insufficient for HiDPI scale bugs
 - add automated capture coverage for that Shaders surface so the visual softness cannot regress silently
 - apply the benchmark harness identically to `main` so branch-to-branch perf comparison is valid

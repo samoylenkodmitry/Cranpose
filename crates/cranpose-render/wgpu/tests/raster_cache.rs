@@ -48,13 +48,15 @@ fn card_layer(node_id: NodeId, y: f32) -> LayerNode {
             clip: None,
         }),
     };
-    test_layer(
+    let mut layer = test_layer(
         Some(node_id),
         CachePolicy::Auto,
         local_bounds,
         ProjectiveTransform::translation(12.0, y),
         vec![RenderNode::Primitive(primitive)],
-    )
+    );
+    layer.graphics_layer.alpha = 0.85;
+    layer
 }
 
 fn scroll_like_graph(offsets: &[f32]) -> RenderGraph {
