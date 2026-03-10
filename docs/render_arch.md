@@ -383,7 +383,7 @@ Status snapshot as of 2026-03-10:
 | Phase 2 | Done | Shared hierarchical graph types, shared scene builder, explicit `transform_to_parent`, graph hashes, and shared graph-scene hit contract are in production paths. |
 | Phase 3 | Done | WGPU renders by graph traversal with local-coordinate primitives, bounded layer surfaces, and compositor-driven transforms instead of flat z-range replay. |
 | Phase 4 | Done | Bounded local-surface effect and backdrop execution landed in WGPU, and WGPU capture coverage now locks subtree alpha, bounded blur, and bounded backdrop semantics to bounded local surfaces. |
-| Phase 5 | Partial | The cache and perf instrumentation work is implemented: layer raster cache, stable subtree hashes, per-frame GPU stats, per-frame upload-bytes accounting, the scenario-driven perf harness, and perf-script counter summaries all landed. What is still missing is the recorded `main` vs `renderer` acceptance data and the explicit pass/fail judgment for each required scenario. |
+| Phase 5 | Partial | The cache and perf instrumentation work is implemented: layer raster cache, stable subtree hashes, per-frame GPU stats, per-frame upload-bytes accounting, the scenario-driven perf harness, and perf-script counter summaries all landed. The non-headless Shaders comparison already exposed and fixed a root presentation-scale bug, but recorded `main` vs `renderer` acceptance data and the remaining Shaders-tab over-isolation/perf regression still need to be closed. |
 | Phase 6 | Mostly done | Pixels and WGPU now share the graph scene contract, shared graph builder, shared transform semantics, and shared render-contract tests. Remaining work is more shared semantic coverage, not another scene-model rewrite. |
 
 ## Rewrite Plan
@@ -515,6 +515,8 @@ Status:
 - not done: there is not yet a written pass/fail evaluation for each scenario against the acceptance criteria
 - not done: the benchmark harness still has to be applied identically to `main` and `renderer` before any branch-to-branch judgment is valid
 - not done: there is not yet a checked-in comparison table for median `main` vs `renderer` scenario results
+- done: the non-headless Shaders comparison exposed a root presentation-scale bug, and the compositor now scales the root surface to the physical swapchain correctly
+- not done: the same Shaders comparison still shows `renderer` materially slower than `main`, so the remaining over-isolation regression has to be fixed before the final acceptance baseline is credible
 
 Files:
 
@@ -620,6 +622,7 @@ Status:
 
 - done: lazy-list fractional scroll, translated text/shadow/decorations, backdrop drag, and scroll visual coverage all run in the desktop robot suite
 - done: the suite now includes a normalized screenshot comparison for rigid subtree motion in the real app
+- not done: the current robot screenshot path is still a logical-scene capture, not a physical presented-window capture, so it does not catch HiDPI / viewport presentation-scale bugs in the desktop window
 
 Use the desktop robot harness and keep the checks measurable.
 
@@ -643,6 +646,12 @@ The robot assertions should measure:
 - stable local bounds for translated cards
 - no frame-to-frame picture drift inside a rigidly moving subtree
 
+Important limitation that still needs to be fixed:
+
+- `Robot::screenshot()` currently captures the renderer scene at layout-root logical size instead of the actual presented desktop window surface
+- that means it can miss physical-window failures where the live WGPU output is scaled, cropped, or letterboxed incorrectly on screen
+- the desktop validation plan therefore still needs a true presented-window capture path for non-headless comparisons on HiDPI displays
+
 ### 4. Performance Validation [Partial]
 
 Status:
@@ -652,6 +661,8 @@ Status:
 - done: `perf_robot_cpu.sh` and `perf_robot_heap.sh` now capture and summarize those counters for the perf scenarios
 - not done: acceptance data for lazy-list scroll, text-heavy scroll, backdrop blur, and simple opaque scenes is not recorded yet
 - not done: the document still lacks explicit interpretation of those numbers against the acceptance criteria
+- not done: the Shaders-tab branch comparison exposed a concrete WGPU regression that must be mitigated before final baseline recording
+- not done: the current robot screenshot path is insufficient for this regression because it captures logical scene output rather than the physical desktop window presentation
 
 The rewrite is only acceptable if correctness improves without turning the renderer into an offscreen-everything system.
 
@@ -732,8 +743,37 @@ Recording template for the required branch comparison:
 | `backdrop_blur` | pending | pending | pending | compare identical harness code in separate worktrees |
 | `opaque_scene` | pending | pending | pending | compare identical harness code in separate worktrees |
 
+Observed non-headless branch gap on 2026-03-10:
+
+- same visual scroll choreography in separate `main` and `renderer` worktrees shows a real regression on the desktop demo `Shaders` tab
+- first concrete cause already found and fixed: the root isolated surface was being composited into the swapchain in logical coordinates instead of physical coordinates, which presented the whole scene at the wrong on-screen scale on HiDPI displays
+- branch-neutral FPS from that run:
+  - `main`: `shaders_open=92.1 FPS`, `scroll_down_4=10.5 FPS`
+  - `renderer`: `shaders_open=12.2 FPS`, `scroll_down_4=3.7 FPS`
+- renderer-only diagnostic stats from the same surface show the cost model is wrong for this screen:
+  - `submits=724`
+  - `offscreen_acquires=361`
+  - `isolated_layer_renders=336`
+  - `isolated_layer_pixels=34.95 MP`
+  - `composite_passes=370`
+  - `upload_bytes=89.5 KB`
+- saved screenshots and live-window observation from that comparison show the scrolled `renderer` image is visibly softer than `main` across ordinary card text and slider labels in the `Shape + Clip`, `Shadow Fields`, and `Compose 1.9 Shadow API` region, not only inside the explicit blur/backdrop preview widgets
+- the current checked-in robot screenshot path did not expose the same problem because it captures logical scene output rather than the actual presented window; live-window validation has to become part of the acceptance path for this class of bug
+
+Mitigation plan for the Shaders-tab regression:
+
+- instrument the Shaders tab at layer granularity so each isolated render on that surface can be attributed to a concrete subtree and isolation reason
+- identify why ordinary card chrome, labels, and sliders are entering isolated composition on this screen; they should stay on the direct path unless they actually own effect/backdrop/alpha semantics
+- reduce isolation granularity so only effect-bearing preview subtrees isolate; parent containers that merely group effect demos must not force whole-card or whole-section offscreen composition
+- audit local-surface resolution and parent-to-child compositing on the scrolled Shaders cards so rigid scroll does not resample ordinary text and slider content into a softer picture
+- replace the current logical-scene screenshot path with a true presented-window capture path, or add that as a second explicit robot capture mode, so future non-headless branch comparisons can lock down physical-window scale and viewport correctness
+- add automated capture coverage for the Shaders tab surface itself so this regression is locked down as a render failure, not just a human visual complaint
+- rerun the non-headless `main` vs `renderer` comparison after the fix, then record the formal median baseline table and pass/fail verdicts for the four Phase 5 scenarios
+
 Still required to close this section:
 
+- fix the remaining Shaders-tab isolation/resampling regression identified above
+- add a physical-window capture path for desktop robot validation so presentation-scale bugs are observable in automated artifacts
 - create a comparison-safe benchmark baseline on `main` using the same harness code as `renderer`
 - record medians from repeated runs, not single-run spot checks
 - run the CPU perf script and record the summary block for each scenario
@@ -776,8 +816,11 @@ These can sometimes hide symptoms. They do not fix the architecture.
 
 ## Immediate Next Step
 
-The correct next implementation steps are the remaining validation gaps:
+The correct next implementation steps are now the concrete Shaders-tab regression and then the remaining validation gaps:
 
+- fix the Shaders-tab over-isolation / resampling regression exposed by the non-headless `main` vs `renderer` comparison
+- add a presented-window capture mode for desktop robot validation; the current logical-scene screenshot path is insufficient for HiDPI scale bugs
+- add automated capture coverage for that Shaders surface so the visual softness cannot regress silently
 - apply the benchmark harness identically to `main` so branch-to-branch perf comparison is valid
 - record acceptance data for lazy list scroll, text-heavy scroll, backdrop blur, and simple opaque scenes
 - write explicit pass/fail evaluation for those recorded numbers against the acceptance criteria

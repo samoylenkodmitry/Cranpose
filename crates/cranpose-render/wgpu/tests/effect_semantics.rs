@@ -16,6 +16,7 @@ use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, GraphicsLayer, Point, Re
 
 const FRAME_WIDTH: u32 = 128;
 const FRAME_HEIGHT: u32 = 96;
+const ROOT_SCALE_TEST_SCALE: f32 = 2.0;
 const ALPHA_LAYER_SIZE: (u32, u32) = (48, 24);
 const BLUR_LAYER_SIZE: (u32, u32) = (28, 28);
 const BACKDROP_LAYER_SIZE: (u32, u32) = (24, 20);
@@ -69,6 +70,34 @@ fn subtree_alpha_capture_preserves_group_opacity_and_uses_bounded_surface() {
         "capture should render the root surface and one isolated alpha child: {stats:?}"
     );
     assert_local_surface_stats(&frame, stats, ALPHA_LAYER_SIZE, 1, "alpha");
+}
+
+#[test]
+fn root_composite_respects_root_scale_on_presented_surface() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping root-scale capture assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    renderer.scene_mut().graph = Some(root_scale_fixture());
+    let frame = renderer
+        .capture_frame_with_scale(FRAME_WIDTH, FRAME_HEIGHT, ROOT_SCALE_TEST_SCALE)
+        .expect("root-scale capture should succeed");
+
+    assert_red(
+        rgba(&frame, FRAME_WIDTH / 4, FRAME_HEIGHT / 4),
+        "root-scale test should color the upper-left quadrant",
+    );
+    assert_red(
+        rgba(&frame, FRAME_WIDTH - 8, FRAME_HEIGHT - 8),
+        "root-scale test should scale the root surface to the full physical frame",
+    );
 }
 
 #[test]
@@ -454,6 +483,21 @@ fn graph(children: Vec<RenderNode>) -> RenderGraph {
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
         children,
+    ))
+}
+
+fn root_scale_fixture() -> RenderGraph {
+    let logical_root = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: FRAME_WIDTH as f32 / ROOT_SCALE_TEST_SCALE,
+        height: FRAME_HEIGHT as f32 / ROOT_SCALE_TEST_SCALE,
+    };
+    RenderGraph::new(layer(
+        logical_root,
+        ProjectiveTransform::identity(),
+        GraphicsLayer::default(),
+        vec![solid_rect(logical_root, Color::RED)],
     ))
 }
 

@@ -1882,13 +1882,15 @@ impl GpuRenderer {
             .root
             .transform_to_parent
             .map_rect(root_surface.logical_rect);
+        let root_dest_quad = scaled_quad(root_quad, root_scale);
         let root_source_rect = Rect {
             x: 0.0,
             y: 0.0,
             width: root_surface.target.width() as f32,
             height: root_surface.target.height() as f32,
         };
-        let root_transform = ProjectiveTransform::from_rect_to_quad(root_source_rect, root_quad);
+        let root_transform =
+            ProjectiveTransform::from_rect_to_quad(root_source_rect, root_dest_quad);
         let root_inverse = root_transform
             .inverse()
             .ok_or_else(|| "root layer transform is not invertible".to_string())?;
@@ -1963,7 +1965,7 @@ impl GpuRenderer {
                 (width, height),
                 (root_source_rect.width, root_source_rect.height),
                 root_inverse.matrix(),
-                root_quad,
+                root_dest_quad,
                 root_surface.composite_alpha,
                 wgpu::LoadOp::Load,
                 None,
@@ -1988,7 +1990,7 @@ impl GpuRenderer {
                 (width, height),
                 (root_source_rect.width, root_source_rect.height),
                 root_inverse.matrix(),
-                root_quad,
+                root_dest_quad,
                 root_surface.composite_alpha,
                 wgpu::LoadOp::Clear(CLEAR_COLOR),
                 None,
