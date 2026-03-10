@@ -383,7 +383,7 @@ Status snapshot as of 2026-03-10:
 | Phase 2 | Done | Shared hierarchical graph types, shared scene builder, explicit `transform_to_parent`, graph hashes, and shared graph-scene hit contract are in production paths. |
 | Phase 3 | Done | WGPU renders by graph traversal with local-coordinate primitives, bounded layer surfaces, and compositor-driven transforms instead of flat z-range replay. |
 | Phase 4 | Done | Bounded local-surface effect and backdrop execution landed in WGPU, and WGPU capture coverage now locks subtree alpha, bounded blur, and bounded backdrop semantics to bounded local surfaces. |
-| Phase 5 | Partial | Layer raster cache, stable subtree hashes, per-frame GPU stats, per-frame upload-bytes accounting, the scenario-driven perf harness, and perf-script counter summaries landed. Recorded acceptance data and explicit pass/fail judgments for the required scenarios are still pending. |
+| Phase 5 | Partial | The cache and perf instrumentation work is implemented: layer raster cache, stable subtree hashes, per-frame GPU stats, per-frame upload-bytes accounting, the scenario-driven perf harness, and perf-script counter summaries all landed. What is still missing is the recorded `main` vs `renderer` acceptance data and the explicit pass/fail judgment for each required scenario. |
 | Phase 6 | Mostly done | Pixels and WGPU now share the graph scene contract, shared graph builder, shared transform semantics, and shared render-contract tests. Remaining work is more shared semantic coverage, not another scene-model rewrite. |
 
 ## Rewrite Plan
@@ -513,6 +513,8 @@ Status:
 - done: the planned per-frame upload-bytes counter now exists in renderer stats
 - not done: the acceptance numbers from those scenarios are not yet recorded in the document
 - not done: there is not yet a written pass/fail evaluation for each scenario against the acceptance criteria
+- not done: the benchmark harness still has to be applied identically to `main` and `renderer` before any branch-to-branch judgment is valid
+- not done: there is not yet a checked-in comparison table for median `main` vs `renderer` scenario results
 
 Files:
 
@@ -535,6 +537,7 @@ Validation target:
 - lazy list scroll uses cache reuse instead of repainting every descendant
 - performance counters show reduced uploads and reduced isolated repaints in scroll-heavy scenes
 - acceptance data for all four scenarios is recorded in this document so the repo has a concrete baseline
+- the branch-to-branch verdict is based on identical benchmark code running on both branches, not on branch-specific tooling differences
 
 ### Phase 6: Port The Pixels Backend And Clean Up [Mostly Done]
 
@@ -652,6 +655,21 @@ Status:
 
 The rewrite is only acceptable if correctness improves without turning the renderer into an offscreen-everything system.
 
+The comparison method matters:
+
+- do not compare `main` using one harness and `renderer` using a newer harness
+- do not use renderer-only counters as the primary cross-branch regression verdict
+- use the same benchmark harness code on both branches, then use renderer-only counters only to explain results on `renderer`
+- keep build artifacts separate per branch so incremental build state does not contaminate the measurement
+
+Recommended setup:
+
+- create a `renderer` worktree
+- create a `main` worktree
+- apply the same benchmark-only harness changes to both worktrees
+- use separate `CARGO_TARGET_DIR` values per worktree
+- run each scenario multiple times and compare medians, not single runs
+
 Collect before/after data for:
 
 - lazy list scroll
@@ -664,8 +682,21 @@ Use:
 - `./perf_robot_cpu.sh`
 - `./perf_robot_heap.sh`
 - `CRANPOSE_PERF_SCENARIO=<scenario> cargo run -p desktop-app --example robot_perf_harness --features robot-app`
+- `git worktree` for side-by-side `main` and `renderer` runs
 - renderer counters already present in `crates/cranpose-render/wgpu/src/render.rs`
 - text telemetry in `crates/cranpose-render/wgpu/src/lib.rs`
+
+Cross-branch verdict data:
+
+- branch-neutral metrics on both branches:
+  - FPS summary
+  - memory summary
+  - CPU profile / heap profile output
+- renderer-only diagnostic metrics on `renderer`:
+  - cache hit/miss
+  - isolated-layer area
+  - upload bytes
+  - offscreen allocations
 
 Scenarios:
 
@@ -692,8 +723,19 @@ Acceptance criteria:
 - simple opaque scenes do not regress materially
 - scroll-heavy scenes show cache reuse and reduced repaint work
 
+Recording template for the required branch comparison:
+
+| Scenario | `main` median summary | `renderer` median summary | Verdict | Notes |
+|---|---|---|---|---|
+| `lazy_list_scroll` | pending | pending | pending | compare identical harness code in separate worktrees |
+| `text_heavy_scroll` | pending | pending | pending | compare identical harness code in separate worktrees |
+| `backdrop_blur` | pending | pending | pending | compare identical harness code in separate worktrees |
+| `opaque_scene` | pending | pending | pending | compare identical harness code in separate worktrees |
+
 Still required to close this section:
 
+- create a comparison-safe benchmark baseline on `main` using the same harness code as `renderer`
+- record medians from repeated runs, not single-run spot checks
 - run the CPU perf script and record the summary block for each scenario
 - run the heap perf script and record the summary block for each scenario
 - write down whether each scenario meets the acceptance criteria above
@@ -736,6 +778,7 @@ These can sometimes hide symptoms. They do not fix the architecture.
 
 The correct next implementation steps are the remaining validation gaps:
 
+- apply the benchmark harness identically to `main` so branch-to-branch perf comparison is valid
 - record acceptance data for lazy list scroll, text-heavy scroll, backdrop blur, and simple opaque scenes
 - write explicit pass/fail evaluation for those recorded numbers against the acceptance criteria
 - tighten the current translation-invariance diff budgets now that the capture suite is in place

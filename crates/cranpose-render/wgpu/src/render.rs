@@ -584,7 +584,6 @@ impl ShapeBatchBuffers {
 pub struct GpuRenderer {
     pub(crate) device: Arc<wgpu::Device>,
     pub(crate) queue: Arc<wgpu::Queue>,
-    #[allow(dead_code)] // Kept for potential future use (e.g., recreating text atlas)
     surface_format: wgpu::TextureFormat,
     pipeline: wgpu::RenderPipeline,
     pipeline_dst_out: wgpu::RenderPipeline,

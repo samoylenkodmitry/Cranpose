@@ -1,5 +1,4 @@
-//! Scene building pipeline - copies layout tree to render scene.
-//! This module is copied from the pixels renderer to maintain compatibility.
+//! Scene building pipeline - builds the render graph and backend scene state.
 
 use std::{ops::Range, rc::Rc};
 
