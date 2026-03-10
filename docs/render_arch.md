@@ -379,7 +379,7 @@ Status snapshot as of 2026-03-10:
 
 | Phase | Status | Notes |
 |---|---|---|
-| Phase 1 | Partial | Shared normalized translation-invariance tests landed for WGPU and Pixels, and real-app robot translation coverage landed. Dedicated WGPU capture assertions for translated backdrop content are still missing, and current translation-diff budgets are still freeze-the-failure thresholds rather than tight final budgets. |
+| Phase 1 | Partial | Shared normalized translation-invariance tests landed for WGPU and Pixels, real-app robot translation coverage landed, and dedicated WGPU translated-backdrop capture coverage landed. Current translation-diff budgets are still freeze-the-failure thresholds rather than tight final budgets. |
 | Phase 2 | Done | Shared hierarchical graph types, shared scene builder, explicit `transform_to_parent`, graph hashes, and shared graph-scene hit contract are in production paths. |
 | Phase 3 | Done | WGPU renders by graph traversal with local-coordinate primitives, bounded layer surfaces, and compositor-driven transforms instead of flat z-range replay. |
 | Phase 4 | Done | Bounded local-surface effect and backdrop execution landed in WGPU, and WGPU capture coverage now locks subtree alpha, bounded blur, and bounded backdrop semantics to bounded local surfaces. |
@@ -398,7 +398,7 @@ Status:
 
 - done: shared normalized translation-invariance cases for translated subtrees and translated text decorations run against both WGPU and Pixels
 - done: robot translation regression covers decorated text and lazy-list subtree motion in the real desktop app
-- not done: a dedicated WGPU translated-backdrop capture case is still missing
+- done: a dedicated WGPU translated-backdrop capture case now covers rigid motion for a subtree that contains both backdrop source content and the backdrop layer itself
 - not done: current normalized-diff budgets are still loose freeze-the-failure thresholds and must tighten after the remaining capture coverage lands
 
 Add automated failures before touching the renderer:
@@ -594,7 +594,7 @@ These belong close to the scene builder and graph types.
 
 Status:
 
-- done: shared WGPU capture coverage exists for rigid translated subtrees, rounded-block spacing, and translated text with shadow and decorations
+- done: shared WGPU capture coverage exists for rigid translated subtrees, rounded-block spacing, translated text with shadow and decorations, and translated backdrop content
 - done: explicit capture assertions cover subtree alpha correctness, bounded blur correctness, and bounded backdrop correctness
 
 Use `capture_frame(...)` / `capture_frame_with_scale(...)` from `crates/cranpose-render/wgpu/src/lib.rs`.

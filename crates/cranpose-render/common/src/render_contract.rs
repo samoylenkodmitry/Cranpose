@@ -7,6 +7,9 @@ use crate::graph::{
     CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
     PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
 };
+use crate::image_compare::{
+    image_difference_stats, normalize_rgba_region, pixel_difference, sample_pixel,
+};
 use crate::raster_cache::LayerRasterCacheHashes;
 
 const BACKGROUND_COLOR: Color = Color(18.0 / 255.0, 18.0 / 255.0, 24.0 / 255.0, 1.0);
@@ -579,58 +582,17 @@ fn assert_clipped_text_frame(pixels: &[u8], width: u32, height: u32) {
     );
 }
 
-fn sample_pixel(pixels: &[u8], width: u32, x: u32, y: u32) -> [u8; 4] {
-    let idx = ((y * width + x) * 4) as usize;
-    [
-        pixels[idx],
-        pixels[idx + 1],
-        pixels[idx + 2],
-        pixels[idx + 3],
-    ]
-}
-
 fn normalize_frame_region(frame: &RenderedFrame) -> Vec<u8> {
     let rect = normalized_rect(frame);
     let (width, height) = normalized_output_dimensions(frame);
-    let mut out = Vec::with_capacity((width * height * 4) as usize);
-    for y in 0..height {
-        for x in 0..width {
-            let sample_x = rect.x + ((x as f32 + 0.5) * rect.width / width as f32);
-            let sample_y = rect.y + ((y as f32 + 0.5) * rect.height / height as f32);
-            out.extend_from_slice(&sample_pixel_bilinear(frame, sample_x, sample_y));
-        }
-    }
-    out
-}
-
-fn sample_pixel_bilinear(frame: &RenderedFrame, x: f32, y: f32) -> [u8; 4] {
-    let max_x = frame.width.saturating_sub(1) as f32;
-    let max_y = frame.height.saturating_sub(1) as f32;
-    let source_x = (x - 0.5).clamp(0.0, max_x);
-    let source_y = (y - 0.5).clamp(0.0, max_y);
-    let x0 = source_x.floor() as u32;
-    let y0 = source_y.floor() as u32;
-    let x1 = (x0 + 1).min(frame.width.saturating_sub(1));
-    let y1 = (y0 + 1).min(frame.height.saturating_sub(1));
-    let tx = source_x - x0 as f32;
-    let ty = source_y - y0 as f32;
-    let top_left = sample_pixel(&frame.pixels, frame.width, x0, y0);
-    let top_right = sample_pixel(&frame.pixels, frame.width, x1, y0);
-    let bottom_left = sample_pixel(&frame.pixels, frame.width, x0, y1);
-    let bottom_right = sample_pixel(&frame.pixels, frame.width, x1, y1);
-
-    let lerp_channel = |index: usize| {
-        let top = top_left[index] as f32 * (1.0 - tx) + top_right[index] as f32 * tx;
-        let bottom = bottom_left[index] as f32 * (1.0 - tx) + bottom_right[index] as f32 * tx;
-        (top * (1.0 - ty) + bottom * ty).round() as u8
-    };
-
-    [
-        lerp_channel(0),
-        lerp_channel(1),
-        lerp_channel(2),
-        lerp_channel(3),
-    ]
+    normalize_rgba_region(
+        &frame.pixels,
+        frame.width,
+        frame.height,
+        rect,
+        width,
+        height,
+    )
 }
 
 fn assert_normalized_region_matches(
@@ -647,7 +609,7 @@ fn assert_normalized_region_matches(
     let (width, height) = normalized_output_dimensions(base);
     let base_normalized = normalize_frame_region(base);
     let moved_normalized = normalize_frame_region(moved);
-    let stats = normalized_difference_stats(
+    let stats = image_difference_stats(
         &base_normalized,
         &moved_normalized,
         width,
@@ -670,8 +632,8 @@ fn assert_normalized_region_matches(
             stats.max_difference,
             diff.x,
             diff.y,
-            diff.base,
-            diff.moved,
+            diff.lhs,
+            diff.rhs,
             diff.difference
         );
     }
@@ -702,76 +664,6 @@ fn normalized_dimension(value: f32, axis: &str) -> u32 {
         "normalized {axis} must be positive, got {value}"
     );
     rounded as u32
-}
-
-#[derive(Debug)]
-struct PixelDifference {
-    x: u32,
-    y: u32,
-    base: [u8; 4],
-    moved: [u8; 4],
-    difference: u32,
-}
-
-struct DifferenceStats {
-    differing_pixels: u32,
-    max_difference: u32,
-    first_difference: Option<PixelDifference>,
-}
-
-fn normalized_difference_stats(
-    base: &[u8],
-    moved: &[u8],
-    width: u32,
-    height: u32,
-    tolerance: u32,
-) -> DifferenceStats {
-    let mut differing_pixels = 0;
-    let mut max_difference = 0;
-    let mut first_difference = None;
-    for y in 0..height {
-        for x in 0..width {
-            let index = ((y * width + x) * 4) as usize;
-            let base_pixel = [
-                base[index],
-                base[index + 1],
-                base[index + 2],
-                base[index + 3],
-            ];
-            let moved_pixel = [
-                moved[index],
-                moved[index + 1],
-                moved[index + 2],
-                moved[index + 3],
-            ];
-            let difference = pixel_difference(base_pixel, moved_pixel);
-            if difference > tolerance {
-                differing_pixels += 1;
-                max_difference = max_difference.max(difference);
-                if first_difference.is_none() {
-                    first_difference = Some(PixelDifference {
-                        x,
-                        y,
-                        base: base_pixel,
-                        moved: moved_pixel,
-                        difference,
-                    });
-                }
-            }
-        }
-    }
-    DifferenceStats {
-        differing_pixels,
-        max_difference,
-        first_difference,
-    }
-}
-
-fn pixel_difference(lhs: [u8; 4], rhs: [u8; 4]) -> u32 {
-    lhs.into_iter()
-        .zip(rhs)
-        .map(|(left, right)| left.abs_diff(right) as u32)
-        .sum()
 }
 
 fn is_background_like(pixel: [u8; 4], background: [u8; 4]) -> bool {

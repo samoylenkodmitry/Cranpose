@@ -7,15 +7,23 @@ use cranpose_render_common::graph::{
     DrawPrimitiveNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
     RenderGraph, RenderNode,
 };
+use cranpose_render_common::image_compare::{
+    image_difference_stats, normalize_rgba_region, sample_pixel,
+};
 use cranpose_render_common::Renderer;
 use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot};
-use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, GraphicsLayer, Rect, RenderEffect};
+use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, GraphicsLayer, Point, Rect, RenderEffect};
 
 const FRAME_WIDTH: u32 = 128;
 const FRAME_HEIGHT: u32 = 96;
 const ALPHA_LAYER_SIZE: (u32, u32) = (48, 24);
 const BLUR_LAYER_SIZE: (u32, u32) = (28, 28);
 const BACKDROP_LAYER_SIZE: (u32, u32) = (24, 20);
+const TRANSLATED_BACKDROP_SUBTREE_SIZE: (u32, u32) = (56, 32);
+const TRANSLATED_BACKDROP_COMPARE_INSET: u32 = 2;
+const TRANSLATED_BACKDROP_PIXEL_TOLERANCE: u32 = 24;
+const TRANSLATED_BACKDROP_MAX_DIFFERING_PIXELS: u32 = 120;
+const TRANSLATED_BACKDROP_MAX_PIXEL_DIFFERENCE: u32 = 360;
 
 #[test]
 fn subtree_alpha_capture_preserves_group_opacity_and_uses_bounded_surface() {
@@ -163,6 +171,93 @@ fn bounded_backdrop_capture_only_filters_local_snapshot() {
     assert_local_surface_stats(&frame, stats, BACKDROP_LAYER_SIZE, 4, "backdrop");
 }
 
+#[test]
+fn translated_backdrop_capture_preserves_local_picture_under_rigid_motion() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping translated backdrop capture assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    let base_translation = Point::new(14.3, 18.6);
+    renderer.scene_mut().graph = Some(translated_backdrop_fixture(base_translation));
+    let base_frame = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("translated backdrop base capture should succeed");
+    let base_stats = renderer
+        .last_frame_stats()
+        .expect("translated backdrop base frame stats");
+
+    let moved_translation = Point::new(36.4, 30.1);
+    renderer.scene_mut().graph = Some(translated_backdrop_fixture(moved_translation));
+    let moved_frame = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("translated backdrop moved capture should succeed");
+    let moved_stats = renderer
+        .last_frame_stats()
+        .expect("translated backdrop moved frame stats");
+
+    assert!(
+        base_stats.blur_passes >= 1 && moved_stats.blur_passes >= 1,
+        "translated backdrop frames should execute blur passes: base={base_stats:?} moved={moved_stats:?}"
+    );
+    assert_eq!(
+        base_stats.isolated_layer_renders, 3,
+        "translated backdrop base frame should render the root surface, the translated subtree surface, and one isolated backdrop child: {base_stats:?}"
+    );
+    assert_eq!(
+        moved_stats.isolated_layer_renders, 3,
+        "translated backdrop moved frame should render the root surface, the translated subtree surface, and one isolated backdrop child: {moved_stats:?}"
+    );
+
+    let base_normalized = normalize_translated_backdrop_region(&base_frame, base_translation);
+    let moved_normalized = normalize_translated_backdrop_region(&moved_frame, moved_translation);
+
+    assert_translated_backdrop_local_picture(
+        &base_normalized,
+        translated_backdrop_compare_dimensions().0,
+        translated_backdrop_compare_dimensions().1,
+        "base",
+    );
+    assert_translated_backdrop_local_picture(
+        &moved_normalized,
+        translated_backdrop_compare_dimensions().0,
+        translated_backdrop_compare_dimensions().1,
+        "moved",
+    );
+
+    let stats = image_difference_stats(
+        &base_normalized,
+        &moved_normalized,
+        translated_backdrop_compare_dimensions().0,
+        translated_backdrop_compare_dimensions().1,
+        TRANSLATED_BACKDROP_PIXEL_TOLERANCE,
+    );
+    if stats.differing_pixels > TRANSLATED_BACKDROP_MAX_DIFFERING_PIXELS
+        || stats.max_difference > TRANSLATED_BACKDROP_MAX_PIXEL_DIFFERENCE
+    {
+        let diff = stats
+            .first_difference
+            .as_ref()
+            .expect("failing translated backdrop comparison should report first difference");
+        panic!(
+            "translated backdrop local picture changed under rigid motion; differing_pixels={} max_diff={} first differing normalized pixel at ({}, {}) base={:?} moved={:?} diff={}",
+            stats.differing_pixels,
+            stats.max_difference,
+            diff.x,
+            diff.y,
+            diff.lhs,
+            diff.rhs,
+            diff.difference
+        );
+    }
+}
+
 fn alpha_fixture() -> RenderGraph {
     let alpha_layer = layer(
         Rect {
@@ -300,6 +395,59 @@ fn backdrop_fixture() -> RenderGraph {
     ])
 }
 
+fn translated_backdrop_fixture(translation: Point) -> RenderGraph {
+    let backdrop_layer = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 20.0,
+            height: 16.0,
+        },
+        ProjectiveTransform::translation(18.0, 8.0),
+        GraphicsLayer {
+            backdrop_effect: Some(RenderEffect::blur(8.0)),
+            ..GraphicsLayer::default()
+        },
+        vec![],
+    );
+    let translated_subtree = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: TRANSLATED_BACKDROP_SUBTREE_SIZE.0 as f32,
+            height: TRANSLATED_BACKDROP_SUBTREE_SIZE.1 as f32,
+        },
+        ProjectiveTransform::translation(translation.x, translation.y),
+        GraphicsLayer::default(),
+        vec![
+            solid_rect(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 28.0,
+                    height: TRANSLATED_BACKDROP_SUBTREE_SIZE.1 as f32,
+                },
+                Color::RED,
+            ),
+            solid_rect(
+                Rect {
+                    x: 28.0,
+                    y: 0.0,
+                    width: 28.0,
+                    height: TRANSLATED_BACKDROP_SUBTREE_SIZE.1 as f32,
+                },
+                Color::BLUE,
+            ),
+            RenderNode::Layer(Box::new(backdrop_layer)),
+        ],
+    );
+
+    graph(vec![
+        solid_rect(frame_rect(), Color::BLACK),
+        RenderNode::Layer(Box::new(translated_subtree)),
+    ])
+}
+
 fn graph(children: Vec<RenderNode>) -> RenderGraph {
     RenderGraph::new(layer(
         frame_rect(),
@@ -340,6 +488,31 @@ fn frame_rect() -> Rect {
     }
 }
 
+fn normalize_translated_backdrop_region(frame: &CapturedFrame, translation: Point) -> Vec<u8> {
+    let (output_width, output_height) = translated_backdrop_compare_dimensions();
+    let inset = TRANSLATED_BACKDROP_COMPARE_INSET as f32;
+    normalize_rgba_region(
+        &frame.pixels,
+        frame.width,
+        frame.height,
+        Rect {
+            x: translation.x + inset,
+            y: translation.y + inset,
+            width: output_width as f32,
+            height: output_height as f32,
+        },
+        output_width,
+        output_height,
+    )
+}
+
+fn translated_backdrop_compare_dimensions() -> (u32, u32) {
+    (
+        TRANSLATED_BACKDROP_SUBTREE_SIZE.0 - (TRANSLATED_BACKDROP_COMPARE_INSET * 2),
+        TRANSLATED_BACKDROP_SUBTREE_SIZE.1 - (TRANSLATED_BACKDROP_COMPARE_INSET * 2),
+    )
+}
+
 fn rgba(frame: &CapturedFrame, x: u32, y: u32) -> [u8; 4] {
     let index = ((y as usize) * (frame.width as usize) + (x as usize)) * 4;
     [
@@ -348,6 +521,38 @@ fn rgba(frame: &CapturedFrame, x: u32, y: u32) -> [u8; 4] {
         frame.pixels[index + 2],
         frame.pixels[index + 3],
     ]
+}
+
+fn assert_translated_backdrop_local_picture(pixels: &[u8], width: u32, height: u32, label: &str) {
+    let (left_x, mixed_x, right_x) = translated_backdrop_sample_positions(width);
+    let left = sample_pixel(pixels, width, left_x, height / 2);
+    let mixed = sample_pixel(pixels, width, mixed_x, height / 2);
+    let right = sample_pixel(pixels, width, right_x, height / 2);
+
+    assert_red(
+        left,
+        &format!("{label} translated backdrop left background should stay red"),
+    );
+    assert_blue(
+        right,
+        &format!("{label} translated backdrop right background should stay blue"),
+    );
+    assert!(
+        mixed[2] >= left[2].saturating_add(40),
+        "{label} translated backdrop blur should mix blue into the center window: left={left:?} mixed={mixed:?} right={right:?}"
+    );
+}
+
+fn translated_backdrop_sample_positions(width: u32) -> (u32, u32, u32) {
+    let split_x = (TRANSLATED_BACKDROP_SUBTREE_SIZE.0 / 2) - TRANSLATED_BACKDROP_COMPARE_INSET;
+    let left_x = split_x / 3;
+    let mixed_x = split_x;
+    let right_x = split_x + (split_x - left_x);
+    assert!(
+        right_x < width,
+        "translated backdrop sample positions must stay inside the normalized region",
+    );
+    (left_x, mixed_x, right_x)
 }
 
 fn assert_channel_close(actual: u8, expected: u8, tolerance: u8, label: &str) {
