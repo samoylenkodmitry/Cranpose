@@ -127,7 +127,7 @@ enum RobotResponse {
     Ok,
     Semantics(Vec<SemanticElement>),
     Screenshot(RobotScreenshot),
-    RenderStats(Option<RenderStatsSnapshot>),
+    RenderStats(Box<Option<RenderStatsSnapshot>>),
     Error(String),
 }
 
@@ -492,7 +492,7 @@ impl Robot {
             .send(RobotCommand::GetRenderStats)
             .map_err(|e| format!("Failed to send render stats command: {}", e))?;
         match self.rx.recv() {
-            Ok(RobotResponse::RenderStats(stats)) => Ok(stats),
+            Ok(RobotResponse::RenderStats(stats)) => Ok(*stats),
             Ok(RobotResponse::Error(e)) => Err(e),
             Ok(_) => Err("Unexpected response".to_string()),
             Err(e) => Err(format!("Failed to receive response: {}", e)),
@@ -1267,9 +1267,9 @@ impl ApplicationHandler for App {
                         }
                     },
                     RobotCommand::GetRenderStats => {
-                        let _ = controller.tx.send(RobotResponse::RenderStats(
+                        let _ = controller.tx.send(RobotResponse::RenderStats(Box::new(
                             app.renderer().last_frame_stats(),
-                        ));
+                        )));
                     }
                     RobotCommand::TypeText(text) => {
                         use cranpose_app_shell::{KeyEvent, KeyEventType, Modifiers};

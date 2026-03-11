@@ -21,7 +21,8 @@ use cranpose_render_common::primitive_emit::{
 };
 use cranpose_render_common::raster_cache::{LayerRasterCacheKey, ScaleBucket};
 use cranpose_ui_graphics::{
-    BlendMode, Brush, Color, ColorFilter, ImageBitmap, Rect, RenderEffect, RenderHash, TileMode,
+    BlendMode, Brush, Color, ColorFilter, CompositingStrategy, ImageBitmap, Rect, RenderEffect,
+    RenderHash, TileMode,
 };
 use cranpose_ui_graphics::{GraphicsLayer, Point};
 use glyphon::{
@@ -40,7 +41,7 @@ use std::sync::{mpsc, Arc, OnceLock};
 use std::time::Duration;
 
 use crate::gpu_stats;
-use crate::gpu_stats::gpu_stats_enabled;
+use crate::gpu_stats::{gpu_stats_enabled, LayerSurfaceReasons};
 use crate::pipeline::{push_draw_primitive, push_layer_shadow, push_text_style_draws};
 
 // Chunked rendering constants for robustness with large scenes
@@ -774,8 +775,12 @@ fn layer_raster_cache_candidate(
     layer: &LayerNode,
     root_scale: f32,
     has_backdrop_underlay: bool,
+    allow_runtime_cache: bool,
 ) -> Option<(LayerRasterCacheKey, Rect)> {
-    if layer.cache_policy != CachePolicy::Auto {
+    let surface_requirements = layer_surface_requirements(layer);
+    let cache_is_allowed = layer.cache_policy == CachePolicy::Auto
+        || (allow_runtime_cache && surface_requirements.reasons.has_renderer_forced_surface());
+    if !cache_is_allowed {
         return None;
     }
     if layer_uses_external_backdrop_input(layer, has_backdrop_underlay) {
@@ -797,6 +802,60 @@ fn layer_raster_cache_candidate(
     ))
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct LayerSurfaceRequirements {
+    direct_translation: Option<Point>,
+    reasons: LayerSurfaceReasons,
+}
+
+fn layer_surface_requirements(layer: &LayerNode) -> LayerSurfaceRequirements {
+    let effective_isolation = effective_layer_isolation(&layer.graphics_layer);
+    let mut reasons = LayerSurfaceReasons {
+        explicit_offscreen: layer.isolation.explicit_offscreen
+            || layer.graphics_layer.compositing_strategy == CompositingStrategy::Offscreen,
+        effect: layer.isolation.effect || layer.effect().is_some(),
+        backdrop: layer.isolation.backdrop || layer.backdrop().is_some(),
+        group_opacity: layer.isolation.group_opacity
+            || matches!(
+                layer.graphics_layer.compositing_strategy,
+                CompositingStrategy::Auto | CompositingStrategy::Offscreen
+            ) && effective_isolation.is_some()
+                && layer.opacity() < 1.0,
+        blend_mode: layer.isolation.blend_mode || layer.blend_mode() != BlendMode::SrcOver,
+        ..LayerSurfaceReasons::default()
+    };
+    let direct_translation = direct_translation(layer.transform_to_parent);
+    let mut has_direct_safe_primitive = false;
+    let mut has_child_layers = false;
+
+    for child in &layer.children {
+        match child {
+            RenderNode::Primitive(primitive) => match &primitive.node {
+                PrimitiveNode::Text(_) => reasons.immediate_text = true,
+                PrimitiveNode::Draw(draw) => match &draw.primitive {
+                    cranpose_ui_graphics::DrawPrimitive::Shadow(_) => {
+                        reasons.immediate_shadow = true;
+                    }
+                    _ => has_direct_safe_primitive = true,
+                },
+            },
+            RenderNode::Layer(_) => has_child_layers = true,
+        }
+    }
+
+    if has_direct_safe_primitive && has_child_layers {
+        reasons.mixed_direct_content = true;
+    }
+    if direct_translation.is_none() {
+        reasons.non_translation_transform = true;
+    }
+
+    LayerSurfaceRequirements {
+        direct_translation,
+        reasons,
+    }
+}
+
 fn direct_translation(transform: ProjectiveTransform) -> Option<Point> {
     let matrix = transform.matrix();
     if (matrix[0][0] - 1.0).abs() > f32::EPSILON
@@ -812,33 +871,11 @@ fn direct_translation(transform: ProjectiveTransform) -> Option<Point> {
     Some(Point::new(matrix[0][2], matrix[1][2]))
 }
 
-fn primitive_requires_local_surface(primitive: &PrimitiveEntry) -> bool {
-    match &primitive.node {
-        PrimitiveNode::Draw(draw) => {
-            matches!(
-                draw.primitive,
-                cranpose_ui_graphics::DrawPrimitive::Shadow(_)
-            )
-        }
-        PrimitiveNode::Text(_) => true,
-    }
-}
-
-fn subtree_requires_local_surface(layer: &LayerNode) -> bool {
-    layer.children.iter().any(|child| match child {
-        RenderNode::Primitive(primitive) => primitive_requires_local_surface(primitive),
-        RenderNode::Layer(child_layer) => subtree_requires_local_surface(child_layer),
-    })
-}
-
 fn child_can_render_directly(layer: &LayerNode) -> Option<Point> {
-    if effective_layer_isolation(&layer.graphics_layer).is_some()
-        || layer.backdrop().is_some()
-        || subtree_requires_local_surface(layer)
-    {
-        return None;
-    }
-    direct_translation(layer.transform_to_parent)
+    let requirements = layer_surface_requirements(layer);
+    (!requirements.reasons.has_any())
+        .then_some(requirements.direct_translation)
+        .flatten()
 }
 
 fn push_local_primitive(
@@ -1875,7 +1912,8 @@ impl GpuRenderer {
         height: u32,
         root_scale: f32,
     ) -> Result<(), String> {
-        let root_surface = self.render_layer_surface(text_state, &graph.root, root_scale, None)?;
+        let root_surface =
+            self.render_layer_surface(text_state, &graph.root, root_scale, None, false)?;
         let root_quad = graph
             .root
             .transform_to_parent
@@ -2100,9 +2138,14 @@ impl GpuRenderer {
         layer: &LayerNode,
         root_scale: f32,
         backdrop_underlay: Option<&OffscreenTarget>,
+        allow_runtime_cache: bool,
     ) -> Result<LayerSurface, String> {
-        let cache_candidate =
-            layer_raster_cache_candidate(layer, root_scale, backdrop_underlay.is_some());
+        let cache_candidate = layer_raster_cache_candidate(
+            layer,
+            root_scale,
+            backdrop_underlay.is_some(),
+            allow_runtime_cache,
+        );
         if let Some((cache_key, logical_rect)) = cache_candidate {
             if let Some((target, logical_rect)) = self.cached_layer_surface(&cache_key) {
                 let isolation = effective_layer_isolation(&layer.graphics_layer);
@@ -2179,7 +2222,14 @@ impl GpuRenderer {
         }
 
         let (width, height) = surface_target_size(surface_rect, root_scale);
-        self.frame_stats.record_isolated_layer_render(width, height);
+        let surface_requirements = layer_surface_requirements(layer);
+        self.frame_stats.record_isolated_layer_render(
+            width,
+            height,
+            layer.node_id,
+            surface_rect,
+            surface_requirements.reasons,
+        );
         let target = self.acquire_offscreen(width, height);
 
         let mut cursor_z = 0usize;
@@ -2224,6 +2274,7 @@ impl GpuRenderer {
                 child.layer,
                 root_scale,
                 child_underlay.as_ref(),
+                true,
             )?;
 
             if let Some(backdrop) = &child_surface.backdrop {
@@ -5006,7 +5057,9 @@ fn inner_shadow_composite_mask(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cranpose_render_common::graph::DrawPrimitiveNode;
+    use cranpose_render_common::graph::{DrawPrimitiveNode, TextPrimitiveNode};
+    use cranpose_ui::text::AnnotatedString;
+    use cranpose_ui::{TextLayoutOptions, TextStyle};
     use cranpose_ui_graphics::{Rect, RenderEffect, RoundedCornerShape};
 
     fn chunk(batches: &[SegmentBatchPlan]) -> SegmentDrawChunkPlan {
@@ -5501,8 +5554,8 @@ mod tests {
         moved.transform_to_parent = ProjectiveTransform::translation(32.0, 18.0);
 
         assert_eq!(
-            layer_raster_cache_candidate(&base, 1.25, false),
-            layer_raster_cache_candidate(&moved, 1.25, false)
+            layer_raster_cache_candidate(&base, 1.25, false, false),
+            layer_raster_cache_candidate(&moved, 1.25, false, false)
         );
     }
 
@@ -5543,8 +5596,8 @@ mod tests {
         );
 
         assert_ne!(
-            layer_raster_cache_candidate(&base, 1.0, false),
-            layer_raster_cache_candidate(&moved, 1.0, false)
+            layer_raster_cache_candidate(&base, 1.0, false, false),
+            layer_raster_cache_candidate(&moved, 1.0, false, false)
         );
     }
 
@@ -5572,8 +5625,49 @@ mod tests {
             vec![RenderNode::Layer(Box::new(child))],
         );
 
-        assert!(layer_raster_cache_candidate(&parent, 1.0, false).is_some());
-        assert!(layer_raster_cache_candidate(&parent, 1.0, true).is_none());
+        assert!(layer_raster_cache_candidate(&parent, 1.0, false, false).is_some());
+        assert!(layer_raster_cache_candidate(&parent, 1.0, true, false).is_none());
+    }
+
+    #[test]
+    fn layer_raster_cache_candidate_allows_runtime_text_surfaces_for_children() {
+        let text = RenderNode::Primitive(PrimitiveEntry {
+            phase: PrimitivePhase::BeforeChildren,
+            node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+                node_id: 77,
+                rect: Rect {
+                    x: 2.0,
+                    y: 3.0,
+                    width: 48.0,
+                    height: 18.0,
+                },
+                text: AnnotatedString::from("runtime cache"),
+                text_style: TextStyle::default(),
+                font_size: 14.0,
+                layout_options: TextLayoutOptions::default(),
+                clip: None,
+            })),
+        });
+        let mut layer = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 64.0,
+                height: 32.0,
+            },
+            vec![text],
+        );
+        layer.node_id = Some(77);
+        layer.recompute_raster_cache_hashes();
+
+        assert!(
+            layer_raster_cache_candidate(&layer, 1.0, false, false).is_none(),
+            "root path should not implicitly cache runtime-isolated layers"
+        );
+        assert!(
+            layer_raster_cache_candidate(&layer, 1.0, false, true).is_some(),
+            "child path should cache runtime-isolated text layers for rigid motion reuse"
+        );
     }
 
     #[test]

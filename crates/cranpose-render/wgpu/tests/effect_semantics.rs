@@ -5,13 +5,15 @@ mod shared_test_support;
 
 use cranpose_render_common::graph::{
     DrawPrimitiveNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
-    RenderGraph, RenderNode,
+    RenderGraph, RenderNode, TextPrimitiveNode,
 };
 use cranpose_render_common::image_compare::{
     image_difference_stats, normalize_rgba_region, sample_pixel,
 };
 use cranpose_render_common::Renderer;
 use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot};
+use cranpose_ui::text::{AnnotatedString, SpanStyle, TextStyle};
+use cranpose_ui::TextLayoutOptions;
 use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, GraphicsLayer, Point, Rect, RenderEffect};
 
 const FRAME_WIDTH: u32 = 128;
@@ -128,6 +130,38 @@ fn translation_only_layers_render_without_nested_offscreens() {
     assert_eq!(
         stats.isolated_layer_renders, 1,
         "translation-only nested layers should collapse into the root target instead of allocating nested offscreens: {stats:?}"
+    );
+}
+
+#[test]
+fn translation_only_wrapper_collapses_while_text_leaf_stays_isolated() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping wrapper-collapse isolation assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    renderer.scene_mut().graph = Some(translation_only_wrapper_with_text_fixture());
+    let frame = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("wrapper text capture should succeed");
+    let stats = renderer
+        .last_frame_stats()
+        .expect("wrapper text frame stats");
+
+    let rect_pixel = rgba(&frame, 29, 31);
+    assert!(
+        rect_pixel[0] >= 40 || rect_pixel[1] >= 40 || rect_pixel[2] >= 40,
+        "text leaf fixture should draw visible content at the composed position, got {rect_pixel:?}"
+    );
+    assert_eq!(
+        stats.isolated_layer_renders, 2,
+        "translation-only wrapper should collapse into the root target while the text-bearing leaf stays isolated: {stats:?}"
     );
 }
 
@@ -267,12 +301,12 @@ fn translated_backdrop_capture_preserves_local_picture_under_rigid_motion() {
         "translated backdrop frames should execute blur passes: base={base_stats:?} moved={moved_stats:?}"
     );
     assert_eq!(
-        base_stats.isolated_layer_renders, 2,
-        "translated backdrop base frame should render the root surface and one isolated backdrop child while collapsing the translation-only wrapper layer: {base_stats:?}"
+        base_stats.isolated_layer_renders, 3,
+        "translated backdrop base frame should keep the content-bearing wrapper isolated and also render the isolated backdrop child: {base_stats:?}"
     );
     assert_eq!(
-        moved_stats.isolated_layer_renders, 2,
-        "translated backdrop moved frame should render the root surface and one isolated backdrop child while collapsing the translation-only wrapper layer: {moved_stats:?}"
+        moved_stats.isolated_layer_renders, 3,
+        "translated backdrop moved frame should keep the content-bearing wrapper isolated and also render the isolated backdrop child: {moved_stats:?}"
     );
 
     let base_normalized = normalize_translated_backdrop_region(&base_frame, base_translation);
@@ -567,6 +601,67 @@ fn translation_only_fixture() -> RenderGraph {
     graph(vec![
         solid_rect(frame_rect(), Color::BLACK),
         RenderNode::Layer(Box::new(middle)),
+    ])
+}
+
+fn translation_only_wrapper_with_text_fixture() -> RenderGraph {
+    let text_style = TextStyle::from_span_style(SpanStyle {
+        color: Some(Color::WHITE),
+        ..Default::default()
+    });
+    let text_leaf = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 32.0,
+            height: 18.0,
+        },
+        ProjectiveTransform::translation(9.0, 7.0),
+        GraphicsLayer::default(),
+        vec![
+            solid_rect(
+                Rect {
+                    x: 4.0,
+                    y: 4.0,
+                    width: 16.0,
+                    height: 8.0,
+                },
+                Color::RED,
+            ),
+            RenderNode::Primitive(PrimitiveEntry {
+                phase: PrimitivePhase::BeforeChildren,
+                node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+                    node_id: 1,
+                    rect: Rect {
+                        x: 4.0,
+                        y: 2.0,
+                        width: 24.0,
+                        height: 14.0,
+                    },
+                    text: AnnotatedString::from("Text"),
+                    text_style,
+                    font_size: 14.0,
+                    layout_options: TextLayoutOptions::default(),
+                    clip: None,
+                })),
+            }),
+        ],
+    );
+    let wrapper = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 64.0,
+            height: 40.0,
+        },
+        ProjectiveTransform::translation(12.0, 14.0),
+        GraphicsLayer::default(),
+        vec![RenderNode::Layer(Box::new(text_leaf))],
+    );
+
+    graph(vec![
+        solid_rect(frame_rect(), Color::BLACK),
+        RenderNode::Layer(Box::new(wrapper)),
     ])
 }
 

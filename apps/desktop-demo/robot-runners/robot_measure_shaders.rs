@@ -110,6 +110,21 @@ fn log_stage_render_stats(robot: &cranpose::Robot, stage: &str) {
                 stats.image_passes,
                 stats.text_passes
             );
+            for (index, layer) in stats.top_isolated_layers().enumerate() {
+                println!(
+                    "VISUAL_ISOLATED stage={} rank={} node={:?} rect=({:.1},{:.1},{:.1},{:.1}) target={}x{} reasons={}",
+                    stage,
+                    index,
+                    layer.node_id,
+                    layer.logical_rect.x,
+                    layer.logical_rect.y,
+                    layer.logical_rect.width,
+                    layer.logical_rect.height,
+                    layer.width,
+                    layer.height,
+                    layer.reasons.display()
+                );
+            }
         }
         Ok(None) => println!("VISUAL_RENDER stage={} unavailable", stage),
         Err(err) => println!("VISUAL_RENDER stage={} error={}", stage, err),

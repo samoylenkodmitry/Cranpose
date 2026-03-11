@@ -3,9 +3,138 @@
 //! Counters are always collected so tests and perf harnesses can assert them.
 //! Setting `CRANPOSE_GPU_STATS=1` prints a summary line every 60 frames to stderr.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+
+use cranpose_core::NodeId;
+use cranpose_ui_graphics::Rect;
+
+const TOP_ISOLATED_LAYER_LIMIT: usize = 8;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LayerSurfaceReasons {
+    pub explicit_offscreen: bool,
+    pub effect: bool,
+    pub backdrop: bool,
+    pub group_opacity: bool,
+    pub blend_mode: bool,
+    pub immediate_text: bool,
+    pub immediate_shadow: bool,
+    pub mixed_direct_content: bool,
+    pub non_translation_transform: bool,
+}
+
+impl LayerSurfaceReasons {
+    pub fn has_any(self) -> bool {
+        self.explicit_offscreen
+            || self.effect
+            || self.backdrop
+            || self.group_opacity
+            || self.blend_mode
+            || self.immediate_text
+            || self.immediate_shadow
+            || self.mixed_direct_content
+            || self.non_translation_transform
+    }
+
+    pub fn labels(self) -> impl Iterator<Item = &'static str> {
+        let mut labels = [None; 9];
+        let mut len = 0usize;
+
+        if self.explicit_offscreen {
+            labels[len] = Some("explicit_offscreen");
+            len += 1;
+        }
+        if self.effect {
+            labels[len] = Some("effect");
+            len += 1;
+        }
+        if self.backdrop {
+            labels[len] = Some("backdrop");
+            len += 1;
+        }
+        if self.group_opacity {
+            labels[len] = Some("group_opacity");
+            len += 1;
+        }
+        if self.blend_mode {
+            labels[len] = Some("blend_mode");
+            len += 1;
+        }
+        if self.immediate_text {
+            labels[len] = Some("immediate_text");
+            len += 1;
+        }
+        if self.immediate_shadow {
+            labels[len] = Some("immediate_shadow");
+            len += 1;
+        }
+        if self.mixed_direct_content {
+            labels[len] = Some("mixed_direct_content");
+            len += 1;
+        }
+        if self.non_translation_transform {
+            labels[len] = Some("non_translation_transform");
+            len += 1;
+        }
+
+        labels.into_iter().flatten().take(len)
+    }
+
+    pub fn display(self) -> String {
+        let mut joined = String::new();
+        for (index, label) in self.labels().enumerate() {
+            if index > 0 {
+                joined.push('+');
+            }
+            joined.push_str(label);
+        }
+        if joined.is_empty() {
+            joined.push_str("none");
+        }
+        joined
+    }
+
+    pub fn has_renderer_forced_surface(self) -> bool {
+        self.immediate_text
+            || self.immediate_shadow
+            || self.mixed_direct_content
+            || self.non_translation_transform
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct IsolatedLayerStat {
+    pub node_id: Option<NodeId>,
+    pub logical_rect: Rect,
+    pub width: u32,
+    pub height: u32,
+    pub reasons: LayerSurfaceReasons,
+}
+
+impl IsolatedLayerStat {
+    fn pixel_area(self) -> u64 {
+        (self.width as u64) * (self.height as u64)
+    }
+}
+
+impl Default for IsolatedLayerStat {
+    fn default() -> Self {
+        Self {
+            node_id: None,
+            logical_rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: 0.0,
+            },
+            width: 0,
+            height: 0,
+            reasons: LayerSurfaceReasons::default(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FrameStatsSnapshot {
     pub submits: u32,
     pub offscreen_acquires: u32,
@@ -32,9 +161,18 @@ pub struct FrameStatsSnapshot {
     pub layer_cache_bytes: u64,
     pub image_cache_size: u32,
     pub text_cache_size: u32,
+    pub top_isolated_layers: [Option<IsolatedLayerStat>; TOP_ISOLATED_LAYER_LIMIT],
+    pub top_isolated_layer_count: usize,
 }
 
 impl FrameStatsSnapshot {
+    pub fn top_isolated_layers(self) -> impl Iterator<Item = IsolatedLayerStat> {
+        self.top_isolated_layers
+            .into_iter()
+            .flatten()
+            .take(self.top_isolated_layer_count)
+    }
+
     fn layer_cache_hit_rate(self) -> f64 {
         let total = self.layer_cache_hits + self.layer_cache_misses;
         if total > 0 {
@@ -87,6 +225,19 @@ impl FrameStatsSnapshot {
             self.image_cache_size,
             self.text_cache_size,
         );
+        for (index, layer) in self.top_isolated_layers().enumerate() {
+            eprintln!(
+                "  [isolated #{index}] node={:?} rect=({:.1},{:.1},{:.1},{:.1}) target={}x{} reasons={}",
+                layer.node_id,
+                layer.logical_rect.x,
+                layer.logical_rect.y,
+                layer.logical_rect.width,
+                layer.logical_rect.height,
+                layer.width,
+                layer.height,
+                layer.reasons.display(),
+            );
+        }
     }
 }
 
@@ -120,6 +271,8 @@ pub(crate) struct FrameStats {
     pub layer_cache_bytes: Cell<u64>,
     pub image_cache_size: Cell<u32>,
     pub text_cache_size: Cell<u32>,
+    top_isolated_layers: RefCell<[Option<IsolatedLayerStat>; TOP_ISOLATED_LAYER_LIMIT]>,
+    top_isolated_layer_count: Cell<usize>,
 }
 
 impl FrameStats {
@@ -142,7 +295,14 @@ impl FrameStats {
             .set(self.upload_bytes.get().saturating_add(bytes));
     }
 
-    pub fn record_isolated_layer_render(&self, width: u32, height: u32) {
+    pub fn record_isolated_layer_render(
+        &self,
+        width: u32,
+        height: u32,
+        node_id: Option<NodeId>,
+        logical_rect: Rect,
+        reasons: LayerSurfaceReasons,
+    ) {
         self.isolated_layer_renders
             .set(self.isolated_layer_renders.get().saturating_add(1));
         self.isolated_layer_pixels.set(
@@ -150,6 +310,13 @@ impl FrameStats {
                 .get()
                 .saturating_add((width as u64) * (height as u64)),
         );
+        self.record_top_isolated_layer(IsolatedLayerStat {
+            node_id,
+            logical_rect,
+            width,
+            height,
+            reasons,
+        });
     }
 
     pub fn record_layer_cache_hit(&self, width: u32, height: u32) {
@@ -216,6 +383,8 @@ impl FrameStats {
             layer_cache_bytes: self.layer_cache_bytes.get(),
             image_cache_size: self.image_cache_size.get(),
             text_cache_size: self.text_cache_size.get(),
+            top_isolated_layers: *self.top_isolated_layers.borrow(),
+            top_isolated_layer_count: self.top_isolated_layer_count.get(),
         }
     }
 
@@ -238,6 +407,8 @@ impl FrameStats {
         self.shape_passes.set(0);
         self.image_passes.set(0);
         self.text_passes.set(0);
+        *self.top_isolated_layers.borrow_mut() = [None; TOP_ISOLATED_LAYER_LIMIT];
+        self.top_isolated_layer_count.set(0);
     }
 
     pub fn maybe_print_snapshot(
@@ -253,6 +424,42 @@ impl FrameStats {
         if (*frame_count).is_multiple_of(60) {
             snapshot.print(*frame_count);
         }
+    }
+
+    fn record_top_isolated_layer(&self, layer: IsolatedLayerStat) {
+        if !layer.reasons.has_any() {
+            return;
+        }
+
+        let mut top_layers = self.top_isolated_layers.borrow_mut();
+        let len = self.top_isolated_layer_count.get();
+        let insert_at = top_layers[..len]
+            .iter()
+            .enumerate()
+            .find_map(|(index, existing)| {
+                existing
+                    .filter(|existing| layer.pixel_area() > existing.pixel_area())
+                    .map(|_| index)
+            })
+            .unwrap_or(len);
+
+        if insert_at >= TOP_ISOLATED_LAYER_LIMIT {
+            return;
+        }
+
+        let new_len = if len < TOP_ISOLATED_LAYER_LIMIT {
+            len + 1
+        } else {
+            TOP_ISOLATED_LAYER_LIMIT
+        };
+
+        let mut index = new_len.saturating_sub(1);
+        while index > insert_at {
+            top_layers[index] = top_layers[index - 1];
+            index -= 1;
+        }
+        top_layers[insert_at] = Some(layer);
+        self.top_isolated_layer_count.set(new_len);
     }
 }
 
@@ -285,7 +492,21 @@ mod tests {
         assert_eq!(stats.layer_cache_hit_pixels.get(), 212);
         assert_eq!(stats.layer_cache_miss_pixels.get(), 30);
 
-        stats.record_isolated_layer_render(7, 8);
+        stats.record_isolated_layer_render(
+            7,
+            8,
+            Some(9),
+            Rect {
+                x: 2.0,
+                y: 3.0,
+                width: 4.0,
+                height: 5.0,
+            },
+            LayerSurfaceReasons {
+                immediate_text: true,
+                ..LayerSurfaceReasons::default()
+            },
+        );
         let snapshot = stats.snapshot();
 
         assert_eq!(snapshot.isolated_layer_renders, 1);
@@ -293,6 +514,9 @@ mod tests {
         assert_eq!(snapshot.upload_bytes, 512);
         assert_eq!(snapshot.layer_cache_hits, 2);
         assert_eq!(snapshot.layer_cache_misses, 1);
+        let top_layers = snapshot.top_isolated_layers().collect::<Vec<_>>();
+        assert_eq!(top_layers.len(), 1);
+        assert_eq!(top_layers[0].node_id, Some(9));
         assert_eq!(stats.layer_cache_hits.get(), 2);
         assert_eq!(stats.layer_cache_misses.get(), 1);
 
@@ -306,6 +530,7 @@ mod tests {
         assert_eq!(stats.upload_bytes.get(), 0);
         assert_eq!(stats.isolated_layer_renders.get(), 0);
         assert_eq!(stats.isolated_layer_pixels.get(), 0);
+        assert_eq!(stats.top_isolated_layer_count.get(), 0);
     }
 
     #[test]
@@ -319,5 +544,50 @@ mod tests {
 
         stats.maybe_print_snapshot(snapshot, &mut frame_count, true);
         assert_eq!(frame_count, 1);
+    }
+
+    #[test]
+    fn layer_surface_reasons_report_runtime_only_bits() {
+        let reasons = LayerSurfaceReasons {
+            immediate_text: true,
+            mixed_direct_content: true,
+            ..LayerSurfaceReasons::default()
+        };
+
+        assert!(reasons.has_any());
+        assert!(reasons.has_renderer_forced_surface());
+        assert_eq!(
+            reasons.labels().collect::<Vec<_>>(),
+            vec!["immediate_text", "mixed_direct_content"]
+        );
+        assert_eq!(reasons.display(), "immediate_text+mixed_direct_content");
+    }
+
+    #[test]
+    fn top_isolated_layers_keep_largest_runtime_surfaces() {
+        let stats = FrameStats::default();
+        for index in 0..(TOP_ISOLATED_LAYER_LIMIT + 2) {
+            stats.record_isolated_layer_render(
+                16 + index as u32,
+                8 + index as u32,
+                Some(index),
+                Rect {
+                    x: index as f32,
+                    y: 0.0,
+                    width: 10.0,
+                    height: 10.0,
+                },
+                LayerSurfaceReasons {
+                    immediate_text: true,
+                    ..LayerSurfaceReasons::default()
+                },
+            );
+        }
+
+        let snapshot = stats.snapshot();
+        let top_layers = snapshot.top_isolated_layers().collect::<Vec<_>>();
+        assert_eq!(top_layers.len(), TOP_ISOLATED_LAYER_LIMIT);
+        assert_eq!(top_layers[0].node_id, Some(TOP_ISOLATED_LAYER_LIMIT + 1));
+        assert_eq!(top_layers[1].node_id, Some(TOP_ISOLATED_LAYER_LIMIT));
     }
 }
