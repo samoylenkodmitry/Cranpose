@@ -146,6 +146,7 @@ mod tests {
                 height: 18.0,
             },
             transform_to_parent,
+            motion_context_animated: false,
             graphics_layer: cranpose_ui_graphics::GraphicsLayer::default(),
             clip_to_bounds: true,
             shadow_clip: None,

@@ -302,14 +302,24 @@ struct GradientStop {
     position: [f32; 4],
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ImageSampleMode {
+    Nearest,
+    Linear,
+}
+
 struct CachedImageTexture {
-    bind_group: wgpu::BindGroup,
+    _texture: wgpu::Texture,
+    _view: wgpu::TextureView,
+    nearest_bind_group: wgpu::BindGroup,
+    linear_bind_group: wgpu::BindGroup,
 }
 
 struct ImageDrawCmd {
     index_start: u32,
     scissor: (u32, u32, u32, u32),
     image_id: u64,
+    sample_mode: ImageSampleMode,
 }
 
 #[derive(Clone, Copy)]
@@ -587,7 +597,8 @@ pub struct GpuRenderer {
     image_pipeline: wgpu::RenderPipeline,
     image_pipeline_dst_out: wgpu::RenderPipeline,
     image_bind_group_layout: wgpu::BindGroupLayout,
-    image_sampler: wgpu::Sampler,
+    image_sampler_nearest: wgpu::Sampler,
+    image_sampler_linear: wgpu::Sampler,
     text_renderer_pool: Vec<TextRendererSlot>,
     /// Which slot in `text_renderer_pool` the next prepare→encode pair should use.
     text_batch_cursor: usize,
@@ -670,6 +681,14 @@ struct ChildLayerComposite<'a> {
     backdrop_rect: Rect,
     shadow_draws: Vec<ShadowDraw>,
     needs_nested_underlay: bool,
+}
+
+#[derive(Clone)]
+struct ResolvedChildSurfaceComposite {
+    logical_rect: Rect,
+    dest_quad: [[f32; 2]; 4],
+    backdrop_rect: Rect,
+    shadow_draws: Vec<ShadowDraw>,
 }
 
 struct CollectedLayer<'a> {
@@ -788,6 +807,25 @@ fn direct_translation(transform: ProjectiveTransform) -> Option<Point> {
     Some(Point::new(matrix[0][2], matrix[1][2]))
 }
 
+fn resolved_child_surface_composite(
+    child: &ChildLayerComposite<'_>,
+) -> ResolvedChildSurfaceComposite {
+    ResolvedChildSurfaceComposite {
+        logical_rect: child.logical_rect,
+        dest_quad: child.dest_quad,
+        backdrop_rect: child.backdrop_rect,
+        shadow_draws: child.shadow_draws.clone(),
+    }
+}
+
+fn image_sample_mode(image_draw: &ImageDraw) -> ImageSampleMode {
+    if image_draw.motion_context_animated {
+        ImageSampleMode::Linear
+    } else {
+        ImageSampleMode::Nearest
+    }
+}
+
 fn root_can_render_directly_cached(
     layer: &LayerNode,
     layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
@@ -803,7 +841,6 @@ fn text_requires_local_surface(text: &TextPrimitiveNode) -> bool {
     let span = &text.text_style.span_style;
     !text.text.span_styles.is_empty()
         || span.shadow.is_some()
-        || span.text_decoration.is_some()
         || span.background.is_some()
         || span.baseline_shift.is_some()
         || span.text_geometric_transform.is_some()
@@ -908,6 +945,7 @@ fn push_local_primitive(
     layer_bounds: Rect,
     local_layer: &GraphicsLayer,
     visual_clip: Option<Rect>,
+    motion_context_animated: bool,
 ) {
     match &primitive.node {
         PrimitiveNode::Draw(draw) => {
@@ -928,6 +966,7 @@ fn push_local_primitive(
                 clip,
                 local_scene,
                 None,
+                motion_context_animated,
             );
         }
         PrimitiveNode::Text(text) => {
@@ -941,11 +980,12 @@ fn push_local_primitive(
             if text.clip.is_some() && text_clip.is_none() {
                 return;
             }
+            let text_rect = text.rect.translate(layer_bounds.x, layer_bounds.y);
             push_text_style_draws(
                 local_scene,
                 text.node_id,
                 layer_bounds,
-                text.rect,
+                text_rect,
                 local_layer,
                 &text.text,
                 &text.text_style,
@@ -993,6 +1033,7 @@ fn collect_layer_contents_into<'a>(
                         layer_bounds,
                         &local_layer,
                         visual_clip,
+                        layer.motion_context_animated,
                     );
                 }
                 PrimitivePhase::AfterChildren => deferred_primitives.push(primitive),
@@ -1093,6 +1134,7 @@ fn collect_layer_contents_into<'a>(
             layer_bounds,
             &local_layer,
             visual_clip,
+            layer.motion_context_animated,
         );
     }
 }
@@ -1535,13 +1577,23 @@ impl GpuRenderer {
         // Create persistent shape buffers
         let shape_buffers = ShapeBatchBuffers::new(&device, &shape_bind_group_layout);
 
-        let image_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Image Sampler"),
+        let image_sampler_nearest = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Nearest Image Sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Nearest,
             min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
+        });
+        let image_sampler_linear = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Linear Image Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
@@ -1572,7 +1624,8 @@ impl GpuRenderer {
             image_pipeline,
             image_pipeline_dst_out,
             image_bind_group_layout,
-            image_sampler,
+            image_sampler_nearest,
+            image_sampler_linear,
             text_renderer_pool: vec![first_slot],
             text_batch_cursor: 0,
             text_atlas,
@@ -1657,8 +1710,8 @@ impl GpuRenderer {
             .record_upload_bytes(image.pixels().len() as u64);
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Image Texture Bind Group"),
+        let nearest_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Nearest Image Texture Bind Group"),
             layout: &self.image_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -1667,13 +1720,34 @@ impl GpuRenderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.image_sampler),
+                    resource: wgpu::BindingResource::Sampler(&self.image_sampler_nearest),
+                },
+            ],
+        });
+        let linear_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Linear Image Texture Bind Group"),
+            layout: &self.image_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.image_sampler_linear),
                 },
             ],
         });
 
-        self.image_texture_cache
-            .put(image.id(), CachedImageTexture { bind_group });
+        self.image_texture_cache.put(
+            image.id(),
+            CachedImageTexture {
+                _texture: texture,
+                _view: view,
+                nearest_bind_group,
+                linear_bind_group,
+            },
+        );
         Ok(())
     }
 
@@ -1777,6 +1851,7 @@ impl GpuRenderer {
         root_scale: f32,
         has_backdrop_underlay: bool,
         allow_runtime_cache: bool,
+        logical_rect_override: Option<Rect>,
     ) -> Option<(LayerRasterCacheKey, Rect)> {
         let surface_requirements =
             layer_surface_requirements_cached(layer, &mut self.layer_surface_requirements_cache);
@@ -1789,11 +1864,13 @@ impl GpuRenderer {
             return None;
         }
 
-        let logical_rect = estimate_layer_surface_rect_cached(
-            layer,
-            &mut self.layer_surface_rect_cache,
-            &mut self.layer_surface_requirements_cache,
-        );
+        let logical_rect = logical_rect_override.unwrap_or_else(|| {
+            estimate_layer_surface_rect_cached(
+                layer,
+                &mut self.layer_surface_rect_cache,
+                &mut self.layer_surface_requirements_cache,
+            )
+        });
         let pixel_size = surface_target_size(logical_rect, root_scale);
         Some((
             LayerRasterCacheKey::new(
@@ -2001,7 +2078,7 @@ impl GpuRenderer {
             );
         }
         let root_surface =
-            self.render_layer_surface(text_state, &graph.root, root_scale, None, false)?;
+            self.render_layer_surface(text_state, &graph.root, root_scale, None, false, None)?;
         let root_quad = graph
             .root
             .transform_to_parent
@@ -2170,7 +2247,9 @@ impl GpuRenderer {
                 next_load_op = wgpu::LoadOp::Load;
             }
 
-            for shadow in &child.shadow_draws {
+            let resolved_child = resolved_child_surface_composite(&child);
+
+            for shadow in &resolved_child.shadow_draws {
                 self.render_shadow_draw(
                     text_state,
                     surface_view,
@@ -2181,8 +2260,14 @@ impl GpuRenderer {
                 );
             }
 
-            let child_surface =
-                self.render_layer_surface(text_state, child.layer, root_scale, None, true)?;
+            let child_surface = self.render_layer_surface(
+                text_state,
+                child.layer,
+                root_scale,
+                None,
+                true,
+                Some(resolved_child.logical_rect),
+            )?;
             if child_surface.backdrop.is_some() {
                 return Err("root direct path does not support backdrop child surfaces".to_string());
             }
@@ -2195,7 +2280,7 @@ impl GpuRenderer {
             };
             let inverse = ProjectiveTransform::from_rect_to_quad(
                 source_rect,
-                scaled_quad(child.dest_quad, root_scale),
+                scaled_quad(resolved_child.dest_quad, root_scale),
             )
             .inverse()
             .ok_or_else(|| "child layer transform is not invertible".to_string())?;
@@ -2207,7 +2292,7 @@ impl GpuRenderer {
                 (width, height),
                 (source_rect.width, source_rect.height),
                 inverse.matrix(),
-                scaled_quad(child.dest_quad, root_scale),
+                scaled_quad(resolved_child.dest_quad, root_scale),
                 child_surface.composite_alpha,
                 wgpu::LoadOp::Load,
                 visual_clip.and_then(|clip| scissor_rect_for_rect(clip, root_scale, width, height)),
@@ -2342,12 +2427,14 @@ impl GpuRenderer {
         root_scale: f32,
         backdrop_underlay: Option<&OffscreenTarget>,
         allow_runtime_cache: bool,
+        logical_rect_override: Option<Rect>,
     ) -> Result<LayerSurface, String> {
         let cache_candidate = self.layer_raster_cache_candidate(
             layer,
             root_scale,
             backdrop_underlay.is_some(),
             allow_runtime_cache,
+            logical_rect_override,
         );
         if let Some((cache_key, logical_rect)) = cache_candidate {
             if let Some((target, logical_rect)) = self.cached_layer_surface(&cache_key) {
@@ -2374,10 +2461,18 @@ impl GpuRenderer {
                 root_scale,
                 backdrop_underlay,
                 Some((cache_key, logical_rect)),
+                logical_rect_override,
             );
         }
 
-        self.render_layer_surface_uncached(text_state, layer, root_scale, backdrop_underlay, None)
+        self.render_layer_surface_uncached(
+            text_state,
+            layer,
+            root_scale,
+            backdrop_underlay,
+            None,
+            logical_rect_override,
+        )
     }
 
     fn render_layer_surface_uncached(
@@ -2387,6 +2482,7 @@ impl GpuRenderer {
         root_scale: f32,
         backdrop_underlay: Option<&OffscreenTarget>,
         cache_candidate: Option<(LayerRasterCacheKey, Rect)>,
+        logical_rect_override: Option<Rect>,
     ) -> Result<LayerSurface, String> {
         let isolation = effective_layer_isolation(&layer.graphics_layer);
         let visual_clip = layer.clip_rect();
@@ -2402,6 +2498,7 @@ impl GpuRenderer {
 
         let surface_rect = cache_candidate
             .map(|(_, logical_rect)| logical_rect)
+            .or(logical_rect_override)
             .unwrap_or_else(|| {
                 let mut bounds = scene_bounds(&local_scene);
                 for child in &child_layers {
@@ -2469,12 +2566,14 @@ impl GpuRenderer {
                 next_load_op = wgpu::LoadOp::Load;
             }
 
+            let resolved_child = resolved_child_surface_composite(&child);
+
             let child_underlay = child.needs_nested_underlay.then(|| {
                 self.create_projected_child_underlay(
                     &target,
                     backdrop_underlay,
-                    child.logical_rect,
-                    child.dest_quad,
+                    resolved_child.logical_rect,
+                    resolved_child.dest_quad,
                     root_scale,
                 )
             });
@@ -2484,13 +2583,14 @@ impl GpuRenderer {
                 root_scale,
                 child_underlay.as_ref(),
                 true,
+                Some(resolved_child.logical_rect),
             )?;
 
             if let Some(backdrop) = &child_surface.backdrop {
                 self.apply_backdrop_layer_to_target(
                     &target,
                     &BackdropLayer {
-                        rect: child.backdrop_rect,
+                        rect: resolved_child.backdrop_rect,
                         clip: visual_clip.map(|clip| clip.translate(shift.x, shift.y)),
                         effect: backdrop.clone(),
                         z_index: child.z_index,
@@ -2502,7 +2602,7 @@ impl GpuRenderer {
                 )?;
             }
 
-            for shadow in &child.shadow_draws {
+            for shadow in &resolved_child.shadow_draws {
                 self.render_shadow_draw(
                     text_state,
                     &target.view,
@@ -2521,7 +2621,7 @@ impl GpuRenderer {
             };
             let inverse = ProjectiveTransform::from_rect_to_quad(
                 source_rect,
-                scaled_quad(child.dest_quad, root_scale),
+                scaled_quad(resolved_child.dest_quad, root_scale),
             )
             .inverse()
             .ok_or_else(|| "child layer transform is not invertible".to_string())?;
@@ -2533,7 +2633,7 @@ impl GpuRenderer {
                 (width, height),
                 (source_rect.width, source_rect.height),
                 inverse.matrix(),
-                scaled_quad(child.dest_quad, root_scale),
+                scaled_quad(resolved_child.dest_quad, root_scale),
                 child_surface.composite_alpha,
                 wgpu::LoadOp::Load,
                 visual_clip.and_then(|clip| {
@@ -4123,7 +4223,11 @@ impl GpuRenderer {
                 .image_texture_cache
                 .get(&cmd.image_id)
                 .ok_or_else(|| "image texture missing from cache".to_string())?;
-            render_pass.set_bind_group(1, &cached.bind_group, &[]);
+            let bind_group = match cmd.sample_mode {
+                ImageSampleMode::Nearest => &cached.nearest_bind_group,
+                ImageSampleMode::Linear => &cached.linear_bind_group,
+            };
+            render_pass.set_bind_group(1, bind_group, &[]);
             render_pass.draw_indexed(cmd.index_start..(cmd.index_start + 6), 0, 0..1);
         }
         Ok(())
@@ -4234,6 +4338,7 @@ impl GpuRenderer {
                 index_start,
                 scissor,
                 image_id: prepared_image.id(),
+                sample_mode: image_sample_mode(image_draw),
             });
         }
 
@@ -5370,7 +5475,21 @@ mod tests {
             clip: None,
             blend_mode,
             src_rect: None,
+            motion_context_animated: false,
         }
+    }
+
+    #[test]
+    fn image_sample_mode_keeps_static_images_nearest() {
+        let image = test_image(0, BlendMode::SrcOver);
+        assert_eq!(image_sample_mode(&image), ImageSampleMode::Nearest);
+    }
+
+    #[test]
+    fn image_sample_mode_switches_scrolling_images_to_linear() {
+        let mut image = test_image(0, BlendMode::SrcOver);
+        image.motion_context_animated = true;
+        assert_eq!(image_sample_mode(&image), ImageSampleMode::Linear);
     }
 
     fn test_text(z_index: usize) -> TextDraw {
@@ -5939,14 +6058,6 @@ mod tests {
                 }),
             ),
             (
-                "decoration",
-                AnnotatedString::from("decoration"),
-                TextStyle::from_span_style(SpanStyle {
-                    text_decoration: Some(TextDecoration::UNDERLINE),
-                    ..SpanStyle::default()
-                }),
-            ),
-            (
                 "background",
                 AnnotatedString::from("background"),
                 TextStyle::from_span_style(SpanStyle {
@@ -6029,6 +6140,29 @@ mod tests {
     }
 
     #[test]
+    fn layer_surface_requirements_keep_decoration_only_text_on_direct_path() {
+        let layer = text_layer_with_style(
+            AnnotatedString::from("decoration"),
+            TextStyle::from_span_style(SpanStyle {
+                text_decoration: Some(TextDecoration::UNDERLINE),
+                ..SpanStyle::default()
+            }),
+        );
+
+        let requirements = layer_surface_requirements(&layer);
+
+        assert_eq!(requirements.direct_translation, Some(Point::default()));
+        assert!(
+            !requirements.reasons.text_local_surface,
+            "decoration-only text should stay on the direct path: {requirements:?}"
+        );
+        assert!(
+            !requirements.reasons.has_any(),
+            "decoration-only text should not force any layer surface reasons: {requirements:?}"
+        );
+    }
+
+    #[test]
     fn layer_surface_requirements_keep_shape_plus_direct_child_on_direct_path() {
         let mut child = test_layer(
             Rect {
@@ -6087,6 +6221,53 @@ mod tests {
         assert_eq!(requirements.direct_translation, Some(Point::default()));
         assert!(!requirements.reasons.mixed_direct_content);
         assert!(!requirements.reasons.has_any());
+    }
+
+    #[test]
+    fn collect_layer_contents_translates_direct_text_rects_into_parent_space() {
+        let mut child = text_layer_with_style(
+            AnnotatedString::from("direct"),
+            TextStyle::from_span_style(SpanStyle {
+                text_decoration: Some(TextDecoration::UNDERLINE),
+                ..SpanStyle::default()
+            }),
+        );
+        child.transform_to_parent = ProjectiveTransform::translation(9.0, 7.0);
+
+        let parent = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 64.0,
+                height: 32.0,
+            },
+            vec![RenderNode::Layer(Box::new(child))],
+        );
+
+        let mut rect_cache = HashMap::new();
+        let mut requirements_cache = HashMap::new();
+        let collected =
+            collect_layer_contents(&parent, None, &mut rect_cache, &mut requirements_cache);
+
+        assert!(
+            collected.child_layers.is_empty(),
+            "decoration-only text child should collapse directly into the parent scene"
+        );
+        assert_eq!(collected.scene.texts.len(), 1, "expected one text draw");
+        let text = &collected.scene.texts[0];
+        assert!(
+            text.rect.x >= 9.0 && text.rect.y >= 7.0,
+            "collapsed text rect should be translated into parent space, got {:?}",
+            text.rect
+        );
+        assert!(
+            collected
+                .scene
+                .shapes
+                .iter()
+                .any(|shape| shape.rect.y >= 7.0),
+            "collapsed underline geometry should also be translated into parent space"
+        );
     }
 
     #[test]

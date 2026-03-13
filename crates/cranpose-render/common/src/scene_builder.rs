@@ -55,7 +55,7 @@ struct SnapshotNodeData {
 pub fn build_graph_from_layout_tree(root: &LayoutBox, scale: f32) -> RenderGraph {
     let root_snapshot = layout_box_to_snapshot(root, None);
     RenderGraph {
-        root: build_layer_node(root_snapshot, scale),
+        root: build_layer_node(root_snapshot, scale, false),
     }
 }
 
@@ -65,11 +65,15 @@ pub fn build_graph_from_applier(
     scale: f32,
 ) -> Option<RenderGraph> {
     Some(RenderGraph {
-        root: build_layer_node_from_applier(applier, root, scale)?,
+        root: build_layer_node_from_applier(applier, root, scale, false)?,
     })
 }
 
-fn build_layer_node(snapshot: BuildNodeSnapshot, root_scale: f32) -> LayerNode {
+fn build_layer_node(
+    snapshot: BuildNodeSnapshot,
+    root_scale: f32,
+    inherited_motion_context_animated: bool,
+) -> LayerNode {
     let BuildNodeSnapshot {
         node_id,
         placement,
@@ -124,22 +128,25 @@ fn build_layer_node(snapshot: BuildNodeSnapshot, root_scale: f32) -> LayerNode {
         size,
         PrimitivePhase::BeforeChildren,
     );
-    if let Some(text) = text_node_from_parts(
+    if let Some(text) = text_node_from_parts(TextNodeParts {
         node_id,
         local_bounds,
         measured_max_width,
-        &resolved_modifiers,
-        annotated_text.as_ref(),
-        text_style.as_ref(),
+        resolved_modifiers: &resolved_modifiers,
+        annotated_text: annotated_text.as_ref(),
+        text_style: text_style.as_ref(),
         text_layout_options,
-    ) {
+        inherited_motion_context_animated,
+    }) {
         children.push(RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
             node: PrimitiveNode::Text(Box::new(text)),
         }));
     }
+    let child_motion_context_animated =
+        inherited_motion_context_animated || content_offset != Point::default();
     for child in child_snapshots {
-        let mut child_layer = build_layer_node(child, 1.0);
+        let mut child_layer = build_layer_node(child, 1.0, child_motion_context_animated);
         if content_offset != Point::default() {
             child_layer.transform_to_parent =
                 child_layer
@@ -167,6 +174,7 @@ fn build_layer_node(snapshot: BuildNodeSnapshot, root_scale: f32) -> LayerNode {
         node_id: Some(node_id),
         local_bounds,
         transform_to_parent,
+        motion_context_animated: inherited_motion_context_animated,
         graphics_layer,
         clip_to_bounds,
         shadow_clip,
@@ -184,6 +192,7 @@ fn build_layer_node_from_applier(
     applier: &mut MemoryApplier,
     node_id: NodeId,
     root_scale: f32,
+    inherited_motion_context_animated: bool,
 ) -> Option<LayerNode> {
     if let Ok(data) = applier.with_node::<LayoutNode, _>(node_id, |node| {
         let state = node.layout_state();
@@ -203,7 +212,13 @@ fn build_layer_node_from_applier(
             children,
         }
     }) {
-        return build_layer_node_from_data(applier, node_id, data, root_scale);
+        return build_layer_node_from_data(
+            applier,
+            node_id,
+            data,
+            root_scale,
+            inherited_motion_context_animated,
+        );
     }
 
     if let Ok(data) = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
@@ -224,7 +239,13 @@ fn build_layer_node_from_applier(
             children,
         }
     }) {
-        return build_layer_node_from_data(applier, node_id, data, root_scale);
+        return build_layer_node_from_data(
+            applier,
+            node_id,
+            data,
+            root_scale,
+            inherited_motion_context_animated,
+        );
     }
 
     None
@@ -235,6 +256,7 @@ fn build_layer_node_from_data(
     node_id: NodeId,
     data: SnapshotNodeData,
     root_scale: f32,
+    inherited_motion_context_animated: bool,
 ) -> Option<LayerNode> {
     let SnapshotNodeData {
         layout_state,
@@ -291,26 +313,31 @@ fn build_layer_node_from_data(
         layout_state.size,
         PrimitivePhase::BeforeChildren,
     );
-    if let Some(text) = text_node_from_parts(
+    if let Some(text) = text_node_from_parts(TextNodeParts {
         node_id,
         local_bounds,
-        layout_state
+        measured_max_width: layout_state
             .measurement_constraints
             .max_width
             .is_finite()
             .then_some(layout_state.measurement_constraints.max_width),
-        &resolved_modifiers,
-        annotated_text.as_ref(),
-        text_style.as_ref(),
+        resolved_modifiers: &resolved_modifiers,
+        annotated_text: annotated_text.as_ref(),
+        text_style: text_style.as_ref(),
         text_layout_options,
-    ) {
+        inherited_motion_context_animated,
+    }) {
         render_children.push(RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
             node: PrimitiveNode::Text(Box::new(text)),
         }));
     }
+    let child_motion_context_animated =
+        inherited_motion_context_animated || layout_state.content_offset != Point::default();
     for child_id in children {
-        let Some(mut child_layer) = build_layer_node_from_applier(applier, child_id, 1.0) else {
+        let Some(mut child_layer) =
+            build_layer_node_from_applier(applier, child_id, 1.0, child_motion_context_animated)
+        else {
             continue;
         };
         if layout_state.content_offset != Point::default() {
@@ -340,6 +367,7 @@ fn build_layer_node_from_data(
         node_id: Some(node_id),
         local_bounds,
         transform_to_parent,
+        motion_context_animated: inherited_motion_context_animated,
         graphics_layer,
         clip_to_bounds,
         shadow_clip,
@@ -375,18 +403,34 @@ fn draw_nodes(
     nodes
 }
 
-fn text_node_from_parts(
+struct TextNodeParts<'a> {
     node_id: NodeId,
     local_bounds: Rect,
     measured_max_width: Option<f32>,
-    resolved_modifiers: &ResolvedModifiers,
-    annotated_text: Option<&AnnotatedString>,
-    text_style: Option<&TextStyle>,
+    resolved_modifiers: &'a ResolvedModifiers,
+    annotated_text: Option<&'a AnnotatedString>,
+    text_style: Option<&'a TextStyle>,
     text_layout_options: Option<TextLayoutOptions>,
-) -> Option<TextPrimitiveNode> {
+    inherited_motion_context_animated: bool,
+}
+
+fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
+    let TextNodeParts {
+        node_id,
+        local_bounds,
+        measured_max_width,
+        resolved_modifiers,
+        annotated_text,
+        text_style,
+        text_layout_options,
+        inherited_motion_context_animated,
+    } = parts;
     let value = annotated_text?;
     let default_text_style = TextStyle::default();
-    let text_style = text_style.cloned().unwrap_or(default_text_style);
+    let mut text_style = text_style.cloned().unwrap_or(default_text_style);
+    if inherited_motion_context_animated && text_style.paragraph_style.text_motion.is_none() {
+        text_style.paragraph_style.text_motion = Some(cranpose_ui::text::TextMotion::Animated);
+    }
     let options = text_layout_options.unwrap_or_default().normalized();
     let padding = resolved_modifiers.padding();
     let content_width = (local_bounds.width - padding.left - padding.right).max(0.0);
@@ -580,7 +624,7 @@ fn resolve_text_horizontal_offset(
 mod tests {
     use std::rc::Rc;
 
-    use cranpose_ui::text::{AnnotatedString, BaselineShift, TextAlign, TextDirection};
+    use cranpose_ui::text::{AnnotatedString, BaselineShift, TextAlign, TextDirection, TextMotion};
     use cranpose_ui::{Color, DrawCommand, Point, Rect, ResolvedModifiers, Size};
     use cranpose_ui_graphics::{Brush, DrawPrimitive, GraphicsLayer};
 
@@ -647,8 +691,8 @@ mod tests {
 
     #[test]
     fn parent_translation_changes_layer_transform_but_not_child_local_geometry() {
-        let static_graph = build_layer_node(snapshot_with_translation(0.0), 1.0);
-        let moved_graph = build_layer_node(snapshot_with_translation(23.5), 1.0);
+        let static_graph = build_layer_node(snapshot_with_translation(0.0), 1.0, false);
+        let moved_graph = build_layer_node(snapshot_with_translation(23.5), 1.0, false);
 
         let RenderNode::Layer(static_child) = &static_graph.children[0] else {
             panic!("expected child layer");
@@ -681,8 +725,8 @@ mod tests {
 
     #[test]
     fn stored_content_hash_ignores_parent_translation() {
-        let static_graph = build_layer_node(snapshot_with_translation(0.0), 1.0);
-        let moved_graph = build_layer_node(snapshot_with_translation(23.5), 1.0);
+        let static_graph = build_layer_node(snapshot_with_translation(0.0), 1.0, false);
+        let moved_graph = build_layer_node(snapshot_with_translation(23.5), 1.0, false);
 
         assert_eq!(
             static_graph.target_content_hash(),
@@ -735,7 +779,7 @@ mod tests {
             children: vec![child],
         };
 
-        let graph = build_layer_node(parent, 1.0);
+        let graph = build_layer_node(parent, 1.0, false);
         let RenderNode::Layer(child) = &graph.children[0] else {
             panic!("expected child layer");
         };
@@ -810,7 +854,7 @@ mod tests {
             children: vec![child],
         };
 
-        let graph = build_layer_node(parent, 1.0);
+        let graph = build_layer_node(parent, 1.0, false);
         let RenderNode::Primitive(behind) = &graph.children[0] else {
             panic!("expected before-children primitive");
         };
@@ -875,8 +919,8 @@ mod tests {
             ..parent.clone()
         };
 
-        let static_graph = build_layer_node(parent, 1.0);
-        let moved_graph = build_layer_node(moved_parent, 1.0);
+        let static_graph = build_layer_node(parent, 1.0, false);
+        let moved_graph = build_layer_node(moved_parent, 1.0, false);
 
         assert_ne!(
             static_graph.target_content_hash(),
@@ -913,8 +957,8 @@ mod tests {
             ..GraphicsLayer::default()
         });
 
-        let base_graph = build_layer_node(base, 1.0);
-        let effected_graph = build_layer_node(effected, 1.0);
+        let base_graph = build_layer_node(base, 1.0, false);
+        let effected_graph = build_layer_node(effected, 1.0, false);
 
         assert_eq!(
             base_graph.target_content_hash(),
@@ -955,7 +999,7 @@ mod tests {
             children: vec![],
         };
 
-        let graph = build_layer_node(snapshot, 1.0);
+        let graph = build_layer_node(snapshot, 1.0, false);
         let RenderNode::Primitive(text_primitive) = &graph.children[0] else {
             panic!("expected text primitive");
         };
@@ -977,6 +1021,134 @@ mod tests {
         assert!(
             clip.intersect(text.rect).is_some(),
             "the clip rect must intersect the shifted text draw rect"
+        );
+    }
+
+    #[test]
+    fn scrolling_content_offset_marks_descendant_text_as_animated_when_unspecified() {
+        let child = BuildNodeSnapshot {
+            node_id: 2,
+            placement: Point { x: 11.0, y: 7.0 },
+            size: Size {
+                width: 120.0,
+                height: 32.0,
+            },
+            content_offset: Point::default(),
+            measured_max_width: Some(120.0),
+            resolved_modifiers: ResolvedModifiers::default(),
+            draw_commands: vec![],
+            click_actions: vec![],
+            pointer_inputs: vec![],
+            clip_to_bounds: false,
+            annotated_text: Some(AnnotatedString::from("scrolling")),
+            text_style: Some(TextStyle::default()),
+            text_layout_options: None,
+            graphics_layer: None,
+            children: vec![],
+        };
+        let parent = BuildNodeSnapshot {
+            node_id: 1,
+            placement: Point::default(),
+            size: Size {
+                width: 160.0,
+                height: 64.0,
+            },
+            content_offset: Point { x: 0.0, y: -18.5 },
+            measured_max_width: None,
+            resolved_modifiers: ResolvedModifiers::default(),
+            draw_commands: vec![],
+            click_actions: vec![],
+            pointer_inputs: vec![],
+            clip_to_bounds: false,
+            annotated_text: None,
+            text_style: None,
+            text_layout_options: None,
+            graphics_layer: None,
+            children: vec![child],
+        };
+
+        let graph = build_layer_node(parent, 1.0, false);
+        let RenderNode::Layer(child_layer) = &graph.children[0] else {
+            panic!("expected child layer");
+        };
+        let RenderNode::Primitive(text_primitive) = &child_layer.children[0] else {
+            panic!("expected text primitive");
+        };
+        let PrimitiveNode::Text(text) = &text_primitive.node else {
+            panic!("expected text primitive");
+        };
+
+        assert_eq!(
+            text.text_style.paragraph_style.text_motion,
+            Some(TextMotion::Animated),
+            "unspecified text under a scrolling content offset must render as animated motion"
+        );
+        assert!(child_layer.motion_context_animated);
+    }
+
+    #[test]
+    fn explicit_static_text_motion_is_preserved_under_scrolling_context() {
+        let child = BuildNodeSnapshot {
+            node_id: 2,
+            placement: Point { x: 11.0, y: 7.0 },
+            size: Size {
+                width: 120.0,
+                height: 32.0,
+            },
+            content_offset: Point::default(),
+            measured_max_width: Some(120.0),
+            resolved_modifiers: ResolvedModifiers::default(),
+            draw_commands: vec![],
+            click_actions: vec![],
+            pointer_inputs: vec![],
+            clip_to_bounds: false,
+            annotated_text: Some(AnnotatedString::from("static")),
+            text_style: Some(TextStyle::from_paragraph_style(
+                cranpose_ui::text::ParagraphStyle {
+                    text_motion: Some(TextMotion::Static),
+                    ..Default::default()
+                },
+            )),
+            text_layout_options: None,
+            graphics_layer: None,
+            children: vec![],
+        };
+        let parent = BuildNodeSnapshot {
+            node_id: 1,
+            placement: Point::default(),
+            size: Size {
+                width: 160.0,
+                height: 64.0,
+            },
+            content_offset: Point { x: 0.0, y: -18.5 },
+            measured_max_width: None,
+            resolved_modifiers: ResolvedModifiers::default(),
+            draw_commands: vec![],
+            click_actions: vec![],
+            pointer_inputs: vec![],
+            clip_to_bounds: false,
+            annotated_text: None,
+            text_style: None,
+            text_layout_options: None,
+            graphics_layer: None,
+            children: vec![child],
+        };
+
+        let graph = build_layer_node(parent, 1.0, false);
+        let RenderNode::Layer(child_layer) = &graph.children[0] else {
+            panic!("expected child layer");
+        };
+        let RenderNode::Primitive(text_primitive) = &child_layer.children[0] else {
+            panic!("expected text primitive");
+        };
+        let PrimitiveNode::Text(text) = &text_primitive.node else {
+            panic!("expected text primitive");
+        };
+
+        assert_eq!(
+            text.text_style.paragraph_style.text_motion,
+            Some(TextMotion::Static),
+            "explicit text motion must win over inherited scrolling motion context"
         );
     }
 }

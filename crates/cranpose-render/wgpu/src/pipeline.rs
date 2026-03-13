@@ -1875,6 +1875,7 @@ pub(crate) fn push_draw_primitive(
     clip: Option<Rect>,
     scene: &mut CompositorScene,
     blend_mode: Option<BlendMode>,
+    motion_context_animated: bool,
 ) {
     struct SceneEmitter<'a> {
         scene: &'a mut CompositorScene,
@@ -1904,6 +1905,7 @@ pub(crate) fn push_draw_primitive(
                 params.clip,
                 params.src_rect,
                 params.blend_mode,
+                params.motion_context_animated,
             );
         }
 
@@ -1926,6 +1928,7 @@ pub(crate) fn push_draw_primitive(
         clip,
         &mut emitter,
         blend_mode,
+        motion_context_animated,
     );
 }
 
@@ -2214,6 +2217,7 @@ mod tests {
             transform_to_parent: cranpose_render_common::graph::ProjectiveTransform::translation(
                 12.0, 8.0,
             ),
+            motion_context_animated: false,
             graphics_layer: GraphicsLayer::default(),
             clip_to_bounds: false,
             shadow_clip: None,

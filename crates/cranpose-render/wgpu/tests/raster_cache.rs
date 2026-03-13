@@ -20,6 +20,7 @@ fn test_layer(
         node_id,
         local_bounds,
         transform_to_parent,
+        motion_context_animated: false,
         graphics_layer: GraphicsLayer::default(),
         clip_to_bounds: false,
         shadow_clip: None,

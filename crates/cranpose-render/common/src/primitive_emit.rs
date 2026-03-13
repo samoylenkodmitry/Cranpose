@@ -35,6 +35,7 @@ pub struct ImageDrawParams {
     pub clip: Option<Rect>,
     pub src_rect: Option<Rect>,
     pub blend_mode: BlendMode,
+    pub motion_context_animated: bool,
 }
 
 pub trait DrawPrimitiveSink {
@@ -89,6 +90,7 @@ pub fn draw_shape_params_for_primitive(
         clip,
         &mut sink,
         Some(blend_mode),
+        false,
     );
     sink.shape
 }
@@ -132,6 +134,7 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
     clip: Option<Rect>,
     sink: &mut S,
     blend_mode: Option<BlendMode>,
+    motion_context_animated: bool,
 ) {
     match primitive {
         DrawPrimitive::Content => {}
@@ -145,6 +148,7 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
             clip,
             sink,
             blend_mode.or(Some(nested)),
+            motion_context_animated,
         ),
         DrawPrimitive::Rect {
             rect: local_rect,
@@ -205,6 +209,7 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
                 clip,
                 src_rect,
                 blend_mode: blend_mode.unwrap_or(BlendMode::SrcOver),
+                motion_context_animated,
             });
         }
         DrawPrimitive::Shadow(shadow_primitive) => {

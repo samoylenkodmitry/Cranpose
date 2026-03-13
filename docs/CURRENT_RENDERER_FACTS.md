@@ -39,6 +39,7 @@ pub struct LayerNode {
     pub node_id: Option<NodeId>,
     pub local_bounds: Rect,
     pub transform_to_parent: ProjectiveTransform,
+    pub motion_context_animated: bool,
     pub graphics_layer: GraphicsLayer,
     pub hit_test: Option<HitTestNode>,
     pub has_hit_targets: bool,
@@ -55,6 +56,7 @@ Source: `crates/cranpose-render/common/src/graph.rs`
 Important facts:
 
 - subtree motion is carried by `transform_to_parent`
+- scroll/content-offset ancestry is carried by `motion_context_animated`
 - interactive-subtree presence is carried by `has_hit_targets`
 - raster-cache hashes are lazy through `cache_hashes_valid`
 
@@ -70,7 +72,7 @@ pub fn build_graph_from_applier(
     scale: f32,
 ) -> Option<RenderGraph> {
     Some(RenderGraph {
-        root: build_layer_node_from_applier(applier, root, scale)?,
+        root: build_layer_node_from_applier(applier, root, scale, false)?,
     })
 }
 ```
@@ -80,6 +82,7 @@ The builder still:
 - preserves local primitive geometry
 - turns placement plus `GraphicsLayer` into `transform_to_parent`
 - folds parent `content_offset` into child transforms
+- resolves unspecified text under scrolling/content-offset ancestry to `TextMotion::Animated`
 - prepares `TextPrimitiveNode` during graph build
 
 The builder does not eagerly recompute raster-cache hashes for every layer.
@@ -214,7 +217,6 @@ post-processing or local text-owned geometry:
 
 - span styles
 - shadow
-- text decoration
 - background
 - baseline shift
 - text geometric transform
@@ -222,7 +224,26 @@ post-processing or local text-owned geometry:
 - specified letter spacing
 - non-solid brush
 
-The classifier lives in `crates/cranpose-render/wgpu/src/render.rs`.
+Decoration-only text is direct again. The direct-collapse path now rebases
+`TextPrimitiveNode.rect` into parent space before emitting text/decorations, so
+collapsed underlined text no longer clips down to a tiny fragment.
+
+Unspecified text inside `motion_context_animated` subtrees is resolved to
+`TextMotion::Animated` during graph build, so scrolling text no longer defaults
+to the static snapped path.
+
+The classifier and direct-collapse text rebasing live in
+`crates/cranpose-render/wgpu/src/render.rs`.
+
+## Image Policy
+
+Image sampling now follows motion context:
+
+- static images use nearest sampling
+- images inside `motion_context_animated` subtrees use linear sampling
+
+This keeps static icons/pixel-art crisp while avoiding nearest-neighbor phase
+stepping during scroll.
 
 ## Root Scale And Capture
 
@@ -249,6 +270,8 @@ Validated current branch behavior:
 
 - transformed hit testing uses exact quads and inverse transforms
 - translation-only wrappers with plain text do zero offscreen work
+- scrolling/content-offset text resolves to animated motion by default
+- scrolling images use linear sampling while static images stay nearest
 - root direct rendering skips the old root offscreen for direct scenes
 - oversized Shaders-tab mixed-content isolates are guarded by a robot test
 - screenshot capture is physical-size aware
@@ -258,8 +281,10 @@ Current screenshot-based review tools:
 - `robot_measure_shaders` can save real stage screenshots under
   `/tmp/cranpose_shaders_visual_compare`
 - `robot_renderer_micro_contract` renders a tiny deterministic surface, saves
-  `/tmp/cranpose_renderer_micro_contract.png`, and validates exact pixels for
-  image/line/fill primitives plus text-region presence
+  `/tmp/cranpose_renderer_micro_contract.png`, and validates exact
+  pixels for image/line/fill primitives plus text-region presence
+- raw robot screenshots are physical-buffer captures; compare logical output, not
+  raw PNG size, when `root_scale != 1.0`
 - committed `main` reference screenshot:
   `docs/render-reference/main_renderer_micro_contract.png`
 

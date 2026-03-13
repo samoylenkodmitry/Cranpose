@@ -23,12 +23,20 @@ The current branch does not use the old global flat-scene model.
 The branch now enforces these invariants:
 
 1. Subtree motion is represented by `LayerNode::transform_to_parent`.
-2. Direct-safe translation-only subtrees collapse into their parent target.
-3. Plain text is not isolated just because it is text.
-4. Mixed-content isolation is attributed by real local-surface reasons, not by
+2. Scroll/content-offset ancestry is represented by `LayerNode::motion_context_animated`.
+3. Direct-safe translation-only subtrees collapse into their parent target.
+4. Plain text is not isolated just because it is text.
+5. Decoration-only text also stays on the direct path when no other
+   text-local-surface reason exists.
+6. Direct child collapse must rebase text primitives into parent space before
+   text/decorations are emitted.
+7. Unspecified text under scrolling/content-offset ancestry resolves to
+   `TextMotion::Animated`.
+8. Scrolling images use linear sampling; static images stay nearest.
+9. Mixed-content isolation is attributed by real local-surface reasons, not by
    tab-wide wrappers.
-5. Hit testing uses exact transformed geometry, not axis-aligned approximations.
-6. Raster-cache hashes are computed only when they are actually needed.
+10. Hit testing uses exact transformed geometry, not axis-aligned approximations.
+11. Raster-cache hashes are computed only when they are actually needed.
 
 ## Current Execution Model
 
@@ -37,6 +45,7 @@ The branch now enforces these invariants:
 - `build_graph_from_applier(...)` is one-pass on the hot path
 - it no longer allocates a full snapshot tree before building the graph
 - child `content_offset` is composed into child transforms
+- child `content_offset` also propagates `motion_context_animated`
 
 Files:
 
@@ -71,16 +80,20 @@ These refactorings are complete in the checked-in branch state:
 1. Exact transformed hit testing.
 2. Root direct rendering for translation-only/no-surface-reason scenes.
 3. Plain translation-only text on the direct path.
-4. Precise text local-surface attribution under `text_local_surface`.
-5. Removal of giant Shaders-tab mixed-content wrapper isolation.
-6. Physical-size-aware presented-window screenshot capture.
-7. Axis-aligned rect-to-quad fast path in `ProjectiveTransform::from_rect_to_quad(...)`.
-8. Per-frame cache for `LayerSurfaceRequirements`.
-9. One-pass direct-child content collection instead of build-then-translate merge.
-10. One-pass hot applier graph build.
-11. Lazy raster-cache hash computation through `cache_hashes_valid`.
-12. Logical-to-physical mapping in robot screenshot helpers.
-13. Deterministic micro-surface screenshot contract via `robot_renderer_micro_contract`.
+4. Decoration-only text on the direct path with parent-space text rebasing.
+5. Precise text local-surface attribution under `text_local_surface`.
+6. Scroll/content-offset motion context propagation into the render graph.
+7. Animated-by-default motion for unspecified text inside scrolling subtrees.
+8. Motion-aware image sampling (`nearest` static, `linear` scrolling).
+9. Removal of giant Shaders-tab mixed-content wrapper isolation.
+10. Physical-size-aware presented-window screenshot capture.
+11. Axis-aligned rect-to-quad fast path in `ProjectiveTransform::from_rect_to_quad(...)`.
+12. Per-frame cache for `LayerSurfaceRequirements`.
+13. One-pass direct-child content collection instead of build-then-translate merge.
+14. One-pass hot applier graph build.
+15. Lazy raster-cache hash computation through `cache_hashes_valid`.
+16. Logical-to-physical mapping in robot screenshot helpers.
+17. Deterministic micro-surface screenshot contract via `robot_renderer_micro_contract`.
 
 ## Acceptance Status
 
@@ -89,8 +102,12 @@ Current checked-in status:
 - no known P0/P1 correctness issue is open on the branch after the latest self-review loop
 - translation-only effect semantics are covered by focused WGPU tests
 - bounded blur/backdrop semantics are covered by focused WGPU tests
+- scrolling text motion defaults are covered by `scene_builder` unit tests
+- motion-aware image sampling policy is covered by WGPU unit tests
 - oversized mixed-content isolate regressions on the Shaders tab are guarded by a robot runner
 - screenshot-based robot checks use logical regions against physical captures correctly
+- attempted isolated-child-surface device-grid snapping was rejected because it
+  violated the shared rigid-translation render contract
 
 Latest sequential perf checks on this machine:
 
@@ -123,7 +140,7 @@ the review loop also includes:
 2. inspect `/tmp/cranpose_renderer_micro_contract.png`
 3. use `robot_measure_shaders` visual-compare mode when a full demo surface is
    needed
-4. compare against `docs/render-reference/main_renderer_micro_contract.png`
+4. compare logical output against `docs/render-reference/main_renderer_micro_contract.png`, not raw PNG size alone
 
 ## Current Plan
 

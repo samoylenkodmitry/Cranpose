@@ -121,6 +121,7 @@ pub(crate) fn apply_draw_commands(
                     clip,
                     src_rect,
                     blend_mode.unwrap_or(BlendMode::SrcOver),
+                    false,
                 );
             }
             DrawPrimitive::Shadow(shadow_prim) => {

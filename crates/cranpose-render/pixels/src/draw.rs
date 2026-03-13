@@ -1176,6 +1176,7 @@ mod tests {
                 height: 16.0,
             },
             transform_to_parent: ProjectiveTransform::identity(),
+            motion_context_animated: false,
             graphics_layer: cranpose_ui_graphics::GraphicsLayer::default(),
             clip_to_bounds: false,
             shadow_clip: None,

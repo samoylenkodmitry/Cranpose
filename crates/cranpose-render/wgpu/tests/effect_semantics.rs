@@ -254,6 +254,72 @@ fn translated_text_wrapper_with_text_stays_on_direct_path_under_fractional_motio
 }
 
 #[test]
+fn translation_only_wrapper_with_underlined_text_stays_on_direct_path() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping underlined text-wrapper assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    let translation = Point::new(12.0, 14.0);
+    renderer.scene_mut().graph = Some(translation_only_wrapper_with_underlined_text_fixture(
+        translation,
+    ));
+    let frame = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("underlined text wrapper capture should succeed");
+    let stats = renderer
+        .last_frame_stats()
+        .expect("underlined text wrapper frame stats");
+
+    let text_region_bright = bright_pixel_count(
+        &frame,
+        Rect {
+            x: translation.x + 12.0,
+            y: translation.y + 8.0,
+            width: 32.0,
+            height: 16.0,
+        },
+        120,
+    );
+    let underline_region_bright = bright_pixel_count(
+        &frame,
+        Rect {
+            x: translation.x + 12.0,
+            y: translation.y + 20.0,
+            width: 34.0,
+            height: 6.0,
+        },
+        160,
+    );
+    assert!(
+        text_region_bright >= 20,
+        "underlined text fixture should draw visible text content at the composed position, bright_pixels={text_region_bright}"
+    );
+    assert!(
+        underline_region_bright >= 6,
+        "underlined text fixture should draw a visible underline on the direct path, bright_pixels={underline_region_bright}"
+    );
+    assert_eq!(
+        stats.isolated_layer_renders, 0,
+        "translation-only wrapper and underlined text leaf should render directly into the root target without isolated surfaces: {stats:?}"
+    );
+    assert_eq!(
+        stats.offscreen_acquires, 0,
+        "translation-only wrapper and underlined text leaf should not acquire offscreen targets: {stats:?}"
+    );
+    assert_eq!(
+        stats.composite_passes, 0,
+        "translation-only wrapper and underlined text leaf should not run composite passes: {stats:?}"
+    );
+}
+
+#[test]
 fn bounded_blur_capture_stays_inside_layer_bounds() {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
@@ -693,10 +759,32 @@ fn translation_only_fixture() -> RenderGraph {
 }
 
 fn translation_only_wrapper_with_text_fixture(wrapper_translation: Point) -> RenderGraph {
-    let text_style = TextStyle::from_span_style(SpanStyle {
-        color: Some(Color::WHITE),
-        ..Default::default()
-    });
+    translation_only_wrapper_with_text_style_fixture(
+        wrapper_translation,
+        TextStyle::from_span_style(SpanStyle {
+            color: Some(Color::WHITE),
+            ..Default::default()
+        }),
+    )
+}
+
+fn translation_only_wrapper_with_underlined_text_fixture(
+    wrapper_translation: Point,
+) -> RenderGraph {
+    translation_only_wrapper_with_text_style_fixture(
+        wrapper_translation,
+        TextStyle::from_span_style(SpanStyle {
+            color: Some(Color::WHITE),
+            text_decoration: Some(cranpose_ui::text::TextDecoration::UNDERLINE),
+            ..Default::default()
+        }),
+    )
+}
+
+fn translation_only_wrapper_with_text_style_fixture(
+    wrapper_translation: Point,
+    text_style: TextStyle,
+) -> RenderGraph {
     let text_leaf = layer(
         Rect {
             x: 0.0,
@@ -826,6 +914,30 @@ fn rgba(frame: &CapturedFrame, x: u32, y: u32) -> [u8; 4] {
         frame.pixels[index + 2],
         frame.pixels[index + 3],
     ]
+}
+
+fn bright_pixel_count(frame: &CapturedFrame, rect: Rect, threshold: u8) -> usize {
+    let left = rect.x.max(0.0).floor() as u32;
+    let top = rect.y.max(0.0).floor() as u32;
+    let right = (rect.x + rect.width)
+        .min(frame.width as f32)
+        .ceil()
+        .max(0.0) as u32;
+    let bottom = (rect.y + rect.height)
+        .min(frame.height as f32)
+        .ceil()
+        .max(0.0) as u32;
+
+    let mut count = 0usize;
+    for y in top..bottom {
+        for x in left..right {
+            let pixel = rgba(frame, x, y);
+            if pixel[0] >= threshold || pixel[1] >= threshold || pixel[2] >= threshold {
+                count += 1;
+            }
+        }
+    }
+    count
 }
 
 fn assert_translated_backdrop_local_picture(pixels: &[u8], width: u32, height: u32, label: &str) {

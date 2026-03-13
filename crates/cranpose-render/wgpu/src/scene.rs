@@ -47,6 +47,7 @@ pub(crate) struct ImageDraw {
     pub blend_mode: BlendMode,
     /// Source sub-region in image-pixel coordinates. `None` means full image.
     pub src_rect: Option<Rect>,
+    pub motion_context_animated: bool,
 }
 
 /// A shadow that requires GPU blur processing.
@@ -172,6 +173,7 @@ impl CompositorScene {
         clip: Option<Rect>,
         src_rect: Option<Rect>,
         blend_mode: BlendMode,
+        motion_context_animated: bool,
     ) {
         let z_index = self.next_z;
         self.next_z += 1;
@@ -186,6 +188,7 @@ impl CompositorScene {
             clip,
             blend_mode,
             src_rect,
+            motion_context_animated,
         });
     }
 

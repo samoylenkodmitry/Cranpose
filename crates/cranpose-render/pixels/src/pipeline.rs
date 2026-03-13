@@ -830,6 +830,7 @@ fn populate_draws_from_graph(
                         mapping.layer_bounds,
                         &mapping.raster_content_layer,
                         visual_clip,
+                        layer.motion_context_animated,
                     );
                 }
                 PrimitivePhase::AfterChildren => {
@@ -855,6 +856,7 @@ fn populate_draws_from_graph(
             mapping.layer_bounds,
             &mapping.raster_content_layer,
             visual_clip,
+            layer.motion_context_animated,
         );
     }
 }
@@ -865,6 +867,7 @@ fn render_graph_primitive(
     layer_bounds: RasterLayerBounds,
     node_layer: &GraphicsLayer,
     visual_clip: Option<Rect>,
+    motion_context_animated: bool,
 ) {
     let rect = layer_bounds.raster_rect();
     match &primitive.node {
@@ -886,6 +889,7 @@ fn render_graph_primitive(
                 effective_clip,
                 scene,
                 None,
+                motion_context_animated,
             );
         }
         PrimitiveNode::Text(text) => {
@@ -940,6 +944,7 @@ fn push_draw_primitive(
     clip: Option<Rect>,
     scene: &mut RasterScene,
     blend_mode: Option<BlendMode>,
+    motion_context_animated: bool,
 ) {
     struct SceneEmitter<'a> {
         scene: &'a mut RasterScene,
@@ -991,6 +996,7 @@ fn push_draw_primitive(
         clip,
         &mut emitter,
         blend_mode,
+        motion_context_animated,
     );
 }
 
@@ -1219,6 +1225,7 @@ mod tests {
                 height: 48.0,
             },
             transform_to_parent: ProjectiveTransform::identity(),
+            motion_context_animated: false,
             graphics_layer: GraphicsLayer::default(),
             clip_to_bounds: false,
             shadow_clip: None,
@@ -1237,6 +1244,7 @@ mod tests {
                     height: 18.0,
                 },
                 transform_to_parent: ProjectiveTransform::translation(17.0, 11.0),
+                motion_context_animated: false,
                 graphics_layer: GraphicsLayer::default(),
                 clip_to_bounds: false,
                 shadow_clip: None,
