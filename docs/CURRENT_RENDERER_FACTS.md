@@ -56,7 +56,7 @@ Source: `crates/cranpose-render/common/src/graph.rs`
 Important facts:
 
 - subtree motion is carried by `transform_to_parent`
-- scroll/content-offset ancestry is carried by `motion_context_animated`
+- active scroll/drag/fling ancestry is carried by `motion_context_animated`
 - interactive-subtree presence is carried by `has_hit_targets`
 - raster-cache hashes are lazy through `cache_hashes_valid`
 
@@ -82,10 +82,12 @@ The builder still:
 - preserves local primitive geometry
 - turns placement plus `GraphicsLayer` into `transform_to_parent`
 - folds parent `content_offset` into child transforms
-- resolves unspecified text under scrolling/content-offset ancestry to `TextMotion::Animated`
+- reads `ModifierNodeSlices::motion_context_animated()` from the UI modifier chain
+- resolves unspecified text under active motion ancestry to `TextMotion::Animated`
 - prepares `TextPrimitiveNode` during graph build
 
 The builder does not eagerly recompute raster-cache hashes for every layer.
+It does not treat nonzero `content_offset` by itself as active motion.
 
 ## Hit Testing
 
@@ -212,8 +214,7 @@ This collector:
 
 Plain translation-only text stays on the direct path.
 
-Text forces a local surface only when it uses features that require local
-post-processing or local text-owned geometry:
+Text still forces a local surface for some effectful/styled cases:
 
 - span styles
 - shadow
@@ -229,8 +230,9 @@ Decoration-only text is direct again. The direct-collapse path now rebases
 collapsed underlined text no longer clips down to a tiny fragment.
 
 Unspecified text inside `motion_context_animated` subtrees is resolved to
-`TextMotion::Animated` during graph build, so scrolling text no longer defaults
-to the static snapped path.
+`TextMotion::Animated` during graph build, but that flag now tracks active
+motion, not mere scroll position. Idle scroll containers stay on the static
+path.
 
 The classifier and direct-collapse text rebasing live in
 `crates/cranpose-render/wgpu/src/render.rs`.
@@ -245,18 +247,25 @@ Image sampling now follows motion context:
 This keeps static icons/pixel-art crisp while avoiding nearest-neighbor phase
 stepping during scroll.
 
-## Root Scale And Capture
+## Robot Capture
 
-Robot screenshot capture uses the physical buffer size and current `root_scale`,
-not only logical layout size.
+Robot screenshot capture now prefers logical layout size and captures at
+`capture_scale = 1.0`, matching `main` raw PNG dimensions again.
 
-`RobotScreenshot` now carries both:
+`RobotScreenshot` still carries logical extents, and robot helpers still map
+logical semantic/layout regions back onto the captured image before sampling,
+cropping, or region diffing.
 
-- physical pixel buffer size
-- logical extents covered by that buffer
+This fixed the raw screenshot size mismatch between `main` and `renderer` for
+the micro contract.
+The current micro contract screenshot is pixel-identical to
+`docs/render-reference/main_renderer_micro_contract.png`.
 
-Robot screenshot helpers map semantic/layout regions back onto the captured
-physical image before sampling, cropping, or region diffing.
+## Current Limitation
+
+Headless logical-size robot captures are now correct and useful for branch
+parity, but presented fractional-scale crispness still has to be judged from
+saved demo screenshots, not raw PNG size alone.
 
 Relevant files:
 
@@ -270,7 +279,7 @@ Validated current branch behavior:
 
 - transformed hit testing uses exact quads and inverse transforms
 - translation-only wrappers with plain text do zero offscreen work
-- scrolling/content-offset text resolves to animated motion by default
+- only active scroll motion resolves unspecified text to animated motion
 - scrolling images use linear sampling while static images stay nearest
 - root direct rendering skips the old root offscreen for direct scenes
 - oversized Shaders-tab mixed-content isolates are guarded by a robot test
@@ -283,8 +292,6 @@ Current screenshot-based review tools:
 - `robot_renderer_micro_contract` renders a tiny deterministic surface, saves
   `/tmp/cranpose_renderer_micro_contract.png`, and validates exact
   pixels for image/line/fill primitives plus text-region presence
-- raw robot screenshots are physical-buffer captures; compare logical output, not
-  raw PNG size, when `root_scale != 1.0`
 - committed `main` reference screenshot:
   `docs/render-reference/main_renderer_micro_contract.png`
 

@@ -23,20 +23,22 @@ The current branch does not use the old global flat-scene model.
 The branch now enforces these invariants:
 
 1. Subtree motion is represented by `LayerNode::transform_to_parent`.
-2. Scroll/content-offset ancestry is represented by `LayerNode::motion_context_animated`.
+2. Active scroll/drag/fling ancestry is represented by `LayerNode::motion_context_animated`.
 3. Direct-safe translation-only subtrees collapse into their parent target.
 4. Plain text is not isolated just because it is text.
 5. Decoration-only text also stays on the direct path when no other
    text-local-surface reason exists.
 6. Direct child collapse must rebase text primitives into parent space before
    text/decorations are emitted.
-7. Unspecified text under scrolling/content-offset ancestry resolves to
-   `TextMotion::Animated`.
-8. Scrolling images use linear sampling; static images stay nearest.
-9. Mixed-content isolation is attributed by real local-surface reasons, not by
+7. Unspecified text under active scroll motion resolves to `TextMotion::Animated`.
+8. Nonzero scroll offset by itself does not force animated sampling.
+9. Scrolling images use linear sampling; static images stay nearest.
+10. Mixed-content isolation is attributed by real local-surface reasons, not by
    tab-wide wrappers.
-10. Hit testing uses exact transformed geometry, not axis-aligned approximations.
-11. Raster-cache hashes are computed only when they are actually needed.
+11. Hit testing uses exact transformed geometry, not axis-aligned approximations.
+12. Raster-cache hashes are computed only when they are actually needed.
+13. Robot screenshot capture must match `main` raw dimensions for the same
+    logical surface.
 
 ## Current Execution Model
 
@@ -45,7 +47,9 @@ The branch now enforces these invariants:
 - `build_graph_from_applier(...)` is one-pass on the hot path
 - it no longer allocates a full snapshot tree before building the graph
 - child `content_offset` is composed into child transforms
-- child `content_offset` also propagates `motion_context_animated`
+- child `content_offset` does not by itself propagate `motion_context_animated`
+- scroll and lazy-scroll modifiers report real motion activity into
+  `ModifierNodeSlices::motion_context_animated()`
 
 Files:
 
@@ -82,8 +86,8 @@ These refactorings are complete in the checked-in branch state:
 3. Plain translation-only text on the direct path.
 4. Decoration-only text on the direct path with parent-space text rebasing.
 5. Precise text local-surface attribution under `text_local_surface`.
-6. Scroll/content-offset motion context propagation into the render graph.
-7. Animated-by-default motion for unspecified text inside scrolling subtrees.
+6. Scroll and lazy-scroll motion-context propagation into the render graph.
+7. Active-motion-only animated sampling for unspecified text inside scrolling subtrees.
 8. Motion-aware image sampling (`nearest` static, `linear` scrolling).
 9. Removal of giant Shaders-tab mixed-content wrapper isolation.
 10. Physical-size-aware presented-window screenshot capture.
@@ -94,20 +98,27 @@ These refactorings are complete in the checked-in branch state:
 15. Lazy raster-cache hash computation through `cache_hashes_valid`.
 16. Logical-to-physical mapping in robot screenshot helpers.
 17. Deterministic micro-surface screenshot contract via `robot_renderer_micro_contract`.
+18. Dynamic lazy-scroll motion marker in UI modifier slices.
+19. Real `LazyColumn` item text contract proving idle lazy-scroll content stays on the static path.
+20. Raw robot screenshot size parity with `main` for the same logical surface.
+21. Pixel-identical micro screenshot parity with the committed `main` reference.
 
 ## Acceptance Status
 
 Current checked-in status:
 
-- no known P0/P1 correctness issue is open on the branch after the latest self-review loop
 - translation-only effect semantics are covered by focused WGPU tests
 - bounded blur/backdrop semantics are covered by focused WGPU tests
-- scrolling text motion defaults are covered by `scene_builder` unit tests
+- idle-vs-active text motion defaults are covered by `scene_builder` unit tests
+- composed `LazyColumn` item text idle behavior is covered by a `scene_builder` test
 - motion-aware image sampling policy is covered by WGPU unit tests
 - oversized mixed-content isolate regressions on the Shaders tab are guarded by a robot runner
-- screenshot-based robot checks use logical regions against physical captures correctly
+- screenshot-based robot checks use logical regions against captured images correctly
 - attempted isolated-child-surface device-grid snapping was rejected because it
   violated the shared rigid-translation render contract
+- raw robot screenshots now match `main` dimensions for the micro contract
+- the current micro contract screenshot is pixel-identical to the committed
+  `main` reference
 
 Latest sequential perf checks on this machine:
 
@@ -144,15 +155,19 @@ the review loop also includes:
 
 ## Current Plan
 
-There is no open architecture refactor queued from the current code review loop.
+The current checked-in state closes the screenshot-scale mismatch and the
+always-animated idle-scroll blur. The remaining review loop is:
 
-The only valid next renderer work is:
+- keep the current invariants green
+- inspect saved demo screenshots when a new visual bug is reported
+- add a new render contract only when a concrete remaining defect is reproduced
+
+The next loop is:
 
 1. Keep the current invariants green.
 2. Start every new bug with a failing automated test.
 3. Reject shortcuts that reintroduce global flattening, forced text isolation,
    or independent child snapping.
-4. Keep screenshot-based acceptance tests aligned with the real direct-path
-   invariant: bounded fractional-phase drift is acceptable, large subtree
-   distortion is not.
+4. Keep screenshot-based acceptance tests aligned with the actual capture mode.
 5. Inspect an actual saved screenshot when a bug report is visual.
+6. Add a new contract only when a concrete remaining defect is reproduced.

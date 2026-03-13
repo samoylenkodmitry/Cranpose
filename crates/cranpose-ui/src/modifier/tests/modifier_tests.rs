@@ -1,9 +1,10 @@
 use super::{
-    inspector_metadata, modifier_element, Alignment, BlendMode, Color, CompositingStrategy,
-    CutDirection, DimensionConstraint, DpOffset, DrawCommand, DynModifierElement, EdgeInsets,
-    GradientCutMaskSpec, GradientFadeMaskSpec, GraphicsLayer, HorizontalAlignment, LayerShape,
-    Modifier, ModifierChainHandle, Point, RenderEffect, RoundedCornerShape, RuntimeShader,
-    SemanticsConfiguration, Shadow, Size, TransformOrigin, VerticalAlignment,
+    collect_slices_from_modifier, inspector_metadata, modifier_element, Alignment, BlendMode,
+    Color, CompositingStrategy, CutDirection, DimensionConstraint, DpOffset, DrawCommand,
+    DynModifierElement, EdgeInsets, GradientCutMaskSpec, GradientFadeMaskSpec, GraphicsLayer,
+    HorizontalAlignment, LayerShape, Modifier, ModifierChainHandle, Point, RenderEffect,
+    RoundedCornerShape, RuntimeShader, SemanticsConfiguration, Shadow, Size, TransformOrigin,
+    VerticalAlignment,
 };
 use cranpose_foundation::{
     DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState,
@@ -59,6 +60,21 @@ fn offset_accumulates_across_chain() {
         .then(Modifier::empty().offset(0.5, -3.0));
     let total = modifier.resolved_modifiers().offset();
     assert_eq!(total, Point { x: 3.0, y: 5.5 });
+}
+
+#[test]
+fn lazy_scroll_modifier_keeps_motion_context_inactive_at_rest() {
+    let mut list_state = None;
+    let _composition = crate::run_test_composition(|| {
+        list_state = Some(cranpose_foundation::lazy::remember_lazy_list_state());
+    });
+    let modifier = Modifier::empty().lazy_vertical_scroll(
+        list_state.expect("lazy list state should be created"),
+        false,
+    );
+    let slices = collect_slices_from_modifier(&modifier);
+
+    assert!(!slices.motion_context_animated());
 }
 
 #[test]

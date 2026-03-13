@@ -1538,9 +1538,8 @@ fn capture_screenshot(app: &mut AppShell<WgpuRenderer>) -> Result<RobotScreensho
             layout_tree.root().rect.height.max(1.0),
         )
     });
-    let capture_scale = app.renderer().root_scale();
     let (width, height, capture_scale) =
-        resolve_robot_screenshot_params(app.buffer_size(), logical_size, capture_scale);
+        resolve_robot_screenshot_params(app.buffer_size(), logical_size);
 
     let captured = app
         .renderer()
@@ -1572,25 +1571,15 @@ fn capture_screenshot(app: &mut AppShell<WgpuRenderer>) -> Result<RobotScreensho
 fn resolve_robot_screenshot_params(
     buffer_size: (u32, u32),
     fallback_logical_size: Option<(f32, f32)>,
-    root_scale: f32,
 ) -> (u32, u32, f32) {
-    let capture_scale = if root_scale.is_finite() && root_scale > 0.0 {
-        root_scale
-    } else {
-        1.0
-    };
-    let (buffer_width, buffer_height) = buffer_size;
-    if buffer_width > 0 && buffer_height > 0 {
-        return (buffer_width, buffer_height, capture_scale);
-    }
-
     if let Some((logical_width, logical_height)) = fallback_logical_size {
-        let width = (logical_width * capture_scale).ceil().max(1.0) as u32;
-        let height = (logical_height * capture_scale).ceil().max(1.0) as u32;
-        return (width, height, capture_scale);
+        let width = logical_width.ceil().max(1.0) as u32;
+        let height = logical_height.ceil().max(1.0) as u32;
+        return (width, height, 1.0);
     }
 
-    (1, 1, capture_scale)
+    let (buffer_width, buffer_height) = buffer_size;
+    (buffer_width.max(1), buffer_height.max(1), 1.0)
 }
 
 /// Extract semantic elements by combining semantic tree with layout tree
@@ -1709,29 +1698,29 @@ mod tests {
 
     #[cfg(feature = "robot")]
     #[test]
-    fn robot_screenshot_uses_physical_buffer_size_and_root_scale() {
-        let resolved = resolve_robot_screenshot_params((1600, 1200), Some((800.0, 600.0)), 2.0);
-        assert_eq!(resolved, (1600, 1200, 2.0));
+    fn robot_screenshot_prefers_logical_layout_size() {
+        let resolved = resolve_robot_screenshot_params((1600, 1200), Some((800.0, 600.0)));
+        assert_eq!(resolved, (800, 600, 1.0));
     }
 
     #[cfg(feature = "robot")]
     #[test]
-    fn robot_screenshot_falls_back_to_scaled_logical_size_when_buffer_is_missing() {
-        let resolved = resolve_robot_screenshot_params((0, 0), Some((801.2, 601.3)), 1.5);
-        assert_eq!(resolved, (1202, 902, 1.5));
+    fn robot_screenshot_uses_ceil_on_fractional_logical_size() {
+        let resolved = resolve_robot_screenshot_params((0, 0), Some((801.2, 601.3)));
+        assert_eq!(resolved, (802, 602, 1.0));
+    }
+
+    #[cfg(feature = "robot")]
+    #[test]
+    fn robot_screenshot_falls_back_to_physical_buffer_when_layout_is_missing() {
+        let resolved = resolve_robot_screenshot_params((1600, 1200), None);
+        assert_eq!(resolved, (1600, 1200, 1.0));
     }
 
     #[cfg(feature = "robot")]
     #[test]
     fn robot_screenshot_clamps_to_non_zero_target() {
-        let resolved = resolve_robot_screenshot_params((0, 0), None, 0.75);
-        assert_eq!(resolved, (1, 1, 0.75));
-    }
-
-    #[cfg(feature = "robot")]
-    #[test]
-    fn robot_screenshot_rejects_non_positive_scale() {
-        let resolved = resolve_robot_screenshot_params((0, 0), Some((10.0, 20.0)), 0.0);
+        let resolved = resolve_robot_screenshot_params((0, 0), Some((10.0, 20.0)));
         assert_eq!(resolved, (10, 20, 1.0));
     }
 }

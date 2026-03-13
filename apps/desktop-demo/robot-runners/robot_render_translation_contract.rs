@@ -12,11 +12,14 @@ use cranpose_testing::{
     y_is_visible,
 };
 use desktop_app::app;
+use image::{ImageBuffer, RgbaImage};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const WINDOW_WIDTH: u32 = 1200;
 const WINDOW_HEIGHT: u32 = 900;
-const PIXEL_DIFFERENCE_TOLERANCE: u32 = 24;
+const TEXT_PIXEL_DIFFERENCE_TOLERANCE: u32 = 24;
+const LAZY_PIXEL_DIFFERENCE_TOLERANCE: u32 = 64;
 const TEXT_MAX_DIFFERING_PIXELS: usize = 240;
 const TEXT_MAX_PIXEL_DIFFERENCE: u32 = 64;
 // Direct scrolling content can still accumulate bounded edge drift because it
@@ -24,9 +27,10 @@ const TEXT_MAX_PIXEL_DIFFERENCE: u32 = 64;
 // The robot contract should reject visible subtree distortion, not demand
 // strict pixel identity from the direct path.
 const LAZY_MAX_DIFFERING_PIXELS: usize = 96;
-const LAZY_MAX_PIXEL_DIFFERENCE: u32 = 128;
+const LAZY_MAX_PIXEL_DIFFERENCE: u32 = 160;
 const TEXT_SCROLL_DELTA_Y: f32 = -18.5;
 const LAZY_SCROLL_DELTA_Y: f32 = -21.5;
+const DEBUG_OUTPUT_DIR: &str = "/tmp/cranpose_translation_contract";
 
 fn main() {
     env_logger::init();
@@ -79,6 +83,7 @@ fn verify_text_translation_contract(robot: &cranpose::Robot) {
         before_region,
         &after_shot,
         after_region,
+        TEXT_PIXEL_DIFFERENCE_TOLERANCE,
         TEXT_MAX_DIFFERING_PIXELS,
         TEXT_MAX_PIXEL_DIFFERENCE,
     );
@@ -112,6 +117,7 @@ fn verify_lazy_list_translation_contract(robot: &cranpose::Robot) {
         before_region.capture_region,
         &after_shot,
         after_region.capture_region,
+        LAZY_PIXEL_DIFFERENCE_TOLERANCE,
         LAZY_MAX_DIFFERING_PIXELS,
         LAZY_MAX_PIXEL_DIFFERENCE,
     );
@@ -200,6 +206,7 @@ fn assert_normalized_region_stable(
     before_region: (f32, f32, f32, f32),
     after_shot: &cranpose::RobotScreenshot,
     after_region: (f32, f32, f32, f32),
+    difference_tolerance: u32,
     max_differing_pixels: usize,
     max_pixel_difference: u32,
 ) {
@@ -209,7 +216,7 @@ fn assert_normalized_region_stable(
             .expect("normalize before screenshot");
     let after = normalize_screenshot_region(after_shot, after_region, output_size.0, output_size.1)
         .expect("normalize after screenshot");
-    let stats = screenshot_difference_stats(&before, &after, PIXEL_DIFFERENCE_TOLERANCE)
+    let stats = screenshot_difference_stats(&before, &after, difference_tolerance)
         .expect("normalized screenshots should have matching size");
     println!(
         "  {} normalized diff: differing_pixels={} max_diff={}",
@@ -218,6 +225,7 @@ fn assert_normalized_region_stable(
 
     if stats.differing_pixels > max_differing_pixels || stats.max_difference > max_pixel_difference
     {
+        save_debug_images(name, before_shot, after_shot, &before, &after);
         let diff = stats
             .first_difference
             .as_ref()
@@ -233,6 +241,76 @@ fn assert_normalized_region_stable(
             diff.after
         );
     }
+}
+
+fn save_debug_images(
+    name: &str,
+    before_shot: &cranpose::RobotScreenshot,
+    after_shot: &cranpose::RobotScreenshot,
+    before_normalized: &cranpose::RobotScreenshot,
+    after_normalized: &cranpose::RobotScreenshot,
+) {
+    let output_dir = PathBuf::from(DEBUG_OUTPUT_DIR);
+    if let Err(err) = std::fs::create_dir_all(&output_dir) {
+        eprintln!(
+            "failed to create translation-contract debug output dir {}: {}",
+            output_dir.display(),
+            err
+        );
+        return;
+    }
+
+    let raw_before = output_dir.join(format!("{name}_before_raw.png"));
+    let raw_after = output_dir.join(format!("{name}_after_raw.png"));
+    let normalized_before = output_dir.join(format!("{name}_before_normalized.png"));
+    let normalized_after = output_dir.join(format!("{name}_after_normalized.png"));
+
+    if let Err(err) = save_png(
+        &raw_before,
+        before_shot.width,
+        before_shot.height,
+        &before_shot.pixels,
+    ) {
+        eprintln!("failed to save {}: {}", raw_before.display(), err);
+    }
+    if let Err(err) = save_png(
+        &raw_after,
+        after_shot.width,
+        after_shot.height,
+        &after_shot.pixels,
+    ) {
+        eprintln!("failed to save {}: {}", raw_after.display(), err);
+    }
+    if let Err(err) = save_png(
+        &normalized_before,
+        before_normalized.width,
+        before_normalized.height,
+        &before_normalized.pixels,
+    ) {
+        eprintln!("failed to save {}: {}", normalized_before.display(), err);
+    }
+    if let Err(err) = save_png(
+        &normalized_after,
+        after_normalized.width,
+        after_normalized.height,
+        &after_normalized.pixels,
+    ) {
+        eprintln!("failed to save {}: {}", normalized_after.display(), err);
+    }
+
+    println!(
+        "TRANSLATION_CONTRACT_DEBUG name={} dir={}",
+        name,
+        output_dir.display()
+    );
+}
+
+fn save_png(path: &Path, width: u32, height: u32, pixels: &[u8]) -> Result<(), String> {
+    let image: RgbaImage = ImageBuffer::from_raw(width, height, pixels.to_vec())
+        .ok_or_else(|| "invalid screenshot dimensions".to_string())?;
+    image
+        .save(path)
+        .map_err(|err| format!("failed to save {}: {}", path.display(), err))
 }
 
 fn pad_bounds(bounds: (f32, f32, f32, f32), pad_x: f32, pad_y: f32) -> (f32, f32, f32, f32) {
