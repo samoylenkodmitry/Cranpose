@@ -123,6 +123,7 @@ the review loop also includes:
 2. inspect `/tmp/cranpose_renderer_micro_contract.png`
 3. use `robot_measure_shaders` visual-compare mode when a full demo surface is
    needed
+4. compare against `docs/render-reference/main_renderer_micro_contract.png`
 
 ## Current Plan
 

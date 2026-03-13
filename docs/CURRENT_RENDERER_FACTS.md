@@ -260,6 +260,8 @@ Current screenshot-based review tools:
 - `robot_renderer_micro_contract` renders a tiny deterministic surface, saves
   `/tmp/cranpose_renderer_micro_contract.png`, and validates exact pixels for
   image/line/fill primitives plus text-region presence
+- committed `main` reference screenshot:
+  `docs/render-reference/main_renderer_micro_contract.png`
 
 Latest sequential perf spot checks on this machine:
 
