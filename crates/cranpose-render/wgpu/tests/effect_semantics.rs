@@ -128,13 +128,21 @@ fn translation_only_layers_render_without_nested_offscreens() {
         "translation-only nested layers should still draw at the composed position",
     );
     assert_eq!(
-        stats.isolated_layer_renders, 1,
-        "translation-only nested layers should collapse into the root target instead of allocating nested offscreens: {stats:?}"
+        stats.isolated_layer_renders, 0,
+        "translation-only nested layers should render directly into the root target without isolated surfaces: {stats:?}"
+    );
+    assert_eq!(
+        stats.offscreen_acquires, 0,
+        "translation-only nested layers should not acquire offscreen targets: {stats:?}"
+    );
+    assert_eq!(
+        stats.composite_passes, 0,
+        "translation-only nested layers should not run composite passes: {stats:?}"
     );
 }
 
 #[test]
-fn translation_only_wrapper_collapses_while_text_leaf_stays_isolated() {
+fn translation_only_wrapper_with_text_collapses_into_root_target() {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
         Err(err) => {
@@ -146,7 +154,9 @@ fn translation_only_wrapper_collapses_while_text_leaf_stays_isolated() {
         }
     };
 
-    renderer.scene_mut().graph = Some(translation_only_wrapper_with_text_fixture());
+    renderer.scene_mut().graph = Some(translation_only_wrapper_with_text_fixture(Point::new(
+        12.0, 14.0,
+    )));
     let frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("wrapper text capture should succeed");
@@ -160,8 +170,86 @@ fn translation_only_wrapper_collapses_while_text_leaf_stays_isolated() {
         "text leaf fixture should draw visible content at the composed position, got {rect_pixel:?}"
     );
     assert_eq!(
-        stats.isolated_layer_renders, 2,
-        "translation-only wrapper should collapse into the root target while the text-bearing leaf stays isolated: {stats:?}"
+        stats.isolated_layer_renders, 0,
+        "translation-only wrapper and plain text leaf should both render directly into the root target: {stats:?}"
+    );
+    assert_eq!(
+        stats.offscreen_acquires, 0,
+        "translation-only wrapper and plain text leaf should not acquire offscreen targets: {stats:?}"
+    );
+    assert_eq!(
+        stats.composite_passes, 0,
+        "translation-only wrapper and plain text leaf should not run composite passes: {stats:?}"
+    );
+}
+
+#[test]
+fn translated_text_wrapper_with_text_stays_on_direct_path_under_fractional_motion() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping translated text-wrapper assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    let base_translation = Point::new(12.0, 14.0);
+    renderer.scene_mut().graph = Some(translation_only_wrapper_with_text_fixture(base_translation));
+    let base_frame = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("translated text-wrapper base capture should succeed");
+    let base_stats = renderer
+        .last_frame_stats()
+        .expect("translated text-wrapper base frame stats");
+
+    let moved_translation = Point::new(12.35, 14.65);
+    renderer.scene_mut().graph = Some(translation_only_wrapper_with_text_fixture(
+        moved_translation,
+    ));
+    let moved_frame = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("translated text-wrapper moved capture should succeed");
+    let moved_stats = renderer
+        .last_frame_stats()
+        .expect("translated text-wrapper moved frame stats");
+
+    assert_eq!(
+        base_stats.isolated_layer_renders, 0,
+        "base frame should render the wrapper and text leaf directly into the root target without isolated surfaces: {base_stats:?}"
+    );
+    assert_eq!(
+        moved_stats.isolated_layer_renders, 0,
+        "moved frame should keep the translation-only text subtree on the direct path without isolated surfaces: {moved_stats:?}"
+    );
+    assert_eq!(
+        base_stats.offscreen_acquires, 0,
+        "base frame should not acquire offscreen targets: {base_stats:?}"
+    );
+    assert_eq!(
+        moved_stats.offscreen_acquires, 0,
+        "moved frame should not acquire offscreen targets: {moved_stats:?}"
+    );
+
+    let base_pixel = rgba(
+        &base_frame,
+        (base_translation.x + 16.0) as u32,
+        (base_translation.y + 17.0) as u32,
+    );
+    let moved_pixel = rgba(
+        &moved_frame,
+        (moved_translation.x + 16.0) as u32,
+        (moved_translation.y + 17.0) as u32,
+    );
+    assert!(
+        base_pixel[0] >= 40 || base_pixel[1] >= 40 || base_pixel[2] >= 40,
+        "base frame should draw visible wrapper/text content at the composed position, got {base_pixel:?}"
+    );
+    assert!(
+        moved_pixel[0] >= 40 || moved_pixel[1] >= 40 || moved_pixel[2] >= 40,
+        "moved frame should draw visible wrapper/text content at the composed position, got {moved_pixel:?}"
     );
 }
 
@@ -604,7 +692,7 @@ fn translation_only_fixture() -> RenderGraph {
     ])
 }
 
-fn translation_only_wrapper_with_text_fixture() -> RenderGraph {
+fn translation_only_wrapper_with_text_fixture(wrapper_translation: Point) -> RenderGraph {
     let text_style = TextStyle::from_span_style(SpanStyle {
         color: Some(Color::WHITE),
         ..Default::default()
@@ -627,6 +715,15 @@ fn translation_only_wrapper_with_text_fixture() -> RenderGraph {
                     height: 8.0,
                 },
                 Color::RED,
+            ),
+            solid_rect(
+                Rect {
+                    x: 4.0,
+                    y: 14.0,
+                    width: 20.0,
+                    height: 1.0,
+                },
+                Color::WHITE,
             ),
             RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
@@ -654,7 +751,7 @@ fn translation_only_wrapper_with_text_fixture() -> RenderGraph {
             width: 64.0,
             height: 40.0,
         },
-        ProjectiveTransform::translation(12.0, 14.0),
+        ProjectiveTransform::translation(wrapper_translation.x, wrapper_translation.y),
         GraphicsLayer::default(),
         vec![RenderNode::Layer(Box::new(text_leaf))],
     );

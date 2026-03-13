@@ -11,7 +11,7 @@ use bytemuck::{Pod, Zeroable};
 use cranpose_render_common::geometry::{blur_extent_margin, expand_blurred_rect, union_rect};
 use cranpose_render_common::graph::{
     quad_bounds, CachePolicy, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
-    ProjectiveTransform, RenderGraph, RenderNode,
+    ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
 };
 use cranpose_render_common::layer_composition::{
     effective_layer_isolation, layer_for_content, local_content_layer,
@@ -617,6 +617,8 @@ pub struct GpuRenderer {
     effect_renderer: EffectRenderer,
     layer_surface_cache: LruCache<LayerRasterCacheKey, CachedLayerSurface>,
     layer_surface_cache_identity: HashMap<usize, LayerRasterCacheKey>,
+    layer_surface_rect_cache: HashMap<usize, Rect>,
+    layer_surface_requirements_cache: HashMap<usize, LayerSurfaceRequirements>,
     layer_surface_cache_bytes: u64,
     frame_stats: gpu_stats::FrameStats,
     last_frame_stats: Option<gpu_stats::FrameStatsSnapshot>,
@@ -673,6 +675,10 @@ struct ChildLayerComposite<'a> {
 struct CollectedLayer<'a> {
     scene: CompositorScene,
     child_layers: Vec<ChildLayerComposite<'a>>,
+}
+
+fn layer_cache_key(layer: &LayerNode) -> usize {
+    layer as *const LayerNode as usize
 }
 
 fn scene_bounds(scene: &CompositorScene) -> Option<Rect> {
@@ -767,17 +773,403 @@ fn target_quad(width: u32, height: u32) -> [[f32; 2]; 4] {
     ]
 }
 
+fn direct_translation(transform: ProjectiveTransform) -> Option<Point> {
+    let matrix = transform.matrix();
+    if (matrix[0][0] - 1.0).abs() > f32::EPSILON
+        || matrix[0][1].abs() > f32::EPSILON
+        || matrix[1][0].abs() > f32::EPSILON
+        || (matrix[1][1] - 1.0).abs() > f32::EPSILON
+        || matrix[2][0].abs() > f32::EPSILON
+        || matrix[2][1].abs() > f32::EPSILON
+        || (matrix[2][2] - 1.0).abs() > f32::EPSILON
+    {
+        return None;
+    }
+    Some(Point::new(matrix[0][2], matrix[1][2]))
+}
+
+fn root_can_render_directly_cached(
+    layer: &LayerNode,
+    layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
+) -> bool {
+    let requirements = layer_surface_requirements_cached(layer, layer_surface_requirements_cache);
+    !requirements.reasons.has_any()
+        && layer.backdrop().is_none()
+        && layer.graphics_layer.shadow_elevation <= 0.0
+        && !layer_contains_descendant_backdrop(layer)
+}
+
+fn text_requires_local_surface(text: &TextPrimitiveNode) -> bool {
+    let span = &text.text_style.span_style;
+    !text.text.span_styles.is_empty()
+        || span.shadow.is_some()
+        || span.text_decoration.is_some()
+        || span.background.is_some()
+        || span.baseline_shift.is_some()
+        || span.text_geometric_transform.is_some()
+        || span.draw_style.is_some()
+        || span.letter_spacing.is_specified()
+        || !matches!(span.brush.as_ref(), None | Some(Brush::Solid(_)))
+}
+
 fn layer_uses_external_backdrop_input(layer: &LayerNode, has_backdrop_underlay: bool) -> bool {
     has_backdrop_underlay && layer_contains_descendant_backdrop(layer)
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct LayerSurfaceRequirements {
+    direct_translation: Option<Point>,
+    reasons: LayerSurfaceReasons,
+}
+
+#[cfg(test)]
+fn layer_surface_requirements(layer: &LayerNode) -> LayerSurfaceRequirements {
+    let mut layer_surface_requirements_cache = HashMap::new();
+    layer_surface_requirements_cached(layer, &mut layer_surface_requirements_cache)
+}
+
+fn layer_surface_requirements_cached(
+    layer: &LayerNode,
+    layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
+) -> LayerSurfaceRequirements {
+    let cache_key = layer_cache_key(layer);
+    if let Some(cached) = layer_surface_requirements_cache.get(&cache_key) {
+        return *cached;
+    }
+
+    let effective_isolation = effective_layer_isolation(&layer.graphics_layer);
+    let mut reasons = LayerSurfaceReasons {
+        explicit_offscreen: layer.isolation.explicit_offscreen
+            || layer.graphics_layer.compositing_strategy == CompositingStrategy::Offscreen,
+        effect: layer.isolation.effect || layer.effect().is_some(),
+        backdrop: layer.isolation.backdrop || layer.backdrop().is_some(),
+        group_opacity: layer.isolation.group_opacity
+            || matches!(
+                layer.graphics_layer.compositing_strategy,
+                CompositingStrategy::Auto | CompositingStrategy::Offscreen
+            ) && effective_isolation.is_some()
+                && layer.opacity() < 1.0,
+        blend_mode: layer.isolation.blend_mode || layer.blend_mode() != BlendMode::SrcOver,
+        ..LayerSurfaceReasons::default()
+    };
+    let direct_translation = direct_translation(layer.transform_to_parent);
+    let mut has_direct_safe_primitive = false;
+    let mut has_isolating_child_layer = false;
+
+    for child in &layer.children {
+        match child {
+            RenderNode::Primitive(primitive) => match &primitive.node {
+                PrimitiveNode::Text(text) => {
+                    if text_requires_local_surface(text) {
+                        reasons.text_local_surface = true;
+                    } else {
+                        has_direct_safe_primitive = true;
+                    }
+                }
+                PrimitiveNode::Draw(draw) => match &draw.primitive {
+                    cranpose_ui_graphics::DrawPrimitive::Shadow(_) => {
+                        reasons.immediate_shadow = true;
+                    }
+                    _ => has_direct_safe_primitive = true,
+                },
+            },
+            RenderNode::Layer(child_layer) => {
+                let child_requirements = layer_surface_requirements_cached(
+                    child_layer.as_ref(),
+                    layer_surface_requirements_cache,
+                );
+                if child_requirements.reasons.has_any()
+                    || child_requirements.direct_translation.is_none()
+                {
+                    has_isolating_child_layer = true;
+                }
+            }
+        }
+    }
+
+    if has_direct_safe_primitive && has_isolating_child_layer {
+        reasons.mixed_direct_content = true;
+    }
+    if direct_translation.is_none() {
+        reasons.non_translation_transform = true;
+    }
+
+    let requirements = LayerSurfaceRequirements {
+        direct_translation,
+        reasons,
+    };
+    layer_surface_requirements_cache.insert(cache_key, requirements);
+    requirements
+}
+
+fn push_local_primitive(
+    local_scene: &mut CompositorScene,
+    primitive: &PrimitiveEntry,
+    layer_bounds: Rect,
+    local_layer: &GraphicsLayer,
+    visual_clip: Option<Rect>,
+) {
+    match &primitive.node {
+        PrimitiveNode::Draw(draw) => {
+            let clip = resolve_primitive_clip(
+                draw.clip,
+                layer_bounds,
+                local_layer,
+                visual_clip,
+                PrimitiveClipSpace::Local,
+            );
+            if draw.clip.is_some() && clip.is_none() {
+                return;
+            }
+            push_draw_primitive(
+                draw.primitive.clone(),
+                layer_bounds,
+                local_layer,
+                clip,
+                local_scene,
+                None,
+            );
+        }
+        PrimitiveNode::Text(text) => {
+            let text_clip = resolve_primitive_clip(
+                text.clip,
+                layer_bounds,
+                local_layer,
+                visual_clip,
+                PrimitiveClipSpace::Local,
+            );
+            if text.clip.is_some() && text_clip.is_none() {
+                return;
+            }
+            push_text_style_draws(
+                local_scene,
+                text.node_id,
+                layer_bounds,
+                text.rect,
+                local_layer,
+                &text.text,
+                &text.text_style,
+                text.font_size,
+                text.layout_options,
+                text_clip,
+            );
+        }
+    }
+}
+
+fn translate_quad(quad: [[f32; 2]; 4], delta: Point) -> [[f32; 2]; 4] {
+    quad.map(|[x, y]| [x + delta.x, y + delta.y])
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_layer_contents_into<'a>(
+    layer: &'a LayerNode,
+    inherited_clip: Option<Rect>,
+    layer_offset: Point,
+    local_scene: &mut CompositorScene,
+    child_layers: &mut Vec<ChildLayerComposite<'a>>,
+    layer_surface_rect_cache: &mut HashMap<usize, Rect>,
+    layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
+) {
+    let isolation = effective_layer_isolation(&layer.graphics_layer);
+    let content_layer = layer_for_content(&layer.graphics_layer, isolation.as_ref());
+    let local_layer = local_content_layer(&content_layer);
+    let layer_bounds = layer.local_bounds.translate(layer_offset.x, layer_offset.y);
+    let visual_clip = resolve_clip(
+        inherited_clip,
+        layer
+            .clip_rect()
+            .map(|clip| clip.translate(layer_offset.x, layer_offset.y)),
+    );
+    let mut deferred_primitives = Vec::new();
+
+    for child in &layer.children {
+        match child {
+            RenderNode::Primitive(primitive) => match primitive.phase {
+                PrimitivePhase::BeforeChildren => {
+                    push_local_primitive(
+                        local_scene,
+                        primitive,
+                        layer_bounds,
+                        &local_layer,
+                        visual_clip,
+                    );
+                }
+                PrimitivePhase::AfterChildren => deferred_primitives.push(primitive),
+            },
+            RenderNode::Layer(child_layer) => {
+                let child_requirements = layer_surface_requirements_cached(
+                    child_layer.as_ref(),
+                    layer_surface_requirements_cache,
+                );
+                if !child_requirements.reasons.has_any() {
+                    let translation = child_requirements
+                        .direct_translation
+                        .expect("direct child layers must keep a pure translation transform");
+                    let child_offset = Point::new(
+                        layer_offset.x + translation.x,
+                        layer_offset.y + translation.y,
+                    );
+                    collect_layer_contents_into(
+                        child_layer.as_ref(),
+                        visual_clip,
+                        child_offset,
+                        local_scene,
+                        child_layers,
+                        layer_surface_rect_cache,
+                        layer_surface_requirements_cache,
+                    );
+                    let child_bounds = child_layer
+                        .local_bounds
+                        .translate(child_offset.x, child_offset.y);
+                    let child_shadow_clip = resolve_clip(
+                        visual_clip,
+                        child_layer
+                            .shadow_clip
+                            .map(|clip| clip.translate(child_offset.x, child_offset.y)),
+                    );
+                    push_layer_shadow(
+                        local_scene,
+                        &child_layer.graphics_layer,
+                        child_bounds,
+                        child_bounds,
+                        child_shadow_clip,
+                    );
+                    continue;
+                }
+
+                let mut shadow_scene = CompositorScene::new();
+                let child_logical_rect = estimate_layer_surface_rect_cached(
+                    child_layer.as_ref(),
+                    layer_surface_rect_cache,
+                    layer_surface_requirements_cache,
+                );
+                let child_bounds = quad_bounds(
+                    child_layer
+                        .transform_to_parent
+                        .map_rect(child_layer.local_bounds),
+                );
+                let child_bounds = child_bounds.translate(layer_offset.x, layer_offset.y);
+                let child_shadow_clip = resolve_clip(
+                    visual_clip,
+                    child_layer.shadow_clip.map(|clip| {
+                        quad_bounds(child_layer.transform_to_parent.map_rect(clip))
+                            .translate(layer_offset.x, layer_offset.y)
+                    }),
+                );
+                push_layer_shadow(
+                    &mut shadow_scene,
+                    &child_layer.graphics_layer,
+                    child_layer.local_bounds,
+                    child_bounds,
+                    child_shadow_clip,
+                );
+                child_layers.push(ChildLayerComposite {
+                    z_index: local_scene.next_z,
+                    layer: child_layer.as_ref(),
+                    logical_rect: child_logical_rect,
+                    dest_quad: translate_quad(
+                        child_layer.transform_to_parent.map_rect(child_logical_rect),
+                        layer_offset,
+                    ),
+                    backdrop_rect: quad_bounds(translate_quad(
+                        child_layer
+                            .transform_to_parent
+                            .map_rect(child_layer.local_bounds),
+                        layer_offset,
+                    )),
+                    shadow_draws: shadow_scene.shadow_draws,
+                    needs_nested_underlay: layer_contains_descendant_backdrop(child_layer.as_ref()),
+                });
+                local_scene.next_z += 1;
+            }
+        }
+    }
+
+    for primitive in deferred_primitives {
+        push_local_primitive(
+            local_scene,
+            primitive,
+            layer_bounds,
+            &local_layer,
+            visual_clip,
+        );
+    }
+}
+
+fn collect_layer_contents<'a>(
+    layer: &'a LayerNode,
+    inherited_clip: Option<Rect>,
+    layer_surface_rect_cache: &mut HashMap<usize, Rect>,
+    layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
+) -> CollectedLayer<'a> {
+    let mut local_scene = CompositorScene::new();
+    let mut child_layers = Vec::new();
+    collect_layer_contents_into(
+        layer,
+        inherited_clip,
+        Point::default(),
+        &mut local_scene,
+        &mut child_layers,
+        layer_surface_rect_cache,
+        layer_surface_requirements_cache,
+    );
+
+    CollectedLayer {
+        scene: local_scene,
+        child_layers,
+    }
+}
+
+#[cfg(test)]
+fn estimate_layer_surface_rect(layer: &LayerNode) -> Rect {
+    let mut layer_surface_rect_cache = HashMap::new();
+    let mut layer_surface_requirements_cache = HashMap::new();
+    estimate_layer_surface_rect_cached(
+        layer,
+        &mut layer_surface_rect_cache,
+        &mut layer_surface_requirements_cache,
+    )
+}
+
+fn estimate_layer_surface_rect_cached(
+    layer: &LayerNode,
+    layer_surface_rect_cache: &mut HashMap<usize, Rect>,
+    layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
+) -> Rect {
+    let cache_key = layer_cache_key(layer);
+    if let Some(cached_rect) = layer_surface_rect_cache.get(&cache_key) {
+        return *cached_rect;
+    }
+
+    let collected = collect_layer_contents(
+        layer,
+        None,
+        layer_surface_rect_cache,
+        layer_surface_requirements_cache,
+    );
+    let mut bounds = scene_bounds(&collected.scene);
+    for child in &collected.child_layers {
+        bounds = union_rect(bounds, quad_bounds(child.dest_quad));
+        if let Some(shadow_bounds) = shadow_draws_bounds(&child.shadow_draws) {
+            bounds = union_rect(bounds, shadow_bounds);
+        }
+    }
+    let rect = resolved_layer_surface_rect(layer, bounds);
+    layer_surface_rect_cache.insert(cache_key, rect);
+    rect
+}
+
+#[cfg(test)]
 fn layer_raster_cache_candidate(
     layer: &LayerNode,
     root_scale: f32,
     has_backdrop_underlay: bool,
     allow_runtime_cache: bool,
 ) -> Option<(LayerRasterCacheKey, Rect)> {
-    let surface_requirements = layer_surface_requirements(layer);
+    let mut layer_surface_requirements_cache = HashMap::new();
+    let surface_requirements =
+        layer_surface_requirements_cached(layer, &mut layer_surface_requirements_cache);
     let cache_is_allowed = layer.cache_policy == CachePolicy::Auto
         || (allow_runtime_cache && surface_requirements.reasons.has_renderer_forced_surface());
     if !cache_is_allowed {
@@ -800,362 +1192,6 @@ fn layer_raster_cache_candidate(
         ),
         logical_rect,
     ))
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-struct LayerSurfaceRequirements {
-    direct_translation: Option<Point>,
-    reasons: LayerSurfaceReasons,
-}
-
-fn layer_surface_requirements(layer: &LayerNode) -> LayerSurfaceRequirements {
-    let effective_isolation = effective_layer_isolation(&layer.graphics_layer);
-    let mut reasons = LayerSurfaceReasons {
-        explicit_offscreen: layer.isolation.explicit_offscreen
-            || layer.graphics_layer.compositing_strategy == CompositingStrategy::Offscreen,
-        effect: layer.isolation.effect || layer.effect().is_some(),
-        backdrop: layer.isolation.backdrop || layer.backdrop().is_some(),
-        group_opacity: layer.isolation.group_opacity
-            || matches!(
-                layer.graphics_layer.compositing_strategy,
-                CompositingStrategy::Auto | CompositingStrategy::Offscreen
-            ) && effective_isolation.is_some()
-                && layer.opacity() < 1.0,
-        blend_mode: layer.isolation.blend_mode || layer.blend_mode() != BlendMode::SrcOver,
-        ..LayerSurfaceReasons::default()
-    };
-    let direct_translation = direct_translation(layer.transform_to_parent);
-    let mut has_direct_safe_primitive = false;
-    let mut has_child_layers = false;
-
-    for child in &layer.children {
-        match child {
-            RenderNode::Primitive(primitive) => match &primitive.node {
-                PrimitiveNode::Text(_) => reasons.immediate_text = true,
-                PrimitiveNode::Draw(draw) => match &draw.primitive {
-                    cranpose_ui_graphics::DrawPrimitive::Shadow(_) => {
-                        reasons.immediate_shadow = true;
-                    }
-                    _ => has_direct_safe_primitive = true,
-                },
-            },
-            RenderNode::Layer(_) => has_child_layers = true,
-        }
-    }
-
-    if has_direct_safe_primitive && has_child_layers {
-        reasons.mixed_direct_content = true;
-    }
-    if direct_translation.is_none() {
-        reasons.non_translation_transform = true;
-    }
-
-    LayerSurfaceRequirements {
-        direct_translation,
-        reasons,
-    }
-}
-
-fn direct_translation(transform: ProjectiveTransform) -> Option<Point> {
-    let matrix = transform.matrix();
-    if (matrix[0][0] - 1.0).abs() > f32::EPSILON
-        || matrix[0][1].abs() > f32::EPSILON
-        || matrix[1][0].abs() > f32::EPSILON
-        || (matrix[1][1] - 1.0).abs() > f32::EPSILON
-        || matrix[2][0].abs() > f32::EPSILON
-        || matrix[2][1].abs() > f32::EPSILON
-        || (matrix[2][2] - 1.0).abs() > f32::EPSILON
-    {
-        return None;
-    }
-    Some(Point::new(matrix[0][2], matrix[1][2]))
-}
-
-fn child_can_render_directly(layer: &LayerNode) -> Option<Point> {
-    let requirements = layer_surface_requirements(layer);
-    (!requirements.reasons.has_any())
-        .then_some(requirements.direct_translation)
-        .flatten()
-}
-
-fn push_local_primitive(
-    local_scene: &mut CompositorScene,
-    primitive: &PrimitiveEntry,
-    layer: &LayerNode,
-    local_layer: &GraphicsLayer,
-    visual_clip: Option<Rect>,
-) {
-    match &primitive.node {
-        PrimitiveNode::Draw(draw) => {
-            let clip = resolve_primitive_clip(
-                draw.clip,
-                layer.local_bounds,
-                local_layer,
-                visual_clip,
-                PrimitiveClipSpace::Local,
-            );
-            if draw.clip.is_some() && clip.is_none() {
-                return;
-            }
-            push_draw_primitive(
-                draw.primitive.clone(),
-                layer.local_bounds,
-                local_layer,
-                clip,
-                local_scene,
-                None,
-            );
-        }
-        PrimitiveNode::Text(text) => {
-            let text_clip = resolve_primitive_clip(
-                text.clip,
-                layer.local_bounds,
-                local_layer,
-                visual_clip,
-                PrimitiveClipSpace::Local,
-            );
-            if text.clip.is_some() && text_clip.is_none() {
-                return;
-            }
-            push_text_style_draws(
-                local_scene,
-                text.node_id,
-                layer.local_bounds,
-                text.rect,
-                local_layer,
-                &text.text,
-                &text.text_style,
-                text.font_size,
-                text.layout_options,
-                text_clip,
-            );
-        }
-    }
-}
-
-trait OffsetZIndices {
-    fn offset_z_indices(&mut self, offset: usize);
-}
-
-impl OffsetZIndices for DrawShape {
-    fn offset_z_indices(&mut self, offset: usize) {
-        self.z_index += offset;
-    }
-}
-
-impl OffsetZIndices for ImageDraw {
-    fn offset_z_indices(&mut self, offset: usize) {
-        self.z_index += offset;
-    }
-}
-
-impl OffsetZIndices for TextDraw {
-    fn offset_z_indices(&mut self, offset: usize) {
-        self.z_index += offset;
-    }
-}
-
-impl OffsetZIndices for ShadowDraw {
-    fn offset_z_indices(&mut self, offset: usize) {
-        self.z_index += offset;
-    }
-}
-
-impl OffsetZIndices for EffectLayer {
-    fn offset_z_indices(&mut self, offset: usize) {
-        self.z_start += offset;
-        self.z_end += offset;
-    }
-}
-
-impl OffsetZIndices for BackdropLayer {
-    fn offset_z_indices(&mut self, offset: usize) {
-        self.z_index += offset;
-    }
-}
-
-impl<T: OffsetZIndices> OffsetZIndices for Vec<T> {
-    fn offset_z_indices(&mut self, offset: usize) {
-        for item in self {
-            item.offset_z_indices(offset);
-        }
-    }
-}
-
-impl OffsetZIndices for CompositorScene {
-    fn offset_z_indices(&mut self, offset: usize) {
-        self.shapes.offset_z_indices(offset);
-        self.images.offset_z_indices(offset);
-        self.texts.offset_z_indices(offset);
-        self.shadow_draws.offset_z_indices(offset);
-        self.effect_layers.offset_z_indices(offset);
-        self.backdrop_layers.offset_z_indices(offset);
-    }
-}
-
-impl<'a> ChildLayerComposite<'a> {
-    fn translate_by(&mut self, delta: Point) {
-        for point in &mut self.dest_quad {
-            point[0] += delta.x;
-            point[1] += delta.y;
-        }
-        self.backdrop_rect.translate_by(delta);
-        self.shadow_draws.translate_by(delta);
-    }
-
-    fn offset_z_indices(&mut self, offset: usize) {
-        self.z_index += offset;
-        self.shadow_draws.offset_z_indices(offset);
-    }
-}
-
-fn merge_child_collection<'a>(
-    parent_scene: &mut CompositorScene,
-    parent_child_layers: &mut Vec<ChildLayerComposite<'a>>,
-    mut child_collection: CollectedLayer<'a>,
-    translation: Point,
-) {
-    let z_offset = parent_scene.next_z;
-    let child_z_span = child_collection.scene.next_z;
-
-    child_collection.scene.translate_by(translation);
-    child_collection.scene.offset_z_indices(z_offset);
-    for child_layer in &mut child_collection.child_layers {
-        child_layer.translate_by(translation);
-        child_layer.offset_z_indices(z_offset);
-    }
-
-    parent_scene.shapes.extend(child_collection.scene.shapes);
-    parent_scene.images.extend(child_collection.scene.images);
-    parent_scene.texts.extend(child_collection.scene.texts);
-    parent_scene
-        .shadow_draws
-        .extend(child_collection.scene.shadow_draws);
-    parent_scene
-        .effect_layers
-        .extend(child_collection.scene.effect_layers);
-    parent_scene
-        .backdrop_layers
-        .extend(child_collection.scene.backdrop_layers);
-    parent_child_layers.extend(child_collection.child_layers);
-    parent_scene.next_z += child_z_span;
-}
-
-fn collect_layer_contents<'a>(
-    layer: &'a LayerNode,
-    inherited_clip: Option<Rect>,
-) -> CollectedLayer<'a> {
-    let isolation = effective_layer_isolation(&layer.graphics_layer);
-    let content_layer = layer_for_content(&layer.graphics_layer, isolation.as_ref());
-    let local_layer = local_content_layer(&content_layer);
-    let visual_clip = resolve_clip(inherited_clip, layer.clip_rect());
-
-    let mut local_scene = CompositorScene::new();
-    let mut child_layers = Vec::new();
-    let mut deferred_primitives = Vec::new();
-
-    for child in &layer.children {
-        match child {
-            RenderNode::Primitive(primitive) => match primitive.phase {
-                PrimitivePhase::BeforeChildren => {
-                    push_local_primitive(
-                        &mut local_scene,
-                        primitive,
-                        layer,
-                        &local_layer,
-                        visual_clip,
-                    );
-                }
-                PrimitivePhase::AfterChildren => deferred_primitives.push(primitive),
-            },
-            RenderNode::Layer(child_layer) => {
-                if let Some(translation) = child_can_render_directly(child_layer.as_ref()) {
-                    let inherited_child_clip =
-                        visual_clip.map(|clip| clip.translate(-translation.x, -translation.y));
-                    let mut child_collection =
-                        collect_layer_contents(child_layer.as_ref(), inherited_child_clip);
-                    let child_shadow_clip =
-                        resolve_clip(inherited_child_clip, child_layer.shadow_clip);
-                    push_layer_shadow(
-                        &mut child_collection.scene,
-                        &child_layer.graphics_layer,
-                        child_layer.local_bounds,
-                        child_layer.local_bounds,
-                        child_shadow_clip,
-                    );
-                    merge_child_collection(
-                        &mut local_scene,
-                        &mut child_layers,
-                        child_collection,
-                        translation,
-                    );
-                    continue;
-                }
-
-                let mut shadow_scene = CompositorScene::new();
-                let child_logical_rect = estimate_layer_surface_rect(child_layer.as_ref());
-                let child_bounds = quad_bounds(
-                    child_layer
-                        .transform_to_parent
-                        .map_rect(child_layer.local_bounds),
-                );
-                let child_shadow_clip = resolve_clip(
-                    visual_clip,
-                    child_layer
-                        .shadow_clip
-                        .map(|clip| quad_bounds(child_layer.transform_to_parent.map_rect(clip))),
-                );
-                push_layer_shadow(
-                    &mut shadow_scene,
-                    &child_layer.graphics_layer,
-                    child_layer.local_bounds,
-                    child_bounds,
-                    child_shadow_clip,
-                );
-                child_layers.push(ChildLayerComposite {
-                    z_index: local_scene.next_z,
-                    layer: child_layer.as_ref(),
-                    logical_rect: child_logical_rect,
-                    dest_quad: child_layer.transform_to_parent.map_rect(child_logical_rect),
-                    backdrop_rect: quad_bounds(
-                        child_layer
-                            .transform_to_parent
-                            .map_rect(child_layer.local_bounds),
-                    ),
-                    shadow_draws: shadow_scene.shadow_draws,
-                    needs_nested_underlay: layer_contains_descendant_backdrop(child_layer.as_ref()),
-                });
-                local_scene.next_z += 1;
-            }
-        }
-    }
-
-    for primitive in deferred_primitives {
-        push_local_primitive(
-            &mut local_scene,
-            primitive,
-            layer,
-            &local_layer,
-            visual_clip,
-        );
-    }
-
-    CollectedLayer {
-        scene: local_scene,
-        child_layers,
-    }
-}
-
-fn estimate_layer_surface_rect(layer: &LayerNode) -> Rect {
-    let collected = collect_layer_contents(layer, None);
-    let mut bounds = scene_bounds(&collected.scene);
-    for child in &collected.child_layers {
-        bounds = union_rect(bounds, quad_bounds(child.dest_quad));
-        if let Some(shadow_bounds) = shadow_draws_bounds(&child.shadow_draws) {
-            bounds = union_rect(bounds, shadow_bounds);
-        }
-    }
-    resolved_layer_surface_rect(layer, bounds)
 }
 
 fn resolved_layer_surface_rect(layer: &LayerNode, bounds: Option<Rect>) -> Rect {
@@ -1570,6 +1606,8 @@ impl GpuRenderer {
                     .expect("layer surface cache size must be non-zero"),
             ),
             layer_surface_cache_identity: HashMap::new(),
+            layer_surface_rect_cache: HashMap::new(),
+            layer_surface_requirements_cache: HashMap::new(),
             layer_surface_cache_bytes: 0,
             frame_stats: gpu_stats::FrameStats::default(),
             last_frame_stats: None,
@@ -1731,6 +1769,43 @@ impl GpuRenderer {
         }
         self.layer_surface_cache_bytes += byte_size;
         cached_handle
+    }
+
+    fn layer_raster_cache_candidate(
+        &mut self,
+        layer: &LayerNode,
+        root_scale: f32,
+        has_backdrop_underlay: bool,
+        allow_runtime_cache: bool,
+    ) -> Option<(LayerRasterCacheKey, Rect)> {
+        let surface_requirements =
+            layer_surface_requirements_cached(layer, &mut self.layer_surface_requirements_cache);
+        let cache_is_allowed = layer.cache_policy == CachePolicy::Auto
+            || (allow_runtime_cache && surface_requirements.reasons.has_renderer_forced_surface());
+        if !cache_is_allowed {
+            return None;
+        }
+        if layer_uses_external_backdrop_input(layer, has_backdrop_underlay) {
+            return None;
+        }
+
+        let logical_rect = estimate_layer_surface_rect_cached(
+            layer,
+            &mut self.layer_surface_rect_cache,
+            &mut self.layer_surface_requirements_cache,
+        );
+        let pixel_size = surface_target_size(logical_rect, root_scale);
+        Some((
+            LayerRasterCacheKey::new(
+                layer.node_id,
+                layer.target_content_hash(),
+                layer.effect_hash(),
+                logical_rect,
+                pixel_size,
+                ScaleBucket::from_scale(root_scale),
+            ),
+            logical_rect,
+        ))
     }
 
     #[allow(clippy::too_many_arguments)] // Render path needs explicit scene slices and target metadata.
@@ -1912,6 +1987,19 @@ impl GpuRenderer {
         height: u32,
         root_scale: f32,
     ) -> Result<(), String> {
+        self.layer_surface_rect_cache.clear();
+        self.layer_surface_requirements_cache.clear();
+        if root_can_render_directly_cached(&graph.root, &mut self.layer_surface_requirements_cache)
+        {
+            return self.render_root_direct(
+                text_state,
+                surface_view,
+                &graph.root,
+                width,
+                height,
+                root_scale,
+            );
+        }
         let root_surface =
             self.render_layer_surface(text_state, &graph.root, root_scale, None, false)?;
         let root_quad = graph
@@ -2037,6 +2125,121 @@ impl GpuRenderer {
         Ok(())
     }
 
+    fn render_root_direct(
+        &mut self,
+        text_state: &mut TextSystemState,
+        surface_view: &wgpu::TextureView,
+        layer: &LayerNode,
+        width: u32,
+        height: u32,
+        root_scale: f32,
+    ) -> Result<(), String> {
+        let visual_clip = layer.clip_rect();
+        let CollectedLayer {
+            scene: local_scene,
+            child_layers,
+        } = collect_layer_contents(
+            layer,
+            None,
+            &mut self.layer_surface_rect_cache,
+            &mut self.layer_surface_requirements_cache,
+        );
+
+        let mut cursor_z = 0usize;
+        let mut next_load_op = wgpu::LoadOp::Clear(CLEAR_COLOR);
+        for child in child_layers {
+            if cursor_z < child.z_index {
+                self.render_non_effect_segment(
+                    text_state,
+                    surface_view,
+                    &local_scene.shapes,
+                    &local_scene.images,
+                    &local_scene.texts,
+                    &local_scene.shadow_draws,
+                    cursor_z,
+                    child.z_index,
+                    &[],
+                    width,
+                    height,
+                    root_scale,
+                    next_load_op,
+                )?;
+                next_load_op = wgpu::LoadOp::Load;
+            } else if matches!(next_load_op, wgpu::LoadOp::Clear(_)) {
+                self.clear_target_view_with_load_op(surface_view, next_load_op);
+                next_load_op = wgpu::LoadOp::Load;
+            }
+
+            for shadow in &child.shadow_draws {
+                self.render_shadow_draw(
+                    text_state,
+                    surface_view,
+                    shadow,
+                    width,
+                    height,
+                    root_scale,
+                );
+            }
+
+            let child_surface =
+                self.render_layer_surface(text_state, child.layer, root_scale, None, true)?;
+            if child_surface.backdrop.is_some() {
+                return Err("root direct path does not support backdrop child surfaces".to_string());
+            }
+
+            let source_rect = Rect {
+                x: 0.0,
+                y: 0.0,
+                width: child_surface.target.width() as f32,
+                height: child_surface.target.height() as f32,
+            };
+            let inverse = ProjectiveTransform::from_rect_to_quad(
+                source_rect,
+                scaled_quad(child.dest_quad, root_scale),
+            )
+            .inverse()
+            .ok_or_else(|| "child layer transform is not invertible".to_string())?;
+            self.effect_renderer.composite_to_view_projective(
+                &self.device,
+                &self.queue,
+                child_surface.target.target(),
+                surface_view,
+                (width, height),
+                (source_rect.width, source_rect.height),
+                inverse.matrix(),
+                scaled_quad(child.dest_quad, root_scale),
+                child_surface.composite_alpha,
+                wgpu::LoadOp::Load,
+                visual_clip.and_then(|clip| scissor_rect_for_rect(clip, root_scale, width, height)),
+                supported_blend_mode(child_surface.blend_mode),
+            );
+            self.release_layer_surface_target(child_surface.target);
+            cursor_z = child.z_index.saturating_add(1);
+        }
+
+        if cursor_z < local_scene.next_z {
+            self.render_non_effect_segment(
+                text_state,
+                surface_view,
+                &local_scene.shapes,
+                &local_scene.images,
+                &local_scene.texts,
+                &local_scene.shadow_draws,
+                cursor_z,
+                local_scene.next_z,
+                &[],
+                width,
+                height,
+                root_scale,
+                next_load_op,
+            )?;
+        } else if matches!(next_load_op, wgpu::LoadOp::Clear(_)) {
+            self.clear_target_view_with_load_op(surface_view, next_load_op);
+        }
+
+        Ok(())
+    }
+
     fn create_projected_child_underlay(
         &mut self,
         parent_target: &OffscreenTarget,
@@ -2140,7 +2343,7 @@ impl GpuRenderer {
         backdrop_underlay: Option<&OffscreenTarget>,
         allow_runtime_cache: bool,
     ) -> Result<LayerSurface, String> {
-        let cache_candidate = layer_raster_cache_candidate(
+        let cache_candidate = self.layer_raster_cache_candidate(
             layer,
             root_scale,
             backdrop_underlay.is_some(),
@@ -2190,7 +2393,12 @@ impl GpuRenderer {
         let CollectedLayer {
             scene: mut local_scene,
             child_layers,
-        } = collect_layer_contents(layer, None);
+        } = collect_layer_contents(
+            layer,
+            None,
+            &mut self.layer_surface_rect_cache,
+            &mut self.layer_surface_requirements_cache,
+        );
 
         let surface_rect = cache_candidate
             .map(|(_, logical_rect)| logical_rect)
@@ -2222,7 +2430,8 @@ impl GpuRenderer {
         }
 
         let (width, height) = surface_target_size(surface_rect, root_scale);
-        let surface_requirements = layer_surface_requirements(layer);
+        let surface_requirements =
+            layer_surface_requirements_cached(layer, &mut self.layer_surface_requirements_cache);
         self.frame_stats.record_isolated_layer_render(
             width,
             height,
@@ -5058,9 +5267,14 @@ fn inner_shadow_composite_mask(
 mod tests {
     use super::*;
     use cranpose_render_common::graph::{DrawPrimitiveNode, TextPrimitiveNode};
-    use cranpose_ui::text::AnnotatedString;
+    use cranpose_ui::text::{
+        AnnotatedString, BaselineShift, RangeStyle, Shadow, SpanStyle, TextDecoration,
+        TextDrawStyle, TextGeometricTransform, TextUnit,
+    };
     use cranpose_ui::{TextLayoutOptions, TextStyle};
-    use cranpose_ui_graphics::{Rect, RenderEffect, RoundedCornerShape};
+    use cranpose_ui_graphics::{
+        Brush, Color, DrawPrimitive, Rect, RenderEffect, RoundedCornerShape,
+    };
 
     fn chunk(batches: &[SegmentBatchPlan]) -> SegmentDrawChunkPlan {
         let mut chunk = SegmentDrawChunkPlan::default();
@@ -5198,6 +5412,34 @@ mod tests {
         layer.cache_policy = cranpose_render_common::graph::CachePolicy::Auto;
         layer.recompute_raster_cache_hashes();
         layer
+    }
+
+    fn text_layer_with_style(text: AnnotatedString, text_style: TextStyle) -> LayerNode {
+        test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 64.0,
+                height: 32.0,
+            },
+            vec![RenderNode::Primitive(PrimitiveEntry {
+                phase: PrimitivePhase::BeforeChildren,
+                node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+                    node_id: 1,
+                    rect: Rect {
+                        x: 2.0,
+                        y: 3.0,
+                        width: 48.0,
+                        height: 18.0,
+                    },
+                    text,
+                    text_style,
+                    font_size: 14.0,
+                    layout_options: TextLayoutOptions::default(),
+                    clip: None,
+                })),
+            })],
+        )
     }
 
     #[test]
@@ -5630,7 +5872,7 @@ mod tests {
     }
 
     #[test]
-    fn layer_raster_cache_candidate_allows_runtime_text_surfaces_for_children() {
+    fn layer_raster_cache_candidate_does_not_force_translation_only_text_surfaces() {
         let text = RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
             node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
@@ -5662,12 +5904,237 @@ mod tests {
 
         assert!(
             layer_raster_cache_candidate(&layer, 1.0, false, false).is_none(),
-            "root path should not implicitly cache runtime-isolated layers"
+            "root path should not isolate plain translation-only text layers"
         );
         assert!(
-            layer_raster_cache_candidate(&layer, 1.0, false, true).is_some(),
-            "child path should cache runtime-isolated text layers for rigid motion reuse"
+            layer_raster_cache_candidate(&layer, 1.0, false, true).is_none(),
+            "child path should also render plain translation-only text layers directly"
         );
+    }
+
+    #[test]
+    fn layer_surface_requirements_keep_plain_text_on_direct_path() {
+        let layer = text_layer_with_style(AnnotatedString::from("plain"), TextStyle::default());
+
+        let requirements = layer_surface_requirements(&layer);
+
+        assert_eq!(requirements.direct_translation, Some(Point::default()));
+        assert!(!requirements.reasons.text_local_surface);
+        assert!(!requirements.reasons.has_any());
+    }
+
+    #[test]
+    fn layer_surface_requirements_mark_effectful_text_for_local_surface() {
+        let cases = [
+            (
+                "shadow",
+                AnnotatedString::from("shadow"),
+                TextStyle::from_span_style(SpanStyle {
+                    shadow: Some(Shadow {
+                        color: Color::BLACK,
+                        offset: Point::new(1.0, 2.0),
+                        blur_radius: 3.0,
+                    }),
+                    ..SpanStyle::default()
+                }),
+            ),
+            (
+                "decoration",
+                AnnotatedString::from("decoration"),
+                TextStyle::from_span_style(SpanStyle {
+                    text_decoration: Some(TextDecoration::UNDERLINE),
+                    ..SpanStyle::default()
+                }),
+            ),
+            (
+                "background",
+                AnnotatedString::from("background"),
+                TextStyle::from_span_style(SpanStyle {
+                    background: Some(Color::BLACK),
+                    ..SpanStyle::default()
+                }),
+            ),
+            (
+                "baseline_shift",
+                AnnotatedString::from("baseline_shift"),
+                TextStyle::from_span_style(SpanStyle {
+                    baseline_shift: Some(BaselineShift::SUPERSCRIPT),
+                    ..SpanStyle::default()
+                }),
+            ),
+            (
+                "geometric_transform",
+                AnnotatedString::from("geometric_transform"),
+                TextStyle::from_span_style(SpanStyle {
+                    text_geometric_transform: Some(TextGeometricTransform {
+                        scale_x: 1.2,
+                        skew_x: 0.15,
+                    }),
+                    ..SpanStyle::default()
+                }),
+            ),
+            (
+                "draw_style",
+                AnnotatedString::from("draw_style"),
+                TextStyle::from_span_style(SpanStyle {
+                    draw_style: Some(TextDrawStyle::Stroke { width: 2.0 }),
+                    ..SpanStyle::default()
+                }),
+            ),
+            (
+                "letter_spacing",
+                AnnotatedString::from("letter_spacing"),
+                TextStyle::from_span_style(SpanStyle {
+                    letter_spacing: TextUnit::Em(0.2),
+                    ..SpanStyle::default()
+                }),
+            ),
+            (
+                "gradient_brush",
+                AnnotatedString::from("gradient"),
+                TextStyle::from_span_style(SpanStyle {
+                    brush: Some(Brush::linear_gradient(vec![Color::WHITE, Color::BLACK])),
+                    ..SpanStyle::default()
+                }),
+            ),
+            (
+                "span_styles",
+                AnnotatedString {
+                    text: "styled".to_string(),
+                    span_styles: vec![RangeStyle {
+                        item: SpanStyle {
+                            color: Some(Color::BLACK),
+                            ..SpanStyle::default()
+                        },
+                        range: 0..3,
+                    }],
+                    ..AnnotatedString::default()
+                },
+                TextStyle::default(),
+            ),
+        ];
+
+        for (label, text, text_style) in cases {
+            let layer = text_layer_with_style(text, text_style);
+            let requirements = layer_surface_requirements(&layer);
+            assert!(
+                requirements.reasons.text_local_surface,
+                "{label} text should require a local surface: {requirements:?}"
+            );
+            assert!(
+                requirements.reasons.has_renderer_forced_surface(),
+                "{label} text should count as a renderer-forced surface: {requirements:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn layer_surface_requirements_keep_shape_plus_direct_child_on_direct_path() {
+        let mut child = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 40.0,
+                height: 20.0,
+            },
+            vec![RenderNode::Primitive(PrimitiveEntry {
+                phase: PrimitivePhase::BeforeChildren,
+                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                    primitive: DrawPrimitive::Rect {
+                        rect: Rect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 40.0,
+                            height: 20.0,
+                        },
+                        brush: Brush::solid(Color::WHITE),
+                    },
+                    clip: None,
+                }),
+            })],
+        );
+        child.transform_to_parent = ProjectiveTransform::translation(8.0, 6.0);
+
+        let layer = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 64.0,
+                height: 32.0,
+            },
+            vec![
+                RenderNode::Primitive(PrimitiveEntry {
+                    phase: PrimitivePhase::BeforeChildren,
+                    node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                        primitive: DrawPrimitive::Rect {
+                            rect: Rect {
+                                x: 0.0,
+                                y: 0.0,
+                                width: 64.0,
+                                height: 32.0,
+                            },
+                            brush: Brush::solid(Color::BLACK),
+                        },
+                        clip: None,
+                    }),
+                }),
+                RenderNode::Layer(Box::new(child)),
+            ],
+        );
+
+        let requirements = layer_surface_requirements(&layer);
+
+        assert_eq!(requirements.direct_translation, Some(Point::default()));
+        assert!(!requirements.reasons.mixed_direct_content);
+        assert!(!requirements.reasons.has_any());
+    }
+
+    #[test]
+    fn layer_surface_requirements_keep_shape_plus_isolating_child_as_mixed_content() {
+        let mut child = text_layer_with_style(
+            AnnotatedString::from("shadow"),
+            TextStyle::from_span_style(SpanStyle {
+                shadow: Some(Shadow {
+                    color: Color::BLACK,
+                    offset: Point::new(1.0, 2.0),
+                    blur_radius: 3.0,
+                }),
+                ..SpanStyle::default()
+            }),
+        );
+        child.transform_to_parent = ProjectiveTransform::translation(8.0, 6.0);
+
+        let layer = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 64.0,
+                height: 32.0,
+            },
+            vec![
+                RenderNode::Primitive(PrimitiveEntry {
+                    phase: PrimitivePhase::BeforeChildren,
+                    node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                        primitive: DrawPrimitive::Rect {
+                            rect: Rect {
+                                x: 0.0,
+                                y: 0.0,
+                                width: 64.0,
+                                height: 32.0,
+                            },
+                            brush: Brush::solid(Color::BLACK),
+                        },
+                        clip: None,
+                    }),
+                }),
+                RenderNode::Layer(Box::new(child)),
+            ],
+        );
+
+        let requirements = layer_surface_requirements(&layer);
+
+        assert!(requirements.reasons.mixed_direct_content);
+        assert!(requirements.reasons.has_any());
     }
 
     #[test]

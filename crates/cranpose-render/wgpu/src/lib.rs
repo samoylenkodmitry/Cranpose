@@ -998,6 +998,10 @@ impl WgpuRenderer {
         self.root_scale = scale;
     }
 
+    pub fn root_scale(&self) -> f32 {
+        self.root_scale
+    }
+
     /// Render the scene to a texture view.
     pub fn render(
         &mut self,
@@ -1152,9 +1156,11 @@ impl Renderer for WgpuRenderer {
             clip_to_bounds: false,
             shadow_clip: None,
             hit_test: None,
+            has_hit_targets: false,
             isolation: IsolationReasons::default(),
             cache_policy: CachePolicy::None,
             cache_hashes: LayerRasterCacheHashes::default(),
+            cache_hashes_valid: false,
             children: vec![
                 RenderNode::Primitive(PrimitiveEntry {
                     phase: PrimitivePhase::BeforeChildren,
@@ -1202,9 +1208,11 @@ impl Renderer for WgpuRenderer {
                 clip_to_bounds: false,
                 shadow_clip: None,
                 hit_test: None,
+                has_hit_targets: false,
                 isolation: IsolationReasons::default(),
                 cache_policy: CachePolicy::None,
                 cache_hashes: LayerRasterCacheHashes::default(),
+                cache_hashes_valid: false,
                 children: Vec::new(),
             })
         });

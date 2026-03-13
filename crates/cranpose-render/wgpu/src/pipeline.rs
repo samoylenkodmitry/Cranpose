@@ -1845,15 +1845,14 @@ fn collect_hits_from_graph(
         fn push_hit(
             &mut self,
             node_id: NodeId,
-            rect: Rect,
+            geometry: cranpose_render_common::graph_scene::HitGeometry,
             shape: Option<RoundedCornerShape>,
             click_actions: &[Rc<dyn Fn(Point)>],
             pointer_inputs: &[Rc<dyn Fn(cranpose_foundation::PointerEvent)>],
-            hit_clip: Option<Rect>,
         ) {
             self.scene.push_hit(
                 node_id,
-                rect,
+                geometry,
                 shape,
                 click_actions
                     .iter()
@@ -1861,7 +1860,6 @@ fn collect_hits_from_graph(
                     .map(ClickAction::WithPoint)
                     .collect(),
                 pointer_inputs.to_vec(),
-                hit_clip,
             );
         }
     }
@@ -2225,9 +2223,11 @@ mod tests {
                 pointer_inputs: vec![],
                 clip: None,
             }),
+            has_hit_targets: true,
             isolation: cranpose_render_common::graph::IsolationReasons::default(),
             cache_policy: cranpose_render_common::graph::CachePolicy::None,
             cache_hashes: LayerRasterCacheHashes::default(),
+            cache_hashes_valid: false,
             children: vec![],
         };
         let mut scene = crate::scene::Scene::new();

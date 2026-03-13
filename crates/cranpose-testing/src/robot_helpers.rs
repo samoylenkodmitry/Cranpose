@@ -737,6 +737,45 @@ pub fn capture_screenshot(robot: &cranpose::Robot) -> Option<cranpose::RobotScre
     robot.screenshot().ok()
 }
 
+fn screenshot_logical_width(screenshot: &cranpose::RobotScreenshot) -> f32 {
+    if screenshot.logical_width.is_finite() && screenshot.logical_width > 0.0 {
+        screenshot.logical_width
+    } else {
+        screenshot.width.max(1) as f32
+    }
+}
+
+fn screenshot_logical_height(screenshot: &cranpose::RobotScreenshot) -> f32 {
+    if screenshot.logical_height.is_finite() && screenshot.logical_height > 0.0 {
+        screenshot.logical_height
+    } else {
+        screenshot.height.max(1) as f32
+    }
+}
+
+fn screenshot_scale_x(screenshot: &cranpose::RobotScreenshot) -> f32 {
+    screenshot.width.max(1) as f32 / screenshot_logical_width(screenshot)
+}
+
+fn screenshot_scale_y(screenshot: &cranpose::RobotScreenshot) -> f32 {
+    screenshot.height.max(1) as f32 / screenshot_logical_height(screenshot)
+}
+
+fn logical_to_screenshot_x(screenshot: &cranpose::RobotScreenshot, x: f32) -> f32 {
+    x * screenshot_scale_x(screenshot)
+}
+
+fn logical_to_screenshot_y(screenshot: &cranpose::RobotScreenshot, y: f32) -> f32 {
+    y * screenshot_scale_y(screenshot)
+}
+
+pub fn screenshot_logical_size(screenshot: &cranpose::RobotScreenshot) -> (f32, f32) {
+    (
+        screenshot_logical_width(screenshot),
+        screenshot_logical_height(screenshot),
+    )
+}
+
 /// Returns pixel RGBA at `(x, y)` from a screenshot.
 pub fn screenshot_pixel(screenshot: &cranpose::RobotScreenshot, x: u32, y: u32) -> Option<[u8; 4]> {
     if x >= screenshot.width || y >= screenshot.height {
@@ -749,6 +788,58 @@ pub fn screenshot_pixel(screenshot: &cranpose::RobotScreenshot, x: u32, y: u32) 
         screenshot.pixels[index + 2],
         screenshot.pixels[index + 3],
     ])
+}
+
+pub fn sample_screenshot_pixel_logical(
+    screenshot: &cranpose::RobotScreenshot,
+    x: f32,
+    y: f32,
+) -> Option<[u8; 4]> {
+    let logical_width = screenshot_logical_width(screenshot);
+    let logical_height = screenshot_logical_height(screenshot);
+    if x < 0.0 || y < 0.0 || x > logical_width || y > logical_height {
+        return None;
+    }
+
+    Some(sample_screenshot_pixel_bilinear(
+        screenshot,
+        logical_to_screenshot_x(screenshot, x),
+        logical_to_screenshot_y(screenshot, y),
+    ))
+}
+
+pub fn logical_region_to_pixel_bounds(
+    screenshot: &cranpose::RobotScreenshot,
+    region: (f32, f32, f32, f32),
+) -> Option<(u32, u32, u32, u32)> {
+    if region.2 <= 0.0 || region.3 <= 0.0 || screenshot.width == 0 || screenshot.height == 0 {
+        return None;
+    }
+
+    let left = logical_to_screenshot_x(screenshot, region.0.max(0.0))
+        .floor()
+        .max(0.0) as u32;
+    let top = logical_to_screenshot_y(screenshot, region.1.max(0.0))
+        .floor()
+        .max(0.0) as u32;
+    let right = logical_to_screenshot_x(
+        screenshot,
+        (region.0 + region.2).min(screenshot_logical_width(screenshot)),
+    )
+    .ceil()
+    .min(screenshot.width as f32) as u32;
+    let bottom = logical_to_screenshot_y(
+        screenshot,
+        (region.1 + region.3).min(screenshot_logical_height(screenshot)),
+    )
+    .ceil()
+    .min(screenshot.height as f32) as u32;
+
+    if right <= left || bottom <= top {
+        return None;
+    }
+
+    Some((left, top, right, bottom))
 }
 
 /// Crops a rectangular region from a screenshot.
@@ -780,8 +871,22 @@ pub fn crop_screenshot(
     Some(cranpose::RobotScreenshot {
         width,
         height,
+        logical_width: width as f32 / screenshot_scale_x(screenshot),
+        logical_height: height as f32 / screenshot_scale_y(screenshot),
         pixels,
     })
+}
+
+pub fn crop_screenshot_logical(
+    screenshot: &cranpose::RobotScreenshot,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+) -> Option<cranpose::RobotScreenshot> {
+    let (left, top, right, bottom) =
+        logical_region_to_pixel_bounds(screenshot, (x, y, width, height))?;
+    crop_screenshot(screenshot, left, top, right - left, bottom - top)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -825,15 +930,17 @@ pub fn normalize_screenshot_region(
         for x in 0..output_width {
             let sample_x = region.0 + ((x as f32 + 0.5) * region.2 / output_width as f32);
             let sample_y = region.1 + ((y as f32 + 0.5) * region.3 / output_height as f32);
-            pixels.extend_from_slice(&sample_screenshot_pixel_bilinear(
+            pixels.extend_from_slice(&sample_screenshot_pixel_logical(
                 screenshot, sample_x, sample_y,
-            ));
+            )?);
         }
     }
 
     Some(cranpose::RobotScreenshot {
         width: output_width,
         height: output_height,
+        logical_width: output_width as f32,
+        logical_height: output_height as f32,
         pixels,
     })
 }
@@ -914,18 +1021,17 @@ pub fn changed_pixel_count_in_region(
     region: (f32, f32, f32, f32),
     channel_threshold: u8,
 ) -> usize {
-    if before.width != after.width || before.height != after.height {
+    if before.width != after.width
+        || before.height != after.height
+        || (screenshot_scale_x(before) - screenshot_scale_x(after)).abs() > f32::EPSILON
+        || (screenshot_scale_y(before) - screenshot_scale_y(after)).abs() > f32::EPSILON
+    {
         return usize::MAX;
     }
 
-    let left = region.0.max(0.0).floor() as u32;
-    let top = region.1.max(0.0).floor() as u32;
-    let right = (region.0 + region.2).min(before.width as f32).ceil() as u32;
-    let bottom = (region.1 + region.3).min(before.height as f32).ceil() as u32;
-
-    if right <= left || bottom <= top {
+    let Some((left, top, right, bottom)) = logical_region_to_pixel_bounds(before, region) else {
         return 0;
-    }
+    };
 
     let width = before.width as usize;
     let mut changed = 0usize;
@@ -1209,6 +1315,8 @@ mod tests {
         let screenshot = RobotScreenshot {
             width: 2,
             height: 1,
+            logical_width: 2.0,
+            logical_height: 1.0,
             pixels: vec![1, 2, 3, 4, 5, 6, 7, 8],
         };
         assert_eq!(screenshot_pixel(&screenshot, 1, 0), Some([5, 6, 7, 8]));
@@ -1219,6 +1327,8 @@ mod tests {
         let screenshot = RobotScreenshot {
             width: 3,
             height: 2,
+            logical_width: 3.0,
+            logical_height: 2.0,
             pixels: vec![
                 1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255, 13, 14, 15, 255, 16, 17,
                 18, 255,
@@ -1227,6 +1337,8 @@ mod tests {
         let cropped = crop_screenshot(&screenshot, 1, 0, 2, 2).expect("crop");
         assert_eq!(cropped.width, 2);
         assert_eq!(cropped.height, 2);
+        assert_eq!(cropped.logical_width, 2.0);
+        assert_eq!(cropped.logical_height, 2.0);
         assert_eq!(
             cropped.pixels,
             vec![4, 5, 6, 255, 7, 8, 9, 255, 13, 14, 15, 255, 16, 17, 18, 255]
@@ -1238,6 +1350,8 @@ mod tests {
         let screenshot = RobotScreenshot {
             width: 2,
             height: 2,
+            logical_width: 2.0,
+            logical_height: 2.0,
             pixels: vec![1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255],
         };
 
@@ -1246,7 +1360,56 @@ mod tests {
 
         assert_eq!(normalized.width, screenshot.width);
         assert_eq!(normalized.height, screenshot.height);
+        assert_eq!(normalized.logical_width, screenshot.logical_width);
+        assert_eq!(normalized.logical_height, screenshot.logical_height);
         assert_eq!(normalized.pixels, screenshot.pixels);
+    }
+
+    #[test]
+    fn changed_pixel_count_in_region_uses_logical_coordinates() {
+        let before = RobotScreenshot {
+            width: 4,
+            height: 4,
+            logical_width: 2.0,
+            logical_height: 2.0,
+            pixels: vec![
+                0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255,
+                0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255,
+                0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255,
+            ],
+        };
+        let mut after = before.clone();
+        for y in 2..4 {
+            for x in 2..4 {
+                let idx = ((y * after.width + x) * 4) as usize;
+                after.pixels[idx] = 255;
+            }
+        }
+
+        assert_eq!(
+            changed_pixel_count_in_region(&before, &after, (1.0, 1.0, 1.0, 1.0), 1),
+            4
+        );
+    }
+
+    #[test]
+    fn sample_screenshot_pixel_logical_maps_scaled_capture() {
+        let screenshot = RobotScreenshot {
+            width: 4,
+            height: 4,
+            logical_width: 2.0,
+            logical_height: 2.0,
+            pixels: vec![
+                1, 0, 0, 255, 2, 0, 0, 255, 3, 0, 0, 255, 4, 0, 0, 255, 5, 0, 0, 255, 6, 0, 0, 255,
+                7, 0, 0, 255, 8, 0, 0, 255, 9, 0, 0, 255, 10, 0, 0, 255, 11, 0, 0, 255, 12, 0, 0,
+                255, 13, 0, 0, 255, 14, 0, 0, 255, 15, 0, 0, 255, 16, 0, 0, 255,
+            ],
+        };
+
+        assert_eq!(
+            sample_screenshot_pixel_logical(&screenshot, 1.25, 1.25),
+            Some([11, 0, 0, 255])
+        );
     }
 
     #[test]
@@ -1254,11 +1417,15 @@ mod tests {
         let before = RobotScreenshot {
             width: 2,
             height: 1,
+            logical_width: 2.0,
+            logical_height: 1.0,
             pixels: vec![10, 20, 30, 255, 1, 2, 3, 255],
         };
         let after = RobotScreenshot {
             width: 2,
             height: 1,
+            logical_width: 2.0,
+            logical_height: 1.0,
             pixels: vec![10, 20, 30, 255, 4, 8, 3, 200],
         };
 

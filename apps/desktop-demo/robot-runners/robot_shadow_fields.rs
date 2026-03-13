@@ -6,7 +6,8 @@
 use cranpose::AppLauncher;
 use cranpose_testing::{
     capture_screenshot, changed_pixel_count, changed_pixel_count_in_region, find_bounds_by_text,
-    find_button_in_semantics, find_text_by_prefix_in_semantics, root_bounds,
+    find_button_in_semantics, find_text_by_prefix_in_semantics, logical_region_to_pixel_bounds,
+    root_bounds,
 };
 use desktop_app::app;
 use image::{ImageBuffer, Rgba, RgbaImage};
@@ -28,10 +29,6 @@ const SHADOW_RING_MARGIN: f32 = 40.0;
 const SHADOW_RING_MIN_PIXELS: usize = 180;
 const OUTPUT_DIR: &str = "/tmp/cranpose_robot_shadow_fields";
 
-fn rect_contains(bounds: (f32, f32, f32, f32), x: f32, y: f32) -> bool {
-    x >= bounds.0 && x < bounds.0 + bounds.2 && y >= bounds.1 && y < bounds.1 + bounds.3
-}
-
 fn changed_pixel_count_in_ring(
     before: &cranpose::RobotScreenshot,
     after: &cranpose::RobotScreenshot,
@@ -43,26 +40,28 @@ fn changed_pixel_count_in_ring(
         return usize::MAX;
     }
 
-    let outer_left = (inner_rect.0 - outer_margin).max(0.0).floor() as u32;
-    let outer_top = (inner_rect.1 - outer_margin).max(0.0).floor() as u32;
-    let outer_right = (inner_rect.0 + inner_rect.2 + outer_margin)
-        .min(before.width as f32)
-        .ceil() as u32;
-    let outer_bottom = (inner_rect.1 + inner_rect.3 + outer_margin)
-        .min(before.height as f32)
-        .ceil() as u32;
-
-    if outer_right <= outer_left || outer_bottom <= outer_top {
+    let Some((inner_left, inner_top, inner_right, inner_bottom)) =
+        logical_region_to_pixel_bounds(before, inner_rect)
+    else {
         return 0;
-    }
+    };
+    let Some((outer_left, outer_top, outer_right, outer_bottom)) = logical_region_to_pixel_bounds(
+        before,
+        (
+            inner_rect.0 - outer_margin,
+            inner_rect.1 - outer_margin,
+            inner_rect.2 + outer_margin * 2.0,
+            inner_rect.3 + outer_margin * 2.0,
+        ),
+    ) else {
+        return 0;
+    };
 
     let width = before.width as usize;
     let mut changed = 0usize;
     for y in outer_top..outer_bottom {
         for x in outer_left..outer_right {
-            let fx = x as f32;
-            let fy = y as f32;
-            if rect_contains(inner_rect, fx, fy) {
+            if x >= inner_left && x < inner_right && y >= inner_top && y < inner_bottom {
                 continue;
             }
             let idx = ((y as usize) * width + x as usize) * 4;
@@ -105,6 +104,8 @@ fn build_diff_image(
         ring_rect.2 + SHADOW_RING_MARGIN * 2.0,
         ring_rect.3 + SHADOW_RING_MARGIN * 2.0,
     );
+    let inner_bounds = logical_region_to_pixel_bounds(before, ring_rect)?;
+    let outer_bounds = logical_region_to_pixel_bounds(before, outer)?;
 
     for y in 0..before.height {
         for x in 0..before.width {
@@ -114,8 +115,14 @@ fn build_diff_image(
             let db = before.pixels[idx + 2].abs_diff(after.pixels[idx + 2]);
             let da = before.pixels[idx + 3].abs_diff(after.pixels[idx + 3]);
             let dmax = dr.max(dg).max(db).max(da);
-            let in_outer = rect_contains(outer, x as f32, y as f32);
-            let in_inner = rect_contains(ring_rect, x as f32, y as f32);
+            let in_outer = x >= outer_bounds.0
+                && x < outer_bounds.2
+                && y >= outer_bounds.1
+                && y < outer_bounds.3;
+            let in_inner = x >= inner_bounds.0
+                && x < inner_bounds.2
+                && y >= inner_bounds.1
+                && y < inner_bounds.3;
             let px = if in_outer && !in_inner {
                 if dmax > CHANNEL_THRESHOLD {
                     let intensity = dmax.max(80);

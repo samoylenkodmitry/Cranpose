@@ -64,20 +64,202 @@ pub fn build_graph_from_applier(
     root: NodeId,
     scale: f32,
 ) -> Option<RenderGraph> {
-    let snapshot = snapshot_from_applier(applier, root)?;
     Some(RenderGraph {
-        root: build_layer_node(snapshot, scale),
+        root: build_layer_node_from_applier(applier, root, scale)?,
     })
 }
 
 fn build_layer_node(snapshot: BuildNodeSnapshot, root_scale: f32) -> LayerNode {
+    let BuildNodeSnapshot {
+        node_id,
+        placement,
+        size,
+        content_offset,
+        measured_max_width,
+        resolved_modifiers,
+        draw_commands,
+        click_actions,
+        pointer_inputs,
+        clip_to_bounds,
+        annotated_text,
+        text_style,
+        text_layout_options,
+        graphics_layer,
+        children: child_snapshots,
+    } = snapshot;
     let local_bounds = Rect {
         x: 0.0,
         y: 0.0,
-        width: snapshot.size.width,
-        height: snapshot.size.height,
+        width: size.width,
+        height: size.height,
     };
-    let mut graphics_layer = snapshot.graphics_layer.clone().unwrap_or_default();
+    let mut graphics_layer = graphics_layer.unwrap_or_default();
+    if root_scale != 1.0 {
+        graphics_layer = combine_layers(
+            GraphicsLayer {
+                scale: root_scale,
+                ..GraphicsLayer::default()
+            },
+            Some(graphics_layer),
+        );
+    }
+    let transform_to_parent = layer_transform_to_parent(local_bounds, placement, &graphics_layer);
+    let isolation = isolation_reasons(&graphics_layer);
+    let cache_policy = if isolation.has_any() {
+        CachePolicy::Auto
+    } else {
+        CachePolicy::None
+    };
+    let shadow_clip = clip_to_bounds.then_some(local_bounds);
+    let hit_test = (!click_actions.is_empty() || !pointer_inputs.is_empty()).then(|| HitTestNode {
+        shape: None,
+        click_actions,
+        pointer_inputs,
+        clip: (clip_to_bounds || graphics_layer.clip).then_some(local_bounds),
+    });
+
+    let mut children = draw_nodes(
+        &draw_commands,
+        DrawPlacement::Behind,
+        size,
+        PrimitivePhase::BeforeChildren,
+    );
+    if let Some(text) = text_node_from_parts(
+        node_id,
+        local_bounds,
+        measured_max_width,
+        &resolved_modifiers,
+        annotated_text.as_ref(),
+        text_style.as_ref(),
+        text_layout_options,
+    ) {
+        children.push(RenderNode::Primitive(PrimitiveEntry {
+            phase: PrimitivePhase::BeforeChildren,
+            node: PrimitiveNode::Text(Box::new(text)),
+        }));
+    }
+    for child in child_snapshots {
+        let mut child_layer = build_layer_node(child, 1.0);
+        if content_offset != Point::default() {
+            child_layer.transform_to_parent =
+                child_layer
+                    .transform_to_parent
+                    .then(ProjectiveTransform::translation(
+                        content_offset.x,
+                        content_offset.y,
+                    ));
+        }
+        children.push(RenderNode::Layer(Box::new(child_layer)));
+    }
+    children.extend(draw_nodes(
+        &draw_commands,
+        DrawPlacement::Overlay,
+        size,
+        PrimitivePhase::AfterChildren,
+    ));
+    let has_hit_targets = hit_test.is_some()
+        || children.iter().any(|child| match child {
+            RenderNode::Layer(child_layer) => child_layer.has_hit_targets,
+            RenderNode::Primitive(_) => false,
+        });
+
+    LayerNode {
+        node_id: Some(node_id),
+        local_bounds,
+        transform_to_parent,
+        graphics_layer,
+        clip_to_bounds,
+        shadow_clip,
+        hit_test,
+        has_hit_targets,
+        isolation,
+        cache_policy,
+        cache_hashes: LayerRasterCacheHashes::default(),
+        cache_hashes_valid: false,
+        children,
+    }
+}
+
+fn build_layer_node_from_applier(
+    applier: &mut MemoryApplier,
+    node_id: NodeId,
+    root_scale: f32,
+) -> Option<LayerNode> {
+    if let Ok(data) = applier.with_node::<LayoutNode, _>(node_id, |node| {
+        let state = node.layout_state();
+        let children = node.children.clone();
+        let modifier_slices = node.modifier_slices_snapshot();
+        SnapshotNodeData {
+            layout_state: state,
+            draw_commands: modifier_slices.draw_commands().to_vec(),
+            click_actions: modifier_slices.click_handlers().to_vec(),
+            pointer_inputs: modifier_slices.pointer_inputs().to_vec(),
+            clip_to_bounds: modifier_slices.clip_to_bounds(),
+            annotated_text: modifier_slices.annotated_string(),
+            text_style: modifier_slices.text_style().cloned(),
+            text_layout_options: modifier_slices.text_layout_options(),
+            graphics_layer: modifier_slices.graphics_layer(),
+            resolved_modifiers: node.resolved_modifiers(),
+            children,
+        }
+    }) {
+        return build_layer_node_from_data(applier, node_id, data, root_scale);
+    }
+
+    if let Ok(data) = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
+        let state = node.layout_state();
+        let children = node.active_children();
+        let modifier_slices = node.modifier_slices_snapshot();
+        SnapshotNodeData {
+            layout_state: state,
+            draw_commands: modifier_slices.draw_commands().to_vec(),
+            click_actions: modifier_slices.click_handlers().to_vec(),
+            pointer_inputs: modifier_slices.pointer_inputs().to_vec(),
+            clip_to_bounds: modifier_slices.clip_to_bounds(),
+            annotated_text: modifier_slices.annotated_string(),
+            text_style: modifier_slices.text_style().cloned(),
+            text_layout_options: modifier_slices.text_layout_options(),
+            graphics_layer: modifier_slices.graphics_layer(),
+            resolved_modifiers: node.resolved_modifiers(),
+            children,
+        }
+    }) {
+        return build_layer_node_from_data(applier, node_id, data, root_scale);
+    }
+
+    None
+}
+
+fn build_layer_node_from_data(
+    applier: &mut MemoryApplier,
+    node_id: NodeId,
+    data: SnapshotNodeData,
+    root_scale: f32,
+) -> Option<LayerNode> {
+    let SnapshotNodeData {
+        layout_state,
+        draw_commands,
+        click_actions,
+        pointer_inputs,
+        clip_to_bounds,
+        annotated_text,
+        text_style,
+        text_layout_options,
+        graphics_layer,
+        resolved_modifiers,
+        children,
+    } = data;
+    if !layout_state.is_placed {
+        return None;
+    }
+
+    let local_bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: layout_state.size.width,
+        height: layout_state.size.height,
+    };
+    let mut graphics_layer = graphics_layer.unwrap_or_default();
     if root_scale != 1.0 {
         graphics_layer = combine_layers(
             GraphicsLayer {
@@ -88,70 +270,88 @@ fn build_layer_node(snapshot: BuildNodeSnapshot, root_scale: f32) -> LayerNode {
         );
     }
     let transform_to_parent =
-        layer_transform_to_parent(local_bounds, snapshot.placement, &graphics_layer);
+        layer_transform_to_parent(local_bounds, layout_state.position, &graphics_layer);
     let isolation = isolation_reasons(&graphics_layer);
     let cache_policy = if isolation.has_any() {
         CachePolicy::Auto
     } else {
         CachePolicy::None
     };
-    let clip_to_bounds = snapshot.clip_to_bounds;
     let shadow_clip = clip_to_bounds.then_some(local_bounds);
-    let hit_test = (!snapshot.click_actions.is_empty() || !snapshot.pointer_inputs.is_empty())
-        .then(|| HitTestNode {
-            shape: None,
-            click_actions: snapshot.click_actions.clone(),
-            pointer_inputs: snapshot.pointer_inputs.clone(),
-            clip: (clip_to_bounds || graphics_layer.clip).then_some(local_bounds),
-        });
+    let hit_test = (!click_actions.is_empty() || !pointer_inputs.is_empty()).then(|| HitTestNode {
+        shape: None,
+        click_actions,
+        pointer_inputs,
+        clip: (clip_to_bounds || graphics_layer.clip).then_some(local_bounds),
+    });
 
-    let mut children = draw_nodes(
-        &snapshot.draw_commands,
+    let mut render_children = draw_nodes(
+        &draw_commands,
         DrawPlacement::Behind,
-        snapshot.size,
+        layout_state.size,
         PrimitivePhase::BeforeChildren,
     );
-    if let Some(text) = text_node(&snapshot, local_bounds) {
-        children.push(RenderNode::Primitive(PrimitiveEntry {
+    if let Some(text) = text_node_from_parts(
+        node_id,
+        local_bounds,
+        layout_state
+            .measurement_constraints
+            .max_width
+            .is_finite()
+            .then_some(layout_state.measurement_constraints.max_width),
+        &resolved_modifiers,
+        annotated_text.as_ref(),
+        text_style.as_ref(),
+        text_layout_options,
+    ) {
+        render_children.push(RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
             node: PrimitiveNode::Text(Box::new(text)),
         }));
     }
-    for child in snapshot.children {
-        let mut child_layer = build_layer_node(child, 1.0);
-        if snapshot.content_offset != Point::default() {
+    for child_id in children {
+        let Some(mut child_layer) = build_layer_node_from_applier(applier, child_id, 1.0) else {
+            continue;
+        };
+        if layout_state.content_offset != Point::default() {
             child_layer.transform_to_parent =
                 child_layer
                     .transform_to_parent
                     .then(ProjectiveTransform::translation(
-                        snapshot.content_offset.x,
-                        snapshot.content_offset.y,
+                        layout_state.content_offset.x,
+                        layout_state.content_offset.y,
                     ));
         }
-        children.push(RenderNode::Layer(Box::new(child_layer)));
+        render_children.push(RenderNode::Layer(Box::new(child_layer)));
     }
-    children.extend(draw_nodes(
-        &snapshot.draw_commands,
+    render_children.extend(draw_nodes(
+        &draw_commands,
         DrawPlacement::Overlay,
-        snapshot.size,
+        layout_state.size,
         PrimitivePhase::AfterChildren,
     ));
+    let has_hit_targets = hit_test.is_some()
+        || render_children.iter().any(|child| match child {
+            RenderNode::Layer(child_layer) => child_layer.has_hit_targets,
+            RenderNode::Primitive(_) => false,
+        });
 
-    let mut layer = LayerNode {
-        node_id: Some(snapshot.node_id),
+    let layer = LayerNode {
+        node_id: Some(node_id),
         local_bounds,
         transform_to_parent,
         graphics_layer,
         clip_to_bounds,
         shadow_clip,
         hit_test,
+        has_hit_targets,
         isolation,
         cache_policy,
         cache_hashes: LayerRasterCacheHashes::default(),
-        children,
+        cache_hashes_valid: false,
+        children: render_children,
     };
-    layer.recompute_raster_cache_hashes();
-    layer
+    Some(layer)
 }
 
 fn draw_nodes(
@@ -175,22 +375,27 @@ fn draw_nodes(
     nodes
 }
 
-fn text_node(snapshot: &BuildNodeSnapshot, local_bounds: Rect) -> Option<TextPrimitiveNode> {
-    let value = snapshot.annotated_text.as_ref()?;
+fn text_node_from_parts(
+    node_id: NodeId,
+    local_bounds: Rect,
+    measured_max_width: Option<f32>,
+    resolved_modifiers: &ResolvedModifiers,
+    annotated_text: Option<&AnnotatedString>,
+    text_style: Option<&TextStyle>,
+    text_layout_options: Option<TextLayoutOptions>,
+) -> Option<TextPrimitiveNode> {
+    let value = annotated_text?;
     let default_text_style = TextStyle::default();
-    let text_style = snapshot.text_style.clone().unwrap_or(default_text_style);
-    let options = snapshot
-        .text_layout_options
-        .unwrap_or_default()
-        .normalized();
-    let padding = snapshot.resolved_modifiers.padding();
+    let text_style = text_style.cloned().unwrap_or(default_text_style);
+    let options = text_layout_options.unwrap_or_default().normalized();
+    let padding = resolved_modifiers.padding();
     let content_width = (local_bounds.width - padding.left - padding.right).max(0.0);
     if content_width <= 0.0 {
         return None;
     }
 
     let measure_width =
-        resolve_text_measure_width(content_width, padding, snapshot.measured_max_width, options);
+        resolve_text_measure_width(content_width, padding, measured_max_width, options);
     let prepared = prepare_text_layout(
         value,
         &text_style,
@@ -230,115 +435,13 @@ fn text_node(snapshot: &BuildNodeSnapshot, local_bounds: Rect) -> Option<TextPri
     };
 
     Some(TextPrimitiveNode {
-        node_id: snapshot.node_id,
+        node_id,
         rect,
         text: prepared.text,
         text_style,
         font_size,
         layout_options: options,
         clip,
-    })
-}
-
-fn snapshot_from_applier(
-    applier: &mut MemoryApplier,
-    node_id: NodeId,
-) -> Option<BuildNodeSnapshot> {
-    if let Ok(data) = applier.with_node::<LayoutNode, _>(node_id, |node| {
-        let state = node.layout_state();
-        let children = node.children.clone();
-        let modifier_slices = node.modifier_slices_snapshot();
-        SnapshotNodeData {
-            layout_state: state,
-            draw_commands: modifier_slices.draw_commands().to_vec(),
-            click_actions: modifier_slices.click_handlers().to_vec(),
-            pointer_inputs: modifier_slices.pointer_inputs().to_vec(),
-            clip_to_bounds: modifier_slices.clip_to_bounds(),
-            annotated_text: modifier_slices.annotated_string(),
-            text_style: modifier_slices.text_style().cloned(),
-            text_layout_options: modifier_slices.text_layout_options(),
-            graphics_layer: modifier_slices.graphics_layer(),
-            resolved_modifiers: node.resolved_modifiers(),
-            children,
-        }
-    }) {
-        return snapshot_from_node_data(applier, node_id, data);
-    }
-
-    if let Ok(data) = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-        let state = node.layout_state();
-        let children = node.active_children();
-        let modifier_slices = node.modifier_slices_snapshot();
-        SnapshotNodeData {
-            layout_state: state,
-            draw_commands: modifier_slices.draw_commands().to_vec(),
-            click_actions: modifier_slices.click_handlers().to_vec(),
-            pointer_inputs: modifier_slices.pointer_inputs().to_vec(),
-            clip_to_bounds: modifier_slices.clip_to_bounds(),
-            annotated_text: modifier_slices.annotated_string(),
-            text_style: modifier_slices.text_style().cloned(),
-            text_layout_options: modifier_slices.text_layout_options(),
-            graphics_layer: modifier_slices.graphics_layer(),
-            resolved_modifiers: node.resolved_modifiers(),
-            children,
-        }
-    }) {
-        return snapshot_from_node_data(applier, node_id, data);
-    }
-
-    None
-}
-
-fn snapshot_from_node_data(
-    applier: &mut MemoryApplier,
-    node_id: NodeId,
-    data: SnapshotNodeData,
-) -> Option<BuildNodeSnapshot> {
-    let SnapshotNodeData {
-        layout_state,
-        draw_commands,
-        click_actions,
-        pointer_inputs,
-        clip_to_bounds,
-        annotated_text,
-        text_style,
-        text_layout_options,
-        graphics_layer,
-        resolved_modifiers,
-        children,
-    } = data;
-    if !layout_state.is_placed {
-        return None;
-    }
-
-    let mut child_snapshots = Vec::new();
-    for child_id in children {
-        let Some(child_snapshot) = snapshot_from_applier(applier, child_id) else {
-            continue;
-        };
-        child_snapshots.push(child_snapshot);
-    }
-
-    Some(BuildNodeSnapshot {
-        node_id,
-        placement: layout_state.position,
-        size: layout_state.size,
-        content_offset: layout_state.content_offset,
-        measured_max_width: layout_state
-            .measurement_constraints
-            .max_width
-            .is_finite()
-            .then_some(layout_state.measurement_constraints.max_width),
-        resolved_modifiers,
-        draw_commands,
-        click_actions,
-        pointer_inputs,
-        clip_to_bounds,
-        annotated_text,
-        text_style,
-        text_layout_options,
-        graphics_layer,
-        children: child_snapshots,
     })
 }
 

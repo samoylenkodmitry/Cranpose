@@ -4,7 +4,9 @@
 //! `cargo run --package desktop-app --example robot_image_chessboard --features robot-app`
 
 use cranpose::AppLauncher;
-use cranpose_testing::{find_button_in_semantics, find_in_semantics, find_text, screenshot_pixel};
+use cranpose_testing::{
+    find_button_in_semantics, find_in_semantics, find_text, sample_screenshot_pixel_logical,
+};
 use desktop_app::app;
 use std::time::Duration;
 
@@ -65,9 +67,9 @@ fn main() {
             };
 
             let sample_cell = |cell_x: u32, cell_y: u32| -> Option<[u8; 3]> {
-                let px = (img_x + ((cell_x as f32 + 0.5) * (img_w / 8.0))).floor() as u32;
-                let py = (img_y + ((cell_y as f32 + 0.5) * (img_h / 8.0))).floor() as u32;
-                let rgba = screenshot_pixel(&screenshot, px, py)?;
+                let sample_x = img_x + ((cell_x as f32 + 0.5) * (img_w / 8.0));
+                let sample_y = img_y + ((cell_y as f32 + 0.5) * (img_h / 8.0));
+                let rgba = sample_screenshot_pixel_logical(&screenshot, sample_x, sample_y)?;
                 Some([rgba[0], rgba[1], rgba[2]])
             };
 

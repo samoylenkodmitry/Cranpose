@@ -15,10 +15,15 @@ pub(crate) fn recompute_layer_raster_cache_hashes(layer: &mut LayerNode) {
             recompute_layer_raster_cache_hashes(child_layer);
         }
     }
-    layer.cache_hashes = LayerRasterCacheHashes {
+    layer.cache_hashes = layer_raster_cache_hashes(layer);
+    layer.cache_hashes_valid = true;
+}
+
+pub(crate) fn layer_raster_cache_hashes(layer: &LayerNode) -> LayerRasterCacheHashes {
+    LayerRasterCacheHashes {
         target_content: finish_hash(|state| hash_layer_target_content(layer, state)),
         effect: hash_optional_render_effect(layer.effect()),
-    };
+    }
 }
 
 fn finish_hash(write: impl FnOnce(&mut DefaultHasher)) -> u64 {

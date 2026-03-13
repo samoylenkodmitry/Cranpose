@@ -17,7 +17,7 @@ pub struct LayerSurfaceReasons {
     pub backdrop: bool,
     pub group_opacity: bool,
     pub blend_mode: bool,
-    pub immediate_text: bool,
+    pub text_local_surface: bool,
     pub immediate_shadow: bool,
     pub mixed_direct_content: bool,
     pub non_translation_transform: bool,
@@ -30,7 +30,7 @@ impl LayerSurfaceReasons {
             || self.backdrop
             || self.group_opacity
             || self.blend_mode
-            || self.immediate_text
+            || self.text_local_surface
             || self.immediate_shadow
             || self.mixed_direct_content
             || self.non_translation_transform
@@ -60,8 +60,8 @@ impl LayerSurfaceReasons {
             labels[len] = Some("blend_mode");
             len += 1;
         }
-        if self.immediate_text {
-            labels[len] = Some("immediate_text");
+        if self.text_local_surface {
+            labels[len] = Some("text_local_surface");
             len += 1;
         }
         if self.immediate_shadow {
@@ -95,7 +95,7 @@ impl LayerSurfaceReasons {
     }
 
     pub fn has_renderer_forced_surface(self) -> bool {
-        self.immediate_text
+        self.text_local_surface
             || self.immediate_shadow
             || self.mixed_direct_content
             || self.non_translation_transform
@@ -503,7 +503,7 @@ mod tests {
                 height: 5.0,
             },
             LayerSurfaceReasons {
-                immediate_text: true,
+                text_local_surface: true,
                 ..LayerSurfaceReasons::default()
             },
         );
@@ -549,7 +549,7 @@ mod tests {
     #[test]
     fn layer_surface_reasons_report_runtime_only_bits() {
         let reasons = LayerSurfaceReasons {
-            immediate_text: true,
+            text_local_surface: true,
             mixed_direct_content: true,
             ..LayerSurfaceReasons::default()
         };
@@ -558,9 +558,9 @@ mod tests {
         assert!(reasons.has_renderer_forced_surface());
         assert_eq!(
             reasons.labels().collect::<Vec<_>>(),
-            vec!["immediate_text", "mixed_direct_content"]
+            vec!["text_local_surface", "mixed_direct_content"]
         );
-        assert_eq!(reasons.display(), "immediate_text+mixed_direct_content");
+        assert_eq!(reasons.display(), "text_local_surface+mixed_direct_content");
     }
 
     #[test]
@@ -578,7 +578,7 @@ mod tests {
                     height: 10.0,
                 },
                 LayerSurfaceReasons {
-                    immediate_text: true,
+                    text_local_surface: true,
                     ..LayerSurfaceReasons::default()
                 },
             );

@@ -200,42 +200,75 @@ impl RenderStatsAccumulator {
 fn PerfHarnessApp(scenario: PerfScenario) {
     let list_state = remember_lazy_list_state();
 
-    Column(
-        Modifier::empty()
-            .fill_max_size()
-            .padding(14.0)
-            .background(Color(0.06, 0.07, 0.09, 1.0)),
-        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(10.0)),
+    Box(
+        Modifier::empty().fill_max_size(),
+        BoxSpec::new(),
         move || {
-            Text(
-                format!("Perf Harness: {}", scenario.title()),
-                Modifier::empty(),
-                TextStyle::default(),
-            );
-            Text(
-                format!("Scenario key: {}", scenario.name()),
-                Modifier::empty(),
-                TextStyle::default(),
-            );
-
             Box(
                 Modifier::empty()
-                    .fill_max_width()
-                    .height(610.0)
-                    .background(Color(0.03, 0.04, 0.06, 1.0))
-                    .rounded_corners(18.0)
-                    .padding(12.0),
+                    .fill_max_size()
+                    .background(Color(0.06, 0.07, 0.09, 1.0)),
                 BoxSpec::new(),
+                || {},
+            );
+
+            Column(
+                Modifier::empty().fill_max_size().padding(14.0),
+                ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(10.0)),
                 {
                     let list_state = list_state.clone();
                     move || {
-                        PerfScenarioList(list_state.clone(), scenario);
-                        if scenario == PerfScenario::BackdropBlur {
-                            BackdropOverlayCard();
-                        }
+                        Text(
+                            format!("Perf Harness: {}", scenario.title()),
+                            Modifier::empty(),
+                            TextStyle::default(),
+                        );
+                        Text(
+                            format!("Scenario key: {}", scenario.name()),
+                            Modifier::empty(),
+                            TextStyle::default(),
+                        );
+
+                        ScenarioViewport(list_state.clone(), scenario);
                     }
                 },
             );
+        },
+    );
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn ScenarioViewport(list_state: LazyListState, scenario: PerfScenario) {
+    Box(
+        Modifier::empty().fill_max_width().height(610.0),
+        BoxSpec::new(),
+        {
+            let list_state = list_state.clone();
+            move || {
+                Box(
+                    Modifier::empty()
+                        .fill_max_size()
+                        .background(Color(0.03, 0.04, 0.06, 1.0))
+                        .rounded_corners(18.0),
+                    BoxSpec::new(),
+                    || {},
+                );
+
+                Box(
+                    Modifier::empty().fill_max_size().padding(12.0),
+                    BoxSpec::new(),
+                    {
+                        let list_state = list_state.clone();
+                        move || {
+                            PerfScenarioList(list_state.clone(), scenario);
+                            if scenario == PerfScenario::BackdropBlur {
+                                BackdropOverlayCard();
+                            }
+                        }
+                    },
+                );
+            }
         },
     );
 }
@@ -565,6 +598,16 @@ fn fatal(robot: &cranpose::Robot, message: impl std::fmt::Display) -> ! {
     std::process::exit(1);
 }
 
+fn wait_for_perf_idle(robot: &cranpose::Robot) {
+    if robot.wait_for_idle().is_err() {
+        std::thread::sleep(Duration::from_millis(150));
+    }
+}
+
+fn perf_isolate_debug_enabled() -> bool {
+    env_bool("CRANPOSE_PERF_LOG_ISOLATES", false)
+}
+
 fn print_render_summary(scenario: PerfScenario, stats: RenderStatsAccumulator) {
     println!(
         "PERF_RENDER_SUMMARY scenario={} samples={} avg_submits={} avg_offscreen_acquires={} avg_offscreen_bytes={} avg_upload_bytes={} max_upload_bytes={} avg_isolated_layers={} avg_isolated_pixels={} max_isolated_pixels={} cache_hits={} cache_misses={} cache_hit_rate_pct={:.2} cache_evictions={} avg_blur_passes={} avg_composite_passes={} avg_effect_applies={} avg_shape_passes={} avg_image_passes={} avg_text_passes={}",
@@ -653,9 +696,7 @@ fn main() {
             });
 
             std::thread::sleep(Duration::from_millis(500));
-            if let Err(err) = robot.wait_for_idle() {
-                fatal(&robot, err);
-            }
+            wait_for_perf_idle(&robot);
 
             let total_duration = Duration::from_secs(duration_secs + warmup_secs);
             let warmup_duration = Duration::from_secs(warmup_secs);
@@ -680,9 +721,7 @@ fn main() {
                 if let Err(err) = robot.drag(scenario.drag_x(), from_y, scenario.drag_x(), to_y) {
                     fatal(&robot, err);
                 }
-                if let Err(err) = robot.wait_for_idle() {
-                    fatal(&robot, err);
-                }
+                wait_for_perf_idle(&robot);
 
                 let elapsed = start.elapsed();
                 if baseline_rss_kb.is_none() && elapsed >= warmup_duration {
@@ -759,6 +798,29 @@ fn main() {
 
             print_memory_summary(scenario, baseline_rss_kb, peak_rss_kb, sample_count);
             print_render_summary(scenario, render_stats);
+            if perf_isolate_debug_enabled() {
+                match robot.get_render_stats() {
+                    Ok(Some(snapshot)) => {
+                        for (index, layer) in snapshot.top_isolated_layers().enumerate() {
+                            println!(
+                                "PERF_ISOLATED scenario={} rank={} node={:?} rect=({:.1},{:.1},{:.1},{:.1}) target={}x{} reasons={}",
+                                scenario.name(),
+                                index,
+                                layer.node_id,
+                                layer.logical_rect.x,
+                                layer.logical_rect.y,
+                                layer.logical_rect.width,
+                                layer.logical_rect.height,
+                                layer.width,
+                                layer.height,
+                                layer.reasons.display(),
+                            );
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(err) => fatal(&robot, err),
+                }
+            }
 
             let stats = fps_stats();
             println!(

@@ -252,15 +252,7 @@ fn ValueSlider(
 #[composable]
 pub(crate) fn ShadersTab() {
     Column(
-        Modifier::empty()
-            .padding(32.0)
-            .draw_behind(|scope| {
-                scope.draw_round_rect(
-                    Brush::solid(Color(0.10, 0.13, 0.20, 1.0)),
-                    CornerRadii::uniform(24.0),
-                );
-            })
-            .padding(20.0),
+        Modifier::empty().padding(32.0).padding(20.0),
         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(24.0)),
         || {
             Text(

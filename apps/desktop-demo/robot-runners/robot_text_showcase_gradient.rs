@@ -5,8 +5,8 @@
 
 use cranpose::AppLauncher;
 use cranpose_testing::{
-    crop_screenshot, find_button_exact_in_semantics, find_button_in_semantics, find_in_semantics,
-    find_text,
+    crop_screenshot_logical, find_button_exact_in_semantics, find_button_in_semantics,
+    find_in_semantics, find_text,
 };
 use desktop_app::app;
 use std::time::Duration;
@@ -75,22 +75,8 @@ fn main() {
                 .screenshot()
                 .unwrap_or_else(|err| fail(&robot, &format!("screenshot failed: {err}")));
 
-            let left = anchor_x.max(0.0).floor() as u32;
-            let top = sample_y.max(0.0).floor() as u32;
-            let right = (anchor_x + sample_w).max(0.0).ceil() as u32;
-            let bottom = (sample_y + sample_h).max(0.0).ceil() as u32;
-            let width = right.saturating_sub(left).max(1);
-            let height = bottom.saturating_sub(top).max(1);
-            let max_width = screenshot.width.saturating_sub(left);
-            let max_height = screenshot.height.saturating_sub(top);
-            let cropped = crop_screenshot(
-                &screenshot,
-                left,
-                top,
-                width.min(max_width).max(1),
-                height.min(max_height).max(1),
-            )
-            .unwrap_or_else(|| fail(&robot, "failed to crop sample bounds"));
+            let cropped = crop_screenshot_logical(&screenshot, anchor_x, sample_y, sample_w, sample_h)
+                .unwrap_or_else(|| fail(&robot, "failed to crop sample bounds"));
 
             let mut colored_pixels = 0usize;
             let mut min_red = 1.0f32;

@@ -651,15 +651,14 @@ fn collect_hits_from_graph(
         fn push_hit(
             &mut self,
             node_id: NodeId,
-            rect: Rect,
+            geometry: cranpose_render_common::graph_scene::HitGeometry,
             shape: Option<RoundedCornerShape>,
             click_actions: &[Rc<dyn Fn(Point)>],
             pointer_inputs: &[Rc<dyn Fn(cranpose_foundation::PointerEvent)>],
-            hit_clip: Option<Rect>,
         ) {
             self.scene.push_hit(
                 node_id,
-                rect,
+                geometry,
                 shape,
                 click_actions
                     .iter()
@@ -667,7 +666,6 @@ fn collect_hits_from_graph(
                     .map(ClickAction::WithPoint)
                     .collect(),
                 pointer_inputs.to_vec(),
-                hit_clip,
             );
         }
     }
@@ -1225,9 +1223,11 @@ mod tests {
             clip_to_bounds: false,
             shadow_clip: None,
             hit_test: None,
+            has_hit_targets: false,
             isolation: IsolationReasons::default(),
             cache_policy: CachePolicy::None,
             cache_hashes: LayerRasterCacheHashes::default(),
+            cache_hashes_valid: false,
             children: vec![RenderNode::Layer(Box::new(LayerNode {
                 node_id: None,
                 local_bounds: Rect {
@@ -1241,9 +1241,11 @@ mod tests {
                 clip_to_bounds: false,
                 shadow_clip: None,
                 hit_test: None,
+                has_hit_targets: false,
                 isolation: IsolationReasons::default(),
                 cache_policy: CachePolicy::None,
                 cache_hashes: LayerRasterCacheHashes::default(),
+                cache_hashes_valid: false,
                 children: vec![RenderNode::Primitive(PrimitiveEntry {
                     phase: PrimitivePhase::BeforeChildren,
                     node: PrimitiveNode::Draw(DrawPrimitiveNode {

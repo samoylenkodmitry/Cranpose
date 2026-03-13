@@ -33,6 +33,18 @@ impl ProjectiveTransform {
             return Self::translation(quad[0][0], quad[0][1]);
         }
 
+        if let Some(axis_aligned) = axis_aligned_rect_from_quad(quad) {
+            let scale_x = axis_aligned.width / rect.width;
+            let scale_y = axis_aligned.height / rect.height;
+            return Self {
+                matrix: [
+                    [scale_x, 0.0, axis_aligned.x - rect.x * scale_x],
+                    [0.0, scale_y, axis_aligned.y - rect.y * scale_y],
+                    [0.0, 0.0, 1.0],
+                ],
+            };
+        }
+
         let source = [
             [rect.x, rect.y],
             [rect.x + rect.width, rect.y],
@@ -151,6 +163,30 @@ impl ProjectiveTransform {
     }
 }
 
+fn axis_aligned_rect_from_quad(quad: [[f32; 2]; 4]) -> Option<Rect> {
+    let top_left = quad[0];
+    let top_right = quad[1];
+    let bottom_left = quad[2];
+    let bottom_right = quad[3];
+    let x_epsilon = 1e-4;
+    let y_epsilon = 1e-4;
+
+    if (top_left[1] - top_right[1]).abs() > y_epsilon
+        || (bottom_left[1] - bottom_right[1]).abs() > y_epsilon
+        || (top_left[0] - bottom_left[0]).abs() > x_epsilon
+        || (top_right[0] - bottom_right[0]).abs() > x_epsilon
+    {
+        return None;
+    }
+
+    Some(Rect {
+        x: top_left[0],
+        y: top_left[1],
+        width: top_right[0] - top_left[0],
+        height: bottom_left[1] - top_left[1],
+    })
+}
+
 impl Default for ProjectiveTransform {
     fn default() -> Self {
         Self::identity()
@@ -235,9 +271,11 @@ pub struct LayerNode {
     pub clip_to_bounds: bool,
     pub shadow_clip: Option<Rect>,
     pub hit_test: Option<HitTestNode>,
+    pub has_hit_targets: bool,
     pub isolation: IsolationReasons,
     pub cache_policy: CachePolicy,
     pub cache_hashes: LayerRasterCacheHashes,
+    pub cache_hashes_valid: bool,
     pub children: Vec<RenderNode>,
 }
 
@@ -267,11 +305,19 @@ impl LayerNode {
     }
 
     pub fn target_content_hash(&self) -> u64 {
-        self.cache_hashes.target_content
+        if self.cache_hashes_valid {
+            self.cache_hashes.target_content
+        } else {
+            crate::graph_hash::layer_raster_cache_hashes(self).target_content
+        }
     }
 
     pub fn effect_hash(&self) -> u64 {
-        self.cache_hashes.effect
+        if self.cache_hashes_valid {
+            self.cache_hashes.effect
+        } else {
+            crate::graph_hash::layer_raster_cache_hashes(self).effect
+        }
     }
 
     pub fn recompute_raster_cache_hashes(&mut self) {
@@ -408,9 +454,11 @@ mod tests {
             clip_to_bounds: false,
             shadow_clip: None,
             hit_test: None,
+            has_hit_targets: false,
             isolation: IsolationReasons::default(),
             cache_policy: CachePolicy::None,
             cache_hashes: LayerRasterCacheHashes::default(),
+            cache_hashes_valid: false,
             children,
         }
     }
@@ -448,6 +496,40 @@ mod tests {
             assert!((expected[0] - actual[0]).abs() < 1e-4);
             assert!((expected[1] - actual[1]).abs() < 1e-4);
         }
+    }
+
+    #[test]
+    fn axis_aligned_rect_to_quad_keeps_exact_affine_matrix() {
+        let rect = Rect {
+            x: 2.0,
+            y: 3.0,
+            width: 20.0,
+            height: 10.0,
+        };
+        let quad = [[12.0, 9.0], [32.0, 9.0], [12.0, 19.0], [32.0, 19.0]];
+        let transform = ProjectiveTransform::from_rect_to_quad(rect, quad);
+
+        assert_eq!(
+            transform.matrix(),
+            [[1.0, 0.0, 10.0], [0.0, 1.0, 6.0], [0.0, 0.0, 1.0]]
+        );
+    }
+
+    #[test]
+    fn axis_aligned_rect_to_quad_keeps_exact_axis_aligned_scale() {
+        let rect = Rect {
+            x: 4.0,
+            y: 6.0,
+            width: 10.0,
+            height: 8.0,
+        };
+        let quad = [[20.0, 18.0], [50.0, 18.0], [20.0, 42.0], [50.0, 42.0]];
+        let transform = ProjectiveTransform::from_rect_to_quad(rect, quad);
+
+        assert_eq!(
+            transform.matrix(),
+            [[3.0, 0.0, 8.0], [0.0, 3.0, 0.0], [0.0, 0.0, 1.0]]
+        );
     }
 
     #[test]

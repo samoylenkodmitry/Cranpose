@@ -5,7 +5,7 @@
 use cranpose::AppLauncher;
 use cranpose_testing::{
     capture_screenshot, changed_pixel_count, changed_pixel_count_in_region,
-    find_button_in_semantics, find_text_in_semantics,
+    find_button_in_semantics, find_text_in_semantics, screenshot_logical_size,
 };
 use desktop_app::app;
 use std::time::Duration;
@@ -296,11 +296,12 @@ fn main() {
                 println!("✗ Could not capture screenshot for tab-row baseline (after)");
                 std::process::exit(1);
             };
+            let (logical_width, logical_height) = screenshot_logical_size(&tab_noise_before);
 
             let tab_strip_region = (
                 0.0,
                 (ty - 8.0).max(0.0),
-                tab_noise_before.width as f32,
+                logical_width,
                 th + 16.0,
             );
             let baseline_tab_strip_diff = changed_pixel_count_in_region(
@@ -320,9 +321,9 @@ fn main() {
 
             // Move pointer away from the tab strip before taking the "after"
             // screenshot to avoid hover-highlight false positives.
-            let safe_x = blur_scroll_start_x.clamp(32.0, tab_noise_after.width as f32 - 32.0);
+            let safe_x = blur_scroll_start_x.clamp(32.0, logical_width - 32.0);
             let safe_y =
-                (tab_strip_bottom + 120.0).clamp(tab_strip_bottom + 20.0, tab_noise_after.height as f32 - 32.0);
+                (tab_strip_bottom + 120.0).clamp(tab_strip_bottom + 20.0, logical_height - 32.0);
             let _ = robot.click(safe_x, safe_y);
             std::thread::sleep(Duration::from_millis(120));
             let _ = robot.wait_for_idle();

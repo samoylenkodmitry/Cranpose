@@ -1180,9 +1180,11 @@ mod tests {
             clip_to_bounds: false,
             shadow_clip: None,
             hit_test: None,
+            has_hit_targets: false,
             isolation: IsolationReasons::default(),
             cache_policy: CachePolicy::None,
             cache_hashes: LayerRasterCacheHashes::default(),
+            cache_hashes_valid: false,
             children: vec![RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
                 node: PrimitiveNode::Draw(DrawPrimitiveNode {
