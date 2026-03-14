@@ -78,7 +78,7 @@ fn lazy_scroll_modifier_keeps_motion_context_inactive_at_rest() {
 }
 
 #[test]
-fn regular_scroll_modifier_keeps_translated_content_context_inactive_at_rest() {
+fn regular_scroll_modifier_keeps_translated_content_context_active_at_rest() {
     let mut state = None;
     let _composition = crate::run_test_composition(|| {
         state = Some(crate::ScrollState::new(12.0));
@@ -87,11 +87,11 @@ fn regular_scroll_modifier_keeps_translated_content_context_inactive_at_rest() {
         Modifier::empty().vertical_scroll(state.expect("scroll state should be created"), false);
     let slices = collect_slices_from_modifier(&modifier);
 
-    assert!(!slices.translated_content_context());
+    assert!(slices.translated_content_context());
 }
 
 #[test]
-fn lazy_scroll_modifier_keeps_translated_content_context_inactive_at_rest() {
+fn lazy_scroll_modifier_keeps_translated_content_context_active_at_rest() {
     let mut list_state = None;
     let _composition = crate::run_test_composition(|| {
         list_state = Some(cranpose_foundation::lazy::remember_lazy_list_state());
@@ -102,7 +102,7 @@ fn lazy_scroll_modifier_keeps_translated_content_context_inactive_at_rest() {
     );
     let slices = collect_slices_from_modifier(&modifier);
 
-    assert!(!slices.translated_content_context());
+    assert!(slices.translated_content_context());
 }
 
 #[test]

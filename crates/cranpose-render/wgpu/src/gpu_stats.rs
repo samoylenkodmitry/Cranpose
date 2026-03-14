@@ -18,6 +18,7 @@ pub struct LayerSurfaceReasons {
     pub group_opacity: bool,
     pub blend_mode: bool,
     pub immediate_shadow: bool,
+    pub text_local_surface: bool,
     pub mixed_direct_content: bool,
     pub non_translation_transform: bool,
 }
@@ -30,11 +31,12 @@ impl LayerSurfaceReasons {
             || self.group_opacity
             || self.blend_mode
             || self.immediate_shadow
+            || self.text_local_surface
             || self.non_translation_transform
     }
 
     pub fn labels(self) -> impl Iterator<Item = &'static str> {
-        let mut labels = [None; 8];
+        let mut labels = [None; 9];
         let mut len = 0usize;
 
         if self.explicit_offscreen {
@@ -59,6 +61,10 @@ impl LayerSurfaceReasons {
         }
         if self.immediate_shadow {
             labels[len] = Some("immediate_shadow");
+            len += 1;
+        }
+        if self.text_local_surface {
+            labels[len] = Some("text_local_surface");
             len += 1;
         }
         if self.mixed_direct_content {
@@ -88,7 +94,7 @@ impl LayerSurfaceReasons {
     }
 
     pub fn has_renderer_forced_surface(self) -> bool {
-        self.immediate_shadow || self.non_translation_transform
+        self.immediate_shadow || self.text_local_surface || self.non_translation_transform
     }
 }
 

@@ -73,6 +73,10 @@ fn rigid_snap_anchor(
     Some(Point::new(mapped.x, mapped.y))
 }
 
+fn translated_content_snap_anchor(layer_bounds: Rect, layer: &GraphicsLayer) -> Option<Point> {
+    rigid_snap_anchor(layer_bounds, layer, false)
+}
+
 #[derive(Clone, Copy)]
 struct SceneCounts {
     shapes: usize,
@@ -771,6 +775,7 @@ pub(crate) fn build_raster_scene(graph: &RenderGraph) -> RasterScene {
         GraphicsLayer::default(),
         &mut scene,
         None,
+        None,
     );
     scene
 }
@@ -873,6 +878,7 @@ fn populate_draws_from_graph(
     parent_content_style: GraphicsLayer,
     scene: &mut RasterScene,
     parent_visual_clip: Option<Rect>,
+    inherited_translated_snap_anchor: Option<Point>,
 ) {
     let transform = layer.transform_to_parent.then(parent_transform);
     let mapping = raster_layer_mapping(layer, transform, parent_content_style);
@@ -887,15 +893,27 @@ fn populate_draws_from_graph(
         parent_visual_clip,
         content_clip_to_bounds.then_some(mapping.transformed_bounds),
     );
-    let layer_snap_anchor = if layer_needs_text_leaf_snap(layer) {
-        rigid_snap_anchor(
-            mapping.layer_bounds.raster_rect(),
-            &mapping.raster_content_layer,
-            layer.motion_context_animated,
-        )
-    } else {
-        None
-    };
+    let translated_snap_anchor = inherited_translated_snap_anchor.or_else(|| {
+        if layer.translated_content_context {
+            translated_content_snap_anchor(
+                mapping.layer_bounds.raster_rect(),
+                &mapping.raster_content_layer,
+            )
+        } else {
+            None
+        }
+    });
+    let layer_snap_anchor = translated_snap_anchor.or_else(|| {
+        if layer_needs_text_leaf_snap(layer) {
+            rigid_snap_anchor(
+                mapping.layer_bounds.raster_rect(),
+                &mapping.raster_content_layer,
+                layer.motion_context_animated,
+            )
+        } else {
+            None
+        }
+    });
 
     if content_clip_to_bounds && visual_clip.is_none() {
         return;
@@ -944,6 +962,7 @@ fn populate_draws_from_graph(
                     mapping.content_style.clone(),
                     scene,
                     visual_clip,
+                    translated_snap_anchor,
                 );
             }
         }
@@ -1491,23 +1510,25 @@ mod tests {
     }
 
     #[test]
-    fn animated_text_leaf_keeps_modifier_background_and_text_unsnapped() {
+    fn translated_animated_text_leaf_keeps_shared_snap_anchor() {
         let scene = build_raster_scene(&snapped_text_leaf_root(true, true));
 
         assert_eq!(scene.shapes.len(), 1);
         assert_eq!(scene.texts.len(), 1);
-        assert_eq!(scene.shapes[0].snap_anchor, None);
-        assert_eq!(scene.texts[0].snap_anchor, None);
+        let expected_anchor = Some(Point::new(14.25, 16.5));
+        assert_eq!(scene.shapes[0].snap_anchor, expected_anchor);
+        assert_eq!(scene.texts[0].snap_anchor, expected_anchor);
     }
 
     #[test]
-    fn translated_content_context_text_leaf_keeps_modifier_background_and_text_unsnapped() {
+    fn translated_content_context_text_leaf_uses_shared_snap_anchor() {
         let scene = build_raster_scene(&snapped_text_leaf_root(false, true));
 
         assert_eq!(scene.shapes.len(), 1);
         assert_eq!(scene.texts.len(), 1);
-        assert_eq!(scene.shapes[0].snap_anchor, None);
-        assert_eq!(scene.texts[0].snap_anchor, None);
+        let expected_anchor = Some(Point::new(14.25, 16.5));
+        assert_eq!(scene.shapes[0].snap_anchor, expected_anchor);
+        assert_eq!(scene.texts[0].snap_anchor, expected_anchor);
     }
 
     #[test]

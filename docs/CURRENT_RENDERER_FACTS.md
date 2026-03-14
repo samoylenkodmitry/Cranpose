@@ -58,7 +58,7 @@ Important facts:
 
 - subtree motion is carried by `transform_to_parent`
 - active scroll/drag/fling ancestry is carried by `motion_context_animated`
-- translated-content ancestry is only active while scroll/lazy-scroll motion is active
+- scroll and lazy-scroll subtrees carry persistent `translated_content_context`
 - interactive-subtree presence is carried by `has_hit_targets`
 - raster-cache hashes are lazy through `cache_hashes_valid`
 
@@ -129,7 +129,10 @@ fn render_graph(...) -> Result<(), String> {
     self.layer_surface_rect_cache.clear();
     self.layer_surface_requirements_cache.clear();
     if root_can_render_directly_cached(&graph.root, &mut self.layer_surface_requirements_cache) {
-        return self.render_root_direct(...);
+        let collected = collect_layer_contents(...);
+        if collected.scene.effect_layers.is_empty() && collected.scene.backdrop_layers.is_empty() {
+            return self.render_root_direct(..., collected, ...);
+        }
     }
     let root_surface = self.render_layer_surface(...)?;
     ...
@@ -176,6 +179,7 @@ pub struct LayerSurfaceReasons {
     pub group_opacity: bool,
     pub blend_mode: bool,
     pub immediate_shadow: bool,
+    pub text_local_surface: bool,
     pub mixed_direct_content: bool,
     pub non_translation_transform: bool,
 }
@@ -214,8 +218,12 @@ This collector:
 
 ## Text Policy
 
-Plain text, decoration-only text, shadow/background text, span-style text,
-gradient text, and stroke text all stay on the direct path.
+Current split:
+
+- plain text and decoration-only text stay on the direct path
+- static plain text leaves use one rigid snap anchor
+- gradient/stroke/span-material text emits GPU `EffectLayer`s
+- complex text uses a bounded local surface via `LayerSurfaceReasons::text_local_surface`
 
 The direct-collapse path rebases `TextPrimitiveNode.rect` into parent space
 before emitting text/decorations, so collapsed underlined text no longer clips
@@ -223,12 +231,26 @@ down to a tiny fragment.
 
 `push_text_style_draws(...)` no longer rounds static text rects in logical
 space. Scene-space text geometry stays unchanged; any remaining snap policy is
-render-time only through shared leaf snap anchors.
+render-time only through shared leaf snap anchors. Static pure-text leaves now
+participate in that same snap-anchor path; it is not limited to layers that
+also contain sibling draw primitives.
 
 Unspecified text inside motion or translated-content ancestry resolves to
-`TextMotion::Animated` during graph build. Scroll and lazy-scroll modifiers now
-drive both flags from active drag/wheel/fling state instead of keeping
-translated-content context permanently enabled for an idle scrolled subtree.
+`TextMotion::Animated` during graph build. Scroll and lazy-scroll modifiers keep
+`translated_content_context` enabled for the whole subtree and use
+`motion_context_animated` only for active drag/wheel/fling state.
+
+Complex text local surfaces are now used to preserve rigid-picture invariance
+for text that cannot stay visually coherent as loose primitives under parent
+translation. Current triggers include:
+
+- gradient or stroke text
+- span-level foreground/material overrides
+- text shadow
+- background
+- baseline shift
+- non-identity geometric transform
+- letter spacing
 
 The direct-path text policy lives in
 `crates/cranpose-render/wgpu/src/pipeline.rs` and
@@ -239,7 +261,7 @@ The direct-path text policy lives in
 Image sampling now follows motion context:
 
 - static images use nearest sampling
-- images inside `motion_context_animated` subtrees use linear sampling
+- images inside translated-content or active-motion subtrees use linear sampling
 
 This keeps static icons/pixel-art crisp while avoiding nearest-neighbor phase
 stepping during scroll.
@@ -255,14 +277,6 @@ cropping, or region diffing.
 
 This fixed the raw screenshot size mismatch between `main` and `renderer` for
 the micro contract.
-
-The translation robot does not compare direct text captures as raw pixels
-anymore. It box-downsamples normalized regions first, because glyphon currently
-uses grayscale mask text with subpixel-positioned cache bins, not LCD subpixel
-mask output. The contract now targets visible structural drift instead of
-subpixel AA phase noise.
-The current micro contract screenshot is pixel-identical to
-`docs/render-reference/main_renderer_micro_contract.png`.
 
 ## Current Limitation
 
@@ -282,36 +296,13 @@ Validated current branch behavior:
 
 - transformed hit testing uses exact quads and inverse transforms
 - translation-only wrappers with plain text do zero offscreen work
-- only active scroll motion resolves unspecified text to animated motion
-- idle scrolled text returns to the static crisp path instead of staying permanently animated
+- scrolled text stays on one translated-content motion path instead of switching on release
+- idle standalone text headings also re-enter the static snap path
+- complex text uses bounded local surfaces instead of trying to preserve rigid motion as loose primitives
+- root direct rendering only applies when the collected root scene has no local effect/backdrop events
 - scrolling images use linear sampling while static images stay nearest
-- root direct rendering skips the old root offscreen for direct scenes
 - oversized Shaders-tab mixed-content isolates are guarded by a robot test
 - screenshot capture is physical-size aware
-
-Current screenshot-based review tools:
-
-- `robot_measure_shaders` can save real stage screenshots under
-  `/tmp/cranpose_shaders_visual_compare`
-- `robot_renderer_micro_contract` renders a tiny deterministic surface, saves
-  `/tmp/cranpose_renderer_micro_contract.png`, and validates exact
-  pixels for image/line/fill primitives plus text-region presence
-- committed `main` reference screenshot:
-  `docs/render-reference/main_renderer_micro_contract.png`
-
-Latest sequential perf spot checks on this machine:
-
-- `renderer` `opaque_scene`: `350.5 fps`
-- temp `main` `opaque_scene`: `315.2 fps`
-- `renderer` `backdrop_blur`: `207.1 fps`
-- temp `main` `backdrop_blur`: `209.5 fps`
-
-These numbers came from the robot perf harness with:
-
-- `CRANPOSE_HEADLESS=1`
-- `CRANPOSE_PRESENT_MODE=immediate`
-- `CRANPOSE_PERF_DURATION_SECS=3`
-- `CRANPOSE_PERF_WARMUP_SECS=2`
 
 ## Important Limits
 

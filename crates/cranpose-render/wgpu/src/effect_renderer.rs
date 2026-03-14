@@ -1019,34 +1019,12 @@ impl EffectRenderer {
         load_op: wgpu::LoadOp<wgpu::Color>,
         sample_mode: CompositeSampleMode,
     ) {
-        self.composite_to_view_with_alpha(
-            device,
-            queue,
-            source,
-            dest_view,
-            1.0,
-            load_op,
-            sample_mode,
-        );
-    }
-
-    /// Composite an offscreen target with explicit alpha multiplication.
-    pub fn composite_to_view_with_alpha(
-        &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        source: &OffscreenTarget,
-        dest_view: &wgpu::TextureView,
-        alpha: f32,
-        load_op: wgpu::LoadOp<wgpu::Color>,
-        sample_mode: CompositeSampleMode,
-    ) {
         self.composite_to_view_scissored_with_alpha(
             device,
             queue,
             source,
             dest_view,
-            alpha,
+            1.0,
             load_op,
             None,
             sample_mode,

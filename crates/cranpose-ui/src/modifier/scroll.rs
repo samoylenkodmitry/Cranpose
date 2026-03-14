@@ -655,19 +655,17 @@ impl MotionContextAnimatedNode {
 
 pub(crate) struct TranslatedContentContextNode {
     state: NodeState,
-    is_active: Rc<dyn Fn() -> bool>,
 }
 
 impl TranslatedContentContextNode {
-    fn new(is_active: Rc<dyn Fn() -> bool>) -> Self {
+    fn new() -> Self {
         Self {
             state: NodeState::new(),
-            is_active,
         }
     }
 
     pub(crate) fn is_active(&self) -> bool {
-        (self.is_active)()
+        true
     }
 }
 
@@ -771,15 +769,11 @@ impl ModifierNodeElement for MotionContextAnimatedElement {
 #[derive(Clone)]
 struct TranslatedContentContextElement {
     identity: usize,
-    is_active: Rc<dyn Fn() -> bool>,
 }
 
 impl TranslatedContentContextElement {
-    fn new(identity: usize, is_active: Rc<dyn Fn() -> bool>) -> Self {
-        Self {
-            identity,
-            is_active,
-        }
+    fn new(identity: usize) -> Self {
+        Self { identity }
     }
 }
 
@@ -809,12 +803,10 @@ impl ModifierNodeElement for TranslatedContentContextElement {
     type Node = TranslatedContentContextNode;
 
     fn create(&self) -> Self::Node {
-        TranslatedContentContextNode::new(self.is_active.clone())
+        TranslatedContentContextNode::new()
     }
 
-    fn update(&self, node: &mut Self::Node) {
-        node.is_active = self.is_active.clone();
-    }
+    fn update(&self, _node: &mut Self::Node) {}
 
     fn capabilities(&self) -> NodeCapabilities {
         NodeCapabilities::LAYOUT
@@ -982,11 +974,8 @@ fn scroll_impl(
         ));
     let motion_modifier =
         Modifier::with_element(MotionContextAnimatedElement::new(motion_context.clone()));
-    let translated_content_motion_context = motion_context.clone();
-    let translated_content_modifier = Modifier::with_element(TranslatedContentContextElement::new(
-        state.id() as usize,
-        Rc::new(move || translated_content_motion_context.is_active()),
-    ));
+    let translated_content_modifier =
+        Modifier::with_element(TranslatedContentContextElement::new(state.id() as usize));
 
     // Combine: pointer input THEN layout modifier, clip to bounds by default
     pointer_input
@@ -1036,11 +1025,8 @@ fn lazy_scroll_impl(state: LazyListState, is_vertical: bool, reverse_scrolling: 
     // Use a unique key per LazyListState
     let state_id = std::ptr::addr_of!(*state.inner_ptr()) as usize;
     let key = (state_id, is_vertical, reverse_scrolling);
-    let translated_content_motion_context = motion_context.clone();
-    let translated_content_modifier = Modifier::with_element(TranslatedContentContextElement::new(
-        state_id,
-        Rc::new(move || translated_content_motion_context.is_active()),
-    ));
+    let translated_content_modifier =
+        Modifier::with_element(TranslatedContentContextElement::new(state_id));
 
     Modifier::with_element(MotionContextAnimatedElement::new(motion_context.clone()))
         .then(translated_content_modifier)

@@ -1,7 +1,7 @@
 //! Robot regression for rigid subtree motion in the real desktop demo.
 //!
-//! This covers two `render_arch.md` requirements with one measurable app-level check:
-//! - translated text plus shadow plus decoration under scroll
+//! This covers two renderer invariants with measurable app-level checks:
+//! - same scroll offset must render identically before and after pointer release
 //! - lazy-list item subtree stability under fractional wheel motion
 
 use cranpose::AppLauncher;
@@ -18,19 +18,14 @@ use std::time::Duration;
 
 const WINDOW_WIDTH: u32 = 1200;
 const WINDOW_HEIGHT: u32 = 900;
-const TEXT_PIXEL_DIFFERENCE_TOLERANCE: u32 = 24;
-const LAZY_PIXEL_DIFFERENCE_TOLERANCE: u32 = 64;
-const TEXT_DOWNSAMPLE_FACTOR: u32 = 4;
-const LAZY_DOWNSAMPLE_FACTOR: u32 = 2;
-const TEXT_MAX_DIFFERING_PIXELS: usize = 80;
-const TEXT_MAX_PIXEL_DIFFERENCE: u32 = 64;
-// Direct scrolling content can still accumulate bounded edge drift because it
-// is rasterized in root space at a different fractional phase after scroll.
-// The robot contract should reject visible subtree distortion, not demand
-// strict pixel identity from the direct path.
-const LAZY_MAX_DIFFERING_PIXELS: usize = 96;
-const LAZY_MAX_PIXEL_DIFFERENCE: u32 = 160;
-const TEXT_SCROLL_DELTA_Y: f32 = -18.5;
+const TEXT_PIXEL_DIFFERENCE_TOLERANCE: u32 = 0;
+const LAZY_PIXEL_DIFFERENCE_TOLERANCE: u32 = 16;
+const TEXT_DOWNSAMPLE_FACTOR: u32 = 1;
+const LAZY_DOWNSAMPLE_FACTOR: u32 = 4;
+const TEXT_MAX_DIFFERING_PIXELS: usize = 0;
+const TEXT_MAX_PIXEL_DIFFERENCE: u32 = 0;
+const LAZY_MAX_DIFFERING_PIXELS: usize = 24;
+const LAZY_MAX_PIXEL_DIFFERENCE: u32 = 56;
 const LAZY_SCROLL_DELTA_Y: f32 = -21.5;
 const DEBUG_OUTPUT_DIR: &str = "/tmp/cranpose_translation_contract";
 const DECORATED_TEXT_PAD_LEFT: f32 = 8.0;
@@ -50,7 +45,8 @@ fn main() {
             std::thread::sleep(Duration::from_millis(600));
             let _ = robot.wait_for_idle();
 
-            verify_text_translation_contract(&robot);
+            verify_text_drag_release_contract(&robot);
+            verify_lazy_list_drag_release_contract(&robot);
             verify_lazy_list_translation_contract(&robot);
 
             println!("\n=== Test Summary ===");
@@ -60,37 +56,59 @@ fn main() {
         .run(app::combined_app);
 }
 
-fn verify_text_translation_contract(robot: &cranpose::Robot) {
-    println!("\n--- Text translation contract ---");
+fn verify_text_drag_release_contract(robot: &cranpose::Robot) {
+    println!("\n--- Text drag/release contract ---");
     open_text_tab(robot);
-    let before_bounds =
-        scroll_text_into_view(robot, "Decorated shadow text", 18).expect("decorated text bounds");
-    let before_region = decorated_text_capture_region(before_bounds);
-    let before_shot = capture_screenshot(robot).expect("text screenshot before scroll");
-    log_render_stats(robot, "decorated_before");
+    let start_bounds = scroll_text_into_view(robot, "Decorated shadow text", 18)
+        .expect("decorated text bounds before drag");
+    let drag_center = center(start_bounds);
 
-    scroll_at(robot, center(before_bounds), TEXT_SCROLL_DELTA_Y);
+    robot
+        .mouse_move(drag_center.0, drag_center.1)
+        .expect("move cursor to text scroller");
+    std::thread::sleep(Duration::from_millis(40));
+    robot.mouse_down().expect("mouse down");
+    std::thread::sleep(Duration::from_millis(40));
+
+    let drag_steps = 6;
+    let per_step_y = 7.0;
+    for step in 1..=drag_steps {
+        robot
+            .mouse_move(drag_center.0, drag_center.1 + per_step_y * step as f32)
+            .expect("drag move");
+        std::thread::sleep(Duration::from_millis(24));
+    }
+    let drag_end = (drag_center.0, drag_center.1 + per_step_y * drag_steps as f32);
+    std::thread::sleep(Duration::from_millis(70));
+    robot
+        .mouse_move(drag_end.0, drag_end.1)
+        .expect("hold drag to settle velocity");
+    std::thread::sleep(Duration::from_millis(70));
+
+    let before_bounds = find_bounds_by_text(robot, "Decorated shadow text")
+        .expect("decorated text bounds during drag");
+    let before_region = decorated_text_capture_region(before_bounds);
+    let before_shot = capture_screenshot(robot).expect("text screenshot during drag");
+    log_render_stats(robot, "decorated_drag");
+
+    robot.mouse_up().expect("mouse up");
+    std::thread::sleep(Duration::from_millis(80));
+    let _ = robot.wait_for_idle();
 
     let after_bounds =
         find_bounds_by_text(robot, "Decorated shadow text").expect("decorated text bounds after");
-    let after_region = translate_region(
-        before_region,
-        after_bounds.0 - before_bounds.0,
-        after_bounds.1 - before_bounds.1,
-    );
-    let after_shot = capture_screenshot(robot).expect("text screenshot after scroll");
-    log_render_stats(robot, "decorated_after");
+    let after_region = decorated_text_capture_region(after_bounds);
+    let after_shot = capture_screenshot(robot).expect("text screenshot after release");
+    log_render_stats(robot, "decorated_release");
 
-    let delta_y = before_bounds.1 - after_bounds.1;
     assert!(
-        delta_y.abs() >= 1.0,
-        "text sample did not move enough under scroll: before_y={:.2} after_y={:.2}",
-        before_bounds.1,
-        after_bounds.1
+        (before_bounds.0 - after_bounds.0).abs() <= 0.1
+            && (before_bounds.1 - after_bounds.1).abs() <= 0.1,
+        "drag/release contract requires same logical offset: before={before_bounds:?} after={after_bounds:?}"
     );
 
     assert_normalized_region_stable(
-        "decorated_text",
+        "decorated_text_release",
         &before_shot,
         before_region,
         &after_shot,
@@ -144,12 +162,24 @@ fn verify_lazy_list_translation_contract(robot: &cranpose::Robot) {
 
     let target_index = 2usize;
     let before_region = lazy_item_region(robot, target_index).expect("lazy item region before");
+    let item_label = format!("Item #{target_index}");
+    let hello_label = format!("Hello #{target_index}");
+    let before_item_bounds = find_bounds_by_text(robot, &item_label).expect("item label before");
+    let before_hello_bounds =
+        find_bounds_by_text(robot, &hello_label).expect("hello label before");
     let before_shot = capture_screenshot(robot).expect("lazy screenshot before scroll");
 
     scroll_at(robot, center(before_region.row_bounds), LAZY_SCROLL_DELTA_Y);
 
     let after_region = lazy_item_region(robot, target_index).expect("lazy item region after");
+    let after_item_bounds = find_bounds_by_text(robot, &item_label).expect("item label after");
+    let after_hello_bounds = find_bounds_by_text(robot, &hello_label).expect("hello label after");
     let after_shot = capture_screenshot(robot).expect("lazy screenshot after scroll");
+    println!(
+        "  lazy_item before_row={:?} after_row={:?}",
+        before_region.row_bounds,
+        after_region.row_bounds,
+    );
 
     let delta_y = before_region.row_bounds.1 - after_region.row_bounds.1;
     assert!(
@@ -160,15 +190,82 @@ fn verify_lazy_list_translation_contract(robot: &cranpose::Robot) {
     );
 
     assert_normalized_region_stable(
-        "lazy_item",
+        "lazy_item_label",
         &before_shot,
-        before_region.capture_region,
+        padded_region(before_item_bounds, 2.0),
         &after_shot,
-        translate_region(
-            before_region.capture_region,
-            after_region.row_bounds.0 - before_region.row_bounds.0,
-            after_region.row_bounds.1 - before_region.row_bounds.1,
-        ),
+        padded_region(after_item_bounds, 2.0),
+        LAZY_PIXEL_DIFFERENCE_TOLERANCE,
+        LAZY_MAX_DIFFERING_PIXELS,
+        LAZY_MAX_PIXEL_DIFFERENCE,
+        Some(LAZY_DOWNSAMPLE_FACTOR),
+    );
+    assert_normalized_region_stable(
+        "lazy_hello_label",
+        &before_shot,
+        padded_region(before_hello_bounds, 2.0),
+        &after_shot,
+        padded_region(after_hello_bounds, 2.0),
+        LAZY_PIXEL_DIFFERENCE_TOLERANCE,
+        LAZY_MAX_DIFFERING_PIXELS,
+        LAZY_MAX_PIXEL_DIFFERENCE,
+        Some(LAZY_DOWNSAMPLE_FACTOR),
+    );
+}
+
+fn verify_lazy_list_drag_release_contract(robot: &cranpose::Robot) {
+    println!("\n--- Lazy list drag/release contract ---");
+    click_tab(robot, "Lazy List");
+    wait_for_text(robot, "Lazy List Demo");
+
+    let before_row = lazy_item_region(robot, 2).expect("lazy item region before drag");
+    let drag_center = center(before_row.row_bounds);
+    robot
+        .mouse_move(drag_center.0, drag_center.1)
+        .expect("move cursor to lazy item");
+    std::thread::sleep(Duration::from_millis(40));
+    robot.mouse_down().expect("mouse down on lazy list");
+    std::thread::sleep(Duration::from_millis(40));
+
+    let drag_steps = 6;
+    let per_step_y = 6.5;
+    for step in 1..=drag_steps {
+        robot
+            .mouse_move(drag_center.0, drag_center.1 + per_step_y * step as f32)
+            .expect("drag lazy list");
+        std::thread::sleep(Duration::from_millis(24));
+    }
+    let drag_end = (drag_center.0, drag_center.1 + per_step_y * drag_steps as f32);
+    std::thread::sleep(Duration::from_millis(70));
+    robot
+        .mouse_move(drag_end.0, drag_end.1)
+        .expect("hold lazy drag");
+    std::thread::sleep(Duration::from_millis(70));
+
+    let during_drag = lazy_item_region(robot, 2).expect("lazy item during drag");
+    let before_shot = capture_screenshot(robot).expect("lazy screenshot during drag");
+
+    robot.mouse_up().expect("mouse up on lazy list");
+    std::thread::sleep(Duration::from_millis(80));
+    let _ = robot.wait_for_idle();
+
+    let after_release = lazy_item_region(robot, 2).expect("lazy item after release");
+    let after_shot = capture_screenshot(robot).expect("lazy screenshot after release");
+
+    assert!(
+        (during_drag.row_bounds.0 - after_release.row_bounds.0).abs() <= 0.1
+            && (during_drag.row_bounds.1 - after_release.row_bounds.1).abs() <= 0.1,
+        "lazy drag/release contract requires same logical offset: during_drag={:?} after_release={:?}",
+        during_drag.row_bounds,
+        after_release.row_bounds
+    );
+
+    assert_normalized_region_stable(
+        "lazy_item_release",
+        &before_shot,
+        during_drag.capture_region,
+        &after_shot,
+        after_release.capture_region,
         LAZY_PIXEL_DIFFERENCE_TOLERANCE,
         LAZY_MAX_DIFFERING_PIXELS,
         LAZY_MAX_PIXEL_DIFFERENCE,
@@ -430,10 +527,6 @@ fn box_downsample_screenshot(
     }
 }
 
-fn translate_region(region: (f32, f32, f32, f32), dx: f32, dy: f32) -> (f32, f32, f32, f32) {
-    (region.0 + dx, region.1 + dy, region.2, region.3)
-}
-
 fn center(bounds: (f32, f32, f32, f32)) -> (f32, f32) {
     (bounds.0 + bounds.2 * 0.5, bounds.1 + bounds.3 * 0.5)
 }
@@ -445,6 +538,15 @@ fn region_output_size(region: (f32, f32, f32, f32)) -> (u32, u32) {
     )
 }
 
+fn padded_region(bounds: (f32, f32, f32, f32), pad: f32) -> (f32, f32, f32, f32) {
+    (
+        bounds.0 - pad,
+        bounds.1 - pad,
+        bounds.2 + pad * 2.0,
+        bounds.3 + pad * 2.0,
+    )
+}
+
 #[derive(Clone, Copy, Debug)]
 struct LazyItemRegion {
     row_bounds: (f32, f32, f32, f32),
@@ -453,13 +555,15 @@ struct LazyItemRegion {
 
 fn lazy_item_region(robot: &cranpose::Robot, index: usize) -> Option<LazyItemRegion> {
     let row_label = format!("ItemRow #{index}");
+    let item_label = format!("Item #{index}");
     let hello_label = format!("Hello #{index}");
     let row_bounds = find_in_semantics(robot, |elem| find_text_exact(elem, &row_label))?;
+    let item_bounds = find_bounds_by_text(robot, &item_label)?;
     let hello_bounds = find_bounds_by_text(robot, &hello_label)?;
-    let left = row_bounds.0 - 16.0;
-    let top = row_bounds.1 - 12.0;
-    let right = (row_bounds.0 + 240.0).max(hello_bounds.0 + hello_bounds.2 + 16.0);
-    let bottom = hello_bounds.1 + hello_bounds.3 + 12.0;
+    let left = item_bounds.0.min(hello_bounds.0) - 2.0;
+    let top = item_bounds.1 - 2.0;
+    let right = (item_bounds.0 + item_bounds.2).max(hello_bounds.0 + hello_bounds.2) + 2.0;
+    let bottom = hello_bounds.1 + hello_bounds.3 + 2.0;
 
     Some(LazyItemRegion {
         row_bounds,

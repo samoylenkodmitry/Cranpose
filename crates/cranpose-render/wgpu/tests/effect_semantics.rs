@@ -12,7 +12,7 @@ use cranpose_render_common::image_compare::{
 };
 use cranpose_render_common::Renderer;
 use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot};
-use cranpose_ui::text::{AnnotatedString, SpanStyle, TextStyle, TextUnit};
+use cranpose_ui::text::{AnnotatedString, SpanStyle, TextDrawStyle, TextStyle, TextUnit};
 use cranpose_ui::TextLayoutOptions;
 use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, GraphicsLayer, Point, Rect, RenderEffect};
 
@@ -320,7 +320,7 @@ fn translation_only_wrapper_with_underlined_text_stays_on_direct_path() {
 }
 
 #[test]
-fn translation_only_wrapper_with_decorated_shadow_text_stays_on_direct_path() {
+fn translated_content_wrapper_with_decorated_shadow_text_uses_bounded_local_surface() {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
         Err(err) => {
@@ -333,9 +333,16 @@ fn translation_only_wrapper_with_decorated_shadow_text_stays_on_direct_path() {
     };
 
     let translation = Point::new(12.0, 14.0);
-    renderer.scene_mut().graph = Some(translation_only_wrapper_with_decorated_shadow_text_fixture(
-        translation,
-    ));
+    let mut graph = translation_only_wrapper_with_decorated_shadow_text_fixture(translation);
+    let Some(RenderNode::Layer(wrapper)) = graph.root.children.get_mut(1) else {
+        panic!("expected decorated text wrapper layer");
+    };
+    wrapper.translated_content_context = true;
+    let Some(RenderNode::Layer(text_leaf)) = wrapper.children.get_mut(0) else {
+        panic!("expected decorated text leaf layer");
+    };
+    text_leaf.translated_content_context = true;
+    renderer.scene_mut().graph = Some(graph);
     let frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("decorated text wrapper capture should succeed");
@@ -385,9 +392,9 @@ fn translation_only_wrapper_with_decorated_shadow_text_stays_on_direct_path() {
         background_region_bright >= 40,
         "decorated text fixture should draw a visible background region on the direct path, bright_pixels={background_region_bright}"
     );
-    assert_eq!(
-        stats.isolated_layer_renders, 0,
-        "translation-only wrapper should keep decorated text on the direct path: {stats:?}"
+    assert!(
+        stats.isolated_layer_renders >= 1,
+        "translated-content decorated-shadow text should render through a bounded local surface: {stats:?}"
     );
     assert!(
         stats.blur_passes >= 1,
@@ -395,8 +402,8 @@ fn translation_only_wrapper_with_decorated_shadow_text_stays_on_direct_path() {
     );
     let isolated = stats.top_isolated_layers().collect::<Vec<_>>();
     assert!(
-        isolated.is_empty(),
-        "decorated text should not allocate isolated text surfaces: {stats:?}"
+        !isolated.is_empty(),
+        "translated-content decorated text should report an isolated text surface in stats: {stats:?}"
     );
 }
 
@@ -952,6 +959,114 @@ fn translation_only_wrapper_with_text_style_fixture(
         solid_rect(frame_rect(), Color::BLACK),
         RenderNode::Layer(Box::new(wrapper)),
     ])
+}
+
+fn gradient_stroke_text_fixture() -> RenderGraph {
+    let text_leaf = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 120.0,
+            height: 36.0,
+        },
+        ProjectiveTransform::translation(8.0, 10.0),
+        GraphicsLayer::default(),
+        vec![RenderNode::Primitive(PrimitiveEntry {
+            phase: PrimitivePhase::BeforeChildren,
+            node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+                node_id: 77,
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 120.0,
+                    height: 28.0,
+                },
+                text: AnnotatedString::from("Gradient"),
+                text_style: TextStyle::from_span_style(SpanStyle {
+                    brush: Some(Brush::linear_gradient(vec![
+                        Color(0.42, 0.94, 1.0, 1.0),
+                        Color(0.75, 0.84, 1.0, 1.0),
+                        Color(1.0, 0.76, 0.54, 1.0),
+                    ])),
+                    alpha: Some(0.92),
+                    font_size: TextUnit::Sp(20.0),
+                    draw_style: Some(TextDrawStyle::Stroke { width: 3.8 }),
+                    ..Default::default()
+                }),
+                font_size: 20.0,
+                layout_options: TextLayoutOptions::default(),
+                clip: None,
+            })),
+        })],
+    );
+
+    graph(vec![
+        solid_rect(frame_rect(), Color::BLACK),
+        RenderNode::Layer(Box::new(text_leaf)),
+    ])
+}
+
+#[test]
+fn gradient_stroke_text_effect_renders_colored_material() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping gradient stroke effect assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    renderer.scene_mut().graph = Some(gradient_stroke_text_fixture());
+    let frame = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("gradient stroke capture should succeed");
+    let stats = renderer
+        .last_frame_stats()
+        .expect("gradient stroke frame stats");
+
+    assert!(
+        stats.effect_applies > 0,
+        "gradient stroke text should exercise the runtime shader effect path: {stats:?}"
+    );
+
+    let mut colored_pixels = 0usize;
+    let mut min_red = 1.0f32;
+    let mut max_red = 0.0f32;
+    let mut min_blue = 1.0f32;
+    let mut max_blue = 0.0f32;
+
+    for y in 10..38 {
+        for x in 8..128 {
+            let rgba = rgba(&frame, x, y);
+            let red = rgba[0] as f32 / 255.0;
+            let green = rgba[1] as f32 / 255.0;
+            let blue = rgba[2] as f32 / 255.0;
+            let max_channel = red.max(green.max(blue));
+            let min_channel = red.min(green.min(blue));
+            let saturation = max_channel - min_channel;
+            if max_channel > 0.30 && saturation > 0.08 {
+                colored_pixels += 1;
+                min_red = min_red.min(red);
+                max_red = max_red.max(red);
+                min_blue = min_blue.min(blue);
+                max_blue = max_blue.max(blue);
+            }
+        }
+    }
+
+    assert!(
+        colored_pixels > 20,
+        "gradient stroke text should produce visible colored ink, got colored_pixels={colored_pixels}"
+    );
+    let red_span = max_red - min_red;
+    let blue_span = max_blue - min_blue;
+    assert!(
+        red_span.max(blue_span) > 0.12,
+        "gradient stroke text should vary across the sampled region, got red_span={red_span:.3}, blue_span={blue_span:.3}"
+    );
 }
 
 fn layer(

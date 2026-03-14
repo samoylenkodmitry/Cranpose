@@ -26,17 +26,22 @@ The branch now enforces these invariants:
 2. Active scroll/drag/fling ancestry is represented by `LayerNode::motion_context_animated`.
 3. Direct-safe translation-only subtrees collapse into their parent target.
 4. Plain text is not isolated just because it is text.
-5. Decoration-only, gradient, stroke, and other styled text stay on the direct path.
+5. Decoration-only text stays on the direct path.
+6. Complex text uses bounded local surfaces through `LayerSurfaceReasons::text_local_surface`.
 6. Direct child collapse must rebase text primitives into parent space before
    text/decorations are emitted.
 7. Unspecified text under active motion ancestry resolves to `TextMotion::Animated`.
 8. Scene build does not round static text rects in logical space.
-9. Scrolling images use linear sampling; static images stay nearest.
-10. Mixed-content isolation is attributed by real local-surface reasons, not by
+9. Idle pure-text leaves participate in the same rigid snap-anchor path as
+   mixed text+draw leaves.
+10. Scrolling images use linear sampling; static images stay nearest.
+11. Mixed-content isolation is attributed by real local-surface reasons, not by
    tab-wide wrappers.
-11. Hit testing uses exact transformed geometry, not axis-aligned approximations.
-12. Raster-cache hashes are computed only when they are actually needed.
-13. Robot screenshot capture must match `main` raw dimensions for the same
+12. Hit testing uses exact transformed geometry, not axis-aligned approximations.
+13. Raster-cache hashes are computed only when they are actually needed.
+14. Root direct rendering only runs when the collected root scene has no local
+    effect/backdrop events.
+15. Robot screenshot capture must match `main` raw dimensions for the same
     logical surface.
 
 ## Current Execution Model
@@ -49,8 +54,8 @@ The branch now enforces these invariants:
 - child `content_offset` does not by itself propagate `motion_context_animated`
 - scroll and lazy-scroll modifiers report real motion activity into
   `ModifierNodeSlices::motion_context_animated()`
-- scroll and lazy-scroll modifiers also mark translated-content ancestry only
-  while that motion is active
+- scroll and lazy-scroll modifiers keep `translated_content_context` enabled for
+  the whole translated subtree
 
 Files:
 
@@ -68,7 +73,8 @@ Files:
 
 ### WGPU compositor
 
-- root direct path when `root_can_render_directly_cached(...)` succeeds
+- root direct path only when `root_can_render_directly_cached(...)` succeeds
+  and the collected root scene has no local `effect_layers` / `backdrop_layers`
 - per-frame layer-surface requirements cache
 - one-pass direct-child collection into the parent `CompositorScene`
 - bounded offscreens only for real surface reasons
@@ -88,20 +94,22 @@ These refactorings are complete in the checked-in branch state:
 4. Decoration-only text on the direct path with parent-space text rebasing.
 5. Removal of renderer-forced text local-surface classification.
 6. Scroll and lazy-scroll motion-context propagation into the render graph.
-7. Active translated-content propagation for scroll subtrees.
+7. Persistent translated-content propagation for scroll subtrees.
 8. Motion-aware image sampling (`nearest` static, `linear` scrolling).
-9. Removal of giant Shaders-tab mixed-content wrapper isolation.
-10. Physical-size-aware presented-window screenshot capture.
-11. Axis-aligned rect-to-quad fast path in `ProjectiveTransform::from_rect_to_quad(...)`.
-12. Per-frame cache for `LayerSurfaceRequirements`.
-13. One-pass direct-child content collection instead of build-then-translate merge.
-14. One-pass hot applier graph build.
-15. Lazy raster-cache hash computation through `cache_hashes_valid`.
-16. Logical-to-physical mapping in robot screenshot helpers.
-17. Deterministic micro-surface screenshot contract via `robot_renderer_micro_contract`.
-18. Raw robot screenshot size parity with `main` for the same logical surface.
-19. Structural translation contracts for direct text/list captures using box-downsampled normalized regions.
-20. Pixel-identical micro screenshot parity with the committed `main` reference.
+9. Static snap-anchor coverage for pure-text leaves.
+10. Complex-text local-surface classification (`text_local_surface`).
+11. Root direct fallback to the root surface path when local effect/backdrop events exist.
+12. Removal of giant Shaders-tab mixed-content wrapper isolation.
+13. Physical-size-aware presented-window screenshot capture.
+14. Axis-aligned rect-to-quad fast path in `ProjectiveTransform::from_rect_to_quad(...)`.
+15. Per-frame cache for `LayerSurfaceRequirements`.
+16. One-pass direct-child content collection instead of build-then-translate merge.
+17. One-pass hot applier graph build.
+18. Lazy raster-cache hash computation through `cache_hashes_valid`.
+19. Logical-to-physical mapping in robot screenshot helpers.
+20. Deterministic micro-surface screenshot contract via `robot_renderer_micro_contract`.
+21. Raw robot screenshot size parity with `main` for the same logical surface.
+22. Shared rigid-translation render contract without downsample fallback.
 
 ## Acceptance Status
 
@@ -118,9 +126,9 @@ Current checked-in status:
 - raw robot screenshots now match `main` dimensions for the micro contract
 - the current micro contract screenshot is pixel-identical to the committed
   `main` reference
-- translation robots compare direct text/list captures structurally after
-  downsampling, because glyphon grayscale mask AA is phase-sensitive under
-  rigid translation even when geometry is stable
+- shared rigid-translation contracts now pass without the temporary render-contract downsample shortcut
+- translated decorated/shadow text in the desktop demo is stable because it now
+  uses bounded local surfaces instead of loose direct primitives
 
 Latest sequential perf checks on this machine:
 
@@ -157,10 +165,10 @@ the review loop also includes:
 
 ## Current Plan
 
-The current checked-in state closes the screenshot-scale mismatch, returns idle
-scroll text to the static crisp path, removes renderer-forced styled-text
-isolation, and removes logical-space static text rounding. The remaining review
-loop is:
+The current checked-in state closes the screenshot-scale mismatch, keeps scroll
+text on one translated-content path across active and idle states, routes
+complex text through bounded local surfaces, and removes logical-space static
+text rounding. The remaining review loop is:
 
 - keep the current invariants green
 - inspect saved demo screenshots when a new visual bug is reported

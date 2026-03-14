@@ -9,12 +9,34 @@ use cranpose_ui_graphics::{
 };
 use std::rc::Rc;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SnapAnchor {
+    pub origin: Point,
+    pub device_pixel_step: f32,
+}
+
+impl SnapAnchor {
+    pub(crate) fn rigid(origin: Point) -> Self {
+        Self {
+            origin,
+            device_pixel_step: 1.0,
+        }
+    }
+
+    pub(crate) fn translated(origin: Point) -> Self {
+        Self {
+            origin,
+            device_pixel_step: 0.25,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct DrawShape {
     pub rect: Rect,
     pub local_rect: Rect,
     pub quad: [[f32; 2]; 4],
-    pub snap_anchor: Option<Point>,
+    pub snap_anchor: Option<SnapAnchor>,
     pub brush: Brush,
     pub shape: Option<RoundedCornerShape>,
     pub z_index: usize,
@@ -26,7 +48,7 @@ pub(crate) struct DrawShape {
 pub(crate) struct TextDraw {
     pub node_id: NodeId,
     pub rect: Rect,
-    pub snap_anchor: Option<Point>,
+    pub snap_anchor: Option<SnapAnchor>,
     pub text: Rc<cranpose_ui::text::AnnotatedString>,
     pub color: Color,
     pub text_style: TextStyle,
@@ -42,7 +64,7 @@ pub(crate) struct ImageDraw {
     pub rect: Rect,
     pub local_rect: Rect,
     pub quad: [[f32; 2]; 4],
-    pub snap_anchor: Option<Point>,
+    pub snap_anchor: Option<SnapAnchor>,
     pub image: ImageBitmap,
     pub alpha: f32,
     pub color_filter: Option<ColorFilter>,

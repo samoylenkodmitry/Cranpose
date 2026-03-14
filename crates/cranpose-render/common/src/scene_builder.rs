@@ -145,8 +145,6 @@ fn build_layer_node_internal(
         annotated_text: annotated_text.as_ref(),
         text_style: text_style.as_ref(),
         text_layout_options,
-        inherited_motion_context_animated: node_motion_context_animated,
-        inherited_translated_content_context: node_translated_content_context,
     }) {
         children.push(RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
@@ -354,8 +352,6 @@ fn build_layer_node_from_data(
         annotated_text: annotated_text.as_ref(),
         text_style: text_style.as_ref(),
         text_layout_options,
-        inherited_motion_context_animated: node_motion_context_animated,
-        inherited_translated_content_context: node_translated_content_context,
     }) {
         render_children.push(RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
@@ -444,8 +440,6 @@ struct TextNodeParts<'a> {
     annotated_text: Option<&'a AnnotatedString>,
     text_style: Option<&'a TextStyle>,
     text_layout_options: Option<TextLayoutOptions>,
-    inherited_motion_context_animated: bool,
-    inherited_translated_content_context: bool,
 }
 
 fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
@@ -457,17 +451,10 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
         annotated_text,
         text_style,
         text_layout_options,
-        inherited_motion_context_animated,
-        inherited_translated_content_context,
     } = parts;
     let value = annotated_text?;
     let default_text_style = TextStyle::default();
-    let mut text_style = text_style.cloned().unwrap_or(default_text_style);
-    if (inherited_motion_context_animated || inherited_translated_content_context)
-        && text_style.paragraph_style.text_motion.is_none()
-    {
-        text_style.paragraph_style.text_motion = Some(cranpose_ui::text::TextMotion::Animated);
-    }
+    let text_style = text_style.cloned().unwrap_or(default_text_style);
     let options = text_layout_options.unwrap_or_default().normalized();
     let padding = resolved_modifiers.padding();
     let content_width = (local_bounds.width - padding.left - padding.right).max(0.0);
@@ -1112,7 +1099,7 @@ mod tests {
     }
 
     #[test]
-    fn translated_content_context_marks_descendant_text_as_animated() {
+    fn translated_content_context_preserves_descendant_text_motion_when_unspecified() {
         let child = BuildNodeSnapshot {
             node_id: 2,
             placement: Point { x: 11.0, y: 7.0 },
@@ -1169,11 +1156,7 @@ mod tests {
             panic!("expected text primitive");
         };
 
-        assert_eq!(
-            text.text_style.paragraph_style.text_motion,
-            Some(TextMotion::Animated),
-            "translated content context must resolve descendant text to animated motion"
-        );
+        assert_eq!(text.text_style.paragraph_style.text_motion, None);
         assert!(!child_layer.motion_context_animated);
     }
 
@@ -1243,7 +1226,7 @@ mod tests {
     }
 
     #[test]
-    fn translated_content_context_marks_effectful_text_as_animated() {
+    fn translated_content_context_preserves_effectful_text_motion_when_unspecified() {
         let child = BuildNodeSnapshot {
             node_id: 2,
             placement: Point { x: 11.0, y: 7.0 },
@@ -1307,15 +1290,11 @@ mod tests {
             panic!("expected text primitive");
         };
 
-        assert_eq!(
-            text.text_style.paragraph_style.text_motion,
-            Some(TextMotion::Animated),
-            "translated content context should keep effectful text on the same animated motion path as plain translated text"
-        );
+        assert_eq!(text.text_style.paragraph_style.text_motion, None);
     }
 
     #[test]
-    fn animated_motion_marker_marks_descendant_text_as_animated_when_unspecified() {
+    fn animated_motion_marker_preserves_descendant_text_motion_when_unspecified() {
         let child = BuildNodeSnapshot {
             node_id: 2,
             placement: Point { x: 11.0, y: 7.0 },
@@ -1372,17 +1351,13 @@ mod tests {
             panic!("expected text primitive");
         };
 
-        assert_eq!(
-            text.text_style.paragraph_style.text_motion,
-            Some(TextMotion::Animated),
-            "unspecified text under an animated motion marker must render as animated motion"
-        );
+        assert_eq!(text.text_style.paragraph_style.text_motion, None);
         assert!(graph.motion_context_animated);
         assert!(child_layer.motion_context_animated);
     }
 
     #[test]
-    fn lazy_column_item_text_resolves_to_animated_at_origin() {
+    fn lazy_column_item_text_keeps_unspecified_motion_at_origin() {
         let mut composition = cranpose_ui::run_test_composition(|| {
             let list_state = remember_lazy_list_state();
             LazyColumn(
@@ -1413,15 +1388,11 @@ mod tests {
         let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("lazy column graph");
         applier.clear_runtime_handle();
 
-        assert_eq!(
-            find_text_motion(&graph.root, "LazyMotion"),
-            Some(Some(TextMotion::Animated)),
-            "lazy column item text should stay on the translated-content animated policy even at origin"
-        );
+        assert_eq!(find_text_motion(&graph.root, "LazyMotion"), Some(None));
     }
 
     #[test]
-    fn scrolled_lazy_column_item_text_resolves_to_animated_at_rest() {
+    fn scrolled_lazy_column_item_text_keeps_unspecified_motion_at_rest() {
         use std::cell::RefCell;
         use std::rc::Rc;
 
@@ -1480,8 +1451,7 @@ mod tests {
         );
         assert_eq!(
             find_text_motion(&graph.root, &format!("LazyMotion {first_index}")),
-            Some(Some(TextMotion::Animated)),
-            "lazy column item text should resolve to animated motion once the list is scrolled away from origin"
+            Some(None)
         );
     }
 

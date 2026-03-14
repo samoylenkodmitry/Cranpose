@@ -569,6 +569,7 @@ struct WgpuFontFamilyResolver {
     loaded_typeface_paths: HashMap<String, String>,
     unavailable_typeface_paths: HashSet<String>,
     available_family_names: HashMap<String, String>,
+    preferred_generic_family: Option<String>,
     indexed_face_count: usize,
     generic_fallback_seeded: bool,
 }
@@ -583,6 +584,12 @@ impl WgpuFontFamilyResolver {
     fn clear_resolution_caches(&mut self) {
         self.request_cache.clear();
         self.style_weight_cache.clear();
+    }
+
+    fn set_preferred_generic_family(&mut self, family_name: Option<String>) {
+        self.preferred_generic_family = family_name;
+        self.generic_fallback_seeded = false;
+        self.clear_resolution_caches();
     }
 
     fn resolve_family_owned(
@@ -736,11 +743,18 @@ impl WgpuFontFamilyResolver {
             return;
         }
 
-        let Some(primary_family) = font_system
-            .db()
-            .faces()
-            .find_map(|face| face.families.first().map(|(name, _)| name.clone()))
-        else {
+        let primary_family = self
+            .preferred_generic_family
+            .as_deref()
+            .and_then(|name| self.canonical_family_name(name))
+            .or_else(|| {
+                font_system
+                    .db()
+                    .faces()
+                    .find_map(|face| face.families.first().map(|(name, _)| name.clone()))
+            });
+
+        let Some(primary_family) = primary_family else {
             return;
         };
 
@@ -823,18 +837,22 @@ impl WgpuFontFamilyResolver {
     }
 }
 
-fn load_fonts(font_system: &mut FontSystem, fonts: &[&[u8]]) {
+fn load_fonts(font_system: &mut FontSystem, fonts: &[&[u8]]) -> Vec<String> {
+    let mut loaded_families = Vec::new();
     for (i, font_data) in fonts.iter().enumerate() {
         log::info!("Loading font #{}, size: {} bytes", i, font_data.len());
+        if let Some(family_name) = primary_family_name_from_bytes(font_data) {
+            loaded_families.push(family_name);
+        }
         font_system.db_mut().load_font_data(font_data.to_vec());
     }
     log::info!(
         "Total font faces loaded: {}",
         font_system.db().faces().count()
     );
+    loaded_families
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn primary_family_name_from_bytes(bytes: &[u8]) -> Option<String> {
     let face = ttf_parser::Face::parse(bytes, 0).ok()?;
     let mut fallback_family = None;
@@ -915,9 +933,11 @@ impl TextSystemState {
         #[cfg(target_os = "android")]
         log::info!("Skipping Android system fonts – using application-provided fonts only");
 
-        load_fonts(&mut font_system, fonts);
+        let loaded_families = load_fonts(&mut font_system, fonts);
 
         let mut font_family_resolver = WgpuFontFamilyResolver::default();
+        font_family_resolver
+            .set_preferred_generic_family(loaded_families.into_iter().next());
         font_family_resolver.prime(&mut font_system);
         Self::from_parts(font_system, font_family_resolver)
     }
@@ -1428,6 +1448,7 @@ fn attrs_from_text_style(
         }
         _ => attrs,
     };
+    attrs = attrs.cache_key_flags(glyphon::cosmic_text::CacheKeyFlags::DISABLE_HINTING);
 
     AttrsOwned::new(&attrs)
 }
@@ -2481,6 +2502,20 @@ mod tests {
     }
 
     #[test]
+    fn attrs_from_text_style_disables_native_hinting() {
+        let (mut font_system, mut resolver) = seeded_font_system_and_resolver();
+        let attrs =
+            attrs_from_text_style(&cranpose_ui::text::TextStyle::default(), 14.0, 1.0, &mut font_system, &mut resolver);
+
+        assert!(
+            attrs
+                .cache_key_flags
+                .contains(glyphon::cosmic_text::CacheKeyFlags::DISABLE_HINTING),
+            "renderer text attrs should disable native hinting to keep glyph rasterization stable across scroll phases"
+        );
+    }
+
+    #[test]
     fn text_buffer_style_hash_changes_when_top_level_color_changes() {
         let text = cranpose_ui::text::AnnotatedString::from("theme");
         let dark = cranpose_ui::text::TextStyle::from_span_style(cranpose_ui::text::SpanStyle {
@@ -2768,6 +2803,8 @@ mod tests {
     // Font bytes used by tests — the same file the demo app ships.
     static TEST_FONT: &[u8] =
         include_bytes!("../../../../apps/desktop-demo/assets/NotoSansMerged.ttf");
+    static TEST_EMOJI_FONT: &[u8] =
+        include_bytes!("../../../../apps/desktop-demo/assets/TwemojiMozilla.ttf");
 
     fn empty_font_system() -> FontSystem {
         let db = glyphon::fontdb::Database::new();
@@ -2793,6 +2830,41 @@ mod tests {
             0,
             "empty slice must not load any faces"
         );
+    }
+
+    fn queried_family_name(font_system: &FontSystem, family: glyphon::fontdb::Family) -> String {
+        let query = glyphon::fontdb::Query {
+            families: &[family],
+            weight: glyphon::fontdb::Weight::NORMAL,
+            stretch: glyphon::fontdb::Stretch::Normal,
+            style: glyphon::fontdb::Style::Normal,
+        };
+        let face_id = font_system
+            .db()
+            .query(&query)
+            .expect("generic family should resolve to a face");
+        let face = font_system
+            .db()
+            .face(face_id)
+            .expect("queried face id should exist");
+        face.families
+            .first()
+            .map(|(name, _)| name.clone())
+            .expect("queried face should carry a family name")
+    }
+
+    #[test]
+    fn generic_fallbacks_prefer_loaded_font_family_over_existing_faces() {
+        let mut font_system = empty_font_system();
+        load_fonts(&mut font_system, &[TEST_EMOJI_FONT, TEST_FONT]);
+        let mut resolver = WgpuFontFamilyResolver::default();
+        resolver.set_preferred_generic_family(primary_family_name_from_bytes(TEST_FONT));
+        resolver.prime(&mut font_system);
+
+        let generic_serif = queried_family_name(&font_system, glyphon::fontdb::Family::Serif);
+        let expected = primary_family_name_from_bytes(TEST_FONT)
+            .expect("test font should resolve to a family name");
+        assert_eq!(generic_serif, expected);
     }
 
     #[test]

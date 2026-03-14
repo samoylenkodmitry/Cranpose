@@ -23,6 +23,10 @@ const TRANSLATED_SUBTREE_BUDGET: NormalizedDifferenceBudget = NormalizedDifferen
     max_differing_pixels: 245,
     max_pixel_difference: 360,
 };
+const TRANSLATED_PLAIN_TEXT_BUDGET: NormalizedDifferenceBudget = NormalizedDifferenceBudget {
+    max_differing_pixels: 0,
+    max_pixel_difference: 0,
+};
 const TRANSLATED_TEXT_DECORATIONS_BUDGET: NormalizedDifferenceBudget = NormalizedDifferenceBudget {
     max_differing_pixels: 240,
     max_pixel_difference: 360,
@@ -55,15 +59,17 @@ pub enum SharedRenderCase {
     RoundedRect,
     PrimitiveClip,
     TranslatedSubtree,
+    TranslatedPlainText,
     TranslatedTextDecorations,
     MultilineText,
     ClippedText,
 }
 
-pub const ALL_SHARED_RENDER_CASES: [SharedRenderCase; 6] = [
+pub const ALL_SHARED_RENDER_CASES: [SharedRenderCase; 7] = [
     SharedRenderCase::RoundedRect,
     SharedRenderCase::PrimitiveClip,
     SharedRenderCase::TranslatedSubtree,
+    SharedRenderCase::TranslatedPlainText,
     SharedRenderCase::TranslatedTextDecorations,
     SharedRenderCase::MultilineText,
     SharedRenderCase::ClippedText,
@@ -75,6 +81,7 @@ impl SharedRenderCase {
             SharedRenderCase::RoundedRect => "rounded_rect",
             SharedRenderCase::PrimitiveClip => "primitive_clip",
             SharedRenderCase::TranslatedSubtree => "translated_subtree",
+            SharedRenderCase::TranslatedPlainText => "translated_plain_text",
             SharedRenderCase::TranslatedTextDecorations => "translated_text_decorations",
             SharedRenderCase::MultilineText => "multiline_text",
             SharedRenderCase::ClippedText => "clipped_text",
@@ -88,6 +95,10 @@ impl SharedRenderCase {
             SharedRenderCase::TranslatedSubtree => vec![
                 translated_subtree_fixture(12.3, 14.7),
                 translated_subtree_fixture(32.6, 26.2),
+            ],
+            SharedRenderCase::TranslatedPlainText => vec![
+                translated_plain_text_fixture(14.3, 18.6),
+                translated_plain_text_fixture(36.4, 30.1),
             ],
             SharedRenderCase::TranslatedTextDecorations => vec![
                 translated_text_decorations_fixture(14.3, 18.6),
@@ -114,6 +125,9 @@ impl SharedRenderCase {
             }
             SharedRenderCase::TranslatedSubtree => {
                 assert_translated_subtree_frames(frames);
+            }
+            SharedRenderCase::TranslatedPlainText => {
+                assert_translated_plain_text_frames(frames);
             }
             SharedRenderCase::TranslatedTextDecorations => {
                 assert_translated_text_decorations_frames(frames);
@@ -226,6 +240,56 @@ fn translated_subtree_fixture(translation_x: f32, translation_y: f32) -> RenderF
     )
 }
 
+fn translated_plain_text_fixture(translation_x: f32, translation_y: f32) -> RenderFixture {
+    let subtree_bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 116.0,
+        height: 36.0,
+    };
+
+    let mut fixture = build_translated_fixture_with_context(
+        196,
+        112,
+        subtree_bounds,
+        Point::new(translation_x, translation_y),
+        true,
+        vec![
+            draw_node(
+                DrawPrimitive::RoundRect {
+                    rect: Rect {
+                        x: 2.0,
+                        y: 2.0,
+                        width: 112.0,
+                        height: 32.0,
+                    },
+                    brush: Brush::solid(Color(0.24, 0.26, 0.40, 0.92)),
+                    radii: CornerRadii::uniform(8.0),
+                },
+                None,
+            ),
+            text_node(
+                33,
+                Rect {
+                    x: 10.0,
+                    y: 8.0,
+                    width: 96.0,
+                    height: 18.0,
+                },
+                "Scroll text",
+                None,
+            ),
+        ],
+    );
+    fixture.normalized_rect = Some(Rect {
+        x: translation_x.round(),
+        y: translation_y.round(),
+        width: subtree_bounds.width,
+        height: subtree_bounds.height,
+    });
+    fixture
+}
+
 fn multiline_text_fixture() -> RenderFixture {
     build_fixture(
         220,
@@ -332,6 +396,24 @@ fn build_translated_fixture(
     translation: Point,
     subtree_children: Vec<RenderNode>,
 ) -> RenderFixture {
+    build_translated_fixture_with_context(
+        width,
+        height,
+        subtree_bounds,
+        translation,
+        false,
+        subtree_children,
+    )
+}
+
+fn build_translated_fixture_with_context(
+    width: u32,
+    height: u32,
+    subtree_bounds: Rect,
+    translation: Point,
+    translated_content_context: bool,
+    subtree_children: Vec<RenderNode>,
+) -> RenderFixture {
     let bounds = Rect {
         x: 0.0,
         y: 0.0,
@@ -343,6 +425,8 @@ fn build_translated_fixture(
         ProjectiveTransform::translation(translation.x, translation.y),
         subtree_children,
     );
+    let mut subtree = subtree;
+    subtree.translated_content_context = translated_content_context;
 
     RenderFixture {
         width,
@@ -546,6 +630,24 @@ fn assert_translated_subtree_frames(frames: &[RenderedFrame]) {
         moved,
         TRANSLATED_SUBTREE_BUDGET,
         "translated subtree output should remain invariant under rigid parent translation",
+    );
+}
+
+fn assert_translated_plain_text_frames(frames: &[RenderedFrame]) {
+    let [base, moved] = frames else {
+        panic!("translated_plain_text expects exactly two rendered frames");
+    };
+    assert_eq!((base.width, base.height), (196, 112));
+    assert_eq!((moved.width, moved.height), (196, 112));
+    assert_ne!(
+        base.pixels, moved.pixels,
+        "translated plain text contract should move within the full frame"
+    );
+    assert_normalized_region_matches(
+        base,
+        moved,
+        TRANSLATED_PLAIN_TEXT_BUDGET,
+        "translated plain text should remain pixel-identical after normalization",
     );
 }
 
