@@ -11,7 +11,9 @@ use cranpose_render_common::hit_graph::{
 };
 use cranpose_render_common::layer_composition::local_content_layer;
 use cranpose_render_common::layer_shadow::layer_shadow_geometry;
-use cranpose_render_common::layer_transform::{apply_layer_to_rect, layer_uniform_scale};
+use cranpose_render_common::layer_transform::{
+    apply_layer_affine_to_rect, apply_layer_to_rect, layer_uniform_scale,
+};
 use cranpose_render_common::primitive_emit::{
     draw_shape_params_for_primitive, emit_draw_primitive, resolve_clip, resolve_primitive_clip,
     DrawPrimitiveSink, ImageDrawParams, PrimitiveClipSpace, ShapeDrawParams,
@@ -49,6 +51,92 @@ fn pad_clip_rect(rect: Rect) -> Rect {
 }
 
 static REPORTED_UNSUPPORTED_PIXELS_EFFECTS: AtomicBool = AtomicBool::new(false);
+
+fn graphics_layer_supports_rigid_snap(layer: &GraphicsLayer) -> bool {
+    (layer.scale - 1.0).abs() <= f32::EPSILON
+        && (layer.scale_x - 1.0).abs() <= f32::EPSILON
+        && (layer.scale_y - 1.0).abs() <= f32::EPSILON
+        && layer.rotation_x.abs() <= f32::EPSILON
+        && layer.rotation_y.abs() <= f32::EPSILON
+        && layer.rotation_z.abs() <= f32::EPSILON
+}
+
+fn rigid_snap_anchor(
+    layer_bounds: Rect,
+    layer: &GraphicsLayer,
+    motion_context_animated: bool,
+) -> Option<Point> {
+    if motion_context_animated || !graphics_layer_supports_rigid_snap(layer) {
+        return None;
+    }
+    let mapped = apply_layer_affine_to_rect(layer_bounds, layer_bounds, layer);
+    Some(Point::new(mapped.x, mapped.y))
+}
+
+#[derive(Clone, Copy)]
+struct SceneCounts {
+    shapes: usize,
+    images: usize,
+    texts: usize,
+}
+
+fn scene_counts(scene: &RasterScene) -> SceneCounts {
+    SceneCounts {
+        shapes: scene.shapes.len(),
+        images: scene.images.len(),
+        texts: scene.texts.len(),
+    }
+}
+
+fn assign_snap_anchor_since(
+    scene: &mut RasterScene,
+    counts: SceneCounts,
+    snap_anchor: Option<Point>,
+) {
+    let Some(snap_anchor) = snap_anchor else {
+        return;
+    };
+
+    for shape in &mut scene.shapes[counts.shapes..] {
+        shape.snap_anchor = Some(snap_anchor);
+    }
+    for image in &mut scene.images[counts.images..] {
+        image.snap_anchor = Some(snap_anchor);
+    }
+    for text in &mut scene.texts[counts.texts..] {
+        text.snap_anchor = Some(snap_anchor);
+    }
+}
+
+fn layer_contains_text_primitives(layer: &LayerNode) -> bool {
+    layer.children.iter().any(|child| {
+        matches!(
+            child,
+            RenderNode::Primitive(PrimitiveEntry {
+                node: PrimitiveNode::Text(_),
+                ..
+            })
+        )
+    })
+}
+
+fn layer_contains_draw_primitives(layer: &LayerNode) -> bool {
+    layer.children.iter().any(|child| {
+        matches!(
+            child,
+            RenderNode::Primitive(PrimitiveEntry {
+                node: PrimitiveNode::Draw(_),
+                ..
+            })
+        )
+    })
+}
+
+fn layer_needs_text_leaf_snap(layer: &LayerNode) -> bool {
+    !layer.translated_content_context
+        && layer_contains_text_primitives(layer)
+        && layer_contains_draw_primitives(layer)
+}
 
 fn is_render_effect_supported(_effect: &RenderEffect) -> bool {
     false
@@ -250,6 +338,7 @@ fn push_layer_shadow(
     ) -> crate::scene::DrawShape {
         crate::scene::DrawShape {
             rect,
+            snap_anchor: None,
             brush: Brush::solid(color),
             shape,
             z_index: 0,
@@ -798,6 +887,15 @@ fn populate_draws_from_graph(
         parent_visual_clip,
         content_clip_to_bounds.then_some(mapping.transformed_bounds),
     );
+    let layer_snap_anchor = if layer_needs_text_leaf_snap(layer) {
+        rigid_snap_anchor(
+            mapping.layer_bounds.raster_rect(),
+            &mapping.raster_content_layer,
+            layer.motion_context_animated,
+        )
+    } else {
+        None
+    };
 
     if content_clip_to_bounds && visual_clip.is_none() {
         return;
@@ -831,6 +929,8 @@ fn populate_draws_from_graph(
                         &mapping.raster_content_layer,
                         visual_clip,
                         layer.motion_context_animated,
+                        layer.translated_content_context,
+                        layer_snap_anchor,
                     );
                 }
                 PrimitivePhase::AfterChildren => {
@@ -857,6 +957,8 @@ fn populate_draws_from_graph(
             &mapping.raster_content_layer,
             visual_clip,
             layer.motion_context_animated,
+            layer.translated_content_context,
+            layer_snap_anchor,
         );
     }
 }
@@ -868,8 +970,11 @@ fn render_graph_primitive(
     node_layer: &GraphicsLayer,
     visual_clip: Option<Rect>,
     motion_context_animated: bool,
+    content_offset_translation: bool,
+    layer_snap_anchor: Option<Point>,
 ) {
     let rect = layer_bounds.raster_rect();
+    let counts_before = scene_counts(scene);
     match &primitive.node {
         PrimitiveNode::Draw(draw) => {
             let effective_clip = resolve_primitive_clip(
@@ -889,13 +994,14 @@ fn render_graph_primitive(
                 effective_clip,
                 scene,
                 None,
-                motion_context_animated,
+                motion_context_animated || content_offset_translation,
             );
         }
         PrimitiveNode::Text(text) => {
-            render_graph_text(scene, text, layer_bounds, node_layer, visual_clip)
+            render_graph_text(scene, text, layer_bounds, node_layer, visual_clip);
         }
     }
+    assign_snap_anchor_since(scene, counts_before, layer_snap_anchor);
 }
 
 fn render_graph_text(
@@ -1017,6 +1123,7 @@ fn push_shadow_primitive(
         Some((
             crate::scene::DrawShape {
                 rect: params.rect,
+                snap_anchor: None,
                 brush: params.brush,
                 shape: params.shape,
                 z_index: 0,
@@ -1114,6 +1221,89 @@ mod tests {
         PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
     };
     use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
+    use cranpose_ui_graphics::CornerRadii;
+
+    fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> RenderGraph {
+        let text_leaf = LayerNode {
+            node_id: Some(77),
+            local_bounds: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 48.0,
+                height: 24.0,
+            },
+            transform_to_parent: ProjectiveTransform::translation(14.25, 16.5),
+            motion_context_animated: animated,
+            translated_content_context,
+            graphics_layer: GraphicsLayer::default(),
+            clip_to_bounds: false,
+            shadow_clip: None,
+            hit_test: None,
+            has_hit_targets: false,
+            isolation: IsolationReasons::default(),
+            cache_policy: CachePolicy::None,
+            cache_hashes: LayerRasterCacheHashes::default(),
+            cache_hashes_valid: false,
+            children: vec![
+                RenderNode::Primitive(PrimitiveEntry {
+                    phase: PrimitivePhase::BeforeChildren,
+                    node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                        primitive: DrawPrimitive::RoundRect {
+                            rect: Rect {
+                                x: 0.0,
+                                y: 0.0,
+                                width: 48.0,
+                                height: 24.0,
+                            },
+                            brush: Brush::solid(Color(0.28, 0.30, 0.46, 0.88)),
+                            radii: CornerRadii::uniform(6.0),
+                        },
+                        clip: None,
+                    }),
+                }),
+                RenderNode::Primitive(PrimitiveEntry {
+                    phase: PrimitivePhase::BeforeChildren,
+                    node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+                        node_id: 77,
+                        rect: Rect {
+                            x: 6.0,
+                            y: 4.0,
+                            width: 36.0,
+                            height: 16.0,
+                        },
+                        text: cranpose_ui::text::AnnotatedString::from("48 px"),
+                        text_style: TextStyle::default(),
+                        font_size: 14.0,
+                        layout_options: TextLayoutOptions::default(),
+                        clip: None,
+                    })),
+                }),
+            ],
+        };
+
+        RenderGraph::new(LayerNode {
+            node_id: None,
+            local_bounds: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 96.0,
+                height: 64.0,
+            },
+            transform_to_parent: ProjectiveTransform::identity(),
+            motion_context_animated: false,
+            translated_content_context: false,
+            graphics_layer: GraphicsLayer::default(),
+            clip_to_bounds: false,
+            shadow_clip: None,
+            hit_test: None,
+            has_hit_targets: false,
+            isolation: IsolationReasons::default(),
+            cache_policy: CachePolicy::None,
+            cache_hashes: LayerRasterCacheHashes::default(),
+            cache_hashes_valid: false,
+            children: vec![RenderNode::Layer(Box::new(text_leaf))],
+        })
+    }
 
     #[test]
     fn render_effect_support_matrix_is_explicit() {
@@ -1226,6 +1416,7 @@ mod tests {
             },
             transform_to_parent: ProjectiveTransform::identity(),
             motion_context_animated: false,
+            translated_content_context: false,
             graphics_layer: GraphicsLayer::default(),
             clip_to_bounds: false,
             shadow_clip: None,
@@ -1245,6 +1436,7 @@ mod tests {
                 },
                 transform_to_parent: ProjectiveTransform::translation(17.0, 11.0),
                 motion_context_animated: false,
+                translated_content_context: false,
                 graphics_layer: GraphicsLayer::default(),
                 clip_to_bounds: false,
                 shadow_clip: None,
@@ -1285,6 +1477,37 @@ mod tests {
                 height: 6.0,
             }
         );
+    }
+
+    #[test]
+    fn direct_text_leaf_snaps_modifier_background_and_text_with_one_anchor() {
+        let scene = build_raster_scene(&snapped_text_leaf_root(false, false));
+
+        assert_eq!(scene.shapes.len(), 1);
+        assert_eq!(scene.texts.len(), 1);
+        let expected_anchor = Some(Point::new(14.25, 16.5));
+        assert_eq!(scene.shapes[0].snap_anchor, expected_anchor);
+        assert_eq!(scene.texts[0].snap_anchor, expected_anchor);
+    }
+
+    #[test]
+    fn animated_text_leaf_keeps_modifier_background_and_text_unsnapped() {
+        let scene = build_raster_scene(&snapped_text_leaf_root(true, true));
+
+        assert_eq!(scene.shapes.len(), 1);
+        assert_eq!(scene.texts.len(), 1);
+        assert_eq!(scene.shapes[0].snap_anchor, None);
+        assert_eq!(scene.texts[0].snap_anchor, None);
+    }
+
+    #[test]
+    fn translated_content_context_text_leaf_keeps_modifier_background_and_text_unsnapped() {
+        let scene = build_raster_scene(&snapped_text_leaf_root(false, true));
+
+        assert_eq!(scene.shapes.len(), 1);
+        assert_eq!(scene.texts.len(), 1);
+        assert_eq!(scene.shapes[0].snap_anchor, None);
+        assert_eq!(scene.texts[0].snap_anchor, None);
     }
 
     #[test]

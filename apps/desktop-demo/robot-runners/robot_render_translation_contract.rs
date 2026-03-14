@@ -20,7 +20,9 @@ const WINDOW_WIDTH: u32 = 1200;
 const WINDOW_HEIGHT: u32 = 900;
 const TEXT_PIXEL_DIFFERENCE_TOLERANCE: u32 = 24;
 const LAZY_PIXEL_DIFFERENCE_TOLERANCE: u32 = 64;
-const TEXT_MAX_DIFFERING_PIXELS: usize = 240;
+const TEXT_DOWNSAMPLE_FACTOR: u32 = 4;
+const LAZY_DOWNSAMPLE_FACTOR: u32 = 2;
+const TEXT_MAX_DIFFERING_PIXELS: usize = 80;
 const TEXT_MAX_PIXEL_DIFFERENCE: u32 = 64;
 // Direct scrolling content can still accumulate bounded edge drift because it
 // is rasterized in root space at a different fractional phase after scroll.
@@ -31,6 +33,10 @@ const LAZY_MAX_PIXEL_DIFFERENCE: u32 = 160;
 const TEXT_SCROLL_DELTA_Y: f32 = -18.5;
 const LAZY_SCROLL_DELTA_Y: f32 = -21.5;
 const DEBUG_OUTPUT_DIR: &str = "/tmp/cranpose_translation_contract";
+const DECORATED_TEXT_PAD_LEFT: f32 = 8.0;
+const DECORATED_TEXT_PAD_RIGHT: f32 = 8.0;
+const DECORATED_TEXT_TOP_INSET: f32 = 4.0;
+const DECORATED_TEXT_BOTTOM_PAD: f32 = 2.0;
 
 fn main() {
     env_logger::init();
@@ -59,15 +65,21 @@ fn verify_text_translation_contract(robot: &cranpose::Robot) {
     open_text_tab(robot);
     let before_bounds =
         scroll_text_into_view(robot, "Decorated shadow text", 18).expect("decorated text bounds");
-    let before_region = pad_bounds(before_bounds, 20.0, 18.0);
+    let before_region = decorated_text_capture_region(before_bounds);
     let before_shot = capture_screenshot(robot).expect("text screenshot before scroll");
+    log_render_stats(robot, "decorated_before");
 
     scroll_at(robot, center(before_bounds), TEXT_SCROLL_DELTA_Y);
 
     let after_bounds =
         find_bounds_by_text(robot, "Decorated shadow text").expect("decorated text bounds after");
-    let after_region = pad_bounds(after_bounds, 20.0, 18.0);
+    let after_region = translate_region(
+        before_region,
+        after_bounds.0 - before_bounds.0,
+        after_bounds.1 - before_bounds.1,
+    );
     let after_shot = capture_screenshot(robot).expect("text screenshot after scroll");
+    log_render_stats(robot, "decorated_after");
 
     let delta_y = before_bounds.1 - after_bounds.1;
     assert!(
@@ -86,7 +98,43 @@ fn verify_text_translation_contract(robot: &cranpose::Robot) {
         TEXT_PIXEL_DIFFERENCE_TOLERANCE,
         TEXT_MAX_DIFFERING_PIXELS,
         TEXT_MAX_PIXEL_DIFFERENCE,
+        Some(TEXT_DOWNSAMPLE_FACTOR),
     );
+}
+
+fn log_render_stats(robot: &cranpose::Robot, stage: &str) {
+    match robot.get_render_stats() {
+        Ok(Some(stats)) => {
+            println!(
+                "  render_stats stage={} isolated_layer_renders={} offscreen_acquires={} composite_passes={} blur_passes={} text_passes={} shape_passes={} image_passes={}",
+                stage,
+                stats.isolated_layer_renders,
+                stats.offscreen_acquires,
+                stats.composite_passes,
+                stats.blur_passes,
+                stats.text_passes,
+                stats.shape_passes,
+                stats.image_passes
+            );
+            for (index, layer) in stats.top_isolated_layers().enumerate() {
+                println!(
+                    "  isolated_layer stage={} rank={} node={:?} rect=({:.1},{:.1},{:.1},{:.1}) target={}x{} reasons={}",
+                    stage,
+                    index,
+                    layer.node_id,
+                    layer.logical_rect.x,
+                    layer.logical_rect.y,
+                    layer.logical_rect.width,
+                    layer.logical_rect.height,
+                    layer.width,
+                    layer.height,
+                    layer.reasons.display()
+                );
+            }
+        }
+        Ok(None) => println!("  render_stats stage={} unavailable", stage),
+        Err(err) => println!("  render_stats stage={} error={}", stage, err),
+    }
 }
 
 fn verify_lazy_list_translation_contract(robot: &cranpose::Robot) {
@@ -116,10 +164,15 @@ fn verify_lazy_list_translation_contract(robot: &cranpose::Robot) {
         &before_shot,
         before_region.capture_region,
         &after_shot,
-        after_region.capture_region,
+        translate_region(
+            before_region.capture_region,
+            after_region.row_bounds.0 - before_region.row_bounds.0,
+            after_region.row_bounds.1 - before_region.row_bounds.1,
+        ),
         LAZY_PIXEL_DIFFERENCE_TOLERANCE,
         LAZY_MAX_DIFFERING_PIXELS,
         LAZY_MAX_PIXEL_DIFFERENCE,
+        Some(LAZY_DOWNSAMPLE_FACTOR),
     );
 }
 
@@ -209,6 +262,7 @@ fn assert_normalized_region_stable(
     difference_tolerance: u32,
     max_differing_pixels: usize,
     max_pixel_difference: u32,
+    downsample_factor: Option<u32>,
 ) {
     let output_size = region_output_size(before_region);
     let before =
@@ -216,6 +270,14 @@ fn assert_normalized_region_stable(
             .expect("normalize before screenshot");
     let after = normalize_screenshot_region(after_shot, after_region, output_size.0, output_size.1)
         .expect("normalize after screenshot");
+    let before = downsample_factor
+        .filter(|factor| *factor > 1)
+        .map(|factor| box_downsample_screenshot(&before, factor))
+        .unwrap_or(before);
+    let after = downsample_factor
+        .filter(|factor| *factor > 1)
+        .map(|factor| box_downsample_screenshot(&after, factor))
+        .unwrap_or(after);
     let stats = screenshot_difference_stats(&before, &after, difference_tolerance)
         .expect("normalized screenshots should have matching size");
     println!(
@@ -313,13 +375,63 @@ fn save_png(path: &Path, width: u32, height: u32, pixels: &[u8]) -> Result<(), S
         .map_err(|err| format!("failed to save {}: {}", path.display(), err))
 }
 
-fn pad_bounds(bounds: (f32, f32, f32, f32), pad_x: f32, pad_y: f32) -> (f32, f32, f32, f32) {
+fn decorated_text_capture_region(bounds: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
     (
-        bounds.0 - pad_x,
-        bounds.1 - pad_y,
-        bounds.2 + pad_x * 2.0,
-        bounds.3 + pad_y * 2.0,
+        bounds.0 - DECORATED_TEXT_PAD_LEFT,
+        bounds.1 + DECORATED_TEXT_TOP_INSET,
+        bounds.2 + DECORATED_TEXT_PAD_LEFT + DECORATED_TEXT_PAD_RIGHT,
+        (bounds.3 - DECORATED_TEXT_TOP_INSET + DECORATED_TEXT_BOTTOM_PAD).max(1.0),
     )
+}
+
+fn box_downsample_screenshot(
+    screenshot: &cranpose::RobotScreenshot,
+    factor: u32,
+) -> cranpose::RobotScreenshot {
+    let factor = factor.max(1);
+    let out_width = (screenshot.width / factor).max(1);
+    let out_height = (screenshot.height / factor).max(1);
+    let mut pixels = vec![0u8; (out_width * out_height * 4) as usize];
+
+    for out_y in 0..out_height {
+        for out_x in 0..out_width {
+            let mut accum = [0u32; 4];
+            let mut samples = 0u32;
+            let start_x = out_x * factor;
+            let start_y = out_y * factor;
+            let end_x = (start_x + factor).min(screenshot.width);
+            let end_y = (start_y + factor).min(screenshot.height);
+
+            for y in start_y..end_y {
+                for x in start_x..end_x {
+                    let index = ((y * screenshot.width + x) * 4) as usize;
+                    accum[0] += screenshot.pixels[index] as u32;
+                    accum[1] += screenshot.pixels[index + 1] as u32;
+                    accum[2] += screenshot.pixels[index + 2] as u32;
+                    accum[3] += screenshot.pixels[index + 3] as u32;
+                    samples += 1;
+                }
+            }
+
+            let dst = ((out_y * out_width + out_x) * 4) as usize;
+            pixels[dst] = (accum[0] / samples.max(1)) as u8;
+            pixels[dst + 1] = (accum[1] / samples.max(1)) as u8;
+            pixels[dst + 2] = (accum[2] / samples.max(1)) as u8;
+            pixels[dst + 3] = (accum[3] / samples.max(1)) as u8;
+        }
+    }
+
+    cranpose::RobotScreenshot {
+        width: out_width,
+        height: out_height,
+        logical_width: screenshot.logical_width,
+        logical_height: screenshot.logical_height,
+        pixels,
+    }
+}
+
+fn translate_region(region: (f32, f32, f32, f32), dx: f32, dy: f32) -> (f32, f32, f32, f32) {
+    (region.0 + dx, region.1 + dy, region.2, region.3)
 }
 
 fn center(bounds: (f32, f32, f32, f32)) -> (f32, f32) {

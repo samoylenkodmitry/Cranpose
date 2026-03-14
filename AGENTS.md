@@ -19,7 +19,7 @@
 - do not create a half-migrated state of the repo; don't "deprecate"; always change the existing code
 - cargo clippy
 - cargo test
-- cargo tree --duplicates/cargo tree -i <package name> and make sure no duplicates (but do not apply vendor patches, and do not change libraries without asking, can suggest though)
+- when updating/changing libs: cargo tree --duplicates/cargo tree -i <package name> and make sure no duplicates (but do not apply vendor patches, and do not change libraries without asking, can suggest though)
 - make sure android compiles [:app:assembleRelease] in project /home/s/develop/projects/compose-rs-proposal/apps/android-demo/android
 - make sure wasm compiles apps/desktop-demo/build-web.sh
 - (+robot tests)

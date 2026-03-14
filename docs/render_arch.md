@@ -26,12 +26,11 @@ The branch now enforces these invariants:
 2. Active scroll/drag/fling ancestry is represented by `LayerNode::motion_context_animated`.
 3. Direct-safe translation-only subtrees collapse into their parent target.
 4. Plain text is not isolated just because it is text.
-5. Decoration-only text also stays on the direct path when no other
-   text-local-surface reason exists.
+5. Decoration-only, gradient, stroke, and other styled text stay on the direct path.
 6. Direct child collapse must rebase text primitives into parent space before
    text/decorations are emitted.
-7. Unspecified text under active scroll motion resolves to `TextMotion::Animated`.
-8. Nonzero scroll offset by itself does not force animated sampling.
+7. Unspecified text under active motion ancestry resolves to `TextMotion::Animated`.
+8. Scene build does not round static text rects in logical space.
 9. Scrolling images use linear sampling; static images stay nearest.
 10. Mixed-content isolation is attributed by real local-surface reasons, not by
    tab-wide wrappers.
@@ -50,6 +49,8 @@ The branch now enforces these invariants:
 - child `content_offset` does not by itself propagate `motion_context_animated`
 - scroll and lazy-scroll modifiers report real motion activity into
   `ModifierNodeSlices::motion_context_animated()`
+- scroll and lazy-scroll modifiers also mark translated-content ancestry only
+  while that motion is active
 
 Files:
 
@@ -85,9 +86,9 @@ These refactorings are complete in the checked-in branch state:
 2. Root direct rendering for translation-only/no-surface-reason scenes.
 3. Plain translation-only text on the direct path.
 4. Decoration-only text on the direct path with parent-space text rebasing.
-5. Precise text local-surface attribution under `text_local_surface`.
+5. Removal of renderer-forced text local-surface classification.
 6. Scroll and lazy-scroll motion-context propagation into the render graph.
-7. Active-motion-only animated sampling for unspecified text inside scrolling subtrees.
+7. Active translated-content propagation for scroll subtrees.
 8. Motion-aware image sampling (`nearest` static, `linear` scrolling).
 9. Removal of giant Shaders-tab mixed-content wrapper isolation.
 10. Physical-size-aware presented-window screenshot capture.
@@ -98,10 +99,9 @@ These refactorings are complete in the checked-in branch state:
 15. Lazy raster-cache hash computation through `cache_hashes_valid`.
 16. Logical-to-physical mapping in robot screenshot helpers.
 17. Deterministic micro-surface screenshot contract via `robot_renderer_micro_contract`.
-18. Dynamic lazy-scroll motion marker in UI modifier slices.
-19. Real `LazyColumn` item text contract proving idle lazy-scroll content stays on the static path.
-20. Raw robot screenshot size parity with `main` for the same logical surface.
-21. Pixel-identical micro screenshot parity with the committed `main` reference.
+18. Raw robot screenshot size parity with `main` for the same logical surface.
+19. Structural translation contracts for direct text/list captures using box-downsampled normalized regions.
+20. Pixel-identical micro screenshot parity with the committed `main` reference.
 
 ## Acceptance Status
 
@@ -109,8 +109,7 @@ Current checked-in status:
 
 - translation-only effect semantics are covered by focused WGPU tests
 - bounded blur/backdrop semantics are covered by focused WGPU tests
-- idle-vs-active text motion defaults are covered by `scene_builder` unit tests
-- composed `LazyColumn` item text idle behavior is covered by a `scene_builder` test
+- motion-vs-translated-content text defaults are covered by `scene_builder` unit tests
 - motion-aware image sampling policy is covered by WGPU unit tests
 - oversized mixed-content isolate regressions on the Shaders tab are guarded by a robot runner
 - screenshot-based robot checks use logical regions against captured images correctly
@@ -119,6 +118,9 @@ Current checked-in status:
 - raw robot screenshots now match `main` dimensions for the micro contract
 - the current micro contract screenshot is pixel-identical to the committed
   `main` reference
+- translation robots compare direct text/list captures structurally after
+  downsampling, because glyphon grayscale mask AA is phase-sensitive under
+  rigid translation even when geometry is stable
 
 Latest sequential perf checks on this machine:
 
@@ -155,8 +157,10 @@ the review loop also includes:
 
 ## Current Plan
 
-The current checked-in state closes the screenshot-scale mismatch and the
-always-animated idle-scroll blur. The remaining review loop is:
+The current checked-in state closes the screenshot-scale mismatch, returns idle
+scroll text to the static crisp path, removes renderer-forced styled-text
+isolation, and removes logical-space static text rounding. The remaining review
+loop is:
 
 - keep the current invariants green
 - inspect saved demo screenshots when a new visual bug is reported

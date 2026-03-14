@@ -3,7 +3,7 @@
 //! This module ties together the offscreen pool, blur pipeline, and shader
 //! pipeline cache to apply `RenderEffect`s to subtree-rendered textures.
 
-use crate::offscreen::{OffscreenPool, OffscreenTarget};
+use crate::offscreen::{OffscreenPool, OffscreenSampleMode, OffscreenTarget};
 use crate::shader_cache::ShaderPipelineCache;
 use crate::shaders;
 use cranpose_ui_graphics::{BlendMode, RenderEffect, RuntimeShader, TileMode};
@@ -47,7 +47,7 @@ pub(crate) struct EffectRenderer {
     effect_uniform_bind_group: wgpu::BindGroup,
 
     // Sampler for effect textures
-    pub effect_sampler: wgpu::Sampler,
+    pub effect_linear_sampler: wgpu::Sampler,
 
     surface_format: wgpu::TextureFormat,
 
@@ -112,6 +112,11 @@ pub(crate) struct RoundedCompositeMask {
     pub rect: [f32; 4],
     /// Corner radii in pixels: top_left, top_right, bottom_left, bottom_right.
     pub radii: [f32; 4],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CompositeSampleMode {
+    Linear,
 }
 
 impl EffectRenderer {
@@ -551,15 +556,14 @@ impl EffectRenderer {
             }],
         });
 
-        let effect_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Effect Sampler"),
+        let effect_linear_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Effect Linear Sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-
         Self {
             offscreen_pool: OffscreenPool::new(surface_format),
             shader_cache: ShaderPipelineCache::new(),
@@ -584,13 +588,24 @@ impl EffectRenderer {
             effect_uniform_bind_group_layout,
             effect_uniform_buffer,
             effect_uniform_bind_group,
-            effect_sampler,
+            effect_linear_sampler,
             surface_format,
             debug_submits: Cell::new(0),
             debug_blurs: Cell::new(0),
             debug_composites: Cell::new(0),
             debug_effects: Cell::new(0),
             debug_upload_bytes: Cell::new(0),
+        }
+    }
+
+    fn sampler_for_mode(
+        &self,
+        sample_mode: CompositeSampleMode,
+    ) -> (&wgpu::Sampler, OffscreenSampleMode) {
+        match sample_mode {
+            CompositeSampleMode::Linear => {
+                (&self.effect_linear_sampler, OffscreenSampleMode::Linear)
+            }
         }
     }
 
@@ -675,6 +690,7 @@ impl EffectRenderer {
                 source,
                 dest_view,
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                CompositeSampleMode::Linear,
             );
             return;
         }
@@ -711,12 +727,14 @@ impl EffectRenderer {
         let source_bind_group = source.get_or_create_bind_group(
             device,
             &self.effect_texture_bind_group_layout,
-            &self.effect_sampler,
+            &self.effect_linear_sampler,
+            OffscreenSampleMode::Linear,
         );
         let intermediate_bind_group = intermediate.get_or_create_bind_group(
             device,
             &self.effect_texture_bind_group_layout,
-            &self.effect_sampler,
+            &self.effect_linear_sampler,
+            OffscreenSampleMode::Linear,
         );
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -801,7 +819,8 @@ impl EffectRenderer {
         let texture_bind_group = source.get_or_create_bind_group(
             device,
             &self.effect_texture_bind_group_layout,
-            &self.effect_sampler,
+            &self.effect_linear_sampler,
+            OffscreenSampleMode::Linear,
         );
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -879,6 +898,7 @@ impl EffectRenderer {
                 source,
                 dest_view,
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                CompositeSampleMode::Linear,
             );
             return;
         };
@@ -887,7 +907,8 @@ impl EffectRenderer {
         let texture_bind_group = source.get_or_create_bind_group(
             device,
             &self.effect_texture_bind_group_layout,
-            &self.effect_sampler,
+            &self.effect_linear_sampler,
+            OffscreenSampleMode::Linear,
         );
 
         // Render pass
@@ -996,8 +1017,17 @@ impl EffectRenderer {
         source: &OffscreenTarget,
         dest_view: &wgpu::TextureView,
         load_op: wgpu::LoadOp<wgpu::Color>,
+        sample_mode: CompositeSampleMode,
     ) {
-        self.composite_to_view_with_alpha(device, queue, source, dest_view, 1.0, load_op);
+        self.composite_to_view_with_alpha(
+            device,
+            queue,
+            source,
+            dest_view,
+            1.0,
+            load_op,
+            sample_mode,
+        );
     }
 
     /// Composite an offscreen target with explicit alpha multiplication.
@@ -1009,9 +1039,17 @@ impl EffectRenderer {
         dest_view: &wgpu::TextureView,
         alpha: f32,
         load_op: wgpu::LoadOp<wgpu::Color>,
+        sample_mode: CompositeSampleMode,
     ) {
         self.composite_to_view_scissored_with_alpha(
-            device, queue, source, dest_view, alpha, load_op, None,
+            device,
+            queue,
+            source,
+            dest_view,
+            alpha,
+            load_op,
+            None,
+            sample_mode,
         );
     }
 
@@ -1027,9 +1065,18 @@ impl EffectRenderer {
         alpha: f32,
         load_op: wgpu::LoadOp<wgpu::Color>,
         scissor: Option<(u32, u32, u32, u32)>,
+        sample_mode: CompositeSampleMode,
     ) {
         self.composite_to_view_scissored_with_alpha_and_mask(
-            device, queue, source, dest_view, alpha, load_op, scissor, None,
+            device,
+            queue,
+            source,
+            dest_view,
+            alpha,
+            load_op,
+            scissor,
+            None,
+            sample_mode,
         );
     }
 
@@ -1046,6 +1093,7 @@ impl EffectRenderer {
         load_op: wgpu::LoadOp<wgpu::Color>,
         scissor: Option<(u32, u32, u32, u32)>,
         rounded_mask: Option<RoundedCompositeMask>,
+        sample_mode: CompositeSampleMode,
     ) {
         self.composite_to_view_scissored_with_alpha_and_mask_and_blend_mode(
             device,
@@ -1058,6 +1106,7 @@ impl EffectRenderer {
             rounded_mask,
             BlendMode::SrcOver,
             None,
+            sample_mode,
         );
     }
 
@@ -1081,6 +1130,7 @@ impl EffectRenderer {
         rounded_mask: Option<RoundedCompositeMask>,
         blend_mode: BlendMode,
         dest_viewport: Option<(f32, f32, f32, f32)>,
+        sample_mode: CompositeSampleMode,
     ) {
         let (mask_rect, mask_radii, mask_enabled) = if let Some(mask) = rounded_mask {
             (mask.rect, mask.radii, [1.0, 0.0, 0.0, 0.0])
@@ -1103,10 +1153,12 @@ impl EffectRenderer {
             bytemuck::bytes_of(&uniforms),
         );
 
+        let (sampler, offscreen_sample_mode) = self.sampler_for_mode(sample_mode);
         let texture_bind_group = source.get_or_create_bind_group(
             device,
             &self.effect_texture_bind_group_layout,
-            &self.effect_sampler,
+            sampler,
+            offscreen_sample_mode,
         );
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1162,6 +1214,7 @@ impl EffectRenderer {
         load_op: wgpu::LoadOp<wgpu::Color>,
         scissor: Option<(u32, u32, u32, u32)>,
         blend_mode: BlendMode,
+        sample_mode: CompositeSampleMode,
     ) {
         let min_x = dest_bounds
             .iter()
@@ -1238,10 +1291,12 @@ impl EffectRenderer {
             bytemuck::bytes_of(&uniforms),
         );
 
+        let (sampler, offscreen_sample_mode) = self.sampler_for_mode(sample_mode);
         let texture_bind_group = source.get_or_create_bind_group(
             device,
             &self.effect_texture_bind_group_layout,
-            &self.effect_sampler,
+            sampler,
+            offscreen_sample_mode,
         );
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Projective Blit Encoder"),

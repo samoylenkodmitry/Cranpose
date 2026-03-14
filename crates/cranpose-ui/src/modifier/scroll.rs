@@ -653,6 +653,32 @@ impl MotionContextAnimatedNode {
     }
 }
 
+pub(crate) struct TranslatedContentContextNode {
+    state: NodeState,
+    is_active: Rc<dyn Fn() -> bool>,
+}
+
+impl TranslatedContentContextNode {
+    fn new(is_active: Rc<dyn Fn() -> bool>) -> Self {
+        Self {
+            state: NodeState::new(),
+            is_active,
+        }
+    }
+
+    pub(crate) fn is_active(&self) -> bool {
+        (self.is_active)()
+    }
+}
+
+impl DelegatableNode for TranslatedContentContextNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
+impl ModifierNode for TranslatedContentContextNode {}
+
 impl DelegatableNode for MotionContextAnimatedNode {
     fn node_state(&self) -> &NodeState {
         &self.state
@@ -735,6 +761,59 @@ impl ModifierNodeElement for MotionContextAnimatedElement {
                 }));
             node.invalidation_callback_id = Some(callback_id);
         }
+    }
+
+    fn capabilities(&self) -> NodeCapabilities {
+        NodeCapabilities::LAYOUT
+    }
+}
+
+#[derive(Clone)]
+struct TranslatedContentContextElement {
+    identity: usize,
+    is_active: Rc<dyn Fn() -> bool>,
+}
+
+impl TranslatedContentContextElement {
+    fn new(identity: usize, is_active: Rc<dyn Fn() -> bool>) -> Self {
+        Self {
+            identity,
+            is_active,
+        }
+    }
+}
+
+impl std::fmt::Debug for TranslatedContentContextElement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TranslatedContentContextElement")
+            .field("identity", &self.identity)
+            .finish()
+    }
+}
+
+impl PartialEq for TranslatedContentContextElement {
+    fn eq(&self, other: &Self) -> bool {
+        self.identity == other.identity
+    }
+}
+
+impl Eq for TranslatedContentContextElement {}
+
+impl std::hash::Hash for TranslatedContentContextElement {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.identity.hash(state);
+    }
+}
+
+impl ModifierNodeElement for TranslatedContentContextElement {
+    type Node = TranslatedContentContextNode;
+
+    fn create(&self) -> Self::Node {
+        TranslatedContentContextNode::new(self.is_active.clone())
+    }
+
+    fn update(&self, node: &mut Self::Node) {
+        node.is_active = self.is_active.clone();
     }
 
     fn capabilities(&self) -> NodeCapabilities {
@@ -901,11 +980,18 @@ fn scroll_impl(
                 info.add_property("reverseScrolling", reverse_scrolling.to_string());
             },
         ));
-    let motion_modifier = Modifier::with_element(MotionContextAnimatedElement::new(motion_context));
+    let motion_modifier =
+        Modifier::with_element(MotionContextAnimatedElement::new(motion_context.clone()));
+    let translated_content_motion_context = motion_context.clone();
+    let translated_content_modifier = Modifier::with_element(TranslatedContentContextElement::new(
+        state.id() as usize,
+        Rc::new(move || translated_content_motion_context.is_active()),
+    ));
 
     // Combine: pointer input THEN layout modifier, clip to bounds by default
     pointer_input
         .then(motion_modifier)
+        .then(translated_content_modifier)
         .then(layout_modifier)
         .clip_to_bounds()
 }
@@ -950,10 +1036,15 @@ fn lazy_scroll_impl(state: LazyListState, is_vertical: bool, reverse_scrolling: 
     // Use a unique key per LazyListState
     let state_id = std::ptr::addr_of!(*state.inner_ptr()) as usize;
     let key = (state_id, is_vertical, reverse_scrolling);
+    let translated_content_motion_context = motion_context.clone();
+    let translated_content_modifier = Modifier::with_element(TranslatedContentContextElement::new(
+        state_id,
+        Rc::new(move || translated_content_motion_context.is_active()),
+    ));
 
-    Modifier::with_element(MotionContextAnimatedElement::new(motion_context.clone())).pointer_input(
-        key,
-        move |scope| {
+    Modifier::with_element(MotionContextAnimatedElement::new(motion_context.clone()))
+        .then(translated_content_modifier)
+        .pointer_input(key, move |scope| {
             // Use the same generic detector with LazyListState
             let detector = ScrollGestureDetector::new(
                 gesture_state.clone(),
@@ -991,6 +1082,5 @@ fn lazy_scroll_impl(state: LazyListState, is_vertical: bool, reverse_scrolling: 
                     })
                     .await;
             }
-        },
-    )
+        })
 }

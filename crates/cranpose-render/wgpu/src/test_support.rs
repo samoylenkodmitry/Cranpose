@@ -15,6 +15,7 @@ pub fn layer_node(
         local_bounds,
         transform_to_parent,
         motion_context_animated: false,
+        translated_content_context: false,
         graphics_layer,
         clip_to_bounds: false,
         shadow_clip: None,

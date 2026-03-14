@@ -17,7 +17,6 @@ pub struct LayerSurfaceReasons {
     pub backdrop: bool,
     pub group_opacity: bool,
     pub blend_mode: bool,
-    pub text_local_surface: bool,
     pub immediate_shadow: bool,
     pub mixed_direct_content: bool,
     pub non_translation_transform: bool,
@@ -30,14 +29,12 @@ impl LayerSurfaceReasons {
             || self.backdrop
             || self.group_opacity
             || self.blend_mode
-            || self.text_local_surface
             || self.immediate_shadow
-            || self.mixed_direct_content
             || self.non_translation_transform
     }
 
     pub fn labels(self) -> impl Iterator<Item = &'static str> {
-        let mut labels = [None; 9];
+        let mut labels = [None; 8];
         let mut len = 0usize;
 
         if self.explicit_offscreen {
@@ -58,10 +55,6 @@ impl LayerSurfaceReasons {
         }
         if self.blend_mode {
             labels[len] = Some("blend_mode");
-            len += 1;
-        }
-        if self.text_local_surface {
-            labels[len] = Some("text_local_surface");
             len += 1;
         }
         if self.immediate_shadow {
@@ -95,10 +88,7 @@ impl LayerSurfaceReasons {
     }
 
     pub fn has_renderer_forced_surface(self) -> bool {
-        self.text_local_surface
-            || self.immediate_shadow
-            || self.mixed_direct_content
-            || self.non_translation_transform
+        self.immediate_shadow || self.non_translation_transform
     }
 }
 
@@ -503,7 +493,7 @@ mod tests {
                 height: 5.0,
             },
             LayerSurfaceReasons {
-                text_local_surface: true,
+                immediate_shadow: true,
                 ..LayerSurfaceReasons::default()
             },
         );
@@ -549,7 +539,7 @@ mod tests {
     #[test]
     fn layer_surface_reasons_report_runtime_only_bits() {
         let reasons = LayerSurfaceReasons {
-            text_local_surface: true,
+            immediate_shadow: true,
             mixed_direct_content: true,
             ..LayerSurfaceReasons::default()
         };
@@ -558,9 +548,25 @@ mod tests {
         assert!(reasons.has_renderer_forced_surface());
         assert_eq!(
             reasons.labels().collect::<Vec<_>>(),
-            vec!["text_local_surface", "mixed_direct_content"]
+            vec!["immediate_shadow", "mixed_direct_content"]
         );
-        assert_eq!(reasons.display(), "text_local_surface+mixed_direct_content");
+        assert_eq!(reasons.display(), "immediate_shadow+mixed_direct_content");
+    }
+
+    #[test]
+    fn mixed_direct_content_only_is_diagnostic_not_isolating() {
+        let reasons = LayerSurfaceReasons {
+            mixed_direct_content: true,
+            ..LayerSurfaceReasons::default()
+        };
+
+        assert!(!reasons.has_any());
+        assert!(!reasons.has_renderer_forced_surface());
+        assert_eq!(
+            reasons.labels().collect::<Vec<_>>(),
+            vec!["mixed_direct_content"]
+        );
+        assert_eq!(reasons.display(), "mixed_direct_content");
     }
 
     #[test]
@@ -578,7 +584,7 @@ mod tests {
                     height: 10.0,
                 },
                 LayerSurfaceReasons {
-                    text_local_surface: true,
+                    immediate_shadow: true,
                     ..LayerSurfaceReasons::default()
                 },
             );

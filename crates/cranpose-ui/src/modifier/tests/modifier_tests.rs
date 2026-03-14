@@ -78,6 +78,34 @@ fn lazy_scroll_modifier_keeps_motion_context_inactive_at_rest() {
 }
 
 #[test]
+fn regular_scroll_modifier_keeps_translated_content_context_inactive_at_rest() {
+    let mut state = None;
+    let _composition = crate::run_test_composition(|| {
+        state = Some(crate::ScrollState::new(12.0));
+    });
+    let modifier =
+        Modifier::empty().vertical_scroll(state.expect("scroll state should be created"), false);
+    let slices = collect_slices_from_modifier(&modifier);
+
+    assert!(!slices.translated_content_context());
+}
+
+#[test]
+fn lazy_scroll_modifier_keeps_translated_content_context_inactive_at_rest() {
+    let mut list_state = None;
+    let _composition = crate::run_test_composition(|| {
+        list_state = Some(cranpose_foundation::lazy::remember_lazy_list_state());
+    });
+    let modifier = Modifier::empty().lazy_vertical_scroll(
+        list_state.expect("lazy list state should be created"),
+        false,
+    );
+    let slices = collect_slices_from_modifier(&modifier);
+
+    assert!(!slices.translated_content_context());
+}
+
+#[test]
 fn then_short_circuits_empty_modifiers() {
     let padding = Modifier::empty().padding(4.0);
     assert_eq!(Modifier::empty().then(padding.clone()), padding);

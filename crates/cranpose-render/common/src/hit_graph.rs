@@ -147,6 +147,7 @@ mod tests {
             },
             transform_to_parent,
             motion_context_animated: false,
+            translated_content_context: false,
             graphics_layer: cranpose_ui_graphics::GraphicsLayer::default(),
             clip_to_bounds: true,
             shadow_clip: None,

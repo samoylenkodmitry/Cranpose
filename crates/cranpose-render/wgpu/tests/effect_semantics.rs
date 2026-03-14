@@ -12,7 +12,7 @@ use cranpose_render_common::image_compare::{
 };
 use cranpose_render_common::Renderer;
 use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot};
-use cranpose_ui::text::{AnnotatedString, SpanStyle, TextStyle};
+use cranpose_ui::text::{AnnotatedString, SpanStyle, TextStyle, TextUnit};
 use cranpose_ui::TextLayoutOptions;
 use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, GraphicsLayer, Point, Rect, RenderEffect};
 
@@ -68,8 +68,8 @@ fn subtree_alpha_capture_preserves_group_opacity_and_uses_bounded_surface() {
         "alpha-only layer should not run render effects: {stats:?}"
     );
     assert_eq!(
-        stats.isolated_layer_renders, 2,
-        "capture should render the root surface and one isolated alpha child: {stats:?}"
+        stats.isolated_layer_renders, 1,
+        "alpha capture should isolate only the alpha subtree now that the root renders direct: {stats:?}"
     );
     assert_local_surface_stats(&frame, stats, ALPHA_LAYER_SIZE, 1, "alpha");
 }
@@ -320,6 +320,87 @@ fn translation_only_wrapper_with_underlined_text_stays_on_direct_path() {
 }
 
 #[test]
+fn translation_only_wrapper_with_decorated_shadow_text_stays_on_direct_path() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping decorated text-wrapper assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    let translation = Point::new(12.0, 14.0);
+    renderer.scene_mut().graph = Some(translation_only_wrapper_with_decorated_shadow_text_fixture(
+        translation,
+    ));
+    let frame = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("decorated text wrapper capture should succeed");
+    let stats = renderer
+        .last_frame_stats()
+        .expect("decorated text wrapper frame stats");
+
+    let text_region_bright = bright_pixel_count(
+        &frame,
+        Rect {
+            x: translation.x + 12.0,
+            y: translation.y + 8.0,
+            width: 32.0,
+            height: 16.0,
+        },
+        120,
+    );
+    let decoration_region_bright = bright_pixel_count(
+        &frame,
+        Rect {
+            x: translation.x + 12.0,
+            y: translation.y + 18.0,
+            width: 34.0,
+            height: 8.0,
+        },
+        120,
+    );
+    let background_region_bright = bright_pixel_count(
+        &frame,
+        Rect {
+            x: translation.x + 11.0,
+            y: translation.y + 7.0,
+            width: 36.0,
+            height: 18.0,
+        },
+        40,
+    );
+    assert!(
+        text_region_bright >= 20,
+        "decorated text fixture should draw visible text content at the composed position, bright_pixels={text_region_bright}"
+    );
+    assert!(
+        decoration_region_bright >= 6,
+        "decorated text fixture should draw visible decoration content on the direct path, bright_pixels={decoration_region_bright}"
+    );
+    assert!(
+        background_region_bright >= 40,
+        "decorated text fixture should draw a visible background region on the direct path, bright_pixels={background_region_bright}"
+    );
+    assert_eq!(
+        stats.isolated_layer_renders, 0,
+        "translation-only wrapper should keep decorated text on the direct path: {stats:?}"
+    );
+    assert!(
+        stats.blur_passes >= 1,
+        "decorated text shadow should still use the bounded blur helper path: {stats:?}"
+    );
+    let isolated = stats.top_isolated_layers().collect::<Vec<_>>();
+    assert!(
+        isolated.is_empty(),
+        "decorated text should not allocate isolated text surfaces: {stats:?}"
+    );
+}
+
+#[test]
 fn bounded_blur_capture_stays_inside_layer_bounds() {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
@@ -367,8 +448,8 @@ fn bounded_blur_capture_stays_inside_layer_bounds() {
         "bounded blur should execute at least one blur pass: {stats:?}"
     );
     assert_eq!(
-        stats.isolated_layer_renders, 2,
-        "capture should render the root surface and one isolated blur child: {stats:?}"
+        stats.isolated_layer_renders, 1,
+        "bounded blur capture should isolate only the blur child now that the root renders direct: {stats:?}"
     );
     assert_local_surface_stats(&frame, stats, BLUR_LAYER_SIZE, 3, "blur");
 }
@@ -455,12 +536,12 @@ fn translated_backdrop_capture_preserves_local_picture_under_rigid_motion() {
         "translated backdrop frames should execute blur passes: base={base_stats:?} moved={moved_stats:?}"
     );
     assert_eq!(
-        base_stats.isolated_layer_renders, 3,
-        "translated backdrop base frame should keep the content-bearing wrapper isolated and also render the isolated backdrop child: {base_stats:?}"
+        base_stats.isolated_layer_renders, 2,
+        "translated backdrop base frame should keep only the content-bearing wrapper and backdrop child isolated: {base_stats:?}"
     );
     assert_eq!(
-        moved_stats.isolated_layer_renders, 3,
-        "translated backdrop moved frame should keep the content-bearing wrapper isolated and also render the isolated backdrop child: {moved_stats:?}"
+        moved_stats.isolated_layer_renders, 2,
+        "translated backdrop moved frame should keep only the content-bearing wrapper and backdrop child isolated: {moved_stats:?}"
     );
 
     let base_normalized = normalize_translated_backdrop_region(&base_frame, base_translation);
@@ -776,6 +857,29 @@ fn translation_only_wrapper_with_underlined_text_fixture(
         TextStyle::from_span_style(SpanStyle {
             color: Some(Color::WHITE),
             text_decoration: Some(cranpose_ui::text::TextDecoration::UNDERLINE),
+            ..Default::default()
+        }),
+    )
+}
+
+fn translation_only_wrapper_with_decorated_shadow_text_fixture(
+    wrapper_translation: Point,
+) -> RenderGraph {
+    translation_only_wrapper_with_text_style_fixture(
+        wrapper_translation,
+        TextStyle::from_span_style(SpanStyle {
+            color: Some(Color::WHITE),
+            letter_spacing: TextUnit::Em(0.18),
+            background: Some(Color(0.2, 0.3, 0.52, 0.55)),
+            text_decoration: Some(
+                cranpose_ui::text::TextDecoration::UNDERLINE
+                    .combine(cranpose_ui::text::TextDecoration::LINE_THROUGH),
+            ),
+            shadow: Some(cranpose_ui::text::Shadow {
+                color: Color::BLACK,
+                offset: Point::new(2.0, 2.0),
+                blur_radius: 3.0,
+            }),
             ..Default::default()
         }),
     )

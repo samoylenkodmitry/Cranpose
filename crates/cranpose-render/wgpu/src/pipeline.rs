@@ -21,7 +21,7 @@ use cranpose_render_common::Brush;
 use cranpose_ui::prepare_text_layout;
 #[cfg(test)]
 use cranpose_ui::text::{resolve_text_direction, ResolvedTextDirection, TextAlign};
-use cranpose_ui::text::{TextDecoration, TextDrawStyle, TextMotion, TextStyle};
+use cranpose_ui::text::{TextDecoration, TextDrawStyle, TextStyle};
 use cranpose_ui::{layout_text, measure_text, LayoutBox, TextLayoutOptions};
 #[cfg(test)]
 use cranpose_ui::{EdgeInsets, TextOverflow};
@@ -298,6 +298,7 @@ fn shadow_shape(
             rect,
             local_rect: rect,
             quad: rect_to_quad(rect),
+            snap_anchor: None,
             brush: Brush::solid(color),
             shape,
             z_index: 0, // populated by CompositorScene::push_shadow_draw()
@@ -436,24 +437,6 @@ fn resolve_text_color_without_gradient_fallback(text_style: &TextStyle, default:
         color.3 *= alpha.clamp(0.0, 1.0);
     }
     color
-}
-
-fn snap_text_rect_for_motion(rect: Rect, text_style: &TextStyle) -> Rect {
-    if text_style
-        .paragraph_style
-        .text_motion
-        .unwrap_or(TextMotion::Static)
-        == TextMotion::Static
-    {
-        return Rect {
-            x: rect.x.round(),
-            y: rect.y.round(),
-            width: rect.width,
-            height: rect.height,
-        };
-    }
-
-    rect
 }
 
 fn tile_mode_to_shader_uniform(tile_mode: TileMode) -> f32 {
@@ -1001,6 +984,7 @@ impl TextStyleDrawSink for CompositorScene {
             texts: vec![TextDraw {
                 node_id,
                 rect,
+                snap_anchor: None,
                 text,
                 color,
                 text_style,
@@ -1207,9 +1191,6 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         height: text_rect.height,
     };
     let transformed_shifted_text_rect = apply_layer_to_rect(shifted_text_rect, rect, content_layer);
-    let snapped_shifted_text_rect =
-        snap_text_rect_for_motion(transformed_shifted_text_rect, text_style);
-
     if let Some(background) = text_style.span_style.background {
         let brush = apply_layer_to_brush(Brush::solid(background), content_layer);
         sink.push_shape(
@@ -1244,16 +1225,12 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
             width: shifted_text_rect.width,
             height: shifted_text_rect.height,
         };
-        let transformed_shadow_rect = snap_text_rect_for_motion(
-            apply_layer_to_rect(shadow_rect, rect, content_layer),
-            text_style,
-        );
         let mut shadow_text_style = transformed_text_style.clone();
         shadow_text_style.span_style.brush = None;
         let blur_radius = shadow.blur_radius.max(0.0) * text_scale;
         sink.push_shadow_text(
             node_id,
-            transformed_shadow_rect,
+            apply_layer_to_rect(shadow_rect, rect, content_layer),
             Rc::new(text.clone()),
             apply_layer_to_color(shadow.color, content_layer),
             shadow_text_style,
@@ -1281,7 +1258,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         && push_span_gpu_text_material_draws(
             sink,
             node_id,
-            snapped_shifted_text_rect,
+            transformed_shifted_text_rect,
             content_layer,
             text,
             &transformed_text_style,
@@ -1298,7 +1275,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
     if !has_span_foreground_overrides {
         if let Some((effect, effect_rect)) = gpu_text_effect_for_style(
             &transformed_text_style,
-            snapped_shifted_text_rect,
+            transformed_shifted_text_rect,
             transformed_text_color,
             text_scale,
         ) {
@@ -1312,7 +1289,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
 
             sink.push_text(
                 node_id,
-                snapped_shifted_text_rect,
+                transformed_shifted_text_rect,
                 Rc::new(mask_text),
                 Color::WHITE,
                 mask_text_style,
@@ -1337,7 +1314,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
 
     sink.push_text(
         node_id,
-        snapped_shifted_text_rect,
+        transformed_shifted_text_rect,
         Rc::new(text.clone()),
         transformed_text_color,
         transformed_text_style,
@@ -1951,6 +1928,7 @@ fn push_shadow_primitive(
                 rect: params.rect,
                 local_rect: params.local_rect,
                 quad: params.quad,
+                snap_anchor: None,
                 brush: params.brush,
                 shape: params.shape,
                 z_index: 0,
@@ -2021,6 +1999,7 @@ mod tests {
     use super::*;
     use crate::scene::CompositorScene as Scene;
     use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
+    use cranpose_ui::text::TextMotion;
     use cranpose_ui::text_layout_result::{
         GlyphLayout, LineLayout, TextLayoutData, TextLayoutResult,
     };
@@ -2218,6 +2197,7 @@ mod tests {
                 12.0, 8.0,
             ),
             motion_context_animated: false,
+            translated_content_context: false,
             graphics_layer: GraphicsLayer::default(),
             clip_to_bounds: false,
             shadow_clip: None,
@@ -4019,7 +3999,7 @@ mod tests {
     }
 
     #[test]
-    fn push_text_style_draws_text_motion_static_snaps_position() {
+    fn push_text_style_draws_keeps_static_and_animated_text_geometry_in_scene_space() {
         let base_rect = Rect {
             x: 8.25,
             y: 10.75,
@@ -4067,14 +4047,14 @@ mod tests {
 
         assert_eq!(static_scene.texts.len(), 1);
         assert_eq!(animated_scene.texts.len(), 1);
-        assert_eq!(static_scene.texts[0].rect.x, base_rect.x.round());
-        assert_eq!(static_scene.texts[0].rect.y, base_rect.y.round());
+        assert!((static_scene.texts[0].rect.x - base_rect.x).abs() < f32::EPSILON);
+        assert!((static_scene.texts[0].rect.y - base_rect.y).abs() < f32::EPSILON);
         assert!((animated_scene.texts[0].rect.x - base_rect.x).abs() < f32::EPSILON);
         assert!((animated_scene.texts[0].rect.y - base_rect.y).abs() < f32::EPSILON);
     }
 
     #[test]
-    fn push_text_style_draws_stroke_text_motion_static_snaps_mask_and_effect_bounds() {
+    fn push_text_style_draws_stroke_keeps_mask_and_effect_bounds_in_scene_space() {
         let base_rect = Rect {
             x: 8.25,
             y: 10.75,
@@ -4133,8 +4113,8 @@ mod tests {
         assert_eq!(animated_scene.effect_layers.len(), 1);
 
         let expected_padding = stroke_effect_padding_local(4.0);
-        assert_eq!(static_scene.texts[0].rect.x, base_rect.x.round());
-        assert_eq!(static_scene.texts[0].rect.y, base_rect.y.round());
+        assert!((static_scene.texts[0].rect.x - base_rect.x).abs() < f32::EPSILON);
+        assert!((static_scene.texts[0].rect.y - base_rect.y).abs() < f32::EPSILON);
         let static_mask_rect = static_scene.texts[0].rect;
         assert!(
             (static_scene.effect_layers[0].rect.x - (static_mask_rect.x - expected_padding)).abs()
@@ -4159,7 +4139,7 @@ mod tests {
     }
 
     #[test]
-    fn push_text_style_draws_gradient_static_text_snaps_mask_and_effect_bounds() {
+    fn push_text_style_draws_gradient_keeps_mask_and_effect_bounds_in_scene_space() {
         let mut scene = Scene::new();
         let base_rect = Rect {
             x: 8.25,
@@ -4211,12 +4191,12 @@ mod tests {
         );
 
         let text_draw = &scene.texts[0];
-        assert_eq!(text_draw.rect.x, base_rect.x.round());
-        assert_eq!(text_draw.rect.y, base_rect.y.round());
+        assert!((text_draw.rect.x - base_rect.x).abs() < f32::EPSILON);
+        assert!((text_draw.rect.y - base_rect.y).abs() < f32::EPSILON);
 
         let effect_layer = &scene.effect_layers[0];
-        assert_eq!(effect_layer.rect.x, base_rect.x.round());
-        assert_eq!(effect_layer.rect.y, base_rect.y.round());
+        assert!((effect_layer.rect.x - base_rect.x).abs() < f32::EPSILON);
+        assert!((effect_layer.rect.y - base_rect.y).abs() < f32::EPSILON);
         assert!((effect_layer.rect.width - base_rect.width).abs() < 1e-3);
         assert!((effect_layer.rect.height - base_rect.height).abs() < 1e-3);
         let Some(RenderEffect::Shader { .. }) = effect_layer.effect.as_ref() else {

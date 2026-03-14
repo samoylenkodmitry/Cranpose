@@ -1,6 +1,6 @@
 //! GPU rendering implementation using WGPU
 
-use crate::effect_renderer::{EffectRenderer, RoundedCompositeMask};
+use crate::effect_renderer::{CompositeSampleMode, EffectRenderer, RoundedCompositeMask};
 use crate::offscreen::OffscreenTarget;
 use crate::scene::{
     BackdropLayer, CompositorScene, DrawShape, EffectLayer, ImageDraw, ShadowDraw, TextDraw,
@@ -11,7 +11,7 @@ use bytemuck::{Pod, Zeroable};
 use cranpose_render_common::geometry::{blur_extent_margin, expand_blurred_rect, union_rect};
 use cranpose_render_common::graph::{
     quad_bounds, CachePolicy, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
-    ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
+    ProjectiveTransform, RenderGraph, RenderNode,
 };
 use cranpose_render_common::layer_composition::{
     effective_layer_isolation, layer_for_content, local_content_layer,
@@ -50,6 +50,7 @@ use crate::pipeline::{push_draw_primitive, push_layer_shadow, push_text_style_dr
 const HARD_MAX_BUFFER_MB: usize = 64; // Maximum 64MB per buffer
 const MAX_LAYER_SURFACE_CACHE_ITEMS: usize = 256;
 const MAX_LAYER_SURFACE_CACHE_BYTES: u64 = 64 * 1024 * 1024;
+const AFFINE_TOLERANCE: f32 = 1e-4;
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     r: 18.0 / 255.0,
     g: 18.0 / 255.0,
@@ -643,6 +644,7 @@ struct LayerSurface {
     composite_alpha: f32,
     blend_mode: BlendMode,
     backdrop: Option<RenderEffect>,
+    sample_mode: CompositeSampleMode,
 }
 
 enum LayerSurfaceTexture {
@@ -794,17 +796,127 @@ fn target_quad(width: u32, height: u32) -> [[f32; 2]; 4] {
 
 fn direct_translation(transform: ProjectiveTransform) -> Option<Point> {
     let matrix = transform.matrix();
-    if (matrix[0][0] - 1.0).abs() > f32::EPSILON
-        || matrix[0][1].abs() > f32::EPSILON
-        || matrix[1][0].abs() > f32::EPSILON
-        || (matrix[1][1] - 1.0).abs() > f32::EPSILON
-        || matrix[2][0].abs() > f32::EPSILON
-        || matrix[2][1].abs() > f32::EPSILON
-        || (matrix[2][2] - 1.0).abs() > f32::EPSILON
+    if (matrix[0][0] - 1.0).abs() > AFFINE_TOLERANCE
+        || matrix[0][1].abs() > AFFINE_TOLERANCE
+        || matrix[1][0].abs() > AFFINE_TOLERANCE
+        || (matrix[1][1] - 1.0).abs() > AFFINE_TOLERANCE
+        || matrix[2][0].abs() > AFFINE_TOLERANCE
+        || matrix[2][1].abs() > AFFINE_TOLERANCE
+        || (matrix[2][2] - 1.0).abs() > AFFINE_TOLERANCE
     {
         return None;
     }
     Some(Point::new(matrix[0][2], matrix[1][2]))
+}
+
+fn graphics_layer_supports_rigid_snap(layer: &GraphicsLayer) -> bool {
+    (layer.scale - 1.0).abs() <= AFFINE_TOLERANCE
+        && (layer.scale_x - 1.0).abs() <= AFFINE_TOLERANCE
+        && (layer.scale_y - 1.0).abs() <= AFFINE_TOLERANCE
+        && layer.rotation_x.abs() <= AFFINE_TOLERANCE
+        && layer.rotation_y.abs() <= AFFINE_TOLERANCE
+        && layer.rotation_z.abs() <= AFFINE_TOLERANCE
+}
+
+fn rigid_snap_anchor(
+    layer_bounds: Rect,
+    layer: &GraphicsLayer,
+    motion_context_animated: bool,
+) -> Option<Point> {
+    if motion_context_animated || !graphics_layer_supports_rigid_snap(layer) {
+        return None;
+    }
+    let mapped = cranpose_render_common::layer_transform::apply_layer_affine_to_rect(
+        layer_bounds,
+        layer_bounds,
+        layer,
+    );
+    Some(Point::new(mapped.x, mapped.y))
+}
+
+fn snap_delta_for_anchor(anchor: Point, root_scale: f32) -> Point {
+    if !root_scale.is_finite() || root_scale <= 0.0 {
+        return Point::default();
+    }
+    Point::new(
+        (anchor.x * root_scale).round() / root_scale - anchor.x,
+        (anchor.y * root_scale).round() / root_scale - anchor.y,
+    )
+}
+
+#[derive(Clone, Copy)]
+struct SceneCounts {
+    shapes: usize,
+    images: usize,
+    texts: usize,
+    shadow_draws: usize,
+}
+
+fn scene_counts(scene: &CompositorScene) -> SceneCounts {
+    SceneCounts {
+        shapes: scene.shapes.len(),
+        images: scene.images.len(),
+        texts: scene.texts.len(),
+        shadow_draws: scene.shadow_draws.len(),
+    }
+}
+
+fn assign_snap_anchor_since(
+    scene: &mut CompositorScene,
+    counts: SceneCounts,
+    snap_anchor: Option<Point>,
+) {
+    let Some(snap_anchor) = snap_anchor else {
+        return;
+    };
+
+    for shape in &mut scene.shapes[counts.shapes..] {
+        shape.snap_anchor = Some(snap_anchor);
+    }
+    for image in &mut scene.images[counts.images..] {
+        image.snap_anchor = Some(snap_anchor);
+    }
+    for text in &mut scene.texts[counts.texts..] {
+        text.snap_anchor = Some(snap_anchor);
+    }
+    for shadow in &mut scene.shadow_draws[counts.shadow_draws..] {
+        for (shape, _) in &mut shadow.shapes {
+            shape.snap_anchor = Some(snap_anchor);
+        }
+        for text in &mut shadow.texts {
+            text.snap_anchor = Some(snap_anchor);
+        }
+    }
+}
+
+fn layer_contains_text_primitives(layer: &LayerNode) -> bool {
+    layer.children.iter().any(|child| {
+        matches!(
+            child,
+            RenderNode::Primitive(PrimitiveEntry {
+                node: PrimitiveNode::Text(_),
+                ..
+            })
+        )
+    })
+}
+
+fn layer_contains_draw_primitives(layer: &LayerNode) -> bool {
+    layer.children.iter().any(|child| {
+        matches!(
+            child,
+            RenderNode::Primitive(PrimitiveEntry {
+                node: PrimitiveNode::Draw(_),
+                ..
+            })
+        )
+    })
+}
+
+fn layer_needs_text_leaf_snap(layer: &LayerNode) -> bool {
+    !layer.translated_content_context
+        && layer_contains_text_primitives(layer)
+        && layer_contains_draw_primitives(layer)
 }
 
 fn resolved_child_surface_composite(
@@ -837,20 +949,15 @@ fn root_can_render_directly_cached(
         && !layer_contains_descendant_backdrop(layer)
 }
 
-fn text_requires_local_surface(text: &TextPrimitiveNode) -> bool {
-    let span = &text.text_style.span_style;
-    !text.text.span_styles.is_empty()
-        || span.shadow.is_some()
-        || span.background.is_some()
-        || span.baseline_shift.is_some()
-        || span.text_geometric_transform.is_some()
-        || span.draw_style.is_some()
-        || span.letter_spacing.is_specified()
-        || !matches!(span.brush.as_ref(), None | Some(Brush::Solid(_)))
-}
-
 fn layer_uses_external_backdrop_input(layer: &LayerNode, has_backdrop_underlay: bool) -> bool {
     has_backdrop_underlay && layer_contains_descendant_backdrop(layer)
+}
+
+fn composite_sample_mode_for_requirements(
+    requirements: LayerSurfaceRequirements,
+) -> CompositeSampleMode {
+    let _ = requirements;
+    CompositeSampleMode::Linear
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -896,13 +1003,7 @@ fn layer_surface_requirements_cached(
     for child in &layer.children {
         match child {
             RenderNode::Primitive(primitive) => match &primitive.node {
-                PrimitiveNode::Text(text) => {
-                    if text_requires_local_surface(text) {
-                        reasons.text_local_surface = true;
-                    } else {
-                        has_direct_safe_primitive = true;
-                    }
-                }
+                PrimitiveNode::Text(_) => has_direct_safe_primitive = true,
                 PrimitiveNode::Draw(draw) => match &draw.primitive {
                     cranpose_ui_graphics::DrawPrimitive::Shadow(_) => {
                         reasons.immediate_shadow = true;
@@ -946,7 +1047,10 @@ fn push_local_primitive(
     local_layer: &GraphicsLayer,
     visual_clip: Option<Rect>,
     motion_context_animated: bool,
+    content_offset_translation: bool,
+    layer_snap_anchor: Option<Point>,
 ) {
+    let counts_before = scene_counts(local_scene);
     match &primitive.node {
         PrimitiveNode::Draw(draw) => {
             let clip = resolve_primitive_clip(
@@ -966,7 +1070,7 @@ fn push_local_primitive(
                 clip,
                 local_scene,
                 None,
-                motion_context_animated,
+                motion_context_animated || content_offset_translation,
             );
         }
         PrimitiveNode::Text(text) => {
@@ -995,6 +1099,7 @@ fn push_local_primitive(
             );
         }
     }
+    assign_snap_anchor_since(local_scene, counts_before, layer_snap_anchor);
 }
 
 fn translate_quad(quad: [[f32; 2]; 4], delta: Point) -> [[f32; 2]; 4] {
@@ -1021,6 +1126,11 @@ fn collect_layer_contents_into<'a>(
             .clip_rect()
             .map(|clip| clip.translate(layer_offset.x, layer_offset.y)),
     );
+    let layer_snap_anchor = if layer_needs_text_leaf_snap(layer) {
+        rigid_snap_anchor(layer_bounds, &local_layer, layer.motion_context_animated)
+    } else {
+        None
+    };
     let mut deferred_primitives = Vec::new();
 
     for child in &layer.children {
@@ -1034,6 +1144,8 @@ fn collect_layer_contents_into<'a>(
                         &local_layer,
                         visual_clip,
                         layer.motion_context_animated,
+                        layer.translated_content_context,
+                        layer_snap_anchor,
                     );
                 }
                 PrimitivePhase::AfterChildren => deferred_primitives.push(primitive),
@@ -1135,6 +1247,8 @@ fn collect_layer_contents_into<'a>(
             &local_layer,
             visual_clip,
             layer.motion_context_animated,
+            layer.translated_content_context,
+            layer_snap_anchor,
         );
     }
 }
@@ -2171,6 +2285,7 @@ impl GpuRenderer {
                 wgpu::LoadOp::Load,
                 None,
                 supported_blend_mode(root_surface.blend_mode),
+                root_surface.sample_mode,
             );
             self.effect_renderer.composite_to_view(
                 &self.device,
@@ -2178,6 +2293,7 @@ impl GpuRenderer {
                 &composite_target,
                 surface_view,
                 wgpu::LoadOp::Clear(CLEAR_COLOR),
+                CompositeSampleMode::Linear,
             );
             self.effect_renderer
                 .offscreen_pool
@@ -2196,6 +2312,7 @@ impl GpuRenderer {
                 wgpu::LoadOp::Clear(CLEAR_COLOR),
                 None,
                 supported_blend_mode(root_surface.blend_mode),
+                root_surface.sample_mode,
             );
         }
         self.release_layer_surface_target(root_surface.target);
@@ -2297,6 +2414,7 @@ impl GpuRenderer {
                 wgpu::LoadOp::Load,
                 visual_clip.and_then(|clip| scissor_rect_for_rect(clip, root_scale, width, height)),
                 supported_blend_mode(child_surface.blend_mode),
+                child_surface.sample_mode,
             );
             self.release_layer_surface_target(child_surface.target);
             cursor_z = child.z_index.saturating_add(1);
@@ -2365,6 +2483,7 @@ impl GpuRenderer {
                 next_load_op,
                 None,
                 BlendMode::SrcOver,
+                CompositeSampleMode::Linear,
             );
             next_load_op = wgpu::LoadOp::Load;
         }
@@ -2382,6 +2501,7 @@ impl GpuRenderer {
             next_load_op,
             None,
             BlendMode::SrcOver,
+            CompositeSampleMode::Linear,
         );
 
         underlay
@@ -2416,6 +2536,7 @@ impl GpuRenderer {
             load_op,
             None,
             BlendMode::SrcOver,
+            CompositeSampleMode::Linear,
         );
         Ok(())
     }
@@ -2429,6 +2550,9 @@ impl GpuRenderer {
         allow_runtime_cache: bool,
         logical_rect_override: Option<Rect>,
     ) -> Result<LayerSurface, String> {
+        let surface_requirements =
+            layer_surface_requirements_cached(layer, &mut self.layer_surface_requirements_cache);
+        let composite_sample_mode = composite_sample_mode_for_requirements(surface_requirements);
         let cache_candidate = self.layer_raster_cache_candidate(
             layer,
             root_scale,
@@ -2451,6 +2575,7 @@ impl GpuRenderer {
                         .map(|params| params.blend_mode)
                         .unwrap_or(BlendMode::SrcOver),
                     backdrop: layer.backdrop().cloned(),
+                    sample_mode: composite_sample_mode,
                 });
             }
             let (width, height) = cache_key.pixel_size();
@@ -2462,6 +2587,7 @@ impl GpuRenderer {
                 backdrop_underlay,
                 Some((cache_key, logical_rect)),
                 logical_rect_override,
+                composite_sample_mode,
             );
         }
 
@@ -2472,6 +2598,7 @@ impl GpuRenderer {
             backdrop_underlay,
             None,
             logical_rect_override,
+            composite_sample_mode,
         )
     }
 
@@ -2483,6 +2610,7 @@ impl GpuRenderer {
         backdrop_underlay: Option<&OffscreenTarget>,
         cache_candidate: Option<(LayerRasterCacheKey, Rect)>,
         logical_rect_override: Option<Rect>,
+        composite_sample_mode: CompositeSampleMode,
     ) -> Result<LayerSurface, String> {
         let isolation = effective_layer_isolation(&layer.graphics_layer);
         let visual_clip = layer.clip_rect();
@@ -2645,6 +2773,7 @@ impl GpuRenderer {
                     )
                 }),
                 supported_blend_mode(child_surface.blend_mode),
+                child_surface.sample_mode,
             );
             self.release_layer_surface_target(child_surface.target);
             if let Some(underlay) = child_underlay {
@@ -2711,6 +2840,7 @@ impl GpuRenderer {
                         .map(|params| params.blend_mode)
                         .unwrap_or(BlendMode::SrcOver),
                     backdrop: layer.backdrop().cloned(),
+                    sample_mode: composite_sample_mode,
                 });
             }
         }
@@ -2727,6 +2857,7 @@ impl GpuRenderer {
                 .map(|params| params.blend_mode)
                 .unwrap_or(BlendMode::SrcOver),
             backdrop: layer.backdrop().cloned(),
+            sample_mode: composite_sample_mode,
         })
     }
 
@@ -3433,7 +3564,7 @@ impl GpuRenderer {
         //    at absolute viewport positions render into the small texture.
         //    The first shape gets LoadOp::Clear to initialize the texture;
         //    subsequent shapes use LoadOp::Load.
-        let viewport_offset = [bounds_x.floor(), bounds_y.floor()];
+        let viewport_offset = [bounds_x, bounds_y];
         let mut first_shadow_item = true; // Tracks shapes and texts
         for (shape, blend_mode) in &shadow.shapes {
             let load = if first_shadow_item {
@@ -3541,6 +3672,7 @@ impl GpuRenderer {
                 rounded_mask,
                 BlendMode::SrcOver,
                 dest_viewport,
+                CompositeSampleMode::Linear,
             );
         self.effect_renderer.offscreen_pool.release(dest);
 
@@ -3687,6 +3819,7 @@ impl GpuRenderer {
                     &source,
                     &dest.view,
                     wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    CompositeSampleMode::Linear,
                 );
             }
         } else {
@@ -3696,6 +3829,7 @@ impl GpuRenderer {
                 &source,
                 &dest.view,
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                CompositeSampleMode::Linear,
             );
         }
 
@@ -3717,6 +3851,7 @@ impl GpuRenderer {
                     effect_width as f32,
                     effect_height as f32,
                 )),
+                CompositeSampleMode::Linear,
             );
 
         self.effect_renderer.offscreen_pool.release(source);
@@ -3790,6 +3925,7 @@ impl GpuRenderer {
                 &snapshot,
                 &dest.view,
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                CompositeSampleMode::Linear,
             );
         }
 
@@ -3810,6 +3946,7 @@ impl GpuRenderer {
                     backdrop_width as f32,
                     backdrop_height as f32,
                 )),
+                CompositeSampleMode::Linear,
             );
 
         self.effect_renderer.offscreen_pool.release(snapshot);
@@ -3902,10 +4039,18 @@ impl GpuRenderer {
         self.scratch_indices.clear();
 
         for (idx, shape) in layer_shapes.enumerate() {
-            let local_rect = shape.local_rect;
+            let snap_delta = shape
+                .snap_anchor
+                .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
+                .unwrap_or_default();
+            let local_rect = shape.local_rect.translate(snap_delta.x, snap_delta.y);
+            let quad = translate_quad(shape.quad, snap_delta);
+            let clip = shape
+                .clip
+                .map(|clip| clip.translate(snap_delta.x, snap_delta.y));
 
             // Clip rect (scaled to physical pixels)
-            let clip_rect = if let Some(clip) = shape.clip {
+            let clip_rect = if let Some(clip) = clip {
                 [
                     clip.x * root_scale,
                     clip.y * root_scale,
@@ -4057,22 +4202,22 @@ impl GpuRenderer {
 
             self.scratch_vertices.extend_from_slice(&[
                 Vertex {
-                    position: [shape.quad[0][0] * root_scale, shape.quad[0][1] * root_scale],
+                    position: [quad[0][0] * root_scale, quad[0][1] * root_scale],
                     color,
                     uv: [0.0, 0.0],
                 },
                 Vertex {
-                    position: [shape.quad[1][0] * root_scale, shape.quad[1][1] * root_scale],
+                    position: [quad[1][0] * root_scale, quad[1][1] * root_scale],
                     color,
                     uv: [1.0, 0.0],
                 },
                 Vertex {
-                    position: [shape.quad[2][0] * root_scale, shape.quad[2][1] * root_scale],
+                    position: [quad[2][0] * root_scale, quad[2][1] * root_scale],
                     color,
                     uv: [0.0, 1.0],
                 },
                 Vertex {
-                    position: [shape.quad[3][0] * root_scale, shape.quad[3][1] * root_scale],
+                    position: [quad[3][0] * root_scale, quad[3][1] * root_scale],
                     color,
                     uv: [1.0, 1.0],
                 },
@@ -4254,7 +4399,11 @@ impl GpuRenderer {
         image_cmds.clear();
 
         for image_draw in layer_images {
-            let rect = image_draw.rect;
+            let snap_delta = image_draw
+                .snap_anchor
+                .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
+                .unwrap_or_default();
+            let rect = image_draw.rect.translate(snap_delta.x, snap_delta.y);
             if rect.width <= 0.0 || rect.height <= 0.0 || image_draw.alpha <= 0.0 {
                 continue;
             }
@@ -4271,7 +4420,23 @@ impl GpuRenderer {
             };
             self.ensure_image_cached(&prepared_image)?;
 
-            let scissor = scissor_rect_for_image(image_draw, root_scale, width, height);
+            let adjusted_image = ImageDraw {
+                rect,
+                local_rect: image_draw.local_rect.translate(snap_delta.x, snap_delta.y),
+                quad: translate_quad(image_draw.quad, snap_delta),
+                snap_anchor: image_draw.snap_anchor,
+                image: image_draw.image.clone(),
+                alpha: image_draw.alpha,
+                color_filter: image_draw.color_filter,
+                z_index: image_draw.z_index,
+                clip: image_draw
+                    .clip
+                    .map(|clip| clip.translate(snap_delta.x, snap_delta.y)),
+                blend_mode: image_draw.blend_mode,
+                src_rect: image_draw.src_rect,
+                motion_context_animated: image_draw.motion_context_animated,
+            };
+            let scissor = scissor_rect_for_image(&adjusted_image, root_scale, width, height);
             let Some(scissor) = scissor else {
                 continue;
             };
@@ -4302,32 +4467,32 @@ impl GpuRenderer {
             image_vertices.extend_from_slice(&[
                 Vertex {
                     position: [
-                        image_draw.quad[0][0] * root_scale,
-                        image_draw.quad[0][1] * root_scale,
+                        adjusted_image.quad[0][0] * root_scale,
+                        adjusted_image.quad[0][1] * root_scale,
                     ],
                     color: tint,
                     uv: [u_min, v_min],
                 },
                 Vertex {
                     position: [
-                        image_draw.quad[1][0] * root_scale,
-                        image_draw.quad[1][1] * root_scale,
+                        adjusted_image.quad[1][0] * root_scale,
+                        adjusted_image.quad[1][1] * root_scale,
                     ],
                     color: tint,
                     uv: [u_max, v_min],
                 },
                 Vertex {
                     position: [
-                        image_draw.quad[2][0] * root_scale,
-                        image_draw.quad[2][1] * root_scale,
+                        adjusted_image.quad[2][0] * root_scale,
+                        adjusted_image.quad[2][1] * root_scale,
                     ],
                     color: tint,
                     uv: [u_min, v_max],
                 },
                 Vertex {
                     position: [
-                        image_draw.quad[3][0] * root_scale,
-                        image_draw.quad[3][1] * root_scale,
+                        adjusted_image.quad[3][0] * root_scale,
+                        adjusted_image.quad[3][1] * root_scale,
                     ],
                     color: tint,
                     uv: [u_max, v_max],
@@ -4542,10 +4707,18 @@ impl GpuRenderer {
                 (text_draw.color.a() * 255.0) as u8,
             );
 
-            let left_px = text_draw.rect.x * root_scale;
-            let top_px = text_draw.rect.y * root_scale;
+            let snap_delta = text_draw
+                .snap_anchor
+                .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
+                .unwrap_or_default();
+            let rect = text_draw.rect.translate(snap_delta.x, snap_delta.y);
+            let left_px = rect.x * root_scale;
+            let top_px = rect.y * root_scale;
 
-            let Some(bounds) = text_bounds_for_clip(text_draw.clip, root_scale, width, height)
+            let adjusted_clip = text_draw
+                .clip
+                .map(|clip| clip.translate(snap_delta.x, snap_delta.y));
+            let Some(bounds) = text_bounds_for_clip(adjusted_clip, root_scale, width, height)
             else {
                 continue;
             };
@@ -4896,6 +5069,16 @@ fn hash_optional_rect<H: Hasher>(rect: Option<Rect>, state: &mut H) {
     }
 }
 
+fn hash_optional_point<H: Hasher>(point: Option<Point>, state: &mut H) {
+    match point {
+        Some(point) => {
+            1u8.hash(state);
+            point.render_hash().hash(state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
 fn hash_f32_bits<H: Hasher>(value: f32, state: &mut H) {
     value.to_bits().hash(state);
 }
@@ -4929,6 +5112,7 @@ where
         hash_f32_bits(text_draw.rect.y, &mut hasher);
         hash_f32_bits(text_draw.rect.width, &mut hasher);
         hash_f32_bits(text_draw.rect.height, &mut hasher);
+        hash_optional_point(text_draw.snap_anchor, &mut hasher);
         hash_optional_rect(text_draw.clip, &mut hasher);
 
         hash_f32_bits(text_draw.color.r(), &mut hasher);
@@ -5371,14 +5555,15 @@ fn inner_shadow_composite_mask(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cranpose_render_common::graph::{DrawPrimitiveNode, TextPrimitiveNode};
+    use cranpose_render_common::graph::{DrawPrimitiveNode, IsolationReasons, TextPrimitiveNode};
+    use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
     use cranpose_ui::text::{
         AnnotatedString, BaselineShift, RangeStyle, Shadow, SpanStyle, TextDecoration,
         TextDrawStyle, TextGeometricTransform, TextUnit,
     };
     use cranpose_ui::{TextLayoutOptions, TextStyle};
     use cranpose_ui_graphics::{
-        Brush, Color, DrawPrimitive, Rect, RenderEffect, RoundedCornerShape,
+        Brush, Color, CornerRadii, DrawPrimitive, Rect, RenderEffect, RoundedCornerShape,
     };
 
     fn chunk(batches: &[SegmentBatchPlan]) -> SegmentDrawChunkPlan {
@@ -5435,6 +5620,7 @@ mod tests {
                 height: 8.0,
             },
             quad: [[0.0, 0.0], [8.0, 0.0], [0.0, 8.0], [8.0, 8.0]],
+            snap_anchor: None,
             brush: Brush::solid(Color::BLACK),
             shape: None,
             z_index,
@@ -5468,6 +5654,7 @@ mod tests {
                 height: 8.0,
             },
             quad: [[0.0, 0.0], [8.0, 0.0], [0.0, 8.0], [8.0, 8.0]],
+            snap_anchor: None,
             image: ImageBitmap::from_rgba8(1, 1, vec![255, 255, 255, 255]).expect("image"),
             alpha: 1.0,
             color_filter: None,
@@ -5501,6 +5688,7 @@ mod tests {
                 width: 8.0,
                 height: 8.0,
             },
+            snap_anchor: None,
             text: std::rc::Rc::new(cranpose_ui::text::AnnotatedString::from("t")),
             color: Color::WHITE,
             text_style: cranpose_ui::TextStyle::default(),
@@ -5558,6 +5746,122 @@ mod tests {
                     clip: None,
                 })),
             })],
+        )
+    }
+
+    fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> LayerNode {
+        let text_leaf = LayerNode {
+            node_id: Some(77),
+            local_bounds: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 48.0,
+                height: 24.0,
+            },
+            transform_to_parent: ProjectiveTransform::translation(14.25, 16.5),
+            motion_context_animated: animated,
+            translated_content_context,
+            graphics_layer: GraphicsLayer::default(),
+            clip_to_bounds: false,
+            shadow_clip: None,
+            hit_test: None,
+            has_hit_targets: false,
+            isolation: IsolationReasons::default(),
+            cache_policy: CachePolicy::None,
+            cache_hashes: LayerRasterCacheHashes::default(),
+            cache_hashes_valid: false,
+            children: vec![
+                RenderNode::Primitive(PrimitiveEntry {
+                    phase: PrimitivePhase::BeforeChildren,
+                    node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                        primitive: DrawPrimitive::RoundRect {
+                            rect: Rect {
+                                x: 0.0,
+                                y: 0.0,
+                                width: 48.0,
+                                height: 24.0,
+                            },
+                            brush: Brush::solid(Color(0.28, 0.30, 0.46, 0.88)),
+                            radii: CornerRadii::uniform(6.0),
+                        },
+                        clip: None,
+                    }),
+                }),
+                RenderNode::Primitive(PrimitiveEntry {
+                    phase: PrimitivePhase::BeforeChildren,
+                    node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+                        node_id: 77,
+                        rect: Rect {
+                            x: 6.0,
+                            y: 4.0,
+                            width: 36.0,
+                            height: 16.0,
+                        },
+                        text: AnnotatedString::from("48 px"),
+                        text_style: TextStyle::default(),
+                        font_size: 14.0,
+                        layout_options: TextLayoutOptions::default(),
+                        clip: None,
+                    })),
+                }),
+            ],
+        };
+
+        test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 96.0,
+                height: 64.0,
+            },
+            vec![RenderNode::Layer(Box::new(text_leaf))],
+        )
+    }
+
+    fn translated_content_local_surface_root() -> LayerNode {
+        let effectful_text = text_layer_with_style(
+            AnnotatedString::from("shadow"),
+            TextStyle::from_span_style(SpanStyle {
+                shadow: Some(Shadow {
+                    color: Color::BLACK,
+                    offset: Point::new(1.0, 2.0),
+                    blur_radius: 3.0,
+                }),
+                ..SpanStyle::default()
+            }),
+        );
+
+        let translated_content = LayerNode {
+            node_id: Some(78),
+            local_bounds: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 96.0,
+                height: 64.0,
+            },
+            transform_to_parent: ProjectiveTransform::translation(14.25, 16.5),
+            motion_context_animated: false,
+            translated_content_context: true,
+            graphics_layer: GraphicsLayer::default(),
+            clip_to_bounds: false,
+            shadow_clip: None,
+            hit_test: None,
+            has_hit_targets: false,
+            isolation: IsolationReasons::default(),
+            cache_policy: CachePolicy::None,
+            cache_hashes: LayerRasterCacheHashes::default(),
+            cache_hashes_valid: false,
+            children: vec![RenderNode::Layer(Box::new(effectful_text))],
+        };
+
+        test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 160.0,
+                height: 120.0,
+            },
+            vec![RenderNode::Layer(Box::new(translated_content))],
         )
     }
 
@@ -6038,12 +6342,42 @@ mod tests {
         let requirements = layer_surface_requirements(&layer);
 
         assert_eq!(requirements.direct_translation, Some(Point::default()));
-        assert!(!requirements.reasons.text_local_surface);
         assert!(!requirements.reasons.has_any());
     }
 
     #[test]
-    fn layer_surface_requirements_mark_effectful_text_for_local_surface() {
+    fn layer_surface_requirements_keep_gradient_and_stroke_text_on_direct_path() {
+        let cases = [
+            (
+                "draw_style",
+                AnnotatedString::from("draw_style"),
+                TextStyle::from_span_style(SpanStyle {
+                    draw_style: Some(TextDrawStyle::Stroke { width: 2.0 }),
+                    ..SpanStyle::default()
+                }),
+            ),
+            (
+                "gradient_brush",
+                AnnotatedString::from("gradient"),
+                TextStyle::from_span_style(SpanStyle {
+                    brush: Some(Brush::linear_gradient(vec![Color::WHITE, Color::BLACK])),
+                    ..SpanStyle::default()
+                }),
+            ),
+        ];
+
+        for (label, text, text_style) in cases {
+            let layer = text_layer_with_style(text, text_style);
+            let requirements = layer_surface_requirements(&layer);
+            assert!(
+                !requirements.reasons.has_any(),
+                "{label} text should stay on the direct path: {requirements:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn layer_surface_requirements_keep_direct_text_effects_on_direct_path() {
         let cases = [
             (
                 "shadow",
@@ -6085,14 +6419,6 @@ mod tests {
                 }),
             ),
             (
-                "draw_style",
-                AnnotatedString::from("draw_style"),
-                TextStyle::from_span_style(SpanStyle {
-                    draw_style: Some(TextDrawStyle::Stroke { width: 2.0 }),
-                    ..SpanStyle::default()
-                }),
-            ),
-            (
                 "letter_spacing",
                 AnnotatedString::from("letter_spacing"),
                 TextStyle::from_span_style(SpanStyle {
@@ -6101,12 +6427,19 @@ mod tests {
                 }),
             ),
             (
-                "gradient_brush",
-                AnnotatedString::from("gradient"),
-                TextStyle::from_span_style(SpanStyle {
-                    brush: Some(Brush::linear_gradient(vec![Color::WHITE, Color::BLACK])),
-                    ..SpanStyle::default()
-                }),
+                "span_styles",
+                AnnotatedString {
+                    text: "styled".to_string(),
+                    span_styles: vec![RangeStyle {
+                        item: SpanStyle {
+                            color: Some(Color::BLACK),
+                            ..SpanStyle::default()
+                        },
+                        range: 0..3,
+                    }],
+                    ..AnnotatedString::default()
+                },
+                TextStyle::default(),
             ),
             (
                 "span_styles",
@@ -6129,12 +6462,13 @@ mod tests {
             let layer = text_layer_with_style(text, text_style);
             let requirements = layer_surface_requirements(&layer);
             assert!(
-                requirements.reasons.text_local_surface,
-                "{label} text should require a local surface: {requirements:?}"
+                !requirements.reasons.has_any(),
+                "{label} text should stay on the direct path: {requirements:?}"
             );
-            assert!(
-                requirements.reasons.has_renderer_forced_surface(),
-                "{label} text should count as a renderer-forced surface: {requirements:?}"
+            assert_eq!(
+                requirements.direct_translation,
+                Some(Point::default()),
+                "{label} text should still classify as a direct translation"
             );
         }
     }
@@ -6153,13 +6487,73 @@ mod tests {
 
         assert_eq!(requirements.direct_translation, Some(Point::default()));
         assert!(
-            !requirements.reasons.text_local_surface,
-            "decoration-only text should stay on the direct path: {requirements:?}"
-        );
-        assert!(
             !requirements.reasons.has_any(),
             "decoration-only text should not force any layer surface reasons: {requirements:?}"
         );
+    }
+
+    #[test]
+    fn direct_text_leaf_snaps_modifier_background_and_text_with_one_anchor() {
+        let root = snapped_text_leaf_root(false, false);
+        let mut rect_cache = HashMap::new();
+        let mut requirements_cache = HashMap::new();
+
+        let collected =
+            collect_layer_contents(&root, None, &mut rect_cache, &mut requirements_cache);
+
+        assert_eq!(collected.scene.shapes.len(), 1);
+        assert_eq!(collected.scene.texts.len(), 1);
+        let expected_anchor = Some(Point::new(14.25, 16.5));
+        assert_eq!(collected.scene.shapes[0].snap_anchor, expected_anchor);
+        assert_eq!(collected.scene.texts[0].snap_anchor, expected_anchor);
+    }
+
+    #[test]
+    fn animated_text_leaf_keeps_modifier_background_and_text_unsnapped() {
+        let root = snapped_text_leaf_root(true, true);
+        let mut rect_cache = HashMap::new();
+        let mut requirements_cache = HashMap::new();
+
+        let collected =
+            collect_layer_contents(&root, None, &mut rect_cache, &mut requirements_cache);
+
+        assert_eq!(collected.scene.shapes.len(), 1);
+        assert_eq!(collected.scene.texts.len(), 1);
+        assert_eq!(collected.scene.shapes[0].snap_anchor, None);
+        assert_eq!(collected.scene.texts[0].snap_anchor, None);
+    }
+
+    #[test]
+    fn translated_content_context_text_leaf_keeps_modifier_background_and_text_unsnapped() {
+        let root = snapped_text_leaf_root(false, true);
+        let mut rect_cache = HashMap::new();
+        let mut requirements_cache = HashMap::new();
+
+        let collected =
+            collect_layer_contents(&root, None, &mut rect_cache, &mut requirements_cache);
+
+        assert_eq!(collected.scene.shapes.len(), 1);
+        assert_eq!(collected.scene.texts.len(), 1);
+        assert_eq!(collected.scene.shapes[0].snap_anchor, None);
+        assert_eq!(collected.scene.texts[0].snap_anchor, None);
+    }
+
+    #[test]
+    fn translated_content_context_effectful_text_stays_direct_and_unsnapped() {
+        let root = translated_content_local_surface_root();
+        let mut rect_cache = HashMap::new();
+        let mut requirements_cache = HashMap::new();
+
+        let collected =
+            collect_layer_contents(&root, None, &mut rect_cache, &mut requirements_cache);
+
+        assert!(
+            collected.child_layers.is_empty(),
+            "translated-content effectful text should collapse into the direct scene"
+        );
+        assert_eq!(collected.scene.texts.len(), 1);
+        assert_eq!(collected.scene.texts[0].snap_anchor, None);
+        assert_eq!(collected.scene.shadow_draws.len(), 1);
     }
 
     #[test]
@@ -6271,19 +6665,54 @@ mod tests {
     }
 
     #[test]
+    fn direct_translation_accepts_nearly_identity_axis_scale_noise() {
+        let local_bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 393.3,
+            height: 16.8,
+        };
+        let quad = [
+            [10.0, 78.399_994],
+            [403.3, 78.399_994],
+            [10.0, 95.2],
+            [403.3, 95.2],
+        ];
+        let transform = ProjectiveTransform::from_rect_to_quad(local_bounds, quad);
+
+        assert_eq!(
+            direct_translation(transform),
+            Some(Point::new(10.0, 78.399_994)),
+        );
+    }
+
+    #[test]
     fn layer_surface_requirements_keep_shape_plus_isolating_child_as_mixed_content() {
-        let mut child = text_layer_with_style(
-            AnnotatedString::from("shadow"),
-            TextStyle::from_span_style(SpanStyle {
-                shadow: Some(Shadow {
-                    color: Color::BLACK,
-                    offset: Point::new(1.0, 2.0),
-                    blur_radius: 3.0,
+        let mut child = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 24.0,
+                height: 18.0,
+            },
+            vec![RenderNode::Primitive(PrimitiveEntry {
+                phase: PrimitivePhase::BeforeChildren,
+                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                    primitive: DrawPrimitive::Rect {
+                        rect: Rect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 24.0,
+                            height: 18.0,
+                        },
+                        brush: Brush::solid(Color::WHITE),
+                    },
+                    clip: None,
                 }),
-                ..SpanStyle::default()
-            }),
+            })],
         );
         child.transform_to_parent = ProjectiveTransform::translation(8.0, 6.0);
+        child.graphics_layer.render_effect = Some(RenderEffect::blur(2.0));
 
         let layer = test_layer(
             Rect {
@@ -6315,7 +6744,7 @@ mod tests {
         let requirements = layer_surface_requirements(&layer);
 
         assert!(requirements.reasons.mixed_direct_content);
-        assert!(requirements.reasons.has_any());
+        assert!(!requirements.reasons.has_any());
     }
 
     #[test]

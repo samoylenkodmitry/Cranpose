@@ -40,6 +40,7 @@ pub struct LayerNode {
     pub local_bounds: Rect,
     pub transform_to_parent: ProjectiveTransform,
     pub motion_context_animated: bool,
+    pub translated_content_context: bool,
     pub graphics_layer: GraphicsLayer,
     pub hit_test: Option<HitTestNode>,
     pub has_hit_targets: bool,
@@ -57,6 +58,7 @@ Important facts:
 
 - subtree motion is carried by `transform_to_parent`
 - active scroll/drag/fling ancestry is carried by `motion_context_animated`
+- translated-content ancestry is only active while scroll/lazy-scroll motion is active
 - interactive-subtree presence is carried by `has_hit_targets`
 - raster-cache hashes are lazy through `cache_hashes_valid`
 
@@ -83,6 +85,7 @@ The builder still:
 - turns placement plus `GraphicsLayer` into `transform_to_parent`
 - folds parent `content_offset` into child transforms
 - reads `ModifierNodeSlices::motion_context_animated()` from the UI modifier chain
+- reads `ModifierNodeSlices::translated_content_context()` from the UI modifier chain
 - resolves unspecified text under active motion ancestry to `TextMotion::Animated`
 - prepares `TextPrimitiveNode` during graph build
 
@@ -172,7 +175,6 @@ pub struct LayerSurfaceReasons {
     pub backdrop: bool,
     pub group_opacity: bool,
     pub blend_mode: bool,
-    pub text_local_surface: bool,
     pub immediate_shadow: bool,
     pub mixed_direct_content: bool,
     pub non_translation_transform: bool,
@@ -212,29 +214,24 @@ This collector:
 
 ## Text Policy
 
-Plain translation-only text stays on the direct path.
+Plain text, decoration-only text, shadow/background text, span-style text,
+gradient text, and stroke text all stay on the direct path.
 
-Text still forces a local surface for some effectful/styled cases:
+The direct-collapse path rebases `TextPrimitiveNode.rect` into parent space
+before emitting text/decorations, so collapsed underlined text no longer clips
+down to a tiny fragment.
 
-- span styles
-- shadow
-- background
-- baseline shift
-- text geometric transform
-- draw style
-- specified letter spacing
-- non-solid brush
+`push_text_style_draws(...)` no longer rounds static text rects in logical
+space. Scene-space text geometry stays unchanged; any remaining snap policy is
+render-time only through shared leaf snap anchors.
 
-Decoration-only text is direct again. The direct-collapse path now rebases
-`TextPrimitiveNode.rect` into parent space before emitting text/decorations, so
-collapsed underlined text no longer clips down to a tiny fragment.
+Unspecified text inside motion or translated-content ancestry resolves to
+`TextMotion::Animated` during graph build. Scroll and lazy-scroll modifiers now
+drive both flags from active drag/wheel/fling state instead of keeping
+translated-content context permanently enabled for an idle scrolled subtree.
 
-Unspecified text inside `motion_context_animated` subtrees is resolved to
-`TextMotion::Animated` during graph build, but that flag now tracks active
-motion, not mere scroll position. Idle scroll containers stay on the static
-path.
-
-The classifier and direct-collapse text rebasing live in
+The direct-path text policy lives in
+`crates/cranpose-render/wgpu/src/pipeline.rs` and
 `crates/cranpose-render/wgpu/src/render.rs`.
 
 ## Image Policy
@@ -258,6 +255,12 @@ cropping, or region diffing.
 
 This fixed the raw screenshot size mismatch between `main` and `renderer` for
 the micro contract.
+
+The translation robot does not compare direct text captures as raw pixels
+anymore. It box-downsamples normalized regions first, because glyphon currently
+uses grayscale mask text with subpixel-positioned cache bins, not LCD subpixel
+mask output. The contract now targets visible structural drift instead of
+subpixel AA phase noise.
 The current micro contract screenshot is pixel-identical to
 `docs/render-reference/main_renderer_micro_contract.png`.
 
@@ -280,6 +283,7 @@ Validated current branch behavior:
 - transformed hit testing uses exact quads and inverse transforms
 - translation-only wrappers with plain text do zero offscreen work
 - only active scroll motion resolves unspecified text to animated motion
+- idle scrolled text returns to the static crisp path instead of staying permanently animated
 - scrolling images use linear sampling while static images stay nearest
 - root direct rendering skips the old root offscreen for direct scenes
 - oversized Shaders-tab mixed-content isolates are guarded by a robot test

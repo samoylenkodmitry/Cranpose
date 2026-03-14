@@ -6,7 +6,7 @@ use cranpose_ui_graphics::{ColorFilter, GraphicsLayer, RenderEffect};
 
 use super::{ModifierChainHandle, Point};
 use crate::draw::DrawCommand;
-use crate::modifier::scroll::MotionContextAnimatedNode;
+use crate::modifier::scroll::{MotionContextAnimatedNode, TranslatedContentContextNode};
 use crate::modifier::Modifier;
 use crate::modifier_nodes::{
     BackgroundNode, ClipToBoundsNode, CornerShapeNode, DrawCommandNode, GraphicsLayerNode,
@@ -25,6 +25,7 @@ pub struct ModifierNodeSlices {
     click_handlers: Vec<Rc<dyn Fn(Point)>>,
     clip_to_bounds: bool,
     motion_context_animated: bool,
+    translated_content_context: bool,
     text_content: Option<Rc<crate::text::AnnotatedString>>,
     text_style: Option<TextStyle>,
     text_layout_options: Option<TextLayoutOptions>,
@@ -46,6 +47,7 @@ impl Clone for ModifierNodeSlices {
             click_handlers: self.click_handlers.clone(),
             clip_to_bounds: self.clip_to_bounds,
             motion_context_animated: self.motion_context_animated,
+            translated_content_context: self.translated_content_context,
             text_content: self.text_content.clone(),
             text_style: self.text_style.clone(),
             text_layout_options: self.text_layout_options,
@@ -144,6 +146,10 @@ impl ModifierNodeSlices {
         self.motion_context_animated
     }
 
+    pub fn translated_content_context(&self) -> bool {
+        self.translated_content_context
+    }
+
     pub fn text_content(&self) -> Option<&str> {
         self.text_content.as_ref().map(|a| a.text.as_str())
     }
@@ -235,6 +241,7 @@ impl ModifierNodeSlices {
         self.click_handlers.clear();
         self.clip_to_bounds = false;
         self.motion_context_animated = false;
+        self.translated_content_context = false;
         self.text_content = None;
         self.text_style = None;
         self.text_layout_options = None;
@@ -253,6 +260,10 @@ impl fmt::Debug for ModifierNodeSlices {
             .field("click_handlers", &self.click_handlers.len())
             .field("clip_to_bounds", &self.clip_to_bounds)
             .field("motion_context_animated", &self.motion_context_animated)
+            .field(
+                "translated_content_context",
+                &self.translated_content_context,
+            )
             .field("text_content", &self.text_content)
             .field("text_style", &self.text_style)
             .field("text_layout_options", &self.text_layout_options)
@@ -370,6 +381,12 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
 
                 if let Some(motion_context_node) = any.downcast_ref::<MotionContextAnimatedNode>() {
                     slices.motion_context_animated = motion_context_node.is_active();
+                }
+
+                if let Some(translated_content_node) =
+                    any.downcast_ref::<TranslatedContentContextNode>()
+                {
+                    slices.translated_content_context = translated_content_node.is_active();
                 }
 
                 if let Some(text_node) = any.downcast_ref::<TextModifierNode>() {

@@ -15,7 +15,7 @@ use crate::graph::{
 };
 use crate::layer_transform::layer_transform_to_parent;
 use crate::raster_cache::LayerRasterCacheHashes;
-use crate::style_shared::{combine_layers, primitives_for_placement, DrawPlacement};
+use crate::style_shared::{primitives_for_placement, DrawPlacement};
 
 const TEXT_CLIP_PAD: f32 = 1.0;
 
@@ -26,6 +26,7 @@ struct BuildNodeSnapshot {
     size: Size,
     content_offset: Point,
     motion_context_animated: bool,
+    translated_content_context: bool,
     measured_max_width: Option<f32>,
     resolved_modifiers: ResolvedModifiers,
     draw_commands: Vec<DrawCommand>,
@@ -46,6 +47,7 @@ struct SnapshotNodeData {
     pointer_inputs: Vec<Rc<dyn Fn(cranpose_foundation::PointerEvent)>>,
     clip_to_bounds: bool,
     motion_context_animated: bool,
+    translated_content_context: bool,
     annotated_text: Option<AnnotatedString>,
     text_style: Option<TextStyle>,
     text_layout_options: Option<TextLayoutOptions>,
@@ -73,8 +75,16 @@ pub fn build_graph_from_applier(
 
 fn build_layer_node(
     snapshot: BuildNodeSnapshot,
-    root_scale: f32,
+    _root_scale: f32,
     inherited_motion_context_animated: bool,
+) -> LayerNode {
+    build_layer_node_internal(snapshot, inherited_motion_context_animated, false)
+}
+
+fn build_layer_node_internal(
+    snapshot: BuildNodeSnapshot,
+    inherited_motion_context_animated: bool,
+    inherited_translated_content_context: bool,
 ) -> LayerNode {
     let BuildNodeSnapshot {
         node_id,
@@ -82,6 +92,7 @@ fn build_layer_node(
         size,
         content_offset,
         motion_context_animated,
+        translated_content_context,
         measured_max_width,
         resolved_modifiers,
         draw_commands,
@@ -100,16 +111,7 @@ fn build_layer_node(
         width: size.width,
         height: size.height,
     };
-    let mut graphics_layer = graphics_layer.unwrap_or_default();
-    if root_scale != 1.0 {
-        graphics_layer = combine_layers(
-            GraphicsLayer {
-                scale: root_scale,
-                ..GraphicsLayer::default()
-            },
-            Some(graphics_layer),
-        );
-    }
+    let graphics_layer = graphics_layer.unwrap_or_default();
     let transform_to_parent = layer_transform_to_parent(local_bounds, placement, &graphics_layer);
     let isolation = isolation_reasons(&graphics_layer);
     let cache_policy = if isolation.has_any() {
@@ -126,6 +128,8 @@ fn build_layer_node(
     });
 
     let node_motion_context_animated = inherited_motion_context_animated || motion_context_animated;
+    let node_translated_content_context =
+        inherited_translated_content_context || translated_content_context;
 
     let mut children = draw_nodes(
         &draw_commands,
@@ -142,6 +146,7 @@ fn build_layer_node(
         text_style: text_style.as_ref(),
         text_layout_options,
         inherited_motion_context_animated: node_motion_context_animated,
+        inherited_translated_content_context: node_translated_content_context,
     }) {
         children.push(RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
@@ -150,7 +155,11 @@ fn build_layer_node(
     }
     let child_motion_context_animated = node_motion_context_animated;
     for child in child_snapshots {
-        let mut child_layer = build_layer_node(child, 1.0, child_motion_context_animated);
+        let mut child_layer = build_layer_node_internal(
+            child,
+            child_motion_context_animated,
+            node_translated_content_context,
+        );
         if content_offset != Point::default() {
             child_layer.transform_to_parent =
                 child_layer
@@ -179,6 +188,7 @@ fn build_layer_node(
         local_bounds,
         transform_to_parent,
         motion_context_animated: node_motion_context_animated,
+        translated_content_context: node_translated_content_context,
         graphics_layer,
         clip_to_bounds,
         shadow_clip,
@@ -195,8 +205,22 @@ fn build_layer_node(
 fn build_layer_node_from_applier(
     applier: &mut MemoryApplier,
     node_id: NodeId,
-    root_scale: f32,
+    _root_scale: f32,
     inherited_motion_context_animated: bool,
+) -> Option<LayerNode> {
+    build_layer_node_from_applier_internal(
+        applier,
+        node_id,
+        inherited_motion_context_animated,
+        false,
+    )
+}
+
+fn build_layer_node_from_applier_internal(
+    applier: &mut MemoryApplier,
+    node_id: NodeId,
+    inherited_motion_context_animated: bool,
+    inherited_translated_content_context: bool,
 ) -> Option<LayerNode> {
     if let Ok(data) = applier.with_node::<LayoutNode, _>(node_id, |node| {
         let state = node.layout_state();
@@ -209,6 +233,7 @@ fn build_layer_node_from_applier(
             pointer_inputs: modifier_slices.pointer_inputs().to_vec(),
             clip_to_bounds: modifier_slices.clip_to_bounds(),
             motion_context_animated: modifier_slices.motion_context_animated(),
+            translated_content_context: modifier_slices.translated_content_context(),
             annotated_text: modifier_slices.annotated_string(),
             text_style: modifier_slices.text_style().cloned(),
             text_layout_options: modifier_slices.text_layout_options(),
@@ -221,8 +246,8 @@ fn build_layer_node_from_applier(
             applier,
             node_id,
             data,
-            root_scale,
             inherited_motion_context_animated,
+            inherited_translated_content_context,
         );
     }
 
@@ -237,6 +262,7 @@ fn build_layer_node_from_applier(
             pointer_inputs: modifier_slices.pointer_inputs().to_vec(),
             clip_to_bounds: modifier_slices.clip_to_bounds(),
             motion_context_animated: modifier_slices.motion_context_animated(),
+            translated_content_context: modifier_slices.translated_content_context(),
             annotated_text: modifier_slices.annotated_string(),
             text_style: modifier_slices.text_style().cloned(),
             text_layout_options: modifier_slices.text_layout_options(),
@@ -249,8 +275,8 @@ fn build_layer_node_from_applier(
             applier,
             node_id,
             data,
-            root_scale,
             inherited_motion_context_animated,
+            inherited_translated_content_context,
         );
     }
 
@@ -261,8 +287,8 @@ fn build_layer_node_from_data(
     applier: &mut MemoryApplier,
     node_id: NodeId,
     data: SnapshotNodeData,
-    root_scale: f32,
     inherited_motion_context_animated: bool,
+    inherited_translated_content_context: bool,
 ) -> Option<LayerNode> {
     let SnapshotNodeData {
         layout_state,
@@ -271,6 +297,7 @@ fn build_layer_node_from_data(
         pointer_inputs,
         clip_to_bounds,
         motion_context_animated,
+        translated_content_context,
         annotated_text,
         text_style,
         text_layout_options,
@@ -288,16 +315,7 @@ fn build_layer_node_from_data(
         width: layout_state.size.width,
         height: layout_state.size.height,
     };
-    let mut graphics_layer = graphics_layer.unwrap_or_default();
-    if root_scale != 1.0 {
-        graphics_layer = combine_layers(
-            GraphicsLayer {
-                scale: root_scale,
-                ..GraphicsLayer::default()
-            },
-            Some(graphics_layer),
-        );
-    }
+    let graphics_layer = graphics_layer.unwrap_or_default();
     let transform_to_parent =
         layer_transform_to_parent(local_bounds, layout_state.position, &graphics_layer);
     let isolation = isolation_reasons(&graphics_layer);
@@ -315,6 +333,8 @@ fn build_layer_node_from_data(
     });
 
     let node_motion_context_animated = inherited_motion_context_animated || motion_context_animated;
+    let node_translated_content_context =
+        inherited_translated_content_context || translated_content_context;
 
     let mut render_children = draw_nodes(
         &draw_commands,
@@ -335,6 +355,7 @@ fn build_layer_node_from_data(
         text_style: text_style.as_ref(),
         text_layout_options,
         inherited_motion_context_animated: node_motion_context_animated,
+        inherited_translated_content_context: node_translated_content_context,
     }) {
         render_children.push(RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
@@ -343,9 +364,12 @@ fn build_layer_node_from_data(
     }
     let child_motion_context_animated = node_motion_context_animated;
     for child_id in children {
-        let Some(mut child_layer) =
-            build_layer_node_from_applier(applier, child_id, 1.0, child_motion_context_animated)
-        else {
+        let Some(mut child_layer) = build_layer_node_from_applier_internal(
+            applier,
+            child_id,
+            child_motion_context_animated,
+            node_translated_content_context,
+        ) else {
             continue;
         };
         if layout_state.content_offset != Point::default() {
@@ -376,6 +400,7 @@ fn build_layer_node_from_data(
         local_bounds,
         transform_to_parent,
         motion_context_animated: node_motion_context_animated,
+        translated_content_context: node_translated_content_context,
         graphics_layer,
         clip_to_bounds,
         shadow_clip,
@@ -420,6 +445,7 @@ struct TextNodeParts<'a> {
     text_style: Option<&'a TextStyle>,
     text_layout_options: Option<TextLayoutOptions>,
     inherited_motion_context_animated: bool,
+    inherited_translated_content_context: bool,
 }
 
 fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
@@ -432,11 +458,14 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
         text_style,
         text_layout_options,
         inherited_motion_context_animated,
+        inherited_translated_content_context,
     } = parts;
     let value = annotated_text?;
     let default_text_style = TextStyle::default();
     let mut text_style = text_style.cloned().unwrap_or(default_text_style);
-    if inherited_motion_context_animated && text_style.paragraph_style.text_motion.is_none() {
+    if (inherited_motion_context_animated || inherited_translated_content_context)
+        && text_style.paragraph_style.text_motion.is_none()
+    {
         text_style.paragraph_style.text_motion = Some(cranpose_ui::text::TextMotion::Animated);
     }
     let options = text_layout_options.unwrap_or_default().normalized();
@@ -518,6 +547,7 @@ fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> Build
         },
         content_offset: node.content_offset,
         motion_context_animated: node.node_data.modifier_slices.motion_context_animated(),
+        translated_content_context: node.node_data.modifier_slices.translated_content_context(),
         measured_max_width: None,
         resolved_modifiers: node.node_data.resolved_modifiers,
         draw_commands: node.node_data.modifier_slices.draw_commands().to_vec(),
@@ -633,8 +663,10 @@ fn resolve_text_horizontal_offset(
 mod tests {
     use std::rc::Rc;
 
-    use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
-    use cranpose_ui::text::{AnnotatedString, BaselineShift, TextAlign, TextDirection, TextMotion};
+    use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope, LazyListState};
+    use cranpose_ui::text::{
+        AnnotatedString, BaselineShift, SpanStyle, TextAlign, TextDirection, TextMotion,
+    };
     use cranpose_ui::{
         Color, DrawCommand, LayoutEngine, LazyColumn, LazyColumnSpec, Modifier, Point, Rect,
         ResolvedModifiers, Size, Text, TextStyle,
@@ -687,6 +719,7 @@ mod tests {
             },
             content_offset: Point::default(),
             motion_context_animated: false,
+            translated_content_context: false,
             measured_max_width: None,
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![child_command],
@@ -709,6 +742,7 @@ mod tests {
             },
             content_offset: Point::default(),
             motion_context_animated: false,
+            translated_content_context: false,
             measured_max_width: None,
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -783,6 +817,7 @@ mod tests {
             },
             content_offset: Point::default(),
             motion_context_animated: false,
+            translated_content_context: false,
             measured_max_width: None,
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -805,6 +840,7 @@ mod tests {
             },
             content_offset: Point { x: 13.0, y: -9.0 },
             motion_context_animated: false,
+            translated_content_context: false,
             measured_max_width: None,
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -838,6 +874,7 @@ mod tests {
             },
             content_offset: Point::default(),
             motion_context_animated: false,
+            translated_content_context: false,
             measured_max_width: None,
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -882,6 +919,7 @@ mod tests {
             },
             content_offset: Point::default(),
             motion_context_animated: false,
+            translated_content_context: false,
             measured_max_width: None,
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![behind, overlay],
@@ -921,6 +959,7 @@ mod tests {
             },
             content_offset: Point::default(),
             motion_context_animated: false,
+            translated_content_context: false,
             measured_max_width: None,
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -945,6 +984,7 @@ mod tests {
             },
             content_offset: Point::default(),
             motion_context_animated: false,
+            translated_content_context: false,
             measured_max_width: None,
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -983,6 +1023,7 @@ mod tests {
             },
             content_offset: Point::default(),
             motion_context_animated: false,
+            translated_content_context: false,
             measured_max_width: None,
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -1028,6 +1069,7 @@ mod tests {
             },
             content_offset: Point::default(),
             motion_context_animated: false,
+            translated_content_context: false,
             measured_max_width: Some(180.0),
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -1070,7 +1112,7 @@ mod tests {
     }
 
     #[test]
-    fn stationary_content_offset_keeps_descendant_text_unspecified() {
+    fn translated_content_context_marks_descendant_text_as_animated() {
         let child = BuildNodeSnapshot {
             node_id: 2,
             placement: Point { x: 11.0, y: 7.0 },
@@ -1080,6 +1122,7 @@ mod tests {
             },
             content_offset: Point::default(),
             motion_context_animated: false,
+            translated_content_context: false,
             measured_max_width: Some(120.0),
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -1101,6 +1144,73 @@ mod tests {
             },
             content_offset: Point { x: 0.0, y: -18.5 },
             motion_context_animated: false,
+            translated_content_context: true,
+            measured_max_width: None,
+            resolved_modifiers: ResolvedModifiers::default(),
+            draw_commands: vec![],
+            click_actions: vec![],
+            pointer_inputs: vec![],
+            clip_to_bounds: false,
+            annotated_text: None,
+            text_style: None,
+            text_layout_options: None,
+            graphics_layer: None,
+            children: vec![child],
+        };
+
+        let graph = build_layer_node(parent, 1.0, false);
+        let RenderNode::Layer(child_layer) = &graph.children[0] else {
+            panic!("expected child layer");
+        };
+        let RenderNode::Primitive(text_primitive) = &child_layer.children[0] else {
+            panic!("expected text primitive");
+        };
+        let PrimitiveNode::Text(text) = &text_primitive.node else {
+            panic!("expected text primitive");
+        };
+
+        assert_eq!(
+            text.text_style.paragraph_style.text_motion,
+            Some(TextMotion::Animated),
+            "translated content context must resolve descendant text to animated motion"
+        );
+        assert!(!child_layer.motion_context_animated);
+    }
+
+    #[test]
+    fn content_offset_without_translated_context_keeps_descendant_text_unspecified() {
+        let child = BuildNodeSnapshot {
+            node_id: 2,
+            placement: Point { x: 11.0, y: 7.0 },
+            size: Size {
+                width: 120.0,
+                height: 32.0,
+            },
+            content_offset: Point::default(),
+            motion_context_animated: false,
+            translated_content_context: false,
+            measured_max_width: Some(120.0),
+            resolved_modifiers: ResolvedModifiers::default(),
+            draw_commands: vec![],
+            click_actions: vec![],
+            pointer_inputs: vec![],
+            clip_to_bounds: false,
+            annotated_text: Some(AnnotatedString::from("scrolling")),
+            text_style: Some(TextStyle::default()),
+            text_layout_options: None,
+            graphics_layer: None,
+            children: vec![],
+        };
+        let parent = BuildNodeSnapshot {
+            node_id: 1,
+            placement: Point::default(),
+            size: Size {
+                width: 160.0,
+                height: 64.0,
+            },
+            content_offset: Point { x: 0.0, y: -18.0 },
+            motion_context_animated: false,
+            translated_content_context: false,
             measured_max_width: None,
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -1127,9 +1237,81 @@ mod tests {
 
         assert_eq!(
             text.text_style.paragraph_style.text_motion, None,
-            "nonzero content offset without active motion must keep text motion unspecified"
+            "content_offset alone must not force text onto the translated-content motion path"
         );
         assert!(!child_layer.motion_context_animated);
+    }
+
+    #[test]
+    fn translated_content_context_marks_effectful_text_as_animated() {
+        let child = BuildNodeSnapshot {
+            node_id: 2,
+            placement: Point { x: 11.0, y: 7.0 },
+            size: Size {
+                width: 120.0,
+                height: 32.0,
+            },
+            content_offset: Point::default(),
+            motion_context_animated: false,
+            translated_content_context: false,
+            measured_max_width: Some(120.0),
+            resolved_modifiers: ResolvedModifiers::default(),
+            draw_commands: vec![],
+            click_actions: vec![],
+            pointer_inputs: vec![],
+            clip_to_bounds: false,
+            annotated_text: Some(AnnotatedString::from("shadow")),
+            text_style: Some(TextStyle::from_span_style(SpanStyle {
+                shadow: Some(cranpose_ui::text::Shadow {
+                    color: Color::BLACK,
+                    offset: Point::new(1.0, 2.0),
+                    blur_radius: 3.0,
+                }),
+                ..SpanStyle::default()
+            })),
+            text_layout_options: None,
+            graphics_layer: None,
+            children: vec![],
+        };
+        let parent = BuildNodeSnapshot {
+            node_id: 1,
+            placement: Point::default(),
+            size: Size {
+                width: 160.0,
+                height: 64.0,
+            },
+            content_offset: Point { x: 0.0, y: -18.5 },
+            motion_context_animated: false,
+            translated_content_context: true,
+            measured_max_width: None,
+            resolved_modifiers: ResolvedModifiers::default(),
+            draw_commands: vec![],
+            click_actions: vec![],
+            pointer_inputs: vec![],
+            clip_to_bounds: false,
+            annotated_text: None,
+            text_style: None,
+            text_layout_options: None,
+            graphics_layer: None,
+            children: vec![child],
+        };
+
+        let graph = build_layer_node(parent, 1.0, false);
+        let RenderNode::Layer(child_layer) = &graph.children[0] else {
+            panic!("expected child layer");
+        };
+        let RenderNode::Primitive(text_primitive) = &child_layer.children[0] else {
+            panic!("expected text primitive");
+        };
+        let PrimitiveNode::Text(text) = &text_primitive.node else {
+            panic!("expected text primitive");
+        };
+
+        assert_eq!(
+            text.text_style.paragraph_style.text_motion,
+            Some(TextMotion::Animated),
+            "translated content context should keep effectful text on the same animated motion path as plain translated text"
+        );
     }
 
     #[test]
@@ -1143,6 +1325,7 @@ mod tests {
             },
             content_offset: Point::default(),
             motion_context_animated: false,
+            translated_content_context: false,
             measured_max_width: Some(120.0),
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -1164,6 +1347,7 @@ mod tests {
             },
             content_offset: Point::default(),
             motion_context_animated: true,
+            translated_content_context: false,
             measured_max_width: None,
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -1198,7 +1382,7 @@ mod tests {
     }
 
     #[test]
-    fn lazy_column_item_text_stays_unspecified_at_idle() {
+    fn lazy_column_item_text_resolves_to_animated_at_origin() {
         let mut composition = cranpose_ui::run_test_composition(|| {
             let list_state = remember_lazy_list_state();
             LazyColumn(
@@ -1231,8 +1415,73 @@ mod tests {
 
         assert_eq!(
             find_text_motion(&graph.root, "LazyMotion"),
-            Some(None),
-            "lazy column item text should stay unspecified while the lazy scroll modifier is idle"
+            Some(Some(TextMotion::Animated)),
+            "lazy column item text should stay on the translated-content animated policy even at origin"
+        );
+    }
+
+    #[test]
+    fn scrolled_lazy_column_item_text_resolves_to_animated_at_rest() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let state_holder: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
+        let state_holder_for_comp = state_holder.clone();
+        let mut composition = cranpose_ui::run_test_composition(move || {
+            let list_state = remember_lazy_list_state();
+            *state_holder_for_comp.borrow_mut() = Some(list_state);
+            LazyColumn(
+                Modifier::empty().height(120.0),
+                list_state,
+                LazyColumnSpec::default(),
+                |scope| {
+                    scope.items(
+                        8,
+                        None::<fn(usize) -> u64>,
+                        None::<fn(usize) -> u64>,
+                        |index| {
+                            Text(
+                                format!("LazyMotion {index}"),
+                                Modifier::empty().padding(4.0),
+                                TextStyle::default(),
+                            );
+                        },
+                    );
+                },
+            );
+        });
+
+        let list_state = state_holder
+            .borrow()
+            .clone()
+            .expect("lazy list state should be captured");
+        list_state.scroll_to_item(3, 0.0);
+
+        let root = composition.root().expect("lazy column root");
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        let _ = applier
+            .compute_layout(
+                root,
+                Size {
+                    width: 240.0,
+                    height: 240.0,
+                },
+            )
+            .expect("lazy column layout");
+        let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("lazy column graph");
+        applier.clear_runtime_handle();
+
+        let first_index = list_state.first_visible_item_index();
+        assert!(
+            first_index > 0,
+            "lazy list should move away from origin before graph building, observed first_index={first_index}"
+        );
+        assert_eq!(
+            find_text_motion(&graph.root, &format!("LazyMotion {first_index}")),
+            Some(Some(TextMotion::Animated)),
+            "lazy column item text should resolve to animated motion once the list is scrolled away from origin"
         );
     }
 
@@ -1247,6 +1496,7 @@ mod tests {
             },
             content_offset: Point::default(),
             motion_context_animated: false,
+            translated_content_context: false,
             measured_max_width: Some(120.0),
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -1273,6 +1523,7 @@ mod tests {
             },
             content_offset: Point { x: 0.0, y: -18.5 },
             motion_context_animated: false,
+            translated_content_context: true,
             measured_max_width: None,
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],

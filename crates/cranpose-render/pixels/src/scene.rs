@@ -4,12 +4,13 @@ use cranpose_core::NodeId;
 pub use cranpose_render_common::graph_scene::{ClickAction, HitRegion, Scene};
 use cranpose_ui::{TextLayoutOptions, TextStyle};
 use cranpose_ui_graphics::{
-    BlendMode, Brush, Color, ColorFilter, ImageBitmap, Rect, RoundedCornerShape,
+    BlendMode, Brush, Color, ColorFilter, ImageBitmap, Point, Rect, RoundedCornerShape,
 };
 
 #[derive(Clone)]
 pub(crate) struct DrawShape {
     pub rect: Rect,
+    pub snap_anchor: Option<Point>,
     pub brush: Brush,
     pub shape: Option<RoundedCornerShape>,
     pub z_index: usize,
@@ -21,6 +22,7 @@ pub(crate) struct DrawShape {
 pub(crate) struct TextDraw {
     pub node_id: NodeId,
     pub rect: Rect,
+    pub snap_anchor: Option<Point>,
     pub text: Rc<cranpose_ui::text::AnnotatedString>,
     pub color: Color,
     pub text_style: TextStyle,
@@ -34,6 +36,7 @@ pub(crate) struct TextDraw {
 #[derive(Clone)]
 pub(crate) struct ImageDraw {
     pub rect: Rect,
+    pub snap_anchor: Option<Point>,
     pub image: ImageBitmap,
     pub alpha: f32,
     pub color_filter: Option<ColorFilter>,
@@ -73,6 +76,7 @@ impl RasterScene {
         self.next_z += 1;
         self.shapes.push(DrawShape {
             rect,
+            snap_anchor: None,
             brush,
             shape,
             z_index,
@@ -112,6 +116,7 @@ impl RasterScene {
         self.next_z += 1;
         self.images.push(ImageDraw {
             rect,
+            snap_anchor: None,
             image,
             alpha: alpha.clamp(0.0, 1.0),
             color_filter,
@@ -140,6 +145,7 @@ impl RasterScene {
         self.texts.push(TextDraw {
             node_id,
             rect,
+            snap_anchor: None,
             text,
             color,
             text_style,

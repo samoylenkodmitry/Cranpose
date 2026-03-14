@@ -35,6 +35,7 @@ fn finish_hash(write: impl FnOnce(&mut DefaultHasher)) -> u64 {
 fn hash_layer_target_content<H: Hasher>(layer: &LayerNode, state: &mut H) {
     layer.local_bounds.render_hash().hash(state);
     layer.motion_context_animated.hash(state);
+    layer.translated_content_context.hash(state);
     hash_optional_rect(layer.clip_rect(), state);
     let isolation = effective_layer_isolation(&layer.graphics_layer);
     let content_layer = layer_for_content(&layer.graphics_layer, isolation.as_ref());
@@ -59,6 +60,7 @@ fn hash_layer_target_content<H: Hasher>(layer: &LayerNode, state: &mut H) {
 fn hash_child_layer_contribution<H: Hasher>(layer: &LayerNode, state: &mut H) {
     hash_projective_transform(layer.transform_to_parent, state);
     layer.motion_context_animated.hash(state);
+    layer.translated_content_context.hash(state);
     hash_optional_rect(layer.shadow_clip, state);
     hash_child_shadow_state(layer, state);
     hash_optional_render_effect_to(layer.effect(), state);

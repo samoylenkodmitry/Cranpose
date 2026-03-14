@@ -592,7 +592,13 @@ impl LayoutNode {
     }
 
     pub fn modifier_slices_snapshot(&self) -> Rc<ModifierNodeSlices> {
-        self.modifier_slices_snapshot.borrow().clone()
+        use crate::modifier::collect_modifier_slices_into;
+
+        let mut buffer = self.modifier_slices_buffer.borrow_mut();
+        collect_modifier_slices_into(self.modifier_chain.chain(), &mut buffer);
+        let snapshot = Rc::new(buffer.clone());
+        *self.modifier_slices_snapshot.borrow_mut() = snapshot.clone();
+        snapshot
     }
 
     // ═══════════════════════════════════════════════════════════════════════

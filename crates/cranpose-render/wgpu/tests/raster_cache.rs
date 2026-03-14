@@ -21,6 +21,7 @@ fn test_layer(
         local_bounds,
         transform_to_parent,
         motion_context_animated: false,
+        translated_content_context: false,
         graphics_layer: GraphicsLayer::default(),
         clip_to_bounds: false,
         shadow_clip: None,

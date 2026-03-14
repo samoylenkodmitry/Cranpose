@@ -506,6 +506,7 @@ impl SubcomposeLayoutNode {
 
     /// Returns the modifier slices snapshot for rendering.
     pub fn modifier_slices_snapshot(&self) -> Rc<ModifierNodeSlices> {
+        self.update_modifier_slices_cache();
         self.modifier_slices_snapshot.borrow().clone()
     }
 
