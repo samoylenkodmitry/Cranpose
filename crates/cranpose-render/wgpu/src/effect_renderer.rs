@@ -565,7 +565,7 @@ impl EffectRenderer {
             ..Default::default()
         });
         Self {
-            offscreen_pool: OffscreenPool::new(surface_format),
+            offscreen_pool: OffscreenPool::new(device, surface_format),
             shader_cache: ShaderPipelineCache::new(),
             blur_pipeline,
             blur_uniform_buffer_horizontal,

@@ -78,7 +78,10 @@ fn verify_text_drag_release_contract(robot: &cranpose::Robot) {
             .expect("drag move");
         std::thread::sleep(Duration::from_millis(24));
     }
-    let drag_end = (drag_center.0, drag_center.1 + per_step_y * drag_steps as f32);
+    let drag_end = (
+        drag_center.0,
+        drag_center.1 + per_step_y * drag_steps as f32,
+    );
     std::thread::sleep(Duration::from_millis(70));
     robot
         .mouse_move(drag_end.0, drag_end.1)
@@ -165,8 +168,7 @@ fn verify_lazy_list_translation_contract(robot: &cranpose::Robot) {
     let item_label = format!("Item #{target_index}");
     let hello_label = format!("Hello #{target_index}");
     let before_item_bounds = find_bounds_by_text(robot, &item_label).expect("item label before");
-    let before_hello_bounds =
-        find_bounds_by_text(robot, &hello_label).expect("hello label before");
+    let before_hello_bounds = find_bounds_by_text(robot, &hello_label).expect("hello label before");
     let before_shot = capture_screenshot(robot).expect("lazy screenshot before scroll");
 
     scroll_at(robot, center(before_region.row_bounds), LAZY_SCROLL_DELTA_Y);
@@ -177,8 +179,7 @@ fn verify_lazy_list_translation_contract(robot: &cranpose::Robot) {
     let after_shot = capture_screenshot(robot).expect("lazy screenshot after scroll");
     println!(
         "  lazy_item before_row={:?} after_row={:?}",
-        before_region.row_bounds,
-        after_region.row_bounds,
+        before_region.row_bounds, after_region.row_bounds,
     );
 
     let delta_y = before_region.row_bounds.1 - after_region.row_bounds.1;
@@ -235,7 +236,10 @@ fn verify_lazy_list_drag_release_contract(robot: &cranpose::Robot) {
             .expect("drag lazy list");
         std::thread::sleep(Duration::from_millis(24));
     }
-    let drag_end = (drag_center.0, drag_center.1 + per_step_y * drag_steps as f32);
+    let drag_end = (
+        drag_center.0,
+        drag_center.1 + per_step_y * drag_steps as f32,
+    );
     std::thread::sleep(Duration::from_millis(70));
     robot
         .mouse_move(drag_end.0, drag_end.1)

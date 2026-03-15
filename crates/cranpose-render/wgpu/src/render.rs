@@ -682,6 +682,9 @@ struct ChildLayerComposite<'a> {
     logical_rect: Rect,
     dest_quad: [[f32; 2]; 4],
     backdrop_rect: Rect,
+    /// Inherited clip from the parent's `clip_to_bounds` / `visual_clip`.
+    /// Used to exclude off-screen child layers from surface bounds computation.
+    visual_clip: Option<Rect>,
     shadow_draws: Vec<ShadowDraw>,
     needs_nested_underlay: bool,
     translated_snap_anchor: Option<SnapAnchor>,
@@ -704,25 +707,47 @@ fn layer_cache_key(layer: &LayerNode) -> usize {
     layer as *const LayerNode as usize
 }
 
+/// Returns the visible portion of `rect` after applying an optional clip.
+///
+/// Draw commands carry clip rects from `clip_to_bounds` modifiers (scroll
+/// containers, clipped boxes, etc.).  Content outside the clip is invisible
+/// and must not inflate surface bounds.
+fn visible_draw_rect(rect: Rect, clip: Option<Rect>) -> Option<Rect> {
+    match clip {
+        Some(clip) => rect.intersect(clip),
+        None => Some(rect),
+    }
+}
+
 fn scene_bounds(scene: &CompositorScene) -> Option<Rect> {
     let mut bounds = None;
     for shape in &scene.shapes {
-        bounds = union_rect(bounds, shape.rect);
+        if let Some(visible) = visible_draw_rect(shape.rect, shape.clip) {
+            bounds = union_rect(bounds, visible);
+        }
     }
     for image in &scene.images {
-        bounds = union_rect(bounds, image.rect);
+        if let Some(visible) = visible_draw_rect(image.rect, image.clip) {
+            bounds = union_rect(bounds, visible);
+        }
     }
     for text in &scene.texts {
-        bounds = union_rect(bounds, text.rect);
+        if let Some(visible) = visible_draw_rect(text.rect, text.clip) {
+            bounds = union_rect(bounds, visible);
+        }
     }
     if let Some(shadow_bounds) = shadow_draws_bounds(&scene.shadow_draws) {
         bounds = union_rect(bounds, shadow_bounds);
     }
     for layer in &scene.effect_layers {
-        bounds = union_rect(bounds, layer.rect);
+        if let Some(visible) = visible_draw_rect(layer.rect, layer.clip) {
+            bounds = union_rect(bounds, visible);
+        }
     }
     for layer in &scene.backdrop_layers {
-        bounds = union_rect(bounds, layer.rect);
+        if let Some(visible) = visible_draw_rect(layer.rect, layer.clip) {
+            bounds = union_rect(bounds, visible);
+        }
     }
     bounds
 }
@@ -767,10 +792,10 @@ fn layer_contains_descendant_backdrop(layer: &LayerNode) -> bool {
     })
 }
 
-fn surface_target_size(rect: Rect, root_scale: f32) -> (u32, u32) {
+fn surface_target_size(rect: Rect, root_scale: f32, max_dim: u32) -> (u32, u32) {
     (
-        (rect.width * root_scale).ceil().max(1.0) as u32,
-        (rect.height * root_scale).ceil().max(1.0) as u32,
+        (rect.width * root_scale).ceil().clamp(1.0, max_dim as f32) as u32,
+        (rect.height * root_scale).ceil().clamp(1.0, max_dim as f32) as u32,
     )
 }
 
@@ -880,10 +905,7 @@ fn rigid_snap_anchor(
     Some(SnapAnchor::rigid(Point::new(mapped.x, mapped.y)))
 }
 
-fn translated_content_snap_anchor(
-    layer_bounds: Rect,
-    layer: &GraphicsLayer,
-) -> Option<SnapAnchor> {
+fn translated_content_snap_anchor(layer_bounds: Rect, layer: &GraphicsLayer) -> Option<SnapAnchor> {
     if !graphics_layer_supports_rigid_snap(layer) {
         return None;
     }
@@ -899,12 +921,12 @@ fn snap_delta_for_anchor(anchor: SnapAnchor, root_scale: f32) -> Point {
     if !root_scale.is_finite() || root_scale <= 0.0 {
         return Point::default();
     }
-    let device_pixel_step = if anchor.device_pixel_step.is_finite() && anchor.device_pixel_step > 0.0
-    {
-        anchor.device_pixel_step
-    } else {
-        1.0
-    };
+    let device_pixel_step =
+        if anchor.device_pixel_step.is_finite() && anchor.device_pixel_step > 0.0 {
+            anchor.device_pixel_step
+        } else {
+            1.0
+        };
     Point::new(
         ((anchor.origin.x * root_scale) / device_pixel_step).round() * device_pixel_step
             / root_scale
@@ -1402,6 +1424,7 @@ fn collect_layer_contents_into<'a>(
                             .map_rect(child_layer.local_bounds),
                         layer_offset,
                     )),
+                    visual_clip,
                     shadow_draws: shadow_scene.shadow_draws,
                     needs_nested_underlay: layer_contains_descendant_backdrop(child_layer.as_ref()),
                     translated_snap_anchor: if child_requirements.reasons.text_local_surface {
@@ -1476,7 +1499,10 @@ fn estimate_layer_surface_rect_cached(
     );
     let mut bounds = scene_bounds(&collected.scene);
     for child in &collected.child_layers {
-        bounds = union_rect(bounds, quad_bounds(child.dest_quad));
+        let child_bounds = quad_bounds(child.dest_quad);
+        if let Some(visible) = visible_draw_rect(child_bounds, child.visual_clip) {
+            bounds = union_rect(bounds, visible);
+        }
         if let Some(shadow_bounds) = shadow_draws_bounds(&child.shadow_draws) {
             bounds = union_rect(bounds, shadow_bounds);
         }
@@ -1506,7 +1532,7 @@ fn layer_raster_cache_candidate(
     }
 
     let logical_rect = estimate_layer_surface_rect(layer);
-    let pixel_size = surface_target_size(logical_rect, root_scale);
+    let pixel_size = surface_target_size(logical_rect, root_scale, u32::MAX);
     Some((
         LayerRasterCacheKey::new(
             layer.node_id,
@@ -2037,6 +2063,10 @@ impl GpuRenderer {
 
     /// Acquire an offscreen target from the pool with stats tracking.
     /// Uses split borrows to avoid conflicting borrows on self.
+    fn max_texture_dim(&self) -> u32 {
+        self.effect_renderer.offscreen_pool.max_texture_dim()
+    }
+
     fn acquire_offscreen(&mut self, width: u32, height: u32) -> OffscreenTarget {
         self.effect_renderer.offscreen_pool.acquire(
             &self.device,
@@ -2155,7 +2185,7 @@ impl GpuRenderer {
                 &mut self.layer_surface_requirements_cache,
             )
         });
-        let pixel_size = surface_target_size(logical_rect, root_scale);
+        let pixel_size = surface_target_size(logical_rect, root_scale, self.max_texture_dim());
         Some((
             LayerRasterCacheKey::new(
                 layer.node_id,
@@ -2371,8 +2401,24 @@ impl GpuRenderer {
                 );
             }
         }
-        let root_surface =
-            self.render_layer_surface(text_state, &graph.root, root_scale, None, false, None)?;
+        // The root layer's visible area is always the viewport — content
+        // outside the screen is invisible regardless of scroll offsets or
+        // inflated scene bounds.  Pass the viewport rect as an explicit
+        // surface rect to prevent offscreen inflation on constrained GPUs.
+        let viewport_rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: width as f32 / root_scale,
+            height: height as f32 / root_scale,
+        };
+        let root_surface = self.render_layer_surface(
+            text_state,
+            &graph.root,
+            root_scale,
+            None,
+            false,
+            Some(viewport_rect),
+        )?;
         let root_quad = graph
             .root
             .transform_to_parent
@@ -2627,7 +2673,8 @@ impl GpuRenderer {
         child_dest_quad: [[f32; 2]; 4],
         root_scale: f32,
     ) -> OffscreenTarget {
-        let (width, height) = surface_target_size(child_logical_rect, root_scale);
+        let (width, height) =
+            surface_target_size(child_logical_rect, root_scale, self.max_texture_dim());
         let underlay = self.acquire_offscreen(width, height);
         let child_source_rect = Rect {
             x: 0.0,
@@ -2815,7 +2862,10 @@ impl GpuRenderer {
             .unwrap_or_else(|| {
                 let mut bounds = scene_bounds(&local_scene);
                 for child in &child_layers {
-                    bounds = union_rect(bounds, quad_bounds(child.dest_quad));
+                    let child_bounds = quad_bounds(child.dest_quad);
+                    if let Some(visible) = visible_draw_rect(child_bounds, child.visual_clip) {
+                        bounds = union_rect(bounds, visible);
+                    }
                     if let Some(shadow_bounds) = shadow_draws_bounds(&child.shadow_draws) {
                         bounds = union_rect(bounds, shadow_bounds);
                     }
@@ -2839,7 +2889,15 @@ impl GpuRenderer {
             child.shadow_draws.translate_by(shift);
         }
 
-        let (width, height) = surface_target_size(surface_rect, target_scale);
+        // Reduce target_scale if needed so both pixel dimensions fit within
+        // max_texture_dimension_2d.  This preserves aspect ratio and avoids
+        // scissor-rect-out-of-bounds on WebGL2 (max 2048).
+        let max_dim = self.max_texture_dim() as f32;
+        let target_scale = target_scale
+            .min(max_dim / surface_rect.width.max(1.0))
+            .min(max_dim / surface_rect.height.max(1.0));
+        let (width, height) =
+            surface_target_size(surface_rect, target_scale, self.max_texture_dim());
         let surface_requirements =
             layer_surface_requirements_cached(layer, &mut self.layer_surface_requirements_cache);
         self.frame_stats.record_isolated_layer_render(
@@ -2974,18 +3032,18 @@ impl GpuRenderer {
                 &local_scene.shapes,
                 &local_scene.images,
                 &local_scene.texts,
-                    &local_scene.shadow_draws,
-                    &local_scene.effect_layers,
-                    &local_scene.backdrop_layers,
-                    cursor_z,
-                    local_scene.next_z,
-                    None,
-                    width,
-                    height,
-                    target_scale,
-                    backdrop_underlay,
-                    next_load_op,
-                )?;
+                &local_scene.shadow_draws,
+                &local_scene.effect_layers,
+                &local_scene.backdrop_layers,
+                cursor_z,
+                local_scene.next_z,
+                None,
+                width,
+                height,
+                target_scale,
+                backdrop_underlay,
+                next_load_op,
+            )?;
         } else if matches!(next_load_op, wgpu::LoadOp::Clear(_)) {
             self.clear_target_view_with_load_op(&target.view, next_load_op);
         }
@@ -3895,7 +3953,8 @@ impl GpuRenderer {
         else {
             return Ok(());
         };
-        let (effect_width, effect_height) = surface_target_size(layer.rect, root_scale);
+        let (effect_width, effect_height) =
+            surface_target_size(layer.rect, root_scale, self.max_texture_dim());
         let window_scene = build_scene_window(
             SceneWindowSource {
                 shapes,
@@ -4062,7 +4121,8 @@ impl GpuRenderer {
         else {
             return Ok(());
         };
-        let (backdrop_width, backdrop_height) = surface_target_size(layer.rect, root_scale);
+        let (backdrop_width, backdrop_height) =
+            surface_target_size(layer.rect, root_scale, self.max_texture_dim());
         let snapshot = self.acquire_offscreen(backdrop_width, backdrop_height);
         if let Some(underlay) = backdrop_underlay {
             self.copy_surface_region_to_view(
@@ -5619,21 +5679,19 @@ fn text_bounds_for_clip(
     width: u32,
     height: u32,
 ) -> Option<TextBounds> {
-    let viewport = Rect {
-        x: 0.0,
-        y: 0.0,
-        width: width as f32,
-        height: height as f32,
+    let (left, top, right, bottom) = match clip {
+        Some(clip_rect) => (
+            (clip_rect.x * root_scale).floor().max(0.0),
+            (clip_rect.y * root_scale).floor().max(0.0),
+            ((clip_rect.x + clip_rect.width) * root_scale)
+                .ceil()
+                .min(width as f32),
+            ((clip_rect.y + clip_rect.height) * root_scale)
+                .ceil()
+                .min(height as f32),
+        ),
+        None => (0.0, 0.0, width as f32, height as f32),
     };
-    let clipped = match clip {
-        Some(clip_rect) => clip_rect.intersect(viewport)?,
-        None => viewport,
-    };
-
-    let left = (clipped.x * root_scale).floor();
-    let top = (clipped.y * root_scale).floor();
-    let right = ((clipped.x + clipped.width) * root_scale).ceil();
-    let bottom = ((clipped.y + clipped.height) * root_scale).ceil();
 
     if !(left.is_finite() && top.is_finite() && right.is_finite() && bottom.is_finite()) {
         return None;
@@ -6165,6 +6223,197 @@ mod tests {
     }
 
     #[test]
+    fn text_bounds_for_clip_clamps_to_render_target() {
+        // Clip extends beyond the render target — bounds must not exceed target dimensions.
+        let clip = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 900.0,
+            height: 600.0,
+        };
+        let bounds = text_bounds_for_clip(Some(clip), 2.0, 1229, 815).expect("bounds");
+        assert_eq!(bounds.left, 0);
+        assert_eq!(bounds.top, 0);
+        // Without clamping, right would be ceil(900*2)=1800 which exceeds width 1229.
+        assert!(bounds.right <= 1229);
+        assert!(bounds.bottom <= 815);
+    }
+
+    #[test]
+    fn text_bounds_for_clip_none_uses_render_target_size() {
+        let bounds = text_bounds_for_clip(None, 2.0, 1229, 815).expect("bounds");
+        assert_eq!(bounds.left, 0);
+        assert_eq!(bounds.top, 0);
+        // No-clip case: bounds must equal exactly the render target dimensions.
+        assert_eq!(bounds.right, 1229);
+        assert_eq!(bounds.bottom, 815);
+    }
+
+    #[test]
+    fn visible_draw_rect_no_clip_returns_original() {
+        let rect = Rect {
+            x: 100.0,
+            y: 200.0,
+            width: 300.0,
+            height: 400.0,
+        };
+        assert_eq!(visible_draw_rect(rect, None), Some(rect));
+    }
+
+    #[test]
+    fn visible_draw_rect_with_clip_intersects() {
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 2000.0,
+            height: 5000.0,
+        };
+        let clip = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        };
+        let visible = visible_draw_rect(rect, Some(clip)).expect("should have visible area");
+        assert_eq!(visible.width, 800.0);
+        assert_eq!(visible.height, 600.0);
+    }
+
+    #[test]
+    fn visible_draw_rect_fully_clipped_returns_none() {
+        let rect = Rect {
+            x: 1000.0,
+            y: 1000.0,
+            width: 200.0,
+            height: 200.0,
+        };
+        let clip = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        };
+        assert!(visible_draw_rect(rect, Some(clip)).is_none());
+    }
+
+    #[test]
+    fn scene_bounds_respects_clip_on_shapes() {
+        let mut scene = CompositorScene::new();
+        // Shape inside viewport — visible
+        scene.shapes.push(DrawShape {
+            rect: Rect {
+                x: 10.0,
+                y: 10.0,
+                width: 100.0,
+                height: 50.0,
+            },
+            clip: Some(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 800.0,
+                height: 600.0,
+            }),
+            ..test_shape(0, BlendMode::SrcOver)
+        });
+        // Shape far outside viewport — clipped away entirely
+        scene.shapes.push(DrawShape {
+            rect: Rect {
+                x: 0.0,
+                y: 3000.0,
+                width: 100.0,
+                height: 50.0,
+            },
+            clip: Some(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 800.0,
+                height: 600.0,
+            }),
+            ..test_shape(1, BlendMode::SrcOver)
+        });
+        let bounds = scene_bounds(&scene).expect("should have bounds");
+        // Bounds should only cover the first shape's visible area,
+        // NOT extend to y=3050 from the clipped second shape.
+        assert!(bounds.y + bounds.height <= 600.0);
+    }
+
+    #[test]
+    fn scene_bounds_scroll_content_clipped_to_viewport() {
+        // Simulates a scroll container: many items with large y offsets,
+        // all clipped to a viewport-sized clip rect.
+        let mut scene = CompositorScene::new();
+        let viewport_clip = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        };
+        for i in 0..20 {
+            scene.shapes.push(DrawShape {
+                rect: Rect {
+                    x: 0.0,
+                    y: i as f32 * 300.0,
+                    width: 800.0,
+                    height: 200.0,
+                },
+                clip: Some(viewport_clip),
+                ..test_shape(i, BlendMode::SrcOver)
+            });
+        }
+        let bounds = scene_bounds(&scene).expect("should have bounds");
+        // All shapes are clipped to viewport — bounds should be viewport-sized,
+        // NOT 20*300 = 6000 dp tall.
+        assert_eq!(bounds.x, 0.0);
+        assert_eq!(bounds.y, 0.0);
+        assert!(bounds.width <= 800.0);
+        assert!(bounds.height <= 600.0);
+    }
+
+    #[test]
+    fn scene_bounds_stable_across_scroll_offsets() {
+        // Simulates horizontal scroll at different offsets —
+        // bounds should be identical regardless of scroll position.
+        let viewport_clip = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 400.0,
+            height: 50.0,
+        };
+        let compute_bounds_at_offset = |scroll_x: f32| {
+            let mut scene = CompositorScene::new();
+            for i in 0..10 {
+                scene.shapes.push(DrawShape {
+                    rect: Rect {
+                        x: i as f32 * 100.0 - scroll_x,
+                        y: 0.0,
+                        width: 80.0,
+                        height: 40.0,
+                    },
+                    clip: Some(viewport_clip),
+                    ..test_shape(i, BlendMode::SrcOver)
+                });
+            }
+            scene_bounds(&scene).expect("bounds")
+        };
+        let bounds_at_0 = compute_bounds_at_offset(0.0);
+        let bounds_at_300 = compute_bounds_at_offset(300.0);
+        let bounds_at_600 = compute_bounds_at_offset(600.0);
+        // Width should be stable (clipped to viewport) regardless of scroll offset
+        assert!(
+            (bounds_at_0.width - bounds_at_300.width).abs() < 1.0,
+            "bounds width changed with scroll: {} vs {}",
+            bounds_at_0.width,
+            bounds_at_300.width
+        );
+        assert!(
+            (bounds_at_0.width - bounds_at_600.width).abs() < 1.0,
+            "bounds width changed with scroll: {} vs {}",
+            bounds_at_0.width,
+            bounds_at_600.width
+        );
+    }
+
+    #[test]
     fn collect_effect_ranges_respects_excluded_effect() {
         let layers = vec![effect_layer(10, 40), effect_layer(20, 30)];
         let mut ranges = Vec::new();
@@ -6624,7 +6873,10 @@ mod tests {
 
         let requirements = layer_surface_requirements(&layer);
 
-        assert_eq!(requirements.direct_translation, Some(Point::new(11.4, 23.6)));
+        assert_eq!(
+            requirements.direct_translation,
+            Some(Point::new(11.4, 23.6))
+        );
         assert!(!requirements.reasons.has_any());
     }
 
@@ -6634,7 +6886,10 @@ mod tests {
 
         let requirements = layer_surface_requirements(&layer);
 
-        assert_eq!(requirements.direct_translation, Some(Point::new(14.25, 16.5)));
+        assert_eq!(
+            requirements.direct_translation,
+            Some(Point::new(14.25, 16.5))
+        );
         assert!(!requirements.reasons.has_any());
     }
 
@@ -7009,8 +7264,13 @@ mod tests {
 
         let mut rect_cache = HashMap::new();
         let mut requirements_cache = HashMap::new();
-        let collected =
-            collect_layer_contents(&parent, None, None, &mut rect_cache, &mut requirements_cache);
+        let collected = collect_layer_contents(
+            &parent,
+            None,
+            None,
+            &mut rect_cache,
+            &mut requirements_cache,
+        );
 
         assert!(
             collected.child_layers.is_empty(),

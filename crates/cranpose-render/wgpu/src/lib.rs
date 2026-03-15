@@ -936,8 +936,7 @@ impl TextSystemState {
         let loaded_families = load_fonts(&mut font_system, fonts);
 
         let mut font_family_resolver = WgpuFontFamilyResolver::default();
-        font_family_resolver
-            .set_preferred_generic_family(loaded_families.into_iter().next());
+        font_family_resolver.set_preferred_generic_family(loaded_families.into_iter().next());
         font_family_resolver.prime(&mut font_system);
         Self::from_parts(font_system, font_family_resolver)
     }
@@ -2504,8 +2503,13 @@ mod tests {
     #[test]
     fn attrs_from_text_style_disables_native_hinting() {
         let (mut font_system, mut resolver) = seeded_font_system_and_resolver();
-        let attrs =
-            attrs_from_text_style(&cranpose_ui::text::TextStyle::default(), 14.0, 1.0, &mut font_system, &mut resolver);
+        let attrs = attrs_from_text_style(
+            &cranpose_ui::text::TextStyle::default(),
+            14.0,
+            1.0,
+            &mut font_system,
+            &mut resolver,
+        );
 
         assert!(
             attrs

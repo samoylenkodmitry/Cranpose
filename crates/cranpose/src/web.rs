@@ -118,13 +118,37 @@ pub async fn run(
 
     surface.configure(&device, &surface_config);
 
+    // The surface texture may be smaller than requested (e.g. WebGL2
+    // backends can cap at 2048).  Probe the actual size and derive the
+    // effective scale from it so layout, rendering, and scissor rects
+    // are all consistent with the real render target.
+    let probe = surface
+        .get_current_texture()
+        .map_err(|e| format!("failed to probe surface texture: {e:?}"))?;
+    let actual_width = probe.texture.width();
+    let actual_height = probe.texture.height();
+    probe.present();
+
+    let mut surface_config = surface_config;
+    let effective_scale =
+        if actual_width < surface_config.width || actual_height < surface_config.height {
+            let fit_x = actual_width as f64 / width as f64;
+            let fit_y = actual_height as f64 / height as f64;
+            let s = fit_x.min(fit_y);
+            surface_config.width = actual_width;
+            surface_config.height = actual_height;
+            s
+        } else {
+            scale_factor
+        };
+
     // Create renderer with fonts from settings
     let fonts: &[&[u8]] = settings.fonts.unwrap_or(&[]);
     log::info!("Web renderer startup: {} font(s)", fonts.len());
     let mut renderer = WgpuRenderer::new(fonts);
     renderer.init_gpu(Arc::new(device), Arc::new(queue), surface_format);
-    renderer.set_root_scale(scale_factor as f32);
-    cranpose_ui::set_density(scale_factor as f32);
+    renderer.set_root_scale(effective_scale as f32);
+    cranpose_ui::set_density(effective_scale as f32);
 
     let app = Rc::new(RefCell::new(AppShell::new(
         renderer,
@@ -132,11 +156,11 @@ pub async fn run(
         content,
     )));
     let platform = Rc::new(RefCell::new(WebPlatform::default()));
-    platform.borrow_mut().set_scale_factor(scale_factor);
+    platform.borrow_mut().set_scale_factor(effective_scale);
 
-    // Set buffer_size to physical pixels and viewport to logical dp
+    // Set buffer_size to actual physical pixels and viewport to logical dp
     app.borrow_mut()
-        .set_buffer_size(surface_config.width, surface_config.height);
+        .set_buffer_size(actual_width, actual_height);
     app.borrow_mut().set_viewport(width as f32, height as f32);
 
     // Set up mouse event handlers
@@ -560,12 +584,14 @@ pub async fn run(
                 let view = output
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
+                let render_width = output.texture.width();
+                let render_height = output.texture.height();
 
                 {
                     let mut app_mut = app.borrow_mut();
                     if let Err(err) = app_mut
                         .renderer()
-                        .render(&view, config.width, config.height)
+                        .render(&view, render_width, render_height)
                     {
                         log::error!("render failed: {:?}", err);
                     }
