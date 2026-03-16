@@ -530,42 +530,9 @@ impl TypefaceRequest {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum FamilyCacheKey {
-    Name(String),
-    Serif,
-    SansSerif,
-    Monospace,
-    Cursive,
-    Fantasy,
-}
-
-impl FamilyCacheKey {
-    fn from_family_owned(family: &FamilyOwned) -> Self {
-        match family {
-            FamilyOwned::Name(name) => Self::Name(name.to_string()),
-            FamilyOwned::Serif => Self::Serif,
-            FamilyOwned::SansSerif => Self::SansSerif,
-            FamilyOwned::Monospace => Self::Monospace,
-            FamilyOwned::Cursive => Self::Cursive,
-            FamilyOwned::Fantasy => Self::Fantasy,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct StyleWeightRequest {
-    family: FamilyCacheKey,
-    requested_weight: cranpose_ui::text::FontWeight,
-    requested_style: cranpose_ui::text::FontStyle,
-}
-
-type ResolvedStyleWeight = Option<(GlyphonStyle, GlyphonWeight)>;
-
 #[derive(Default)]
 struct WgpuFontFamilyResolver {
     request_cache: HashMap<TypefaceRequest, FamilyOwned>,
-    style_weight_cache: HashMap<StyleWeightRequest, ResolvedStyleWeight>,
     loaded_typeface_paths: HashMap<String, String>,
     unavailable_typeface_paths: HashSet<String>,
     available_family_names: HashMap<String, String>,
@@ -583,7 +550,6 @@ impl WgpuFontFamilyResolver {
 
     fn clear_resolution_caches(&mut self) {
         self.request_cache.clear();
-        self.style_weight_cache.clear();
     }
 
     fn set_preferred_generic_family(&mut self, family_name: Option<String>) {
@@ -608,33 +574,6 @@ impl WgpuFontFamilyResolver {
 
         let resolved = self.resolve_family_owned_uncached(font_system, &request);
         self.request_cache.insert(request, resolved.clone());
-        resolved
-    }
-
-    fn resolve_available_style_and_weight(
-        &mut self,
-        font_system: &FontSystem,
-        family: &FamilyOwned,
-        requested_weight: Option<cranpose_ui::text::FontWeight>,
-        requested_style: Option<cranpose_ui::text::FontStyle>,
-    ) -> Option<(GlyphonStyle, GlyphonWeight)> {
-        let request = StyleWeightRequest {
-            family: FamilyCacheKey::from_family_owned(family),
-            requested_weight: requested_weight.unwrap_or_default(),
-            requested_style: requested_style.unwrap_or_default(),
-        };
-
-        if let Some(cached) = self.style_weight_cache.get(&request) {
-            return *cached;
-        }
-
-        let resolved = resolve_available_style_and_weight_uncached(
-            font_system,
-            family,
-            requested_weight,
-            requested_style,
-        );
-        self.style_weight_cache.insert(request, resolved);
         resolved
     }
 
@@ -1301,96 +1240,6 @@ pub(crate) fn resolve_effective_line_height(
     resolve_line_height(style, max_font_size)
 }
 
-fn family_owned_to_fontdb_family(family: &FamilyOwned) -> glyphon::fontdb::Family<'_> {
-    match family {
-        FamilyOwned::Name(name) => glyphon::fontdb::Family::Name(name.as_str()),
-        FamilyOwned::Serif => glyphon::fontdb::Family::Serif,
-        FamilyOwned::SansSerif => glyphon::fontdb::Family::SansSerif,
-        FamilyOwned::Monospace => glyphon::fontdb::Family::Monospace,
-        FamilyOwned::Cursive => glyphon::fontdb::Family::Cursive,
-        FamilyOwned::Fantasy => glyphon::fontdb::Family::Fantasy,
-    }
-}
-
-fn requested_fontdb_style(style: Option<cranpose_ui::text::FontStyle>) -> glyphon::fontdb::Style {
-    match style.unwrap_or_default() {
-        cranpose_ui::text::FontStyle::Normal => glyphon::fontdb::Style::Normal,
-        cranpose_ui::text::FontStyle::Italic => glyphon::fontdb::Style::Italic,
-    }
-}
-
-fn glyphon_style_from_fontdb(style: glyphon::fontdb::Style) -> GlyphonStyle {
-    match style {
-        glyphon::fontdb::Style::Italic | glyphon::fontdb::Style::Oblique => GlyphonStyle::Italic,
-        glyphon::fontdb::Style::Normal => GlyphonStyle::Normal,
-    }
-}
-
-fn resolve_available_style_and_weight_uncached(
-    font_system: &FontSystem,
-    family: &FamilyOwned,
-    requested_weight: Option<cranpose_ui::text::FontWeight>,
-    requested_style: Option<cranpose_ui::text::FontStyle>,
-) -> Option<(GlyphonStyle, GlyphonWeight)> {
-    let requested_fontdb_weight = requested_weight.unwrap_or_default().0;
-    let requested_style = requested_fontdb_style(requested_style);
-    let requested_family = family_owned_to_fontdb_family(family);
-    let requested_family_name = font_system
-        .db()
-        .family_name(&requested_family)
-        .to_ascii_lowercase();
-
-    let style_penalty = |face_style: glyphon::fontdb::Style| -> u32 {
-        if face_style == requested_style {
-            0
-        } else if requested_style != glyphon::fontdb::Style::Normal
-            && face_style == glyphon::fontdb::Style::Normal
-        {
-            1_000
-        } else {
-            10_000
-        }
-    };
-
-    let weight_penalty = |face_weight: u16| -> u32 {
-        (i32::from(face_weight) - i32::from(requested_fontdb_weight)).unsigned_abs()
-    };
-
-    let mut best_in_family: Option<(u32, glyphon::fontdb::Style, u16)> = None;
-    let mut best_global: Option<(u32, glyphon::fontdb::Style, u16)> = None;
-
-    for face in font_system.db().faces() {
-        let score = style_penalty(face.style) + weight_penalty(face.weight.0);
-        let in_family = face
-            .families
-            .iter()
-            .any(|(name, _)| name.eq_ignore_ascii_case(requested_family_name.as_str()));
-
-        if in_family
-            && best_in_family
-                .as_ref()
-                .map(|(best_score, _, _)| score < *best_score)
-                .unwrap_or(true)
-        {
-            best_in_family = Some((score, face.style, face.weight.0));
-        }
-
-        if best_global
-            .as_ref()
-            .map(|(best_score, _, _)| score < *best_score)
-            .unwrap_or(true)
-        {
-            best_global = Some((score, face.style, face.weight.0));
-        }
-    }
-
-    let (_, resolved_style, resolved_weight) = best_in_family.or(best_global)?;
-    Some((
-        glyphon_style_from_fontdb(resolved_style),
-        GlyphonWeight(resolved_weight),
-    ))
-}
-
 fn attrs_from_text_style(
     style: &cranpose_ui::text::TextStyle,
     unscaled_base_font_size: f32,
@@ -1423,21 +1272,18 @@ fn attrs_from_text_style(
     let family_owned = font_family_resolver.resolve_family_owned(font_system, span_style);
     attrs = attrs.family(family_owned.as_family());
 
-    if let Some((resolved_style, resolved_weight)) = font_family_resolver
-        .resolve_available_style_and_weight(font_system, &family_owned, font_weight, font_style)
-    {
-        attrs = attrs.style(resolved_style).weight(resolved_weight);
-    } else {
-        if let Some(font_weight) = font_weight {
-            attrs = attrs.weight(GlyphonWeight(font_weight.0));
-        }
-
-        if let Some(font_style) = font_style {
-            attrs = attrs.style(match font_style {
-                cranpose_ui::text::FontStyle::Normal => GlyphonStyle::Normal,
-                cranpose_ui::text::FontStyle::Italic => GlyphonStyle::Italic,
-            });
-        }
+    // Always pass the requested style/weight to glyphon so it can synthesize
+    // bold/italic when the actual font face doesn't have matching variants.
+    // resolve_available_style_and_weight finds the closest face, but we use
+    // the *requested* values for attrs so glyphon applies synthesis as needed.
+    if let Some(font_weight) = font_weight {
+        attrs = attrs.weight(GlyphonWeight(font_weight.0));
+    }
+    if let Some(font_style) = font_style {
+        attrs = attrs.style(match font_style {
+            cranpose_ui::text::FontStyle::Normal => GlyphonStyle::Normal,
+            cranpose_ui::text::FontStyle::Italic => GlyphonStyle::Italic,
+        });
     }
 
     attrs = match letter_spacing {
@@ -2443,7 +2289,7 @@ mod tests {
     }
 
     #[test]
-    fn attrs_resolution_downgrades_missing_italic_to_available_style() {
+    fn attrs_resolution_preserves_requested_italic_for_synthesis() {
         let (mut font_system, mut resolver) = seeded_font_system_and_resolver();
         let style = cranpose_ui::text::TextStyle {
             span_style: cranpose_ui::text::SpanStyle {
@@ -2457,13 +2303,13 @@ mod tests {
         let attrs = attrs_from_text_style(&style, 14.0, 1.0, &mut font_system, &mut resolver);
         assert_eq!(
             attrs.style,
-            GlyphonStyle::Normal,
-            "missing italic face should downgrade to available style instead of panicking during shaping"
+            GlyphonStyle::Italic,
+            "requested italic must be preserved in attrs so glyphon can synthesize it"
         );
     }
 
     #[test]
-    fn attrs_resolution_downgrades_missing_weight_to_available_weight() {
+    fn attrs_resolution_preserves_requested_bold_for_synthesis() {
         let (mut font_system, mut resolver) = seeded_font_system_and_resolver();
         let style = cranpose_ui::text::TextStyle {
             span_style: cranpose_ui::text::SpanStyle {
@@ -2477,8 +2323,8 @@ mod tests {
         let attrs = attrs_from_text_style(&style, 14.0, 1.0, &mut font_system, &mut resolver);
         assert_eq!(
             attrs.weight,
-            GlyphonWeight(cranpose_ui::text::FontWeight::NORMAL.0),
-            "missing bold face should downgrade to available weight instead of panicking during shaping"
+            GlyphonWeight(cranpose_ui::text::FontWeight::BOLD.0),
+            "requested bold must be preserved in attrs so glyphon can synthesize it"
         );
     }
 
