@@ -2404,6 +2404,51 @@ mod tests {
     }
 
     #[test]
+    fn bold_text_uses_bold_font_face_when_available() {
+        let mut db = glyphon::fontdb::Database::new();
+        db.load_font_data(TEST_FONT.to_vec());
+        db.load_font_data(TEST_BOLD_FONT.to_vec());
+        let mut font_system = FontSystem::new_with_locale_and_db("en-US".to_string(), db);
+        let mut resolver = WgpuFontFamilyResolver::default();
+        resolver.prime(&mut font_system);
+
+        let style = cranpose_ui::text::TextStyle {
+            span_style: cranpose_ui::text::SpanStyle {
+                font_weight: Some(cranpose_ui::text::FontWeight::BOLD),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let text = cranpose_ui::text::AnnotatedString::from("bold text");
+        let style_hash = text_buffer_style_hash(&style, &text);
+        let mut buffer = new_shared_text_buffer(&mut font_system, 14.0, 14.0 * 1.4);
+        buffer.ensure(
+            &mut font_system,
+            &mut resolver,
+            EnsureTextBufferParams {
+                annotated_text: &text,
+                font_size_px: 14.0,
+                line_height_px: 14.0 * 1.4,
+                style_hash,
+                style: &style,
+                scale: 1.0,
+            },
+        );
+        let bold_face_used = buffer.buffer.layout_runs().any(|run| {
+            run.glyphs.iter().any(|glyph| {
+                font_system
+                    .db()
+                    .face(glyph.font_id)
+                    .is_some_and(|face| face.weight.0 == 700)
+            })
+        });
+        assert!(
+            bold_face_used,
+            "bold text must use the bold font face (weight 700) when available"
+        );
+    }
+
+    #[test]
     fn attrs_from_text_style_applies_alpha_to_foreground_color() {
         let (mut font_system, mut resolver) = seeded_font_system_and_resolver();
         let style = cranpose_ui::text::TextStyle::from_span_style(cranpose_ui::text::SpanStyle {
@@ -2728,6 +2773,8 @@ mod tests {
     // Font bytes used by tests — the same file the demo app ships.
     static TEST_FONT: &[u8] =
         include_bytes!("../../../../apps/desktop-demo/assets/NotoSansMerged.ttf");
+    static TEST_BOLD_FONT: &[u8] =
+        include_bytes!("../../../../apps/desktop-demo/assets/NotoSansBold.ttf");
     static TEST_EMOJI_FONT: &[u8] =
         include_bytes!("../../../../apps/desktop-demo/assets/TwemojiMozilla.ttf");
 
