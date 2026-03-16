@@ -1361,16 +1361,6 @@ fn collect_layer_contents_into<'a>(
                         layer_offset.x + translation.x,
                         layer_offset.y + translation.y,
                     );
-                    collect_layer_contents_into(
-                        child_layer.as_ref(),
-                        visual_clip,
-                        child_offset,
-                        translated_snap_anchor,
-                        local_scene,
-                        child_layers,
-                        layer_surface_rect_cache,
-                        layer_surface_requirements_cache,
-                    );
                     let child_bounds = child_layer
                         .local_bounds
                         .translate(child_offset.x, child_offset.y);
@@ -1386,6 +1376,16 @@ fn collect_layer_contents_into<'a>(
                         child_bounds,
                         child_bounds,
                         child_shadow_clip,
+                    );
+                    collect_layer_contents_into(
+                        child_layer.as_ref(),
+                        visual_clip,
+                        child_offset,
+                        translated_snap_anchor,
+                        local_scene,
+                        child_layers,
+                        layer_surface_rect_cache,
+                        layer_surface_requirements_cache,
                     );
                     continue;
                 }
@@ -8106,6 +8106,86 @@ mod tests {
         assert!(
             shape.clip.is_some(),
             "the visible card's shape must have a clip from clip_to_bounds"
+        );
+    }
+
+    #[test]
+    fn flattened_layer_shadow_z_index_is_below_content() {
+        // Shadow must render behind content. When a child layer with shadow_elevation
+        // is flattened (no isolation), its shadow z-index must be lower than any
+        // content z-index so shadow draws render first.
+        let shape = RenderNode::Primitive(PrimitiveEntry {
+            phase: PrimitivePhase::BeforeChildren,
+            node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                primitive: DrawPrimitive::Rect {
+                    rect: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 100.0,
+                        height: 100.0,
+                    },
+                    brush: Brush::solid(Color::WHITE),
+                },
+                clip: None,
+            }),
+        });
+
+        let child_bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        };
+
+        let child = crate::test_support::layer_node(
+            child_bounds,
+            ProjectiveTransform::translation(50.0, 50.0),
+            GraphicsLayer {
+                shadow_elevation: 20.0,
+                ..GraphicsLayer::default()
+            },
+            vec![shape],
+        );
+
+        let root = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 800.0,
+                height: 600.0,
+            },
+            vec![RenderNode::Layer(Box::new(child))],
+        );
+
+        let mut rect_cache = HashMap::new();
+        let mut requirements_cache = HashMap::new();
+        let collected =
+            collect_layer_contents(&root, None, None, &mut rect_cache, &mut requirements_cache);
+
+        assert!(
+            !collected.scene.shadow_draws.is_empty(),
+            "shadow_elevation > 0 must produce shadow draws"
+        );
+        let max_shadow_z = collected
+            .scene
+            .shadow_draws
+            .iter()
+            .map(|s| s.z_index)
+            .max()
+            .unwrap();
+        let min_content_z = collected
+            .scene
+            .shapes
+            .iter()
+            .map(|s| s.z_index)
+            .min()
+            .unwrap();
+        assert!(
+            max_shadow_z < min_content_z,
+            "shadow z-index ({}) must be less than content z-index ({}); \
+             shadows must render behind their content",
+            max_shadow_z,
+            min_content_z
         );
     }
 }
