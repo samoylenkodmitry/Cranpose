@@ -1240,6 +1240,21 @@ pub(crate) fn resolve_effective_line_height(
     resolve_line_height(style, max_font_size)
 }
 
+/// Returns true if the fontdb contains at least one italic (or oblique) face
+/// whose family matches the given `FamilyOwned`.
+fn family_has_italic_face(font_system: &FontSystem, family: &FamilyOwned) -> bool {
+    let family_ref = family.as_family();
+    let family_name = font_system.db().family_name(&family_ref);
+    font_system.db().faces().any(|face| {
+        (face.style == glyphon::fontdb::Style::Italic
+            || face.style == glyphon::fontdb::Style::Oblique)
+            && face
+                .families
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(family_name))
+    })
+}
+
 fn attrs_from_text_style(
     style: &cranpose_ui::text::TextStyle,
     unscaled_base_font_size: f32,
@@ -1272,18 +1287,31 @@ fn attrs_from_text_style(
     let family_owned = font_family_resolver.resolve_family_owned(font_system, span_style);
     attrs = attrs.family(family_owned.as_family());
 
-    // Always pass the requested style/weight to glyphon so it can synthesize
-    // bold/italic when the actual font face doesn't have matching variants.
-    // resolve_available_style_and_weight finds the closest face, but we use
-    // the *requested* values for attrs so glyphon applies synthesis as needed.
     if let Some(font_weight) = font_weight {
         attrs = attrs.weight(GlyphonWeight(font_weight.0));
     }
+
+    // cosmic-text 0.15 does NOT synthesize italic automatically — it passes
+    // cache_key_flags through as-is from attrs to glyphs.  We must decide here
+    // whether to request a native italic face or to ask for synthetic skew.
+    //
+    // Strategy:
+    //   • If the resolved family owns an italic face → set style=Italic so
+    //     cosmic-text matches the real face.  No FAKE_ITALIC needed.
+    //   • Otherwise → keep style=Normal (so font matching finds the Regular
+    //     face) and set FAKE_ITALIC for the swash 14-degree skew.
+    let mut flags = glyphon::cosmic_text::CacheKeyFlags::DISABLE_HINTING;
     if let Some(font_style) = font_style {
-        attrs = attrs.style(match font_style {
-            cranpose_ui::text::FontStyle::Normal => GlyphonStyle::Normal,
-            cranpose_ui::text::FontStyle::Italic => GlyphonStyle::Italic,
-        });
+        match font_style {
+            cranpose_ui::text::FontStyle::Normal => {}
+            cranpose_ui::text::FontStyle::Italic => {
+                if family_has_italic_face(font_system, &family_owned) {
+                    attrs = attrs.style(GlyphonStyle::Italic);
+                } else {
+                    flags |= glyphon::cosmic_text::CacheKeyFlags::FAKE_ITALIC;
+                }
+            }
+        }
     }
 
     attrs = match letter_spacing {
@@ -1293,12 +1321,10 @@ fn attrs_from_text_style(
         }
         _ => attrs,
     };
-    attrs = attrs.cache_key_flags(glyphon::cosmic_text::CacheKeyFlags::DISABLE_HINTING);
+    attrs = attrs.cache_key_flags(flags);
 
     AttrsOwned::new(&attrs)
 }
-
-// Text measurer implementation for WGPU
 
 // Text measurer implementation for WGPU
 
@@ -2289,7 +2315,7 @@ mod tests {
     }
 
     #[test]
-    fn attrs_resolution_preserves_requested_italic_for_synthesis() {
+    fn attrs_resolution_synthesizes_italic_when_no_italic_face_available() {
         let (mut font_system, mut resolver) = seeded_font_system_and_resolver();
         let style = cranpose_ui::text::TextStyle {
             span_style: cranpose_ui::text::SpanStyle {
@@ -2301,10 +2327,18 @@ mod tests {
         };
 
         let attrs = attrs_from_text_style(&style, 14.0, 1.0, &mut font_system, &mut resolver);
+        // Noto Sans (test font) has no italic face → style stays Normal,
+        // FAKE_ITALIC is set so the swash renderer applies 14° skew.
         assert_eq!(
             attrs.style,
-            GlyphonStyle::Italic,
-            "requested italic must be preserved in attrs so glyphon can synthesize it"
+            GlyphonStyle::Normal,
+            "style must stay Normal for font matching when no italic face exists"
+        );
+        assert!(
+            attrs
+                .cache_key_flags
+                .contains(glyphon::cosmic_text::CacheKeyFlags::FAKE_ITALIC),
+            "FAKE_ITALIC must be set when the font family lacks a native italic face"
         );
     }
 
@@ -2325,6 +2359,47 @@ mod tests {
             attrs.weight,
             GlyphonWeight(cranpose_ui::text::FontWeight::BOLD.0),
             "requested bold must be preserved in attrs so glyphon can synthesize it"
+        );
+    }
+
+    #[test]
+    fn span_level_italic_propagates_through_rich_text_ensure() {
+        let (mut font_system, mut resolver) = seeded_font_system_and_resolver();
+        let mut text = cranpose_ui::text::AnnotatedString::from("normal italic");
+        text.span_styles.push(cranpose_ui::text::RangeStyle {
+            item: cranpose_ui::text::SpanStyle {
+                font_style: Some(cranpose_ui::text::FontStyle::Italic),
+                ..Default::default()
+            },
+            range: 7..13, // "italic"
+        });
+        let style = cranpose_ui::text::TextStyle::default();
+        let style_hash = text_buffer_style_hash(&style, &text);
+        let mut buffer = new_shared_text_buffer(&mut font_system, 14.0, 14.0 * 1.4);
+        buffer.ensure(
+            &mut font_system,
+            &mut resolver,
+            EnsureTextBufferParams {
+                annotated_text: &text,
+                font_size_px: 14.0,
+                line_height_px: 14.0 * 1.4,
+                style_hash,
+                style: &style,
+                scale: 1.0,
+            },
+        );
+        // Check that the buffer's layout lines have FAKE_ITALIC flag on the italic span
+        let has_fake_italic = buffer.buffer.layout_runs().any(|run| {
+            run.glyphs.iter().any(|glyph| {
+                glyph.start >= 7
+                    && glyph
+                        .cache_key_flags
+                        .contains(glyphon::cosmic_text::CacheKeyFlags::FAKE_ITALIC)
+            })
+        });
+        assert!(
+            has_fake_italic,
+            "span-level italic must produce FAKE_ITALIC glyphs when the font lacks native italic"
         );
     }
 
