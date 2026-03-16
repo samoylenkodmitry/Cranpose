@@ -1298,12 +1298,18 @@ fn collect_layer_contents_into<'a>(
     let content_layer = layer_for_content(&layer.graphics_layer, isolation.as_ref());
     let local_layer = local_content_layer(&content_layer);
     let layer_bounds = layer.local_bounds.translate(layer_offset.x, layer_offset.y);
-    let visual_clip = resolve_clip(
-        inherited_clip,
-        layer
-            .clip_rect()
-            .map(|clip| clip.translate(layer_offset.x, layer_offset.y)),
-    );
+    let layer_clip = layer
+        .clip_rect()
+        .map(|clip| clip.translate(layer_offset.x, layer_offset.y));
+    let visual_clip = resolve_clip(inherited_clip, layer_clip);
+
+    // When a layer has its own clip that doesn't intersect the inherited clip,
+    // the entire subtree is invisible — skip it to avoid producing primitives
+    // with no clip (resolve_clip returns None for empty intersections, which
+    // downstream code interprets as "no clipping" rather than "fully clipped").
+    if layer_clip.is_some() && inherited_clip.is_some() && visual_clip.is_none() {
+        return;
+    }
     let translated_snap_anchor = inherited_translated_snap_anchor.or_else(|| {
         if layer.translated_content_context {
             translated_content_snap_anchor(layer_bounds, &local_layer)
@@ -2393,7 +2399,6 @@ impl GpuRenderer {
                 return self.render_root_direct(
                     text_state,
                     surface_view,
-                    &graph.root,
                     collected,
                     width,
                     height,
@@ -2549,13 +2554,11 @@ impl GpuRenderer {
         &mut self,
         text_state: &mut TextSystemState,
         surface_view: &wgpu::TextureView,
-        layer: &LayerNode,
         collected: CollectedLayer<'_>,
         width: u32,
         height: u32,
         root_scale: f32,
     ) -> Result<(), String> {
-        let visual_clip = layer.clip_rect();
         let CollectedLayer {
             scene: local_scene,
             child_layers,
@@ -2634,7 +2637,9 @@ impl GpuRenderer {
                 scaled_quad(resolved_child.dest_quad, root_scale),
                 child_surface.composite_alpha,
                 wgpu::LoadOp::Load,
-                visual_clip.and_then(|clip| scissor_rect_for_rect(clip, root_scale, width, height)),
+                child
+                    .visual_clip
+                    .and_then(|clip| scissor_rect_for_rect(clip, root_scale, width, height)),
                 supported_blend_mode(child_surface.blend_mode),
                 child_surface.sample_mode,
             );
@@ -2844,7 +2849,6 @@ impl GpuRenderer {
             composite_sample_mode,
         } = options;
         let isolation = effective_layer_isolation(&layer.graphics_layer);
-        let visual_clip = layer.clip_rect();
         let CollectedLayer {
             scene: mut local_scene,
             child_layers,
@@ -2886,6 +2890,10 @@ impl GpuRenderer {
             }
             child.backdrop_rect.x += shift.x;
             child.backdrop_rect.y += shift.y;
+            if let Some(clip) = child.visual_clip.as_mut() {
+                clip.x += shift.x;
+                clip.y += shift.y;
+            }
             child.shadow_draws.translate_by(shift);
         }
 
@@ -2962,7 +2970,7 @@ impl GpuRenderer {
                     &target,
                     &BackdropLayer {
                         rect: resolved_child.backdrop_rect,
-                        clip: visual_clip.map(|clip| clip.translate(shift.x, shift.y)),
+                        clip: child.visual_clip,
                         effect: backdrop.clone(),
                         z_index: child.z_index,
                     },
@@ -3007,14 +3015,9 @@ impl GpuRenderer {
                 scaled_quad(resolved_child.dest_quad, target_scale),
                 child_surface.composite_alpha,
                 wgpu::LoadOp::Load,
-                visual_clip.and_then(|clip| {
-                    scissor_rect_for_rect(
-                        clip.translate(shift.x, shift.y),
-                        target_scale,
-                        width,
-                        height,
-                    )
-                }),
+                child
+                    .visual_clip
+                    .and_then(|clip| scissor_rect_for_rect(clip, target_scale, width, height)),
                 supported_blend_mode(child_surface.blend_mode),
                 child_surface.sample_mode,
             );
@@ -7859,5 +7862,250 @@ mod tests {
         assert!(is_render_effect_supported(&offset));
         assert!(is_render_effect_supported(&shader));
         assert!(is_render_effect_supported(&chain));
+    }
+
+    #[test]
+    fn clip_to_bounds_propagates_visual_clip_to_all_descendant_shapes() {
+        // Simulates: root → clip_to_bounds container → child with shapes above/below clip
+        // All shapes inside the clip_to_bounds container must have a clip set.
+        let container_local_bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 500.0,
+        };
+        // Container is placed at y=50 in parent space via transform_to_parent
+        let container_clip_in_parent = Rect {
+            x: 0.0,
+            y: 50.0,
+            width: 800.0,
+            height: 500.0,
+        };
+
+        // Shape that extends above the clip boundary (scroll content scrolled up)
+        let shape_above = RenderNode::Primitive(PrimitiveEntry {
+            phase: PrimitivePhase::BeforeChildren,
+            node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                primitive: DrawPrimitive::Rect {
+                    rect: Rect {
+                        x: 10.0,
+                        y: -30.0,
+                        width: 100.0,
+                        height: 40.0,
+                    },
+                    brush: Brush::solid(Color::WHITE),
+                },
+                clip: None,
+            }),
+        });
+
+        // Shape within the clip boundary
+        let shape_inside = RenderNode::Primitive(PrimitiveEntry {
+            phase: PrimitivePhase::BeforeChildren,
+            node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                primitive: DrawPrimitive::Rect {
+                    rect: Rect {
+                        x: 10.0,
+                        y: 100.0,
+                        width: 100.0,
+                        height: 40.0,
+                    },
+                    brush: Brush::solid(Color::WHITE),
+                },
+                clip: None,
+            }),
+        });
+
+        // Shape below the clip boundary (scroll content below viewport)
+        let shape_below = RenderNode::Primitive(PrimitiveEntry {
+            phase: PrimitivePhase::BeforeChildren,
+            node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                primitive: DrawPrimitive::Rect {
+                    rect: Rect {
+                        x: 10.0,
+                        y: 600.0,
+                        width: 100.0,
+                        height: 40.0,
+                    },
+                    brush: Brush::solid(Color::WHITE),
+                },
+                clip: None,
+            }),
+        });
+
+        // Content child layer (represents scroll content, translated up by scroll offset)
+        let mut content_layer = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 800.0,
+                height: 1000.0,
+            },
+            vec![shape_above, shape_inside, shape_below],
+        );
+        content_layer.transform_to_parent = ProjectiveTransform::translation(0.0, -30.0);
+        content_layer.translated_content_context = true;
+
+        // Clip container (e.g. TabContent with clip_to_bounds)
+        let mut clip_container = test_layer(
+            container_local_bounds,
+            vec![RenderNode::Layer(Box::new(content_layer))],
+        );
+        clip_container.clip_to_bounds = true;
+        clip_container.transform_to_parent = ProjectiveTransform::translation(0.0, 50.0);
+
+        // Root
+        let root = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 800.0,
+                height: 600.0,
+            },
+            vec![RenderNode::Layer(Box::new(clip_container))],
+        );
+
+        let mut rect_cache = HashMap::new();
+        let mut requirements_cache = HashMap::new();
+        let collected =
+            collect_layer_contents(&root, None, None, &mut rect_cache, &mut requirements_cache);
+
+        assert_eq!(
+            collected.scene.shapes.len(),
+            3,
+            "all three shapes should be flattened into the scene"
+        );
+
+        for (i, shape) in collected.scene.shapes.iter().enumerate() {
+            assert!(
+                shape.clip.is_some(),
+                "shape {} at rect {:?} must have a clip from clip_to_bounds container, but clip is None",
+                i,
+                shape.rect
+            );
+            let clip = shape.clip.unwrap();
+            assert_eq!(
+                clip, container_clip_in_parent,
+                "shape {} clip should match the clip_to_bounds container bounds in parent space",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn clip_to_bounds_culls_child_layers_outside_boundary() {
+        // Reproduces the out-of-clip rendering bug: a child layer with
+        // graphics_layer.clip=true (e.g. from rounded_surface()) positioned
+        // entirely below the parent's clip_to_bounds boundary must be culled.
+        // Before the fix, resolve_clip returned None for non-overlapping rects,
+        // which downstream code interpreted as "no clipping" instead of "fully clipped",
+        // causing invisible content to render everywhere.
+
+        let clip_container_bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 500.0,
+        };
+
+        let shape_in_card = RenderNode::Primitive(PrimitiveEntry {
+            phase: PrimitivePhase::BeforeChildren,
+            node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                primitive: DrawPrimitive::Rect {
+                    rect: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 300.0,
+                        height: 80.0,
+                    },
+                    brush: Brush::solid(Color::WHITE),
+                },
+                clip: None,
+            }),
+        });
+
+        // Card layer with graphics_layer.clip=true, positioned BELOW the clip boundary
+        let mut card_outside = crate::test_support::layer_node(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 300.0,
+                height: 80.0,
+            },
+            ProjectiveTransform::identity(),
+            GraphicsLayer {
+                clip: true,
+                ..GraphicsLayer::default()
+            },
+            vec![shape_in_card.clone()],
+        );
+        card_outside.transform_to_parent = ProjectiveTransform::translation(10.0, 600.0);
+
+        // Card layer with graphics_layer.clip=true, positioned INSIDE the clip boundary
+        let mut card_inside = crate::test_support::layer_node(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 300.0,
+                height: 80.0,
+            },
+            ProjectiveTransform::identity(),
+            GraphicsLayer {
+                clip: true,
+                ..GraphicsLayer::default()
+            },
+            vec![shape_in_card],
+        );
+        card_inside.transform_to_parent = ProjectiveTransform::translation(10.0, 100.0);
+
+        // Content layer holding both cards
+        let content = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 800.0,
+                height: 1000.0,
+            },
+            vec![
+                RenderNode::Layer(Box::new(card_inside)),
+                RenderNode::Layer(Box::new(card_outside)),
+            ],
+        );
+
+        // Clip container
+        let mut clip_container = test_layer(
+            clip_container_bounds,
+            vec![RenderNode::Layer(Box::new(content))],
+        );
+        clip_container.clip_to_bounds = true;
+
+        // Root
+        let root = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 800.0,
+                height: 600.0,
+            },
+            vec![RenderNode::Layer(Box::new(clip_container))],
+        );
+
+        let mut rect_cache = HashMap::new();
+        let mut requirements_cache = HashMap::new();
+        let collected =
+            collect_layer_contents(&root, None, None, &mut rect_cache, &mut requirements_cache);
+
+        assert_eq!(
+            collected.scene.shapes.len(),
+            1,
+            "only the card inside the clip boundary should produce shapes; \
+             the card outside must be culled entirely"
+        );
+
+        let shape = &collected.scene.shapes[0];
+        assert!(
+            shape.clip.is_some(),
+            "the visible card's shape must have a clip from clip_to_bounds"
+        );
     }
 }
