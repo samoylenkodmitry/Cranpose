@@ -31,6 +31,10 @@ const DEFAULT_VISUAL_SETTLE_MS: u64 = 900;
 const DEFAULT_VISUAL_SCROLL_STEPS: u64 = 4;
 const DEFAULT_VISUAL_SCROLL_DELAY_MS: u64 = 140;
 const DEFAULT_VISUAL_OUTPUT_DIR: &str = "/tmp/cranpose_shaders_visual_compare";
+const DEFAULT_PROFILE_DURATION_SECS: u64 = 20;
+const DEFAULT_HEADLESS_PROFILE_DURATION_SECS: u64 = 5;
+const DEFAULT_PROFILE_SCROLL_STEPS: usize = 10;
+const DEFAULT_HEADLESS_PROFILE_SCROLL_STEPS: usize = 3;
 const MAX_MIXED_DIRECT_LAYER_PIXELS: u64 = 400_000;
 const MAX_MIXED_DIRECT_LAYER_LOGICAL_HEIGHT: f32 = 600.0;
 
@@ -68,6 +72,29 @@ fn env_bool(key: &str, default: bool) -> bool {
 
 fn env_string(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
+}
+
+fn env_usize(key: &str, default: usize) -> usize {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(default)
+}
+
+fn default_profile_duration_secs(headless: bool) -> u64 {
+    if headless {
+        DEFAULT_HEADLESS_PROFILE_DURATION_SECS
+    } else {
+        DEFAULT_PROFILE_DURATION_SECS
+    }
+}
+
+fn default_profile_scroll_steps(headless: bool) -> usize {
+    if headless {
+        DEFAULT_HEADLESS_PROFILE_SCROLL_STEPS
+    } else {
+        DEFAULT_PROFILE_SCROLL_STEPS
+    }
 }
 
 fn fatal(robot: &cranpose::Robot, message: &str) -> ! {
@@ -297,7 +324,7 @@ fn run_visual_compare(robot: &cranpose::Robot) {
     robot.exit().expect("Failed to exit");
 }
 
-fn run_profile(robot: &cranpose::Robot, duration: Duration, scroll_steps: usize) {
+fn run_profile(robot: &cranpose::Robot, duration: Duration, scroll_steps: usize, headless: bool) {
     std::thread::sleep(Duration::from_millis(1000));
     let _ = robot.wait_for_idle();
 
@@ -313,6 +340,14 @@ fn run_profile(robot: &cranpose::Robot, duration: Duration, scroll_steps: usize)
     std::thread::sleep(Duration::from_millis(500));
     println!("  ✓ Entered Shaders tab");
     assert_no_large_mixed_direct_layers(robot, "profile_open");
+    log_stage_fps("profile_open");
+    log_stage_render_stats(robot, "profile_open");
+
+    if headless {
+        println!("  ✓ Headless profile smoke completed");
+        robot.exit().expect("Failed to exit");
+        return;
+    }
 
     let start_time = Instant::now();
     let mut loops = 0;
@@ -385,25 +420,64 @@ fn main() {
     println!("=== Shaders Performance Profiling Robot ===");
 
     let mode = MeasureMode::from_env();
-    let headless = env_bool("CRANPOSE_HEADLESS", false);
-    let duration_secs = env_u64("CRANPOSE_PERF_DURATION_SECS", 20);
-    let duration = Duration::from_secs(duration_secs);
-    println!(
-        "  mode={:?}, headless={}, duration={}s",
-        mode, headless, duration_secs
+    let headless_default = matches!(mode, MeasureMode::Profile);
+    let headless = env_bool("CRANPOSE_HEADLESS", headless_default);
+    let duration_secs = env_u64(
+        "CRANPOSE_PERF_DURATION_SECS",
+        default_profile_duration_secs(headless),
     );
-
-    let scroll_steps = 10;
+    let duration = Duration::from_secs(duration_secs);
+    let scroll_steps = env_usize(
+        "CRANPOSE_PERF_SCROLL_STEPS",
+        default_profile_scroll_steps(headless),
+    );
+    println!(
+        "  mode={:?}, headless={}, duration={}s, scroll_steps={}",
+        mode, headless, duration_secs, scroll_steps
+    );
 
     AppLauncher::new()
         .with_title("Shaders Profiling")
         .with_size(WINDOW_WIDTH, WINDOW_HEIGHT)
         .with_headless(headless)
         .with_test_driver(move |robot| match mode {
-            MeasureMode::Profile => run_profile(&robot, duration, scroll_steps),
+            MeasureMode::Profile => run_profile(&robot, duration, scroll_steps, headless),
             MeasureMode::VisualCompare => run_visual_compare(&robot),
         })
         .run(|| {
             app::combined_app();
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        default_profile_duration_secs, default_profile_scroll_steps,
+        DEFAULT_HEADLESS_PROFILE_DURATION_SECS, DEFAULT_HEADLESS_PROFILE_SCROLL_STEPS,
+        DEFAULT_PROFILE_DURATION_SECS, DEFAULT_PROFILE_SCROLL_STEPS,
+    };
+
+    #[test]
+    fn headless_profile_defaults_stay_bounded() {
+        assert_eq!(
+            default_profile_duration_secs(true),
+            DEFAULT_HEADLESS_PROFILE_DURATION_SECS
+        );
+        assert_eq!(
+            default_profile_scroll_steps(true),
+            DEFAULT_HEADLESS_PROFILE_SCROLL_STEPS
+        );
+    }
+
+    #[test]
+    fn interactive_profile_defaults_keep_full_workload() {
+        assert_eq!(
+            default_profile_duration_secs(false),
+            DEFAULT_PROFILE_DURATION_SECS
+        );
+        assert_eq!(
+            default_profile_scroll_steps(false),
+            DEFAULT_PROFILE_SCROLL_STEPS
+        );
+    }
 }

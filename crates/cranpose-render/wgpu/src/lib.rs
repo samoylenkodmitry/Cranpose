@@ -5,12 +5,16 @@
 
 mod effect_renderer;
 pub(crate) mod gpu_stats;
+mod normalized_scene;
 mod offscreen;
 mod pipeline;
 mod render;
 mod scene;
 mod shader_cache;
 mod shaders;
+mod surface_executor;
+mod surface_plan;
+mod surface_requirements;
 #[cfg(test)]
 mod test_support;
 

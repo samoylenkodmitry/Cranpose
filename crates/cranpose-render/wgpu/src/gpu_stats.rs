@@ -3,6 +3,7 @@
 //! Counters are always collected so tests and perf harnesses can assert them.
 //! Setting `CRANPOSE_GPU_STATS=1` prints a summary line every 60 frames to stderr.
 
+use crate::surface_requirements::{SurfaceRequirement, SurfaceRequirementSet};
 use std::cell::{Cell, RefCell};
 
 use cranpose_core::NodeId;
@@ -19,6 +20,7 @@ pub struct LayerSurfaceReasons {
     pub blend_mode: bool,
     pub immediate_shadow: bool,
     pub text_local_surface: bool,
+    pub motion_stable_capture: bool,
     pub mixed_direct_content: bool,
     pub non_translation_transform: bool,
 }
@@ -32,11 +34,12 @@ impl LayerSurfaceReasons {
             || self.blend_mode
             || self.immediate_shadow
             || self.text_local_surface
+            || self.motion_stable_capture
             || self.non_translation_transform
     }
 
     pub fn labels(self) -> impl Iterator<Item = &'static str> {
-        let mut labels = [None; 9];
+        let mut labels = [None; 10];
         let mut len = 0usize;
 
         if self.explicit_offscreen {
@@ -67,6 +70,10 @@ impl LayerSurfaceReasons {
             labels[len] = Some("text_local_surface");
             len += 1;
         }
+        if self.motion_stable_capture {
+            labels[len] = Some("motion_stable_capture");
+            len += 1;
+        }
         if self.mixed_direct_content {
             labels[len] = Some("mixed_direct_content");
             len += 1;
@@ -94,7 +101,28 @@ impl LayerSurfaceReasons {
     }
 
     pub fn has_renderer_forced_surface(self) -> bool {
-        self.immediate_shadow || self.text_local_surface || self.non_translation_transform
+        self.immediate_shadow
+            || self.text_local_surface
+            || self.motion_stable_capture
+            || self.non_translation_transform
+    }
+}
+
+impl From<SurfaceRequirementSet> for LayerSurfaceReasons {
+    fn from(requirements: SurfaceRequirementSet) -> Self {
+        Self {
+            explicit_offscreen: requirements.contains(SurfaceRequirement::ExplicitOffscreen),
+            effect: requirements.contains(SurfaceRequirement::RenderEffect),
+            backdrop: requirements.contains(SurfaceRequirement::Backdrop),
+            group_opacity: requirements.contains(SurfaceRequirement::GroupOpacity),
+            blend_mode: requirements.contains(SurfaceRequirement::BlendMode),
+            immediate_shadow: requirements.contains(SurfaceRequirement::ImmediateShadow),
+            text_local_surface: requirements.contains(SurfaceRequirement::TextMaterialMask),
+            motion_stable_capture: requirements.contains(SurfaceRequirement::MotionStableCapture),
+            mixed_direct_content: requirements.contains(SurfaceRequirement::MixedDirectContent),
+            non_translation_transform: requirements
+                .contains(SurfaceRequirement::NonTranslationTransform),
+        }
     }
 }
 

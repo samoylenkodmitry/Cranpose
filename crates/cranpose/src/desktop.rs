@@ -120,6 +120,7 @@ enum RobotCommand {
     WaitForIdle,
     GetSemantics,
     GetScreenshot,
+    GetScreenshotWithScale(f32),
     GetRenderStats,
     Exit,
 }
@@ -481,6 +482,19 @@ impl Robot {
     pub fn screenshot(&self) -> Result<RobotScreenshot, String> {
         self.tx
             .send(RobotCommand::GetScreenshot)
+            .map_err(|e| format!("Failed to send screenshot command: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::Screenshot(image)) => Ok(image),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
+    }
+
+    /// Capture a screenshot at a specific device pixel scale (e.g., 2.0 for HiDPI).
+    pub fn screenshot_with_scale(&self, scale: f32) -> Result<RobotScreenshot, String> {
+        self.tx
+            .send(RobotCommand::GetScreenshotWithScale(scale))
             .map_err(|e| format!("Failed to send screenshot command: {}", e))?;
         match self.rx.recv() {
             Ok(RobotResponse::Screenshot(image)) => Ok(image),
@@ -1270,6 +1284,16 @@ impl ApplicationHandler for App {
                             let _ = controller.tx.send(RobotResponse::Error(err));
                         }
                     },
+                    RobotCommand::GetScreenshotWithScale(scale) => {
+                        match capture_screenshot_with_scale(app, scale) {
+                            Ok(screenshot) => {
+                                let _ = controller.tx.send(RobotResponse::Screenshot(screenshot));
+                            }
+                            Err(err) => {
+                                let _ = controller.tx.send(RobotResponse::Error(err));
+                            }
+                        }
+                    }
                     RobotCommand::GetRenderStats => {
                         let _ = controller.tx.send(RobotResponse::RenderStats(Box::new(
                             app.renderer().last_frame_stats(),
@@ -1557,6 +1581,35 @@ fn capture_screenshot(app: &mut AppShell<WgpuRenderer>) -> Result<RobotScreensho
             (captured.height as f32 / fallback_scale).max(1.0),
         )
     });
+
+    Ok(RobotScreenshot {
+        width: captured.width,
+        height: captured.height,
+        logical_width,
+        logical_height,
+        pixels: captured.pixels,
+    })
+}
+
+#[cfg(feature = "robot")]
+fn capture_screenshot_with_scale(
+    app: &mut AppShell<WgpuRenderer>,
+    scale: f32,
+) -> Result<RobotScreenshot, String> {
+    let logical_size = app.layout_tree().map(|layout_tree| {
+        (
+            layout_tree.root().rect.width.max(1.0),
+            layout_tree.root().rect.height.max(1.0),
+        )
+    });
+    let (logical_width, logical_height) = logical_size.unwrap_or((1.0, 1.0));
+    let width = (logical_width * scale).ceil() as u32;
+    let height = (logical_height * scale).ceil() as u32;
+
+    let captured = app
+        .renderer()
+        .capture_frame_with_scale(width, height, scale)
+        .map_err(|err| format!("Failed to capture GPU screenshot: {err:?}"))?;
 
     Ok(RobotScreenshot {
         width: captured.width,

@@ -73,10 +73,6 @@ fn rigid_snap_anchor(
     Some(Point::new(mapped.x, mapped.y))
 }
 
-fn translated_content_snap_anchor(layer_bounds: Rect, layer: &GraphicsLayer) -> Option<Point> {
-    rigid_snap_anchor(layer_bounds, layer, false)
-}
-
 #[derive(Clone, Copy)]
 struct SceneCounts {
     shapes: usize,
@@ -110,6 +106,16 @@ fn assign_snap_anchor_since(
     for text in &mut scene.texts[counts.texts..] {
         text.snap_anchor = Some(snap_anchor);
     }
+}
+
+#[derive(Clone, Copy)]
+struct PrimitiveRenderContext<'a> {
+    layer_bounds: RasterLayerBounds,
+    node_layer: &'a GraphicsLayer,
+    visual_clip: Option<Rect>,
+    motion_context_animated: bool,
+    content_offset_translation: bool,
+    layer_snap_anchor: Option<Point>,
 }
 
 fn layer_contains_text_primitives(layer: &LayerNode) -> bool {
@@ -893,27 +899,28 @@ fn populate_draws_from_graph(
         parent_visual_clip,
         content_clip_to_bounds.then_some(mapping.transformed_bounds),
     );
-    let translated_snap_anchor = inherited_translated_snap_anchor.or_else(|| {
-        if layer.translated_content_context {
-            translated_content_snap_anchor(
-                mapping.layer_bounds.raster_rect(),
-                &mapping.raster_content_layer,
-            )
-        } else {
-            None
-        }
-    });
-    let layer_snap_anchor = translated_snap_anchor.or_else(|| {
-        if layer_needs_text_leaf_snap(layer) {
-            rigid_snap_anchor(
-                mapping.layer_bounds.raster_rect(),
-                &mapping.raster_content_layer,
-                layer.motion_context_animated,
-            )
-        } else {
-            None
-        }
-    });
+    // Scrollable content must not snap — discrete position jumps cause visible
+    // rendering artifacts (glyph quality changes, underline thickness flickering).
+    let translated_snap_anchor = if layer.translated_content_context {
+        None
+    } else {
+        inherited_translated_snap_anchor
+    };
+    let layer_snap_anchor = if layer.translated_content_context {
+        None
+    } else {
+        translated_snap_anchor.or_else(|| {
+            if layer_needs_text_leaf_snap(layer) {
+                rigid_snap_anchor(
+                    mapping.layer_bounds.raster_rect(),
+                    &mapping.raster_content_layer,
+                    layer.motion_context_animated,
+                )
+            } else {
+                None
+            }
+        })
+    };
 
     if content_clip_to_bounds && visual_clip.is_none() {
         return;
@@ -940,16 +947,15 @@ fn populate_draws_from_graph(
         match child {
             RenderNode::Primitive(primitive) => match primitive.phase {
                 PrimitivePhase::BeforeChildren => {
-                    render_graph_primitive(
-                        scene,
-                        primitive,
-                        mapping.layer_bounds,
-                        &mapping.raster_content_layer,
+                    let primitive_context = PrimitiveRenderContext {
+                        layer_bounds: mapping.layer_bounds,
+                        node_layer: &mapping.raster_content_layer,
                         visual_clip,
-                        layer.motion_context_animated,
-                        layer.translated_content_context,
+                        motion_context_animated: layer.motion_context_animated,
+                        content_offset_translation: layer.translated_content_context,
                         layer_snap_anchor,
-                    );
+                    };
+                    render_graph_primitive(scene, primitive, primitive_context);
                 }
                 PrimitivePhase::AfterChildren => {
                     deferred_primitives.push(primitive);
@@ -969,38 +975,32 @@ fn populate_draws_from_graph(
     }
 
     for primitive in deferred_primitives {
-        render_graph_primitive(
-            scene,
-            primitive,
-            mapping.layer_bounds,
-            &mapping.raster_content_layer,
+        let primitive_context = PrimitiveRenderContext {
+            layer_bounds: mapping.layer_bounds,
+            node_layer: &mapping.raster_content_layer,
             visual_clip,
-            layer.motion_context_animated,
-            layer.translated_content_context,
+            motion_context_animated: layer.motion_context_animated,
+            content_offset_translation: layer.translated_content_context,
             layer_snap_anchor,
-        );
+        };
+        render_graph_primitive(scene, primitive, primitive_context);
     }
 }
 
 fn render_graph_primitive(
     scene: &mut RasterScene,
     primitive: &PrimitiveEntry,
-    layer_bounds: RasterLayerBounds,
-    node_layer: &GraphicsLayer,
-    visual_clip: Option<Rect>,
-    motion_context_animated: bool,
-    content_offset_translation: bool,
-    layer_snap_anchor: Option<Point>,
+    context: PrimitiveRenderContext<'_>,
 ) {
-    let rect = layer_bounds.raster_rect();
+    let rect = context.layer_bounds.raster_rect();
     let counts_before = scene_counts(scene);
     match &primitive.node {
         PrimitiveNode::Draw(draw) => {
             let effective_clip = resolve_primitive_clip(
                 draw.clip,
                 rect,
-                node_layer,
-                visual_clip,
+                context.node_layer,
+                context.visual_clip,
                 PrimitiveClipSpace::LayerTransformed,
             );
             if draw.clip.is_some() && effective_clip.is_none() {
@@ -1009,18 +1009,24 @@ fn render_graph_primitive(
             push_draw_primitive(
                 draw.primitive.clone(),
                 rect,
-                node_layer,
+                context.node_layer,
                 effective_clip,
                 scene,
                 None,
-                motion_context_animated || content_offset_translation,
+                context.motion_context_animated || context.content_offset_translation,
             );
         }
         PrimitiveNode::Text(text) => {
-            render_graph_text(scene, text, layer_bounds, node_layer, visual_clip);
+            render_graph_text(
+                scene,
+                text,
+                context.layer_bounds,
+                context.node_layer,
+                context.visual_clip,
+            );
         }
     }
-    assign_snap_anchor_since(scene, counts_before, layer_snap_anchor);
+    assign_snap_anchor_since(scene, counts_before, context.layer_snap_anchor);
 }
 
 fn render_graph_text(
@@ -1510,25 +1516,35 @@ mod tests {
     }
 
     #[test]
-    fn translated_animated_text_leaf_keeps_shared_snap_anchor() {
+    fn translated_animated_text_leaf_disables_snap_for_smooth_scroll() {
         let scene = build_raster_scene(&snapped_text_leaf_root(true, true));
 
         assert_eq!(scene.shapes.len(), 1);
         assert_eq!(scene.texts.len(), 1);
-        let expected_anchor = Some(Point::new(14.25, 16.5));
-        assert_eq!(scene.shapes[0].snap_anchor, expected_anchor);
-        assert_eq!(scene.texts[0].snap_anchor, expected_anchor);
+        assert_eq!(
+            scene.shapes[0].snap_anchor, None,
+            "scrollable content must not snap — discrete jumps cause visible rendering artifacts"
+        );
+        assert_eq!(
+            scene.texts[0].snap_anchor, None,
+            "scrollable text must not snap — discrete jumps cause visible rendering artifacts"
+        );
     }
 
     #[test]
-    fn translated_content_context_text_leaf_uses_shared_snap_anchor() {
+    fn translated_content_context_text_leaf_disables_snap_for_smooth_scroll() {
         let scene = build_raster_scene(&snapped_text_leaf_root(false, true));
 
         assert_eq!(scene.shapes.len(), 1);
         assert_eq!(scene.texts.len(), 1);
-        let expected_anchor = Some(Point::new(14.25, 16.5));
-        assert_eq!(scene.shapes[0].snap_anchor, expected_anchor);
-        assert_eq!(scene.texts[0].snap_anchor, expected_anchor);
+        assert_eq!(
+            scene.shapes[0].snap_anchor, None,
+            "scrollable content must not snap — discrete jumps cause visible rendering artifacts"
+        );
+        assert_eq!(
+            scene.texts[0].snap_anchor, None,
+            "scrollable text must not snap — discrete jumps cause visible rendering artifacts"
+        );
     }
 
     #[test]

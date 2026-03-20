@@ -1,38 +1,73 @@
 //! GPU rendering implementation using WGPU
 
 use crate::effect_renderer::{CompositeSampleMode, EffectRenderer, RoundedCompositeMask};
+#[cfg(test)]
+use crate::normalized_scene::estimate_layer_surface_rect;
+#[cfg(test)]
+use crate::normalized_scene::{
+    build_scene_window, filtered_effect_layer_index, scene_bounds, visible_draw_rect,
+    SceneWindowSource,
+};
+use crate::normalized_scene::{
+    collect_layer_contents, collect_layer_contents_with_translation_context, effect_layer_in_range,
+    estimate_layer_surface_rect_cached, scene_has_layer_events, translate_quad, CollectedLayer,
+};
 use crate::offscreen::OffscreenTarget;
 use crate::scene::{
     BackdropLayer, CompositorScene, DrawShape, EffectLayer, ImageDraw, ShadowDraw, SnapAnchor,
     TextDraw,
 };
 use crate::shaders;
+#[cfg(test)]
+use crate::surface_executor::DevicePixelBounds;
+use crate::surface_executor::{
+    apply_backdrop_layer_to_target as execute_apply_backdrop_layer_to_target,
+    axis_aligned_quad_rect, device_pixel_bounds_for_rect, offscreen_byte_size,
+    render_effect_layer_to_target as execute_render_effect_layer_to_target,
+    render_layer_surface as execute_render_layer_surface,
+    render_root_direct as execute_render_root_direct, scaled_quad, snap_motion_stable_dest_quad,
+    surface_target_size, CachedLayerSurface, LayerSurface, LayerSurfaceTexture,
+    SurfaceExecutionBackend,
+};
+#[cfg(test)]
+use crate::surface_executor::{clamp_effect_surface_scale, visible_layer_rect};
+#[cfg(test)]
+use crate::surface_plan::{
+    composite_sample_mode_for_effect_layer, composite_sample_mode_for_requirements,
+    direct_translation, effect_layer_target_scale, layer_contains_descendant_backdrop,
+    layer_surface_requirements, layer_surface_target_scale,
+};
+use crate::surface_plan::{
+    layer_surface_requirements_cached, layer_uses_external_backdrop_input,
+    root_can_render_directly_cached, LayerSurfaceRequest, LayerSurfaceRequirements,
+    TranslationRenderContext,
+};
+#[cfg(test)]
+use crate::surface_requirements::SurfaceRequirement;
+use crate::surface_requirements::SurfaceRequirementSet;
 use crate::{EnsureTextBufferParams, TextCacheKey, TextSystemState};
 use bytemuck::{Pod, Zeroable};
-use cranpose_render_common::geometry::{blur_extent_margin, expand_blurred_rect, union_rect};
+use cranpose_core::NodeId;
+use cranpose_render_common::geometry::blur_extent_margin;
 use cranpose_render_common::graph::{
-    quad_bounds, CachePolicy, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
-    ProjectiveTransform, RenderGraph, RenderNode,
+    quad_bounds, CachePolicy, LayerNode, ProjectiveTransform, RenderGraph,
 };
-use cranpose_render_common::layer_composition::{
-    effective_layer_isolation, layer_for_content, local_content_layer,
-};
-use cranpose_render_common::primitive_emit::{
-    resolve_clip, resolve_primitive_clip, PrimitiveClipSpace,
-};
+#[cfg(test)]
+use cranpose_render_common::graph::{PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderNode};
 use cranpose_render_common::raster_cache::{LayerRasterCacheKey, ScaleBucket};
+#[cfg(test)]
+use cranpose_ui_graphics::GraphicsLayer;
+use cranpose_ui_graphics::Point;
 use cranpose_ui_graphics::{
-    BlendMode, Brush, Color, ColorFilter, CompositingStrategy, ImageBitmap, Rect, RenderEffect,
-    RenderHash, TileMode,
+    BlendMode, Brush, Color, ColorFilter, ImageBitmap, Rect, RenderEffect, RenderHash, TileMode,
 };
-use cranpose_ui_graphics::{GraphicsLayer, Point};
 use glyphon::{
     Cache, Color as GlyphonColor, Resolution, SwashCache, TextArea, TextAtlas, TextBounds,
     TextRenderer, Viewport,
 };
 use lru::LruCache;
 use rustc_hash::FxHasher;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::ops::Range;
@@ -42,17 +77,16 @@ use std::sync::{mpsc, Arc, OnceLock};
 use std::time::Duration;
 
 use crate::gpu_stats;
-use crate::gpu_stats::{gpu_stats_enabled, LayerSurfaceReasons};
-use crate::pipeline::{push_draw_primitive, push_layer_shadow, push_text_style_draws};
+use crate::gpu_stats::gpu_stats_enabled;
+use crate::pipeline::push_layer_shadow;
 
 // Chunked rendering constants for robustness with large scenes
 // Note: Limited to 256 for WebGL compatibility (uniform buffer size limit)
 // WebGL guarantees 16KB uniform buffers, ShapeData is 64 bytes = 256 max shapes
 const HARD_MAX_BUFFER_MB: usize = 64; // Maximum 64MB per buffer
 const MAX_LAYER_SURFACE_CACHE_ITEMS: usize = 256;
-const MAX_LAYER_SURFACE_CACHE_BYTES: u64 = 64 * 1024 * 1024;
-const AFFINE_TOLERANCE: f32 = 1e-4;
-const CLEAR_COLOR: wgpu::Color = wgpu::Color {
+pub(crate) const MAX_LAYER_SURFACE_CACHE_BYTES: u64 = 64 * 1024 * 1024;
+pub(crate) const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     r: 18.0 / 255.0,
     g: 18.0 / 255.0,
     b: 24.0 / 255.0,
@@ -589,6 +623,12 @@ impl ShapeBatchBuffers {
 
 // TextCacheKey is now defined in lib.rs and shared between measurement and rendering
 
+#[derive(Clone, Copy)]
+struct TranslatedTextRasterOrigin {
+    position: Point,
+    root_scale: f32,
+}
+
 pub struct GpuRenderer {
     pub(crate) device: Arc<wgpu::Device>,
     pub(crate) queue: Arc<wgpu::Queue>,
@@ -615,6 +655,8 @@ pub struct GpuRenderer {
     image_vertex_buffer: wgpu::Buffer,
     image_index_buffer: wgpu::Buffer,
     image_texture_cache: LruCache<u64, CachedImageTexture>,
+    translated_text_raster_origins: HashMap<NodeId, TranslatedTextRasterOrigin>,
+    active_translated_text_nodes: HashSet<NodeId>,
     text_viewport: Viewport,
     scratch_shape_data: Vec<ShapeData>,
     scratch_gradients: Vec<GradientStop>,
@@ -639,284 +681,6 @@ pub struct GpuRenderer {
     gpu_stats_enabled: bool,
 }
 
-struct LayerSurface {
-    target: LayerSurfaceTexture,
-    logical_rect: Rect,
-    composite_alpha: f32,
-    blend_mode: BlendMode,
-    backdrop: Option<RenderEffect>,
-    sample_mode: CompositeSampleMode,
-}
-
-enum LayerSurfaceTexture {
-    Owned(OffscreenTarget),
-    Cached(Rc<OffscreenTarget>),
-}
-
-impl LayerSurfaceTexture {
-    fn target(&self) -> &OffscreenTarget {
-        match self {
-            Self::Owned(target) => target,
-            Self::Cached(target) => target.as_ref(),
-        }
-    }
-
-    fn width(&self) -> u32 {
-        self.target().width
-    }
-
-    fn height(&self) -> u32 {
-        self.target().height
-    }
-}
-
-struct CachedLayerSurface {
-    target: Rc<OffscreenTarget>,
-    logical_rect: Rect,
-    byte_size: u64,
-}
-
-struct ChildLayerComposite<'a> {
-    z_index: usize,
-    layer: &'a LayerNode,
-    logical_rect: Rect,
-    dest_quad: [[f32; 2]; 4],
-    backdrop_rect: Rect,
-    /// Inherited clip from the parent's `clip_to_bounds` / `visual_clip`.
-    /// Used to exclude off-screen child layers from surface bounds computation.
-    visual_clip: Option<Rect>,
-    shadow_draws: Vec<ShadowDraw>,
-    needs_nested_underlay: bool,
-    translated_snap_anchor: Option<SnapAnchor>,
-}
-
-#[derive(Clone)]
-struct ResolvedChildSurfaceComposite {
-    logical_rect: Rect,
-    dest_quad: [[f32; 2]; 4],
-    backdrop_rect: Rect,
-    shadow_draws: Vec<ShadowDraw>,
-}
-
-struct CollectedLayer<'a> {
-    scene: CompositorScene,
-    child_layers: Vec<ChildLayerComposite<'a>>,
-}
-
-fn layer_cache_key(layer: &LayerNode) -> usize {
-    layer as *const LayerNode as usize
-}
-
-/// Returns the visible portion of `rect` after applying an optional clip.
-///
-/// Draw commands carry clip rects from `clip_to_bounds` modifiers (scroll
-/// containers, clipped boxes, etc.).  Content outside the clip is invisible
-/// and must not inflate surface bounds.
-fn visible_draw_rect(rect: Rect, clip: Option<Rect>) -> Option<Rect> {
-    match clip {
-        Some(clip) => rect.intersect(clip),
-        None => Some(rect),
-    }
-}
-
-fn scene_bounds(scene: &CompositorScene) -> Option<Rect> {
-    let mut bounds = None;
-    for shape in &scene.shapes {
-        if let Some(visible) = visible_draw_rect(shape.rect, shape.clip) {
-            bounds = union_rect(bounds, visible);
-        }
-    }
-    for image in &scene.images {
-        if let Some(visible) = visible_draw_rect(image.rect, image.clip) {
-            bounds = union_rect(bounds, visible);
-        }
-    }
-    for text in &scene.texts {
-        if let Some(visible) = visible_draw_rect(text.rect, text.clip) {
-            bounds = union_rect(bounds, visible);
-        }
-    }
-    if let Some(shadow_bounds) = shadow_draws_bounds(&scene.shadow_draws) {
-        bounds = union_rect(bounds, shadow_bounds);
-    }
-    for layer in &scene.effect_layers {
-        if let Some(visible) = visible_draw_rect(layer.rect, layer.clip) {
-            bounds = union_rect(bounds, visible);
-        }
-    }
-    for layer in &scene.backdrop_layers {
-        if let Some(visible) = visible_draw_rect(layer.rect, layer.clip) {
-            bounds = union_rect(bounds, visible);
-        }
-    }
-    bounds
-}
-
-fn scene_has_layer_events(scene: &CompositorScene) -> bool {
-    !scene.effect_layers.is_empty() || !scene.backdrop_layers.is_empty()
-}
-
-fn shadow_draws_bounds(shadow_draws: &[ShadowDraw]) -> Option<Rect> {
-    let mut bounds = None;
-    for shadow in shadow_draws {
-        let mut shadow_bounds = None;
-        for (shape, _) in &shadow.shapes {
-            shadow_bounds = union_rect(shadow_bounds, shape.rect);
-        }
-        for text in &shadow.texts {
-            shadow_bounds = union_rect(shadow_bounds, text.rect);
-        }
-        if let Some(shadow_bounds) = shadow_bounds {
-            if let Some(expanded) =
-                expand_blurred_rect(shadow_bounds, shadow.blur_radius, shadow.clip)
-            {
-                bounds = union_rect(bounds, expanded);
-            }
-        }
-    }
-    bounds
-}
-
-fn layer_contains_backdrop(layer: &LayerNode) -> bool {
-    layer.backdrop().is_some()
-        || layer.children.iter().any(|child| match child {
-            RenderNode::Layer(layer) => layer_contains_backdrop(layer),
-            RenderNode::Primitive(_) => false,
-        })
-}
-
-fn layer_contains_descendant_backdrop(layer: &LayerNode) -> bool {
-    layer.children.iter().any(|child| match child {
-        RenderNode::Layer(layer) => layer_contains_backdrop(layer),
-        RenderNode::Primitive(_) => false,
-    })
-}
-
-fn surface_target_size(rect: Rect, root_scale: f32, max_dim: u32) -> (u32, u32) {
-    (
-        (rect.width * root_scale).ceil().clamp(1.0, max_dim as f32) as u32,
-        (rect.height * root_scale).ceil().clamp(1.0, max_dim as f32) as u32,
-    )
-}
-
-fn offscreen_byte_size(width: u32, height: u32) -> u64 {
-    (width as u64) * (height as u64) * 4
-}
-
-fn surface_pixel_rect(rect: Rect, root_scale: f32) -> Rect {
-    Rect {
-        x: rect.x * root_scale,
-        y: rect.y * root_scale,
-        width: rect.width * root_scale,
-        height: rect.height * root_scale,
-    }
-}
-
-fn local_effect_pixel_rect(width: u32, height: u32) -> [f32; 4] {
-    [0.0, 0.0, width as f32, height as f32]
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct DevicePixelBounds {
-    x: f32,
-    y: f32,
-    width: u32,
-    height: u32,
-}
-
-fn device_pixel_bounds_for_rect(
-    rect: Rect,
-    viewport_width: u32,
-    viewport_height: u32,
-    root_scale: f32,
-) -> Option<DevicePixelBounds> {
-    if !root_scale.is_finite() || root_scale <= 0.0 {
-        return None;
-    }
-
-    let min_x = (rect.x * root_scale).floor().max(0.0);
-    let min_y = (rect.y * root_scale).floor().max(0.0);
-    let max_x = ((rect.x + rect.width) * root_scale)
-        .ceil()
-        .min(viewport_width as f32);
-    let max_y = ((rect.y + rect.height) * root_scale)
-        .ceil()
-        .min(viewport_height as f32);
-    let width = (max_x - min_x).max(0.0) as u32;
-    let height = (max_y - min_y).max(0.0) as u32;
-    if width == 0 || height == 0 {
-        return None;
-    }
-
-    Some(DevicePixelBounds {
-        x: min_x,
-        y: min_y,
-        width,
-        height,
-    })
-}
-
-fn target_quad(width: u32, height: u32) -> [[f32; 2]; 4] {
-    [
-        [0.0, 0.0],
-        [width as f32, 0.0],
-        [0.0, height as f32],
-        [width as f32, height as f32],
-    ]
-}
-
-fn direct_translation(transform: ProjectiveTransform) -> Option<Point> {
-    let matrix = transform.matrix();
-    if (matrix[0][0] - 1.0).abs() > AFFINE_TOLERANCE
-        || matrix[0][1].abs() > AFFINE_TOLERANCE
-        || matrix[1][0].abs() > AFFINE_TOLERANCE
-        || (matrix[1][1] - 1.0).abs() > AFFINE_TOLERANCE
-        || matrix[2][0].abs() > AFFINE_TOLERANCE
-        || matrix[2][1].abs() > AFFINE_TOLERANCE
-        || (matrix[2][2] - 1.0).abs() > AFFINE_TOLERANCE
-    {
-        return None;
-    }
-    Some(Point::new(matrix[0][2], matrix[1][2]))
-}
-
-fn graphics_layer_supports_rigid_snap(layer: &GraphicsLayer) -> bool {
-    (layer.scale - 1.0).abs() <= AFFINE_TOLERANCE
-        && (layer.scale_x - 1.0).abs() <= AFFINE_TOLERANCE
-        && (layer.scale_y - 1.0).abs() <= AFFINE_TOLERANCE
-        && layer.rotation_x.abs() <= AFFINE_TOLERANCE
-        && layer.rotation_y.abs() <= AFFINE_TOLERANCE
-        && layer.rotation_z.abs() <= AFFINE_TOLERANCE
-}
-
-fn rigid_snap_anchor(
-    layer_bounds: Rect,
-    layer: &GraphicsLayer,
-    motion_context_animated: bool,
-) -> Option<SnapAnchor> {
-    if motion_context_animated || !graphics_layer_supports_rigid_snap(layer) {
-        return None;
-    }
-    let mapped = cranpose_render_common::layer_transform::apply_layer_affine_to_rect(
-        layer_bounds,
-        layer_bounds,
-        layer,
-    );
-    Some(SnapAnchor::rigid(Point::new(mapped.x, mapped.y)))
-}
-
-fn translated_content_snap_anchor(layer_bounds: Rect, layer: &GraphicsLayer) -> Option<SnapAnchor> {
-    if !graphics_layer_supports_rigid_snap(layer) {
-        return None;
-    }
-    let mapped = cranpose_render_common::layer_transform::apply_layer_affine_to_rect(
-        layer_bounds,
-        layer_bounds,
-        layer,
-    );
-    Some(SnapAnchor::translated(Point::new(mapped.x, mapped.y)))
-}
-
 fn snap_delta_for_anchor(anchor: SnapAnchor, root_scale: f32) -> Point {
     if !root_scale.is_finite() || root_scale <= 0.0 {
         return Point::default();
@@ -937,585 +701,12 @@ fn snap_delta_for_anchor(anchor: SnapAnchor, root_scale: f32) -> Point {
     )
 }
 
-#[derive(Clone, Copy)]
-struct SceneCounts {
-    shapes: usize,
-    images: usize,
-    texts: usize,
-    shadow_draws: usize,
-}
-
-fn scene_counts(scene: &CompositorScene) -> SceneCounts {
-    SceneCounts {
-        shapes: scene.shapes.len(),
-        images: scene.images.len(),
-        texts: scene.texts.len(),
-        shadow_draws: scene.shadow_draws.len(),
-    }
-}
-
-fn assign_snap_anchor_since(
-    scene: &mut CompositorScene,
-    counts: SceneCounts,
-    snap_anchor: Option<SnapAnchor>,
-) {
-    let Some(snap_anchor) = snap_anchor else {
-        return;
-    };
-
-    for shape in &mut scene.shapes[counts.shapes..] {
-        shape.snap_anchor = Some(snap_anchor);
-    }
-    for image in &mut scene.images[counts.images..] {
-        image.snap_anchor = Some(snap_anchor);
-    }
-    for text in &mut scene.texts[counts.texts..] {
-        text.snap_anchor = Some(snap_anchor);
-    }
-    for shadow in &mut scene.shadow_draws[counts.shadow_draws..] {
-        for (shape, _) in &mut shadow.shapes {
-            shape.snap_anchor = Some(snap_anchor);
-        }
-        for text in &mut shadow.texts {
-            text.snap_anchor = Some(snap_anchor);
-        }
-    }
-}
-
-fn layer_contains_text_primitives(layer: &LayerNode) -> bool {
-    layer.children.iter().any(|child| {
-        matches!(
-            child,
-            RenderNode::Primitive(PrimitiveEntry {
-                node: PrimitiveNode::Text(_),
-                ..
-            })
-        )
-    })
-}
-
-fn span_has_foreground_override(span_style: &cranpose_ui::text::SpanStyle) -> bool {
-    span_style.color.is_some()
-        || span_style.brush.is_some()
-        || span_style.alpha.is_some()
-        || span_style.draw_style.is_some()
-}
-
-fn text_primitive_uses_gpu_effect(text: &cranpose_render_common::graph::TextPrimitiveNode) -> bool {
-    if text
-        .text
-        .span_styles
-        .iter()
-        .any(|span| span_has_foreground_override(&span.item))
-    {
-        return true;
-    }
-
-    matches!(
-        text.text_style.span_style.brush,
-        Some(
-            Brush::LinearGradient { .. }
-                | Brush::RadialGradient { .. }
-                | Brush::SweepGradient { .. }
-        )
-    ) || matches!(
-        text.text_style.span_style.draw_style,
-        Some(cranpose_ui::text::TextDrawStyle::Stroke { width })
-            if width.is_finite() && width > 0.0
-    )
-}
-
-fn text_primitive_needs_local_surface(
-    text: &cranpose_render_common::graph::TextPrimitiveNode,
-) -> bool {
-    let span_style = &text.text_style.span_style;
-    let has_non_identity_geometric_transform =
-        span_style
-            .text_geometric_transform
-            .is_some_and(|transform| {
-                (transform.scale_x - 1.0).abs() > AFFINE_TOLERANCE
-                    || transform.skew_x.abs() > AFFINE_TOLERANCE
-            });
-    let has_baseline_shift = span_style
-        .baseline_shift
-        .is_some_and(|shift| shift.is_specified() && shift.0.abs() > AFFINE_TOLERANCE);
-
-    text_primitive_uses_gpu_effect(text)
-        || !text.text.span_styles.is_empty()
-        || span_style.shadow.is_some()
-        || span_style.background.is_some()
-        || has_baseline_shift
-        || has_non_identity_geometric_transform
-        || span_style.letter_spacing.is_specified()
-}
-
-fn layer_contains_gpu_effect_text_primitives(layer: &LayerNode) -> bool {
-    layer.children.iter().any(|child| match child {
-        RenderNode::Primitive(PrimitiveEntry {
-            node: PrimitiveNode::Text(text),
-            ..
-        }) => text_primitive_uses_gpu_effect(text),
-        _ => false,
-    })
-}
-
-fn layer_needs_text_leaf_snap(layer: &LayerNode) -> bool {
-    !layer.translated_content_context
-        && layer_contains_text_primitives(layer)
-        && !layer_contains_gpu_effect_text_primitives(layer)
-}
-
-fn resolved_child_surface_composite(
-    child: &ChildLayerComposite<'_>,
-    root_scale: f32,
-) -> ResolvedChildSurfaceComposite {
-    let snap_delta = child
-        .translated_snap_anchor
-        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
-        .unwrap_or_default();
-    let mut backdrop_rect = child.backdrop_rect;
-    backdrop_rect.translate_by(snap_delta);
-    let mut shadow_draws = child.shadow_draws.clone();
-    shadow_draws.translate_by(snap_delta);
-    ResolvedChildSurfaceComposite {
-        logical_rect: child.logical_rect,
-        dest_quad: translate_quad(child.dest_quad, snap_delta),
-        backdrop_rect,
-        shadow_draws,
-    }
-}
-
 fn image_sample_mode(image_draw: &ImageDraw) -> ImageSampleMode {
     if image_draw.motion_context_animated {
         ImageSampleMode::Linear
     } else {
         ImageSampleMode::Nearest
     }
-}
-
-fn root_can_render_directly_cached(
-    layer: &LayerNode,
-    layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
-) -> bool {
-    let requirements = layer_surface_requirements_cached(layer, layer_surface_requirements_cache);
-    !requirements.reasons.has_any()
-        && layer.backdrop().is_none()
-        && layer.graphics_layer.shadow_elevation <= 0.0
-        && !layer_contains_descendant_backdrop(layer)
-}
-
-fn layer_uses_external_backdrop_input(layer: &LayerNode, has_backdrop_underlay: bool) -> bool {
-    has_backdrop_underlay && layer_contains_descendant_backdrop(layer)
-}
-
-fn composite_sample_mode_for_requirements(
-    requirements: LayerSurfaceRequirements,
-) -> CompositeSampleMode {
-    let _ = requirements;
-    CompositeSampleMode::Linear
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-struct LayerSurfaceRequirements {
-    direct_translation: Option<Point>,
-    reasons: LayerSurfaceReasons,
-}
-
-#[cfg(test)]
-fn layer_surface_requirements(layer: &LayerNode) -> LayerSurfaceRequirements {
-    let mut layer_surface_requirements_cache = HashMap::new();
-    layer_surface_requirements_cached(layer, &mut layer_surface_requirements_cache)
-}
-
-fn layer_surface_requirements_cached(
-    layer: &LayerNode,
-    layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
-) -> LayerSurfaceRequirements {
-    let cache_key = layer_cache_key(layer);
-    if let Some(cached) = layer_surface_requirements_cache.get(&cache_key) {
-        return *cached;
-    }
-
-    let effective_isolation = effective_layer_isolation(&layer.graphics_layer);
-    let mut reasons = LayerSurfaceReasons {
-        explicit_offscreen: layer.isolation.explicit_offscreen
-            || layer.graphics_layer.compositing_strategy == CompositingStrategy::Offscreen,
-        effect: layer.isolation.effect || layer.effect().is_some(),
-        backdrop: layer.isolation.backdrop || layer.backdrop().is_some(),
-        group_opacity: layer.isolation.group_opacity
-            || matches!(
-                layer.graphics_layer.compositing_strategy,
-                CompositingStrategy::Auto | CompositingStrategy::Offscreen
-            ) && effective_isolation.is_some()
-                && layer.opacity() < 1.0,
-        blend_mode: layer.isolation.blend_mode || layer.blend_mode() != BlendMode::SrcOver,
-        ..LayerSurfaceReasons::default()
-    };
-    let direct_translation = direct_translation(layer.transform_to_parent);
-    let mut has_direct_safe_primitive = false;
-    let mut has_isolating_child_layer = false;
-
-    for child in &layer.children {
-        match child {
-            RenderNode::Primitive(primitive) => match &primitive.node {
-                PrimitiveNode::Text(text) => {
-                    has_direct_safe_primitive = true;
-                    if text_primitive_needs_local_surface(text) {
-                        reasons.text_local_surface = true;
-                    }
-                }
-                PrimitiveNode::Draw(draw) => match &draw.primitive {
-                    cranpose_ui_graphics::DrawPrimitive::Shadow(_) => {
-                        reasons.immediate_shadow = true;
-                    }
-                    _ => has_direct_safe_primitive = true,
-                },
-            },
-            RenderNode::Layer(child_layer) => {
-                let child_requirements = layer_surface_requirements_cached(
-                    child_layer.as_ref(),
-                    layer_surface_requirements_cache,
-                );
-                if child_requirements.reasons.has_any()
-                    || child_requirements.direct_translation.is_none()
-                {
-                    has_isolating_child_layer = true;
-                }
-            }
-        }
-    }
-
-    if has_direct_safe_primitive && has_isolating_child_layer {
-        reasons.mixed_direct_content = true;
-    }
-    if direct_translation.is_none() {
-        reasons.non_translation_transform = true;
-    }
-
-    let requirements = LayerSurfaceRequirements {
-        direct_translation,
-        reasons,
-    };
-    layer_surface_requirements_cache.insert(cache_key, requirements);
-    requirements
-}
-
-fn push_local_primitive(
-    local_scene: &mut CompositorScene,
-    primitive: &PrimitiveEntry,
-    context: &LocalPrimitiveContext<'_>,
-) {
-    match &primitive.node {
-        PrimitiveNode::Draw(draw) => {
-            let counts_before = scene_counts(local_scene);
-            let clip = resolve_primitive_clip(
-                draw.clip,
-                context.layer_bounds,
-                context.local_layer,
-                context.visual_clip,
-                PrimitiveClipSpace::Local,
-            );
-            if draw.clip.is_some() && clip.is_none() {
-                return;
-            }
-            push_draw_primitive(
-                draw.primitive.clone(),
-                context.layer_bounds,
-                context.local_layer,
-                clip,
-                local_scene,
-                None,
-                context.motion_context_animated || context.content_offset_translation,
-            );
-            assign_snap_anchor_since(local_scene, counts_before, context.draw_snap_anchor);
-        }
-        PrimitiveNode::Text(text) => {
-            let counts_before = scene_counts(local_scene);
-            let text_clip = resolve_primitive_clip(
-                text.clip,
-                context.layer_bounds,
-                context.local_layer,
-                context.visual_clip,
-                PrimitiveClipSpace::Local,
-            );
-            if text.clip.is_some() && text_clip.is_none() {
-                return;
-            }
-            let text_rect = text
-                .rect
-                .translate(context.layer_bounds.x, context.layer_bounds.y);
-            push_text_style_draws(
-                local_scene,
-                text.node_id,
-                context.layer_bounds,
-                text_rect,
-                context.local_layer,
-                &text.text,
-                &text.text_style,
-                text.font_size,
-                text.layout_options,
-                text_clip,
-            );
-            assign_snap_anchor_since(local_scene, counts_before, context.text_snap_anchor);
-        }
-    }
-}
-
-struct LocalPrimitiveContext<'a> {
-    layer_bounds: Rect,
-    local_layer: &'a GraphicsLayer,
-    visual_clip: Option<Rect>,
-    motion_context_animated: bool,
-    content_offset_translation: bool,
-    draw_snap_anchor: Option<SnapAnchor>,
-    text_snap_anchor: Option<SnapAnchor>,
-}
-
-struct LayerSurfaceRenderOptions<'a> {
-    target_scale: f32,
-    backdrop_underlay: Option<&'a OffscreenTarget>,
-    cache_candidate: Option<(LayerRasterCacheKey, Rect)>,
-    logical_rect_override: Option<Rect>,
-    composite_sample_mode: CompositeSampleMode,
-}
-
-fn translate_quad(quad: [[f32; 2]; 4], delta: Point) -> [[f32; 2]; 4] {
-    quad.map(|[x, y]| [x + delta.x, y + delta.y])
-}
-
-#[allow(clippy::too_many_arguments)]
-fn collect_layer_contents_into<'a>(
-    layer: &'a LayerNode,
-    inherited_clip: Option<Rect>,
-    layer_offset: Point,
-    inherited_translated_snap_anchor: Option<SnapAnchor>,
-    local_scene: &mut CompositorScene,
-    child_layers: &mut Vec<ChildLayerComposite<'a>>,
-    layer_surface_rect_cache: &mut HashMap<usize, Rect>,
-    layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
-) {
-    let isolation = effective_layer_isolation(&layer.graphics_layer);
-    let content_layer = layer_for_content(&layer.graphics_layer, isolation.as_ref());
-    let local_layer = local_content_layer(&content_layer);
-    let layer_bounds = layer.local_bounds.translate(layer_offset.x, layer_offset.y);
-    let layer_clip = layer
-        .clip_rect()
-        .map(|clip| clip.translate(layer_offset.x, layer_offset.y));
-    let visual_clip = resolve_clip(inherited_clip, layer_clip);
-
-    // When a layer has its own clip that doesn't intersect the inherited clip,
-    // the entire subtree is invisible — skip it to avoid producing primitives
-    // with no clip (resolve_clip returns None for empty intersections, which
-    // downstream code interprets as "no clipping" rather than "fully clipped").
-    if layer_clip.is_some() && inherited_clip.is_some() && visual_clip.is_none() {
-        return;
-    }
-    let translated_snap_anchor = inherited_translated_snap_anchor.or_else(|| {
-        if layer.translated_content_context {
-            translated_content_snap_anchor(layer_bounds, &local_layer)
-        } else {
-            None
-        }
-    });
-    let layer_snap_anchor = translated_snap_anchor.or_else(|| {
-        if layer_needs_text_leaf_snap(layer) {
-            rigid_snap_anchor(layer_bounds, &local_layer, layer.motion_context_animated)
-        } else {
-            None
-        }
-    });
-    let text_snap_anchor = if layer.translated_content_context {
-        None
-    } else {
-        layer_snap_anchor
-    };
-    let local_primitive_context = LocalPrimitiveContext {
-        layer_bounds,
-        local_layer: &local_layer,
-        visual_clip,
-        motion_context_animated: layer.motion_context_animated,
-        content_offset_translation: layer.translated_content_context,
-        draw_snap_anchor: layer_snap_anchor,
-        text_snap_anchor,
-    };
-    let mut deferred_primitives = Vec::new();
-
-    for child in &layer.children {
-        match child {
-            RenderNode::Primitive(primitive) => match primitive.phase {
-                PrimitivePhase::BeforeChildren => {
-                    push_local_primitive(local_scene, primitive, &local_primitive_context);
-                }
-                PrimitivePhase::AfterChildren => deferred_primitives.push(primitive),
-            },
-            RenderNode::Layer(child_layer) => {
-                let child_requirements = layer_surface_requirements_cached(
-                    child_layer.as_ref(),
-                    layer_surface_requirements_cache,
-                );
-                if !child_requirements.reasons.has_any() {
-                    let translation = child_requirements
-                        .direct_translation
-                        .expect("direct child layers must keep a pure translation transform");
-                    let child_offset = Point::new(
-                        layer_offset.x + translation.x,
-                        layer_offset.y + translation.y,
-                    );
-                    let child_bounds = child_layer
-                        .local_bounds
-                        .translate(child_offset.x, child_offset.y);
-                    let child_shadow_clip = resolve_clip(
-                        visual_clip,
-                        child_layer
-                            .shadow_clip
-                            .map(|clip| clip.translate(child_offset.x, child_offset.y)),
-                    );
-                    push_layer_shadow(
-                        local_scene,
-                        &child_layer.graphics_layer,
-                        child_bounds,
-                        child_bounds,
-                        child_shadow_clip,
-                    );
-                    collect_layer_contents_into(
-                        child_layer.as_ref(),
-                        visual_clip,
-                        child_offset,
-                        translated_snap_anchor,
-                        local_scene,
-                        child_layers,
-                        layer_surface_rect_cache,
-                        layer_surface_requirements_cache,
-                    );
-                    continue;
-                }
-
-                let mut shadow_scene = CompositorScene::new();
-                let child_logical_rect = estimate_layer_surface_rect_cached(
-                    child_layer.as_ref(),
-                    layer_surface_rect_cache,
-                    layer_surface_requirements_cache,
-                );
-                let child_bounds = quad_bounds(
-                    child_layer
-                        .transform_to_parent
-                        .map_rect(child_layer.local_bounds),
-                );
-                let child_bounds = child_bounds.translate(layer_offset.x, layer_offset.y);
-                let child_shadow_clip = resolve_clip(
-                    visual_clip,
-                    child_layer.shadow_clip.map(|clip| {
-                        quad_bounds(child_layer.transform_to_parent.map_rect(clip))
-                            .translate(layer_offset.x, layer_offset.y)
-                    }),
-                );
-                push_layer_shadow(
-                    &mut shadow_scene,
-                    &child_layer.graphics_layer,
-                    child_layer.local_bounds,
-                    child_bounds,
-                    child_shadow_clip,
-                );
-                child_layers.push(ChildLayerComposite {
-                    z_index: local_scene.next_z,
-                    layer: child_layer.as_ref(),
-                    logical_rect: child_logical_rect,
-                    dest_quad: translate_quad(
-                        child_layer.transform_to_parent.map_rect(child_logical_rect),
-                        layer_offset,
-                    ),
-                    backdrop_rect: quad_bounds(translate_quad(
-                        child_layer
-                            .transform_to_parent
-                            .map_rect(child_layer.local_bounds),
-                        layer_offset,
-                    )),
-                    visual_clip,
-                    shadow_draws: shadow_scene.shadow_draws,
-                    needs_nested_underlay: layer_contains_descendant_backdrop(child_layer.as_ref()),
-                    translated_snap_anchor: if child_requirements.reasons.text_local_surface {
-                        None
-                    } else {
-                        translated_snap_anchor
-                    },
-                });
-                local_scene.next_z += 1;
-            }
-        }
-    }
-
-    for primitive in deferred_primitives {
-        push_local_primitive(local_scene, primitive, &local_primitive_context);
-    }
-}
-
-fn collect_layer_contents<'a>(
-    layer: &'a LayerNode,
-    inherited_clip: Option<Rect>,
-    inherited_translated_snap_anchor: Option<SnapAnchor>,
-    layer_surface_rect_cache: &mut HashMap<usize, Rect>,
-    layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
-) -> CollectedLayer<'a> {
-    let mut local_scene = CompositorScene::new();
-    let mut child_layers = Vec::new();
-    collect_layer_contents_into(
-        layer,
-        inherited_clip,
-        Point::default(),
-        inherited_translated_snap_anchor,
-        &mut local_scene,
-        &mut child_layers,
-        layer_surface_rect_cache,
-        layer_surface_requirements_cache,
-    );
-
-    CollectedLayer {
-        scene: local_scene,
-        child_layers,
-    }
-}
-
-#[cfg(test)]
-fn estimate_layer_surface_rect(layer: &LayerNode) -> Rect {
-    let mut layer_surface_rect_cache = HashMap::new();
-    let mut layer_surface_requirements_cache = HashMap::new();
-    estimate_layer_surface_rect_cached(
-        layer,
-        &mut layer_surface_rect_cache,
-        &mut layer_surface_requirements_cache,
-    )
-}
-
-fn estimate_layer_surface_rect_cached(
-    layer: &LayerNode,
-    layer_surface_rect_cache: &mut HashMap<usize, Rect>,
-    layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
-) -> Rect {
-    let cache_key = layer_cache_key(layer);
-    if let Some(cached_rect) = layer_surface_rect_cache.get(&cache_key) {
-        return *cached_rect;
-    }
-
-    let collected = collect_layer_contents(
-        layer,
-        None,
-        None,
-        layer_surface_rect_cache,
-        layer_surface_requirements_cache,
-    );
-    let mut bounds = scene_bounds(&collected.scene);
-    for child in &collected.child_layers {
-        let child_bounds = quad_bounds(child.dest_quad);
-        if let Some(visible) = visible_draw_rect(child_bounds, child.visual_clip) {
-            bounds = union_rect(bounds, visible);
-        }
-        if let Some(shadow_bounds) = shadow_draws_bounds(&child.shadow_draws) {
-            bounds = union_rect(bounds, shadow_bounds);
-        }
-    }
-    let rect = resolved_layer_surface_rect(layer, bounds);
-    layer_surface_rect_cache.insert(cache_key, rect);
-    rect
 }
 
 #[cfg(test)]
@@ -1529,7 +720,7 @@ fn layer_raster_cache_candidate(
     let surface_requirements =
         layer_surface_requirements_cached(layer, &mut layer_surface_requirements_cache);
     let cache_is_allowed = layer.cache_policy == CachePolicy::Auto
-        || (allow_runtime_cache && surface_requirements.reasons.has_renderer_forced_surface());
+        || (allow_runtime_cache && surface_requirements.has_renderer_forced_surface());
     if !cache_is_allowed {
         return None;
     }
@@ -1550,196 +741,6 @@ fn layer_raster_cache_candidate(
         ),
         logical_rect,
     ))
-}
-
-fn resolved_layer_surface_rect(layer: &LayerNode, bounds: Option<Rect>) -> Rect {
-    let rect = bounds.unwrap_or(layer.local_bounds);
-    if layer.effect().is_some() || layer.backdrop().is_some() {
-        union_rect(Some(rect), layer.local_bounds).unwrap_or(rect)
-    } else {
-        rect
-    }
-}
-
-trait TranslateBy {
-    fn translate_by(&mut self, delta: Point);
-}
-
-impl TranslateBy for Rect {
-    fn translate_by(&mut self, delta: Point) {
-        self.x += delta.x;
-        self.y += delta.y;
-    }
-}
-
-impl TranslateBy for DrawShape {
-    fn translate_by(&mut self, delta: Point) {
-        self.rect.translate_by(delta);
-        self.local_rect.translate_by(delta);
-        for point in &mut self.quad {
-            point[0] += delta.x;
-            point[1] += delta.y;
-        }
-        if let Some(clip) = self.clip.as_mut() {
-            clip.translate_by(delta);
-        }
-    }
-}
-
-impl TranslateBy for ImageDraw {
-    fn translate_by(&mut self, delta: Point) {
-        self.rect.translate_by(delta);
-        self.local_rect.translate_by(delta);
-        for point in &mut self.quad {
-            point[0] += delta.x;
-            point[1] += delta.y;
-        }
-        if let Some(clip) = self.clip.as_mut() {
-            clip.translate_by(delta);
-        }
-    }
-}
-
-impl TranslateBy for TextDraw {
-    fn translate_by(&mut self, delta: Point) {
-        self.rect.translate_by(delta);
-        if let Some(clip) = self.clip.as_mut() {
-            clip.translate_by(delta);
-        }
-    }
-}
-
-impl TranslateBy for ShadowDraw {
-    fn translate_by(&mut self, delta: Point) {
-        for (shape, _) in &mut self.shapes {
-            shape.translate_by(delta);
-        }
-        for text in &mut self.texts {
-            text.translate_by(delta);
-        }
-        if let Some(clip) = self.clip.as_mut() {
-            clip.translate_by(delta);
-        }
-    }
-}
-
-impl TranslateBy for EffectLayer {
-    fn translate_by(&mut self, delta: Point) {
-        self.rect.translate_by(delta);
-        if let Some(clip) = self.clip.as_mut() {
-            clip.translate_by(delta);
-        }
-    }
-}
-
-impl TranslateBy for BackdropLayer {
-    fn translate_by(&mut self, delta: Point) {
-        self.rect.translate_by(delta);
-        if let Some(clip) = self.clip.as_mut() {
-            clip.translate_by(delta);
-        }
-    }
-}
-
-impl<T: TranslateBy> TranslateBy for Vec<T> {
-    fn translate_by(&mut self, delta: Point) {
-        for item in self {
-            item.translate_by(delta);
-        }
-    }
-}
-
-impl TranslateBy for CompositorScene {
-    fn translate_by(&mut self, delta: Point) {
-        self.shapes.translate_by(delta);
-        self.images.translate_by(delta);
-        self.texts.translate_by(delta);
-        self.shadow_draws.translate_by(delta);
-        self.effect_layers.translate_by(delta);
-        self.backdrop_layers.translate_by(delta);
-    }
-}
-
-struct SceneWindowSource<'a> {
-    shapes: &'a [DrawShape],
-    images: &'a [ImageDraw],
-    texts: &'a [TextDraw],
-    shadow_draws: &'a [ShadowDraw],
-    effect_layers: &'a [EffectLayer],
-    backdrop_layers: &'a [BackdropLayer],
-}
-
-fn build_scene_window(
-    source: SceneWindowSource<'_>,
-    z_start: usize,
-    z_end: usize,
-    window_rect: Rect,
-) -> CompositorScene {
-    let mut scene = CompositorScene::new();
-    scene.shapes = source
-        .shapes
-        .iter()
-        .filter(|shape| shape.z_index >= z_start && shape.z_index < z_end)
-        .cloned()
-        .collect();
-    scene.images = source
-        .images
-        .iter()
-        .filter(|image| image.z_index >= z_start && image.z_index < z_end)
-        .cloned()
-        .collect();
-    scene.texts = source
-        .texts
-        .iter()
-        .filter(|text| text.z_index >= z_start && text.z_index < z_end)
-        .cloned()
-        .collect();
-    scene.shadow_draws = source
-        .shadow_draws
-        .iter()
-        .filter(|shadow| shadow.z_index >= z_start && shadow.z_index < z_end)
-        .cloned()
-        .collect();
-    scene.effect_layers = source
-        .effect_layers
-        .iter()
-        .filter(|layer| effect_layer_in_range(layer, z_start, z_end))
-        .cloned()
-        .collect();
-    scene.backdrop_layers = source
-        .backdrop_layers
-        .iter()
-        .filter(|layer| layer.z_index >= z_start && layer.z_index < z_end)
-        .cloned()
-        .collect();
-    scene.translate_by(Point {
-        x: -window_rect.x,
-        y: -window_rect.y,
-    });
-    scene
-}
-
-fn filtered_effect_layer_index(
-    effect_layers: &[EffectLayer],
-    effect_layer_index: usize,
-    z_start: usize,
-    z_end: usize,
-) -> Option<usize> {
-    let mut filtered_index = 0usize;
-    for (index, layer) in effect_layers.iter().enumerate() {
-        if !effect_layer_in_range(layer, z_start, z_end) {
-            continue;
-        }
-        if index == effect_layer_index {
-            return Some(filtered_index);
-        }
-        filtered_index += 1;
-    }
-    None
-}
-
-fn scaled_quad(quad: [[f32; 2]; 4], scale: f32) -> [[f32; 2]; 4] {
-    quad.map(|[x, y]| [x * scale, y * scale])
 }
 
 impl GpuRenderer {
@@ -1957,6 +958,8 @@ impl GpuRenderer {
                 NonZeroUsize::new(MAX_TEXTURE_CACHE_ITEMS)
                     .expect("image texture cache size must be non-zero"),
             ),
+            translated_text_raster_origins: HashMap::new(),
+            active_translated_text_nodes: HashSet::new(),
             text_viewport,
             scratch_shape_data: Vec::new(),
             scratch_gradients: Vec::new(),
@@ -2065,6 +1068,31 @@ impl GpuRenderer {
             },
         );
         Ok(())
+    }
+
+    fn translated_text_raster_origin(
+        &mut self,
+        node_id: NodeId,
+        current_position: Point,
+        root_scale: f32,
+    ) -> Point {
+        self.active_translated_text_nodes.insert(node_id);
+
+        let origin = self
+            .translated_text_raster_origins
+            .entry(node_id)
+            .or_insert(TranslatedTextRasterOrigin {
+                position: current_position,
+                root_scale,
+            });
+        if (origin.root_scale - root_scale).abs() > f32::EPSILON {
+            *origin = TranslatedTextRasterOrigin {
+                position: current_position,
+                root_scale,
+            };
+        }
+
+        origin.position
     }
 
     /// Acquire an offscreen target from the pool with stats tracking.
@@ -2176,7 +1204,7 @@ impl GpuRenderer {
         let surface_requirements =
             layer_surface_requirements_cached(layer, &mut self.layer_surface_requirements_cache);
         let cache_is_allowed = layer.cache_policy == CachePolicy::Auto
-            || (allow_runtime_cache && surface_requirements.reasons.has_renderer_forced_surface());
+            || (allow_runtime_cache && surface_requirements.has_renderer_forced_surface());
         if !cache_is_allowed {
             return None;
         }
@@ -2205,6 +1233,367 @@ impl GpuRenderer {
         ))
     }
 
+    fn supports_render_effect(&self, effect: &RenderEffect) -> bool {
+        is_render_effect_supported(effect)
+    }
+}
+
+impl SurfaceExecutionBackend for GpuRenderer {
+    fn max_texture_dim(&self) -> u32 {
+        GpuRenderer::max_texture_dim(self)
+    }
+
+    fn acquire_offscreen(&mut self, width: u32, height: u32) -> OffscreenTarget {
+        GpuRenderer::acquire_offscreen(self, width, height)
+    }
+
+    fn release_offscreen(&mut self, target: OffscreenTarget) {
+        self.effect_renderer.offscreen_pool.release(target);
+    }
+
+    fn release_layer_surface_target(&mut self, target: LayerSurfaceTexture) {
+        GpuRenderer::release_layer_surface_target(self, target);
+    }
+
+    fn cached_layer_surface(
+        &mut self,
+        key: &LayerRasterCacheKey,
+    ) -> Option<(Rc<OffscreenTarget>, Rect)> {
+        GpuRenderer::cached_layer_surface(self, key)
+    }
+
+    fn insert_cached_layer_surface(
+        &mut self,
+        key: LayerRasterCacheKey,
+        target: OffscreenTarget,
+        logical_rect: Rect,
+    ) -> Rc<OffscreenTarget> {
+        GpuRenderer::insert_cached_layer_surface(self, key, target, logical_rect)
+    }
+
+    fn layer_raster_cache_candidate(
+        &mut self,
+        layer: &LayerNode,
+        root_scale: f32,
+        has_backdrop_underlay: bool,
+        allow_runtime_cache: bool,
+        logical_rect_override: Option<Rect>,
+    ) -> Option<(LayerRasterCacheKey, Rect)> {
+        GpuRenderer::layer_raster_cache_candidate(
+            self,
+            layer,
+            root_scale,
+            has_backdrop_underlay,
+            allow_runtime_cache,
+            logical_rect_override,
+        )
+    }
+
+    fn layer_surface_requirements(&mut self, layer: &LayerNode) -> LayerSurfaceRequirements {
+        layer_surface_requirements_cached(layer, &mut self.layer_surface_requirements_cache)
+    }
+
+    fn collect_layer_contents_with_translation_context<'a>(
+        &mut self,
+        layer: &'a LayerNode,
+        inherited_clip: Option<Rect>,
+        inherited_translated_snap_anchor: Option<SnapAnchor>,
+        translation_context: TranslationRenderContext,
+    ) -> CollectedLayer<'a> {
+        collect_layer_contents_with_translation_context(
+            layer,
+            inherited_clip,
+            inherited_translated_snap_anchor,
+            translation_context,
+            &mut self.layer_surface_rect_cache,
+            &mut self.layer_surface_requirements_cache,
+        )
+    }
+
+    fn clear_target_view_with_load_op(
+        &self,
+        target_view: &wgpu::TextureView,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+    ) {
+        GpuRenderer::clear_target_view_with_load_op(self, target_view, load_op);
+    }
+
+    fn render_non_effect_segment(
+        &mut self,
+        text_state: &mut TextSystemState,
+        target_view: &wgpu::TextureView,
+        shapes: &[DrawShape],
+        images: &[ImageDraw],
+        texts: &[TextDraw],
+        shadow_draws: &[ShadowDraw],
+        z_start: usize,
+        z_end: usize,
+        effect_z_ranges: &[Range<usize>],
+        width: u32,
+        height: u32,
+        root_scale: f32,
+        initial_load_op: wgpu::LoadOp<wgpu::Color>,
+    ) -> Result<(), String> {
+        GpuRenderer::render_non_effect_segment(
+            self,
+            text_state,
+            target_view,
+            shapes,
+            images,
+            texts,
+            shadow_draws,
+            z_start,
+            z_end,
+            effect_z_ranges,
+            width,
+            height,
+            root_scale,
+            initial_load_op,
+        )
+    }
+
+    fn render_range_with_layer_events_to_target(
+        &mut self,
+        text_state: &mut TextSystemState,
+        target: &OffscreenTarget,
+        shapes: &[DrawShape],
+        images: &[ImageDraw],
+        texts: &[TextDraw],
+        shadow_draws: &[ShadowDraw],
+        effect_layers: &[EffectLayer],
+        backdrop_layers: &[BackdropLayer],
+        z_start: usize,
+        z_end: usize,
+        excluded_effect_layer: Option<usize>,
+        width: u32,
+        height: u32,
+        root_scale: f32,
+        backdrop_underlay: Option<&OffscreenTarget>,
+        initial_load_op: wgpu::LoadOp<wgpu::Color>,
+    ) -> Result<(), String> {
+        GpuRenderer::render_range_with_layer_events_to_target(
+            self,
+            text_state,
+            target,
+            shapes,
+            images,
+            texts,
+            shadow_draws,
+            effect_layers,
+            backdrop_layers,
+            z_start,
+            z_end,
+            excluded_effect_layer,
+            width,
+            height,
+            root_scale,
+            backdrop_underlay,
+            initial_load_op,
+        )
+    }
+
+    fn render_shadow_draw(
+        &mut self,
+        text_state: &mut TextSystemState,
+        target_view: &wgpu::TextureView,
+        shadow: &ShadowDraw,
+        width: u32,
+        height: u32,
+        root_scale: f32,
+    ) {
+        GpuRenderer::render_shadow_draw(
+            self,
+            text_state,
+            target_view,
+            shadow,
+            width,
+            height,
+            root_scale,
+        );
+    }
+
+    fn composite_to_view(
+        &mut self,
+        source: &OffscreenTarget,
+        dest_view: &wgpu::TextureView,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        sample_mode: CompositeSampleMode,
+    ) {
+        self.effect_renderer.composite_to_view(
+            &self.device,
+            &self.queue,
+            source,
+            dest_view,
+            load_op,
+            sample_mode,
+        );
+    }
+
+    fn composite_to_view_projective(
+        &mut self,
+        source: &OffscreenTarget,
+        dest_view: &wgpu::TextureView,
+        viewport: (u32, u32),
+        source_size: (f32, f32),
+        inverse_matrix: [[f32; 3]; 3],
+        dest_bounds: [[f32; 2]; 4],
+        alpha: f32,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        scissor: Option<(u32, u32, u32, u32)>,
+        blend_mode: BlendMode,
+        sample_mode: CompositeSampleMode,
+    ) {
+        self.effect_renderer.composite_to_view_projective(
+            &self.device,
+            &self.queue,
+            source,
+            dest_view,
+            viewport,
+            source_size,
+            inverse_matrix,
+            dest_bounds,
+            alpha,
+            load_op,
+            scissor,
+            supported_blend_mode(blend_mode),
+            sample_mode,
+        );
+    }
+
+    fn composite_to_view_scissored_with_alpha_and_mask_and_blend_mode(
+        &mut self,
+        source: &OffscreenTarget,
+        dest_view: &wgpu::TextureView,
+        alpha: f32,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        scissor: Option<(u32, u32, u32, u32)>,
+        rounded_mask: Option<RoundedCompositeMask>,
+        blend_mode: BlendMode,
+        dest_viewport: Option<(f32, f32, f32, f32)>,
+        sample_mode: CompositeSampleMode,
+    ) {
+        self.effect_renderer
+            .composite_to_view_scissored_with_alpha_and_mask_and_blend_mode(
+                &self.device,
+                &self.queue,
+                source,
+                dest_view,
+                alpha,
+                load_op,
+                scissor,
+                rounded_mask,
+                supported_blend_mode(blend_mode),
+                dest_viewport,
+                sample_mode,
+            );
+    }
+
+    fn apply_effect(
+        &mut self,
+        source: &OffscreenTarget,
+        dest_view: &wgpu::TextureView,
+        effect: &RenderEffect,
+        effect_rect: [f32; 4],
+    ) {
+        self.effect_renderer.apply_effect(
+            &self.device,
+            &self.queue,
+            source,
+            dest_view,
+            effect,
+            effect_rect,
+        );
+    }
+
+    fn is_render_effect_supported(&self, effect: &RenderEffect) -> bool {
+        self.supports_render_effect(effect)
+    }
+
+    fn warn_unsupported_effect_once(&self) {
+        warn_unsupported_effect_once();
+    }
+
+    fn record_layer_cache_miss(&self, width: u32, height: u32) {
+        self.frame_stats.record_layer_cache_miss(width, height);
+    }
+
+    fn record_isolated_layer_render(
+        &self,
+        width: u32,
+        height: u32,
+        node_id: Option<NodeId>,
+        logical_rect: Rect,
+        requirements: SurfaceRequirementSet,
+    ) {
+        self.frame_stats.record_isolated_layer_render(
+            width,
+            height,
+            node_id,
+            logical_rect,
+            requirements.into(),
+        );
+    }
+}
+
+impl GpuRenderer {
+    #[allow(clippy::too_many_arguments)]
+    fn composite_offscreen_quad_to_view(
+        &mut self,
+        source: &OffscreenTarget,
+        dest_view: &wgpu::TextureView,
+        viewport: (u32, u32),
+        dest_quad: [[f32; 2]; 4],
+        alpha: f32,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        scissor: Option<(u32, u32, u32, u32)>,
+        blend_mode: BlendMode,
+        sample_mode: CompositeSampleMode,
+    ) -> Result<(), String> {
+        if let Some(dest_rect) = axis_aligned_quad_rect(dest_quad) {
+            self.effect_renderer
+                .composite_to_view_scissored_with_alpha_and_mask_and_blend_mode(
+                    &self.device,
+                    &self.queue,
+                    source,
+                    dest_view,
+                    alpha,
+                    load_op,
+                    scissor,
+                    None,
+                    supported_blend_mode(blend_mode),
+                    Some((dest_rect.x, dest_rect.y, dest_rect.width, dest_rect.height)),
+                    sample_mode,
+                );
+            return Ok(());
+        }
+
+        let source_rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: source.width as f32,
+            height: source.height as f32,
+        };
+        let inverse = ProjectiveTransform::from_rect_to_quad(source_rect, dest_quad)
+            .inverse()
+            .ok_or_else(|| "root layer transform is not invertible".to_string())?;
+        self.effect_renderer.composite_to_view_projective(
+            &self.device,
+            &self.queue,
+            source,
+            dest_view,
+            viewport,
+            (source_rect.width, source_rect.height),
+            inverse.matrix(),
+            dest_quad,
+            alpha,
+            load_op,
+            scissor,
+            supported_blend_mode(blend_mode),
+            sample_mode,
+        );
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)] // Render path needs explicit scene slices and target metadata.
     pub fn render(
         &mut self,
@@ -2218,8 +1607,14 @@ impl GpuRenderer {
         log::trace!("🎨 Rendering graph to {}x{}", width, height);
 
         self.text_batch_cursor = 0;
+        self.active_translated_text_nodes.clear();
 
         let result = self.render_graph(text_state, view, graph, width, height, root_scale);
+        if result.is_ok() {
+            self.translated_text_raster_origins
+                .retain(|node_id, _| self.active_translated_text_nodes.contains(node_id));
+        }
+        self.active_translated_text_nodes.clear();
 
         // Trim text renderer pool to the number of slots actually used this frame,
         // plus a small margin to avoid thrashing on minor batch count fluctuations.
@@ -2419,27 +1814,19 @@ impl GpuRenderer {
         let root_surface = self.render_layer_surface(
             text_state,
             &graph.root,
-            root_scale,
-            None,
-            false,
-            Some(viewport_rect),
+            LayerSurfaceRequest {
+                root_scale,
+                backdrop_underlay: None,
+                allow_runtime_cache: false,
+                logical_rect_override: Some(viewport_rect),
+                translation_context: TranslationRenderContext::default(),
+            },
         )?;
         let root_quad = graph
             .root
             .transform_to_parent
             .map_rect(root_surface.logical_rect);
         let root_dest_quad = scaled_quad(root_quad, root_scale);
-        let root_source_rect = Rect {
-            x: 0.0,
-            y: 0.0,
-            width: root_surface.target.width() as f32,
-            height: root_surface.target.height() as f32,
-        };
-        let root_transform =
-            ProjectiveTransform::from_rect_to_quad(root_source_rect, root_dest_quad);
-        let root_inverse = root_transform
-            .inverse()
-            .ok_or_else(|| "root layer transform is not invertible".to_string())?;
 
         let needs_root_composite_target =
             graph.root.backdrop().is_some() || graph.root.graphics_layer.shadow_elevation > 0.0;
@@ -2503,21 +1890,19 @@ impl GpuRenderer {
                 );
             }
 
-            self.effect_renderer.composite_to_view_projective(
-                &self.device,
-                &self.queue,
+            let composite_dest_quad =
+                snap_motion_stable_dest_quad(root_dest_quad, root_surface.sample_mode);
+            self.composite_offscreen_quad_to_view(
                 root_surface.target.target(),
                 &composite_target.view,
                 (width, height),
-                (root_source_rect.width, root_source_rect.height),
-                root_inverse.matrix(),
-                root_dest_quad,
+                composite_dest_quad,
                 root_surface.composite_alpha,
                 wgpu::LoadOp::Load,
                 None,
-                supported_blend_mode(root_surface.blend_mode),
+                root_surface.blend_mode,
                 root_surface.sample_mode,
-            );
+            )?;
             self.effect_renderer.composite_to_view(
                 &self.device,
                 &self.queue,
@@ -2530,21 +1915,19 @@ impl GpuRenderer {
                 .offscreen_pool
                 .release(composite_target);
         } else {
-            self.effect_renderer.composite_to_view_projective(
-                &self.device,
-                &self.queue,
+            let composite_dest_quad =
+                snap_motion_stable_dest_quad(root_dest_quad, root_surface.sample_mode);
+            self.composite_offscreen_quad_to_view(
                 root_surface.target.target(),
                 surface_view,
                 (width, height),
-                (root_source_rect.width, root_source_rect.height),
-                root_inverse.matrix(),
-                root_dest_quad,
+                composite_dest_quad,
                 root_surface.composite_alpha,
                 wgpu::LoadOp::Clear(CLEAR_COLOR),
                 None,
-                supported_blend_mode(root_surface.blend_mode),
+                root_surface.blend_mode,
                 root_surface.sample_mode,
-            );
+            )?;
         }
         self.release_layer_surface_target(root_surface.target);
         Ok(())
@@ -2559,552 +1942,24 @@ impl GpuRenderer {
         height: u32,
         root_scale: f32,
     ) -> Result<(), String> {
-        let CollectedLayer {
-            scene: local_scene,
-            child_layers,
-        } = collected;
-
-        let mut cursor_z = 0usize;
-        let mut next_load_op = wgpu::LoadOp::Clear(CLEAR_COLOR);
-        for child in child_layers {
-            if cursor_z < child.z_index {
-                self.render_non_effect_segment(
-                    text_state,
-                    surface_view,
-                    &local_scene.shapes,
-                    &local_scene.images,
-                    &local_scene.texts,
-                    &local_scene.shadow_draws,
-                    cursor_z,
-                    child.z_index,
-                    &[],
-                    width,
-                    height,
-                    root_scale,
-                    next_load_op,
-                )?;
-                next_load_op = wgpu::LoadOp::Load;
-            } else if matches!(next_load_op, wgpu::LoadOp::Clear(_)) {
-                self.clear_target_view_with_load_op(surface_view, next_load_op);
-                next_load_op = wgpu::LoadOp::Load;
-            }
-
-            let resolved_child = resolved_child_surface_composite(&child, root_scale);
-
-            for shadow in &resolved_child.shadow_draws {
-                self.render_shadow_draw(
-                    text_state,
-                    surface_view,
-                    shadow,
-                    width,
-                    height,
-                    root_scale,
-                );
-            }
-
-            let child_surface = self.render_layer_surface(
-                text_state,
-                child.layer,
-                root_scale,
-                None,
-                true,
-                Some(resolved_child.logical_rect),
-            )?;
-            if child_surface.backdrop.is_some() {
-                return Err("root direct path does not support backdrop child surfaces".to_string());
-            }
-
-            let source_rect = Rect {
-                x: 0.0,
-                y: 0.0,
-                width: child_surface.target.width() as f32,
-                height: child_surface.target.height() as f32,
-            };
-            let inverse = ProjectiveTransform::from_rect_to_quad(
-                source_rect,
-                scaled_quad(resolved_child.dest_quad, root_scale),
-            )
-            .inverse()
-            .ok_or_else(|| "child layer transform is not invertible".to_string())?;
-            self.effect_renderer.composite_to_view_projective(
-                &self.device,
-                &self.queue,
-                child_surface.target.target(),
-                surface_view,
-                (width, height),
-                (source_rect.width, source_rect.height),
-                inverse.matrix(),
-                scaled_quad(resolved_child.dest_quad, root_scale),
-                child_surface.composite_alpha,
-                wgpu::LoadOp::Load,
-                child
-                    .visual_clip
-                    .and_then(|clip| scissor_rect_for_rect(clip, root_scale, width, height)),
-                supported_blend_mode(child_surface.blend_mode),
-                child_surface.sample_mode,
-            );
-            self.release_layer_surface_target(child_surface.target);
-            cursor_z = child.z_index.saturating_add(1);
-        }
-
-        if cursor_z < local_scene.next_z {
-            self.render_non_effect_segment(
-                text_state,
-                surface_view,
-                &local_scene.shapes,
-                &local_scene.images,
-                &local_scene.texts,
-                &local_scene.shadow_draws,
-                cursor_z,
-                local_scene.next_z,
-                &[],
-                width,
-                height,
-                root_scale,
-                next_load_op,
-            )?;
-        } else if matches!(next_load_op, wgpu::LoadOp::Clear(_)) {
-            self.clear_target_view_with_load_op(surface_view, next_load_op);
-        }
-
-        Ok(())
-    }
-
-    fn create_projected_child_underlay(
-        &mut self,
-        parent_target: &OffscreenTarget,
-        parent_underlay: Option<&OffscreenTarget>,
-        child_logical_rect: Rect,
-        child_dest_quad: [[f32; 2]; 4],
-        root_scale: f32,
-    ) -> OffscreenTarget {
-        let (width, height) =
-            surface_target_size(child_logical_rect, root_scale, self.max_texture_dim());
-        let underlay = self.acquire_offscreen(width, height);
-        let child_source_rect = Rect {
-            x: 0.0,
-            y: 0.0,
-            width: width as f32,
-            height: height as f32,
-        };
-        let transform = ProjectiveTransform::from_rect_to_quad(
-            child_source_rect,
-            scaled_quad(child_dest_quad, root_scale),
-        );
-        let dest_quad = target_quad(width, height);
-        let mut next_load_op = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
-
-        if let Some(ancestor_underlay) = parent_underlay {
-            self.effect_renderer.composite_to_view_projective(
-                &self.device,
-                &self.queue,
-                ancestor_underlay,
-                &underlay.view,
-                (width, height),
-                (
-                    ancestor_underlay.width as f32,
-                    ancestor_underlay.height as f32,
-                ),
-                transform.matrix(),
-                dest_quad,
-                1.0,
-                next_load_op,
-                None,
-                BlendMode::SrcOver,
-                CompositeSampleMode::Linear,
-            );
-            next_load_op = wgpu::LoadOp::Load;
-        }
-
-        self.effect_renderer.composite_to_view_projective(
-            &self.device,
-            &self.queue,
-            parent_target,
-            &underlay.view,
-            (width, height),
-            (parent_target.width as f32, parent_target.height as f32),
-            transform.matrix(),
-            dest_quad,
-            1.0,
-            next_load_op,
-            None,
-            BlendMode::SrcOver,
-            CompositeSampleMode::Linear,
-        );
-
-        underlay
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn copy_surface_region_to_view(
-        &mut self,
-        source: &OffscreenTarget,
-        source_rect: Rect,
-        dest_view: &wgpu::TextureView,
-        dest_width: u32,
-        dest_height: u32,
-        root_scale: f32,
-        load_op: wgpu::LoadOp<wgpu::Color>,
-    ) -> Result<(), String> {
-        let source_pixel_rect = surface_pixel_rect(source_rect, root_scale);
-        let dest_quad = target_quad(dest_width, dest_height);
-        let inverse = ProjectiveTransform::from_rect_to_quad(source_pixel_rect, dest_quad)
-            .inverse()
-            .ok_or_else(|| "surface region transform is not invertible".to_string())?;
-        self.effect_renderer.composite_to_view_projective(
-            &self.device,
-            &self.queue,
-            source,
-            dest_view,
-            (dest_width, dest_height),
-            (source.width as f32, source.height as f32),
-            inverse.matrix(),
-            dest_quad,
-            1.0,
-            load_op,
-            None,
-            BlendMode::SrcOver,
-            CompositeSampleMode::Linear,
-        );
-        Ok(())
+        execute_render_root_direct(
+            self,
+            text_state,
+            surface_view,
+            collected,
+            width,
+            height,
+            root_scale,
+        )
     }
 
     fn render_layer_surface(
         &mut self,
         text_state: &mut TextSystemState,
         layer: &LayerNode,
-        root_scale: f32,
-        backdrop_underlay: Option<&OffscreenTarget>,
-        allow_runtime_cache: bool,
-        logical_rect_override: Option<Rect>,
+        request: LayerSurfaceRequest<'_>,
     ) -> Result<LayerSurface, String> {
-        let surface_requirements =
-            layer_surface_requirements_cached(layer, &mut self.layer_surface_requirements_cache);
-        let composite_sample_mode = composite_sample_mode_for_requirements(surface_requirements);
-        let target_scale = root_scale;
-        let cache_candidate = self.layer_raster_cache_candidate(
-            layer,
-            target_scale,
-            backdrop_underlay.is_some(),
-            allow_runtime_cache,
-            logical_rect_override,
-        );
-        if let Some((cache_key, logical_rect)) = cache_candidate {
-            if let Some((target, logical_rect)) = self.cached_layer_surface(&cache_key) {
-                let isolation = effective_layer_isolation(&layer.graphics_layer);
-                return Ok(LayerSurface {
-                    target: LayerSurfaceTexture::Cached(target),
-                    logical_rect,
-                    composite_alpha: isolation
-                        .as_ref()
-                        .map(|params| params.composite_alpha)
-                        .unwrap_or(1.0),
-                    blend_mode: isolation
-                        .as_ref()
-                        .map(|params| params.blend_mode)
-                        .unwrap_or(BlendMode::SrcOver),
-                    backdrop: layer.backdrop().cloned(),
-                    sample_mode: composite_sample_mode,
-                });
-            }
-            let (width, height) = cache_key.pixel_size();
-            self.frame_stats.record_layer_cache_miss(width, height);
-            return self.render_layer_surface_uncached(
-                text_state,
-                layer,
-                LayerSurfaceRenderOptions {
-                    target_scale,
-                    backdrop_underlay,
-                    cache_candidate: Some((cache_key, logical_rect)),
-                    logical_rect_override,
-                    composite_sample_mode,
-                },
-            );
-        }
-
-        self.render_layer_surface_uncached(
-            text_state,
-            layer,
-            LayerSurfaceRenderOptions {
-                target_scale,
-                backdrop_underlay,
-                cache_candidate: None,
-                logical_rect_override,
-                composite_sample_mode,
-            },
-        )
-    }
-
-    fn render_layer_surface_uncached(
-        &mut self,
-        text_state: &mut TextSystemState,
-        layer: &LayerNode,
-        options: LayerSurfaceRenderOptions<'_>,
-    ) -> Result<LayerSurface, String> {
-        let LayerSurfaceRenderOptions {
-            target_scale,
-            backdrop_underlay,
-            cache_candidate,
-            logical_rect_override,
-            composite_sample_mode,
-        } = options;
-        let isolation = effective_layer_isolation(&layer.graphics_layer);
-        let CollectedLayer {
-            scene: mut local_scene,
-            child_layers,
-        } = collect_layer_contents(
-            layer,
-            None,
-            None,
-            &mut self.layer_surface_rect_cache,
-            &mut self.layer_surface_requirements_cache,
-        );
-
-        let surface_rect = cache_candidate
-            .map(|(_, logical_rect)| logical_rect)
-            .or(logical_rect_override)
-            .unwrap_or_else(|| {
-                let mut bounds = scene_bounds(&local_scene);
-                for child in &child_layers {
-                    let child_bounds = quad_bounds(child.dest_quad);
-                    if let Some(visible) = visible_draw_rect(child_bounds, child.visual_clip) {
-                        bounds = union_rect(bounds, visible);
-                    }
-                    if let Some(shadow_bounds) = shadow_draws_bounds(&child.shadow_draws) {
-                        bounds = union_rect(bounds, shadow_bounds);
-                    }
-                }
-                resolved_layer_surface_rect(layer, bounds)
-            });
-        let shift = Point {
-            x: -surface_rect.x,
-            y: -surface_rect.y,
-        };
-        local_scene.translate_by(shift);
-
-        let mut child_layers = child_layers;
-        for child in &mut child_layers {
-            for point in &mut child.dest_quad {
-                point[0] += shift.x;
-                point[1] += shift.y;
-            }
-            child.backdrop_rect.x += shift.x;
-            child.backdrop_rect.y += shift.y;
-            if let Some(clip) = child.visual_clip.as_mut() {
-                clip.x += shift.x;
-                clip.y += shift.y;
-            }
-            child.shadow_draws.translate_by(shift);
-        }
-
-        // Reduce target_scale if needed so both pixel dimensions fit within
-        // max_texture_dimension_2d.  This preserves aspect ratio and avoids
-        // scissor-rect-out-of-bounds on WebGL2 (max 2048).
-        let max_dim = self.max_texture_dim() as f32;
-        let target_scale = target_scale
-            .min(max_dim / surface_rect.width.max(1.0))
-            .min(max_dim / surface_rect.height.max(1.0));
-        let (width, height) =
-            surface_target_size(surface_rect, target_scale, self.max_texture_dim());
-        let surface_requirements =
-            layer_surface_requirements_cached(layer, &mut self.layer_surface_requirements_cache);
-        self.frame_stats.record_isolated_layer_render(
-            width,
-            height,
-            layer.node_id,
-            surface_rect,
-            surface_requirements.reasons,
-        );
-        let target = self.acquire_offscreen(width, height);
-
-        let mut cursor_z = 0usize;
-        let mut next_load_op = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
-        for child in child_layers {
-            if cursor_z < child.z_index {
-                self.render_range_with_layer_events_to_target(
-                    text_state,
-                    &target,
-                    &local_scene.shapes,
-                    &local_scene.images,
-                    &local_scene.texts,
-                    &local_scene.shadow_draws,
-                    &local_scene.effect_layers,
-                    &local_scene.backdrop_layers,
-                    cursor_z,
-                    child.z_index,
-                    None,
-                    width,
-                    height,
-                    target_scale,
-                    backdrop_underlay,
-                    next_load_op,
-                )?;
-                next_load_op = wgpu::LoadOp::Load;
-            } else if matches!(next_load_op, wgpu::LoadOp::Clear(_)) {
-                self.clear_target_view_with_load_op(&target.view, next_load_op);
-                next_load_op = wgpu::LoadOp::Load;
-            }
-
-            let resolved_child = resolved_child_surface_composite(&child, target_scale);
-
-            let child_underlay = child.needs_nested_underlay.then(|| {
-                self.create_projected_child_underlay(
-                    &target,
-                    backdrop_underlay,
-                    resolved_child.logical_rect,
-                    resolved_child.dest_quad,
-                    target_scale,
-                )
-            });
-            let child_surface = self.render_layer_surface(
-                text_state,
-                child.layer,
-                target_scale,
-                child_underlay.as_ref(),
-                true,
-                Some(resolved_child.logical_rect),
-            )?;
-
-            if let Some(backdrop) = &child_surface.backdrop {
-                self.apply_backdrop_layer_to_target(
-                    &target,
-                    &BackdropLayer {
-                        rect: resolved_child.backdrop_rect,
-                        clip: child.visual_clip,
-                        effect: backdrop.clone(),
-                        z_index: child.z_index,
-                    },
-                    backdrop_underlay,
-                    width,
-                    height,
-                    target_scale,
-                )?;
-            }
-
-            for shadow in &resolved_child.shadow_draws {
-                self.render_shadow_draw(
-                    text_state,
-                    &target.view,
-                    shadow,
-                    width,
-                    height,
-                    target_scale,
-                );
-            }
-
-            let source_rect = Rect {
-                x: 0.0,
-                y: 0.0,
-                width: child_surface.target.width() as f32,
-                height: child_surface.target.height() as f32,
-            };
-            let inverse = ProjectiveTransform::from_rect_to_quad(
-                source_rect,
-                scaled_quad(resolved_child.dest_quad, target_scale),
-            )
-            .inverse()
-            .ok_or_else(|| "child layer transform is not invertible".to_string())?;
-            self.effect_renderer.composite_to_view_projective(
-                &self.device,
-                &self.queue,
-                child_surface.target.target(),
-                &target.view,
-                (width, height),
-                (source_rect.width, source_rect.height),
-                inverse.matrix(),
-                scaled_quad(resolved_child.dest_quad, target_scale),
-                child_surface.composite_alpha,
-                wgpu::LoadOp::Load,
-                child
-                    .visual_clip
-                    .and_then(|clip| scissor_rect_for_rect(clip, target_scale, width, height)),
-                supported_blend_mode(child_surface.blend_mode),
-                child_surface.sample_mode,
-            );
-            self.release_layer_surface_target(child_surface.target);
-            if let Some(underlay) = child_underlay {
-                self.effect_renderer.offscreen_pool.release(underlay);
-            }
-            cursor_z = child.z_index.saturating_add(1);
-        }
-
-        if cursor_z < local_scene.next_z {
-            self.render_range_with_layer_events_to_target(
-                text_state,
-                &target,
-                &local_scene.shapes,
-                &local_scene.images,
-                &local_scene.texts,
-                &local_scene.shadow_draws,
-                &local_scene.effect_layers,
-                &local_scene.backdrop_layers,
-                cursor_z,
-                local_scene.next_z,
-                None,
-                width,
-                height,
-                target_scale,
-                backdrop_underlay,
-                next_load_op,
-            )?;
-        } else if matches!(next_load_op, wgpu::LoadOp::Clear(_)) {
-            self.clear_target_view_with_load_op(&target.view, next_load_op);
-        }
-
-        let mut target = target;
-        if let Some(effect) = isolation.as_ref().and_then(|params| params.effect.as_ref()) {
-            if is_render_effect_supported(effect) {
-                let effected = self.acquire_offscreen(width, height);
-                self.effect_renderer.apply_effect(
-                    &self.device,
-                    &self.queue,
-                    &target,
-                    &effected.view,
-                    effect,
-                    local_effect_pixel_rect(width, height),
-                );
-                self.effect_renderer.offscreen_pool.release(target);
-                target = effected;
-            } else {
-                warn_unsupported_effect_once();
-            }
-        }
-
-        if let Some((cache_key, logical_rect)) = cache_candidate {
-            if offscreen_byte_size(target.width, target.height) <= MAX_LAYER_SURFACE_CACHE_BYTES {
-                let cached_target =
-                    self.insert_cached_layer_surface(cache_key, target, logical_rect);
-                return Ok(LayerSurface {
-                    target: LayerSurfaceTexture::Cached(cached_target),
-                    logical_rect,
-                    composite_alpha: isolation
-                        .as_ref()
-                        .map(|params| params.composite_alpha)
-                        .unwrap_or(1.0),
-                    blend_mode: isolation
-                        .as_ref()
-                        .map(|params| params.blend_mode)
-                        .unwrap_or(BlendMode::SrcOver),
-                    backdrop: layer.backdrop().cloned(),
-                    sample_mode: composite_sample_mode,
-                });
-            }
-        }
-
-        Ok(LayerSurface {
-            target: LayerSurfaceTexture::Owned(target),
-            logical_rect: surface_rect,
-            composite_alpha: isolation
-                .as_ref()
-                .map(|params| params.composite_alpha)
-                .unwrap_or(1.0),
-            blend_mode: isolation
-                .as_ref()
-                .map(|params| params.blend_mode)
-                .unwrap_or(BlendMode::SrcOver),
-            backdrop: layer.backdrop().cloned(),
-            sample_mode: composite_sample_mode,
-        })
+        execute_render_layer_surface(self, text_state, layer, request)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3947,167 +2802,22 @@ impl GpuRenderer {
         height: u32,
         root_scale: f32,
     ) -> Result<(), String> {
-        let layer = effect_layers
-            .get(effect_layer_index)
-            .cloned()
-            .ok_or_else(|| "effect layer index out of bounds".to_string())?;
-        let Some(scissor) =
-            scissor_rect_for_layer(layer.rect, layer.clip, root_scale, width, height)
-        else {
-            return Ok(());
-        };
-        let (effect_width, effect_height) =
-            surface_target_size(layer.rect, root_scale, self.max_texture_dim());
-        let window_scene = build_scene_window(
-            SceneWindowSource {
-                shapes,
-                images,
-                texts,
-                shadow_draws,
-                effect_layers,
-                backdrop_layers,
-            },
-            layer.z_start,
-            layer.z_end,
-            layer.rect,
-        );
-        let Some(window_effect_index) = filtered_effect_layer_index(
-            effect_layers,
-            effect_layer_index,
-            layer.z_start,
-            layer.z_end,
-        ) else {
-            return Err("effect layer window index is missing".to_string());
-        };
-
-        let source = self.acquire_offscreen(effect_width, effect_height);
-
-        // Nested backdrop layers inside this effect-isolated subtree should still
-        // be able to sample the true scene content behind the subtree.
-        let has_nested_backdrop =
-            has_backdrop_layer_in_range(&window_scene.backdrop_layers, layer.z_start, layer.z_end);
-        let layer_underlay = if has_nested_backdrop {
-            let underlay = self.acquire_offscreen(effect_width, effect_height);
-
-            if let Some(existing_underlay) = backdrop_underlay {
-                self.copy_surface_region_to_view(
-                    existing_underlay,
-                    layer.rect,
-                    &underlay.view,
-                    effect_width,
-                    effect_height,
-                    root_scale,
-                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                )?;
-                self.copy_surface_region_to_view(
-                    target,
-                    layer.rect,
-                    &underlay.view,
-                    effect_width,
-                    effect_height,
-                    root_scale,
-                    wgpu::LoadOp::Load,
-                )?;
-            } else {
-                self.copy_surface_region_to_view(
-                    target,
-                    layer.rect,
-                    &underlay.view,
-                    effect_width,
-                    effect_height,
-                    root_scale,
-                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                )?;
-            }
-            Some(underlay)
-        } else {
-            None
-        };
-
-        let render_result = self.render_range_with_layer_events_to_target(
+        execute_render_effect_layer_to_target(
+            self,
             text_state,
-            &source,
-            &window_scene.shapes,
-            &window_scene.images,
-            &window_scene.texts,
-            &window_scene.shadow_draws,
-            &window_scene.effect_layers,
-            &window_scene.backdrop_layers,
-            layer.z_start,
-            layer.z_end,
-            Some(window_effect_index),
-            effect_width,
-            effect_height,
+            target,
+            shapes,
+            images,
+            texts,
+            shadow_draws,
+            effect_layers,
+            backdrop_layers,
+            effect_layer_index,
+            backdrop_underlay,
+            width,
+            height,
             root_scale,
-            layer_underlay.as_ref(),
-            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-        );
-
-        if let Some(underlay) = layer_underlay {
-            self.effect_renderer.offscreen_pool.release(underlay);
-        }
-
-        render_result?;
-
-        let dest = self.acquire_offscreen(effect_width, effect_height);
-
-        if let Some(effect) = &layer.effect {
-            if is_render_effect_supported(effect) {
-                self.effect_renderer.apply_effect(
-                    &self.device,
-                    &self.queue,
-                    &source,
-                    &dest.view,
-                    effect,
-                    local_effect_pixel_rect(effect_width, effect_height),
-                );
-            } else {
-                warn_unsupported_effect_once();
-                self.effect_renderer.composite_to_view(
-                    &self.device,
-                    &self.queue,
-                    &source,
-                    &dest.view,
-                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    CompositeSampleMode::Linear,
-                );
-            }
-        } else {
-            self.effect_renderer.composite_to_view(
-                &self.device,
-                &self.queue,
-                &source,
-                &dest.view,
-                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                CompositeSampleMode::Linear,
-            );
-        }
-
-        let layer_blend_mode = supported_blend_mode(layer.blend_mode);
-        self.effect_renderer
-            .composite_to_view_scissored_with_alpha_and_mask_and_blend_mode(
-                &self.device,
-                &self.queue,
-                &dest,
-                &target.view,
-                layer.composite_alpha,
-                wgpu::LoadOp::Load,
-                Some(scissor),
-                None,
-                layer_blend_mode,
-                Some((
-                    layer.rect.x * root_scale,
-                    layer.rect.y * root_scale,
-                    effect_width as f32,
-                    effect_height as f32,
-                )),
-                CompositeSampleMode::Linear,
-            );
-
-        self.effect_renderer.offscreen_pool.release(source);
-        self.effect_renderer.offscreen_pool.release(dest);
-
-        Ok(())
+        )
     }
 
     fn apply_backdrop_layer_to_target(
@@ -4119,91 +2829,15 @@ impl GpuRenderer {
         height: u32,
         root_scale: f32,
     ) -> Result<(), String> {
-        let Some(scissor) =
-            scissor_rect_for_layer(layer.rect, layer.clip, root_scale, width, height)
-        else {
-            return Ok(());
-        };
-        let (backdrop_width, backdrop_height) =
-            surface_target_size(layer.rect, root_scale, self.max_texture_dim());
-        let snapshot = self.acquire_offscreen(backdrop_width, backdrop_height);
-        if let Some(underlay) = backdrop_underlay {
-            self.copy_surface_region_to_view(
-                underlay,
-                layer.rect,
-                &snapshot.view,
-                backdrop_width,
-                backdrop_height,
-                root_scale,
-                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            )?;
-            self.copy_surface_region_to_view(
-                target,
-                layer.rect,
-                &snapshot.view,
-                backdrop_width,
-                backdrop_height,
-                root_scale,
-                wgpu::LoadOp::Load,
-            )?;
-        } else {
-            self.copy_surface_region_to_view(
-                target,
-                layer.rect,
-                &snapshot.view,
-                backdrop_width,
-                backdrop_height,
-                root_scale,
-                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            )?;
-        }
-
-        let dest = self.acquire_offscreen(backdrop_width, backdrop_height);
-        if is_render_effect_supported(&layer.effect) {
-            self.effect_renderer.apply_effect(
-                &self.device,
-                &self.queue,
-                &snapshot,
-                &dest.view,
-                &layer.effect,
-                local_effect_pixel_rect(backdrop_width, backdrop_height),
-            );
-        } else {
-            warn_unsupported_effect_once();
-            self.effect_renderer.composite_to_view(
-                &self.device,
-                &self.queue,
-                &snapshot,
-                &dest.view,
-                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                CompositeSampleMode::Linear,
-            );
-        }
-
-        self.effect_renderer
-            .composite_to_view_scissored_with_alpha_and_mask_and_blend_mode(
-                &self.device,
-                &self.queue,
-                &dest,
-                &target.view,
-                1.0,
-                wgpu::LoadOp::Load,
-                Some(scissor),
-                None,
-                BlendMode::SrcOver,
-                Some((
-                    layer.rect.x * root_scale,
-                    layer.rect.y * root_scale,
-                    backdrop_width as f32,
-                    backdrop_height as f32,
-                )),
-                CompositeSampleMode::Linear,
-            );
-
-        self.effect_renderer.offscreen_pool.release(snapshot);
-        self.effect_renderer.offscreen_pool.release(dest);
-
-        Ok(())
+        execute_apply_backdrop_layer_to_target(
+            self,
+            target,
+            layer,
+            backdrop_underlay,
+            width,
+            height,
+            root_scale,
+        )
     }
 
     fn clear_target_view_with_load_op(
@@ -4421,13 +3055,15 @@ impl GpuRenderer {
                 [0.0, 0.0, 0.0, 0.0]
             };
 
+            let device_rect = [
+                local_rect.x * root_scale,
+                local_rect.y * root_scale,
+                local_rect.width * root_scale,
+                local_rect.height * root_scale,
+            ];
+
             self.scratch_shape_data.push(ShapeData {
-                rect: [
-                    local_rect.x * root_scale,
-                    local_rect.y * root_scale,
-                    local_rect.width * root_scale,
-                    local_rect.height * root_scale,
-                ],
+                rect: device_rect,
                 radii,
                 gradient_params,
                 clip_rect,
@@ -4437,7 +3073,6 @@ impl GpuRenderer {
                 gradient_tile_mode,
             });
 
-            // Build vertices
             let base_vertex = (idx * 4) as u32;
             let color = match &shape.brush {
                 Brush::Solid(c) => [c.r(), c.g(), c.b(), c.a()],
@@ -4451,24 +3086,31 @@ impl GpuRenderer {
                 }
             };
 
+            let vertices = [
+                [quad[0][0] * root_scale, quad[0][1] * root_scale],
+                [quad[1][0] * root_scale, quad[1][1] * root_scale],
+                [quad[2][0] * root_scale, quad[2][1] * root_scale],
+                [quad[3][0] * root_scale, quad[3][1] * root_scale],
+            ];
+
             self.scratch_vertices.extend_from_slice(&[
                 Vertex {
-                    position: [quad[0][0] * root_scale, quad[0][1] * root_scale],
+                    position: vertices[0],
                     color,
                     uv: [0.0, 0.0],
                 },
                 Vertex {
-                    position: [quad[1][0] * root_scale, quad[1][1] * root_scale],
+                    position: vertices[1],
                     color,
                     uv: [1.0, 0.0],
                 },
                 Vertex {
-                    position: [quad[2][0] * root_scale, quad[2][1] * root_scale],
+                    position: vertices[2],
                     color,
                     uv: [0.0, 1.0],
                 },
                 Vertex {
-                    position: [quad[3][0] * root_scale, quad[3][1] * root_scale],
+                    position: vertices[3],
                     color,
                     uv: [1.0, 1.0],
                 },
@@ -4965,6 +3607,21 @@ impl GpuRenderer {
             let rect = text_draw.rect.translate(snap_delta.x, snap_delta.y);
             let left_px = rect.x * root_scale;
             let top_px = rect.y * root_scale;
+            let current_position = Point::new(left_px, top_px);
+            let (cache_origin, subpixel_y) = if text_draw.translated_content_context {
+                (
+                    self.translated_text_raster_origin(
+                        text_draw.node_id,
+                        current_position,
+                        root_scale,
+                    ),
+                    true,
+                )
+            } else {
+                self.translated_text_raster_origins
+                    .remove(&text_draw.node_id);
+                (current_position, false)
+            };
 
             let adjusted_clip = text_draw
                 .clip
@@ -4978,6 +3635,9 @@ impl GpuRenderer {
                 buffer: &cached.buffer,
                 left: left_px,
                 top: top_px,
+                cache_left: cache_origin.x,
+                cache_top: cache_origin.y,
+                subpixel_y,
                 scale: 1.0,
                 bounds,
                 default_color: color,
@@ -5546,10 +4206,6 @@ fn collect_non_effect_segment_items(
     scratch.sort_by_key(|(z_index, _)| *z_index);
 }
 
-fn effect_layer_in_range(layer: &EffectLayer, z_start: usize, z_end: usize) -> bool {
-    layer.z_start >= z_start && layer.z_start < z_end && layer.z_end <= z_end
-}
-
 fn collect_effect_ranges(
     effect_layers: &[EffectLayer],
     z_start: usize,
@@ -5623,7 +4279,7 @@ fn collect_layer_events(
     });
 }
 
-fn has_backdrop_layer_in_range(
+pub(crate) fn has_backdrop_layer_in_range(
     backdrop_layers: &[BackdropLayer],
     z_start: usize,
     z_end: usize,
@@ -5633,7 +4289,7 @@ fn has_backdrop_layer_in_range(
         .any(|layer| layer.z_index >= z_start && layer.z_index < z_end)
 }
 
-fn scissor_rect_for_rect(
+pub(crate) fn scissor_rect_for_rect(
     rect: Rect,
     root_scale: f32,
     width: u32,
@@ -5838,6 +4494,7 @@ mod tests {
             composite_alpha: 1.0,
             z_start,
             z_end,
+            requirements: SurfaceRequirementSet::default().with(SurfaceRequirement::RenderEffect),
         }
     }
 
@@ -5864,6 +4521,62 @@ mod tests {
                 width: 41,
                 height: 19,
             }
+        );
+    }
+
+    #[test]
+    fn visible_layer_rect_intersects_clip_and_viewport() {
+        let visible = visible_layer_rect(
+            Rect {
+                x: -10.0,
+                y: 5.0,
+                width: 80.0,
+                height: 40.0,
+            },
+            Some(Rect {
+                x: 4.0,
+                y: 8.0,
+                width: 20.0,
+                height: 50.0,
+            }),
+            2.0,
+            60,
+            40,
+        )
+        .expect("visible rect");
+
+        assert_eq!(
+            visible,
+            Rect {
+                x: 4.0,
+                y: 8.0,
+                width: 20.0,
+                height: 12.0,
+            }
+        );
+    }
+
+    #[test]
+    fn clamp_effect_surface_scale_caps_large_surfaces_but_keeps_base_scale() {
+        let clamped = clamp_effect_surface_scale(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1200.0,
+                height: 900.0,
+            },
+            1.0,
+            8.0,
+            16_384,
+        );
+
+        assert!(
+            clamped < 8.0,
+            "large translated effect layers must be capped to avoid OOM, got {clamped}"
+        );
+        assert!(
+            clamped >= 1.0,
+            "effect surfaces must not fall below destination resolution, got {clamped}"
         );
     }
 
@@ -5965,6 +4678,7 @@ mod tests {
                 height: 8.0,
             },
             snap_anchor: None,
+            translated_content_context: false,
             text: std::rc::Rc::new(cranpose_ui::text::AnnotatedString::from("t")),
             color: Color::WHITE,
             text_style: cranpose_ui::TextStyle::default(),
@@ -6867,7 +5581,7 @@ mod tests {
         let requirements = layer_surface_requirements(&layer);
 
         assert_eq!(requirements.direct_translation, Some(Point::default()));
-        assert!(!requirements.reasons.has_any());
+        assert!(!requirements.surface_requirements.has_any());
     }
 
     #[test]
@@ -6880,7 +5594,10 @@ mod tests {
             requirements.direct_translation,
             Some(Point::new(11.4, 23.6))
         );
-        assert!(!requirements.reasons.has_any());
+        assert!(
+            !requirements.surface_requirements.has_any(),
+            "translated plain text should stay on the direct path and isolate only the glyph draw"
+        );
     }
 
     #[test]
@@ -6893,7 +5610,108 @@ mod tests {
             requirements.direct_translation,
             Some(Point::new(14.25, 16.5))
         );
-        assert!(!requirements.reasons.has_any());
+        assert!(
+            !requirements.surface_requirements.has_any(),
+            "translated text with direct sibling decoration/background should keep the layer direct"
+        );
+    }
+
+    #[test]
+    fn translated_text_effect_layer_uses_box4_composite_resolve() {
+        let root = pure_text_leaf_root(false, true);
+        let mut rect_cache = HashMap::new();
+        let mut requirements_cache = HashMap::new();
+        let collected =
+            collect_layer_contents(&root, None, None, &mut rect_cache, &mut requirements_cache);
+
+        assert_eq!(collected.child_layers.len(), 0);
+        assert_eq!(collected.scene.texts.len(), 1);
+        assert_eq!(collected.scene.effect_layers.len(), 1);
+        assert!(collected.scene.effect_layers[0]
+            .requirements
+            .contains(SurfaceRequirement::MotionStableCapture));
+        assert_eq!(
+            collected.scene.effect_layers[0].effect, None,
+            "translated plain text should isolate only the glyph draw, not apply a post-effect"
+        );
+    }
+
+    #[test]
+    fn non_translated_text_local_surface_keeps_linear_composite_resolve() {
+        let layer = text_layer_with_style(
+            AnnotatedString::from("gradient"),
+            TextStyle::from_span_style(SpanStyle {
+                brush: Some(Brush::linear_gradient(vec![Color::WHITE, Color::BLACK])),
+                ..SpanStyle::default()
+            }),
+        );
+        let requirements = layer_surface_requirements(&layer);
+
+        assert!(requirements
+            .surface_requirements
+            .contains(SurfaceRequirement::TextMaterialMask));
+        assert_eq!(
+            composite_sample_mode_for_requirements(false, false, requirements),
+            CompositeSampleMode::Linear
+        );
+    }
+
+    #[test]
+    fn inherited_translated_text_local_surface_uses_box4_layer_surface() {
+        let layer = text_layer_with_style(
+            AnnotatedString::from("shadow"),
+            TextStyle::from_span_style(SpanStyle {
+                shadow: Some(Shadow {
+                    color: Color::BLACK,
+                    offset: Point::new(1.0, 2.0),
+                    blur_radius: 3.0,
+                }),
+                ..SpanStyle::default()
+            }),
+        );
+        let requirements = layer_surface_requirements(&layer);
+
+        assert!(requirements
+            .surface_requirements
+            .contains(SurfaceRequirement::TextMaterialMask));
+        assert_eq!(
+            composite_sample_mode_for_requirements(true, false, requirements),
+            CompositeSampleMode::Box4
+        );
+        assert_eq!(
+            layer_surface_target_scale(true, false, requirements, 1.25),
+            SurfaceRequirementSet::default()
+                .with(SurfaceRequirement::TextMaterialMask)
+                .with(SurfaceRequirement::MotionStableCapture)
+                .target_scale(1.25)
+        );
+    }
+
+    #[test]
+    fn translated_text_local_surface_inside_capture_keeps_parent_scale() {
+        let layer = text_layer_with_style(
+            AnnotatedString::from("shadow"),
+            TextStyle::from_span_style(SpanStyle {
+                shadow: Some(Shadow {
+                    color: Color::BLACK,
+                    offset: Point::new(1.0, 2.0),
+                    blur_radius: 3.0,
+                }),
+                ..SpanStyle::default()
+            }),
+        );
+        let requirements = layer_surface_requirements(&layer);
+
+        assert_eq!(
+            composite_sample_mode_for_requirements(true, true, requirements),
+            CompositeSampleMode::Linear
+        );
+        assert_eq!(
+            layer_surface_target_scale(true, true, requirements, 10.0),
+            SurfaceRequirementSet::default()
+                .with(SurfaceRequirement::TextMaterialMask)
+                .target_scale(10.0)
+        );
     }
 
     #[test]
@@ -6921,7 +5739,9 @@ mod tests {
             let layer = text_layer_with_style(text, text_style);
             let requirements = layer_surface_requirements(&layer);
             assert!(
-                requirements.reasons.text_local_surface,
+                requirements
+                    .surface_requirements
+                    .contains(SurfaceRequirement::TextMaterialMask),
                 "{label} text should use a bounded local surface: {requirements:?}"
             );
         }
@@ -6977,43 +5797,15 @@ mod tests {
                     ..SpanStyle::default()
                 }),
             ),
-            (
-                "span_styles",
-                AnnotatedString {
-                    text: "styled".to_string(),
-                    span_styles: vec![RangeStyle {
-                        item: SpanStyle {
-                            color: Some(Color::BLACK),
-                            ..SpanStyle::default()
-                        },
-                        range: 0..3,
-                    }],
-                    ..AnnotatedString::default()
-                },
-                TextStyle::default(),
-            ),
-            (
-                "span_styles",
-                AnnotatedString {
-                    text: "styled".to_string(),
-                    span_styles: vec![RangeStyle {
-                        item: SpanStyle {
-                            color: Some(Color::BLACK),
-                            ..SpanStyle::default()
-                        },
-                        range: 0..3,
-                    }],
-                    ..AnnotatedString::default()
-                },
-                TextStyle::default(),
-            ),
         ];
 
         for (label, text, text_style) in cases {
             let layer = text_layer_with_style(text, text_style);
             let requirements = layer_surface_requirements(&layer);
             assert!(
-                requirements.reasons.text_local_surface,
+                requirements
+                    .surface_requirements
+                    .contains(SurfaceRequirement::TextMaterialMask),
                 "{label} text should use a bounded local surface: {requirements:?}"
             );
             assert_eq!(
@@ -7022,6 +5814,31 @@ mod tests {
                 "{label} text should still classify as a direct translation"
             );
         }
+    }
+
+    #[test]
+    fn layer_surface_requirements_color_only_span_styles_use_direct_path() {
+        let layer = text_layer_with_style(
+            AnnotatedString {
+                text: "styled".to_string(),
+                span_styles: vec![RangeStyle {
+                    item: SpanStyle {
+                        color: Some(Color::BLACK),
+                        ..SpanStyle::default()
+                    },
+                    range: 0..3,
+                }],
+                ..AnnotatedString::default()
+            },
+            TextStyle::default(),
+        );
+        let requirements = layer_surface_requirements(&layer);
+        assert!(
+            !requirements
+                .surface_requirements
+                .contains(SurfaceRequirement::TextMaterialMask),
+            "color-only span styles should render directly via cosmic-text per-glyph colors"
+        );
     }
 
     #[test]
@@ -7038,7 +5855,7 @@ mod tests {
 
         assert_eq!(requirements.direct_translation, Some(Point::default()));
         assert!(
-            !requirements.reasons.has_any(),
+            !requirements.surface_requirements.has_any(),
             "decoration-only text should not force any layer surface reasons: {requirements:?}"
         );
     }
@@ -7060,7 +5877,7 @@ mod tests {
     }
 
     #[test]
-    fn translated_animated_text_leaf_keeps_shared_snap_anchor() {
+    fn translated_animated_text_leaf_disables_snap_for_smooth_scroll() {
         let root = snapped_text_leaf_root(true, true);
         let mut rect_cache = HashMap::new();
         let mut requirements_cache = HashMap::new();
@@ -7068,15 +5885,22 @@ mod tests {
         let collected =
             collect_layer_contents(&root, None, None, &mut rect_cache, &mut requirements_cache);
 
+        assert_eq!(collected.child_layers.len(), 0);
         assert_eq!(collected.scene.shapes.len(), 1);
         assert_eq!(collected.scene.texts.len(), 1);
-        let expected_draw_anchor = Some(SnapAnchor::translated(Point::new(14.25, 16.5)));
-        assert_eq!(collected.scene.shapes[0].snap_anchor, expected_draw_anchor);
-        assert_eq!(collected.scene.texts[0].snap_anchor, None);
+        assert_eq!(collected.scene.effect_layers.len(), 1);
+        assert_eq!(
+            collected.scene.shapes[0].snap_anchor, None,
+            "scrollable content must not snap — discrete jumps cause visible rendering artifacts"
+        );
+        assert_eq!(
+            collected.scene.texts[0].snap_anchor, None,
+            "scrollable text must not snap — discrete jumps cause visible rendering artifacts"
+        );
     }
 
     #[test]
-    fn translated_content_context_text_leaf_uses_shared_snap_anchor() {
+    fn translated_content_context_text_leaf_disables_snap_for_smooth_scroll() {
         let root = snapped_text_leaf_root(false, true);
         let mut rect_cache = HashMap::new();
         let mut requirements_cache = HashMap::new();
@@ -7084,12 +5908,18 @@ mod tests {
         let collected =
             collect_layer_contents(&root, None, None, &mut rect_cache, &mut requirements_cache);
 
+        assert_eq!(collected.child_layers.len(), 0);
         assert_eq!(collected.scene.shapes.len(), 1);
         assert_eq!(collected.scene.texts.len(), 1);
-        assert!(collected.child_layers.is_empty());
-        let expected_draw_anchor = Some(SnapAnchor::translated(Point::new(14.25, 16.5)));
-        assert_eq!(collected.scene.shapes[0].snap_anchor, expected_draw_anchor);
-        assert_eq!(collected.scene.texts[0].snap_anchor, None);
+        assert_eq!(collected.scene.effect_layers.len(), 1);
+        assert_eq!(
+            collected.scene.shapes[0].snap_anchor, None,
+            "scrollable content must not snap — discrete jumps cause visible rendering artifacts"
+        );
+        assert_eq!(
+            collected.scene.texts[0].snap_anchor, None,
+            "scrollable text must not snap — discrete jumps cause visible rendering artifacts"
+        );
     }
 
     #[test]
@@ -7107,6 +5937,90 @@ mod tests {
         );
         assert!(collected.scene.texts.is_empty());
         assert!(collected.scene.shadow_draws.is_empty());
+    }
+
+    #[test]
+    fn translated_layer_surface_capture_does_not_restart_local_picture_for_shadow_text() {
+        let mut layer = text_layer_with_style(
+            AnnotatedString::from("shadow"),
+            TextStyle::from_span_style(SpanStyle {
+                shadow: Some(Shadow {
+                    color: Color::BLACK,
+                    offset: Point::new(1.0, 2.0),
+                    blur_radius: 3.0,
+                }),
+                ..SpanStyle::default()
+            }),
+        );
+        layer.translated_content_context = true;
+        let mut rect_cache = HashMap::new();
+        let mut requirements_cache = HashMap::new();
+
+        let collected = collect_layer_contents_with_translation_context(
+            &layer,
+            None,
+            None,
+            TranslationRenderContext {
+                inherited_content_translation: false,
+                surface_capture_active: true,
+            },
+            &mut rect_cache,
+            &mut requirements_cache,
+        );
+
+        assert!(
+            collected.scene.effect_layers.is_empty(),
+            "a translated layer surface already provides the stable local capture"
+        );
+        assert_eq!(collected.scene.shadow_draws.len(), 1);
+        assert_eq!(collected.scene.texts.len(), 1);
+        assert!(
+            !collected.scene.texts[0].translated_content_context,
+            "text inside an active motion-stable capture must raster in capture-local coordinates"
+        );
+    }
+
+    #[test]
+    fn translated_layer_surface_capture_keeps_only_material_effect_layers() {
+        let mut layer = text_layer_with_style(
+            AnnotatedString::from("gradient"),
+            TextStyle::from_span_style(SpanStyle {
+                brush: Some(Brush::linear_gradient(vec![Color::WHITE, Color::BLACK])),
+                ..SpanStyle::default()
+            }),
+        );
+        layer.translated_content_context = true;
+        let mut rect_cache = HashMap::new();
+        let mut requirements_cache = HashMap::new();
+
+        let collected = collect_layer_contents_with_translation_context(
+            &layer,
+            None,
+            None,
+            TranslationRenderContext {
+                inherited_content_translation: false,
+                surface_capture_active: true,
+            },
+            &mut rect_cache,
+            &mut requirements_cache,
+        );
+
+        assert_eq!(collected.scene.effect_layers.len(), 1);
+        assert!(
+            collected.scene.effect_layers[0]
+                .requirements
+                .contains(SurfaceRequirement::MotionStableCapture),
+            "translated text materials still need motion-stable resolve semantics inside a stable capture"
+        );
+        assert_eq!(
+            composite_sample_mode_for_effect_layer(&collected.scene.effect_layers[0]),
+            CompositeSampleMode::Box4
+        );
+        assert_eq!(
+            effect_layer_target_scale(&collected.scene.effect_layers[0], 10.0),
+            10.0
+        );
+        assert!(collected.scene.effect_layers[0].effect.is_some());
     }
 
     #[test]
@@ -7139,7 +6053,7 @@ mod tests {
     }
 
     #[test]
-    fn translated_pure_text_leaf_stays_unsnapped() {
+    fn translated_pure_text_leaf_disables_snap_for_smooth_scroll() {
         let root = pure_text_leaf_root(false, true);
         let mut rect_cache = HashMap::new();
         let mut requirements_cache = HashMap::new();
@@ -7147,9 +6061,13 @@ mod tests {
         let collected =
             collect_layer_contents(&root, None, None, &mut rect_cache, &mut requirements_cache);
 
+        assert_eq!(collected.child_layers.len(), 0);
         assert_eq!(collected.scene.texts.len(), 1);
-        assert!(collected.child_layers.is_empty());
-        assert_eq!(collected.scene.texts[0].snap_anchor, None);
+        assert_eq!(collected.scene.effect_layers.len(), 1);
+        assert_eq!(
+            collected.scene.texts[0].snap_anchor, None,
+            "scrollable text must not snap — discrete jumps cause visible rendering artifacts"
+        );
     }
 
     #[test]
@@ -7240,8 +6158,10 @@ mod tests {
         let requirements = layer_surface_requirements(&layer);
 
         assert_eq!(requirements.direct_translation, Some(Point::default()));
-        assert!(!requirements.reasons.mixed_direct_content);
-        assert!(!requirements.reasons.has_any());
+        assert!(!requirements
+            .surface_requirements
+            .contains(SurfaceRequirement::MixedDirectContent));
+        assert!(!requirements.surface_requirements.has_any());
     }
 
     #[test]
@@ -7375,8 +6295,12 @@ mod tests {
 
         let requirements = layer_surface_requirements(&layer);
 
-        assert!(requirements.reasons.mixed_direct_content);
-        assert!(!requirements.reasons.has_any());
+        assert!(requirements
+            .surface_requirements
+            .contains(SurfaceRequirement::MixedDirectContent));
+        assert!(!requirements
+            .surface_requirements
+            .has_isolating_requirement());
     }
 
     #[test]

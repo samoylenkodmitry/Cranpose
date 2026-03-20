@@ -512,6 +512,21 @@ path = "robot-runners/robot_render_translation_contract.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_scroll_decoration_invariance"
+path = "robot-runners/robot_scroll_decoration_invariance.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_underline_screenshot"
+path = "robot-runners/robot_underline_screenshot.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_text_scroll_exact_external_contract"
+path = "robot-runners/robot_text_scroll_exact_external_contract.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_renderer_micro_contract"
 path = "robot-runners/robot_renderer_micro_contract.rs"
 required-features = ["robot-app"]

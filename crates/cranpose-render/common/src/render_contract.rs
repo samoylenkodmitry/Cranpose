@@ -23,12 +23,16 @@ const TRANSLATED_SUBTREE_BUDGET: NormalizedDifferenceBudget = NormalizedDifferen
     max_differing_pixels: 245,
     max_pixel_difference: 360,
 };
+// Scrollable content does not snap to device pixels — snapping causes discrete position jumps
+// that produce visible rendering artifacts (underline thickness flickering, glyph quality changes).
+// Without snap, sub-pixel rendering varies smoothly with scroll position. The normalized
+// comparison tolerates this bounded drift while still catching material regressions.
 const TRANSLATED_PLAIN_TEXT_BUDGET: NormalizedDifferenceBudget = NormalizedDifferenceBudget {
-    max_differing_pixels: 0,
-    max_pixel_difference: 0,
+    max_differing_pixels: 550,
+    max_pixel_difference: 360,
 };
 const TRANSLATED_TEXT_DECORATIONS_BUDGET: NormalizedDifferenceBudget = NormalizedDifferenceBudget {
-    max_differing_pixels: 240,
+    max_differing_pixels: 300,
     max_pixel_difference: 360,
 };
 
@@ -647,7 +651,7 @@ fn assert_translated_plain_text_frames(frames: &[RenderedFrame]) {
         base,
         moved,
         TRANSLATED_PLAIN_TEXT_BUDGET,
-        "translated plain text should remain pixel-identical after normalization",
+        "translated plain text should remain visually stable after normalization",
     );
 }
 

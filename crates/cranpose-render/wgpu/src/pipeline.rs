@@ -3,7 +3,6 @@
 use std::{ops::Range, rc::Rc};
 
 use cranpose_core::{MemoryApplier, NodeId};
-#[cfg(test)]
 use cranpose_render_common::geometry::{expand_blurred_rect, union_rect};
 use cranpose_render_common::hit_graph::{
     collect_hits_from_graph as collect_common_hits, HitGraphSink,
@@ -30,9 +29,8 @@ use cranpose_ui_graphics::{
     RoundedCornerShape, RuntimeShader, TileMode,
 };
 
-use crate::scene::{
-    ClickAction, CompositorScene, DrawShape, EffectLayer, Scene, ShadowDraw, TextDraw,
-};
+use crate::scene::{ClickAction, CompositorScene, DrawShape, Scene, ShadowDraw, TextDraw};
+use crate::surface_requirements::{SurfaceRequirement, SurfaceRequirementSet};
 
 // Re-use style functions from a local copy
 mod style;
@@ -734,9 +732,14 @@ fn gpu_text_effect_for_style(
 }
 
 fn span_has_foreground_override(span_style: &cranpose_ui::text::SpanStyle) -> bool {
-    span_style.color.is_some()
-        || span_style.brush.is_some()
-        || span_style.alpha.is_some()
+    matches!(
+        span_style.brush.as_ref(),
+        Some(
+            cranpose_ui::Brush::LinearGradient { .. }
+                | cranpose_ui::Brush::RadialGradient { .. }
+                | cranpose_ui::Brush::SweepGradient { .. }
+        )
+    ) || span_style.alpha.is_some()
         || span_style.draw_style.is_some()
 }
 
@@ -744,6 +747,12 @@ fn text_has_span_foreground_overrides(text: &cranpose_ui::text::AnnotatedString)
     text.span_styles
         .iter()
         .any(|span| span_has_foreground_override(&span.item))
+}
+
+fn text_spans_override_foreground_color(text: &cranpose_ui::text::AnnotatedString) -> bool {
+    text.span_styles.iter().any(|span| {
+        span.item.color.is_some() || matches!(span.item.brush, Some(cranpose_ui::Brush::Solid(_)))
+    })
 }
 
 fn text_for_gpu_mask(
@@ -922,6 +931,30 @@ trait TextStyleDrawSink {
         z_start: usize,
         z_end: usize,
     );
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_effect_layer_with_surface(
+        &mut self,
+        rect: Rect,
+        clip: Option<Rect>,
+        effect: Option<RenderEffect>,
+        blend_mode: BlendMode,
+        composite_alpha: f32,
+        z_start: usize,
+        z_end: usize,
+        requirements: SurfaceRequirementSet,
+    ) {
+        let _ = requirements;
+        self.push_effect_layer(
+            rect,
+            clip,
+            effect,
+            blend_mode,
+            composite_alpha,
+            z_start,
+            z_end,
+        );
+    }
 }
 
 impl TextStyleDrawSink for CompositorScene {
@@ -985,6 +1018,7 @@ impl TextStyleDrawSink for CompositorScene {
                 node_id,
                 rect,
                 snap_anchor: None,
+                translated_content_context: false,
                 text,
                 color,
                 text_style,
@@ -1010,7 +1044,8 @@ impl TextStyleDrawSink for CompositorScene {
         z_start: usize,
         z_end: usize,
     ) {
-        self.effect_layers.push(EffectLayer {
+        CompositorScene::push_effect_layer(
+            self,
             rect,
             clip,
             effect,
@@ -1018,7 +1053,31 @@ impl TextStyleDrawSink for CompositorScene {
             composite_alpha,
             z_start,
             z_end,
-        });
+        );
+    }
+
+    fn push_effect_layer_with_surface(
+        &mut self,
+        rect: Rect,
+        clip: Option<Rect>,
+        effect: Option<RenderEffect>,
+        blend_mode: BlendMode,
+        composite_alpha: f32,
+        z_start: usize,
+        z_end: usize,
+        requirements: SurfaceRequirementSet,
+    ) {
+        CompositorScene::push_effect_layer_with_requirements(
+            self,
+            rect,
+            clip,
+            effect,
+            blend_mode,
+            composite_alpha,
+            z_start,
+            z_end,
+            requirements,
+        );
     }
 }
 
@@ -1150,7 +1209,7 @@ fn push_span_gpu_text_material_draws<S: TextStyleDrawSink>(
             options,
             text_clip,
         );
-        sink.push_effect_layer(
+        sink.push_effect_layer_with_surface(
             effect_rect,
             text_clip,
             Some(effect),
@@ -1158,6 +1217,10 @@ fn push_span_gpu_text_material_draws<S: TextStyleDrawSink>(
             1.0,
             z_start,
             sink.current_z(),
+            SurfaceRequirementSet::from_iter([
+                SurfaceRequirement::RenderEffect,
+                SurfaceRequirement::TextMaterialMask,
+            ]),
         );
     }
 
@@ -1279,6 +1342,27 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
             transformed_text_color,
             text_scale,
         ) {
+            // If any span overrides the foreground color, the single GPU effect
+            // would overwrite that override. Fall back to per-span batching so
+            // each range gets its own material (gradient vs solid).
+            if text_spans_override_foreground_color(text)
+                && push_span_gpu_text_material_draws(
+                    sink,
+                    node_id,
+                    transformed_shifted_text_rect,
+                    content_layer,
+                    text,
+                    &transformed_text_style,
+                    transformed_text_color,
+                    font_size,
+                    text_scale,
+                    options,
+                    text_clip,
+                )
+            {
+                return;
+            }
+
             let z_start = sink.current_z();
             let mut mask_text_style = transformed_text_style.clone();
             mask_text_style.span_style.brush = None;
@@ -1299,7 +1383,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
                 text_clip,
             );
 
-            sink.push_effect_layer(
+            sink.push_effect_layer_with_surface(
                 effect_rect,
                 text_clip,
                 Some(effect),
@@ -1307,12 +1391,17 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
                 1.0,
                 z_start,
                 sink.current_z(),
+                SurfaceRequirementSet::from_iter([
+                    SurfaceRequirement::RenderEffect,
+                    SurfaceRequirement::TextMaterialMask,
+                ]),
             );
             return;
         }
     }
 
-    sink.push_text(
+    push_text_draw(
+        sink,
         node_id,
         transformed_shifted_text_rect,
         Rc::new(text.clone()),
@@ -1322,6 +1411,32 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         text_scale,
         options,
         text_clip,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_text_draw<S: TextStyleDrawSink>(
+    sink: &mut S,
+    node_id: NodeId,
+    rect: Rect,
+    text: Rc<cranpose_ui::text::AnnotatedString>,
+    color: Color,
+    text_style: TextStyle,
+    font_size: f32,
+    scale: f32,
+    layout_options: TextLayoutOptions,
+    clip: Option<Rect>,
+) {
+    sink.push_text(
+        node_id,
+        rect,
+        text,
+        color,
+        text_style,
+        font_size,
+        scale,
+        layout_options,
+        clip,
     );
 }
 
@@ -1350,6 +1465,138 @@ pub(crate) fn push_text_style_draws(
         options,
         text_clip,
     );
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct SceneEmissionCounts {
+    shapes: usize,
+    images: usize,
+    texts: usize,
+    shadow_draws: usize,
+    effect_layers: usize,
+    backdrop_layers: usize,
+}
+
+pub(crate) fn scene_emission_counts(scene: &CompositorScene) -> SceneEmissionCounts {
+    SceneEmissionCounts {
+        shapes: scene.shapes.len(),
+        images: scene.images.len(),
+        texts: scene.texts.len(),
+        shadow_draws: scene.shadow_draws.len(),
+        effect_layers: scene.effect_layers.len(),
+        backdrop_layers: scene.backdrop_layers.len(),
+    }
+}
+
+fn visible_scene_rect(rect: Rect, clip: Option<Rect>) -> Option<Rect> {
+    match clip {
+        Some(clip) => rect.intersect(clip),
+        None => Some(rect),
+    }
+}
+
+fn shadow_draw_bounds(shadow_draws: &[ShadowDraw]) -> Option<Rect> {
+    let mut bounds = None;
+    for shadow in shadow_draws {
+        let mut shadow_bounds = None;
+        for (shape, _) in &shadow.shapes {
+            shadow_bounds = union_rect(shadow_bounds, shape.rect);
+        }
+        for text in &shadow.texts {
+            shadow_bounds = union_rect(shadow_bounds, text.rect);
+        }
+        if let Some(shadow_bounds) = shadow_bounds {
+            if let Some(expanded) =
+                expand_blurred_rect(shadow_bounds, shadow.blur_radius, shadow.clip)
+            {
+                bounds = union_rect(bounds, expanded);
+            }
+        }
+    }
+    bounds
+}
+
+pub(crate) fn emitted_scene_bounds(
+    scene: &CompositorScene,
+    counts: SceneEmissionCounts,
+) -> Option<Rect> {
+    let mut bounds = None;
+
+    for shape in &scene.shapes[counts.shapes..] {
+        if let Some(visible) = visible_scene_rect(shape.rect, shape.clip) {
+            bounds = union_rect(bounds, visible);
+        }
+    }
+    for image in &scene.images[counts.images..] {
+        if let Some(visible) = visible_scene_rect(image.rect, image.clip) {
+            bounds = union_rect(bounds, visible);
+        }
+    }
+    for text in &scene.texts[counts.texts..] {
+        if let Some(visible) = visible_scene_rect(text.rect, text.clip) {
+            bounds = union_rect(bounds, visible);
+        }
+    }
+    if let Some(shadow_bounds) = shadow_draw_bounds(&scene.shadow_draws[counts.shadow_draws..]) {
+        bounds = union_rect(bounds, shadow_bounds);
+    }
+    for layer in &scene.effect_layers[counts.effect_layers..] {
+        if let Some(visible) = visible_scene_rect(layer.rect, layer.clip) {
+            bounds = union_rect(bounds, visible);
+        }
+    }
+    for layer in &scene.backdrop_layers[counts.backdrop_layers..] {
+        if let Some(visible) = visible_scene_rect(layer.rect, layer.clip) {
+            bounds = union_rect(bounds, visible);
+        }
+    }
+
+    bounds
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn push_translated_text_style_draws(
+    scene: &mut CompositorScene,
+    node_id: NodeId,
+    rect: Rect,
+    text_rect: Rect,
+    content_layer: &GraphicsLayer,
+    text: &cranpose_ui::text::AnnotatedString,
+    text_style: &TextStyle,
+    font_size: f32,
+    options: TextLayoutOptions,
+    text_clip: Option<Rect>,
+) {
+    let counts = scene_emission_counts(scene);
+    let z_start = scene.current_z();
+    emit_text_style_draws(
+        scene,
+        node_id,
+        rect,
+        text_rect,
+        content_layer,
+        text,
+        text_style,
+        font_size,
+        options,
+        text_clip,
+    );
+    let z_end = scene.current_z();
+    if z_end > z_start {
+        if let Some(surface_rect) = emitted_scene_bounds(scene, counts) {
+            scene.push_effect_layer_with_surface(
+                surface_rect,
+                text_clip,
+                None,
+                BlendMode::SrcOver,
+                1.0,
+                z_start,
+                z_end,
+                SurfaceRequirementSet::default().with(SurfaceRequirement::MotionStableCapture),
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2731,6 +2978,72 @@ mod tests {
     }
 
     #[test]
+    fn push_translated_text_style_draws_wraps_the_whole_text_picture_in_one_surface() {
+        let mut scene = Scene::new();
+        let style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                color: Some(Color::WHITE),
+                text_decoration: Some(cranpose_ui::text::TextDecoration::UNDERLINE),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let rect = Rect {
+            x: 8.0,
+            y: 10.0,
+            width: 180.0,
+            height: 28.0,
+        };
+
+        push_translated_text_style_draws(
+            &mut scene,
+            71 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            &cranpose_ui::text::AnnotatedString::from("Decorated"),
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        assert_eq!(
+            scene.shapes.len(),
+            1,
+            "underline geometry should be emitted"
+        );
+        assert_eq!(scene.texts.len(), 1, "glyph draw should be emitted");
+        assert_eq!(
+            scene.effect_layers.len(),
+            1,
+            "translated text should be isolated in exactly one bounded local surface"
+        );
+        let effect_layer = &scene.effect_layers[0];
+        assert!(
+            effect_layer.effect.is_none(),
+            "translated text isolation should not apply a post-effect"
+        );
+        assert!(
+            effect_layer
+                .requirements
+                .contains(SurfaceRequirement::MotionStableCapture),
+            "translated text should request a motion-stable surface"
+        );
+        let expected_surface_rect = union_rect(Some(scene.shapes[0].rect), scene.texts[0].rect)
+            .expect("translated text surface should cover both underline and glyphs");
+        assert_eq!(
+            effect_layer.rect, expected_surface_rect,
+            "the local text surface should cover the entire emitted picture"
+        );
+        assert_eq!(
+            effect_layer.z_end - effect_layer.z_start,
+            2,
+            "the underline and glyph draw should be isolated together"
+        );
+    }
+
+    #[test]
     fn push_text_style_draws_emits_multiline_decoration_shapes_per_visual_line() {
         let mut scene = Scene::new();
         let style = cranpose_ui::TextStyle {
@@ -3674,7 +3987,7 @@ mod tests {
     }
 
     #[test]
-    fn push_text_style_draws_adjacent_span_paint_overrides_batch_same_material() {
+    fn push_text_style_draws_adjacent_span_color_overrides_use_direct_path() {
         let mut scene = Scene::new();
         let style = cranpose_ui::TextStyle::default();
         let text = cranpose_ui::text::AnnotatedString::builder()
@@ -3712,43 +4025,26 @@ mod tests {
         );
 
         assert_eq!(scene.images.len(), 0, "no software fallback should be used");
-        assert_eq!(
-            scene.texts.len(),
-            1,
-            "adjacent equal-material spans should batch into one mask draw"
-        );
+        assert_eq!(scene.texts.len(), 1);
         assert_eq!(
             scene.effect_layers.len(),
-            1,
-            "adjacent equal-material spans should share one runtime shader pass"
-        );
-        assert_eq!(
-            scene.effect_layers[0].z_start + 1,
-            scene.effect_layers[0].z_end
-        );
-        let Some(RenderEffect::Shader { shader }) = scene.effect_layers[0].effect.as_ref() else {
-            panic!("expected runtime shader effect for solid span batch");
-        };
-        let uniforms = shader.uniforms();
-        let uniform = |index: usize| uniforms.get(index).copied().unwrap_or(0.0);
-        assert_eq!(uniform(0), GPU_TEXT_BRUSH_KIND_SOLID);
-        assert_eq!(scene.texts[0].color, Color(1.0, 1.0, 1.0, 0.0));
-        assert_eq!(
-            scene.texts[0].text_style.span_style.color,
-            Some(Color(1.0, 1.0, 1.0, 0.0))
+            0,
+            "solid color spans use cosmic-text per-glyph colors, no GPU shader needed"
         );
         assert!(
             scene.texts[0]
                 .text
                 .span_styles
                 .iter()
-                .any(|span| span.item.color == Some(Color::WHITE)),
-            "batched mask text should contain white-visible range spans"
+                .filter(|span| span.item.color == Some(Color::RED))
+                .count()
+                >= 1,
+            "span colors should be preserved for cosmic-text per-glyph rendering"
         );
     }
 
     #[test]
-    fn push_text_style_draws_span_color_override_packs_solid_color_material() {
+    fn push_text_style_draws_span_color_override_uses_direct_per_glyph_color() {
         let mut scene = Scene::new();
         let style = cranpose_ui::TextStyle::default();
         let text = cranpose_ui::text::AnnotatedString::builder()
@@ -3781,18 +4077,19 @@ mod tests {
 
         assert_eq!(scene.images.len(), 0, "no software fallback should be used");
         assert_eq!(scene.texts.len(), 1);
-        assert_eq!(scene.effect_layers.len(), 1);
-        let Some(RenderEffect::Shader { shader }) = scene.effect_layers[0].effect.as_ref() else {
-            panic!("expected runtime shader effect for span color override");
-        };
-        let uniforms = shader.uniforms();
-        let uniform = |index: usize| uniforms.get(index).copied().unwrap_or_default();
-        let color_slot = GPU_TEXT_BRUSH_EFFECT_FIRST_STOP_SLOT * 4;
-        assert_eq!(uniform(0), GPU_TEXT_BRUSH_KIND_SOLID);
-        assert!((uniform(color_slot) - Color::RED.r()).abs() < f32::EPSILON);
-        assert!((uniform(color_slot + 1) - Color::RED.g()).abs() < f32::EPSILON);
-        assert!((uniform(color_slot + 2) - Color::RED.b()).abs() < f32::EPSILON);
-        assert!((uniform(color_slot + 3) - Color::RED.a()).abs() < f32::EPSILON);
+        assert_eq!(
+            scene.effect_layers.len(),
+            0,
+            "solid color span overrides use cosmic-text per-glyph colors, no GPU shader needed"
+        );
+        assert!(
+            scene.texts[0]
+                .text
+                .span_styles
+                .iter()
+                .any(|span| span.item.color == Some(Color::RED)),
+            "span color should be preserved in the text for cosmic-text per-glyph rendering"
+        );
     }
 
     #[test]
@@ -3851,7 +4148,7 @@ mod tests {
     }
 
     #[test]
-    fn push_text_style_draws_wrap_newline_gap_keeps_same_material_batch() {
+    fn push_text_style_draws_wrap_newline_gap_color_spans_use_direct_path() {
         let mut scene = Scene::new();
         let style = cranpose_ui::TextStyle::default();
         let text = cranpose_ui::text::AnnotatedString::builder()
@@ -3890,33 +4187,28 @@ mod tests {
         );
 
         assert_eq!(scene.images.len(), 0, "no software fallback should be used");
-        assert_eq!(
-            scene.texts.len(),
-            1,
-            "newline-only style gaps should not force extra material batches"
-        );
+        assert_eq!(scene.texts.len(), 1);
         assert_eq!(
             scene.effect_layers.len(),
-            1,
-            "same-material spans split by wrapped newline should share one effect layer"
+            0,
+            "solid color spans use cosmic-text per-glyph colors, no GPU shader needed"
         );
-
-        let white_ranges: Vec<_> = scene.texts[0]
+        let red_ranges: Vec<_> = scene.texts[0]
             .text
             .span_styles
             .iter()
-            .filter(|span| span.item.color == Some(Color::WHITE))
+            .filter(|span| span.item.color == Some(Color::RED))
             .map(|span| span.range.clone())
             .collect();
         assert_eq!(
-            white_ranges,
-            vec![0..3, 4..7],
-            "batch mask should keep one visible-range span per wrapped visual segment"
+            red_ranges.len(),
+            2,
+            "span colors should be preserved for both wrapped lines"
         );
     }
 
     #[test]
-    fn push_text_style_draws_mixed_bidi_wrapped_same_material_keeps_single_batch() {
+    fn push_text_style_draws_mixed_bidi_wrapped_color_spans_use_direct_path() {
         let mut scene = Scene::new();
         let style = cranpose_ui::TextStyle::default();
         let source_text = cranpose_ui::text::AnnotatedString::builder()
@@ -3960,41 +4252,19 @@ mod tests {
         );
 
         assert_eq!(scene.images.len(), 0, "no software fallback should be used");
-        assert_eq!(
-            scene.texts.len(),
-            1,
-            "wrapped mixed-bidi text with one material should stay in one mask batch"
-        );
+        assert_eq!(scene.texts.len(), 1);
         assert_eq!(
             scene.effect_layers.len(),
-            1,
-            "wrapped mixed-bidi text with one material should stay in one effect layer"
-        );
-
-        let white_ranges: Vec<_> = scene.texts[0]
-            .text
-            .span_styles
-            .iter()
-            .filter(|span| span.item.color == Some(Color::WHITE))
-            .map(|span| span.range.clone())
-            .collect();
-        assert!(
-            white_ranges.len() > 1,
-            "wrapped text should produce multiple visible ranges in one batch"
+            0,
+            "solid color spans use cosmic-text per-glyph colors, no GPU shader needed"
         );
         assert!(
-            white_ranges
-                .windows(2)
-                .all(|window| window[0].end <= window[1].start),
-            "visible ranges should preserve logical ordering"
-        );
-        assert!(
-            white_ranges.iter().all(|range| prepared
+            scene.texts[0]
                 .text
-                .text
-                .get(range.clone())
-                .is_some_and(|segment| !segment.contains('\n'))),
-            "visible ranges should not include newline-only gaps"
+                .span_styles
+                .iter()
+                .any(|span| span.item.color == Some(Color::RED)),
+            "span color should be preserved for cosmic-text per-glyph rendering"
         );
     }
 

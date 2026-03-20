@@ -22,6 +22,7 @@ members = [
     "apps/minimal-single-file",
     "crates/cranpose-services",
 ]
+exclude = ["crates/glyphon"]
 resolver = "2"
 
 [workspace.package]

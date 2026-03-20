@@ -86,6 +86,9 @@ struct BlitUniforms {
     mask_rect: [f32; 4],
     mask_radii: [f32; 4],
     mask_enabled: [f32; 4],
+    sampling: [f32; 4],
+    dest_viewport: [f32; 4],
+    resolve_span: [f32; 4],
 }
 
 #[repr(C)]
@@ -97,6 +100,7 @@ struct ProjectiveBlitUniforms {
     inverse_row1: [f32; 4],
     inverse_row2: [f32; 4],
     alpha: [f32; 4],
+    sampling: [f32; 4],
 }
 
 #[repr(C)]
@@ -117,6 +121,7 @@ pub(crate) struct RoundedCompositeMask {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CompositeSampleMode {
     Linear,
+    Box4,
 }
 
 impl EffectRenderer {
@@ -606,6 +611,7 @@ impl EffectRenderer {
             CompositeSampleMode::Linear => {
                 (&self.effect_linear_sampler, OffscreenSampleMode::Linear)
             }
+            CompositeSampleMode::Box4 => (&self.effect_linear_sampler, OffscreenSampleMode::Linear),
         }
     }
 
@@ -1119,11 +1125,26 @@ impl EffectRenderer {
                 [0.0, 0.0, 0.0, 0.0],
             )
         };
+        let dest_viewport_uniform = dest_viewport.unwrap_or((0.0, 0.0, 0.0, 0.0));
+        let resolve_span = dest_viewport
+            .filter(|(_, _, width, height)| *width > 0.0 && *height > 0.0)
+            .map(|(_, _, width, height)| {
+                (source.width as f32 / width, source.height as f32 / height)
+            })
+            .unwrap_or((0.0, 0.0));
         let uniforms = BlitUniforms {
             alpha: [alpha.clamp(0.0, 1.0), 0.0, 0.0, 0.0],
             mask_rect,
             mask_radii,
             mask_enabled,
+            sampling: [composite_sampling_mode_value(sample_mode), 0.0, 0.0, 0.0],
+            dest_viewport: [
+                dest_viewport_uniform.0,
+                dest_viewport_uniform.1,
+                dest_viewport_uniform.2,
+                dest_viewport_uniform.3,
+            ],
+            resolve_span: [resolve_span.0, resolve_span.1, 0.0, 0.0],
         };
         self.write_buffer_at_zero_offset(
             queue,
@@ -1262,6 +1283,7 @@ impl EffectRenderer {
                 0.0,
             ],
             alpha: [alpha.clamp(0.0, 1.0), 0.0, 0.0, 0.0],
+            sampling: [composite_sampling_mode_value(sample_mode), 0.0, 0.0, 0.0],
         };
         self.write_buffer_at_zero_offset(
             queue,
@@ -1318,5 +1340,12 @@ fn tile_mode_uniform_value(tile_mode: TileMode) -> f32 {
         TileMode::Repeated => 1.0,
         TileMode::Mirror => 2.0,
         TileMode::Decal => 3.0,
+    }
+}
+
+fn composite_sampling_mode_value(sample_mode: CompositeSampleMode) -> f32 {
+    match sample_mode {
+        CompositeSampleMode::Linear => 0.0,
+        CompositeSampleMode::Box4 => 1.0,
     }
 }

@@ -1817,9 +1817,8 @@ dependencies = [
 [[package]]
 name = "glyphon"
 version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "201b40693830fc7f5e53159003e694d40fa56d32352224439ca93f7654ce3566"
 dependencies = [
+ "bytemuck",
  "cosmic-text",
  "etagere",
  "lru",

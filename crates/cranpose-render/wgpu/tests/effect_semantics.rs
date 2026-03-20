@@ -27,6 +27,11 @@ const TRANSLATED_BACKDROP_COMPARE_INSET: u32 = 2;
 const TRANSLATED_BACKDROP_PIXEL_TOLERANCE: u32 = 24;
 const TRANSLATED_BACKDROP_MAX_DIFFERING_PIXELS: u32 = 120;
 const TRANSLATED_BACKDROP_MAX_PIXEL_DIFFERENCE: u32 = 360;
+const TRANSLATED_TEXT_LOCAL_SIZE: (u32, u32) = (48, 24);
+const TRANSLATED_TEXT_PIXEL_TOLERANCE: u32 = 24;
+const TRANSLATED_TEXT_MAX_DIFFERING_PIXELS: u32 = 240;
+const TRANSLATED_TEXT_MAX_PIXEL_DIFFERENCE: u32 = 420;
+const TRANSLATED_THIN_SHAPE_LOCAL_SIZE: (u32, u32) = (40, 18);
 
 #[test]
 fn subtree_alpha_capture_preserves_group_opacity_and_uses_bounded_surface() {
@@ -250,6 +255,140 @@ fn translated_text_wrapper_with_text_stays_on_direct_path_under_fractional_motio
     assert!(
         moved_pixel[0] >= 40 || moved_pixel[1] >= 40 || moved_pixel[2] >= 40,
         "moved frame should draw visible wrapper/text content at the composed position, got {moved_pixel:?}"
+    );
+}
+
+#[test]
+fn translated_text_wrapper_preserves_local_picture_under_fractional_motion_on_each_axis() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping translated text local-picture assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    let base_translation = Point::new(12.0, 14.0);
+    let mut base_graph = translation_only_wrapper_with_plain_text_only_fixture(base_translation);
+    mark_translated_text_wrapper(&mut base_graph);
+    renderer.scene_mut().graph = Some(base_graph);
+    let base_frame = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("translated text base capture should succeed");
+
+    let horizontal_translation = Point::new(12.35, 14.0);
+    let mut horizontal_graph =
+        translation_only_wrapper_with_plain_text_only_fixture(horizontal_translation);
+    mark_translated_text_wrapper(&mut horizontal_graph);
+    renderer.scene_mut().graph = Some(horizontal_graph);
+    let horizontal_frame = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("translated text horizontal capture should succeed");
+
+    let vertical_translation = Point::new(12.0, 14.65);
+    let mut vertical_graph =
+        translation_only_wrapper_with_plain_text_only_fixture(vertical_translation);
+    mark_translated_text_wrapper(&mut vertical_graph);
+    renderer.scene_mut().graph = Some(vertical_graph);
+    let vertical_frame = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("translated text vertical capture should succeed");
+
+    let base_normalized = normalize_translated_text_region(&base_frame, base_translation);
+    let horizontal_normalized =
+        normalize_translated_text_region(&horizontal_frame, horizontal_translation);
+    let vertical_normalized =
+        normalize_translated_text_region(&vertical_frame, vertical_translation);
+
+    assert_translated_text_local_picture_stable(
+        &base_normalized,
+        &horizontal_normalized,
+        "horizontal",
+    );
+    assert_translated_text_local_picture_stable(&base_normalized, &vertical_normalized, "vertical");
+}
+
+#[test]
+fn translated_thin_shape_wrapper_uses_bounded_local_surface_under_fractional_motion() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping translated thin-shape assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    let base_translation = Point::new(12.0, 14.0);
+    let mut base_graph = translation_only_wrapper_with_thin_shapes_fixture(base_translation);
+    mark_translated_shape_wrapper(&mut base_graph);
+    renderer.scene_mut().graph = Some(base_graph);
+    let base_frame = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("translated thin-shape base capture should succeed");
+    let base_stats = renderer
+        .last_frame_stats()
+        .expect("translated thin-shape base frame stats");
+
+    let horizontal_translation = Point::new(12.35, 14.0);
+    let mut horizontal_graph =
+        translation_only_wrapper_with_thin_shapes_fixture(horizontal_translation);
+    mark_translated_shape_wrapper(&mut horizontal_graph);
+    renderer.scene_mut().graph = Some(horizontal_graph);
+    let horizontal_frame = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("translated thin-shape horizontal capture should succeed");
+    let horizontal_stats = renderer
+        .last_frame_stats()
+        .expect("translated thin-shape horizontal frame stats");
+
+    let vertical_translation = Point::new(12.0, 14.65);
+    let mut vertical_graph =
+        translation_only_wrapper_with_thin_shapes_fixture(vertical_translation);
+    mark_translated_shape_wrapper(&mut vertical_graph);
+    renderer.scene_mut().graph = Some(vertical_graph);
+    let vertical_frame = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("translated thin-shape vertical capture should succeed");
+    let vertical_stats = renderer
+        .last_frame_stats()
+        .expect("translated thin-shape vertical frame stats");
+
+    let bright_region = |frame: &CapturedFrame, translation: Point| {
+        bright_pixel_count(
+            frame,
+            Rect {
+                x: translation.x + 12.0,
+                y: translation.y + 8.0,
+                width: 24.0,
+                height: 10.0,
+            },
+            120,
+        )
+    };
+
+    assert!(
+        base_stats.isolated_layer_renders > 0
+            && horizontal_stats.isolated_layer_renders > 0
+            && vertical_stats.isolated_layer_renders > 0,
+        "translated thin-shape fixture should render through bounded local surfaces: base={base_stats:?} horizontal={horizontal_stats:?} vertical={vertical_stats:?}"
+    );
+    assert!(
+        bright_region(&base_frame, base_translation) >= 60,
+        "translated thin-shape base frame should keep visible thin bars"
+    );
+    assert!(
+        bright_region(&horizontal_frame, horizontal_translation) >= 60,
+        "translated thin-shape horizontal frame should keep visible thin bars"
+    );
+    assert!(
+        bright_region(&vertical_frame, vertical_translation) >= 60,
+        "translated thin-shape vertical frame should keep visible thin bars"
     );
 }
 
@@ -856,6 +995,57 @@ fn translation_only_wrapper_with_text_fixture(wrapper_translation: Point) -> Ren
     )
 }
 
+fn translation_only_wrapper_with_plain_text_only_fixture(
+    wrapper_translation: Point,
+) -> RenderGraph {
+    let text_leaf = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: TRANSLATED_TEXT_LOCAL_SIZE.0 as f32,
+            height: TRANSLATED_TEXT_LOCAL_SIZE.1 as f32,
+        },
+        ProjectiveTransform::translation(9.0, 7.0),
+        GraphicsLayer::default(),
+        vec![RenderNode::Primitive(PrimitiveEntry {
+            phase: PrimitivePhase::BeforeChildren,
+            node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+                node_id: 99,
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: TRANSLATED_TEXT_LOCAL_SIZE.0 as f32,
+                    height: 20.0,
+                },
+                text: AnnotatedString::from("Label"),
+                text_style: TextStyle::from_span_style(SpanStyle {
+                    color: Some(Color::WHITE),
+                    ..Default::default()
+                }),
+                font_size: 16.0,
+                layout_options: TextLayoutOptions::default(),
+                clip: None,
+            })),
+        })],
+    );
+    let wrapper = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 64.0,
+            height: 40.0,
+        },
+        ProjectiveTransform::translation(wrapper_translation.x, wrapper_translation.y),
+        GraphicsLayer::default(),
+        vec![RenderNode::Layer(Box::new(text_leaf))],
+    );
+
+    graph(vec![
+        solid_rect(frame_rect(), Color::BLACK),
+        RenderNode::Layer(Box::new(wrapper)),
+    ])
+}
+
 fn translation_only_wrapper_with_underlined_text_fixture(
     wrapper_translation: Point,
 ) -> RenderGraph {
@@ -867,6 +1057,73 @@ fn translation_only_wrapper_with_underlined_text_fixture(
             ..Default::default()
         }),
     )
+}
+
+fn translation_only_wrapper_with_thin_shapes_fixture(wrapper_translation: Point) -> RenderGraph {
+    let shape_leaf = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: TRANSLATED_THIN_SHAPE_LOCAL_SIZE.0 as f32,
+            height: TRANSLATED_THIN_SHAPE_LOCAL_SIZE.1 as f32,
+        },
+        ProjectiveTransform::translation(9.0, 7.0),
+        GraphicsLayer::default(),
+        vec![
+            solid_rect(
+                Rect {
+                    x: 2.0,
+                    y: 1.0,
+                    width: 32.0,
+                    height: 3.0,
+                },
+                Color(0.66, 0.70, 0.86, 1.0),
+            ),
+            solid_rect(
+                Rect {
+                    x: 4.0,
+                    y: 7.0,
+                    width: 34.0,
+                    height: 1.0,
+                },
+                Color(0.95, 0.80, 0.84, 1.0),
+            ),
+            solid_rect(
+                Rect {
+                    x: 6.0,
+                    y: 11.0,
+                    width: 30.0,
+                    height: 1.0,
+                },
+                Color(0.95, 0.80, 0.84, 1.0),
+            ),
+            solid_rect(
+                Rect {
+                    x: 8.0,
+                    y: 15.0,
+                    width: 28.0,
+                    height: 1.0,
+                },
+                Color(0.95, 0.80, 0.84, 1.0),
+            ),
+        ],
+    );
+    let wrapper = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 64.0,
+            height: 40.0,
+        },
+        ProjectiveTransform::translation(wrapper_translation.x, wrapper_translation.y),
+        GraphicsLayer::default(),
+        vec![RenderNode::Layer(Box::new(shape_leaf))],
+    );
+
+    graph(vec![
+        solid_rect(frame_rect(), Color::BLACK),
+        RenderNode::Layer(Box::new(wrapper)),
+    ])
 }
 
 fn translation_only_wrapper_with_decorated_shadow_text_fixture(
@@ -1100,6 +1357,28 @@ fn frame_rect() -> Rect {
     }
 }
 
+fn mark_translated_text_wrapper(graph: &mut RenderGraph) {
+    let Some(RenderNode::Layer(wrapper)) = graph.root.children.get_mut(1) else {
+        panic!("expected translated text wrapper layer");
+    };
+    wrapper.translated_content_context = true;
+    let Some(RenderNode::Layer(text_leaf)) = wrapper.children.get_mut(0) else {
+        panic!("expected translated text leaf layer");
+    };
+    text_leaf.translated_content_context = true;
+}
+
+fn mark_translated_shape_wrapper(graph: &mut RenderGraph) {
+    let Some(RenderNode::Layer(wrapper)) = graph.root.children.get_mut(1) else {
+        panic!("expected translated thin-shape wrapper layer");
+    };
+    wrapper.translated_content_context = true;
+    let Some(RenderNode::Layer(shape_leaf)) = wrapper.children.get_mut(0) else {
+        panic!("expected translated thin-shape leaf layer");
+    };
+    shape_leaf.translated_content_context = true;
+}
+
 fn normalize_translated_backdrop_region(frame: &CapturedFrame, translation: Point) -> Vec<u8> {
     let (output_width, output_height) = translated_backdrop_compare_dimensions();
     let inset = TRANSLATED_BACKDROP_COMPARE_INSET as f32;
@@ -1116,6 +1395,50 @@ fn normalize_translated_backdrop_region(frame: &CapturedFrame, translation: Poin
         output_width,
         output_height,
     )
+}
+
+fn normalize_translated_text_region(frame: &CapturedFrame, translation: Point) -> Vec<u8> {
+    normalize_rgba_region(
+        &frame.pixels,
+        frame.width,
+        frame.height,
+        Rect {
+            x: translation.x + 9.0,
+            y: translation.y + 7.0,
+            width: TRANSLATED_TEXT_LOCAL_SIZE.0 as f32,
+            height: TRANSLATED_TEXT_LOCAL_SIZE.1 as f32,
+        },
+        TRANSLATED_TEXT_LOCAL_SIZE.0,
+        TRANSLATED_TEXT_LOCAL_SIZE.1,
+    )
+}
+
+fn assert_translated_text_local_picture_stable(base: &[u8], moved: &[u8], axis: &str) {
+    let stats = image_difference_stats(
+        base,
+        moved,
+        TRANSLATED_TEXT_LOCAL_SIZE.0,
+        TRANSLATED_TEXT_LOCAL_SIZE.1,
+        TRANSLATED_TEXT_PIXEL_TOLERANCE,
+    );
+    if stats.differing_pixels > TRANSLATED_TEXT_MAX_DIFFERING_PIXELS
+        || stats.max_difference > TRANSLATED_TEXT_MAX_PIXEL_DIFFERENCE
+    {
+        let diff = stats
+            .first_difference
+            .as_ref()
+            .expect("failing translated text comparison should report first difference");
+        panic!(
+            "translated text local picture changed too much under {axis} fractional motion; differing_pixels={} max_diff={} first differing normalized pixel at ({}, {}) base={:?} moved={:?} diff={}",
+            stats.differing_pixels,
+            stats.max_difference,
+            diff.x,
+            diff.y,
+            diff.lhs,
+            diff.rhs,
+            diff.difference
+        );
+    }
 }
 
 fn translated_backdrop_compare_dimensions() -> (u32, u32) {

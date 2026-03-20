@@ -58,7 +58,7 @@ fn main() {
                 fail(&robot, "Text showcase heading not found after tab switch");
             }
 
-            let Some((anchor_x, anchor_y, anchor_w, anchor_h)) = find_in_semantics(&robot, |elem| {
+            let Some((_anchor_x, _anchor_y, _anchor_w, _anchor_h)) = find_in_semantics(&robot, |elem| {
                 find_text(elem, "brush + alpha + draw_style + platform_style")
             })
             else {
@@ -67,15 +67,27 @@ fn main() {
                     "gradient/stroke anchor label not found in Text showcase semantics",
                 );
             };
-            let sample_y = anchor_y + anchor_h + 2.0;
-            let sample_w = anchor_w.max(280.0);
-            let sample_h = (anchor_h * 2.2).max(28.0);
+            let Some((sample_x, sample_y, sample_w, sample_h)) = find_in_semantics(&robot, |elem| {
+                find_text(elem, "Gradient/alpha/fill/platform")
+            }) else {
+                fail(
+                    &robot,
+                    "gradient/stroke sample text not found in Text showcase semantics",
+                );
+            };
 
             let screenshot = robot
                 .screenshot()
                 .unwrap_or_else(|err| fail(&robot, &format!("screenshot failed: {err}")));
 
-            let cropped = crop_screenshot_logical(&screenshot, anchor_x, sample_y, sample_w, sample_h)
+            let crop_padding = 8.0;
+            let cropped = crop_screenshot_logical(
+                &screenshot,
+                sample_x - crop_padding,
+                sample_y - crop_padding,
+                sample_w + crop_padding * 2.0,
+                sample_h + crop_padding * 2.0,
+            )
                 .unwrap_or_else(|| fail(&robot, "failed to crop sample bounds"));
 
             let mut colored_pixels = 0usize;

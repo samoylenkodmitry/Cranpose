@@ -1,0 +1,31 @@
+[package]
+edition = "2021"
+name = "glyphon"
+version = "0.10.0"
+description = "Fast, simple 2D text rendering for wgpu (cranpose fork: float vertex positions + linear sampling)"
+license = "MIT OR Apache-2.0 OR Zlib"
+
+[lib]
+name = "glyphon"
+path = "src/lib.rs"
+
+[dependencies]
+bytemuck = { version = "1.25.0", features = ["derive"] }
+
+[dependencies.cosmic-text]
+version = "0.15"
+
+[dependencies.etagere]
+version = "0.2.15"
+
+[dependencies.lru]
+version = "0.16.2"
+default-features = false
+
+[dependencies.rustc-hash]
+version = "2.1.1"
+
+[dependencies.wgpu]
+version = "28.0.0"
+features = ["wgsl"]
+default-features = false

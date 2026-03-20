@@ -26,6 +26,10 @@ const TEXT_MAX_DIFFERING_PIXELS: usize = 0;
 const TEXT_MAX_PIXEL_DIFFERENCE: u32 = 0;
 const LAZY_MAX_DIFFERING_PIXELS: usize = 24;
 const LAZY_MAX_PIXEL_DIFFERENCE: u32 = 56;
+// Direct text now translates smoothly through fractional scroll positions, so a normalized
+// text-only crop can retain a few per-pixel differences even when the row itself moves rigidly.
+const LAZY_TEXT_MAX_DIFFERING_PIXELS: usize = 24;
+const LAZY_TEXT_MAX_PIXEL_DIFFERENCE: u32 = 72;
 const LAZY_SCROLL_DELTA_Y: f32 = -21.5;
 const DEBUG_OUTPUT_DIR: &str = "/tmp/cranpose_translation_contract";
 const DECORATED_TEXT_PAD_LEFT: f32 = 8.0;
@@ -197,8 +201,8 @@ fn verify_lazy_list_translation_contract(robot: &cranpose::Robot) {
         &after_shot,
         padded_region(after_item_bounds, 2.0),
         LAZY_PIXEL_DIFFERENCE_TOLERANCE,
-        LAZY_MAX_DIFFERING_PIXELS,
-        LAZY_MAX_PIXEL_DIFFERENCE,
+        LAZY_TEXT_MAX_DIFFERING_PIXELS,
+        LAZY_TEXT_MAX_PIXEL_DIFFERENCE,
         Some(LAZY_DOWNSAMPLE_FACTOR),
     );
     assert_normalized_region_stable(
@@ -208,8 +212,8 @@ fn verify_lazy_list_translation_contract(robot: &cranpose::Robot) {
         &after_shot,
         padded_region(after_hello_bounds, 2.0),
         LAZY_PIXEL_DIFFERENCE_TOLERANCE,
-        LAZY_MAX_DIFFERING_PIXELS,
-        LAZY_MAX_PIXEL_DIFFERENCE,
+        LAZY_TEXT_MAX_DIFFERING_PIXELS,
+        LAZY_TEXT_MAX_PIXEL_DIFFERENCE,
         Some(LAZY_DOWNSAMPLE_FACTOR),
     );
 }

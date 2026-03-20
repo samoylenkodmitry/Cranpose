@@ -21,7 +21,7 @@ cranpose-core = { workspace = true }
 # Default features include platform-appropriate backends (Vulkan/Metal/DX12/GLES)
 wgpu = { version = "28.0", features = ["webgl"] }
 bytemuck = { version = "1.25", features = ["derive"] }
-glyphon = "0.10"
+glyphon = { path = "../../../crates/glyphon" }
 log = "0.4"
 lru = "0.16"
 rustc-hash = "2.1.1"
