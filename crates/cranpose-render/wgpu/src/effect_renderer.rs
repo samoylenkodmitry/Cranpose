@@ -125,7 +125,11 @@ pub(crate) enum CompositeSampleMode {
 }
 
 impl EffectRenderer {
-    pub fn new(device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        surface_format: wgpu::TextureFormat,
+        adapter_backend: wgpu::Backend,
+    ) -> Self {
         // Create shared bind group layouts
         let effect_texture_bind_group_layout = OffscreenPool::texture_bind_group_layout(device);
         let effect_uniform_bind_group_layout = OffscreenPool::uniform_bind_group_layout(device);
@@ -571,7 +575,7 @@ impl EffectRenderer {
         });
         Self {
             offscreen_pool: OffscreenPool::new(device, surface_format),
-            shader_cache: ShaderPipelineCache::new(),
+            shader_cache: ShaderPipelineCache::new(adapter_backend),
             blur_pipeline,
             blur_uniform_buffer_horizontal,
             blur_uniform_buffer_vertical,
@@ -887,11 +891,9 @@ impl EffectRenderer {
         );
 
         // Get or compile pipeline
-        let source_hash = shader.source_hash();
         let Some(pipeline) = self.shader_cache.get_or_create(
             device,
-            source_hash,
-            shader.source(),
+            shader,
             self.surface_format,
             &self.effect_texture_bind_group_layout,
             &self.effect_uniform_bind_group_layout,
@@ -1185,9 +1187,6 @@ impl EffectRenderer {
             });
             pass.set_bind_group(0, &*texture_bind_group, &[]);
             pass.set_bind_group(1, &self.blit_uniform_bind_group, &[]);
-            if let Some((x, y, w, h)) = dest_viewport {
-                pass.set_viewport(x, y, w, h, 0.0, 1.0);
-            }
             if let Some((x, y, w, h)) = scissor {
                 pass.set_scissor_rect(x, y, w, h);
             }

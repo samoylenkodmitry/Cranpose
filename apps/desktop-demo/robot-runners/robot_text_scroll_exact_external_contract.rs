@@ -9,7 +9,7 @@ use desktop_app::app;
 use image::{ImageBuffer, RgbaImage};
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use text_showcase_external_helpers::{
     find_window_id, open_text_tab, scroll_text_into_view, take_x11_screenshot,
 };
@@ -142,8 +142,7 @@ fn output_dir() -> PathBuf {
 
 fn prepare_output_dir() -> PathBuf {
     let output_dir = output_dir();
-    rotate_output_dir(&output_dir);
-    std::fs::create_dir_all(&output_dir).expect("create output dir");
+    recreate_output_dir(&output_dir);
     output_dir
 }
 
@@ -158,8 +157,7 @@ fn prepare_internal_diagnostic() -> Option<InternalDiagnostic> {
     }
 
     let output_dir = PathBuf::from("/tmp/cranpose_text_scroll_exact_internal");
-    rotate_output_dir(&output_dir);
-    std::fs::create_dir_all(&output_dir).expect("create internal output dir");
+    recreate_output_dir(&output_dir);
     let capture_scale = std::env::var(INTERNAL_DIAGNOSTIC_SCALE_ENV)
         .ok()
         .and_then(|value| value.parse::<f32>().ok())
@@ -171,25 +169,13 @@ fn prepare_internal_diagnostic() -> Option<InternalDiagnostic> {
     })
 }
 
-fn rotate_output_dir(output_dir: &PathBuf) {
+fn recreate_output_dir(output_dir: &std::path::Path) {
     if output_dir.exists() {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time before unix epoch")
-            .as_secs();
-        let backup_name = format!(
-            "{}_old_{timestamp}",
-            output_dir.file_name().unwrap().to_string_lossy()
-        );
-        let backup_dir = output_dir.with_file_name(backup_name);
-        std::fs::rename(output_dir, &backup_dir).unwrap_or_else(|err| {
-            panic!(
-                "failed to rotate {} to {}: {err}",
-                output_dir.display(),
-                backup_dir.display()
-            )
-        });
+        std::fs::remove_dir_all(output_dir)
+            .unwrap_or_else(|err| panic!("failed to clear {}: {err}", output_dir.display()));
     }
+    std::fs::create_dir_all(output_dir)
+        .unwrap_or_else(|err| panic!("failed to create {}: {err}", output_dir.display()));
 }
 
 fn compare_script_path() -> PathBuf {

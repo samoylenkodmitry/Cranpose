@@ -951,8 +951,14 @@ impl WgpuRenderer {
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
         surface_format: wgpu::TextureFormat,
+        adapter_backend: wgpu::Backend,
     ) {
-        self.gpu_renderer = Some(GpuRenderer::new(device, queue, surface_format));
+        self.gpu_renderer = Some(GpuRenderer::new(
+            device,
+            queue,
+            surface_format,
+            adapter_backend,
+        ));
     }
 
     /// Set root scale factor for text rendering (e.g., density scaling on Android)

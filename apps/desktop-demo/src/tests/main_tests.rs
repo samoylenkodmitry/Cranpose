@@ -219,3 +219,29 @@ fn markdown_tab_uses_internal_scroll_container() {
         "Markdown tab owns an internal lazy list + scrollbar and must not be wrapped in ScrollableTab"
     );
 }
+
+#[test]
+fn startup_tab_parser_accepts_variant_and_label_aliases() {
+    assert_eq!(
+        DemoTab::from_startup_name("shaders"),
+        Some(DemoTab::Shaders)
+    );
+    assert_eq!(
+        DemoTab::from_startup_name("Recursive Layout"),
+        Some(DemoTab::Layout)
+    );
+    assert_eq!(
+        DemoTab::from_startup_name("modifier_showcase"),
+        Some(DemoTab::ModifierShowcase)
+    );
+    assert_eq!(
+        DemoTab::from_startup_name("markdown-viewer"),
+        Some(DemoTab::MarkdownViewer)
+    );
+}
+
+#[test]
+fn startup_tab_parser_rejects_unknown_names() {
+    assert_eq!(DemoTab::from_startup_name(""), None);
+    assert_eq!(DemoTab::from_startup_name("definitely-not-a-tab"), None);
+}

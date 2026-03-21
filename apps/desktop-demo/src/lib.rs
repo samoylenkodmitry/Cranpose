@@ -55,10 +55,33 @@ pub fn web_init() {
 
 #[cfg(all(feature = "web", target_arch = "wasm32"))]
 #[wasm_bindgen]
-pub async fn run_app() -> Result<(), JsValue> {
+pub async fn run_app(initial_tab: Option<String>) -> Result<(), JsValue> {
     log::info!("Initializing Cranpose app...");
 
+    let startup_tab = initial_tab
+        .as_deref()
+        .and_then(app::DemoTab::from_startup_name);
+    if let Some(requested) = initial_tab.as_deref() {
+        match startup_tab {
+            Some(tab) => {
+                log::info!(
+                    "Applying startup tab override: requested='{}' resolved='{}'",
+                    requested,
+                    tab.label()
+                );
+            }
+            None => {
+                log::warn!(
+                    "Ignoring unknown startup tab override '{}'; continuing with default tab",
+                    requested
+                );
+            }
+        }
+    }
+
     create_app()
-        .run_web("cranpose-canvas", app::combined_app)
+        .run_web("cranpose-canvas", move || {
+            app::combined_app_with_initial_tab(startup_tab);
+        })
         .await
 }

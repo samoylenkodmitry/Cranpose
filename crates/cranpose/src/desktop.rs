@@ -798,6 +798,7 @@ impl ApplicationHandler for App {
                     return;
                 }
             };
+        let adapter_info = adapter.get_info();
 
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("Main Device"),
@@ -835,7 +836,12 @@ impl ApplicationHandler for App {
         // Create renderer with fonts from settings
         let fonts: &[&[u8]] = self.settings.fonts.take().unwrap_or(&[]);
         let mut renderer = WgpuRenderer::new(fonts);
-        renderer.init_gpu(Arc::new(device), Arc::new(queue), surface_format);
+        renderer.init_gpu(
+            Arc::new(device),
+            Arc::new(queue),
+            surface_format,
+            adapter_info.backend,
+        );
         let initial_scale = window.scale_factor();
         renderer.set_root_scale(initial_scale as f32);
         cranpose_ui::set_density(initial_scale as f32);

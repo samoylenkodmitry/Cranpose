@@ -3,18 +3,22 @@
 //! Compiles and caches `wgpu::RenderPipeline` objects keyed by WGSL source hash,
 //! so the same shader with different uniform values reuses its pipeline.
 
+use cranpose_ui_graphics::RuntimeShader;
+use naga::back::glsl;
 use naga::ShaderStage;
 use std::collections::{HashMap, HashSet};
 
 /// Caches compiled render pipelines for custom WGSL shader effects.
 pub(crate) struct ShaderPipelineCache {
+    backend: wgpu::Backend,
     cache: HashMap<u64, wgpu::RenderPipeline>,
     disabled: HashSet<u64>,
 }
 
 impl ShaderPipelineCache {
-    pub fn new() -> Self {
+    pub fn new(backend: wgpu::Backend) -> Self {
         Self {
+            backend,
             cache: HashMap::new(),
             disabled: HashSet::new(),
         }
@@ -28,12 +32,12 @@ impl ShaderPipelineCache {
     pub fn get_or_create(
         &mut self,
         device: &wgpu::Device,
-        source_hash: u64,
-        source: &str,
+        shader: &RuntimeShader,
         format: wgpu::TextureFormat,
         texture_bind_group_layout: &wgpu::BindGroupLayout,
         uniform_bind_group_layout: &wgpu::BindGroupLayout,
     ) -> Option<&wgpu::RenderPipeline> {
+        let source_hash = shader.source_hash();
         if self.disabled.contains(&source_hash) {
             return None;
         }
@@ -42,7 +46,7 @@ impl ShaderPipelineCache {
             return self.cache.get(&source_hash);
         }
 
-        if let Err(err) = validate_runtime_shader_source(source) {
+        if let Err(err) = validate_runtime_shader_source(shader.source(), self.backend) {
             log::warn!(
                 "Disabling RuntimeShader (hash={}): {}. Falling back to pass-through.",
                 source_hash,
@@ -55,7 +59,7 @@ impl ShaderPipelineCache {
         let pipeline = {
             let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("RuntimeShader Effect"),
-                source: wgpu::ShaderSource::Wgsl(source.into()),
+                source: wgpu::ShaderSource::Wgsl(shader.source().into()),
             });
 
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -102,7 +106,7 @@ impl ShaderPipelineCache {
     }
 }
 
-fn validate_runtime_shader_source(source: &str) -> Result<(), String> {
+fn validate_runtime_shader_source(source: &str, backend: wgpu::Backend) -> Result<(), String> {
     let module =
         naga::front::wgsl::parse_str(source).map_err(|err| format!("WGSL parse error: {err}"))?;
 
@@ -126,16 +130,70 @@ fn validate_runtime_shader_source(source: &str) -> Result<(), String> {
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::all(),
     );
-    validator
+    let module_info = validator
         .validate(&module)
         .map_err(|err| format!("WGSL validation error: {err}"))?;
 
+    validate_runtime_shader_backend_support(&module, &module_info, backend)?;
+
     Ok(())
+}
+
+fn validate_runtime_shader_backend_support(
+    module: &naga::Module,
+    module_info: &naga::valid::ModuleInfo,
+    backend: wgpu::Backend,
+) -> Result<(), String> {
+    if backend != wgpu::Backend::Gl {
+        return Ok(());
+    }
+
+    validate_glsl_portability(module, module_info, "fullscreen_vs", ShaderStage::Vertex)?;
+    validate_glsl_portability(module, module_info, "effect_fs", ShaderStage::Fragment)
+}
+
+fn validate_glsl_portability(
+    module: &naga::Module,
+    module_info: &naga::valid::ModuleInfo,
+    entry_point: &str,
+    shader_stage: ShaderStage,
+) -> Result<(), String> {
+    let mut glsl_source = String::new();
+    let options = glsl::Options {
+        version: glsl::Version::new_gles(300),
+        writer_flags: glsl::WriterFlags::ADJUST_COORDINATE_SPACE,
+        ..Default::default()
+    };
+    let pipeline_options = glsl::PipelineOptions {
+        shader_stage,
+        entry_point: entry_point.to_string(),
+        multiview: None,
+    };
+
+    let mut writer = glsl::Writer::new(
+        &mut glsl_source,
+        module,
+        module_info,
+        &options,
+        &pipeline_options,
+        naga::proc::BoundsCheckPolicies::default(),
+    )
+    .map_err(|err| format!("GL/WebGL portability validation failed for `{entry_point}`: {err}"))?;
+
+    writer
+        .write()
+        .map(|_| ())
+        .map_err(|err| format!("GL/WebGL portability emission failed for `{entry_point}`: {err}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::validate_runtime_shader_source;
+    use crate::pipeline::GPU_TEXT_BRUSH_EFFECT_SHADER;
+    use cranpose_ui_graphics::{
+        GRADIENT_CUT_MASK_WGSL, GRADIENT_FADE_DST_OUT_WGSL, LIQUID_GLASS_WGSL,
+        ROUNDED_ALPHA_MASK_WGSL,
+    };
 
     const VALID_SHADER: &str = r#"
 struct VertexOutput {
@@ -165,13 +223,13 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 
     #[test]
     fn validator_accepts_valid_runtime_shader() {
-        assert!(validate_runtime_shader_source(VALID_SHADER).is_ok());
+        assert!(validate_runtime_shader_source(VALID_SHADER, wgpu::Backend::Vulkan).is_ok());
     }
 
     #[test]
     fn validator_rejects_invalid_wgsl() {
         let invalid = "this is not wgsl";
-        assert!(validate_runtime_shader_source(invalid).is_err());
+        assert!(validate_runtime_shader_source(invalid, wgpu::Backend::Vulkan).is_err());
     }
 
     #[test]
@@ -184,6 +242,22 @@ fn fullscreen_vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> 
     return vec4<f32>(x, y, 0.0, 1.0);
 }
 "#;
-        assert!(validate_runtime_shader_source(missing_effect_fs).is_err());
+        assert!(validate_runtime_shader_source(missing_effect_fs, wgpu::Backend::Vulkan).is_err());
+    }
+
+    #[test]
+    fn validator_accepts_gl_portable_builtin_runtime_shaders() {
+        for (name, source) in [
+            ("gradient_cut_mask", GRADIENT_CUT_MASK_WGSL),
+            ("rounded_alpha_mask", ROUNDED_ALPHA_MASK_WGSL),
+            ("gradient_fade_dst_out", GRADIENT_FADE_DST_OUT_WGSL),
+            ("liquid_glass", LIQUID_GLASS_WGSL),
+            ("gpu_text_brush_effect", GPU_TEXT_BRUSH_EFFECT_SHADER),
+        ] {
+            assert!(
+                validate_runtime_shader_source(source, wgpu::Backend::Gl).is_ok(),
+                "{name} should remain GL-portable"
+            );
+        }
     }
 }

@@ -748,6 +748,7 @@ impl GpuRenderer {
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
         surface_format: wgpu::TextureFormat,
+        adapter_backend: wgpu::Backend,
     ) -> Self {
         let uniform_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -929,7 +930,7 @@ impl GpuRenderer {
             mapped_at_creation: false,
         });
 
-        let effect_renderer = EffectRenderer::new(&device, surface_format);
+        let effect_renderer = EffectRenderer::new(&device, surface_format, adapter_backend);
 
         Self {
             device,
@@ -1819,6 +1820,7 @@ impl GpuRenderer {
                 backdrop_underlay: None,
                 allow_runtime_cache: false,
                 logical_rect_override: Some(viewport_rect),
+                activates_nested_capture: false,
                 translation_context: TranslationRenderContext::default(),
             },
         )?;
@@ -2659,6 +2661,7 @@ impl GpuRenderer {
         let bounds_y = device_bounds.y;
         let bounds_w = device_bounds.width;
         let bounds_h = device_bounds.height;
+        let pixel_radius = shadow.blur_radius * root_scale;
 
         // 1. Acquire bounds-sized offscreen source.
         let source = self.acquire_offscreen(bounds_w, bounds_h);
@@ -2733,7 +2736,6 @@ impl GpuRenderer {
 
         // 3. Apply Gaussian blur on the bounds-sized textures.
         let dest = self.acquire_offscreen(bounds_w, bounds_h);
-        let pixel_radius = shadow.blur_radius * root_scale;
         self.effect_renderer.apply_blur_scissored(
             &self.device,
             &self.queue,

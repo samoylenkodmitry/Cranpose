@@ -88,6 +88,35 @@ impl DemoTab {
             DemoTab::MarkdownViewer => "Markdown",
         }
     }
+
+    #[cfg(any(test, target_arch = "wasm32"))]
+    pub(crate) fn from_startup_name(name: &str) -> Option<Self> {
+        let normalized = name
+            .chars()
+            .filter(|ch| ch.is_ascii_alphanumeric())
+            .map(|ch| ch.to_ascii_lowercase())
+            .collect::<String>();
+        match normalized.as_str() {
+            "counter" | "counterapp" => Some(Self::Counter),
+            "compositionlocal" | "compositionlocaltest" => Some(Self::CompositionLocal),
+            "async" | "asyncruntime" => Some(Self::Async),
+            "animations" => Some(Self::Animations),
+            "webfetch" => Some(Self::WebFetch),
+            "textinput" => Some(Self::TextInput),
+            "layout" | "recursivelayout" => Some(Self::Layout),
+            "modifiers" | "modifiersshowcase" | "modifiershowcase" => Some(Self::ModifierShowcase),
+            "lazylist" => Some(Self::LazyList),
+            "mineswapper2" => Some(Self::Mineswapper2),
+            "hackernews" => Some(Self::HackerNews),
+            "images" => Some(Self::Images),
+            "text" => Some(Self::Text),
+            "winamp" => Some(Self::Winamp),
+            "xkcd" => Some(Self::Xkcd),
+            "shaders" => Some(Self::Shaders),
+            "markdown" | "markdownviewer" => Some(Self::MarkdownViewer),
+            _ => None,
+        }
+    }
 }
 
 pub const DEMO_TABS: [DemoTab; 17] = [
@@ -254,12 +283,12 @@ fn TabContent(active_tab: cranpose_core::MutableState<DemoTab>, modifier: Modifi
 
 #[composable]
 pub fn combined_app() {
-    let active_tab = cranpose_core::useState(|| {
-        // Default to Counter for now
-        // DemoTab::Counter
-        // DemoTab::AsyncRuntime
-        DemoTab::Counter
-    });
+    combined_app_with_initial_tab(None);
+}
+
+#[composable]
+pub(crate) fn combined_app_with_initial_tab(initial_tab: Option<DemoTab>) {
+    let active_tab = cranpose_core::useState(move || initial_tab.unwrap_or(DemoTab::Counter));
     TEST_ACTIVE_TAB_STATE.with(|cell| {
         *cell.borrow_mut() = Some(active_tab);
     });

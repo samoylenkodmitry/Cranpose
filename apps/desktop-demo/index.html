@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Cranpose Demo</title>
+    <link rel="icon" href="data:,">
     <style>
         body {
             margin: 0;
@@ -95,7 +96,7 @@
         <div id="error" class="error" style="display: none;"></div>
 
         <div class="info">
-            <p>Powered by Rust 🦀 + WebAssembly + WebGL</p>
+            <p>Powered by Rust 🦀 + WebAssembly + WebGPU/WebGL2</p>
             <p>Full demo with interactive examples, animations, and more!</p>
         </div>
 
@@ -106,46 +107,174 @@
     </div>
 
     <script type="module">
+        const MAX_CAPTURED_CONSOLE_MESSAGES = 2000;
+        const capturedConsoleMessages = [];
+        const appState = {
+            phase: 'booting',
+            backend: null,
+            initialTab: null,
+            lastUpdatedMs: Date.now(),
+            error: null,
+        };
+
+        window.__cranposeConsoleMessages = capturedConsoleMessages;
+        window.__cranposeAppState = appState;
+
+        function updateAppState(phase, extra = {}) {
+            Object.assign(appState, extra, {
+                phase,
+                lastUpdatedMs: Date.now(),
+            });
+        }
+
+        function serializeConsoleValue(value) {
+            if (value instanceof Error) {
+                return value.stack || value.message || String(value);
+            }
+            if (typeof value === 'string') {
+                return value;
+            }
+            if (value === undefined) {
+                return 'undefined';
+            }
+            if (value === null) {
+                return 'null';
+            }
+            if (typeof value === 'object') {
+                try {
+                    return JSON.stringify(value);
+                } catch (_) {
+                    return String(value);
+                }
+            }
+            return String(value);
+        }
+
+        function captureConsole(level, args) {
+            const serializedArgs = args.map(serializeConsoleValue);
+            capturedConsoleMessages.push({
+                level,
+                args: serializedArgs,
+                text: serializedArgs.join(' '),
+                timestampMs: Date.now(),
+            });
+            if (capturedConsoleMessages.length > MAX_CAPTURED_CONSOLE_MESSAGES) {
+                capturedConsoleMessages.splice(
+                    0,
+                    capturedConsoleMessages.length - MAX_CAPTURED_CONSOLE_MESSAGES,
+                );
+            }
+        }
+
+        const originalConsole = {};
+        for (const level of ['log', 'info', 'warn', 'error']) {
+            originalConsole[level] = console[level].bind(console);
+            console[level] = (...args) => {
+                captureConsole(level, args);
+                originalConsole[level](...args);
+            };
+        }
+
+        window.addEventListener('error', (event) => {
+            captureConsole('error', [
+                'window.error',
+                event.message || '',
+                event.filename || '',
+                event.lineno || 0,
+                event.colno || 0,
+            ]);
+        });
+
+        window.addEventListener('unhandledrejection', (event) => {
+            captureConsole('error', [
+                'window.unhandledrejection',
+                serializeConsoleValue(event.reason),
+            ]);
+        });
+
+        function registerGraphicsContextMonitor(canvas) {
+            if (!canvas) {
+                return;
+            }
+
+            canvas.addEventListener('webglcontextlost', (event) => {
+                event.preventDefault();
+                const message = 'Graphics context lost';
+                console.error(message);
+                updateAppState('error', { error: message });
+            });
+
+            canvas.addEventListener('webglcontextrestored', (event) => {
+                event.preventDefault();
+                if (appState.phase !== 'error') {
+                    const message = 'Graphics context restored after loss';
+                    console.warn(message);
+                    updateAppState('error', { error: message });
+                }
+            });
+        }
+
         async function init() {
             try {
-                // Check for WebGL2 support (wgpu uses WebGL backend on web)
+                const params = new URLSearchParams(window.location.search);
+                const backend = params.get('backend') || 'gl';
+                const initialTab = params.get('tab');
+                updateAppState('initializing', { backend, initialTab });
+                registerGraphicsContextMonitor(document.getElementById('cranpose-canvas'));
+                const hasWebGpu = typeof navigator !== 'undefined' && 'gpu' in navigator;
                 const canvas = document.createElement('canvas');
-                const gl = canvas.getContext('webgl2');
-                if (!gl) {
-                    throw new Error('WebGL2 is not supported in this browser. Please use a modern browser (Chrome, Firefox, Edge, or Safari).');
+                const hasWebGl2 = !!canvas.getContext('webgl2');
+                if (backend === 'webgpu' && !hasWebGpu) {
+                    throw new Error('This URL forced backend=webgpu, but WebGPU is not available in this browser.');
                 }
-                console.log('WebGL2 support detected');
+                if (backend === 'gl' && !hasWebGl2) {
+                    throw new Error('This URL forced backend=gl, but WebGL2 is not available in this browser.');
+                }
+                if (!hasWebGpu && !hasWebGl2) {
+                    throw new Error('Neither WebGPU nor WebGL2 is supported in this browser. Please use a current browser with modern graphics support.');
+                }
+                console.log(`Graphics startup preference: backend=${backend}`);
+                if (initialTab) {
+                    console.log(`UI startup preference: tab=${initialTab}`);
+                }
 
                 // Import the WASM module
+                updateAppState('loading_wasm');
                 const wasm = await import('./pkg/desktop_app.js');
 
                 // Initialize the WASM module (this loads the .wasm file)
                 await wasm.default();
 
                 // Now run the app (functions are available after init)
-                await wasm.run_app();
+                updateAppState('starting_app');
+                await wasm.run_app(initialTab);
+                updateAppState('running');
 
                 // Hide loading message
                 document.getElementById('loading').style.display = 'none';
             } catch (err) {
                 console.error('Failed to initialize app:', err);
+                updateAppState('error', {
+                    error: err.message || err.toString(),
+                });
                 document.getElementById('loading').style.display = 'none';
                 const errorDiv = document.getElementById('error');
                 errorDiv.style.display = 'block';
 
                 let errorHtml = `<h3>Error Loading Application</h3><p>${err.message || err.toString()}</p>`;
 
-                if ((err.message || '').includes('WebGL')) {
+                if ((err.message || '').includes('WebGPU') || (err.message || '').includes('WebGL')) {
                     errorHtml += `
                         <hr>
-                        <h4>WebGL2 Not Supported</h4>
-                        <p style="text-align: left;">This demo requires WebGL2 support, which is available in all modern browsers.</p>
+                        <h4>Graphics Support Missing</h4>
+                        <p style="text-align: left;">This demo defaults to the stable WebGL2 path and supports manual overrides with <code>?backend=webgpu</code>, <code>?backend=gl</code>, or <code>?backend=auto</code>.</p>
                         <h5>Solutions:</h5>
                         <ol style="text-align: left;">
                             <li>Update your browser to the latest version</li>
-                            <li>Enable WebGL in your browser settings</li>
+                            <li>Enable WebGPU or WebGL in your browser settings</li>
                             <li>Update your graphics drivers</li>
-                            <li>Try a different browser (Chrome, Firefox, Edge, or Safari)</li>
+                            <li>Use the default WebGL2 path or <code>?backend=gl</code> if WebGPU startup is unstable on your browser</li>
+                            <li>Try a different browser (Chrome, Edge, Safari, or Firefox with the needed graphics support)</li>
                         </ol>
                     `;
                 } else {

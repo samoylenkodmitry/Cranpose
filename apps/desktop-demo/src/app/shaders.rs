@@ -262,7 +262,7 @@ pub(crate) fn ShadersTab() {
             })
             .padding(20.0),
         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(24.0)),
-        || {
+        move || {
             Text(
                 "Shaders & Effects",
                 Modifier::empty().padding(10.0).draw_behind(|scope| {
@@ -273,7 +273,6 @@ pub(crate) fn ShadersTab() {
                 }),
                 TextStyle::default(),
             );
-
             SweepGradientDemo();
             InteractiveEffectsDemo();
             EffectSemanticsDemo();

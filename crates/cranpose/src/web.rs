@@ -15,6 +15,13 @@ use web_sys::{HtmlCanvasElement, MouseEvent, PointerEvent, WheelEvent};
 
 const WEB_WHEEL_LINE_DELTA_PIXELS: f32 = 40.0;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WebBackendPreference {
+    Auto,
+    WebGpu,
+    Gl,
+}
+
 /// Runs a web Compose application with wgpu rendering.
 ///
 /// Called by `AppLauncher::run_web()`. This is the framework-level
@@ -59,14 +66,19 @@ pub async fn run(
         style.set_property("touch-action", "none")?;
     }
 
-    // Initialize WGPU
-    // Use WebGL backend for maximum compatibility with Chrome stable.
-    // This avoids the wgpu 0.19 / Chrome WebGPU spec incompatibility
-    // (maxInterStageShaderComponents vs maxInterStageShaderVariables).
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::GL,
+    let backend_preference = requested_web_backend(&window);
+    let instance_desc = wgpu::InstanceDescriptor {
+        backends: instance_backends(backend_preference),
         ..Default::default()
-    });
+    };
+    let instance = match backend_preference {
+        WebBackendPreference::Auto => {
+            wgpu::util::new_instance_with_webgpu_detection(&instance_desc).await
+        }
+        WebBackendPreference::WebGpu | WebBackendPreference::Gl => {
+            wgpu::Instance::new(&instance_desc)
+        }
+    };
 
     let surface = instance
         .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
@@ -81,14 +93,22 @@ pub async fn run(
         .await
         .map_err(|e| format!("failed to find suitable adapter: {:?}", e))?;
 
-    // For web, use downlevel defaults for maximum compatibility.
-    // wgpu 0.19 uses newer WebGPU spec field names, so we use the most
-    // conservative limits designed for WebGL2-level capabilities.
+    let adapter_info = adapter.get_info();
+    let adapter_limits = adapter.limits();
+    let required_limits =
+        required_limits_for_web_backend(adapter_info.backend, adapter_limits.clone());
+    log::info!(
+        "Web backend preference={:?}, selected backend={:?}, max_texture_dimension_2d={}",
+        backend_preference,
+        adapter_info.backend,
+        adapter_limits.max_texture_dimension_2d
+    );
+
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("Main Device"),
             required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
+            required_limits,
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
             memory_hints: wgpu::MemoryHints::default(),
             trace: wgpu::Trace::Off,
@@ -118,35 +138,44 @@ pub async fn run(
 
     surface.configure(&device, &surface_config);
 
-    // The surface texture may be smaller than requested (e.g. WebGL2
-    // backends can cap at 2048).  Probe the actual size and derive the
-    // effective scale from it so layout, rendering, and scissor rects
-    // are all consistent with the real render target.
-    let probe = surface
-        .get_current_texture()
-        .map_err(|e| format!("failed to probe surface texture: {e:?}"))?;
-    let actual_width = probe.texture.width();
-    let actual_height = probe.texture.height();
-    probe.present();
-
     let mut surface_config = surface_config;
-    let effective_scale =
-        if actual_width < surface_config.width || actual_height < surface_config.height {
-            let fit_x = actual_width as f64 / width as f64;
-            let fit_y = actual_height as f64 / height as f64;
-            let s = fit_x.min(fit_y);
-            surface_config.width = actual_width;
-            surface_config.height = actual_height;
-            s
+    let (actual_width, actual_height, effective_scale) =
+        if adapter_info.backend == wgpu::Backend::BrowserWebGpu {
+            (surface_config.width, surface_config.height, scale_factor)
         } else {
-            scale_factor
+            // WebGL backends can cap the swapchain below the requested size.
+            // Probe the actual surface once so layout and root scale match the
+            // real render target instead of the requested CSS size.
+            let probe = surface
+                .get_current_texture()
+                .map_err(|e| format!("failed to probe surface texture: {e:?}"))?;
+            let actual_width = probe.texture.width();
+            let actual_height = probe.texture.height();
+            probe.present();
+            let effective_scale =
+                if actual_width < surface_config.width || actual_height < surface_config.height {
+                    let fit_x = actual_width as f64 / width as f64;
+                    let fit_y = actual_height as f64 / height as f64;
+                    let s = fit_x.min(fit_y);
+                    surface_config.width = actual_width;
+                    surface_config.height = actual_height;
+                    s
+                } else {
+                    scale_factor
+                };
+            (actual_width, actual_height, effective_scale)
         };
 
     // Create renderer with fonts from settings
     let fonts: &[&[u8]] = settings.fonts.unwrap_or(&[]);
     log::info!("Web renderer startup: {} font(s)", fonts.len());
     let mut renderer = WgpuRenderer::new(fonts);
-    renderer.init_gpu(Arc::new(device), Arc::new(queue), surface_format);
+    renderer.init_gpu(
+        Arc::new(device),
+        Arc::new(queue),
+        surface_format,
+        adapter_info.backend,
+    );
     renderer.set_root_scale(effective_scale as f32);
     cranpose_ui::set_density(effective_scale as f32);
 
@@ -162,6 +191,9 @@ pub async fn run(
     app.borrow_mut()
         .set_buffer_size(actual_width, actual_height);
     app.borrow_mut().set_viewport(width as f32, height as f32);
+
+    let surface = Rc::new(surface);
+    let surface_config = Rc::new(RefCell::new(surface_config));
 
     // Set up mouse event handlers
     {
@@ -572,9 +604,6 @@ pub async fn run(
     let render_loop = Rc::new(RefCell::new(None));
     let render_loop_clone = render_loop.clone();
 
-    let surface = Rc::new(surface);
-    let surface_config = Rc::new(RefCell::new(surface_config));
-
     *render_loop.borrow_mut() = Some(Closure::wrap(Box::new(move || {
         app.borrow_mut().update();
 
@@ -631,4 +660,40 @@ fn request_animation_frame(f: &Closure<dyn FnMut()>) {
         .unwrap()
         .request_animation_frame(f.as_ref().unchecked_ref())
         .expect("should register `requestAnimationFrame` OK");
+}
+
+fn requested_web_backend(window: &web_sys::Window) -> WebBackendPreference {
+    let query = window.location().search().unwrap_or_default();
+    for pair in query.trim_start_matches('?').split('&') {
+        let Some((key, value)) = pair.split_once('=') else {
+            continue;
+        };
+        if key != "backend" {
+            continue;
+        }
+        return match value {
+            "webgpu" => WebBackendPreference::WebGpu,
+            "gl" => WebBackendPreference::Gl,
+            _ => WebBackendPreference::Auto,
+        };
+    }
+    WebBackendPreference::Gl
+}
+
+fn instance_backends(preference: WebBackendPreference) -> wgpu::Backends {
+    match preference {
+        WebBackendPreference::Auto => wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL,
+        WebBackendPreference::WebGpu => wgpu::Backends::BROWSER_WEBGPU,
+        WebBackendPreference::Gl => wgpu::Backends::GL,
+    }
+}
+
+fn required_limits_for_web_backend(
+    backend: wgpu::Backend,
+    adapter_limits: wgpu::Limits,
+) -> wgpu::Limits {
+    match backend {
+        wgpu::Backend::BrowserWebGpu => wgpu::Limits::default().using_resolution(adapter_limits),
+        _ => wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter_limits),
+    }
 }

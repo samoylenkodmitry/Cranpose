@@ -352,6 +352,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                 backdrop_underlay: None,
                 allow_runtime_cache: true,
                 logical_rect_override: Some(resolved_child.logical_rect),
+                activates_nested_capture: true,
                 translation_context: TranslationRenderContext::default(),
             },
         )?;
@@ -415,6 +416,7 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
         backdrop_underlay,
         allow_runtime_cache,
         logical_rect_override,
+        activates_nested_capture,
         translation_context,
     } = request;
     let surface_requirements = backend.layer_surface_requirements(layer);
@@ -431,11 +433,8 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
         surface_requirements,
         root_scale,
     );
-    let translation_context = TranslationRenderContext {
-        inherited_content_translation: translation_context.inherited_content_translation,
-        surface_capture_active: translation_context.surface_capture_active
-            || composite_sample_mode == CompositeSampleMode::Box4,
-    };
+    let translation_context =
+        layer_surface_translation_context(translation_context, activates_nested_capture);
     let cache_candidate = backend.layer_raster_cache_candidate(
         layer,
         target_scale,
@@ -491,6 +490,17 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
             translation_context,
         },
     )
+}
+
+fn layer_surface_translation_context(
+    translation_context: TranslationRenderContext,
+    activates_nested_capture: bool,
+) -> TranslationRenderContext {
+    TranslationRenderContext {
+        inherited_content_translation: translation_context.inherited_content_translation,
+        surface_capture_active: translation_context.surface_capture_active
+            || activates_nested_capture,
+    }
 }
 
 fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
@@ -558,7 +568,6 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
         }
         child.shadow_draws.translate_by(shift);
     }
-
     let (width, height) =
         surface_target_size(surface_rect, target_scale, backend.max_texture_dim());
     backend.record_isolated_layer_render(
@@ -618,6 +627,7 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
                 backdrop_underlay: child_underlay.as_ref(),
                 allow_runtime_cache: true,
                 logical_rect_override: Some(resolved_child.logical_rect),
+                activates_nested_capture: true,
                 translation_context: TranslationRenderContext {
                     inherited_content_translation: effective_translated_content_context,
                     surface_capture_active: translation_context.surface_capture_active,
@@ -821,6 +831,8 @@ pub(crate) fn render_effect_layer_to_target<B: SurfaceExecutionBackend>(
         layer.z_end,
         capture_rect,
     );
+    let has_nested_backdrop =
+        has_backdrop_layer_in_range(&window_scene.backdrop_layers, layer.z_start, layer.z_end);
     let Some(window_effect_index) = filtered_effect_layer_index(
         effect_layers,
         effect_layer_index,
@@ -831,8 +843,6 @@ pub(crate) fn render_effect_layer_to_target<B: SurfaceExecutionBackend>(
     };
 
     let source = backend.acquire_offscreen(effect_width, effect_height);
-    let has_nested_backdrop =
-        has_backdrop_layer_in_range(&window_scene.backdrop_layers, layer.z_start, layer.z_end);
     let layer_underlay = if has_nested_backdrop {
         let underlay = backend.acquire_offscreen(effect_width, effect_height);
 
@@ -1292,9 +1302,11 @@ fn composite_surface_to_view<B: SurfaceExecutionBackend>(
 #[cfg(test)]
 mod tests {
     use super::{
-        axis_aligned_quad_rect, quantize_motion_stable_target_scale, snap_motion_stable_dest_quad,
+        axis_aligned_quad_rect, layer_surface_translation_context,
+        quantize_motion_stable_target_scale, snap_motion_stable_dest_quad,
     };
     use crate::effect_renderer::CompositeSampleMode;
+    use crate::surface_plan::TranslationRenderContext;
     use cranpose_ui_graphics::Rect;
 
     #[test]
@@ -1362,6 +1374,63 @@ mod tests {
         assert_eq!(
             quantize_motion_stable_target_scale(4.72, CompositeSampleMode::Linear),
             4.72
+        );
+    }
+
+    #[test]
+    fn layer_surface_context_marks_nested_linear_capture_active() {
+        let context = layer_surface_translation_context(
+            TranslationRenderContext {
+                inherited_content_translation: true,
+                surface_capture_active: false,
+            },
+            true,
+        );
+
+        assert_eq!(
+            context,
+            TranslationRenderContext {
+                inherited_content_translation: true,
+                surface_capture_active: true,
+            }
+        );
+    }
+
+    #[test]
+    fn layer_surface_context_keeps_existing_capture_active() {
+        let context = layer_surface_translation_context(
+            TranslationRenderContext {
+                inherited_content_translation: false,
+                surface_capture_active: true,
+            },
+            false,
+        );
+
+        assert_eq!(
+            context,
+            TranslationRenderContext {
+                inherited_content_translation: false,
+                surface_capture_active: true,
+            }
+        );
+    }
+
+    #[test]
+    fn layer_surface_context_keeps_root_viewport_uncaptured() {
+        let context = layer_surface_translation_context(
+            TranslationRenderContext {
+                inherited_content_translation: false,
+                surface_capture_active: false,
+            },
+            false,
+        );
+
+        assert_eq!(
+            context,
+            TranslationRenderContext {
+                inherited_content_translation: false,
+                surface_capture_active: false,
+            }
         );
     }
 }

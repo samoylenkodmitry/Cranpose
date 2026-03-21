@@ -37,6 +37,7 @@ pub(crate) struct LayerSurfaceRequest<'a> {
     pub(crate) backdrop_underlay: Option<&'a OffscreenTarget>,
     pub(crate) allow_runtime_cache: bool,
     pub(crate) logical_rect_override: Option<Rect>,
+    pub(crate) activates_nested_capture: bool,
     pub(crate) translation_context: TranslationRenderContext,
 }
 
@@ -215,12 +216,16 @@ pub(crate) fn layer_surface_target_scale(
     requirements: LayerSurfaceRequirements,
     root_scale: f32,
 ) -> f32 {
-    effective_surface_requirements(
+    let effective = effective_surface_requirements(
         translated_content_context,
         surface_capture_active,
         requirements,
-    )
-    .target_scale(root_scale)
+    );
+    if surface_capture_active && effective.contains(SurfaceRequirement::MotionStableCapture) {
+        root_scale
+    } else {
+        effective.target_scale(root_scale)
+    }
 }
 
 pub(crate) fn composite_sample_mode_for_effect_layer(layer: &EffectLayer) -> CompositeSampleMode {
@@ -363,4 +368,91 @@ pub(crate) fn layer_surface_requirements_cached(
     };
     layer_surface_requirements_cache.insert(cache_key, requirements);
     requirements
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        composite_sample_mode_for_requirements, layer_surface_requirements,
+        layer_surface_target_scale,
+    };
+    use crate::effect_renderer::CompositeSampleMode;
+    use crate::surface_requirements::{SurfaceRequirement, MOTION_STABLE_SURFACE_SCALE_MULTIPLIER};
+    use cranpose_render_common::graph::{
+        CachePolicy, IsolationReasons, LayerNode, ProjectiveTransform, RenderNode,
+    };
+    use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
+    use cranpose_ui_graphics::{GraphicsLayer, Rect};
+
+    fn test_layer(local_bounds: Rect) -> LayerNode {
+        LayerNode {
+            node_id: None,
+            local_bounds,
+            transform_to_parent: ProjectiveTransform::identity(),
+            motion_context_animated: false,
+            translated_content_context: false,
+            graphics_layer: GraphicsLayer::default(),
+            clip_to_bounds: false,
+            shadow_clip: None,
+            hit_test: None,
+            has_hit_targets: false,
+            isolation: IsolationReasons::default(),
+            cache_policy: CachePolicy::None,
+            cache_hashes: LayerRasterCacheHashes::default(),
+            cache_hashes_valid: false,
+            children: Vec::<RenderNode>::new(),
+        }
+    }
+
+    #[test]
+    fn translated_clip_layer_outside_capture_uses_motion_stable_scale() {
+        let mut layer = test_layer(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 120.0,
+            height: 80.0,
+        });
+        layer.translated_content_context = true;
+        layer.clip_to_bounds = true;
+
+        let requirements = layer_surface_requirements(&layer);
+
+        assert!(requirements
+            .surface_requirements
+            .contains(SurfaceRequirement::MotionStableCapture));
+        assert_eq!(
+            composite_sample_mode_for_requirements(true, false, requirements),
+            CompositeSampleMode::Box4
+        );
+        assert_eq!(
+            layer_surface_target_scale(true, false, requirements, 9.0),
+            9.0 * MOTION_STABLE_SURFACE_SCALE_MULTIPLIER
+        );
+    }
+
+    #[test]
+    fn translated_clip_layer_inside_capture_keeps_parent_scale() {
+        let mut layer = test_layer(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 120.0,
+            height: 80.0,
+        });
+        layer.translated_content_context = true;
+        layer.clip_to_bounds = true;
+
+        let requirements = layer_surface_requirements(&layer);
+
+        assert!(requirements
+            .surface_requirements
+            .contains(SurfaceRequirement::MotionStableCapture));
+        assert_eq!(
+            composite_sample_mode_for_requirements(true, true, requirements),
+            CompositeSampleMode::Box4
+        );
+        assert_eq!(
+            layer_surface_target_scale(true, true, requirements, 9.0),
+            9.0
+        );
+    }
 }

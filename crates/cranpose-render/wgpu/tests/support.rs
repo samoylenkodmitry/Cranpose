@@ -31,6 +31,7 @@ pub fn headless_renderer() -> Result<WgpuRenderer, String> {
         Arc::new(device),
         Arc::new(queue),
         wgpu::TextureFormat::Bgra8UnormSrgb,
+        adapter.get_info().backend,
     );
     Ok(renderer)
 }

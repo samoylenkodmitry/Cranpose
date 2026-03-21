@@ -430,13 +430,16 @@ struct BlurUniforms {
 @group(0) @binding(1) var input_sampler: sampler;
 @group(1) @binding(0) var<uniform> blur: BlurUniforms;
 
+fn inside_unit_bounds(uv: vec2<f32>) -> f32 {
+    let inside = uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0;
+    return select(0.0, 1.0, inside);
+}
+
 fn sample_with_tile_mode(uv: vec2<f32>) -> vec4<f32> {
     if (blur.tile_mode >= 2.5) {
         // Decal: out-of-bounds samples are transparent.
-        if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) {
-            return textureSample(input_texture, input_sampler, uv);
-        }
-        return vec4<f32>(0.0);
+        let clamped_uv = clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0));
+        return textureSample(input_texture, input_sampler, clamped_uv) * inside_unit_bounds(uv);
     }
 
     if (blur.tile_mode >= 1.5) {
@@ -539,12 +542,11 @@ struct OffsetUniforms {
 fn offset_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let tex_size = vec2<f32>(textureDimensions(input_texture));
     let shifted_uv = input.uv - params.offset / max(tex_size, vec2<f32>(1.0));
-
-    if (shifted_uv.x < 0.0 || shifted_uv.x > 1.0 || shifted_uv.y < 0.0 || shifted_uv.y > 1.0) {
-        return vec4<f32>(0.0);
-    }
-
-    return textureSample(input_texture, input_sampler, shifted_uv);
+    let inside =
+        shifted_uv.x >= 0.0 && shifted_uv.x <= 1.0 && shifted_uv.y >= 0.0 && shifted_uv.y <= 1.0;
+    let clamped_uv = clamp(shifted_uv, vec2<f32>(0.0), vec2<f32>(1.0));
+    return textureSample(input_texture, input_sampler, clamped_uv)
+        * select(0.0, 1.0, inside);
 }
 "#
     )
@@ -586,6 +588,11 @@ fn blit_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     var source_pos = input.uv * tex_size;
     var resolve_span = blit.resolve_span.xy;
     if use_dest_viewport {
+        let viewport_max = blit.dest_viewport.xy + blit.dest_viewport.zw;
+        if dest_pos.x < blit.dest_viewport.x || dest_pos.y < blit.dest_viewport.y ||
+            dest_pos.x >= viewport_max.x || dest_pos.y >= viewport_max.y {
+            discard;
+        }
         let local_dest = dest_pos - blit.dest_viewport.xy;
         source_pos = vec2<f32>(
             local_dest.x * tex_size.x / blit.dest_viewport.z,
@@ -689,4 +696,30 @@ fn projective_blit_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 "#
     );
     shader
+}
+
+#[cfg(test)]
+mod tests {
+    fn validate_wgsl_module(source: &str) -> Result<(), String> {
+        let module = naga::front::wgsl::parse_str(source)
+            .map_err(|err| format!("WGSL parse error: {err}"))?;
+        let mut validator = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        );
+        validator
+            .validate(&module)
+            .map_err(|err| format!("WGSL validation error: {err}"))?;
+        Ok(())
+    }
+
+    #[test]
+    fn blur_shader_validates_for_webgpu() {
+        assert!(validate_wgsl_module(&super::blur_shader()).is_ok());
+    }
+
+    #[test]
+    fn offset_shader_validates_for_webgpu() {
+        assert!(validate_wgsl_module(&super::offset_shader()).is_ok());
+    }
 }

@@ -41,7 +41,7 @@ const TEXT_CLIP_PAD: f32 = 1.0;
 const GPU_TEXT_BRUSH_EFFECT_MAX_STOPS: usize = 16;
 const GPU_TEXT_BRUSH_EFFECT_FIRST_STOP_SLOT: usize = 8;
 const DECORATION_SEGMENT_MERGE_EPSILON: f32 = 0.75;
-const GPU_TEXT_BRUSH_EFFECT_SHADER: &str = r#"
+pub(crate) const GPU_TEXT_BRUSH_EFFECT_SHADER: &str = r#"
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
