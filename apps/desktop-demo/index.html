@@ -113,6 +113,7 @@
             phase: 'booting',
             backend: null,
             initialTab: null,
+            initialShaderSection: null,
             lastUpdatedMs: Date.now(),
             error: null,
         };
@@ -219,7 +220,8 @@
                 const params = new URLSearchParams(window.location.search);
                 const backend = params.get('backend') || 'gl';
                 const initialTab = params.get('tab');
-                updateAppState('initializing', { backend, initialTab });
+                const initialShaderSection = params.get('shader_section');
+                updateAppState('initializing', { backend, initialTab, initialShaderSection });
                 registerGraphicsContextMonitor(document.getElementById('cranpose-canvas'));
                 const hasWebGpu = typeof navigator !== 'undefined' && 'gpu' in navigator;
                 const canvas = document.createElement('canvas');
@@ -237,6 +239,9 @@
                 if (initialTab) {
                     console.log(`UI startup preference: tab=${initialTab}`);
                 }
+                if (initialShaderSection) {
+                    console.log(`UI startup preference: shader_section=${initialShaderSection}`);
+                }
 
                 // Import the WASM module
                 updateAppState('loading_wasm');
@@ -247,7 +252,7 @@
 
                 // Now run the app (functions are available after init)
                 updateAppState('starting_app');
-                await wasm.run_app(initialTab);
+                await wasm.run_app(initialTab, initialShaderSection);
                 updateAppState('running');
 
                 // Hide loading message

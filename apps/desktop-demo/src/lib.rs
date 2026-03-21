@@ -55,14 +55,22 @@ pub fn web_init() {
 
 #[cfg(all(feature = "web", target_arch = "wasm32"))]
 #[wasm_bindgen]
-pub async fn run_app(initial_tab: Option<String>) -> Result<(), JsValue> {
+pub async fn run_app(
+    initial_tab: Option<String>,
+    initial_shader_section: Option<String>,
+) -> Result<(), JsValue> {
     log::info!("Initializing Cranpose app...");
 
-    let startup_tab = initial_tab
+    let requested_tab = initial_tab
         .as_deref()
         .and_then(app::DemoTab::from_startup_name);
+    let requested_shader_section = initial_shader_section
+        .as_deref()
+        .and_then(app::ShaderSection::from_startup_name);
+    let startup = app::StartupSelection::from_requested(requested_tab, requested_shader_section);
+
     if let Some(requested) = initial_tab.as_deref() {
-        match startup_tab {
+        match requested_tab {
             Some(tab) => {
                 log::info!(
                     "Applying startup tab override: requested='{}' resolved='{}'",
@@ -78,10 +86,35 @@ pub async fn run_app(initial_tab: Option<String>) -> Result<(), JsValue> {
             }
         }
     }
+    if let Some(requested) = initial_shader_section.as_deref() {
+        match requested_shader_section {
+            Some(section) if startup.initial_shader_section == Some(section) => {
+                log::info!(
+                    "Applying startup shader section override: requested='{}' resolved='{}'",
+                    requested,
+                    section.label()
+                );
+            }
+            Some(section) => {
+                log::warn!(
+                    "Ignoring startup shader section override '{}' ('{}') because the active startup tab is '{}'",
+                    requested,
+                    section.label(),
+                    startup.initial_tab.unwrap_or(app::DemoTab::Counter).label()
+                );
+            }
+            None => {
+                log::warn!(
+                    "Ignoring unknown startup shader section override '{}'; continuing with default shaders content",
+                    requested
+                );
+            }
+        }
+    }
 
     create_app()
         .run_web("cranpose-canvas", move || {
-            app::combined_app_with_initial_tab(startup_tab);
+            app::combined_app_with_startup(startup);
         })
         .await
 }

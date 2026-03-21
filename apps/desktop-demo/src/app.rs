@@ -34,6 +34,7 @@ use hacker_news::hacker_news_tab;
 use images::images_tab;
 use lazy_list::lazy_list_example;
 use markdown::markdown_viewer_tab;
+pub(crate) use shaders::ShaderSection;
 use shaders::ShadersTab;
 use text_showcase::TextShowcaseTab;
 use web_fetch::web_fetch_example;
@@ -141,6 +142,40 @@ pub const DEMO_TABS: [DemoTab; 17] = [
 
 pub fn demo_tab_labels() -> Vec<&'static str> {
     DEMO_TABS.iter().map(|tab| tab.label()).collect()
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(crate) struct StartupSelection {
+    pub(crate) initial_tab: Option<DemoTab>,
+    pub(crate) initial_shader_section: Option<ShaderSection>,
+}
+
+impl StartupSelection {
+    #[cfg(any(test, target_arch = "wasm32"))]
+    pub(crate) fn from_requested(
+        initial_tab: Option<DemoTab>,
+        initial_shader_section: Option<ShaderSection>,
+    ) -> Self {
+        match (initial_tab, initial_shader_section) {
+            (Some(DemoTab::Shaders), initial_shader_section) => Self {
+                initial_tab: Some(DemoTab::Shaders),
+                initial_shader_section,
+            },
+            (Some(tab), Some(_)) => Self {
+                initial_tab: Some(tab),
+                initial_shader_section: None,
+            },
+            (Some(tab), None) => Self {
+                initial_tab: Some(tab),
+                initial_shader_section: None,
+            },
+            (None, Some(section)) => Self {
+                initial_tab: Some(DemoTab::Shaders),
+                initial_shader_section: Some(section),
+            },
+            (None, None) => Self::default(),
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -268,14 +303,18 @@ fn TabBarHorizontal(active_tab: cranpose_core::MutableState<DemoTab>) {
 
 #[allow(non_snake_case)]
 #[composable]
-fn TabContent(active_tab: cranpose_core::MutableState<DemoTab>, modifier: Modifier) {
+fn TabContent(
+    active_tab: cranpose_core::MutableState<DemoTab>,
+    startup: StartupSelection,
+    modifier: Modifier,
+) {
     let active = active_tab.get();
     cranpose_ui::Box(modifier.clip_to_bounds(), BoxSpec::default(), move || {
         cranpose_core::with_key(&active, || {
             if tab_requires_scroll(active) {
-                ScrollableTab(move || render_active_tab(active));
+                ScrollableTab(move || render_active_tab(active, startup));
             } else {
-                render_active_tab(active);
+                render_active_tab(active, startup);
             }
         });
     });
@@ -283,12 +322,19 @@ fn TabContent(active_tab: cranpose_core::MutableState<DemoTab>, modifier: Modifi
 
 #[composable]
 pub fn combined_app() {
-    combined_app_with_initial_tab(None);
+    combined_app_with_startup(StartupSelection::default());
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+#[composable]
+pub(crate) fn combined_app_with_initial_tab(initial_tab: Option<DemoTab>) {
+    combined_app_with_startup(StartupSelection::from_requested(initial_tab, None));
 }
 
 #[composable]
-pub(crate) fn combined_app_with_initial_tab(initial_tab: Option<DemoTab>) {
-    let active_tab = cranpose_core::useState(move || initial_tab.unwrap_or(DemoTab::Counter));
+pub(crate) fn combined_app_with_startup(startup: StartupSelection) {
+    let active_tab =
+        cranpose_core::useState(move || startup.initial_tab.unwrap_or(DemoTab::Counter));
     TEST_ACTIVE_TAB_STATE.with(|cell| {
         *cell.borrow_mut() = Some(active_tab);
     });
@@ -304,7 +350,11 @@ pub(crate) fn combined_app_with_initial_tab(initial_tab: Option<DemoTab>) {
                 height: 12.0,
             });
 
-            TabContent(active_tab, Modifier::empty().fill_max_width().weight(1.0));
+            TabContent(
+                active_tab,
+                startup,
+                Modifier::empty().fill_max_width().weight(1.0),
+            );
         },
     );
 }
@@ -323,7 +373,7 @@ fn tab_requires_scroll(tab: DemoTab) -> bool {
 }
 
 #[composable]
-fn render_active_tab(active: DemoTab) {
+fn render_active_tab(active: DemoTab, startup: StartupSelection) {
     match active {
         DemoTab::Counter => counter_app(),
         DemoTab::CompositionLocal => composition_local_example(),
@@ -340,7 +390,7 @@ fn render_active_tab(active: DemoTab) {
         DemoTab::Text => TextShowcaseTab(),
         DemoTab::Winamp => WinampTab(),
         DemoTab::Xkcd => xkcd_tab(),
-        DemoTab::Shaders => ShadersTab(),
+        DemoTab::Shaders => ShadersTab(startup.initial_shader_section),
         DemoTab::MarkdownViewer => markdown_viewer_tab(),
     }
 }

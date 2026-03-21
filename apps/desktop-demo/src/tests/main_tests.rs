@@ -245,3 +245,31 @@ fn startup_tab_parser_rejects_unknown_names() {
     assert_eq!(DemoTab::from_startup_name(""), None);
     assert_eq!(DemoTab::from_startup_name("definitely-not-a-tab"), None);
 }
+
+#[test]
+fn startup_selection_focuses_shaders_when_only_section_is_requested() {
+    let startup = StartupSelection::from_requested(None, Some(ShaderSection::EffectSemantics));
+    assert_eq!(startup.initial_tab, Some(DemoTab::Shaders));
+    assert_eq!(
+        startup.initial_shader_section,
+        Some(ShaderSection::EffectSemantics)
+    );
+}
+
+#[test]
+fn startup_selection_ignores_shader_section_for_non_shader_tab() {
+    let startup = StartupSelection::from_requested(
+        Some(DemoTab::Counter),
+        Some(ShaderSection::InteractiveEffects),
+    );
+    assert_eq!(startup.initial_tab, Some(DemoTab::Counter));
+    assert_eq!(startup.initial_shader_section, None);
+}
+
+#[test]
+fn startup_selection_keeps_shader_section_for_shaders_tab() {
+    let startup =
+        StartupSelection::from_requested(Some(DemoTab::Shaders), Some(ShaderSection::MaskApi));
+    assert_eq!(startup.initial_tab, Some(DemoTab::Shaders));
+    assert_eq!(startup.initial_shader_section, Some(ShaderSection::MaskApi));
+}

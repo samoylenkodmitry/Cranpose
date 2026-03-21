@@ -419,11 +419,8 @@ pub fn blur_shader() -> String {
         "{FULLSCREEN_QUAD_VS}{}",
         r#"
 struct BlurUniforms {
-    direction: vec2<f32>,   // (1,0) horizontal, (0,1) vertical
-    radius: vec2<f32>,      // blur radius in pixels
-    texture_size: vec2<f32>,
-    tile_mode: f32,         // 0 = Clamp, 1 = Repeated, 2 = Mirror, 3 = Decal
-    _padding: f32,
+    direction_and_radius: vec4<f32>,      // direction.xy, radius.xy
+    texture_size_and_tile_mode: vec4<f32>,// texture_size.xy, tile_mode, unused
 }
 
 @group(0) @binding(0) var input_texture: texture_2d<f32>;
@@ -436,13 +433,14 @@ fn inside_unit_bounds(uv: vec2<f32>) -> f32 {
 }
 
 fn sample_with_tile_mode(uv: vec2<f32>) -> vec4<f32> {
-    if (blur.tile_mode >= 2.5) {
+    let tile_mode = blur.texture_size_and_tile_mode.z;
+    if (tile_mode >= 2.5) {
         // Decal: out-of-bounds samples are transparent.
         let clamped_uv = clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0));
         return textureSample(input_texture, input_sampler, clamped_uv) * inside_unit_bounds(uv);
     }
 
-    if (blur.tile_mode >= 1.5) {
+    if (tile_mode >= 1.5) {
         // Mirror: ... 0->1, 1->0, repeat.
         let wrap_x = uv.x - floor(uv.x / 2.0) * 2.0;
         let wrap_y = uv.y - floor(uv.y / 2.0) * 2.0;
@@ -453,7 +451,7 @@ fn sample_with_tile_mode(uv: vec2<f32>) -> vec4<f32> {
         return textureSample(input_texture, input_sampler, mirrored_uv);
     }
 
-    if (blur.tile_mode >= 0.5) {
+    if (tile_mode >= 0.5) {
         // Repeated: wrap to [0,1).
         let repeated_uv = vec2<f32>(uv.x - floor(uv.x), uv.y - floor(uv.y));
         return textureSample(input_texture, input_sampler, repeated_uv);
@@ -466,10 +464,11 @@ fn sample_with_tile_mode(uv: vec2<f32>) -> vec4<f32> {
 
 @fragment
 fn blur_fs(input: VertexOutput) -> @location(0) vec4<f32> {
-    let pixel_size = 1.0 / blur.texture_size;
-    let dir = blur.direction;
+    let texture_size = max(blur.texture_size_and_tile_mode.xy, vec2<f32>(1.0, 1.0));
+    let pixel_size = 1.0 / texture_size;
+    let dir = blur.direction_and_radius.xy;
     // Use the radius component matching the direction.
-    let radius = max(dot(dir, blur.radius), 0.0);
+    let radius = max(dot(dir, blur.direction_and_radius.zw), 0.0);
     let sigma = max(radius * 0.5, 0.001);
 
     // Number of taps on each side (capped for shader cost stability).
@@ -480,42 +479,22 @@ fn blur_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     let inv_2sigma2 = 1.0 / (2.0 * sigma * sigma);
-    var color = sample_with_tile_mode(input.uv);
-    var total_weight = 1.0;
+    var color = vec4<f32>(0.0);
+    var total_weight = 0.0;
 
-    // Pair neighboring taps using linear filtering to reduce samples and keep
-    // a smoother Gaussian falloff (less "frosted" texture).
-    var i: i32 = 1;
-    loop {
-        if (i > tap_count) {
-            break;
+    for (var i: i32 = -32; i <= 32; i = i + 1) {
+        if (abs(i) > tap_count) {
+            continue;
         }
 
         let fi = f32(i);
-        let w0 = exp(-(fi * fi) * inv_2sigma2);
-
-        if (i == tap_count) {
-            let offset = dir * fi * pixel_size;
-            color = color + sample_with_tile_mode(input.uv + offset) * w0;
-            color = color + sample_with_tile_mode(input.uv - offset) * w0;
-            total_weight = total_weight + w0 * 2.0;
-            break;
-        }
-
-        let fi1 = f32(i + 1);
-        let w1 = exp(-(fi1 * fi1) * inv_2sigma2);
-        let pair_weight = w0 + w1;
-        let pair_offset = fi + w1 / max(pair_weight, 0.00001);
-        let offset = dir * pair_offset * pixel_size;
-
-        color = color + sample_with_tile_mode(input.uv + offset) * pair_weight;
-        color = color + sample_with_tile_mode(input.uv - offset) * pair_weight;
-        total_weight = total_weight + pair_weight * 2.0;
-
-        i = i + 2;
+        let weight = exp(-(fi * fi) * inv_2sigma2);
+        let offset = dir * fi * pixel_size;
+        color = color + sample_with_tile_mode(input.uv + offset) * weight;
+        total_weight = total_weight + weight;
     }
 
-    return color / total_weight;
+    return color / max(total_weight, 0.00001);
 }
 "#
     )
@@ -700,6 +679,9 @@ fn projective_blit_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 
 #[cfg(test)]
 mod tests {
+    use naga::back::glsl;
+    use naga::ShaderStage;
+
     fn validate_wgsl_module(source: &str) -> Result<(), String> {
         let module = naga::front::wgsl::parse_str(source)
             .map_err(|err| format!("WGSL parse error: {err}"))?;
@@ -713,9 +695,56 @@ mod tests {
         Ok(())
     }
 
+    fn validate_glsl_portability(
+        source: &str,
+        entry_point: &str,
+        shader_stage: ShaderStage,
+    ) -> Result<(), String> {
+        let module = naga::front::wgsl::parse_str(source)
+            .map_err(|err| format!("WGSL parse error: {err}"))?;
+        let mut validator = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        );
+        let module_info = validator
+            .validate(&module)
+            .map_err(|err| format!("WGSL validation error: {err}"))?;
+        let mut glsl_source = String::new();
+        let options = glsl::Options {
+            version: glsl::Version::new_gles(300),
+            writer_flags: glsl::WriterFlags::ADJUST_COORDINATE_SPACE,
+            ..Default::default()
+        };
+        let pipeline_options = glsl::PipelineOptions {
+            shader_stage,
+            entry_point: entry_point.to_string(),
+            multiview: None,
+        };
+        let mut writer = glsl::Writer::new(
+            &mut glsl_source,
+            &module,
+            &module_info,
+            &options,
+            &pipeline_options,
+            naga::proc::BoundsCheckPolicies::default(),
+        )
+        .map_err(|err| format!("GL/WebGL portability validation failed: {err}"))?;
+        writer
+            .write()
+            .map(|_| ())
+            .map_err(|err| format!("GL/WebGL portability emission failed: {err}"))
+    }
+
     #[test]
     fn blur_shader_validates_for_webgpu() {
         assert!(validate_wgsl_module(&super::blur_shader()).is_ok());
+    }
+
+    #[test]
+    fn blur_shader_validates_for_webgl() {
+        let shader = super::blur_shader();
+        assert!(validate_glsl_portability(&shader, "fullscreen_vs", ShaderStage::Vertex).is_ok());
+        assert!(validate_glsl_portability(&shader, "blur_fs", ShaderStage::Fragment).is_ok());
     }
 
     #[test]

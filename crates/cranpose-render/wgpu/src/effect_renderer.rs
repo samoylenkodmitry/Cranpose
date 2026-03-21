@@ -63,11 +63,8 @@ pub(crate) struct EffectRenderer {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct BlurUniforms {
-    direction: [f32; 2],
-    radius: [f32; 2],
-    texture_size: [f32; 2],
-    tile_mode: f32,
-    _padding: f32,
+    direction_and_radius: [f32; 4],
+    texture_size_and_tile_mode: [f32; 4],
 }
 
 /// Offset uniform data matching the WGSL `OffsetUniforms` struct.
@@ -710,18 +707,12 @@ impl EffectRenderer {
 
         // Upload both pass uniforms up front and execute both passes in a single submit.
         let horizontal_uniforms = BlurUniforms {
-            direction: [1.0, 0.0],
-            radius: [radius_x, radius_y],
-            texture_size: [width as f32, height as f32],
-            tile_mode: tile_mode_value,
-            _padding: 0.0,
+            direction_and_radius: [1.0, 0.0, radius_x, radius_y],
+            texture_size_and_tile_mode: [width as f32, height as f32, tile_mode_value, 0.0],
         };
         let vertical_uniforms = BlurUniforms {
-            direction: [0.0, 1.0],
-            radius: [radius_x, radius_y],
-            texture_size: [width as f32, height as f32],
-            tile_mode: tile_mode_value,
-            _padding: 0.0,
+            direction_and_radius: [0.0, 1.0, radius_x, radius_y],
+            texture_size_and_tile_mode: [width as f32, height as f32, tile_mode_value, 0.0],
         };
         self.write_buffer_at_zero_offset(
             queue,
@@ -1346,5 +1337,20 @@ fn composite_sampling_mode_value(sample_mode: CompositeSampleMode) -> f32 {
     match sample_mode {
         CompositeSampleMode::Linear => 0.0,
         CompositeSampleMode::Box4 => 1.0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BlurUniforms;
+
+    #[test]
+    fn blur_uniforms_use_vec4_packing_for_gl_backends() {
+        assert_eq!(std::mem::size_of::<BlurUniforms>(), 32);
+        assert_eq!(std::mem::offset_of!(BlurUniforms, direction_and_radius), 0);
+        assert_eq!(
+            std::mem::offset_of!(BlurUniforms, texture_size_and_tile_mode),
+            16
+        );
     }
 }
