@@ -1533,8 +1533,8 @@ impl ClickableNode {
                     // Clear press state on cancel
                     *press_position.borrow_mut() = None;
                 }
-                PointerEventKind::Scroll => {
-                    // Wheel/trackpad scrolling should not affect click press state.
+                PointerEventKind::Scroll | PointerEventKind::Enter | PointerEventKind::Exit => {
+                    // These events don't affect click press state.
                 }
             }
         })

@@ -23,6 +23,7 @@ pub mod lazy_list;
 mod lazy_scrollbar;
 mod markdown;
 mod mineswapper2;
+mod shader_rect;
 mod shaders;
 mod text_showcase;
 mod web_fetch;
@@ -34,6 +35,7 @@ use hacker_news::hacker_news_tab;
 use images::images_tab;
 use lazy_list::lazy_list_example;
 use markdown::markdown_viewer_tab;
+use shader_rect::ShaderRectTab;
 pub(crate) use shaders::ShaderSection;
 use shaders::ShadersTab;
 use text_showcase::TextShowcaseTab;
@@ -64,6 +66,7 @@ pub enum DemoTab {
     Winamp,
     Xkcd,
     Shaders,
+    ShaderRect,
     MarkdownViewer,
 }
 
@@ -86,6 +89,7 @@ impl DemoTab {
             DemoTab::Winamp => "Winamp",
             DemoTab::Xkcd => "XKCD",
             DemoTab::Shaders => "Shaders",
+            DemoTab::ShaderRect => "Shader Rect",
             DemoTab::MarkdownViewer => "Markdown",
         }
     }
@@ -114,13 +118,14 @@ impl DemoTab {
             "winamp" => Some(Self::Winamp),
             "xkcd" => Some(Self::Xkcd),
             "shaders" => Some(Self::Shaders),
+            "shaderrect" => Some(Self::ShaderRect),
             "markdown" | "markdownviewer" => Some(Self::MarkdownViewer),
             _ => None,
         }
     }
 }
 
-pub const DEMO_TABS: [DemoTab; 17] = [
+pub const DEMO_TABS: [DemoTab; 18] = [
     DemoTab::Counter,
     DemoTab::CompositionLocal,
     DemoTab::Async,
@@ -137,6 +142,7 @@ pub const DEMO_TABS: [DemoTab; 17] = [
     DemoTab::Winamp,
     DemoTab::Xkcd,
     DemoTab::Shaders,
+    DemoTab::ShaderRect,
     DemoTab::MarkdownViewer,
 ];
 
@@ -391,6 +397,7 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection) {
         DemoTab::Winamp => WinampTab(),
         DemoTab::Xkcd => xkcd_tab(),
         DemoTab::Shaders => ShadersTab(startup.initial_shader_section),
+        DemoTab::ShaderRect => ShaderRectTab(),
         DemoTab::MarkdownViewer => markdown_viewer_tab(),
     }
 }
@@ -1449,7 +1456,9 @@ fn counter_app() {
                                                     });
                                                 }
                                                 PointerEventKind::Cancel => pointer_down.set(false),
-                                                PointerEventKind::Scroll => {}
+                                                PointerEventKind::Scroll
+                                                | PointerEventKind::Enter
+                                                | PointerEventKind::Exit => {}
                                             }
                                         }
                                     })

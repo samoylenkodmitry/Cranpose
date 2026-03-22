@@ -104,6 +104,11 @@ name = "robot_image_chessboard"
 path = "robot-runners/robot_image_chessboard.rs"
 required-features = ["robot-app"]
 
+[[example]]
+name = "robot_shader_rect"
+path = "robot-runners/robot_shader_rect.rs"
+required-features = ["robot-app"]
+
 
 
 [[example]]

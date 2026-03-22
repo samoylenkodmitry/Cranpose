@@ -947,6 +947,7 @@ fn scroll_impl(
                             } else {
                                 event.scroll_delta.x
                             }),
+                            PointerEventKind::Enter | PointerEventKind::Exit => false,
                         };
 
                         if should_consume {
@@ -1059,6 +1060,7 @@ fn lazy_scroll_impl(state: LazyListState, is_vertical: bool, reverse_scrolling: 
                                 } else {
                                     event.scroll_delta.x
                                 }),
+                                PointerEventKind::Enter | PointerEventKind::Exit => false,
                             };
 
                             if should_consume {

@@ -914,7 +914,9 @@ fn PressableSprite(
                                             }
                                             is_pressed.set(false);
                                         }
-                                        PointerEventKind::Scroll => {}
+                                        PointerEventKind::Scroll
+                                        | PointerEventKind::Enter
+                                        | PointerEventKind::Exit => {}
                                     }
                                 }
                             })
@@ -1082,7 +1084,9 @@ fn WindowDragHandle(window_position: MutableState<Point>, area: SpriteRect, scal
                                     PointerEventKind::Up | PointerEventKind::Cancel => {
                                         drag_offset.set(None);
                                     }
-                                    PointerEventKind::Scroll => {}
+                                    PointerEventKind::Scroll
+                                    | PointerEventKind::Enter
+                                    | PointerEventKind::Exit => {}
                                 }
                             }
                         })
