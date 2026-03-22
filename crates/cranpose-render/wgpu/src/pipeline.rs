@@ -277,14 +277,7 @@ fn pad_clip_rect(rect: Rect) -> Rect {
     }
 }
 
-pub(crate) fn rect_to_quad(rect: Rect) -> [[f32; 2]; 4] {
-    [
-        [rect.x, rect.y],
-        [rect.x + rect.width, rect.y],
-        [rect.x, rect.y + rect.height],
-        [rect.x + rect.width, rect.y + rect.height],
-    ]
-}
+use crate::rect_to_quad;
 
 fn shadow_shape(
     rect: Rect,
@@ -932,6 +925,11 @@ trait TextStyleDrawSink {
         z_end: usize,
     );
 
+    /// Extended version of `push_effect_layer` that carries surface requirements.
+    ///
+    /// The default implementation **discards** `requirements` and delegates to
+    /// `push_effect_layer`. Implementations that use requirements for surface
+    /// isolation decisions (e.g. `CompositorScene`) **must** override this.
     #[allow(clippy::too_many_arguments)]
     fn push_effect_layer_with_surface(
         &mut self,

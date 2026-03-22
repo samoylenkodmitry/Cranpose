@@ -119,7 +119,7 @@ pub(crate) fn scene_bounds(scene: &CompositorScene) -> Option<Rect> {
     scene_bounds_with_clip(scene, true)
 }
 
-pub(crate) fn scene_capture_bounds(scene: &CompositorScene) -> Option<Rect> {
+fn scene_capture_bounds(scene: &CompositorScene) -> Option<Rect> {
     scene_bounds_with_clip(scene, false)
 }
 
@@ -147,7 +147,7 @@ fn shadow_draws_bounds_with_clip(shadow_draws: &[ShadowDraw], apply_clip: bool) 
     bounds
 }
 
-pub(crate) fn shadow_draws_bounds(shadow_draws: &[ShadowDraw]) -> Option<Rect> {
+fn shadow_draws_bounds(shadow_draws: &[ShadowDraw]) -> Option<Rect> {
     shadow_draws_bounds_with_clip(shadow_draws, true)
 }
 
@@ -302,7 +302,7 @@ fn flush_translated_local_picture(
     let z_end = scene.next_z;
     if z_end > current.z_start {
         if let Some(surface_rect) = emitted_scene_bounds(scene, current.counts) {
-            scene.push_effect_layer_with_surface(
+            scene.push_effect_layer_with_requirements(
                 surface_rect,
                 clip,
                 None,

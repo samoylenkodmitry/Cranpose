@@ -280,30 +280,6 @@ impl CompositorScene {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn push_effect_layer_with_surface(
-        &mut self,
-        rect: Rect,
-        clip: Option<Rect>,
-        effect: Option<RenderEffect>,
-        blend_mode: BlendMode,
-        composite_alpha: f32,
-        z_start: usize,
-        z_end: usize,
-        requirements: SurfaceRequirementSet,
-    ) {
-        self.push_effect_layer_with_requirements(
-            rect,
-            clip,
-            effect,
-            blend_mode,
-            composite_alpha,
-            z_start,
-            z_end,
-            requirements,
-        );
-    }
-
-    #[allow(clippy::too_many_arguments)]
     pub fn push_effect_layer(
         &mut self,
         rect: Rect,
@@ -340,11 +316,4 @@ impl Default for CompositorScene {
     }
 }
 
-fn rect_to_quad(rect: Rect) -> [[f32; 2]; 4] {
-    [
-        [rect.x, rect.y],
-        [rect.x + rect.width, rect.y],
-        [rect.x, rect.y + rect.height],
-        [rect.x + rect.width, rect.y + rect.height],
-    ]
-}
+use crate::rect_to_quad;

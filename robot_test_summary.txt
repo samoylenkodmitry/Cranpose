@@ -1,4 +1,0 @@
-TOTAL=86
-PASSED=85
-FAILED=1
-FAILED_TESTS=robot_content_type_reuse

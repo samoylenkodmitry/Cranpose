@@ -26,6 +26,10 @@ pub struct LayerSurfaceReasons {
 }
 
 impl LayerSurfaceReasons {
+    /// Returns true if any isolating requirement is set.
+    /// Delegates to `SurfaceRequirementSet::has_isolating_requirement` to
+    /// keep the semantics in sync (e.g. `mixed_direct_content` alone does
+    /// not count as isolating).
     pub fn has_any(self) -> bool {
         self.explicit_offscreen
             || self.effect
@@ -101,10 +105,7 @@ impl LayerSurfaceReasons {
     }
 
     pub fn has_renderer_forced_surface(self) -> bool {
-        self.immediate_shadow
-            || self.text_local_surface
-            || self.motion_stable_capture
-            || self.non_translation_transform
+        self.immediate_shadow || self.text_local_surface || self.non_translation_transform
     }
 }
 
@@ -601,6 +602,31 @@ mod tests {
             vec!["mixed_direct_content"]
         );
         assert_eq!(reasons.display(), "mixed_direct_content");
+    }
+
+    #[test]
+    fn has_any_matches_has_isolating_requirement_for_each_requirement() {
+        let all_requirements = [
+            SurfaceRequirement::ExplicitOffscreen,
+            SurfaceRequirement::RenderEffect,
+            SurfaceRequirement::Backdrop,
+            SurfaceRequirement::GroupOpacity,
+            SurfaceRequirement::BlendMode,
+            SurfaceRequirement::ImmediateShadow,
+            SurfaceRequirement::TextMaterialMask,
+            SurfaceRequirement::MotionStableCapture,
+            SurfaceRequirement::NonTranslationTransform,
+            SurfaceRequirement::MixedDirectContent,
+        ];
+        for requirement in all_requirements {
+            let set = SurfaceRequirementSet::default().with(requirement);
+            let reasons = LayerSurfaceReasons::from(set);
+            assert_eq!(
+                reasons.has_any(),
+                set.has_isolating_requirement(),
+                "has_any vs has_isolating_requirement mismatch for {requirement:?}"
+            );
+        }
     }
 
     #[test]

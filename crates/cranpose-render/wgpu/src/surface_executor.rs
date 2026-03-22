@@ -1229,14 +1229,7 @@ pub(crate) fn snap_motion_stable_dest_quad(
     dest_quad.map(|[x, y]| [x + delta_x, y + delta_y])
 }
 
-fn rect_to_quad(rect: Rect) -> [[f32; 2]; 4] {
-    [
-        [rect.x, rect.y],
-        [rect.x + rect.width, rect.y],
-        [rect.x, rect.y + rect.height],
-        [rect.x + rect.width, rect.y + rect.height],
-    ]
-}
+use crate::rect_to_quad;
 
 fn quantize_motion_stable_target_scale(target_scale: f32, sample_mode: CompositeSampleMode) -> f32 {
     if sample_mode != CompositeSampleMode::Box4 || !target_scale.is_finite() {

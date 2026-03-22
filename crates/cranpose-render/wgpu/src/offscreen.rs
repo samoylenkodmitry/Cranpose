@@ -7,11 +7,6 @@
 use crate::gpu_stats::FrameStats;
 use std::cell::RefCell;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum OffscreenSampleMode {
-    Linear,
-}
-
 /// A GPU texture that can serve as both a render target and a texture source.
 pub(crate) struct OffscreenTarget {
     // Texture kept alive for the view's lifetime; the view borrows from it implicitly.
@@ -19,9 +14,9 @@ pub(crate) struct OffscreenTarget {
     pub view: wgpu::TextureView,
     pub width: u32,
     pub height: u32,
-    /// Lazily-cached bind groups for sampling this target as a texture.
+    /// Lazily-cached bind group for sampling this target as a texture.
     /// Valid as long as the underlying texture is alive (i.e. while this target exists).
-    cached_bind_groups: RefCell<[Option<wgpu::BindGroup>; 2]>,
+    cached_bind_group: RefCell<Option<wgpu::BindGroup>>,
 }
 
 impl OffscreenTarget {
@@ -46,7 +41,7 @@ impl OffscreenTarget {
             view,
             width,
             height,
-            cached_bind_groups: RefCell::new([None, None]),
+            cached_bind_group: RefCell::new(None),
         }
     }
 
@@ -68,15 +63,11 @@ impl OffscreenTarget {
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         sampler: &wgpu::Sampler,
-        sample_mode: OffscreenSampleMode,
     ) -> std::cell::Ref<'_, wgpu::BindGroup> {
-        let cache_index = match sample_mode {
-            OffscreenSampleMode::Linear => 0,
-        };
         {
-            let mut slots = self.cached_bind_groups.borrow_mut();
-            if slots[cache_index].is_none() {
-                slots[cache_index] = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            let mut slot = self.cached_bind_group.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("Offscreen Texture Bind Group (cached)"),
                     layout,
                     entries: &[
@@ -92,10 +83,8 @@ impl OffscreenTarget {
                 }));
             }
         }
-        std::cell::Ref::map(self.cached_bind_groups.borrow(), |slots| {
-            slots[cache_index]
-                .as_ref()
-                .expect("bind group was just populated")
+        std::cell::Ref::map(self.cached_bind_group.borrow(), |opt| {
+            opt.as_ref().expect("bind group was just populated")
         })
     }
 }

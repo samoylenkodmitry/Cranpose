@@ -3,7 +3,7 @@
 //! This module ties together the offscreen pool, blur pipeline, and shader
 //! pipeline cache to apply `RenderEffect`s to subtree-rendered textures.
 
-use crate::offscreen::{OffscreenPool, OffscreenSampleMode, OffscreenTarget};
+use crate::offscreen::{OffscreenPool, OffscreenTarget};
 use crate::shader_cache::ShaderPipelineCache;
 use crate::shaders;
 use cranpose_ui_graphics::{BlendMode, RenderEffect, RuntimeShader, TileMode};
@@ -604,16 +604,8 @@ impl EffectRenderer {
         }
     }
 
-    fn sampler_for_mode(
-        &self,
-        sample_mode: CompositeSampleMode,
-    ) -> (&wgpu::Sampler, OffscreenSampleMode) {
-        match sample_mode {
-            CompositeSampleMode::Linear => {
-                (&self.effect_linear_sampler, OffscreenSampleMode::Linear)
-            }
-            CompositeSampleMode::Box4 => (&self.effect_linear_sampler, OffscreenSampleMode::Linear),
-        }
+    fn sampler_for_mode(&self, _sample_mode: CompositeSampleMode) -> &wgpu::Sampler {
+        &self.effect_linear_sampler
     }
 
     pub(crate) fn merge_and_reset_debug_counters(&self, stats: &FrameStats) {
@@ -657,7 +649,7 @@ impl EffectRenderer {
     /// Uses an intermediate offscreen target for the horizontal pass and
     /// submits both passes together for lower command submission overhead.
     #[allow(clippy::too_many_arguments)]
-    pub fn apply_blur(
+    fn apply_blur(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -729,13 +721,11 @@ impl EffectRenderer {
             device,
             &self.effect_texture_bind_group_layout,
             &self.effect_linear_sampler,
-            OffscreenSampleMode::Linear,
         );
         let intermediate_bind_group = intermediate.get_or_create_bind_group(
             device,
             &self.effect_texture_bind_group_layout,
             &self.effect_linear_sampler,
-            OffscreenSampleMode::Linear,
         );
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -821,7 +811,6 @@ impl EffectRenderer {
             device,
             &self.effect_texture_bind_group_layout,
             &self.effect_linear_sampler,
-            OffscreenSampleMode::Linear,
         );
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -907,7 +896,6 @@ impl EffectRenderer {
             device,
             &self.effect_texture_bind_group_layout,
             &self.effect_linear_sampler,
-            OffscreenSampleMode::Linear,
         );
 
         // Render pass
@@ -1033,7 +1021,7 @@ impl EffectRenderer {
     /// Composite an offscreen target onto a destination view with an optional scissor region
     /// and explicit alpha multiplication.
     #[allow(clippy::too_many_arguments)]
-    pub fn composite_to_view_scissored_with_alpha(
+    fn composite_to_view_scissored_with_alpha(
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -1060,7 +1048,7 @@ impl EffectRenderer {
     /// Composite an offscreen target onto a destination view with optional
     /// scissor and optional rounded-rectangle clip mask.
     #[allow(clippy::too_many_arguments)]
-    pub fn composite_to_view_scissored_with_alpha_and_mask(
+    fn composite_to_view_scissored_with_alpha_and_mask(
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -1145,12 +1133,11 @@ impl EffectRenderer {
             bytemuck::bytes_of(&uniforms),
         );
 
-        let (sampler, offscreen_sample_mode) = self.sampler_for_mode(sample_mode);
+        let sampler = self.sampler_for_mode(sample_mode);
         let texture_bind_group = source.get_or_create_bind_group(
             device,
             &self.effect_texture_bind_group_layout,
             sampler,
-            offscreen_sample_mode,
         );
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1281,12 +1268,11 @@ impl EffectRenderer {
             bytemuck::bytes_of(&uniforms),
         );
 
-        let (sampler, offscreen_sample_mode) = self.sampler_for_mode(sample_mode);
+        let sampler = self.sampler_for_mode(sample_mode);
         let texture_bind_group = source.get_or_create_bind_group(
             device,
             &self.effect_texture_bind_group_layout,
             sampler,
-            offscreen_sample_mode,
         );
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Projective Blit Encoder"),

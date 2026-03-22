@@ -4,6 +4,8 @@ name = "glyphon"
 version = "0.10.0"
 description = "Fast, simple 2D text rendering for wgpu (cranpose fork: float vertex positions + linear sampling)"
 license = "MIT OR Apache-2.0 OR Zlib"
+# Forked from upstream glyphon 0.10.0 @ d386955c086447ad28cbface2d6fc5eaf7b54fe2
+# Changes: float vertex positions, linear atlas sampling, glyph padding, cache_left/cache_top/subpixel_y on TextArea
 
 [lib]
 name = "glyphon"
