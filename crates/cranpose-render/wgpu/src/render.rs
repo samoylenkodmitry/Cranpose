@@ -67,7 +67,7 @@ use glyphon::{
 };
 use lru::LruCache;
 use rustc_hash::FxHasher;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::ops::Range;
@@ -623,12 +623,6 @@ impl ShapeBatchBuffers {
 
 // TextCacheKey is now defined in lib.rs and shared between measurement and rendering
 
-#[derive(Clone, Copy)]
-struct TranslatedTextRasterOrigin {
-    position: Point,
-    root_scale: f32,
-}
-
 pub struct GpuRenderer {
     pub(crate) device: Arc<wgpu::Device>,
     pub(crate) queue: Arc<wgpu::Queue>,
@@ -655,8 +649,6 @@ pub struct GpuRenderer {
     image_vertex_buffer: wgpu::Buffer,
     image_index_buffer: wgpu::Buffer,
     image_texture_cache: LruCache<u64, CachedImageTexture>,
-    translated_text_raster_origins: HashMap<NodeId, TranslatedTextRasterOrigin>,
-    active_translated_text_nodes: HashSet<NodeId>,
     text_viewport: Viewport,
     scratch_shape_data: Vec<ShapeData>,
     scratch_gradients: Vec<GradientStop>,
@@ -959,8 +951,6 @@ impl GpuRenderer {
                 NonZeroUsize::new(MAX_TEXTURE_CACHE_ITEMS)
                     .expect("image texture cache size must be non-zero"),
             ),
-            translated_text_raster_origins: HashMap::new(),
-            active_translated_text_nodes: HashSet::new(),
             text_viewport,
             scratch_shape_data: Vec::new(),
             scratch_gradients: Vec::new(),
@@ -1069,31 +1059,6 @@ impl GpuRenderer {
             },
         );
         Ok(())
-    }
-
-    fn translated_text_raster_origin(
-        &mut self,
-        node_id: NodeId,
-        current_position: Point,
-        root_scale: f32,
-    ) -> Point {
-        self.active_translated_text_nodes.insert(node_id);
-
-        let origin = self
-            .translated_text_raster_origins
-            .entry(node_id)
-            .or_insert(TranslatedTextRasterOrigin {
-                position: current_position,
-                root_scale,
-            });
-        if (origin.root_scale - root_scale).abs() > f32::EPSILON {
-            *origin = TranslatedTextRasterOrigin {
-                position: current_position,
-                root_scale,
-            };
-        }
-
-        origin.position
     }
 
     /// Acquire an offscreen target from the pool with stats tracking.
@@ -1608,14 +1573,8 @@ impl GpuRenderer {
         log::trace!("🎨 Rendering graph to {}x{}", width, height);
 
         self.text_batch_cursor = 0;
-        self.active_translated_text_nodes.clear();
 
         let result = self.render_graph(text_state, view, graph, width, height, root_scale);
-        if result.is_ok() {
-            self.translated_text_raster_origins
-                .retain(|node_id, _| self.active_translated_text_nodes.contains(node_id));
-        }
-        self.active_translated_text_nodes.clear();
 
         // Trim text renderer pool to the number of slots actually used this frame,
         // plus a small margin to avoid thrashing on minor batch count fluctuations.
@@ -3609,21 +3568,6 @@ impl GpuRenderer {
             let rect = text_draw.rect.translate(snap_delta.x, snap_delta.y);
             let left_px = rect.x * root_scale;
             let top_px = rect.y * root_scale;
-            let current_position = Point::new(left_px, top_px);
-            let (cache_origin, subpixel_y) = if text_draw.translated_content_context {
-                (
-                    self.translated_text_raster_origin(
-                        text_draw.node_id,
-                        current_position,
-                        root_scale,
-                    ),
-                    true,
-                )
-            } else {
-                self.translated_text_raster_origins
-                    .remove(&text_draw.node_id);
-                (current_position, false)
-            };
 
             let adjusted_clip = text_draw
                 .clip
@@ -3637,9 +3581,6 @@ impl GpuRenderer {
                 buffer: &cached.buffer,
                 left: left_px,
                 top: top_px,
-                cache_left: cache_origin.x,
-                cache_top: cache_origin.y,
-                subpixel_y,
                 scale: 1.0,
                 bounds,
                 default_color: color,
