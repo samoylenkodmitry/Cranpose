@@ -5,6 +5,8 @@
 use crate::launcher::AppSettings;
 use cranpose_app_shell::{default_root_key, AppShell};
 use cranpose_platform_desktop_winit::DesktopWinitPlatform;
+#[cfg(feature = "robot")]
+use cranpose_render_wgpu::RenderStatsSnapshot;
 use cranpose_render_wgpu::WgpuRenderer;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -67,6 +69,10 @@ pub struct RobotScreenshot {
     pub width: u32,
     /// Screenshot height in pixels.
     pub height: u32,
+    /// Logical width covered by the screenshot.
+    pub logical_width: f32,
+    /// Logical height covered by the screenshot.
+    pub logical_height: f32,
     /// Packed RGBA8 pixel buffer in row-major order.
     pub pixels: Vec<u8>,
 }
@@ -114,6 +120,8 @@ enum RobotCommand {
     WaitForIdle,
     GetSemantics,
     GetScreenshot,
+    GetScreenshotWithScale(f32),
+    GetRenderStats,
     Exit,
 }
 
@@ -124,6 +132,7 @@ enum RobotResponse {
     Ok,
     Semantics(Vec<SemanticElement>),
     Screenshot(RobotScreenshot),
+    RenderStats(Box<Option<RenderStatsSnapshot>>),
     Error(String),
 }
 
@@ -482,6 +491,32 @@ impl Robot {
         }
     }
 
+    /// Capture a screenshot at a specific device pixel scale (e.g., 2.0 for HiDPI).
+    pub fn screenshot_with_scale(&self, scale: f32) -> Result<RobotScreenshot, String> {
+        self.tx
+            .send(RobotCommand::GetScreenshotWithScale(scale))
+            .map_err(|e| format!("Failed to send screenshot command: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::Screenshot(image)) => Ok(image),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
+    }
+
+    /// Get the most recent renderer frame stats, if available.
+    pub fn get_render_stats(&self) -> Result<Option<RenderStatsSnapshot>, String> {
+        self.tx
+            .send(RobotCommand::GetRenderStats)
+            .map_err(|e| format!("Failed to send render stats command: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::RenderStats(stats)) => Ok(*stats),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
+    }
+
     /// Find any element by text content (recursive search)
     pub fn find_by_text<'a>(
         elements: &'a [SemanticElement],
@@ -763,6 +798,7 @@ impl ApplicationHandler for App {
                     return;
                 }
             };
+        let adapter_info = adapter.get_info();
 
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("Main Device"),
@@ -800,7 +836,12 @@ impl ApplicationHandler for App {
         // Create renderer with fonts from settings
         let fonts: &[&[u8]] = self.settings.fonts.take().unwrap_or(&[]);
         let mut renderer = WgpuRenderer::new(fonts);
-        renderer.init_gpu(Arc::new(device), Arc::new(queue), surface_format);
+        renderer.init_gpu(
+            Arc::new(device),
+            Arc::new(queue),
+            surface_format,
+            adapter_info.backend,
+        );
         let initial_scale = window.scale_factor();
         renderer.set_root_scale(initial_scale as f32);
         cranpose_ui::set_density(initial_scale as f32);
@@ -1249,6 +1290,21 @@ impl ApplicationHandler for App {
                             let _ = controller.tx.send(RobotResponse::Error(err));
                         }
                     },
+                    RobotCommand::GetScreenshotWithScale(scale) => {
+                        match capture_screenshot_with_scale(app, scale) {
+                            Ok(screenshot) => {
+                                let _ = controller.tx.send(RobotResponse::Screenshot(screenshot));
+                            }
+                            Err(err) => {
+                                let _ = controller.tx.send(RobotResponse::Error(err));
+                            }
+                        }
+                    }
+                    RobotCommand::GetRenderStats => {
+                        let _ = controller.tx.send(RobotResponse::RenderStats(Box::new(
+                            app.renderer().last_frame_stats(),
+                        )));
+                    }
                     RobotCommand::TypeText(text) => {
                         use cranpose_app_shell::{KeyEvent, KeyEventType, Modifiers};
 
@@ -1506,36 +1562,83 @@ pub fn run(mut settings: AppSettings, content: impl FnMut() + 'static) -> ! {
 
 #[cfg(feature = "robot")]
 fn capture_screenshot(app: &mut AppShell<WgpuRenderer>) -> Result<RobotScreenshot, String> {
-    let (mut width, mut height, mut capture_scale) = if let Some(layout_tree) = app.layout_tree() {
+    let logical_size = app.layout_tree().map(|layout_tree| {
         (
-            layout_tree.root().rect.width.max(1.0).ceil() as u32,
-            layout_tree.root().rect.height.max(1.0).ceil() as u32,
-            1.0f32,
+            layout_tree.root().rect.width.max(1.0),
+            layout_tree.root().rect.height.max(1.0),
         )
-    } else {
-        let (bw, bh) = app.buffer_size();
-        (bw.max(1), bh.max(1), 1.0f32)
-    };
-
-    if width == 0 || height == 0 {
-        let (bw, bh) = app.buffer_size();
-        width = bw.max(1);
-        height = bh.max(1);
-        capture_scale = 1.0;
-    }
-    width = width.max(1);
-    height = height.max(1);
+    });
+    let (width, height, capture_scale) =
+        resolve_robot_screenshot_params(app.buffer_size(), logical_size);
 
     let captured = app
         .renderer()
         .capture_frame_with_scale(width, height, capture_scale)
         .map_err(|err| format!("Failed to capture GPU screenshot: {err:?}"))?;
 
+    let (logical_width, logical_height) = logical_size.unwrap_or_else(|| {
+        let fallback_scale = if capture_scale.is_finite() && capture_scale > 0.0 {
+            capture_scale
+        } else {
+            1.0
+        };
+        (
+            (captured.width as f32 / fallback_scale).max(1.0),
+            (captured.height as f32 / fallback_scale).max(1.0),
+        )
+    });
+
     Ok(RobotScreenshot {
         width: captured.width,
         height: captured.height,
+        logical_width,
+        logical_height,
         pixels: captured.pixels,
     })
+}
+
+#[cfg(feature = "robot")]
+fn capture_screenshot_with_scale(
+    app: &mut AppShell<WgpuRenderer>,
+    scale: f32,
+) -> Result<RobotScreenshot, String> {
+    let logical_size = app.layout_tree().map(|layout_tree| {
+        (
+            layout_tree.root().rect.width.max(1.0),
+            layout_tree.root().rect.height.max(1.0),
+        )
+    });
+    let (logical_width, logical_height) = logical_size.unwrap_or((1.0, 1.0));
+    let width = (logical_width * scale).ceil() as u32;
+    let height = (logical_height * scale).ceil() as u32;
+
+    let captured = app
+        .renderer()
+        .capture_frame_with_scale(width, height, scale)
+        .map_err(|err| format!("Failed to capture GPU screenshot: {err:?}"))?;
+
+    Ok(RobotScreenshot {
+        width: captured.width,
+        height: captured.height,
+        logical_width,
+        logical_height,
+        pixels: captured.pixels,
+    })
+}
+
+#[cfg(feature = "robot")]
+fn resolve_robot_screenshot_params(
+    buffer_size: (u32, u32),
+    fallback_logical_size: Option<(f32, f32)>,
+) -> (u32, u32, f32) {
+    if let Some((logical_width, logical_height)) = fallback_logical_size {
+        let width = logical_width.ceil().max(1.0) as u32;
+        let height = logical_height.ceil().max(1.0) as u32;
+        return (width, height, 1.0);
+    }
+
+    let (buffer_width, buffer_height) = buffer_size;
+    (buffer_width.max(1), buffer_height.max(1), 1.0)
 }
 
 /// Extract semantic elements by combining semantic tree with layout tree
@@ -1644,5 +1747,39 @@ fn char_to_key_code(ch: char) -> cranpose_app_shell::KeyCode {
         '9' => KeyCode::Digit9,
         ' ' => KeyCode::Space,
         _ => KeyCode::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(feature = "robot")]
+    use super::resolve_robot_screenshot_params;
+
+    #[cfg(feature = "robot")]
+    #[test]
+    fn robot_screenshot_prefers_logical_layout_size() {
+        let resolved = resolve_robot_screenshot_params((1600, 1200), Some((800.0, 600.0)));
+        assert_eq!(resolved, (800, 600, 1.0));
+    }
+
+    #[cfg(feature = "robot")]
+    #[test]
+    fn robot_screenshot_uses_ceil_on_fractional_logical_size() {
+        let resolved = resolve_robot_screenshot_params((0, 0), Some((801.2, 601.3)));
+        assert_eq!(resolved, (802, 602, 1.0));
+    }
+
+    #[cfg(feature = "robot")]
+    #[test]
+    fn robot_screenshot_falls_back_to_physical_buffer_when_layout_is_missing() {
+        let resolved = resolve_robot_screenshot_params((1600, 1200), None);
+        assert_eq!(resolved, (1600, 1200, 1.0));
+    }
+
+    #[cfg(feature = "robot")]
+    #[test]
+    fn robot_screenshot_clamps_to_non_zero_target() {
+        let resolved = resolve_robot_screenshot_params((0, 0), Some((10.0, 20.0)));
+        assert_eq!(resolved, (10, 20, 1.0));
     }
 }

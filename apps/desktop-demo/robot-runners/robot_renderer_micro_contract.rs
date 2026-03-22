@@ -1,0 +1,266 @@
+//! Robot micro-contract for deterministic renderer screenshot validation.
+//!
+//! Run with:
+//! `cargo run --package desktop-app --example robot_renderer_micro_contract --features robot-app`
+
+use cranpose::AppLauncher;
+use cranpose_testing::{
+    capture_screenshot, crop_screenshot_logical, sample_screenshot_pixel_logical,
+};
+use cranpose_ui::{
+    composable, text::SpanStyle, text::TextDecoration, text::TextUnit, Alignment, Box, BoxSpec,
+    Color, ContentScale, Image, ImageBitmap, Modifier, Size, Text, TextStyle,
+};
+use image::{ImageBuffer, RgbaImage};
+use std::path::Path;
+use std::time::Duration;
+
+const WINDOW_WIDTH: u32 = 180;
+const WINDOW_HEIGHT: u32 = 120;
+const SCREENSHOT_PATH: &str = "/tmp/cranpose_renderer_micro_contract.png";
+
+const BACKGROUND_COLOR: Color = Color(0.12, 0.16, 0.24, 1.0);
+const LINE_VERTICAL_COLOR: Color = Color(0.98, 0.98, 0.98, 1.0);
+const LINE_HORIZONTAL_COLOR: Color = Color(0.98, 0.72, 0.30, 1.0);
+const RECT_FILL_COLOR: Color = Color(0.30, 0.78, 0.56, 1.0);
+const CHESS_LIGHT: [u8; 3] = [240, 240, 240];
+const CHESS_DARK: [u8; 3] = [36, 54, 72];
+const COLOR_TOLERANCE: u8 = 18;
+
+fn within_tolerance(actual: [u8; 3], expected: [u8; 3], tolerance: u8) -> bool {
+    let tolerance = tolerance as i16;
+    (actual[0] as i16 - expected[0] as i16).abs() <= tolerance
+        && (actual[1] as i16 - expected[1] as i16).abs() <= tolerance
+        && (actual[2] as i16 - expected[2] as i16).abs() <= tolerance
+}
+
+fn sample_rgb(screenshot: &cranpose::RobotScreenshot, x: f32, y: f32) -> Result<[u8; 3], String> {
+    let rgba = sample_screenshot_pixel_logical(screenshot, x, y)
+        .ok_or_else(|| format!("sample out of bounds at ({x:.1}, {y:.1})"))?;
+    Ok([rgba[0], rgba[1], rgba[2]])
+}
+
+fn linear_channel_to_srgb_u8(channel: f32) -> u8 {
+    let channel = channel.clamp(0.0, 1.0);
+    let srgb = if channel <= 0.003_130_8 {
+        channel * 12.92
+    } else {
+        1.055 * channel.powf(1.0 / 2.4) - 0.055
+    };
+    (srgb * 255.0).round().clamp(0.0, 255.0) as u8
+}
+
+fn expected_screenshot_rgb(color: Color) -> [u8; 3] {
+    [
+        linear_channel_to_srgb_u8(color.0),
+        linear_channel_to_srgb_u8(color.1),
+        linear_channel_to_srgb_u8(color.2),
+    ]
+}
+
+fn assert_color(
+    screenshot: &cranpose::RobotScreenshot,
+    label: &str,
+    x: f32,
+    y: f32,
+    expected: [u8; 3],
+) -> Result<(), String> {
+    let actual = sample_rgb(screenshot, x, y)?;
+    if within_tolerance(actual, expected, COLOR_TOLERANCE) {
+        return Ok(());
+    }
+    Err(format!(
+        "{label}: expected {expected:?} at ({x:.1}, {y:.1}), got {actual:?}"
+    ))
+}
+
+fn count_bright_pixels(screenshot: &cranpose::RobotScreenshot) -> usize {
+    screenshot
+        .pixels
+        .chunks_exact(4)
+        .filter(|rgba| rgba[0] > 170 || rgba[1] > 170 || rgba[2] > 170)
+        .count()
+}
+
+fn save_png(path: &Path, screenshot: &cranpose::RobotScreenshot) -> Result<(), String> {
+    let image: RgbaImage = ImageBuffer::from_raw(
+        screenshot.width,
+        screenshot.height,
+        screenshot.pixels.clone(),
+    )
+    .ok_or_else(|| "invalid screenshot dimensions".to_string())?;
+    image
+        .save(path)
+        .map_err(|err| format!("failed to save {}: {}", path.display(), err))
+}
+
+fn fail(robot: &cranpose::Robot, message: &str) -> ! {
+    println!("FATAL: {message}");
+    let _ = robot.exit();
+    std::process::exit(1);
+}
+
+fn generate_chessboard_bitmap(tile_size: u32, tiles_per_side: u32) -> ImageBitmap {
+    let side = tile_size.max(1) * tiles_per_side.max(1);
+    let mut pixels = vec![0u8; (side * side * 4) as usize];
+
+    for y in 0..side {
+        for x in 0..side {
+            let tile_x = x / tile_size.max(1);
+            let tile_y = y / tile_size.max(1);
+            let color = if ((tile_x + tile_y) & 1) == 0 {
+                [CHESS_LIGHT[0], CHESS_LIGHT[1], CHESS_LIGHT[2], 255]
+            } else {
+                [CHESS_DARK[0], CHESS_DARK[1], CHESS_DARK[2], 255]
+            };
+            let index = ((y * side + x) * 4) as usize;
+            pixels[index..index + 4].copy_from_slice(&color);
+        }
+    }
+
+    ImageBitmap::from_rgba8(side, side, pixels).expect("valid chessboard bitmap")
+}
+
+#[allow(non_snake_case)]
+#[composable]
+fn RendererMicroContractApp() {
+    let board = cranpose_core::remember(|| generate_chessboard_bitmap(8, 4)).with(|b| b.clone());
+    let underline_style = TextStyle::from_span_style(SpanStyle {
+        color: Some(Color(0.97, 0.98, 1.0, 1.0)),
+        font_size: TextUnit::Sp(18.0),
+        text_decoration: Some(TextDecoration::UNDERLINE),
+        ..SpanStyle::default()
+    });
+
+    Box(
+        Modifier::empty()
+            .size(Size::new(WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32))
+            .background(BACKGROUND_COLOR),
+        BoxSpec::default().content_alignment(Alignment::TOP_START),
+        move || {
+            Box(
+                Modifier::empty()
+                    .offset(16.0, 14.0)
+                    .size(Size::new(4.0, 24.0))
+                    .background(LINE_VERTICAL_COLOR),
+                BoxSpec::default(),
+                || {},
+            );
+            Box(
+                Modifier::empty()
+                    .offset(24.0, 14.0)
+                    .size(Size::new(24.0, 4.0))
+                    .background(LINE_HORIZONTAL_COLOR),
+                BoxSpec::default(),
+                || {},
+            );
+            Image(
+                board.clone(),
+                Some("Micro chessboard".to_string()),
+                Modifier::empty()
+                    .offset(16.0, 42.0)
+                    .size(Size::new(32.0, 32.0)),
+                Alignment::CENTER,
+                ContentScale::FillBounds,
+                1.0,
+                None,
+            );
+            Box(
+                Modifier::empty()
+                    .offset(60.0, 70.0)
+                    .size(Size::new(26.0, 14.0))
+                    .background(RECT_FILL_COLOR),
+                BoxSpec::default(),
+                || {},
+            );
+            Text(
+                "UNDER",
+                Modifier::empty().offset(60.0, 24.0),
+                underline_style.clone(),
+            );
+        },
+    );
+}
+
+fn main() {
+    env_logger::init();
+    println!("=== Robot Renderer Micro Contract ===");
+
+    AppLauncher::new()
+        .with_title("Robot Renderer Micro Contract")
+        .with_size(WINDOW_WIDTH, WINDOW_HEIGHT)
+        .with_fonts(desktop_app::fonts::DEMO_FONTS)
+        .with_headless(true)
+        .with_test_driver(|robot| {
+            std::thread::sleep(Duration::from_millis(500));
+            let _ = robot.wait_for_idle();
+
+            let Some(screenshot) = capture_screenshot(&robot) else {
+                fail(&robot, "failed to capture renderer micro-contract screenshot");
+            };
+            let output_path = Path::new(SCREENSHOT_PATH);
+            if let Err(err) = save_png(output_path, &screenshot) {
+                fail(&robot, &err);
+            }
+            println!("SCREENSHOT_PATH={}", output_path.display());
+
+            let background = expected_screenshot_rgb(BACKGROUND_COLOR);
+            let vertical_line = expected_screenshot_rgb(LINE_VERTICAL_COLOR);
+            let horizontal_line = expected_screenshot_rgb(LINE_HORIZONTAL_COLOR);
+            let fill_rect = expected_screenshot_rgb(RECT_FILL_COLOR);
+            for (label, x, y, expected) in [
+                ("background", 4.0, 4.0, background),
+                ("vertical_line", 18.0, 20.0, vertical_line),
+                ("vertical_left_bg", 13.0, 20.0, background),
+                ("horizontal_line", 36.0, 16.0, horizontal_line),
+                ("horizontal_above_bg", 36.0, 12.0, background),
+                ("fill_rect", 72.0, 76.0, fill_rect),
+                ("fill_rect_above_bg", 150.0, 66.0, background),
+                ("chess_0_0", 20.0, 46.0, CHESS_LIGHT),
+                ("chess_1_0", 28.0, 46.0, CHESS_DARK),
+                ("chess_0_1", 20.0, 54.0, CHESS_DARK),
+                ("chess_1_1", 28.0, 54.0, CHESS_LIGHT),
+            ] {
+                if let Err(err) = assert_color(&screenshot, label, x, y, expected) {
+                    fail(&robot, &err);
+                }
+            }
+
+            let Some(underline_crop) =
+                crop_screenshot_logical(&screenshot, 58.0, 22.0, 90.0, 24.0)
+            else {
+                fail(&robot, "failed to crop underlined text region");
+            };
+            let Some(underline_band) =
+                crop_screenshot_logical(&screenshot, 58.0, 37.0, 90.0, 4.0)
+            else {
+                fail(&robot, "failed to crop underline band");
+            };
+
+            let underline_bright = count_bright_pixels(&underline_crop);
+            let underline_band_bright = count_bright_pixels(&underline_band);
+            if underline_bright < 150 {
+                fail(
+                    &robot,
+                    &format!(
+                        "underlined text region is too soft or missing: bright_pixels={underline_bright}"
+                    ),
+                );
+            }
+            if underline_band_bright < 22 {
+                fail(
+                    &robot,
+                    &format!(
+                        "underline band is too weak or misplaced: bright_pixels={underline_band_bright}"
+                    ),
+                );
+            }
+
+            println!(
+                "PASS: renderer micro-contract pixels match expected image/line/fill layout; underlined text crop looks populated (underlined={}, underline_band={})",
+                underline_bright, underline_band_bright
+            );
+            let _ = robot.exit();
+        })
+        .run(RendererMicroContractApp);
+}

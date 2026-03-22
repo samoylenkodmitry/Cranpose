@@ -292,7 +292,12 @@ pub fn run(
                                 // First initialization - create renderer and app shell
                                 let fonts: &[&[u8]] = settings.fonts.unwrap_or(&[]);
                                 let mut renderer = WgpuRenderer::new(fonts);
-                                renderer.init_gpu(device.clone(), queue.clone(), surface_format);
+                                renderer.init_gpu(
+                                    device.clone(),
+                                    queue.clone(),
+                                    surface_format,
+                                    adapter_info.backend,
+                                );
                                 renderer.set_root_scale(density);
 
                                 // Create app shell with content closure
@@ -320,6 +325,7 @@ pub fn run(
                                         device.clone(),
                                         queue.clone(),
                                         surface_format,
+                                        adapter_info.backend,
                                     );
                                     shell.renderer().set_root_scale(density);
                                     cranpose_ui::set_density(density);

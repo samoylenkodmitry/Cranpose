@@ -1,6 +1,5 @@
 # Time Wasters
 
-- `wild-linker` `0.8.0` is not currently usable here as a direct linker on `x86_64-unknown-linux-gnu`. `cargo build` fails during build-script linking with `wild: error: -m 64 is not yet supported`.
-- Cranelift is not safe for local Cranpose robot builds here. It caused deterministic panics like `state cell missing: slot=9, gen=0, expected=f32` and allocator aborts, while the same suite passed `80/80` on LLVM. The local wrapper no longer enables Cranelift.
 - Parallel execution of robot examples is flaky on this machine even without Cranelift. `16`, `8`, and `4` parallel workers produced intermittent segfaults or timeouts, while sequential execution passed `80/80`, so `run_robot_test.sh` now defaults to sequential mode and leaves `--parallel N` as an explicit opt-in.
-- Lazy list debugging trap: a large `first_visible_item_scroll_offset` is not automatically "many average items later". For tall wrapped items, the offset can still be inside the current item. If forward normalization jumps by average size before checking the current item's cached or exact size, you get fake forward teleports/backtracks like `5 -> 4 -> 3 -> 5`.
+- Perf harness trap: do not run multiple GPU perf scenarios in parallel on this machine. The numbers become meaningless because the scenarios contend for the same GPU/driver state. Perf comparisons for `robot_perf_harness` must be sequential and single-scenario.
+- Renderer trap: do not keep chasing text-only crispness fixes before surface planning is unified. The recent scroll wobble, decorated-text breakage, and WGPU OOM were not independent glyph bugs. They came from restarting translated stable-capture boundaries inside already-isolated surfaces. Fix the surface planner first.

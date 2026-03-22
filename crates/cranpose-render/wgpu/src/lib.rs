@@ -5,22 +5,36 @@
 
 mod effect_renderer;
 pub(crate) mod gpu_stats;
+mod normalized_scene;
 mod offscreen;
 mod pipeline;
 mod render;
 mod scene;
 mod shader_cache;
 mod shaders;
+mod surface_executor;
+mod surface_plan;
+mod surface_requirements;
+#[cfg(test)]
+mod test_support;
 
-pub use scene::{BackdropLayer, ClickAction, DrawShape, HitRegion, ImageDraw, Scene, TextDraw};
+pub use gpu_stats::FrameStatsSnapshot as RenderStatsSnapshot;
+pub use scene::{ClickAction, HitRegion, Scene};
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::{
-    text_hyphenation::choose_auto_hyphen_break as choose_shared_auto_hyphen_break, RenderScene,
-    Renderer,
+    graph::{
+        CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
+        PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
+    },
+    raster_cache::LayerRasterCacheHashes,
+    text_hyphenation::choose_auto_hyphen_break as choose_shared_auto_hyphen_break,
+    RenderScene, Renderer,
 };
 use cranpose_ui::{set_text_measurer, LayoutTree, TextMeasurer};
-use cranpose_ui_graphics::Size;
+use cranpose_ui_graphics::{
+    Brush, Color, CornerRadii, DrawPrimitive, GraphicsLayer, Rect, RenderHash, Size,
+};
 use glyphon::{
     Attrs, AttrsOwned, Buffer, FamilyOwned, FontSystem, Metrics, Shaping, Style as GlyphonStyle,
     Weight as GlyphonWeight,
@@ -35,6 +49,16 @@ use std::num::NonZeroUsize;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+
+/// Convert an axis-aligned rectangle to four corner positions (TL, TR, BL, BR).
+pub(crate) fn rect_to_quad(rect: Rect) -> [[f32; 2]; 4] {
+    [
+        [rect.x, rect.y],
+        [rect.x + rect.width, rect.y],
+        [rect.x, rect.y + rect.height],
+        [rect.x + rect.width, rect.y + rect.height],
+    ]
+}
 
 /// Size-only cache for ultra-fast text measurement lookups.
 /// Key: (text_hash, font_size_fixed_point, style_hash)
@@ -304,17 +328,6 @@ fn select_text_shaping(
     }
 }
 
-fn hash_f32_bits<H: Hasher>(value: f32, state: &mut H) {
-    value.to_bits().hash(state);
-}
-
-fn hash_color<H: Hasher>(color: cranpose_ui_graphics::Color, state: &mut H) {
-    hash_f32_bits(color.r(), state);
-    hash_f32_bits(color.g(), state);
-    hash_f32_bits(color.b(), state);
-    hash_f32_bits(color.a(), state);
-}
-
 fn glyph_foreground_color(
     span_style: &cranpose_ui::text::SpanStyle,
 ) -> Option<cranpose_ui_graphics::Color> {
@@ -334,7 +347,7 @@ fn hash_optional_glyph_foreground_color<H: Hasher>(
     match glyph_foreground_color(span_style) {
         Some(color) => {
             1u8.hash(state);
-            hash_color(color, state);
+            color.render_hash().hash(state);
         }
         None => 0u8.hash(state),
     }
@@ -531,45 +544,13 @@ impl TypefaceRequest {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum FamilyCacheKey {
-    Name(String),
-    Serif,
-    SansSerif,
-    Monospace,
-    Cursive,
-    Fantasy,
-}
-
-impl FamilyCacheKey {
-    fn from_family_owned(family: &FamilyOwned) -> Self {
-        match family {
-            FamilyOwned::Name(name) => Self::Name(name.to_string()),
-            FamilyOwned::Serif => Self::Serif,
-            FamilyOwned::SansSerif => Self::SansSerif,
-            FamilyOwned::Monospace => Self::Monospace,
-            FamilyOwned::Cursive => Self::Cursive,
-            FamilyOwned::Fantasy => Self::Fantasy,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct StyleWeightRequest {
-    family: FamilyCacheKey,
-    requested_weight: cranpose_ui::text::FontWeight,
-    requested_style: cranpose_ui::text::FontStyle,
-}
-
-type ResolvedStyleWeight = Option<(GlyphonStyle, GlyphonWeight)>;
-
 #[derive(Default)]
 struct WgpuFontFamilyResolver {
     request_cache: HashMap<TypefaceRequest, FamilyOwned>,
-    style_weight_cache: HashMap<StyleWeightRequest, ResolvedStyleWeight>,
     loaded_typeface_paths: HashMap<String, String>,
     unavailable_typeface_paths: HashSet<String>,
     available_family_names: HashMap<String, String>,
+    preferred_generic_family: Option<String>,
     indexed_face_count: usize,
     generic_fallback_seeded: bool,
 }
@@ -583,7 +564,12 @@ impl WgpuFontFamilyResolver {
 
     fn clear_resolution_caches(&mut self) {
         self.request_cache.clear();
-        self.style_weight_cache.clear();
+    }
+
+    fn set_preferred_generic_family(&mut self, family_name: Option<String>) {
+        self.preferred_generic_family = family_name;
+        self.generic_fallback_seeded = false;
+        self.clear_resolution_caches();
     }
 
     fn resolve_family_owned(
@@ -602,33 +588,6 @@ impl WgpuFontFamilyResolver {
 
         let resolved = self.resolve_family_owned_uncached(font_system, &request);
         self.request_cache.insert(request, resolved.clone());
-        resolved
-    }
-
-    fn resolve_available_style_and_weight(
-        &mut self,
-        font_system: &FontSystem,
-        family: &FamilyOwned,
-        requested_weight: Option<cranpose_ui::text::FontWeight>,
-        requested_style: Option<cranpose_ui::text::FontStyle>,
-    ) -> Option<(GlyphonStyle, GlyphonWeight)> {
-        let request = StyleWeightRequest {
-            family: FamilyCacheKey::from_family_owned(family),
-            requested_weight: requested_weight.unwrap_or_default(),
-            requested_style: requested_style.unwrap_or_default(),
-        };
-
-        if let Some(cached) = self.style_weight_cache.get(&request) {
-            return *cached;
-        }
-
-        let resolved = resolve_available_style_and_weight_uncached(
-            font_system,
-            family,
-            requested_weight,
-            requested_style,
-        );
-        self.style_weight_cache.insert(request, resolved);
         resolved
     }
 
@@ -737,11 +696,18 @@ impl WgpuFontFamilyResolver {
             return;
         }
 
-        let Some(primary_family) = font_system
-            .db()
-            .faces()
-            .find_map(|face| face.families.first().map(|(name, _)| name.clone()))
-        else {
+        let primary_family = self
+            .preferred_generic_family
+            .as_deref()
+            .and_then(|name| self.canonical_family_name(name))
+            .or_else(|| {
+                font_system
+                    .db()
+                    .faces()
+                    .find_map(|face| face.families.first().map(|(name, _)| name.clone()))
+            });
+
+        let Some(primary_family) = primary_family else {
             return;
         };
 
@@ -824,18 +790,22 @@ impl WgpuFontFamilyResolver {
     }
 }
 
-fn load_fonts(font_system: &mut FontSystem, fonts: &[&[u8]]) {
+fn load_fonts(font_system: &mut FontSystem, fonts: &[&[u8]]) -> Vec<String> {
+    let mut loaded_families = Vec::new();
     for (i, font_data) in fonts.iter().enumerate() {
         log::info!("Loading font #{}, size: {} bytes", i, font_data.len());
+        if let Some(family_name) = primary_family_name_from_bytes(font_data) {
+            loaded_families.push(family_name);
+        }
         font_system.db_mut().load_font_data(font_data.to_vec());
     }
     log::info!(
         "Total font faces loaded: {}",
         font_system.db().faces().count()
     );
+    loaded_families
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn primary_family_name_from_bytes(bytes: &[u8]) -> Option<String> {
     let face = ttf_parser::Face::parse(bytes, 0).ok()?;
     let mut fallback_family = None;
@@ -916,9 +886,10 @@ impl TextSystemState {
         #[cfg(target_os = "android")]
         log::info!("Skipping Android system fonts – using application-provided fonts only");
 
-        load_fonts(&mut font_system, fonts);
+        let loaded_families = load_fonts(&mut font_system, fonts);
 
         let mut font_family_resolver = WgpuFontFamilyResolver::default();
+        font_family_resolver.set_preferred_generic_family(loaded_families.into_iter().next());
         font_family_resolver.prime(&mut font_system);
         Self::from_parts(font_system, font_family_resolver)
     }
@@ -990,13 +961,23 @@ impl WgpuRenderer {
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
         surface_format: wgpu::TextureFormat,
+        adapter_backend: wgpu::Backend,
     ) {
-        self.gpu_renderer = Some(GpuRenderer::new(device, queue, surface_format));
+        self.gpu_renderer = Some(GpuRenderer::new(
+            device,
+            queue,
+            surface_format,
+            adapter_backend,
+        ));
     }
 
     /// Set root scale factor for text rendering (e.g., density scaling on Android)
     pub fn set_root_scale(&mut self, scale: f32) {
         self.root_scale = scale;
+    }
+
+    pub fn root_scale(&self) -> f32 {
+        self.root_scale
     }
 
     /// Render the scene to a texture view.
@@ -1007,21 +988,20 @@ impl WgpuRenderer {
         height: u32,
     ) -> Result<(), WgpuRendererError> {
         if let Some(gpu_renderer) = &mut self.gpu_renderer {
-            gpu_renderer
-                .render(
-                    &mut self.render_text_state,
-                    view,
-                    &self.scene.shapes,
-                    &self.scene.images,
-                    &self.scene.texts,
-                    &self.scene.shadow_draws,
-                    &self.scene.effect_layers,
-                    &self.scene.backdrop_layers,
-                    width,
-                    height,
-                    self.root_scale,
-                )
-                .map_err(WgpuRendererError::Wgpu)
+            let graph = self
+                .scene
+                .graph
+                .as_ref()
+                .ok_or_else(|| WgpuRendererError::Wgpu("scene graph is missing".to_string()))?;
+            let result = gpu_renderer.render(
+                &mut self.render_text_state,
+                view,
+                graph,
+                width,
+                height,
+                self.root_scale,
+            );
+            result.map_err(WgpuRendererError::Wgpu)
         } else {
             Err(WgpuRendererError::Wgpu(
                 "GPU renderer not initialized. Call init_gpu() first.".to_string(),
@@ -1048,15 +1028,15 @@ impl WgpuRenderer {
         root_scale: f32,
     ) -> Result<CapturedFrame, WgpuRendererError> {
         if let Some(gpu_renderer) = &mut self.gpu_renderer {
+            let graph = self
+                .scene
+                .graph
+                .as_ref()
+                .ok_or_else(|| WgpuRendererError::Wgpu("scene graph is missing".to_string()))?;
             let pixels = gpu_renderer
                 .render_to_rgba_pixels(
                     &mut self.render_text_state,
-                    &self.scene.shapes,
-                    &self.scene.images,
-                    &self.scene.texts,
-                    &self.scene.shadow_draws,
-                    &self.scene.effect_layers,
-                    &self.scene.backdrop_layers,
+                    graph,
                     width,
                     height,
                     root_scale,
@@ -1072,6 +1052,12 @@ impl WgpuRenderer {
                 "GPU renderer not initialized. Call init_gpu() first.".to_string(),
             ))
         }
+    }
+
+    pub fn last_frame_stats(&self) -> Option<RenderStatsSnapshot> {
+        self.gpu_renderer
+            .as_ref()
+            .and_then(GpuRenderer::last_frame_stats)
     }
 
     /// Get access to the WGPU device (for surface configuration).
@@ -1126,54 +1112,104 @@ impl Renderer for WgpuRenderer {
     }
 
     fn draw_dev_overlay(&mut self, text: &str, viewport: Size) {
-        use cranpose_ui_graphics::{BlendMode, Brush, Color, Rect, RoundedCornerShape};
-
-        // Draw FPS text in top-right corner with semi-transparent background
-        // Position: 8px from right edge, 8px from top
+        const DEV_OVERLAY_NODE_ID: NodeId = NodeId::MAX;
         let padding = 8.0;
         let font_size = 14.0;
-
-        // Measure text width (approximate: ~7px per character at 14px font)
         let char_width = 7.0;
         let text_width = text.len() as f32 * char_width;
         let text_height = font_size * 1.4;
-
         let x = viewport.width - text_width - padding * 2.0;
         let y = padding;
 
-        // Add background rectangle (dark semi-transparent)
-        let bg_rect = Rect {
-            x,
-            y,
-            width: text_width + padding,
-            height: text_height + padding / 2.0,
+        let mut overlay_layer = LayerNode {
+            node_id: Some(DEV_OVERLAY_NODE_ID),
+            local_bounds: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: text_width + padding,
+                height: text_height + padding / 2.0,
+            },
+            transform_to_parent: ProjectiveTransform::translation(x, y),
+            motion_context_animated: false,
+            translated_content_context: false,
+            graphics_layer: GraphicsLayer::default(),
+            clip_to_bounds: false,
+            shadow_clip: None,
+            hit_test: None,
+            has_hit_targets: false,
+            isolation: IsolationReasons::default(),
+            cache_policy: CachePolicy::None,
+            cache_hashes: LayerRasterCacheHashes::default(),
+            cache_hashes_valid: false,
+            children: vec![
+                RenderNode::Primitive(PrimitiveEntry {
+                    phase: PrimitivePhase::BeforeChildren,
+                    node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                        primitive: DrawPrimitive::RoundRect {
+                            rect: Rect {
+                                x: 0.0,
+                                y: 0.0,
+                                width: text_width + padding,
+                                height: text_height + padding / 2.0,
+                            },
+                            brush: Brush::Solid(Color(0.0, 0.0, 0.0, 0.7)),
+                            radii: CornerRadii::uniform(4.0),
+                        },
+                        clip: None,
+                    }),
+                }),
+                RenderNode::Primitive(PrimitiveEntry {
+                    phase: PrimitivePhase::AfterChildren,
+                    node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+                        node_id: DEV_OVERLAY_NODE_ID,
+                        rect: Rect {
+                            x: padding / 2.0,
+                            y: padding / 4.0,
+                            width: text_width,
+                            height: text_height,
+                        },
+                        text: cranpose_ui::text::AnnotatedString::from(text),
+                        text_style: cranpose_ui::TextStyle::default(),
+                        font_size,
+                        layout_options: cranpose_ui::TextLayoutOptions::default(),
+                        clip: None,
+                    })),
+                }),
+            ],
         };
-        self.scene.push_shape(
-            bg_rect,
-            Brush::Solid(Color(0.0, 0.0, 0.0, 0.7)),
-            Some(RoundedCornerShape::uniform(4.0)),
-            None,
-            BlendMode::SrcOver,
-        );
+        overlay_layer.recompute_raster_cache_hashes();
 
-        // Add text (green color for visibility)
-        let text_rect = Rect {
-            x: x + padding / 2.0,
-            y: y + padding / 4.0,
-            width: text_width,
-            height: text_height,
-        };
-        self.scene.push_text(
-            NodeId::MAX,
-            text_rect,
-            Rc::new(cranpose_ui::text::AnnotatedString::from(text)),
-            Color(0.0, 1.0, 0.0, 1.0), // Green
-            cranpose_ui::TextStyle::default(),
-            font_size,
-            1.0,
-            cranpose_ui::TextLayoutOptions::default(),
-            None,
-        );
+        let graph = self.scene.graph.get_or_insert_with(|| {
+            RenderGraph::new(LayerNode {
+                node_id: None,
+                local_bounds: Rect::from_size(viewport),
+                transform_to_parent: ProjectiveTransform::identity(),
+                motion_context_animated: false,
+                translated_content_context: false,
+                graphics_layer: GraphicsLayer::default(),
+                clip_to_bounds: false,
+                shadow_clip: None,
+                hit_test: None,
+                has_hit_targets: false,
+                isolation: IsolationReasons::default(),
+                cache_policy: CachePolicy::None,
+                cache_hashes: LayerRasterCacheHashes::default(),
+                cache_hashes_valid: false,
+                children: Vec::new(),
+            })
+        });
+
+        graph.root.children.retain(|child| {
+            !matches!(
+                child,
+                RenderNode::Layer(layer) if layer.node_id == Some(DEV_OVERLAY_NODE_ID)
+            )
+        });
+        graph
+            .root
+            .children
+            .push(RenderNode::Layer(Box::new(overlay_layer)));
+        graph.root.recompute_raster_cache_hashes();
     }
 }
 
@@ -1224,94 +1260,19 @@ pub(crate) fn resolve_effective_line_height(
     resolve_line_height(style, max_font_size)
 }
 
-fn family_owned_to_fontdb_family(family: &FamilyOwned) -> glyphon::fontdb::Family<'_> {
-    match family {
-        FamilyOwned::Name(name) => glyphon::fontdb::Family::Name(name.as_str()),
-        FamilyOwned::Serif => glyphon::fontdb::Family::Serif,
-        FamilyOwned::SansSerif => glyphon::fontdb::Family::SansSerif,
-        FamilyOwned::Monospace => glyphon::fontdb::Family::Monospace,
-        FamilyOwned::Cursive => glyphon::fontdb::Family::Cursive,
-        FamilyOwned::Fantasy => glyphon::fontdb::Family::Fantasy,
-    }
-}
-
-fn requested_fontdb_style(style: Option<cranpose_ui::text::FontStyle>) -> glyphon::fontdb::Style {
-    match style.unwrap_or_default() {
-        cranpose_ui::text::FontStyle::Normal => glyphon::fontdb::Style::Normal,
-        cranpose_ui::text::FontStyle::Italic => glyphon::fontdb::Style::Italic,
-    }
-}
-
-fn glyphon_style_from_fontdb(style: glyphon::fontdb::Style) -> GlyphonStyle {
-    match style {
-        glyphon::fontdb::Style::Italic | glyphon::fontdb::Style::Oblique => GlyphonStyle::Italic,
-        glyphon::fontdb::Style::Normal => GlyphonStyle::Normal,
-    }
-}
-
-fn resolve_available_style_and_weight_uncached(
-    font_system: &FontSystem,
-    family: &FamilyOwned,
-    requested_weight: Option<cranpose_ui::text::FontWeight>,
-    requested_style: Option<cranpose_ui::text::FontStyle>,
-) -> Option<(GlyphonStyle, GlyphonWeight)> {
-    let requested_fontdb_weight = requested_weight.unwrap_or_default().0;
-    let requested_style = requested_fontdb_style(requested_style);
-    let requested_family = family_owned_to_fontdb_family(family);
-    let requested_family_name = font_system
-        .db()
-        .family_name(&requested_family)
-        .to_ascii_lowercase();
-
-    let style_penalty = |face_style: glyphon::fontdb::Style| -> u32 {
-        if face_style == requested_style {
-            0
-        } else if requested_style != glyphon::fontdb::Style::Normal
-            && face_style == glyphon::fontdb::Style::Normal
-        {
-            1_000
-        } else {
-            10_000
-        }
-    };
-
-    let weight_penalty = |face_weight: u16| -> u32 {
-        (i32::from(face_weight) - i32::from(requested_fontdb_weight)).unsigned_abs()
-    };
-
-    let mut best_in_family: Option<(u32, glyphon::fontdb::Style, u16)> = None;
-    let mut best_global: Option<(u32, glyphon::fontdb::Style, u16)> = None;
-
-    for face in font_system.db().faces() {
-        let score = style_penalty(face.style) + weight_penalty(face.weight.0);
-        let in_family = face
-            .families
-            .iter()
-            .any(|(name, _)| name.eq_ignore_ascii_case(requested_family_name.as_str()));
-
-        if in_family
-            && best_in_family
-                .as_ref()
-                .map(|(best_score, _, _)| score < *best_score)
-                .unwrap_or(true)
-        {
-            best_in_family = Some((score, face.style, face.weight.0));
-        }
-
-        if best_global
-            .as_ref()
-            .map(|(best_score, _, _)| score < *best_score)
-            .unwrap_or(true)
-        {
-            best_global = Some((score, face.style, face.weight.0));
-        }
-    }
-
-    let (_, resolved_style, resolved_weight) = best_in_family.or(best_global)?;
-    Some((
-        glyphon_style_from_fontdb(resolved_style),
-        GlyphonWeight(resolved_weight),
-    ))
+/// Returns true if the fontdb contains at least one italic (or oblique) face
+/// whose family matches the given `FamilyOwned`.
+fn family_has_italic_face(font_system: &FontSystem, family: &FamilyOwned) -> bool {
+    let family_ref = family.as_family();
+    let family_name = font_system.db().family_name(&family_ref);
+    font_system.db().faces().any(|face| {
+        (face.style == glyphon::fontdb::Style::Italic
+            || face.style == glyphon::fontdb::Style::Oblique)
+            && face
+                .families
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(family_name))
+    })
 }
 
 fn attrs_from_text_style(
@@ -1346,20 +1307,30 @@ fn attrs_from_text_style(
     let family_owned = font_family_resolver.resolve_family_owned(font_system, span_style);
     attrs = attrs.family(family_owned.as_family());
 
-    if let Some((resolved_style, resolved_weight)) = font_family_resolver
-        .resolve_available_style_and_weight(font_system, &family_owned, font_weight, font_style)
-    {
-        attrs = attrs.style(resolved_style).weight(resolved_weight);
-    } else {
-        if let Some(font_weight) = font_weight {
-            attrs = attrs.weight(GlyphonWeight(font_weight.0));
-        }
+    if let Some(font_weight) = font_weight {
+        attrs = attrs.weight(GlyphonWeight(font_weight.0));
+    }
 
-        if let Some(font_style) = font_style {
-            attrs = attrs.style(match font_style {
-                cranpose_ui::text::FontStyle::Normal => GlyphonStyle::Normal,
-                cranpose_ui::text::FontStyle::Italic => GlyphonStyle::Italic,
-            });
+    // cosmic-text 0.15 does NOT synthesize italic automatically — it passes
+    // cache_key_flags through as-is from attrs to glyphs.  We must decide here
+    // whether to request a native italic face or to ask for synthetic skew.
+    //
+    // Strategy:
+    //   • If the resolved family owns an italic face → set style=Italic so
+    //     cosmic-text matches the real face.  No FAKE_ITALIC needed.
+    //   • Otherwise → keep style=Normal (so font matching finds the Regular
+    //     face) and set FAKE_ITALIC for the swash 14-degree skew.
+    let mut flags = glyphon::cosmic_text::CacheKeyFlags::DISABLE_HINTING;
+    if let Some(font_style) = font_style {
+        match font_style {
+            cranpose_ui::text::FontStyle::Normal => {}
+            cranpose_ui::text::FontStyle::Italic => {
+                if family_has_italic_face(font_system, &family_owned) {
+                    attrs = attrs.style(GlyphonStyle::Italic);
+                } else {
+                    flags |= glyphon::cosmic_text::CacheKeyFlags::FAKE_ITALIC;
+                }
+            }
         }
     }
 
@@ -1370,11 +1341,10 @@ fn attrs_from_text_style(
         }
         _ => attrs,
     };
+    attrs = attrs.cache_key_flags(flags);
 
     AttrsOwned::new(&attrs)
 }
-
-// Text measurer implementation for WGPU
 
 // Text measurer implementation for WGPU
 
@@ -2290,6 +2260,8 @@ impl TextMeasurer for WgpuTextMeasurer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
 
     const WORKER_TEST_TIMEOUT_SECS: u64 = 15;
 
@@ -2363,7 +2335,7 @@ mod tests {
     }
 
     #[test]
-    fn attrs_resolution_downgrades_missing_italic_to_available_style() {
+    fn attrs_resolution_synthesizes_italic_when_no_italic_face_available() {
         let (mut font_system, mut resolver) = seeded_font_system_and_resolver();
         let style = cranpose_ui::text::TextStyle {
             span_style: cranpose_ui::text::SpanStyle {
@@ -2375,15 +2347,23 @@ mod tests {
         };
 
         let attrs = attrs_from_text_style(&style, 14.0, 1.0, &mut font_system, &mut resolver);
+        // Noto Sans (test font) has no italic face → style stays Normal,
+        // FAKE_ITALIC is set so the swash renderer applies 14° skew.
         assert_eq!(
             attrs.style,
             GlyphonStyle::Normal,
-            "missing italic face should downgrade to available style instead of panicking during shaping"
+            "style must stay Normal for font matching when no italic face exists"
+        );
+        assert!(
+            attrs
+                .cache_key_flags
+                .contains(glyphon::cosmic_text::CacheKeyFlags::FAKE_ITALIC),
+            "FAKE_ITALIC must be set when the font family lacks a native italic face"
         );
     }
 
     #[test]
-    fn attrs_resolution_downgrades_missing_weight_to_available_weight() {
+    fn attrs_resolution_preserves_requested_bold_for_synthesis() {
         let (mut font_system, mut resolver) = seeded_font_system_and_resolver();
         let style = cranpose_ui::text::TextStyle {
             span_style: cranpose_ui::text::SpanStyle {
@@ -2397,8 +2377,94 @@ mod tests {
         let attrs = attrs_from_text_style(&style, 14.0, 1.0, &mut font_system, &mut resolver);
         assert_eq!(
             attrs.weight,
-            GlyphonWeight(cranpose_ui::text::FontWeight::NORMAL.0),
-            "missing bold face should downgrade to available weight instead of panicking during shaping"
+            GlyphonWeight(cranpose_ui::text::FontWeight::BOLD.0),
+            "requested bold must be preserved in attrs so glyphon can synthesize it"
+        );
+    }
+
+    #[test]
+    fn span_level_italic_propagates_through_rich_text_ensure() {
+        let (mut font_system, mut resolver) = seeded_font_system_and_resolver();
+        let mut text = cranpose_ui::text::AnnotatedString::from("normal italic");
+        text.span_styles.push(cranpose_ui::text::RangeStyle {
+            item: cranpose_ui::text::SpanStyle {
+                font_style: Some(cranpose_ui::text::FontStyle::Italic),
+                ..Default::default()
+            },
+            range: 7..13, // "italic"
+        });
+        let style = cranpose_ui::text::TextStyle::default();
+        let style_hash = text_buffer_style_hash(&style, &text);
+        let mut buffer = new_shared_text_buffer(&mut font_system, 14.0, 14.0 * 1.4);
+        buffer.ensure(
+            &mut font_system,
+            &mut resolver,
+            EnsureTextBufferParams {
+                annotated_text: &text,
+                font_size_px: 14.0,
+                line_height_px: 14.0 * 1.4,
+                style_hash,
+                style: &style,
+                scale: 1.0,
+            },
+        );
+        // Check that the buffer's layout lines have FAKE_ITALIC flag on the italic span
+        let has_fake_italic = buffer.buffer.layout_runs().any(|run| {
+            run.glyphs.iter().any(|glyph| {
+                glyph.start >= 7
+                    && glyph
+                        .cache_key_flags
+                        .contains(glyphon::cosmic_text::CacheKeyFlags::FAKE_ITALIC)
+            })
+        });
+        assert!(
+            has_fake_italic,
+            "span-level italic must produce FAKE_ITALIC glyphs when the font lacks native italic"
+        );
+    }
+
+    #[test]
+    fn bold_text_uses_bold_font_face_when_available() {
+        let mut db = glyphon::fontdb::Database::new();
+        db.load_font_data(TEST_FONT.to_vec());
+        db.load_font_data(TEST_BOLD_FONT.to_vec());
+        let mut font_system = FontSystem::new_with_locale_and_db("en-US".to_string(), db);
+        let mut resolver = WgpuFontFamilyResolver::default();
+        resolver.prime(&mut font_system);
+
+        let style = cranpose_ui::text::TextStyle {
+            span_style: cranpose_ui::text::SpanStyle {
+                font_weight: Some(cranpose_ui::text::FontWeight::BOLD),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let text = cranpose_ui::text::AnnotatedString::from("bold text");
+        let style_hash = text_buffer_style_hash(&style, &text);
+        let mut buffer = new_shared_text_buffer(&mut font_system, 14.0, 14.0 * 1.4);
+        buffer.ensure(
+            &mut font_system,
+            &mut resolver,
+            EnsureTextBufferParams {
+                annotated_text: &text,
+                font_size_px: 14.0,
+                line_height_px: 14.0 * 1.4,
+                style_hash,
+                style: &style,
+                scale: 1.0,
+            },
+        );
+        let bold_face_used = buffer.buffer.layout_runs().any(|run| {
+            run.glyphs.iter().any(|glyph| {
+                font_system
+                    .db()
+                    .face(glyph.font_id)
+                    .is_some_and(|face| face.weight.0 == 700)
+            })
+        });
+        assert!(
+            bold_face_used,
+            "bold text must use the bold font face (weight 700) when available"
         );
     }
 
@@ -2417,6 +2483,25 @@ mod tests {
             attrs.color_opt,
             Some(glyphon::Color::rgba(51, 102, 153, 63)),
             "glyph attrs must track alpha-adjusted foreground color"
+        );
+    }
+
+    #[test]
+    fn attrs_from_text_style_disables_native_hinting() {
+        let (mut font_system, mut resolver) = seeded_font_system_and_resolver();
+        let attrs = attrs_from_text_style(
+            &cranpose_ui::text::TextStyle::default(),
+            14.0,
+            1.0,
+            &mut font_system,
+            &mut resolver,
+        );
+
+        assert!(
+            attrs
+                .cache_key_flags
+                .contains(glyphon::cosmic_text::CacheKeyFlags::DISABLE_HINTING),
+            "renderer text attrs should disable native hinting to keep glyph rasterization stable across scroll phases"
         );
     }
 
@@ -2661,9 +2746,6 @@ mod tests {
 
     #[test]
     fn renderer_measurement_keeps_render_text_cache_empty() {
-        use std::sync::mpsc;
-        use std::time::Duration;
-
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let renderer = WgpuRenderer::new(&[TEST_FONT]);
@@ -2711,6 +2793,10 @@ mod tests {
     // Font bytes used by tests — the same file the demo app ships.
     static TEST_FONT: &[u8] =
         include_bytes!("../../../../apps/desktop-demo/assets/NotoSansMerged.ttf");
+    static TEST_BOLD_FONT: &[u8] =
+        include_bytes!("../../../../apps/desktop-demo/assets/NotoSansBold.ttf");
+    static TEST_EMOJI_FONT: &[u8] =
+        include_bytes!("../../../../apps/desktop-demo/assets/TwemojiMozilla.ttf");
 
     fn empty_font_system() -> FontSystem {
         let db = glyphon::fontdb::Database::new();
@@ -2736,6 +2822,41 @@ mod tests {
             0,
             "empty slice must not load any faces"
         );
+    }
+
+    fn queried_family_name(font_system: &FontSystem, family: glyphon::fontdb::Family) -> String {
+        let query = glyphon::fontdb::Query {
+            families: &[family],
+            weight: glyphon::fontdb::Weight::NORMAL,
+            stretch: glyphon::fontdb::Stretch::Normal,
+            style: glyphon::fontdb::Style::Normal,
+        };
+        let face_id = font_system
+            .db()
+            .query(&query)
+            .expect("generic family should resolve to a face");
+        let face = font_system
+            .db()
+            .face(face_id)
+            .expect("queried face id should exist");
+        face.families
+            .first()
+            .map(|(name, _)| name.clone())
+            .expect("queried face should carry a family name")
+    }
+
+    #[test]
+    fn generic_fallbacks_prefer_loaded_font_family_over_existing_faces() {
+        let mut font_system = empty_font_system();
+        load_fonts(&mut font_system, &[TEST_EMOJI_FONT, TEST_FONT]);
+        let mut resolver = WgpuFontFamilyResolver::default();
+        resolver.set_preferred_generic_family(primary_family_name_from_bytes(TEST_FONT));
+        resolver.prime(&mut font_system);
+
+        let generic_serif = queried_family_name(&font_system, glyphon::fontdb::Family::Serif);
+        let expected = primary_family_name_from_bytes(TEST_FONT)
+            .expect("test font should resolve to a family name");
+        assert_eq!(generic_serif, expected);
     }
 
     #[test]

@@ -1,16 +1,32 @@
+#[cfg(test)]
+pub(crate) use cranpose_render_common::graph::quad_bounds;
+#[cfg(test)]
+pub(crate) use cranpose_render_common::layer_transform::{
+    apply_layer_affine_to_rect, apply_layer_to_quad,
+};
+#[cfg(test)]
+pub(crate) use cranpose_render_common::layer_transform::{
+    apply_layer_to_rect, layer_uniform_scale,
+};
 pub(crate) use cranpose_render_common::style_shared::{
-    apply_layer_affine_to_rect, apply_layer_to_brush, apply_layer_to_color, apply_layer_to_quad,
-    apply_layer_to_rect, combine_layers, compose_color_filters, layer_uniform_scale,
-    primitives_for_placement, quad_bounds, scale_corner_radii, DrawPlacement, NodeStyle,
+    apply_layer_to_brush, apply_layer_to_color, combine_layers, scale_corner_radii,
 };
+#[cfg(test)]
+pub(crate) use cranpose_render_common::style_shared::{
+    compose_color_filters, primitives_for_placement, DrawPlacement,
+};
+#[cfg(test)]
 use cranpose_ui::DrawCommand;
-use cranpose_ui_graphics::{
-    BlendMode, CornerRadii, DrawPrimitive, GraphicsLayer, Rect, RoundedCornerShape,
-    ShadowPrimitive, Size,
-};
+#[cfg(test)]
+use cranpose_ui_graphics::RoundedCornerShape;
+#[cfg(test)]
+use cranpose_ui_graphics::{BlendMode, DrawPrimitive, GraphicsLayer, ShadowPrimitive, Size};
+use cranpose_ui_graphics::{CornerRadii, Rect};
 
-use crate::scene::Scene;
+#[cfg(test)]
+use crate::scene::RasterScene;
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)] // Render operations need all style and placement parameters
 pub(crate) fn apply_draw_commands(
     commands: &[DrawCommand],
@@ -19,14 +35,14 @@ pub(crate) fn apply_draw_commands(
     size: Size,
     layer: &GraphicsLayer,
     clip: Option<Rect>,
-    scene: &mut Scene,
+    scene: &mut RasterScene,
 ) {
     fn emit_primitive(
         primitive: DrawPrimitive,
         layer_bounds: Rect,
         layer: &GraphicsLayer,
         clip: Option<Rect>,
-        scene: &mut Scene,
+        scene: &mut RasterScene,
         blend_mode: Option<BlendMode>,
     ) {
         match primitive {
@@ -410,7 +426,7 @@ mod tests {
             scale_y: 0.5,
             ..Default::default()
         };
-        let mut scene = Scene::new();
+        let mut scene = RasterScene::new();
         let bounds = Rect {
             x: 0.0,
             y: 0.0,

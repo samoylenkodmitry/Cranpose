@@ -1,6 +1,19 @@
 //! Common rendering contracts shared between renderer backends.
 
 pub mod font_layout;
+pub mod geometry;
+pub mod graph;
+mod graph_hash;
+pub mod graph_scene;
+pub mod hit_graph;
+pub mod image_compare;
+pub mod layer_composition;
+pub mod layer_shadow;
+pub mod layer_transform;
+pub mod primitive_emit;
+pub mod raster_cache;
+pub mod render_contract;
+pub mod scene_builder;
 pub mod software_text_raster;
 pub mod style_shared;
 pub mod text_hyphenation;

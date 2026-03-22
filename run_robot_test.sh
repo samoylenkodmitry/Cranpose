@@ -193,6 +193,9 @@ run_test() {
         robot_text_input)
             timeout_secs=120
             ;;
+        robot_text_scroll_exact_external_contract)
+            timeout_secs=180
+            ;;
         robot_content_type_reuse|robot_lazy_perf_validation)
             timeout_secs=240
             ;;
@@ -235,16 +238,26 @@ run_test() {
         robot_shadow_fields)
             timeout_secs=180
             ;;
+        robot_render_translation_contract)
+            timeout_secs=120
+            ;;
         robot_double_click|robot_multiline_click|robot_multiline_nav)
             timeout_secs=90
             ;;
     esac
 
+    local headless_env="CRANPOSE_HEADLESS=1"
+    case "$example" in
+        robot_text_scroll_exact_external_contract)
+            headless_env="CRANPOSE_HEADLESS=0"
+            ;;
+    esac
+
     if command -v timeout >/dev/null 2>&1; then
-        CRANPOSE_HEADLESS=1 timeout "${timeout_secs}s" "$example_bin" > "$output_file" 2>&1
+        env "$headless_env" timeout "${timeout_secs}s" "$example_bin" > "$output_file" 2>&1
         local exit_code=$?
     else
-        CRANPOSE_HEADLESS=1 "$example_bin" > "$output_file" 2>&1
+        env "$headless_env" "$example_bin" > "$output_file" 2>&1
         local exit_code=$?
     fi
 

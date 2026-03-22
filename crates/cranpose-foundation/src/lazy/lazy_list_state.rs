@@ -406,6 +406,23 @@ impl LazyListState {
         self.scroll_position.scroll_offset()
     }
 
+    /// Returns whether the list is positioned away from its origin without creating
+    /// a reactive subscription.
+    pub fn is_scrolled_non_reactive(&self) -> bool {
+        self.scroll_position.current_index() > 0
+            || self.scroll_position.current_scroll_offset().abs() > 0.001
+            || self
+                .inner
+                .try_with(|rc| {
+                    let inner = rc.borrow();
+                    inner.scroll_to_be_consumed.abs() > 0.001
+                        || inner
+                            .pending_scroll_to_index
+                            .is_some_and(|(index, offset)| index > 0 || offset.abs() > 0.001)
+                })
+                .unwrap_or(false)
+    }
+
     /// Returns the layout info from the last measure pass.
     pub fn layout_info(&self) -> LazyListLayoutInfo {
         self.inner

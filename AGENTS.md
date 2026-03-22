@@ -19,7 +19,7 @@
 - do not create a half-migrated state of the repo; don't "deprecate"; always change the existing code
 - cargo clippy
 - cargo test
-- cargo tree --duplicates/cargo tree -i <package name> and make sure no duplicates (but do not apply vendor patches, and do not change libraries without asking, can suggest though)
+- when updating/changing libs: cargo tree --duplicates/cargo tree -i <package name> and make sure no duplicates (but do not apply vendor patches, and do not change libraries without asking, can suggest though)
 - make sure android compiles [:app:assembleRelease] in project /home/s/develop/projects/compose-rs-proposal/apps/android-demo/android
 - make sure wasm compiles apps/desktop-demo/build-web.sh
 - (+robot tests)
@@ -46,3 +46,5 @@
 - parallelization and SIMD where appropriate (note: the wasm target must not be forgotten)
 - if you spot you wasted too much time on something, please put the discovered info into TIME_WASTERS.md so save future time for everyone
 - not "if you want to"; should be "the proper fix for production-grade ui-framework"; not "I WANT"; should be "this is wrong, this is right, this is the cause, this has to be re-architectured and be rewritten"
+- for non-trivial bugs: explore → document findings → rank suspicions with evidence → propose re-architecture options → implement → diagnostic verify → iterate until confirmed fixed. no one-shot guessing.
+- should never workaround bugs instead of fixing the root issue

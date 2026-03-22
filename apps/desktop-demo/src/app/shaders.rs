@@ -18,6 +18,55 @@ use cranpose_ui_graphics::{
 
 use super::images::generate_chessboard_bitmap;
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ShaderSection {
+    SweepGradient,
+    InteractiveEffects,
+    EffectSemantics,
+    GraphicsLayerFields,
+    MaskApi,
+}
+
+impl ShaderSection {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::SweepGradient => "Sweep Gradient",
+            Self::InteractiveEffects => "Interactive Effects",
+            Self::EffectSemantics => "Effect Semantics",
+            Self::GraphicsLayerFields => "GraphicsLayer Fields",
+            Self::MaskApi => "Mask API",
+        }
+    }
+
+    #[cfg(any(test, target_arch = "wasm32"))]
+    pub(crate) fn from_startup_name(name: &str) -> Option<Self> {
+        let normalized = name
+            .chars()
+            .filter(|ch| ch.is_ascii_alphanumeric())
+            .map(|ch| ch.to_ascii_lowercase())
+            .collect::<String>();
+        match normalized.as_str() {
+            "sweep" | "sweepgradient" => Some(Self::SweepGradient),
+            "interactive" | "interactiveeffects" => Some(Self::InteractiveEffects),
+            "effectsemantics" | "semantics" => Some(Self::EffectSemantics),
+            "graphicslayer" | "graphicslayerfields" => Some(Self::GraphicsLayerFields),
+            "mask" | "maskapi" => Some(Self::MaskApi),
+            _ => None,
+        }
+    }
+}
+
+#[composable]
+fn RenderShaderSection(section: ShaderSection) {
+    match section {
+        ShaderSection::SweepGradient => SweepGradientDemo(),
+        ShaderSection::InteractiveEffects => InteractiveEffectsDemo(),
+        ShaderSection::EffectSemantics => EffectSemanticsDemo(),
+        ShaderSection::GraphicsLayerFields => GraphicsLayerFieldsDemo(),
+        ShaderSection::MaskApi => MaskApiDemo(),
+    }
+}
+
 /// Build a smooth rounded blur by chaining framework blur + rounded alpha mask.
 fn smooth_rect_blur_effect(
     width: f32,
@@ -250,7 +299,7 @@ fn ValueSlider(
 
 /// Main shaders demo tab composable.
 #[composable]
-pub(crate) fn ShadersTab() {
+pub(crate) fn ShadersTab(initial_section: Option<ShaderSection>) {
     Column(
         Modifier::empty()
             .padding(32.0)
@@ -262,7 +311,7 @@ pub(crate) fn ShadersTab() {
             })
             .padding(20.0),
         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(24.0)),
-        || {
+        move || {
             Text(
                 "Shaders & Effects",
                 Modifier::empty().padding(10.0).draw_behind(|scope| {
@@ -273,12 +322,25 @@ pub(crate) fn ShadersTab() {
                 }),
                 TextStyle::default(),
             );
-
-            SweepGradientDemo();
-            InteractiveEffectsDemo();
-            EffectSemanticsDemo();
-            GraphicsLayerFieldsDemo();
-            MaskApiDemo();
+            if let Some(section) = initial_section {
+                Text(
+                    format!("Focused Section: {}", section.label()),
+                    Modifier::empty().padding(8.0).draw_behind(|scope| {
+                        scope.draw_round_rect(
+                            Brush::solid(Color(0.18, 0.24, 0.38, 0.85)),
+                            CornerRadii::uniform(12.0),
+                        );
+                    }),
+                    TextStyle::default(),
+                );
+                RenderShaderSection(section);
+            } else {
+                RenderShaderSection(ShaderSection::SweepGradient);
+                RenderShaderSection(ShaderSection::InteractiveEffects);
+                RenderShaderSection(ShaderSection::EffectSemantics);
+                RenderShaderSection(ShaderSection::GraphicsLayerFields);
+                RenderShaderSection(ShaderSection::MaskApi);
+            }
         },
     );
 }
@@ -2295,7 +2357,9 @@ fn DraggableOverlay(
                                     PointerEventKind::Up | PointerEventKind::Cancel => {
                                         drag_offset = None;
                                     }
-                                    PointerEventKind::Scroll => {}
+                                    PointerEventKind::Scroll
+                                    | PointerEventKind::Enter
+                                    | PointerEventKind::Exit => {}
                                 }
                             }
                         })
@@ -2433,5 +2497,34 @@ mod tests {
         assert_eq!(slider_value(1.0, 2.0, 10.0), 10.0);
         assert_eq!(slider_value(2.0, 2.0, 10.0), 10.0);
         assert_eq!(slider_value(-1.0, 2.0, 10.0), 2.0);
+    }
+
+    #[test]
+    fn shader_section_parser_accepts_aliases() {
+        assert_eq!(
+            ShaderSection::from_startup_name("interactive-effects"),
+            Some(ShaderSection::InteractiveEffects)
+        );
+        assert_eq!(
+            ShaderSection::from_startup_name("Effect Semantics"),
+            Some(ShaderSection::EffectSemantics)
+        );
+        assert_eq!(
+            ShaderSection::from_startup_name("graphics_layer_fields"),
+            Some(ShaderSection::GraphicsLayerFields)
+        );
+        assert_eq!(
+            ShaderSection::from_startup_name("mask"),
+            Some(ShaderSection::MaskApi)
+        );
+    }
+
+    #[test]
+    fn shader_section_parser_rejects_unknown_names() {
+        assert_eq!(ShaderSection::from_startup_name(""), None);
+        assert_eq!(
+            ShaderSection::from_startup_name("definitely-not-a-section"),
+            None
+        );
     }
 }

@@ -1,42 +1,47 @@
-//! Scene building pipeline - copies layout tree to render scene.
-//! This module is copied from the pixels renderer to maintain compatibility.
+//! Scene building pipeline - builds the render graph and backend scene state.
 
 use std::{ops::Range, rc::Rc};
 
 use cranpose_core::{MemoryApplier, NodeId};
+use cranpose_render_common::geometry::{expand_blurred_rect, union_rect};
+use cranpose_render_common::hit_graph::{
+    collect_hits_from_graph as collect_common_hits, HitGraphSink,
+};
+use cranpose_render_common::layer_shadow::layer_shadow_geometry;
+use cranpose_render_common::layer_transform::{apply_layer_to_rect, layer_uniform_scale};
+#[cfg(test)]
+use cranpose_render_common::primitive_emit::resolve_clip;
+use cranpose_render_common::primitive_emit::{
+    draw_shape_params_for_primitive, emit_draw_primitive, DrawPrimitiveSink, ImageDrawParams,
+    ShapeDrawParams,
+};
 use cranpose_render_common::Brush;
 #[cfg(test)]
 use cranpose_ui::prepare_text_layout;
-use cranpose_ui::text::{
-    resolve_text_direction, ResolvedTextDirection, TextAlign, TextDecoration, TextDrawStyle,
-    TextMotion, TextStyle,
-};
-use cranpose_ui::{
-    layout_text, measure_text, LayoutBox, LayoutNode, LayoutNodeKind, SubcomposeLayoutNode,
-    TextLayoutOptions, TextOverflow,
-};
+#[cfg(test)]
+use cranpose_ui::text::{resolve_text_direction, ResolvedTextDirection, TextAlign};
+use cranpose_ui::text::{TextDecoration, TextDrawStyle, TextStyle};
+use cranpose_ui::{layout_text, measure_text, LayoutBox, TextLayoutOptions};
+#[cfg(test)]
+use cranpose_ui::{EdgeInsets, TextOverflow};
 use cranpose_ui_graphics::{
-    BlendMode, Color, CompositingStrategy, EdgeInsets, GraphicsLayer, LayerShape, Point, Rect,
-    RenderEffect, RoundedCornerShape, RuntimeShader, Size, TileMode,
+    BlendMode, Color, DrawPrimitive, GraphicsLayer, LayerShape, Point, Rect, RenderEffect,
+    RoundedCornerShape, RuntimeShader, TileMode,
 };
 
-use crate::scene::{
-    BackdropLayer, ClickAction, DrawShape, EffectLayer, Scene, ShadowDraw, TextDraw,
-};
+use crate::scene::{ClickAction, CompositorScene, DrawShape, Scene, ShadowDraw, TextDraw};
+use crate::surface_requirements::{SurfaceRequirement, SurfaceRequirementSet};
 
 // Re-use style functions from a local copy
 mod style;
-use style::{
-    apply_draw_commands, apply_layer_affine_to_rect, apply_layer_to_brush, apply_layer_to_color,
-    apply_layer_to_quad, apply_layer_to_rect, combine_layers, layer_uniform_scale, quad_bounds,
-    scale_corner_radii, DrawPlacement, NodeStyle,
-};
+use style::{apply_layer_to_brush, apply_layer_to_color, scale_corner_radii};
 
+#[cfg(test)]
 const TEXT_CLIP_PAD: f32 = 1.0;
 const GPU_TEXT_BRUSH_EFFECT_MAX_STOPS: usize = 16;
 const GPU_TEXT_BRUSH_EFFECT_FIRST_STOP_SLOT: usize = 8;
 const DECORATION_SEGMENT_MERGE_EPSILON: f32 = 0.75;
-const GPU_TEXT_BRUSH_EFFECT_SHADER: &str = r#"
+pub(crate) const GPU_TEXT_BRUSH_EFFECT_SHADER: &str = r#"
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -262,6 +267,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
+#[cfg(test)]
 fn pad_clip_rect(rect: Rect) -> Rect {
     Rect {
         x: rect.x - TEXT_CLIP_PAD,
@@ -271,55 +277,7 @@ fn pad_clip_rect(rect: Rect) -> Rect {
     }
 }
 
-#[derive(Clone)]
-struct LayerIsolation {
-    effect: Option<RenderEffect>,
-    blend_mode: BlendMode,
-    composite_alpha: f32,
-}
-
-fn effective_layer_isolation(layer: &GraphicsLayer) -> Option<LayerIsolation> {
-    let has_effect = layer.render_effect.is_some();
-    let has_layer_blend = layer.blend_mode != BlendMode::SrcOver;
-    let requires_isolation = match layer.compositing_strategy {
-        CompositingStrategy::Offscreen => true,
-        CompositingStrategy::Auto => has_effect || has_layer_blend || layer.alpha < 1.0,
-        CompositingStrategy::ModulateAlpha => has_effect || has_layer_blend,
-    };
-
-    if !requires_isolation {
-        return None;
-    }
-
-    let composite_alpha = if layer.compositing_strategy == CompositingStrategy::ModulateAlpha {
-        1.0
-    } else {
-        layer.alpha.clamp(0.0, 1.0)
-    };
-
-    Some(LayerIsolation {
-        effect: layer.render_effect.clone(),
-        blend_mode: layer.blend_mode,
-        composite_alpha,
-    })
-}
-
-fn layer_for_content(layer: &GraphicsLayer, isolation: Option<&LayerIsolation>) -> GraphicsLayer {
-    let mut content = layer.clone();
-    if isolation.is_some() && layer.compositing_strategy != CompositingStrategy::ModulateAlpha {
-        content.alpha = 1.0;
-    }
-    content
-}
-
-fn rect_to_quad(rect: Rect) -> [[f32; 2]; 4] {
-    [
-        [rect.x, rect.y],
-        [rect.x + rect.width, rect.y],
-        [rect.x, rect.y + rect.height],
-        [rect.x + rect.width, rect.y + rect.height],
-    ]
-}
+use crate::rect_to_quad;
 
 fn shadow_shape(
     rect: Rect,
@@ -331,9 +289,10 @@ fn shadow_shape(
             rect,
             local_rect: rect,
             quad: rect_to_quad(rect),
+            snap_anchor: None,
             brush: Brush::solid(color),
             shape,
-            z_index: 0, // populated by Scene::push_shadow_draw()
+            z_index: 0, // populated by CompositorScene::push_shadow_draw()
             clip: None,
             blend_mode: BlendMode::SrcOver,
         },
@@ -341,28 +300,19 @@ fn shadow_shape(
     )
 }
 
-fn push_layer_shadow(
-    scene: &mut Scene,
+pub(crate) fn push_layer_shadow(
+    scene: &mut CompositorScene,
     layer: &GraphicsLayer,
     layer_bounds: Rect,
     transformed_bounds: Rect,
     clip: Option<Rect>,
 ) {
-    if layer.shadow_elevation <= 0.0 {
-        return;
-    }
-
-    let scale = layer_uniform_scale(layer).max(0.1);
-    let elevation = layer.shadow_elevation * scale;
-    let spread = (elevation * 0.24).max(0.8);
-    let spot_offset_x = elevation * 0.18;
-    let spot_offset_y = elevation * 0.62;
-    let ambient_blur_radius = (elevation * 0.95).max(0.5);
-    let spot_blur_radius = (elevation * 0.72).max(0.5);
+    let shadow_geometry = layer_shadow_geometry(layer, transformed_bounds);
 
     let resolved_shape = match layer.shape {
         LayerShape::Rectangle => None,
         LayerShape::Rounded(shape) => {
+            let scale = layer_uniform_scale(layer).max(0.1);
             let resolved = shape.resolve(layer_bounds.width, layer_bounds.height);
             Some(RoundedCornerShape::with_radii(scale_corner_radii(
                 resolved, scale,
@@ -370,383 +320,55 @@ fn push_layer_shadow(
         }
     };
 
-    let ambient_alpha = (layer.ambient_shadow_color.a() * 0.44).clamp(0.0, 1.0);
-    if ambient_alpha > f32::EPSILON {
+    if let Some(ambient_pass) = shadow_geometry.ambient {
         let ambient = Color(
             layer.ambient_shadow_color.r(),
             layer.ambient_shadow_color.g(),
             layer.ambient_shadow_color.b(),
-            ambient_alpha,
+            ambient_pass.alpha,
         );
-        let ambient_rect = Rect {
-            x: transformed_bounds.x - spread,
-            y: transformed_bounds.y - spread,
-            width: transformed_bounds.width + spread * 2.0,
-            height: transformed_bounds.height + spread * 2.0,
-        };
         scene.push_shadow_draw(ShadowDraw {
-            shapes: vec![shadow_shape(ambient_rect, ambient, resolved_shape)],
+            shapes: vec![shadow_shape(ambient_pass.rect, ambient, resolved_shape)],
             texts: vec![],
-            blur_radius: ambient_blur_radius,
+            blur_radius: ambient_pass.blur_radius,
             clip,
-            z_index: 0, // populated by Scene::push_shadow_draw()
+            z_index: 0, // populated by CompositorScene::push_shadow_draw()
         });
     }
 
-    let spot_alpha = (layer.spot_shadow_color.a() * 0.62).clamp(0.0, 1.0);
-    if spot_alpha > f32::EPSILON {
+    if let Some(spot_pass) = shadow_geometry.spot {
         let spot = Color(
             layer.spot_shadow_color.r(),
             layer.spot_shadow_color.g(),
             layer.spot_shadow_color.b(),
-            spot_alpha,
+            spot_pass.alpha,
         );
-        let spot_spread = spread * 0.72;
-        let spot_rect = Rect {
-            x: transformed_bounds.x + spot_offset_x - spot_spread,
-            y: transformed_bounds.y + spot_offset_y - spot_spread,
-            width: transformed_bounds.width + spot_spread * 2.0,
-            height: transformed_bounds.height + spot_spread * 2.0,
-        };
         scene.push_shadow_draw(ShadowDraw {
-            shapes: vec![shadow_shape(spot_rect, spot, resolved_shape)],
+            shapes: vec![shadow_shape(spot_pass.rect, spot, resolved_shape)],
             texts: vec![],
-            blur_radius: spot_blur_radius,
+            blur_radius: spot_pass.blur_radius,
             clip,
-            z_index: 0, // populated by Scene::push_shadow_draw()
+            z_index: 0, // populated by CompositorScene::push_shadow_draw()
         });
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn render_layout_tree(root: &LayoutBox, scene: &mut Scene) {
     render_layout_tree_with_scale(root, scene, 1.0);
 }
 
 pub(crate) fn render_layout_tree_with_scale(root: &LayoutBox, scene: &mut Scene, scale: f32) {
-    let root_layer = GraphicsLayer {
-        scale,
-        ..Default::default()
-    };
-    render_layout_node(root, root_layer, scene, None, None);
-}
-
-fn render_layout_node(
-    layout: &LayoutBox,
-    parent_layer: GraphicsLayer,
-    scene: &mut Scene,
-    parent_visual_clip: Option<Rect>,
-    parent_hit_clip: Option<Rect>,
-) {
-    match &layout.node_data.kind {
-        LayoutNodeKind::Spacer => {
-            render_spacer(
-                layout,
-                parent_layer,
-                parent_visual_clip,
-                parent_hit_clip,
-                scene,
-            );
-        }
-        LayoutNodeKind::Button { on_click } => {
-            render_button(
-                layout,
-                Rc::clone(on_click),
-                parent_layer,
-                parent_visual_clip,
-                parent_hit_clip,
-                scene,
-            );
-        }
-        LayoutNodeKind::Layout | LayoutNodeKind::Subcompose | LayoutNodeKind::Unknown => {
-            render_container(
-                layout,
-                parent_layer,
-                parent_visual_clip,
-                parent_hit_clip,
-                scene,
-                Vec::new(),
-            );
-        }
-    }
-}
-
-fn render_container(
-    layout: &LayoutBox,
-    parent_layer: GraphicsLayer,
-    parent_visual_clip: Option<Rect>,
-    parent_hit_clip: Option<Rect>,
-    scene: &mut Scene,
-    mut extra_clicks: Vec<ClickAction>,
-) {
-    let style = NodeStyle::from_layout_node(&layout.node_data);
-    let node_layer = combine_layers(parent_layer, style.graphics_layer);
-    let layer_isolation = effective_layer_isolation(&node_layer);
-    let content_layer = layer_for_content(&node_layer, layer_isolation.as_ref());
-    let rect = layout.rect;
-    let size = Size {
-        width: rect.width,
-        height: rect.height,
-    };
-    let transformed_rect = apply_layer_to_rect(rect, rect, &node_layer);
-
-    if transformed_rect.width <= 0.0 || transformed_rect.height <= 0.0 {
-        return;
-    }
-
-    let content_clip_to_bounds = style.clip_to_bounds || node_layer.clip;
-    let visual_clip = resolve_clip(
-        parent_visual_clip,
-        content_clip_to_bounds.then_some(transformed_rect),
-    );
-
-    if content_clip_to_bounds && visual_clip.is_none() {
-        return;
-    }
-
-    let hit_clip = resolve_clip(
-        parent_hit_clip,
-        content_clip_to_bounds.then_some(transformed_rect),
-    );
-
-    // Track z_start for layer events emitted by this node.
-    let has_backdrop = node_layer.backdrop_effect.is_some();
-    let z_start = scene.next_z;
-
-    if has_backdrop {
-        if let Some(effect) = &node_layer.backdrop_effect {
-            scene.backdrop_layers.push(BackdropLayer {
-                rect: transformed_rect,
-                clip: visual_clip,
-                effect: effect.clone(),
-                z_index: z_start,
-            });
-        }
-    }
-
-    // GraphicsLayer clipping clips content, but should not clip its own shadow.
-    // Explicit clip-to-bounds modifiers still clip both.
-    let shadow_clip = resolve_clip(
-        parent_visual_clip,
-        style.clip_to_bounds.then_some(transformed_rect),
-    );
-    push_layer_shadow(scene, &node_layer, rect, transformed_rect, shadow_clip);
-
-    apply_draw_commands(
-        &style.draw_commands,
-        DrawPlacement::Behind,
-        rect,
-        size,
-        &content_layer,
-        visual_clip,
+    let graph = cranpose_render_common::scene_builder::build_graph_from_layout_tree(root, scale);
+    collect_hits_from_graph(
+        &graph.root,
+        cranpose_render_common::graph::ProjectiveTransform::identity(),
         scene,
+        None,
     );
-
-    let scaled_shape = style.shape.map(|shape| {
-        let resolved = shape.resolve(rect.width, rect.height);
-        RoundedCornerShape::with_radii(scale_corner_radii(
-            resolved,
-            layer_uniform_scale(&content_layer),
-        ))
-    });
-
-    if let Some(color) = style.background {
-        let brush = apply_layer_to_brush(Brush::solid(color), &content_layer);
-        let local_rect = apply_layer_affine_to_rect(rect, rect, &content_layer);
-        let quad = apply_layer_to_quad(rect, rect, &content_layer);
-        scene.push_shape_with_geometry(
-            quad_bounds(quad),
-            local_rect,
-            quad,
-            brush,
-            scaled_shape,
-            visual_clip,
-            BlendMode::SrcOver,
-        );
-    }
-
-    // Render text content if present in modifier slices.
-    // Text is now handled via TextModifierNode in the modifier chain.
-    if let Some(value) = layout.node_data.modifier_slices().annotated_text() {
-        let default_text_style = cranpose_ui::text::TextStyle::default();
-        let text_style_ref = layout
-            .node_data
-            .modifier_slices()
-            .text_style()
-            .unwrap_or(&default_text_style);
-
-        let options = layout
-            .node_data
-            .modifier_slices()
-            .text_layout_options()
-            .unwrap_or_default()
-            .normalized();
-        let padding = style.padding;
-        let content_width = (rect.width - padding.left - padding.right).max(0.0);
-        let measure_width = resolve_text_measure_width(content_width, padding, None, options);
-        let prepared = layout
-            .node_data
-            .modifier_slices()
-            .prepare_text_layout(Some(measure_width).filter(|w| w.is_finite() && *w > 0.0))
-            .expect("modifier text layout");
-        let draw_width = if options.overflow == TextOverflow::Visible {
-            prepared.metrics.width
-        } else {
-            content_width
-        };
-        let alignment_offset = resolve_text_horizontal_offset(
-            text_style_ref,
-            value.text.as_str(),
-            content_width,
-            prepared.metrics.width,
-        );
-        let text_rect = Rect {
-            x: rect.x + padding.left + alignment_offset,
-            y: rect.y + padding.top,
-            width: draw_width,
-            height: prepared.metrics.height,
-        };
-        let text_bounds_rect = Rect {
-            x: rect.x + padding.left,
-            y: rect.y + padding.top,
-            width: content_width,
-            height: (rect.height - padding.top - padding.bottom).max(0.0),
-        };
-        // Extract font size from text style or default
-        let font_size = text_style_ref.resolve_font_size(14.0);
-        let expanded_text_bounds =
-            expand_text_bounds_for_baseline_shift(text_bounds_rect, text_style_ref, font_size);
-        let transformed_text_bounds =
-            apply_layer_to_rect(expanded_text_bounds, rect, &content_layer);
-        let text_clip = resolve_text_clip(options.overflow, visual_clip, transformed_text_bounds);
-
-        if let Some(text_clip) = text_clip {
-            push_text_style_draws(
-                scene,
-                layout.node_id,
-                rect,
-                text_rect,
-                &content_layer,
-                &prepared.text,
-                text_style_ref,
-                font_size,
-                options,
-                text_clip,
-            );
-        }
-    }
-
-    for handler in &style.click_actions {
-        extra_clicks.push(ClickAction::WithPoint(handler.clone()));
-    }
-
-    scene.push_hit(
-        layout.node_id,
-        transformed_rect,
-        scaled_shape,
-        extra_clicks,
-        style.pointer_inputs.clone(),
-        hit_clip,
-    );
-
-    for child_layout in &layout.children {
-        render_layout_node(
-            child_layout,
-            content_layer.clone(),
-            scene,
-            visual_clip,
-            hit_clip,
-        );
-    }
-
-    apply_draw_commands(
-        &style.draw_commands,
-        DrawPlacement::Overlay,
-        rect,
-        size,
-        &content_layer,
-        visual_clip,
-        scene,
-    );
-
-    // Record isolation layer if this node requires offscreen composition.
-    if let Some(isolation) = layer_isolation {
-        scene.effect_layers.push(EffectLayer {
-            rect: transformed_rect,
-            clip: visual_clip,
-            effect: isolation.effect,
-            blend_mode: isolation.blend_mode,
-            composite_alpha: isolation.composite_alpha,
-            z_start,
-            z_end: scene.next_z,
-        });
-    }
+    scene.graph = Some(graph);
 }
 
-fn render_spacer(
-    layout: &LayoutBox,
-    parent_layer: GraphicsLayer,
-    parent_visual_clip: Option<Rect>,
-    parent_hit_clip: Option<Rect>,
-    scene: &mut Scene,
-) {
-    render_container(
-        layout,
-        parent_layer,
-        parent_visual_clip,
-        parent_hit_clip,
-        scene,
-        Vec::new(),
-    );
-}
-
-fn render_button(
-    layout: &LayoutBox,
-    on_click: Rc<std::cell::RefCell<dyn FnMut()>>,
-    parent_layer: GraphicsLayer,
-    parent_visual_clip: Option<Rect>,
-    parent_hit_clip: Option<Rect>,
-    scene: &mut Scene,
-) {
-    let clicks = vec![ClickAction::Simple(on_click)];
-    render_container(
-        layout,
-        parent_layer,
-        parent_visual_clip,
-        parent_hit_clip,
-        scene,
-        clicks,
-    );
-}
-
-fn intersect_rect(a: Rect, b: Rect) -> Option<Rect> {
-    let left = a.x.max(b.x);
-    let top = a.y.max(b.y);
-    let right = (a.x + a.width).min(b.x + b.width);
-    let bottom = (a.y + a.height).min(b.y + b.height);
-    let width = right - left;
-    let height = bottom - top;
-    if width <= 0.0 || height <= 0.0 {
-        None
-    } else {
-        Some(Rect {
-            x: left,
-            y: top,
-            width,
-            height,
-        })
-    }
-}
-
-fn resolve_clip(parent_clip: Option<Rect>, requested_clip: Option<Rect>) -> Option<Rect> {
-    match (parent_clip, requested_clip) {
-        (Some(parent), Some(current)) => intersect_rect(parent, current),
-        (Some(parent), None) => Some(parent),
-        (None, Some(current)) => Some(current),
-        (None, None) => None,
-    }
-}
-
+#[cfg(test)]
 fn resolve_text_clip(
     overflow: TextOverflow,
     visual_clip: Option<Rect>,
@@ -760,6 +382,7 @@ fn resolve_text_clip(
     resolve_clip(visual_clip, Some(pad_clip_rect(transformed_text_bounds))).map(Some)
 }
 
+#[cfg(test)]
 fn expand_text_bounds_for_baseline_shift(
     text_bounds: Rect,
     text_style: &TextStyle,
@@ -805,24 +428,6 @@ fn resolve_text_color_without_gradient_fallback(text_style: &TextStyle, default:
         color.3 *= alpha.clamp(0.0, 1.0);
     }
     color
-}
-
-fn snap_text_rect_for_motion(rect: Rect, text_style: &TextStyle) -> Rect {
-    if text_style
-        .paragraph_style
-        .text_motion
-        .unwrap_or(TextMotion::Static)
-        == TextMotion::Static
-    {
-        return Rect {
-            x: rect.x.round(),
-            y: rect.y.round(),
-            width: rect.width,
-            height: rect.height,
-        };
-    }
-
-    rect
 }
 
 fn tile_mode_to_shader_uniform(tile_mode: TileMode) -> f32 {
@@ -1120,9 +725,14 @@ fn gpu_text_effect_for_style(
 }
 
 fn span_has_foreground_override(span_style: &cranpose_ui::text::SpanStyle) -> bool {
-    span_style.color.is_some()
-        || span_style.brush.is_some()
-        || span_style.alpha.is_some()
+    matches!(
+        span_style.brush.as_ref(),
+        Some(
+            cranpose_ui::Brush::LinearGradient { .. }
+                | cranpose_ui::Brush::RadialGradient { .. }
+                | cranpose_ui::Brush::SweepGradient { .. }
+        )
+    ) || span_style.alpha.is_some()
         || span_style.draw_style.is_some()
 }
 
@@ -1130,6 +740,12 @@ fn text_has_span_foreground_overrides(text: &cranpose_ui::text::AnnotatedString)
     text.span_styles
         .iter()
         .any(|span| span_has_foreground_override(&span.item))
+}
+
+fn text_spans_override_foreground_color(text: &cranpose_ui::text::AnnotatedString) -> bool {
+    text.span_styles.iter().any(|span| {
+        span.item.color.is_some() || matches!(span.item.brush, Some(cranpose_ui::Brush::Solid(_)))
+    })
 }
 
 fn text_for_gpu_mask(
@@ -1256,9 +872,291 @@ fn text_for_gpu_mask_batch(
     mask_text
 }
 
+trait TextStyleDrawSink {
+    fn current_z(&self) -> usize;
+
+    fn push_shape(
+        &mut self,
+        rect: Rect,
+        brush: Brush,
+        shape: Option<RoundedCornerShape>,
+        clip: Option<Rect>,
+        blend_mode: BlendMode,
+    );
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_text(
+        &mut self,
+        node_id: NodeId,
+        rect: Rect,
+        text: Rc<cranpose_ui::text::AnnotatedString>,
+        color: Color,
+        text_style: TextStyle,
+        font_size: f32,
+        scale: f32,
+        layout_options: TextLayoutOptions,
+        clip: Option<Rect>,
+    );
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_shadow_text(
+        &mut self,
+        node_id: NodeId,
+        rect: Rect,
+        text: Rc<cranpose_ui::text::AnnotatedString>,
+        color: Color,
+        text_style: TextStyle,
+        font_size: f32,
+        scale: f32,
+        layout_options: TextLayoutOptions,
+        blur_radius: f32,
+        clip: Option<Rect>,
+    );
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_effect_layer(
+        &mut self,
+        rect: Rect,
+        clip: Option<Rect>,
+        effect: Option<RenderEffect>,
+        blend_mode: BlendMode,
+        composite_alpha: f32,
+        z_start: usize,
+        z_end: usize,
+    );
+
+    /// Extended version of `push_effect_layer` that carries surface requirements.
+    ///
+    /// The default implementation **discards** `requirements` and delegates to
+    /// `push_effect_layer`. Implementations that use requirements for surface
+    /// isolation decisions (e.g. `CompositorScene`) **must** override this.
+    #[allow(clippy::too_many_arguments)]
+    fn push_effect_layer_with_surface(
+        &mut self,
+        rect: Rect,
+        clip: Option<Rect>,
+        effect: Option<RenderEffect>,
+        blend_mode: BlendMode,
+        composite_alpha: f32,
+        z_start: usize,
+        z_end: usize,
+        requirements: SurfaceRequirementSet,
+    ) {
+        let _ = requirements;
+        self.push_effect_layer(
+            rect,
+            clip,
+            effect,
+            blend_mode,
+            composite_alpha,
+            z_start,
+            z_end,
+        );
+    }
+}
+
+impl TextStyleDrawSink for CompositorScene {
+    fn current_z(&self) -> usize {
+        self.next_z
+    }
+
+    fn push_shape(
+        &mut self,
+        rect: Rect,
+        brush: Brush,
+        shape: Option<RoundedCornerShape>,
+        clip: Option<Rect>,
+        blend_mode: BlendMode,
+    ) {
+        CompositorScene::push_shape(self, rect, brush, shape, clip, blend_mode);
+    }
+
+    fn push_text(
+        &mut self,
+        node_id: NodeId,
+        rect: Rect,
+        text: Rc<cranpose_ui::text::AnnotatedString>,
+        color: Color,
+        text_style: TextStyle,
+        font_size: f32,
+        scale: f32,
+        layout_options: TextLayoutOptions,
+        clip: Option<Rect>,
+    ) {
+        CompositorScene::push_text(
+            self,
+            node_id,
+            rect,
+            text,
+            color,
+            text_style,
+            font_size,
+            scale,
+            layout_options,
+            clip,
+        );
+    }
+
+    fn push_shadow_text(
+        &mut self,
+        node_id: NodeId,
+        rect: Rect,
+        text: Rc<cranpose_ui::text::AnnotatedString>,
+        color: Color,
+        text_style: TextStyle,
+        font_size: f32,
+        scale: f32,
+        layout_options: TextLayoutOptions,
+        blur_radius: f32,
+        clip: Option<Rect>,
+    ) {
+        self.push_shadow_draw(ShadowDraw {
+            shapes: vec![],
+            texts: vec![TextDraw {
+                node_id,
+                rect,
+                snap_anchor: None,
+                translated_content_context: false,
+                text,
+                color,
+                text_style,
+                font_size,
+                scale,
+                layout_options,
+                z_index: 0,
+                clip,
+            }],
+            blur_radius,
+            clip,
+            z_index: 0,
+        });
+    }
+
+    fn push_effect_layer(
+        &mut self,
+        rect: Rect,
+        clip: Option<Rect>,
+        effect: Option<RenderEffect>,
+        blend_mode: BlendMode,
+        composite_alpha: f32,
+        z_start: usize,
+        z_end: usize,
+    ) {
+        CompositorScene::push_effect_layer(
+            self,
+            rect,
+            clip,
+            effect,
+            blend_mode,
+            composite_alpha,
+            z_start,
+            z_end,
+        );
+    }
+
+    fn push_effect_layer_with_surface(
+        &mut self,
+        rect: Rect,
+        clip: Option<Rect>,
+        effect: Option<RenderEffect>,
+        blend_mode: BlendMode,
+        composite_alpha: f32,
+        z_start: usize,
+        z_end: usize,
+        requirements: SurfaceRequirementSet,
+    ) {
+        CompositorScene::push_effect_layer_with_requirements(
+            self,
+            rect,
+            clip,
+            effect,
+            blend_mode,
+            composite_alpha,
+            z_start,
+            z_end,
+            requirements,
+        );
+    }
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct TextBoundsCollector {
+    bounds: Option<Rect>,
+    next_z: usize,
+}
+
+#[cfg(test)]
+impl TextStyleDrawSink for TextBoundsCollector {
+    fn current_z(&self) -> usize {
+        self.next_z
+    }
+
+    fn push_shape(
+        &mut self,
+        rect: Rect,
+        _brush: Brush,
+        _shape: Option<RoundedCornerShape>,
+        _clip: Option<Rect>,
+        _blend_mode: BlendMode,
+    ) {
+        self.bounds = union_rect(self.bounds, rect);
+        self.next_z += 1;
+    }
+
+    fn push_text(
+        &mut self,
+        _node_id: NodeId,
+        rect: Rect,
+        _text: Rc<cranpose_ui::text::AnnotatedString>,
+        _color: Color,
+        _text_style: TextStyle,
+        _font_size: f32,
+        _scale: f32,
+        _layout_options: TextLayoutOptions,
+        _clip: Option<Rect>,
+    ) {
+        self.bounds = union_rect(self.bounds, rect);
+        self.next_z += 1;
+    }
+
+    fn push_shadow_text(
+        &mut self,
+        _node_id: NodeId,
+        rect: Rect,
+        _text: Rc<cranpose_ui::text::AnnotatedString>,
+        _color: Color,
+        _text_style: TextStyle,
+        _font_size: f32,
+        _scale: f32,
+        _layout_options: TextLayoutOptions,
+        blur_radius: f32,
+        clip: Option<Rect>,
+    ) {
+        let shadow_bounds = expand_blurred_rect(rect, blur_radius, clip);
+        if let Some(shadow_bounds) = shadow_bounds {
+            self.bounds = union_rect(self.bounds, shadow_bounds);
+        }
+        self.next_z += 1;
+    }
+
+    fn push_effect_layer(
+        &mut self,
+        rect: Rect,
+        _clip: Option<Rect>,
+        _effect: Option<RenderEffect>,
+        _blend_mode: BlendMode,
+        _composite_alpha: f32,
+        _z_start: usize,
+        _z_end: usize,
+    ) {
+        self.bounds = union_rect(self.bounds, rect);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-fn push_span_gpu_text_material_draws(
-    scene: &mut Scene,
+fn push_span_gpu_text_material_draws<S: TextStyleDrawSink>(
+    sink: &mut S,
     node_id: NodeId,
     text_rect: Rect,
     content_layer: &GraphicsLayer,
@@ -1296,9 +1194,9 @@ fn push_span_gpu_text_material_draws(
     mask_text_style.span_style.draw_style = Some(TextDrawStyle::Fill);
 
     for (visible_ranges, effect, effect_rect) in batch_effects {
-        let z_start = scene.next_z;
+        let z_start = sink.current_z();
         let mask_text = text_for_gpu_mask_batch(text, &visible_ranges);
-        scene.push_text(
+        sink.push_text(
             node_id,
             text_rect,
             Rc::new(mask_text),
@@ -1309,23 +1207,27 @@ fn push_span_gpu_text_material_draws(
             options,
             text_clip,
         );
-        scene.effect_layers.push(EffectLayer {
-            rect: effect_rect,
-            clip: text_clip,
-            effect: Some(effect),
-            blend_mode: BlendMode::SrcOver,
-            composite_alpha: 1.0,
+        sink.push_effect_layer_with_surface(
+            effect_rect,
+            text_clip,
+            Some(effect),
+            BlendMode::SrcOver,
+            1.0,
             z_start,
-            z_end: scene.next_z,
-        });
+            sink.current_z(),
+            SurfaceRequirementSet::from_iter([
+                SurfaceRequirement::RenderEffect,
+                SurfaceRequirement::TextMaterialMask,
+            ]),
+        );
     }
 
     true
 }
 
 #[allow(clippy::too_many_arguments)]
-fn push_text_style_draws(
-    scene: &mut Scene,
+fn emit_text_style_draws<S: TextStyleDrawSink>(
+    sink: &mut S,
     node_id: NodeId,
     rect: Rect,
     text_rect: Rect,
@@ -1350,12 +1252,9 @@ fn push_text_style_draws(
         height: text_rect.height,
     };
     let transformed_shifted_text_rect = apply_layer_to_rect(shifted_text_rect, rect, content_layer);
-    let snapped_shifted_text_rect =
-        snap_text_rect_for_motion(transformed_shifted_text_rect, text_style);
-
     if let Some(background) = text_style.span_style.background {
         let brush = apply_layer_to_brush(Brush::solid(background), content_layer);
-        scene.push_shape(
+        sink.push_shape(
             transformed_shifted_text_rect,
             brush,
             None,
@@ -1387,38 +1286,25 @@ fn push_text_style_draws(
             width: shifted_text_rect.width,
             height: shifted_text_rect.height,
         };
-        let transformed_shadow_rect = snap_text_rect_for_motion(
-            apply_layer_to_rect(shadow_rect, rect, content_layer),
-            text_style,
-        );
         let mut shadow_text_style = transformed_text_style.clone();
         shadow_text_style.span_style.brush = None;
         let blur_radius = shadow.blur_radius.max(0.0) * text_scale;
-
-        let shadow_text = TextDraw {
+        sink.push_shadow_text(
             node_id,
-            rect: transformed_shadow_rect,
-            text: Rc::new(text.clone()),
-            color: apply_layer_to_color(shadow.color, content_layer),
-            text_style: shadow_text_style,
+            apply_layer_to_rect(shadow_rect, rect, content_layer),
+            Rc::new(text.clone()),
+            apply_layer_to_color(shadow.color, content_layer),
+            shadow_text_style,
             font_size,
-            scale: text_scale,
-            layout_options: options,
-            z_index: 0,
-            clip: text_clip,
-        };
-
-        scene.push_shadow_draw(ShadowDraw {
-            shapes: vec![],
-            texts: vec![shadow_text],
+            text_scale,
+            options,
             blur_radius,
-            clip: text_clip,
-            z_index: 0,
-        });
+            text_clip,
+        );
     }
 
     push_text_decorations(
-        scene,
+        sink,
         rect,
         shifted_text_rect,
         content_layer,
@@ -1431,9 +1317,9 @@ fn push_text_style_draws(
     let has_span_foreground_overrides = text_has_span_foreground_overrides(text);
     if has_span_foreground_overrides
         && push_span_gpu_text_material_draws(
-            scene,
+            sink,
             node_id,
-            snapped_shifted_text_rect,
+            transformed_shifted_text_rect,
             content_layer,
             text,
             &transformed_text_style,
@@ -1450,11 +1336,32 @@ fn push_text_style_draws(
     if !has_span_foreground_overrides {
         if let Some((effect, effect_rect)) = gpu_text_effect_for_style(
             &transformed_text_style,
-            snapped_shifted_text_rect,
+            transformed_shifted_text_rect,
             transformed_text_color,
             text_scale,
         ) {
-            let z_start = scene.next_z;
+            // If any span overrides the foreground color, the single GPU effect
+            // would overwrite that override. Fall back to per-span batching so
+            // each range gets its own material (gradient vs solid).
+            if text_spans_override_foreground_color(text)
+                && push_span_gpu_text_material_draws(
+                    sink,
+                    node_id,
+                    transformed_shifted_text_rect,
+                    content_layer,
+                    text,
+                    &transformed_text_style,
+                    transformed_text_color,
+                    font_size,
+                    text_scale,
+                    options,
+                    text_clip,
+                )
+            {
+                return;
+            }
+
+            let z_start = sink.current_z();
             let mut mask_text_style = transformed_text_style.clone();
             mask_text_style.span_style.brush = None;
             mask_text_style.span_style.alpha = None;
@@ -1462,9 +1369,9 @@ fn push_text_style_draws(
             mask_text_style.span_style.draw_style = Some(TextDrawStyle::Fill);
             let mask_text = text_for_gpu_mask(text);
 
-            scene.push_text(
+            sink.push_text(
                 node_id,
-                snapped_shifted_text_rect,
+                transformed_shifted_text_rect,
                 Rc::new(mask_text),
                 Color::WHITE,
                 mask_text_style,
@@ -1474,22 +1381,27 @@ fn push_text_style_draws(
                 text_clip,
             );
 
-            scene.effect_layers.push(EffectLayer {
-                rect: effect_rect,
-                clip: text_clip,
-                effect: Some(effect),
-                blend_mode: BlendMode::SrcOver,
-                composite_alpha: 1.0,
+            sink.push_effect_layer_with_surface(
+                effect_rect,
+                text_clip,
+                Some(effect),
+                BlendMode::SrcOver,
+                1.0,
                 z_start,
-                z_end: scene.next_z,
-            });
+                sink.current_z(),
+                SurfaceRequirementSet::from_iter([
+                    SurfaceRequirement::RenderEffect,
+                    SurfaceRequirement::TextMaterialMask,
+                ]),
+            );
             return;
         }
     }
 
-    scene.push_text(
+    push_text_draw(
+        sink,
         node_id,
-        snapped_shifted_text_rect,
+        transformed_shifted_text_rect,
         Rc::new(text.clone()),
         transformed_text_color,
         transformed_text_style,
@@ -1501,8 +1413,222 @@ fn push_text_style_draws(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn push_text_decorations(
-    scene: &mut Scene,
+fn push_text_draw<S: TextStyleDrawSink>(
+    sink: &mut S,
+    node_id: NodeId,
+    rect: Rect,
+    text: Rc<cranpose_ui::text::AnnotatedString>,
+    color: Color,
+    text_style: TextStyle,
+    font_size: f32,
+    scale: f32,
+    layout_options: TextLayoutOptions,
+    clip: Option<Rect>,
+) {
+    sink.push_text(
+        node_id,
+        rect,
+        text,
+        color,
+        text_style,
+        font_size,
+        scale,
+        layout_options,
+        clip,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn push_text_style_draws(
+    scene: &mut CompositorScene,
+    node_id: NodeId,
+    rect: Rect,
+    text_rect: Rect,
+    content_layer: &GraphicsLayer,
+    text: &cranpose_ui::text::AnnotatedString,
+    text_style: &TextStyle,
+    font_size: f32,
+    options: TextLayoutOptions,
+    text_clip: Option<Rect>,
+) {
+    emit_text_style_draws(
+        scene,
+        node_id,
+        rect,
+        text_rect,
+        content_layer,
+        text,
+        text_style,
+        font_size,
+        options,
+        text_clip,
+    );
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct SceneEmissionCounts {
+    shapes: usize,
+    images: usize,
+    texts: usize,
+    shadow_draws: usize,
+    effect_layers: usize,
+    backdrop_layers: usize,
+}
+
+pub(crate) fn scene_emission_counts(scene: &CompositorScene) -> SceneEmissionCounts {
+    SceneEmissionCounts {
+        shapes: scene.shapes.len(),
+        images: scene.images.len(),
+        texts: scene.texts.len(),
+        shadow_draws: scene.shadow_draws.len(),
+        effect_layers: scene.effect_layers.len(),
+        backdrop_layers: scene.backdrop_layers.len(),
+    }
+}
+
+fn visible_scene_rect(rect: Rect, clip: Option<Rect>) -> Option<Rect> {
+    match clip {
+        Some(clip) => rect.intersect(clip),
+        None => Some(rect),
+    }
+}
+
+fn shadow_draw_bounds(shadow_draws: &[ShadowDraw]) -> Option<Rect> {
+    let mut bounds = None;
+    for shadow in shadow_draws {
+        let mut shadow_bounds = None;
+        for (shape, _) in &shadow.shapes {
+            shadow_bounds = union_rect(shadow_bounds, shape.rect);
+        }
+        for text in &shadow.texts {
+            shadow_bounds = union_rect(shadow_bounds, text.rect);
+        }
+        if let Some(shadow_bounds) = shadow_bounds {
+            if let Some(expanded) =
+                expand_blurred_rect(shadow_bounds, shadow.blur_radius, shadow.clip)
+            {
+                bounds = union_rect(bounds, expanded);
+            }
+        }
+    }
+    bounds
+}
+
+pub(crate) fn emitted_scene_bounds(
+    scene: &CompositorScene,
+    counts: SceneEmissionCounts,
+) -> Option<Rect> {
+    let mut bounds = None;
+
+    for shape in &scene.shapes[counts.shapes..] {
+        if let Some(visible) = visible_scene_rect(shape.rect, shape.clip) {
+            bounds = union_rect(bounds, visible);
+        }
+    }
+    for image in &scene.images[counts.images..] {
+        if let Some(visible) = visible_scene_rect(image.rect, image.clip) {
+            bounds = union_rect(bounds, visible);
+        }
+    }
+    for text in &scene.texts[counts.texts..] {
+        if let Some(visible) = visible_scene_rect(text.rect, text.clip) {
+            bounds = union_rect(bounds, visible);
+        }
+    }
+    if let Some(shadow_bounds) = shadow_draw_bounds(&scene.shadow_draws[counts.shadow_draws..]) {
+        bounds = union_rect(bounds, shadow_bounds);
+    }
+    for layer in &scene.effect_layers[counts.effect_layers..] {
+        if let Some(visible) = visible_scene_rect(layer.rect, layer.clip) {
+            bounds = union_rect(bounds, visible);
+        }
+    }
+    for layer in &scene.backdrop_layers[counts.backdrop_layers..] {
+        if let Some(visible) = visible_scene_rect(layer.rect, layer.clip) {
+            bounds = union_rect(bounds, visible);
+        }
+    }
+
+    bounds
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn push_translated_text_style_draws(
+    scene: &mut CompositorScene,
+    node_id: NodeId,
+    rect: Rect,
+    text_rect: Rect,
+    content_layer: &GraphicsLayer,
+    text: &cranpose_ui::text::AnnotatedString,
+    text_style: &TextStyle,
+    font_size: f32,
+    options: TextLayoutOptions,
+    text_clip: Option<Rect>,
+) {
+    let counts = scene_emission_counts(scene);
+    let z_start = scene.current_z();
+    emit_text_style_draws(
+        scene,
+        node_id,
+        rect,
+        text_rect,
+        content_layer,
+        text,
+        text_style,
+        font_size,
+        options,
+        text_clip,
+    );
+    let z_end = scene.current_z();
+    if z_end > z_start {
+        if let Some(surface_rect) = emitted_scene_bounds(scene, counts) {
+            scene.push_effect_layer_with_surface(
+                surface_rect,
+                text_clip,
+                None,
+                BlendMode::SrcOver,
+                1.0,
+                z_start,
+                z_end,
+                SurfaceRequirementSet::default().with(SurfaceRequirement::MotionStableCapture),
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn estimate_text_style_draw_bounds(
+    node_id: NodeId,
+    rect: Rect,
+    text_rect: Rect,
+    content_layer: &GraphicsLayer,
+    text: &cranpose_ui::text::AnnotatedString,
+    text_style: &TextStyle,
+    font_size: f32,
+    options: TextLayoutOptions,
+    text_clip: Option<Rect>,
+) -> Option<Rect> {
+    let mut collector = TextBoundsCollector::default();
+    emit_text_style_draws(
+        &mut collector,
+        node_id,
+        rect,
+        text_rect,
+        content_layer,
+        text,
+        text_style,
+        font_size,
+        options,
+        text_clip,
+    );
+    collector.bounds
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_text_decorations<S: TextStyleDrawSink>(
+    sink: &mut S,
     rect: Rect,
     text_rect: Rect,
     content_layer: &GraphicsLayer,
@@ -1550,7 +1676,7 @@ fn push_text_decorations(
                 height: thickness,
             };
             let transformed = apply_layer_to_rect(underline_rect, rect, content_layer);
-            scene.push_shape(
+            sink.push_shape(
                 transformed,
                 brush.clone(),
                 None,
@@ -1567,7 +1693,7 @@ fn push_text_decorations(
                 height: thickness,
             };
             let transformed = apply_layer_to_rect(strike_rect, rect, content_layer);
-            scene.push_shape(transformed, brush, None, text_clip, BlendMode::SrcOver);
+            sink.push_shape(transformed, brush, None, text_clip, BlendMode::SrcOver);
         }
     }
 }
@@ -1846,6 +1972,7 @@ fn decoration_brush_for_span(
     )
 }
 
+#[cfg(test)]
 fn resolve_text_measure_width(
     content_width: f32,
     padding: EdgeInsets,
@@ -1869,6 +1996,7 @@ fn resolve_text_measure_width(
     width
 }
 
+#[cfg(test)]
 fn resolve_text_horizontal_offset(
     style: &TextStyle,
     text: &str,
@@ -1911,297 +2039,212 @@ pub(crate) fn render_from_applier(
     scene: &mut Scene,
     scale: f32,
 ) {
-    let root_layer = GraphicsLayer {
-        scale,
-        ..Default::default()
+    let Some(graph) =
+        cranpose_render_common::scene_builder::build_graph_from_applier(applier, root, scale)
+    else {
+        return;
     };
-    render_node_from_applier(
-        applier,
-        root,
-        root_layer,
+    collect_hits_from_graph(
+        &graph.root,
+        cranpose_render_common::graph::ProjectiveTransform::identity(),
         scene,
         None,
-        None,
-        Point::default(),
     );
+    scene.graph = Some(graph);
 }
 
-fn render_node_from_applier(
-    applier: &mut MemoryApplier,
-    node_id: NodeId,
-    parent_layer: GraphicsLayer,
+fn collect_hits_from_graph(
+    layer: &cranpose_render_common::graph::LayerNode,
+    parent_transform: cranpose_render_common::graph::ProjectiveTransform,
     scene: &mut Scene,
-    parent_visual_clip: Option<Rect>,
     parent_hit_clip: Option<Rect>,
-    parent_offset: Point,
 ) {
-    // Try LayoutNode first, then SubcomposeLayoutNode
-    let node_data = if let Ok(data) = applier.with_node::<LayoutNode, _>(node_id, |node| {
-        let state = node.layout_state();
-        let modifier_slices = node.modifier_slices_snapshot();
-        let resolved_modifiers = node.resolved_modifiers();
-        let children: Vec<NodeId> = node.children.clone();
-        (state, modifier_slices, resolved_modifiers, children)
-    }) {
-        data
-    } else if let Ok(data) = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-        let state = node.layout_state();
-        let modifier_slices = node.modifier_slices_snapshot();
-        let resolved_modifiers = node.resolved_modifiers();
-        // For SubcomposeLayoutNode, use active_children() which returns the placed children
-        let children: Vec<NodeId> = node.active_children();
-        (state, modifier_slices, resolved_modifiers, children)
-    }) {
-        data
-    } else {
-        // Node not found or type mismatch with both types
-        return;
-    };
-
-    let (layout_state, modifier_slices, resolved_modifiers, children) = node_data;
-
-    // Skip nodes that weren't placed
-    if !layout_state.is_placed {
-        return;
+    struct SceneHitSink<'a> {
+        scene: &'a mut Scene,
     }
 
-    // Calculate absolute position (parent offset + node position)
-    let abs_x = parent_offset.x + layout_state.position.x;
-    let abs_y = parent_offset.y + layout_state.position.y;
-
-    let rect = Rect {
-        x: abs_x,
-        y: abs_y,
-        width: layout_state.size.width,
-        height: layout_state.size.height,
-    };
-
-    // Build NodeStyle from modifier data (same approach as NodeStyle::from_layout_node)
-    let style = NodeStyle {
-        graphics_layer: modifier_slices.graphics_layer(),
-        background: None, // Now rendered via draw commands
-        shape: None,      // Now encoded in draw command round rects
-        padding: resolved_modifiers.padding(),
-        clip_to_bounds: modifier_slices.clip_to_bounds(),
-        draw_commands: modifier_slices.draw_commands().to_vec(),
-        click_actions: modifier_slices.click_handlers().to_vec(),
-        pointer_inputs: modifier_slices.pointer_inputs().to_vec(),
-    };
-
-    let node_layer = combine_layers(parent_layer, style.graphics_layer);
-    let layer_isolation = effective_layer_isolation(&node_layer);
-    let content_layer = layer_for_content(&node_layer, layer_isolation.as_ref());
-    let size = Size {
-        width: rect.width,
-        height: rect.height,
-    };
-    let transformed_rect = apply_layer_to_rect(rect, rect, &node_layer);
-
-    if transformed_rect.width <= 0.0 || transformed_rect.height <= 0.0 {
-        return;
-    }
-
-    let content_clip_to_bounds = style.clip_to_bounds || node_layer.clip;
-    let visual_clip = resolve_clip(
-        parent_visual_clip,
-        content_clip_to_bounds.then_some(transformed_rect),
-    );
-
-    if content_clip_to_bounds && visual_clip.is_none() {
-        return;
-    }
-
-    let hit_clip = resolve_clip(
-        parent_hit_clip,
-        content_clip_to_bounds.then_some(transformed_rect),
-    );
-
-    // Track z_start for layer events emitted by this node.
-    let has_backdrop = node_layer.backdrop_effect.is_some();
-    let z_start = scene.next_z;
-
-    if has_backdrop {
-        if let Some(effect) = &node_layer.backdrop_effect {
-            scene.backdrop_layers.push(BackdropLayer {
-                rect: transformed_rect,
-                clip: visual_clip,
-                effect: effect.clone(),
-                z_index: z_start,
-            });
-        }
-    }
-
-    // GraphicsLayer clipping clips content, but should not clip its own shadow.
-    // Explicit clip-to-bounds modifiers still clip both.
-    let shadow_clip = resolve_clip(
-        parent_visual_clip,
-        style.clip_to_bounds.then_some(transformed_rect),
-    );
-    push_layer_shadow(scene, &node_layer, rect, transformed_rect, shadow_clip);
-
-    // Draw behind layer
-    apply_draw_commands(
-        &style.draw_commands,
-        DrawPlacement::Behind,
-        rect,
-        size,
-        &content_layer,
-        visual_clip,
-        scene,
-    );
-
-    let scaled_shape = style.shape.map(|shape| {
-        let resolved = shape.resolve(rect.width, rect.height);
-        RoundedCornerShape::with_radii(scale_corner_radii(
-            resolved,
-            layer_uniform_scale(&content_layer),
-        ))
-    });
-
-    if let Some(color) = style.background {
-        let brush = apply_layer_to_brush(Brush::solid(color), &content_layer);
-        let local_rect = apply_layer_affine_to_rect(rect, rect, &content_layer);
-        let quad = apply_layer_to_quad(rect, rect, &content_layer);
-        scene.push_shape_with_geometry(
-            quad_bounds(quad),
-            local_rect,
-            quad,
-            brush,
-            scaled_shape,
-            visual_clip,
-            BlendMode::SrcOver,
-        );
-    }
-
-    // Render text content if present
-    if let Some(value) = modifier_slices.annotated_text() {
-        let default_text_style = cranpose_ui::text::TextStyle::default();
-        let text_style_ref = modifier_slices.text_style().unwrap_or(&default_text_style);
-
-        let options = modifier_slices
-            .text_layout_options()
-            .unwrap_or_default()
-            .normalized();
-        let padding = style.padding;
-        let content_width = (rect.width - padding.left - padding.right).max(0.0);
-        let measured_max_width = layout_state
-            .measurement_constraints
-            .max_width
-            .is_finite()
-            .then_some(layout_state.measurement_constraints.max_width);
-        let measure_width =
-            resolve_text_measure_width(content_width, padding, measured_max_width, options);
-        let prepared = modifier_slices
-            .prepare_text_layout(Some(measure_width).filter(|w| w.is_finite() && *w > 0.0))
-            .expect("modifier text layout");
-        let draw_width = if options.overflow == TextOverflow::Visible {
-            prepared.metrics.width
-        } else {
-            content_width
-        };
-        let alignment_offset = resolve_text_horizontal_offset(
-            text_style_ref,
-            value.text.as_str(),
-            content_width,
-            prepared.metrics.width,
-        );
-        let text_rect = Rect {
-            x: rect.x + padding.left + alignment_offset,
-            y: rect.y + padding.top,
-            width: draw_width,
-            height: prepared.metrics.height,
-        };
-        let text_bounds_rect = Rect {
-            x: rect.x + padding.left,
-            y: rect.y + padding.top,
-            width: content_width,
-            height: (rect.height - padding.top - padding.bottom).max(0.0),
-        };
-        // Extract font size
-        let font_size = text_style_ref.resolve_font_size(14.0);
-        let expanded_text_bounds =
-            expand_text_bounds_for_baseline_shift(text_bounds_rect, text_style_ref, font_size);
-        let transformed_text_bounds =
-            apply_layer_to_rect(expanded_text_bounds, rect, &content_layer);
-        let text_clip = resolve_text_clip(options.overflow, visual_clip, transformed_text_bounds);
-
-        if let Some(text_clip) = text_clip {
-            push_text_style_draws(
-                scene,
+    impl HitGraphSink for SceneHitSink<'_> {
+        fn push_hit(
+            &mut self,
+            node_id: NodeId,
+            geometry: cranpose_render_common::graph_scene::HitGeometry,
+            shape: Option<RoundedCornerShape>,
+            click_actions: &[Rc<dyn Fn(Point)>],
+            pointer_inputs: &[Rc<dyn Fn(cranpose_foundation::PointerEvent)>],
+        ) {
+            self.scene.push_hit(
                 node_id,
-                rect,
-                text_rect,
-                &content_layer,
-                &prepared.text,
-                text_style_ref,
-                font_size,
-                options,
-                text_clip,
+                geometry,
+                shape,
+                click_actions
+                    .iter()
+                    .cloned()
+                    .map(ClickAction::WithPoint)
+                    .collect(),
+                pointer_inputs.to_vec(),
             );
         }
     }
 
-    // Collect click actions
-    let extra_clicks: Vec<ClickAction> = style
-        .click_actions
-        .iter()
-        .map(|h| ClickAction::WithPoint(h.clone()))
-        .collect();
+    let mut sink = SceneHitSink { scene };
+    collect_common_hits(layer, parent_transform, &mut sink, parent_hit_clip);
+}
 
-    scene.push_hit(
-        node_id,
-        transformed_rect,
-        scaled_shape,
-        extra_clicks,
-        style.pointer_inputs.clone(),
-        hit_clip,
-    );
-
-    // Recurse to children with updated offset (including parent's content offset like padding)
-    let child_offset = Point {
-        x: abs_x + layout_state.content_offset.x,
-        y: abs_y + layout_state.content_offset.y,
-    };
-    for child_id in children {
-        render_node_from_applier(
-            applier,
-            child_id,
-            content_layer.clone(),
-            scene,
-            visual_clip,
-            hit_clip,
-            child_offset,
-        );
+pub(crate) fn push_draw_primitive(
+    primitive: DrawPrimitive,
+    layer_bounds: Rect,
+    layer: &GraphicsLayer,
+    clip: Option<Rect>,
+    scene: &mut CompositorScene,
+    blend_mode: Option<BlendMode>,
+    motion_context_animated: bool,
+) {
+    struct SceneEmitter<'a> {
+        scene: &'a mut CompositorScene,
     }
 
-    // Draw overlay layer
-    apply_draw_commands(
-        &style.draw_commands,
-        DrawPlacement::Overlay,
-        rect,
-        size,
-        &content_layer,
-        visual_clip,
-        scene,
-    );
+    impl DrawPrimitiveSink for SceneEmitter<'_> {
+        fn push_shape(&mut self, params: ShapeDrawParams) {
+            self.scene.push_shape_with_geometry(
+                params.rect,
+                params.local_rect,
+                params.quad,
+                params.brush,
+                params.shape,
+                params.clip,
+                params.blend_mode,
+            );
+        }
 
-    // Record isolation layer if this node requires offscreen composition.
-    if let Some(isolation) = layer_isolation {
-        scene.effect_layers.push(EffectLayer {
-            rect: transformed_rect,
-            clip: visual_clip,
-            effect: isolation.effect,
-            blend_mode: isolation.blend_mode,
-            composite_alpha: isolation.composite_alpha,
-            z_start,
-            z_end: scene.next_z,
-        });
+        fn push_image(&mut self, params: ImageDrawParams) {
+            self.scene.push_image_with_geometry(
+                params.rect,
+                params.local_rect,
+                params.quad,
+                params.image,
+                params.alpha,
+                params.color_filter,
+                params.clip,
+                params.src_rect,
+                params.blend_mode,
+                params.motion_context_animated,
+            );
+        }
+
+        fn push_shadow(
+            &mut self,
+            shadow_primitive: cranpose_ui_graphics::ShadowPrimitive,
+            layer_bounds: Rect,
+            layer: &GraphicsLayer,
+            clip: Option<Rect>,
+        ) {
+            push_shadow_primitive(shadow_primitive, layer_bounds, layer, clip, self.scene);
+        }
+    }
+
+    let mut emitter = SceneEmitter { scene };
+    emit_draw_primitive(
+        primitive,
+        layer_bounds,
+        layer,
+        clip,
+        &mut emitter,
+        blend_mode,
+        motion_context_animated,
+    );
+}
+
+fn push_shadow_primitive(
+    shadow_prim: cranpose_ui_graphics::ShadowPrimitive,
+    layer_bounds: Rect,
+    layer: &GraphicsLayer,
+    clip: Option<Rect>,
+    scene: &mut CompositorScene,
+) {
+    fn shape_pair_for_primitive(
+        prim: DrawPrimitive,
+        layer_bounds: Rect,
+        layer: &GraphicsLayer,
+        blend_mode: BlendMode,
+    ) -> Option<(DrawShape, BlendMode)> {
+        let params = draw_shape_params_for_primitive(prim, layer_bounds, layer, None, blend_mode)?;
+        Some((
+            DrawShape {
+                rect: params.rect,
+                local_rect: params.local_rect,
+                quad: params.quad,
+                snap_anchor: None,
+                brush: params.brush,
+                shape: params.shape,
+                z_index: 0,
+                clip: params.clip,
+                blend_mode: params.blend_mode,
+            },
+            params.blend_mode,
+        ))
+    }
+
+    match shadow_prim {
+        cranpose_ui_graphics::ShadowPrimitive::Drop {
+            shape,
+            blur_radius,
+            blend_mode,
+        } => {
+            let Some(shape_pair) =
+                shape_pair_for_primitive(*shape, layer_bounds, layer, blend_mode)
+            else {
+                return;
+            };
+            scene.push_shadow_draw(ShadowDraw {
+                shapes: vec![shape_pair],
+                texts: vec![],
+                blur_radius,
+                clip,
+                z_index: 0,
+            });
+        }
+        cranpose_ui_graphics::ShadowPrimitive::Inner {
+            fill,
+            cutout,
+            blur_radius,
+            blend_mode,
+            clip_rect,
+        } => {
+            let Some(fill_pair) = shape_pair_for_primitive(*fill, layer_bounds, layer, blend_mode)
+            else {
+                return;
+            };
+            let Some(cutout_pair) =
+                shape_pair_for_primitive(*cutout, layer_bounds, layer, BlendMode::DstOut)
+            else {
+                return;
+            };
+            let abs_clip = Rect {
+                x: clip_rect.x + layer_bounds.x,
+                y: clip_rect.y + layer_bounds.y,
+                width: clip_rect.width,
+                height: clip_rect.height,
+            };
+            let transformed_clip = apply_layer_to_rect(abs_clip, layer_bounds, layer);
+            scene.push_shadow_draw(ShadowDraw {
+                shapes: vec![fill_pair, cutout_pair],
+                texts: vec![],
+                blur_radius,
+                clip: clip.map_or(Some(transformed_clip), |parent_clip| {
+                    parent_clip.intersect(transformed_clip)
+                }),
+                z_index: 0,
+            });
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scene::CompositorScene as Scene;
+    use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
+    use cranpose_ui::text::TextMotion;
     use cranpose_ui::text_layout_result::{
         GlyphLayout, LineLayout, TextLayoutData, TextLayoutResult,
     };
@@ -2244,69 +2287,40 @@ mod tests {
         )
     }
 
-    #[test]
-    fn auto_alpha_triggers_isolation_with_composite_alpha() {
-        let layer = GraphicsLayer {
-            alpha: 0.5,
-            compositing_strategy: CompositingStrategy::Auto,
-            ..Default::default()
-        };
-        let isolation = effective_layer_isolation(&layer).expect("expected isolation");
-        assert!(isolation.effect.is_none());
-        assert!((isolation.composite_alpha - 0.5).abs() < 1e-6);
-
-        let content = layer_for_content(&layer, Some(&isolation));
-        assert!((content.alpha - 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn modulate_alpha_keeps_in_place_alpha_without_offscreen() {
-        let layer = GraphicsLayer {
-            alpha: 0.5,
-            compositing_strategy: CompositingStrategy::ModulateAlpha,
-            ..Default::default()
-        };
-        assert!(effective_layer_isolation(&layer).is_none());
-    }
-
-    #[test]
-    fn non_src_over_layer_blend_triggers_isolation() {
-        let layer = GraphicsLayer {
-            blend_mode: BlendMode::DstOut,
-            compositing_strategy: CompositingStrategy::Auto,
-            ..Default::default()
-        };
-        let isolation = effective_layer_isolation(&layer).expect("expected blend isolation");
-        assert_eq!(isolation.blend_mode, BlendMode::DstOut);
-        assert!((isolation.composite_alpha - 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn offscreen_isolation_has_no_effect_payload() {
-        let layer = GraphicsLayer {
-            alpha: 1.0,
-            compositing_strategy: CompositingStrategy::Offscreen,
-            ..Default::default()
-        };
-        let isolation = effective_layer_isolation(&layer).expect("expected isolation");
-        assert!(isolation.effect.is_none());
-        assert!((isolation.composite_alpha - 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn render_effect_forces_isolation_even_with_modulate_alpha() {
-        let layer = GraphicsLayer {
-            alpha: 0.4,
-            compositing_strategy: CompositingStrategy::ModulateAlpha,
-            render_effect: Some(RenderEffect::blur(4.0)),
-            ..Default::default()
-        };
-        let isolation = effective_layer_isolation(&layer).expect("expected effect isolation");
-        assert!(isolation.effect.is_some());
-        // ModulateAlpha keeps alpha modulation in-content.
-        assert!((isolation.composite_alpha - 1.0).abs() < 1e-6);
-        let content = layer_for_content(&layer, Some(&isolation));
-        assert!((content.alpha - layer.alpha).abs() < 1e-6);
+    fn scene_bounds_for_test(scene: &Scene) -> Option<Rect> {
+        let mut bounds = None;
+        for shape in &scene.shapes {
+            bounds = union_rect(bounds, shape.rect);
+        }
+        for image in &scene.images {
+            bounds = union_rect(bounds, image.rect);
+        }
+        for text in &scene.texts {
+            bounds = union_rect(bounds, text.rect);
+        }
+        for shadow in &scene.shadow_draws {
+            let mut shadow_bounds = None;
+            for (shape, _) in &shadow.shapes {
+                shadow_bounds = union_rect(shadow_bounds, shape.rect);
+            }
+            for text in &shadow.texts {
+                shadow_bounds = union_rect(shadow_bounds, text.rect);
+            }
+            if let Some(shadow_bounds) = shadow_bounds {
+                let shadow_bounds =
+                    expand_blurred_rect(shadow_bounds, shadow.blur_radius, shadow.clip);
+                if let Some(shadow_bounds) = shadow_bounds {
+                    bounds = union_rect(bounds, shadow_bounds);
+                }
+            }
+        }
+        for layer in &scene.effect_layers {
+            bounds = union_rect(bounds, layer.rect);
+        }
+        for layer in &scene.backdrop_layers {
+            bounds = union_rect(bounds, layer.rect);
+        }
+        bounds
     }
 
     #[test]
@@ -2412,6 +2426,50 @@ mod tests {
                 height: 20.0,
             }
         );
+    }
+
+    #[test]
+    fn collect_hits_from_graph_only_populates_hit_regions() {
+        let layer = cranpose_render_common::graph::LayerNode {
+            node_id: Some(7),
+            local_bounds: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 40.0,
+                height: 24.0,
+            },
+            transform_to_parent: cranpose_render_common::graph::ProjectiveTransform::translation(
+                12.0, 8.0,
+            ),
+            motion_context_animated: false,
+            translated_content_context: false,
+            graphics_layer: GraphicsLayer::default(),
+            clip_to_bounds: false,
+            shadow_clip: None,
+            hit_test: Some(cranpose_render_common::graph::HitTestNode {
+                shape: None,
+                click_actions: vec![Rc::new(|_point| {})],
+                pointer_inputs: vec![],
+                clip: None,
+            }),
+            has_hit_targets: true,
+            isolation: cranpose_render_common::graph::IsolationReasons::default(),
+            cache_policy: cranpose_render_common::graph::CachePolicy::None,
+            cache_hashes: LayerRasterCacheHashes::default(),
+            cache_hashes_valid: false,
+            children: vec![],
+        };
+        let mut scene = crate::scene::Scene::new();
+
+        collect_hits_from_graph(
+            &layer,
+            cranpose_render_common::graph::ProjectiveTransform::identity(),
+            &mut scene,
+            None,
+        );
+
+        assert_eq!(scene.hits.len(), 1);
+        assert!(scene.graph.is_none());
     }
 
     #[test]
@@ -2814,6 +2872,72 @@ mod tests {
     }
 
     #[test]
+    fn estimate_text_style_draw_bounds_matches_scene_emission() {
+        let mut scene = Scene::new();
+        let style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                brush: Some(Brush::linear_gradient_range(
+                    vec![Color(0.2, 0.9, 1.0, 1.0), Color(1.0, 0.6, 0.4, 1.0)],
+                    Point::new(0.0, 0.0),
+                    Point::new(140.0, 0.0),
+                )),
+                shadow: Some(cranpose_ui::text::Shadow {
+                    color: Color(0.0, 0.0, 0.0, 0.85),
+                    offset: Point::new(2.5, 1.5),
+                    blur_radius: 3.0,
+                }),
+                text_decoration: Some(TextDecoration::UNDERLINE),
+                baseline_shift: Some(cranpose_ui::text::BaselineShift::SUPERSCRIPT),
+                ..Default::default()
+            },
+            paragraph_style: cranpose_ui::ParagraphStyle {
+                text_motion: Some(TextMotion::Static),
+                ..Default::default()
+            },
+        };
+        let text = cranpose_ui::text::AnnotatedString::from("Layer text bounds");
+        let rect = Rect {
+            x: 8.25,
+            y: 12.5,
+            width: 180.0,
+            height: 30.0,
+        };
+        let clip = Some(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 140.0,
+            height: 48.0,
+        });
+
+        push_text_style_draws(
+            &mut scene,
+            31 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            &text,
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            clip,
+        );
+
+        let estimated = estimate_text_style_draw_bounds(
+            31 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            &text,
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            clip,
+        );
+
+        assert_eq!(estimated, scene_bounds_for_test(&scene));
+    }
+
+    #[test]
     fn push_text_style_draws_emits_decoration_shapes() {
         let mut scene = Scene::new();
         let style = cranpose_ui::TextStyle {
@@ -2849,6 +2973,72 @@ mod tests {
 
         assert_eq!(scene.shapes.len(), 2, "underline + line-through expected");
         assert_eq!(scene.texts.len(), 1, "main text expected");
+    }
+
+    #[test]
+    fn push_translated_text_style_draws_wraps_the_whole_text_picture_in_one_surface() {
+        let mut scene = Scene::new();
+        let style = cranpose_ui::TextStyle {
+            span_style: cranpose_ui::SpanStyle {
+                color: Some(Color::WHITE),
+                text_decoration: Some(cranpose_ui::text::TextDecoration::UNDERLINE),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let rect = Rect {
+            x: 8.0,
+            y: 10.0,
+            width: 180.0,
+            height: 28.0,
+        };
+
+        push_translated_text_style_draws(
+            &mut scene,
+            71 as NodeId,
+            rect,
+            rect,
+            &GraphicsLayer::default(),
+            &cranpose_ui::text::AnnotatedString::from("Decorated"),
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+            None,
+        );
+
+        assert_eq!(
+            scene.shapes.len(),
+            1,
+            "underline geometry should be emitted"
+        );
+        assert_eq!(scene.texts.len(), 1, "glyph draw should be emitted");
+        assert_eq!(
+            scene.effect_layers.len(),
+            1,
+            "translated text should be isolated in exactly one bounded local surface"
+        );
+        let effect_layer = &scene.effect_layers[0];
+        assert!(
+            effect_layer.effect.is_none(),
+            "translated text isolation should not apply a post-effect"
+        );
+        assert!(
+            effect_layer
+                .requirements
+                .contains(SurfaceRequirement::MotionStableCapture),
+            "translated text should request a motion-stable surface"
+        );
+        let expected_surface_rect = union_rect(Some(scene.shapes[0].rect), scene.texts[0].rect)
+            .expect("translated text surface should cover both underline and glyphs");
+        assert_eq!(
+            effect_layer.rect, expected_surface_rect,
+            "the local text surface should cover the entire emitted picture"
+        );
+        assert_eq!(
+            effect_layer.z_end - effect_layer.z_start,
+            2,
+            "the underline and glyph draw should be isolated together"
+        );
     }
 
     #[test]
@@ -3795,7 +3985,7 @@ mod tests {
     }
 
     #[test]
-    fn push_text_style_draws_adjacent_span_paint_overrides_batch_same_material() {
+    fn push_text_style_draws_adjacent_span_color_overrides_use_direct_path() {
         let mut scene = Scene::new();
         let style = cranpose_ui::TextStyle::default();
         let text = cranpose_ui::text::AnnotatedString::builder()
@@ -3833,43 +4023,26 @@ mod tests {
         );
 
         assert_eq!(scene.images.len(), 0, "no software fallback should be used");
-        assert_eq!(
-            scene.texts.len(),
-            1,
-            "adjacent equal-material spans should batch into one mask draw"
-        );
+        assert_eq!(scene.texts.len(), 1);
         assert_eq!(
             scene.effect_layers.len(),
-            1,
-            "adjacent equal-material spans should share one runtime shader pass"
-        );
-        assert_eq!(
-            scene.effect_layers[0].z_start + 1,
-            scene.effect_layers[0].z_end
-        );
-        let Some(RenderEffect::Shader { shader }) = scene.effect_layers[0].effect.as_ref() else {
-            panic!("expected runtime shader effect for solid span batch");
-        };
-        let uniforms = shader.uniforms();
-        let uniform = |index: usize| uniforms.get(index).copied().unwrap_or(0.0);
-        assert_eq!(uniform(0), GPU_TEXT_BRUSH_KIND_SOLID);
-        assert_eq!(scene.texts[0].color, Color(1.0, 1.0, 1.0, 0.0));
-        assert_eq!(
-            scene.texts[0].text_style.span_style.color,
-            Some(Color(1.0, 1.0, 1.0, 0.0))
+            0,
+            "solid color spans use cosmic-text per-glyph colors, no GPU shader needed"
         );
         assert!(
             scene.texts[0]
                 .text
                 .span_styles
                 .iter()
-                .any(|span| span.item.color == Some(Color::WHITE)),
-            "batched mask text should contain white-visible range spans"
+                .filter(|span| span.item.color == Some(Color::RED))
+                .count()
+                >= 1,
+            "span colors should be preserved for cosmic-text per-glyph rendering"
         );
     }
 
     #[test]
-    fn push_text_style_draws_span_color_override_packs_solid_color_material() {
+    fn push_text_style_draws_span_color_override_uses_direct_per_glyph_color() {
         let mut scene = Scene::new();
         let style = cranpose_ui::TextStyle::default();
         let text = cranpose_ui::text::AnnotatedString::builder()
@@ -3902,18 +4075,19 @@ mod tests {
 
         assert_eq!(scene.images.len(), 0, "no software fallback should be used");
         assert_eq!(scene.texts.len(), 1);
-        assert_eq!(scene.effect_layers.len(), 1);
-        let Some(RenderEffect::Shader { shader }) = scene.effect_layers[0].effect.as_ref() else {
-            panic!("expected runtime shader effect for span color override");
-        };
-        let uniforms = shader.uniforms();
-        let uniform = |index: usize| uniforms.get(index).copied().unwrap_or_default();
-        let color_slot = GPU_TEXT_BRUSH_EFFECT_FIRST_STOP_SLOT * 4;
-        assert_eq!(uniform(0), GPU_TEXT_BRUSH_KIND_SOLID);
-        assert!((uniform(color_slot) - Color::RED.r()).abs() < f32::EPSILON);
-        assert!((uniform(color_slot + 1) - Color::RED.g()).abs() < f32::EPSILON);
-        assert!((uniform(color_slot + 2) - Color::RED.b()).abs() < f32::EPSILON);
-        assert!((uniform(color_slot + 3) - Color::RED.a()).abs() < f32::EPSILON);
+        assert_eq!(
+            scene.effect_layers.len(),
+            0,
+            "solid color span overrides use cosmic-text per-glyph colors, no GPU shader needed"
+        );
+        assert!(
+            scene.texts[0]
+                .text
+                .span_styles
+                .iter()
+                .any(|span| span.item.color == Some(Color::RED)),
+            "span color should be preserved in the text for cosmic-text per-glyph rendering"
+        );
     }
 
     #[test]
@@ -3972,7 +4146,7 @@ mod tests {
     }
 
     #[test]
-    fn push_text_style_draws_wrap_newline_gap_keeps_same_material_batch() {
+    fn push_text_style_draws_wrap_newline_gap_color_spans_use_direct_path() {
         let mut scene = Scene::new();
         let style = cranpose_ui::TextStyle::default();
         let text = cranpose_ui::text::AnnotatedString::builder()
@@ -4011,33 +4185,28 @@ mod tests {
         );
 
         assert_eq!(scene.images.len(), 0, "no software fallback should be used");
-        assert_eq!(
-            scene.texts.len(),
-            1,
-            "newline-only style gaps should not force extra material batches"
-        );
+        assert_eq!(scene.texts.len(), 1);
         assert_eq!(
             scene.effect_layers.len(),
-            1,
-            "same-material spans split by wrapped newline should share one effect layer"
+            0,
+            "solid color spans use cosmic-text per-glyph colors, no GPU shader needed"
         );
-
-        let white_ranges: Vec<_> = scene.texts[0]
+        let red_ranges: Vec<_> = scene.texts[0]
             .text
             .span_styles
             .iter()
-            .filter(|span| span.item.color == Some(Color::WHITE))
+            .filter(|span| span.item.color == Some(Color::RED))
             .map(|span| span.range.clone())
             .collect();
         assert_eq!(
-            white_ranges,
-            vec![0..3, 4..7],
-            "batch mask should keep one visible-range span per wrapped visual segment"
+            red_ranges.len(),
+            2,
+            "span colors should be preserved for both wrapped lines"
         );
     }
 
     #[test]
-    fn push_text_style_draws_mixed_bidi_wrapped_same_material_keeps_single_batch() {
+    fn push_text_style_draws_mixed_bidi_wrapped_color_spans_use_direct_path() {
         let mut scene = Scene::new();
         let style = cranpose_ui::TextStyle::default();
         let source_text = cranpose_ui::text::AnnotatedString::builder()
@@ -4081,46 +4250,24 @@ mod tests {
         );
 
         assert_eq!(scene.images.len(), 0, "no software fallback should be used");
-        assert_eq!(
-            scene.texts.len(),
-            1,
-            "wrapped mixed-bidi text with one material should stay in one mask batch"
-        );
+        assert_eq!(scene.texts.len(), 1);
         assert_eq!(
             scene.effect_layers.len(),
-            1,
-            "wrapped mixed-bidi text with one material should stay in one effect layer"
-        );
-
-        let white_ranges: Vec<_> = scene.texts[0]
-            .text
-            .span_styles
-            .iter()
-            .filter(|span| span.item.color == Some(Color::WHITE))
-            .map(|span| span.range.clone())
-            .collect();
-        assert!(
-            white_ranges.len() > 1,
-            "wrapped text should produce multiple visible ranges in one batch"
+            0,
+            "solid color spans use cosmic-text per-glyph colors, no GPU shader needed"
         );
         assert!(
-            white_ranges
-                .windows(2)
-                .all(|window| window[0].end <= window[1].start),
-            "visible ranges should preserve logical ordering"
-        );
-        assert!(
-            white_ranges.iter().all(|range| prepared
+            scene.texts[0]
                 .text
-                .text
-                .get(range.clone())
-                .is_some_and(|segment| !segment.contains('\n'))),
-            "visible ranges should not include newline-only gaps"
+                .span_styles
+                .iter()
+                .any(|span| span.item.color == Some(Color::RED)),
+            "span color should be preserved for cosmic-text per-glyph rendering"
         );
     }
 
     #[test]
-    fn push_text_style_draws_text_motion_static_snaps_position() {
+    fn push_text_style_draws_keeps_static_and_animated_text_geometry_in_scene_space() {
         let base_rect = Rect {
             x: 8.25,
             y: 10.75,
@@ -4168,14 +4315,14 @@ mod tests {
 
         assert_eq!(static_scene.texts.len(), 1);
         assert_eq!(animated_scene.texts.len(), 1);
-        assert_eq!(static_scene.texts[0].rect.x, base_rect.x.round());
-        assert_eq!(static_scene.texts[0].rect.y, base_rect.y.round());
+        assert!((static_scene.texts[0].rect.x - base_rect.x).abs() < f32::EPSILON);
+        assert!((static_scene.texts[0].rect.y - base_rect.y).abs() < f32::EPSILON);
         assert!((animated_scene.texts[0].rect.x - base_rect.x).abs() < f32::EPSILON);
         assert!((animated_scene.texts[0].rect.y - base_rect.y).abs() < f32::EPSILON);
     }
 
     #[test]
-    fn push_text_style_draws_stroke_text_motion_static_snaps_mask_and_effect_bounds() {
+    fn push_text_style_draws_stroke_keeps_mask_and_effect_bounds_in_scene_space() {
         let base_rect = Rect {
             x: 8.25,
             y: 10.75,
@@ -4234,8 +4381,8 @@ mod tests {
         assert_eq!(animated_scene.effect_layers.len(), 1);
 
         let expected_padding = stroke_effect_padding_local(4.0);
-        assert_eq!(static_scene.texts[0].rect.x, base_rect.x.round());
-        assert_eq!(static_scene.texts[0].rect.y, base_rect.y.round());
+        assert!((static_scene.texts[0].rect.x - base_rect.x).abs() < f32::EPSILON);
+        assert!((static_scene.texts[0].rect.y - base_rect.y).abs() < f32::EPSILON);
         let static_mask_rect = static_scene.texts[0].rect;
         assert!(
             (static_scene.effect_layers[0].rect.x - (static_mask_rect.x - expected_padding)).abs()
@@ -4260,7 +4407,7 @@ mod tests {
     }
 
     #[test]
-    fn push_text_style_draws_gradient_static_text_snaps_mask_and_effect_bounds() {
+    fn push_text_style_draws_gradient_keeps_mask_and_effect_bounds_in_scene_space() {
         let mut scene = Scene::new();
         let base_rect = Rect {
             x: 8.25,
@@ -4312,12 +4459,12 @@ mod tests {
         );
 
         let text_draw = &scene.texts[0];
-        assert_eq!(text_draw.rect.x, base_rect.x.round());
-        assert_eq!(text_draw.rect.y, base_rect.y.round());
+        assert!((text_draw.rect.x - base_rect.x).abs() < f32::EPSILON);
+        assert!((text_draw.rect.y - base_rect.y).abs() < f32::EPSILON);
 
         let effect_layer = &scene.effect_layers[0];
-        assert_eq!(effect_layer.rect.x, base_rect.x.round());
-        assert_eq!(effect_layer.rect.y, base_rect.y.round());
+        assert!((effect_layer.rect.x - base_rect.x).abs() < f32::EPSILON);
+        assert!((effect_layer.rect.y - base_rect.y).abs() < f32::EPSILON);
         assert!((effect_layer.rect.width - base_rect.width).abs() < 1e-3);
         assert!((effect_layer.rect.height - base_rect.height).abs() < 1e-3);
         let Some(RenderEffect::Shader { .. }) = effect_layer.effect.as_ref() else {

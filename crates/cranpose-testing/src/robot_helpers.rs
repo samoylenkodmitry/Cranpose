@@ -95,12 +95,7 @@ pub fn find_text_center(elem: &SemanticElement, text: &str) -> Option<(f32, f32)
 
 /// Check if an element or any of its children contains the specified text.
 pub fn has_text(elem: &SemanticElement, text: &str) -> bool {
-    if let Some(ref t) = elem.text {
-        if t.contains(text) {
-            return true;
-        }
-    }
-    elem.children.iter().any(|c| has_text(c, text))
+    has_text_by(elem, text, text_contains)
 }
 
 /// Find a clickable element (button) containing the specified text.
@@ -108,20 +103,7 @@ pub fn has_text(elem: &SemanticElement, text: &str) -> bool {
 /// Matches elements where `clickable == true` AND the element (or its children) contains the text.
 /// Returns bounds (x, y, width, height).
 pub fn find_button(elem: &SemanticElement, text: &str) -> Option<(f32, f32, f32, f32)> {
-    if elem.clickable && has_text(elem, text) {
-        return Some((
-            elem.bounds.x,
-            elem.bounds.y,
-            elem.bounds.width,
-            elem.bounds.height,
-        ));
-    }
-    for child in &elem.children {
-        if let Some(pos) = find_button(child, text) {
-            return Some(pos);
-        }
-    }
-    None
+    find_button_by(elem, text, text_contains)
 }
 
 /// Find a clickable element (button) containing the specified text.
@@ -221,8 +203,24 @@ pub fn find_button_in_semantics(
     robot: &cranpose::Robot,
     text: &str,
 ) -> Option<(f32, f32, f32, f32)> {
+    find_button_in_semantics_by(robot, text, text_contains)
+}
+
+/// Find button by exact text in semantics tree.
+pub fn find_button_exact_in_semantics(
+    robot: &cranpose::Robot,
+    text: &str,
+) -> Option<(f32, f32, f32, f32)> {
+    find_button_in_semantics_by(robot, text, text_equals)
+}
+
+fn find_button_in_semantics_by(
+    robot: &cranpose::Robot,
+    text: &str,
+    matcher: TextMatcher,
+) -> Option<(f32, f32, f32, f32)> {
     let text_owned = text.to_string();
-    let mut bounds = find_in_semantics(robot, |elem| find_button(elem, &text_owned));
+    let mut bounds = find_in_semantics(robot, |elem| find_button_by(elem, &text_owned, matcher));
 
     let Some(root) = root_bounds(robot) else {
         return bounds;
@@ -267,7 +265,7 @@ pub fn find_button_in_semantics(
         std::thread::sleep(Duration::from_millis(SCROLL_SETTLE_MS));
         let _ = robot.wait_for_idle();
 
-        bounds = find_in_semantics(robot, |elem| find_button(elem, &text_owned));
+        bounds = find_in_semantics(robot, |elem| find_button_by(elem, &text_owned, matcher));
         if let Some(current) = bounds {
             if is_fully_visible(current, root) {
                 break;
@@ -558,6 +556,46 @@ pub fn root_bounds(robot: &cranpose::Robot) -> Option<RectBounds> {
 const VISIBILITY_PADDING: f32 = 4.0;
 const SCROLL_STEP: f32 = 240.0;
 const SCROLL_SETTLE_MS: u64 = 140;
+type TextMatcher = fn(&str, &str) -> bool;
+
+fn text_contains(actual: &str, needle: &str) -> bool {
+    actual.contains(needle)
+}
+
+fn text_equals(actual: &str, needle: &str) -> bool {
+    actual == needle
+}
+
+fn has_text_by(elem: &SemanticElement, text: &str, matcher: TextMatcher) -> bool {
+    if elem
+        .text
+        .as_deref()
+        .is_some_and(|actual| matcher(actual, text))
+    {
+        return true;
+    }
+    elem.children
+        .iter()
+        .any(|child| has_text_by(child, text, matcher))
+}
+
+fn find_button_by(
+    elem: &SemanticElement,
+    text: &str,
+    matcher: TextMatcher,
+) -> Option<(f32, f32, f32, f32)> {
+    if elem.clickable && has_text_by(elem, text, matcher) {
+        return Some((
+            elem.bounds.x,
+            elem.bounds.y,
+            elem.bounds.width,
+            elem.bounds.height,
+        ));
+    }
+    elem.children
+        .iter()
+        .find_map(|child| find_button_by(child, text, matcher))
+}
 
 fn is_axis_visible(bounds: RectBounds, root: RectBounds, axis: TabAxis) -> bool {
     let (x, y, w, h) = bounds;
@@ -699,6 +737,45 @@ pub fn capture_screenshot(robot: &cranpose::Robot) -> Option<cranpose::RobotScre
     robot.screenshot().ok()
 }
 
+fn screenshot_logical_width(screenshot: &cranpose::RobotScreenshot) -> f32 {
+    if screenshot.logical_width.is_finite() && screenshot.logical_width > 0.0 {
+        screenshot.logical_width
+    } else {
+        screenshot.width.max(1) as f32
+    }
+}
+
+fn screenshot_logical_height(screenshot: &cranpose::RobotScreenshot) -> f32 {
+    if screenshot.logical_height.is_finite() && screenshot.logical_height > 0.0 {
+        screenshot.logical_height
+    } else {
+        screenshot.height.max(1) as f32
+    }
+}
+
+fn screenshot_scale_x(screenshot: &cranpose::RobotScreenshot) -> f32 {
+    screenshot.width.max(1) as f32 / screenshot_logical_width(screenshot)
+}
+
+fn screenshot_scale_y(screenshot: &cranpose::RobotScreenshot) -> f32 {
+    screenshot.height.max(1) as f32 / screenshot_logical_height(screenshot)
+}
+
+fn logical_to_screenshot_x(screenshot: &cranpose::RobotScreenshot, x: f32) -> f32 {
+    x * screenshot_scale_x(screenshot)
+}
+
+fn logical_to_screenshot_y(screenshot: &cranpose::RobotScreenshot, y: f32) -> f32 {
+    y * screenshot_scale_y(screenshot)
+}
+
+pub fn screenshot_logical_size(screenshot: &cranpose::RobotScreenshot) -> (f32, f32) {
+    (
+        screenshot_logical_width(screenshot),
+        screenshot_logical_height(screenshot),
+    )
+}
+
 /// Returns pixel RGBA at `(x, y)` from a screenshot.
 pub fn screenshot_pixel(screenshot: &cranpose::RobotScreenshot, x: u32, y: u32) -> Option<[u8; 4]> {
     if x >= screenshot.width || y >= screenshot.height {
@@ -711,6 +788,58 @@ pub fn screenshot_pixel(screenshot: &cranpose::RobotScreenshot, x: u32, y: u32) 
         screenshot.pixels[index + 2],
         screenshot.pixels[index + 3],
     ])
+}
+
+pub fn sample_screenshot_pixel_logical(
+    screenshot: &cranpose::RobotScreenshot,
+    x: f32,
+    y: f32,
+) -> Option<[u8; 4]> {
+    let logical_width = screenshot_logical_width(screenshot);
+    let logical_height = screenshot_logical_height(screenshot);
+    if x < 0.0 || y < 0.0 || x > logical_width || y > logical_height {
+        return None;
+    }
+
+    Some(sample_screenshot_pixel_bilinear(
+        screenshot,
+        logical_to_screenshot_x(screenshot, x),
+        logical_to_screenshot_y(screenshot, y),
+    ))
+}
+
+pub fn logical_region_to_pixel_bounds(
+    screenshot: &cranpose::RobotScreenshot,
+    region: (f32, f32, f32, f32),
+) -> Option<(u32, u32, u32, u32)> {
+    if region.2 <= 0.0 || region.3 <= 0.0 || screenshot.width == 0 || screenshot.height == 0 {
+        return None;
+    }
+
+    let left = logical_to_screenshot_x(screenshot, region.0.max(0.0))
+        .floor()
+        .max(0.0) as u32;
+    let top = logical_to_screenshot_y(screenshot, region.1.max(0.0))
+        .floor()
+        .max(0.0) as u32;
+    let right = logical_to_screenshot_x(
+        screenshot,
+        (region.0 + region.2).min(screenshot_logical_width(screenshot)),
+    )
+    .ceil()
+    .min(screenshot.width as f32) as u32;
+    let bottom = logical_to_screenshot_y(
+        screenshot,
+        (region.1 + region.3).min(screenshot_logical_height(screenshot)),
+    )
+    .ceil()
+    .min(screenshot.height as f32) as u32;
+
+    if right <= left || bottom <= top {
+        return None;
+    }
+
+    Some((left, top, right, bottom))
 }
 
 /// Crops a rectangular region from a screenshot.
@@ -742,7 +871,122 @@ pub fn crop_screenshot(
     Some(cranpose::RobotScreenshot {
         width,
         height,
+        logical_width: width as f32 / screenshot_scale_x(screenshot),
+        logical_height: height as f32 / screenshot_scale_y(screenshot),
         pixels,
+    })
+}
+
+pub fn crop_screenshot_logical(
+    screenshot: &cranpose::RobotScreenshot,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+) -> Option<cranpose::RobotScreenshot> {
+    let (left, top, right, bottom) =
+        logical_region_to_pixel_bounds(screenshot, (x, y, width, height))?;
+    crop_screenshot(screenshot, left, top, right - left, bottom - top)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScreenshotPixelDifference {
+    pub x: u32,
+    pub y: u32,
+    pub before: [u8; 4],
+    pub after: [u8; 4],
+    pub difference: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScreenshotDifferenceStats {
+    pub differing_pixels: usize,
+    pub max_difference: u32,
+    pub first_difference: Option<ScreenshotPixelDifference>,
+}
+
+/// Normalize a floating-point screenshot region into a stable pixel grid with bilinear sampling.
+///
+/// This is useful for comparing the local picture of a translated subtree after compensating for
+/// parent motion.
+pub fn normalize_screenshot_region(
+    screenshot: &cranpose::RobotScreenshot,
+    region: (f32, f32, f32, f32),
+    output_width: u32,
+    output_height: u32,
+) -> Option<cranpose::RobotScreenshot> {
+    if output_width == 0
+        || output_height == 0
+        || region.2 <= 0.0
+        || region.3 <= 0.0
+        || screenshot.width == 0
+        || screenshot.height == 0
+    {
+        return None;
+    }
+
+    let mut pixels = Vec::with_capacity((output_width * output_height * 4) as usize);
+    for y in 0..output_height {
+        for x in 0..output_width {
+            let sample_x = region.0 + ((x as f32 + 0.5) * region.2 / output_width as f32);
+            let sample_y = region.1 + ((y as f32 + 0.5) * region.3 / output_height as f32);
+            pixels.extend_from_slice(&sample_screenshot_pixel_logical(
+                screenshot, sample_x, sample_y,
+            )?);
+        }
+    }
+
+    Some(cranpose::RobotScreenshot {
+        width: output_width,
+        height: output_height,
+        logical_width: output_width as f32,
+        logical_height: output_height as f32,
+        pixels,
+    })
+}
+
+/// Count differing pixels and report the strongest difference between two screenshots of equal
+/// dimensions. The difference metric is the sum of per-channel absolute differences.
+pub fn screenshot_difference_stats(
+    before: &cranpose::RobotScreenshot,
+    after: &cranpose::RobotScreenshot,
+    difference_tolerance: u32,
+) -> Option<ScreenshotDifferenceStats> {
+    if before.width != after.width || before.height != after.height {
+        return None;
+    }
+
+    let mut differing_pixels = 0usize;
+    let mut max_difference = 0u32;
+    let mut first_difference = None;
+
+    for y in 0..before.height {
+        for x in 0..before.width {
+            let before_pixel =
+                screenshot_pixel(before, x, y).expect("screenshot bounds checked by loop");
+            let after_pixel =
+                screenshot_pixel(after, x, y).expect("screenshot bounds checked by loop");
+            let difference = pixel_difference(before_pixel, after_pixel);
+            if difference > difference_tolerance {
+                differing_pixels += 1;
+                max_difference = max_difference.max(difference);
+                if first_difference.is_none() {
+                    first_difference = Some(ScreenshotPixelDifference {
+                        x,
+                        y,
+                        before: before_pixel,
+                        after: after_pixel,
+                        difference,
+                    });
+                }
+            }
+        }
+    }
+
+    Some(ScreenshotDifferenceStats {
+        differing_pixels,
+        max_difference,
+        first_difference,
     })
 }
 
@@ -777,18 +1021,17 @@ pub fn changed_pixel_count_in_region(
     region: (f32, f32, f32, f32),
     channel_threshold: u8,
 ) -> usize {
-    if before.width != after.width || before.height != after.height {
+    if before.width != after.width
+        || before.height != after.height
+        || (screenshot_scale_x(before) - screenshot_scale_x(after)).abs() > f32::EPSILON
+        || (screenshot_scale_y(before) - screenshot_scale_y(after)).abs() > f32::EPSILON
+    {
         return usize::MAX;
     }
 
-    let left = region.0.max(0.0).floor() as u32;
-    let top = region.1.max(0.0).floor() as u32;
-    let right = (region.0 + region.2).min(before.width as f32).ceil() as u32;
-    let bottom = (region.1 + region.3).min(before.height as f32).ceil() as u32;
-
-    if right <= left || bottom <= top {
+    let Some((left, top, right, bottom)) = logical_region_to_pixel_bounds(before, region) else {
         return 0;
-    }
+    };
 
     let width = before.width as usize;
     let mut changed = 0usize;
@@ -806,6 +1049,48 @@ pub fn changed_pixel_count_in_region(
     }
 
     changed
+}
+
+fn sample_screenshot_pixel_bilinear(
+    screenshot: &cranpose::RobotScreenshot,
+    x: f32,
+    y: f32,
+) -> [u8; 4] {
+    let max_x = screenshot.width.saturating_sub(1) as f32;
+    let max_y = screenshot.height.saturating_sub(1) as f32;
+    let source_x = (x - 0.5).clamp(0.0, max_x);
+    let source_y = (y - 0.5).clamp(0.0, max_y);
+    let x0 = source_x.floor() as u32;
+    let y0 = source_y.floor() as u32;
+    let x1 = (x0 + 1).min(screenshot.width.saturating_sub(1));
+    let y1 = (y0 + 1).min(screenshot.height.saturating_sub(1));
+    let tx = source_x - x0 as f32;
+    let ty = source_y - y0 as f32;
+    let top_left = screenshot_pixel(screenshot, x0, y0).expect("bilinear x0/y0 in bounds");
+    let top_right = screenshot_pixel(screenshot, x1, y0).expect("bilinear x1/y0 in bounds");
+    let bottom_left = screenshot_pixel(screenshot, x0, y1).expect("bilinear x0/y1 in bounds");
+    let bottom_right = screenshot_pixel(screenshot, x1, y1).expect("bilinear x1/y1 in bounds");
+
+    let lerp_channel = |index: usize| {
+        let top = top_left[index] as f32 * (1.0 - tx) + top_right[index] as f32 * tx;
+        let bottom = bottom_left[index] as f32 * (1.0 - tx) + bottom_right[index] as f32 * tx;
+        (top * (1.0 - ty) + bottom * ty).round() as u8
+    };
+
+    [
+        lerp_channel(0),
+        lerp_channel(1),
+        lerp_channel(2),
+        lerp_channel(3),
+    ]
+}
+
+fn pixel_difference(before: [u8; 4], after: [u8; 4]) -> u32 {
+    before
+        .into_iter()
+        .zip(after)
+        .map(|(lhs, rhs)| lhs.abs_diff(rhs) as u32)
+        .sum()
 }
 
 /// Parse "label: value" text from a slider label, returning the numeric value.
@@ -978,10 +1263,60 @@ mod tests {
     }
 
     #[test]
+    fn find_button_exact_requires_full_text_match() {
+        let exact_button = semantic_element(
+            "Button",
+            None,
+            true,
+            (10.0, 20.0, 90.0, 28.0),
+            vec![
+                semantic_element(
+                    "Text",
+                    Some("Text"),
+                    false,
+                    (14.0, 24.0, 30.0, 20.0),
+                    vec![],
+                ),
+                semantic_element(
+                    "Text",
+                    Some("Text Input"),
+                    false,
+                    (46.0, 24.0, 48.0, 20.0),
+                    vec![],
+                ),
+            ],
+        );
+        let partial_only_button = semantic_element(
+            "Button",
+            None,
+            true,
+            (120.0, 20.0, 90.0, 28.0),
+            vec![semantic_element(
+                "Text",
+                Some("Text Input"),
+                false,
+                (124.0, 24.0, 48.0, 20.0),
+                vec![],
+            )],
+        );
+
+        assert_eq!(
+            find_button_by(&exact_button, "Text", text_equals),
+            Some((10.0, 20.0, 90.0, 28.0))
+        );
+        assert_eq!(
+            find_button_by(&partial_only_button, "Text", text_equals),
+            None
+        );
+    }
+
+    #[test]
     fn screenshot_pixel_reads_expected_value() {
         let screenshot = RobotScreenshot {
             width: 2,
             height: 1,
+            logical_width: 2.0,
+            logical_height: 1.0,
             pixels: vec![1, 2, 3, 4, 5, 6, 7, 8],
         };
         assert_eq!(screenshot_pixel(&screenshot, 1, 0), Some([5, 6, 7, 8]));
@@ -992,6 +1327,8 @@ mod tests {
         let screenshot = RobotScreenshot {
             width: 3,
             height: 2,
+            logical_width: 3.0,
+            logical_height: 2.0,
             pixels: vec![
                 1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255, 13, 14, 15, 255, 16, 17,
                 18, 255,
@@ -1000,9 +1337,111 @@ mod tests {
         let cropped = crop_screenshot(&screenshot, 1, 0, 2, 2).expect("crop");
         assert_eq!(cropped.width, 2);
         assert_eq!(cropped.height, 2);
+        assert_eq!(cropped.logical_width, 2.0);
+        assert_eq!(cropped.logical_height, 2.0);
         assert_eq!(
             cropped.pixels,
             vec![4, 5, 6, 255, 7, 8, 9, 255, 13, 14, 15, 255, 16, 17, 18, 255]
+        );
+    }
+
+    #[test]
+    fn normalize_screenshot_region_preserves_pixel_grid_at_native_size() {
+        let screenshot = RobotScreenshot {
+            width: 2,
+            height: 2,
+            logical_width: 2.0,
+            logical_height: 2.0,
+            pixels: vec![1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255],
+        };
+
+        let normalized =
+            normalize_screenshot_region(&screenshot, (0.0, 0.0, 2.0, 2.0), 2, 2).expect("norm");
+
+        assert_eq!(normalized.width, screenshot.width);
+        assert_eq!(normalized.height, screenshot.height);
+        assert_eq!(normalized.logical_width, screenshot.logical_width);
+        assert_eq!(normalized.logical_height, screenshot.logical_height);
+        assert_eq!(normalized.pixels, screenshot.pixels);
+    }
+
+    #[test]
+    fn changed_pixel_count_in_region_uses_logical_coordinates() {
+        let before = RobotScreenshot {
+            width: 4,
+            height: 4,
+            logical_width: 2.0,
+            logical_height: 2.0,
+            pixels: vec![
+                0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255,
+                0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255,
+                0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255,
+            ],
+        };
+        let mut after = before.clone();
+        for y in 2..4 {
+            for x in 2..4 {
+                let idx = ((y * after.width + x) * 4) as usize;
+                after.pixels[idx] = 255;
+            }
+        }
+
+        assert_eq!(
+            changed_pixel_count_in_region(&before, &after, (1.0, 1.0, 1.0, 1.0), 1),
+            4
+        );
+    }
+
+    #[test]
+    fn sample_screenshot_pixel_logical_maps_scaled_capture() {
+        let screenshot = RobotScreenshot {
+            width: 4,
+            height: 4,
+            logical_width: 2.0,
+            logical_height: 2.0,
+            pixels: vec![
+                1, 0, 0, 255, 2, 0, 0, 255, 3, 0, 0, 255, 4, 0, 0, 255, 5, 0, 0, 255, 6, 0, 0, 255,
+                7, 0, 0, 255, 8, 0, 0, 255, 9, 0, 0, 255, 10, 0, 0, 255, 11, 0, 0, 255, 12, 0, 0,
+                255, 13, 0, 0, 255, 14, 0, 0, 255, 15, 0, 0, 255, 16, 0, 0, 255,
+            ],
+        };
+
+        assert_eq!(
+            sample_screenshot_pixel_logical(&screenshot, 1.25, 1.25),
+            Some([11, 0, 0, 255])
+        );
+    }
+
+    #[test]
+    fn screenshot_difference_stats_reports_first_difference() {
+        let before = RobotScreenshot {
+            width: 2,
+            height: 1,
+            logical_width: 2.0,
+            logical_height: 1.0,
+            pixels: vec![10, 20, 30, 255, 1, 2, 3, 255],
+        };
+        let after = RobotScreenshot {
+            width: 2,
+            height: 1,
+            logical_width: 2.0,
+            logical_height: 1.0,
+            pixels: vec![10, 20, 30, 255, 4, 8, 3, 200],
+        };
+
+        let stats = screenshot_difference_stats(&before, &after, 3).expect("stats");
+
+        assert_eq!(stats.differing_pixels, 1);
+        assert_eq!(stats.max_difference, 64);
+        assert_eq!(
+            stats.first_difference,
+            Some(ScreenshotPixelDifference {
+                x: 1,
+                y: 0,
+                before: [1, 2, 3, 255],
+                after: [4, 8, 3, 200],
+                difference: 64,
+            })
         );
     }
 }

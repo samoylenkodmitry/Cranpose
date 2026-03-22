@@ -1,0 +1,167 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
+use cranpose_ui_graphics::{BlendMode, ColorFilter, Rect, RenderEffect, RenderHash};
+
+use crate::graph::{
+    LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderNode,
+};
+use crate::layer_composition::{effective_layer_isolation, layer_for_content, local_content_layer};
+use crate::raster_cache::LayerRasterCacheHashes;
+
+pub(crate) fn recompute_layer_raster_cache_hashes(layer: &mut LayerNode) {
+    for child in &mut layer.children {
+        if let RenderNode::Layer(child_layer) = child {
+            recompute_layer_raster_cache_hashes(child_layer);
+        }
+    }
+    layer.cache_hashes = layer_raster_cache_hashes(layer);
+    layer.cache_hashes_valid = true;
+}
+
+pub(crate) fn layer_raster_cache_hashes(layer: &LayerNode) -> LayerRasterCacheHashes {
+    LayerRasterCacheHashes {
+        target_content: finish_hash(|state| hash_layer_target_content(layer, state)),
+        effect: hash_optional_render_effect(layer.effect()),
+    }
+}
+
+fn finish_hash(write: impl FnOnce(&mut DefaultHasher)) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    write(&mut hasher);
+    hasher.finish()
+}
+
+fn hash_layer_target_content<H: Hasher>(layer: &LayerNode, state: &mut H) {
+    layer.local_bounds.render_hash().hash(state);
+    layer.motion_context_animated.hash(state);
+    layer.translated_content_context.hash(state);
+    hash_optional_rect(layer.clip_rect(), state);
+    let isolation = effective_layer_isolation(&layer.graphics_layer);
+    let content_layer = layer_for_content(&layer.graphics_layer, isolation.as_ref());
+    let local_layer = local_content_layer(&content_layer);
+    hash_f32_bits(local_layer.alpha, state);
+    hash_optional_color_filter(local_layer.color_filter, state);
+    layer.children.len().hash(state);
+    for child in &layer.children {
+        match child {
+            RenderNode::Primitive(primitive) => {
+                0u8.hash(state);
+                hash_primitive_entry(primitive, state);
+            }
+            RenderNode::Layer(child_layer) => {
+                1u8.hash(state);
+                hash_child_layer_contribution(child_layer, state);
+            }
+        }
+    }
+}
+
+fn hash_child_layer_contribution<H: Hasher>(layer: &LayerNode, state: &mut H) {
+    hash_projective_transform(layer.transform_to_parent, state);
+    layer.motion_context_animated.hash(state);
+    layer.translated_content_context.hash(state);
+    hash_optional_rect(layer.shadow_clip, state);
+    hash_child_shadow_state(layer, state);
+    hash_optional_render_effect_to(layer.effect(), state);
+    hash_optional_render_effect_to(layer.backdrop(), state);
+    let isolation = effective_layer_isolation(&layer.graphics_layer);
+    let composite_alpha = isolation
+        .as_ref()
+        .map(|params| params.composite_alpha)
+        .unwrap_or(1.0);
+    let blend_mode = isolation
+        .as_ref()
+        .map(|params| params.blend_mode)
+        .unwrap_or(BlendMode::SrcOver);
+    hash_f32_bits(composite_alpha, state);
+    blend_mode.hash(state);
+    layer.target_content_hash().hash(state);
+}
+
+fn hash_child_shadow_state<H: Hasher>(layer: &LayerNode, state: &mut H) {
+    hash_f32_bits(layer.graphics_layer.shadow_elevation, state);
+    layer
+        .graphics_layer
+        .ambient_shadow_color
+        .render_hash()
+        .hash(state);
+    layer
+        .graphics_layer
+        .spot_shadow_color
+        .render_hash()
+        .hash(state);
+    hash_f32_bits(layer.graphics_layer.scale, state);
+    hash_f32_bits(layer.graphics_layer.scale_x, state);
+    hash_f32_bits(layer.graphics_layer.scale_y, state);
+    layer.graphics_layer.shape.render_hash().hash(state);
+}
+
+fn hash_primitive_entry<H: Hasher>(primitive: &PrimitiveEntry, state: &mut H) {
+    match primitive.phase {
+        PrimitivePhase::BeforeChildren => 0u8.hash(state),
+        PrimitivePhase::AfterChildren => 1u8.hash(state),
+    }
+    match &primitive.node {
+        PrimitiveNode::Draw(draw) => {
+            0u8.hash(state);
+            hash_optional_rect(draw.clip, state);
+            draw.primitive.render_hash().hash(state);
+        }
+        PrimitiveNode::Text(text) => {
+            1u8.hash(state);
+            text.rect.render_hash().hash(state);
+            text.text.render_hash().hash(state);
+            text.text_style.render_hash().hash(state);
+            hash_f32_bits(text.font_size, state);
+            text.layout_options.hash(state);
+            hash_optional_rect(text.clip, state);
+        }
+    }
+}
+
+fn hash_projective_transform<H: Hasher>(transform: ProjectiveTransform, state: &mut H) {
+    for row in transform.matrix() {
+        for value in row {
+            hash_f32_bits(value, state);
+        }
+    }
+}
+
+fn hash_optional_render_effect(effect: Option<&RenderEffect>) -> u64 {
+    finish_hash(|state| hash_optional_render_effect_to(effect, state))
+}
+
+fn hash_optional_render_effect_to<H: Hasher>(effect: Option<&RenderEffect>, state: &mut H) {
+    match effect {
+        Some(effect) => {
+            1u8.hash(state);
+            effect.render_hash().hash(state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
+fn hash_optional_color_filter<H: Hasher>(filter: Option<ColorFilter>, state: &mut H) {
+    match filter {
+        Some(filter) => {
+            1u8.hash(state);
+            filter.render_hash().hash(state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
+fn hash_optional_rect<H: Hasher>(rect: Option<Rect>, state: &mut H) {
+    match rect {
+        Some(rect) => {
+            1u8.hash(state);
+            rect.render_hash().hash(state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
+fn hash_f32_bits<H: Hasher>(value: f32, state: &mut H) {
+    value.to_bits().hash(state);
+}

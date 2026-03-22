@@ -19,6 +19,8 @@ pub enum PointerEventKind {
     Up,
     Cancel,
     Scroll,
+    Enter,
+    Exit,
 }
 
 #[repr(u8)]
@@ -95,7 +97,9 @@ impl PointerEvent {
             kind,
             phase: match kind {
                 PointerEventKind::Down => PointerPhase::Start,
-                PointerEventKind::Move => PointerPhase::Move,
+                PointerEventKind::Move | PointerEventKind::Enter | PointerEventKind::Exit => {
+                    PointerPhase::Move
+                }
                 PointerEventKind::Up => PointerPhase::End,
                 PointerEventKind::Cancel => PointerPhase::Cancel,
                 PointerEventKind::Scroll => PointerPhase::Move,

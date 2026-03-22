@@ -3,7 +3,8 @@ use cranpose_ui::{
     composable, measure_layout, Column, ColumnSpec, HeadlessRenderer, LayoutMeasurements, Modifier,
     Row, RowSpec, Size, Text, TextStyle,
 };
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use std::hint::black_box;
 
 const SECTION_COUNT: usize = 4;
 const ROWS_PER_SECTION: usize = 64;

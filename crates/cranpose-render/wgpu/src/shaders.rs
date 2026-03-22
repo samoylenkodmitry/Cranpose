@@ -173,19 +173,22 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let half_size = shape.rect.zw * 0.5;
     let local_pos = rect_pos - rect_center;
 
-    // Compute SDF for rounded rectangle
-    let dist = sdf_rounded_rect(local_pos, half_size, shape.radii);
-
-    // Coverage:
-    // - Rounded rects keep smooth SDF anti-aliasing.
-    // - Plain rects use hard inside coverage to avoid 1px seams with
-    //   subtractive blend modes (e.g. DstOut) at fractional coordinates.
-    let has_rounded_corners = max(max(shape.radii.x, shape.radii.y), max(shape.radii.z, shape.radii.w)) > 0.0001;
-    var alpha = 0.0;
-    if (has_rounded_corners) {
+    let has_radii = (shape.radii[0] > 0.0 || shape.radii[1] > 0.0 ||
+                     shape.radii[2] > 0.0 || shape.radii[3] > 0.0);
+    var alpha: f32;
+    if (has_radii) {
+        // Rounded rect: SDF + smoothstep for curved edges
+        let dist = sdf_rounded_rect(local_pos, half_size, shape.radii);
         alpha = 1.0 - smoothstep(-0.5, 0.5, dist);
     } else {
-        alpha = select(0.0, 1.0, dist <= 0.0);
+        // Non-rounded rect: analytical box coverage.
+        // Computes the exact fraction of each pixel covered by the rect,
+        // producing constant visual weight (sum of alpha) regardless of
+        // sub-pixel position. This prevents thin shapes (underlines, borders)
+        // from changing apparent thickness during scroll.
+        let cov_x = clamp(half_size.x + 0.5 - abs(local_pos.x), 0.0, 1.0);
+        let cov_y = clamp(half_size.y + 0.5 - abs(local_pos.y), 0.0, 1.0);
+        alpha = cov_x * cov_y;
     }
 
     if (alpha < 0.001) {
@@ -332,6 +335,74 @@ fn sdf_rounded_rect(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
 }
 "#;
 
+pub const COMPOSITE_SAMPLE_FN: &str = r#"
+fn composite_sample_box4(
+    source_pos: vec2<f32>,
+    source_size: vec2<f32>,
+    span_hint: vec2<f32>,
+) -> vec4<f32> {
+    let dims = vec2<i32>(textureDimensions(input_texture));
+    let inferred_footprint = vec2<f32>(
+        max(abs(dpdx(source_pos.x)), abs(dpdy(source_pos.x))),
+        max(abs(dpdx(source_pos.y)), abs(dpdy(source_pos.y))),
+    );
+    let footprint = vec2<f32>(
+        select(inferred_footprint.x, span_hint.x, span_hint.x > 0.0),
+        select(inferred_footprint.y, span_hint.y, span_hint.y > 0.0),
+    );
+    let span = max(footprint, vec2<f32>(1.0, 1.0));
+    let left = source_pos - span * 0.5;
+    let right = source_pos + span * 0.5;
+    let start_x = i32(floor(left.x));
+    let start_y = i32(floor(left.y));
+    var accum = vec4<f32>(0.0);
+    var total_weight = 0.0;
+
+    for (var offset_y: i32 = 0; offset_y < 6; offset_y = offset_y + 1) {
+        let texel_y = start_y + offset_y;
+        let texel_top = f32(texel_y);
+        let texel_bottom = texel_top + 1.0;
+        let weight_y = max(0.0, min(right.y, texel_bottom) - max(left.y, texel_top));
+        if (weight_y <= 0.0) {
+            continue;
+        }
+
+        for (var offset_x: i32 = 0; offset_x < 6; offset_x = offset_x + 1) {
+            let texel_x = start_x + offset_x;
+            let texel_left = f32(texel_x);
+            let texel_right = texel_left + 1.0;
+            let weight_x = max(0.0, min(right.x, texel_right) - max(left.x, texel_left));
+            let weight = weight_x * weight_y;
+            if (weight <= 0.0) {
+                continue;
+            }
+
+            total_weight = total_weight + weight;
+            if (texel_x < 0 || texel_x >= dims.x || texel_y < 0 || texel_y >= dims.y) {
+                continue;
+            }
+            accum = accum + textureLoad(input_texture, vec2<i32>(texel_x, texel_y), 0) * weight;
+        }
+    }
+
+    return accum / max(total_weight, 0.00001);
+}
+
+fn composite_sample(
+    source_pos: vec2<f32>,
+    source_size: vec2<f32>,
+    sampling_mode: f32,
+    span_hint: vec2<f32>,
+) -> vec4<f32> {
+    let safe_source_size = max(source_size, vec2<f32>(0.00001, 0.00001));
+    let uv = source_pos / safe_source_size;
+    if (sampling_mode <= 0.5) {
+        return textureSample(input_texture, input_sampler, uv);
+    }
+    return composite_sample_box4(source_pos, safe_source_size, span_hint);
+}
+"#;
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Composed post-process shaders
 // ═══════════════════════════════════════════════════════════════════════════
@@ -348,27 +419,28 @@ pub fn blur_shader() -> String {
         "{FULLSCREEN_QUAD_VS}{}",
         r#"
 struct BlurUniforms {
-    direction: vec2<f32>,   // (1,0) horizontal, (0,1) vertical
-    radius: vec2<f32>,      // blur radius in pixels
-    texture_size: vec2<f32>,
-    tile_mode: f32,         // 0 = Clamp, 1 = Repeated, 2 = Mirror, 3 = Decal
-    _padding: f32,
+    direction_and_radius: vec4<f32>,      // direction.xy, radius.xy
+    texture_size_and_tile_mode: vec4<f32>,// texture_size.xy, tile_mode, unused
 }
 
 @group(0) @binding(0) var input_texture: texture_2d<f32>;
 @group(0) @binding(1) var input_sampler: sampler;
 @group(1) @binding(0) var<uniform> blur: BlurUniforms;
 
+fn inside_unit_bounds(uv: vec2<f32>) -> f32 {
+    let inside = uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0;
+    return select(0.0, 1.0, inside);
+}
+
 fn sample_with_tile_mode(uv: vec2<f32>) -> vec4<f32> {
-    if (blur.tile_mode >= 2.5) {
+    let tile_mode = blur.texture_size_and_tile_mode.z;
+    if (tile_mode >= 2.5) {
         // Decal: out-of-bounds samples are transparent.
-        if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) {
-            return textureSample(input_texture, input_sampler, uv);
-        }
-        return vec4<f32>(0.0);
+        let clamped_uv = clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0));
+        return textureSample(input_texture, input_sampler, clamped_uv) * inside_unit_bounds(uv);
     }
 
-    if (blur.tile_mode >= 1.5) {
+    if (tile_mode >= 1.5) {
         // Mirror: ... 0->1, 1->0, repeat.
         let wrap_x = uv.x - floor(uv.x / 2.0) * 2.0;
         let wrap_y = uv.y - floor(uv.y / 2.0) * 2.0;
@@ -379,7 +451,7 @@ fn sample_with_tile_mode(uv: vec2<f32>) -> vec4<f32> {
         return textureSample(input_texture, input_sampler, mirrored_uv);
     }
 
-    if (blur.tile_mode >= 0.5) {
+    if (tile_mode >= 0.5) {
         // Repeated: wrap to [0,1).
         let repeated_uv = vec2<f32>(uv.x - floor(uv.x), uv.y - floor(uv.y));
         return textureSample(input_texture, input_sampler, repeated_uv);
@@ -392,10 +464,11 @@ fn sample_with_tile_mode(uv: vec2<f32>) -> vec4<f32> {
 
 @fragment
 fn blur_fs(input: VertexOutput) -> @location(0) vec4<f32> {
-    let pixel_size = 1.0 / blur.texture_size;
-    let dir = blur.direction;
+    let texture_size = max(blur.texture_size_and_tile_mode.xy, vec2<f32>(1.0, 1.0));
+    let pixel_size = 1.0 / texture_size;
+    let dir = blur.direction_and_radius.xy;
     // Use the radius component matching the direction.
-    let radius = max(dot(dir, blur.radius), 0.0);
+    let radius = max(dot(dir, blur.direction_and_radius.zw), 0.0);
     let sigma = max(radius * 0.5, 0.001);
 
     // Number of taps on each side (capped for shader cost stability).
@@ -406,42 +479,22 @@ fn blur_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     let inv_2sigma2 = 1.0 / (2.0 * sigma * sigma);
-    var color = sample_with_tile_mode(input.uv);
-    var total_weight = 1.0;
+    var color = vec4<f32>(0.0);
+    var total_weight = 0.0;
 
-    // Pair neighboring taps using linear filtering to reduce samples and keep
-    // a smoother Gaussian falloff (less "frosted" texture).
-    var i: i32 = 1;
-    loop {
-        if (i > tap_count) {
-            break;
+    for (var i: i32 = -32; i <= 32; i = i + 1) {
+        if (abs(i) > tap_count) {
+            continue;
         }
 
         let fi = f32(i);
-        let w0 = exp(-(fi * fi) * inv_2sigma2);
-
-        if (i == tap_count) {
-            let offset = dir * fi * pixel_size;
-            color = color + sample_with_tile_mode(input.uv + offset) * w0;
-            color = color + sample_with_tile_mode(input.uv - offset) * w0;
-            total_weight = total_weight + w0 * 2.0;
-            break;
-        }
-
-        let fi1 = f32(i + 1);
-        let w1 = exp(-(fi1 * fi1) * inv_2sigma2);
-        let pair_weight = w0 + w1;
-        let pair_offset = fi + w1 / max(pair_weight, 0.00001);
-        let offset = dir * pair_offset * pixel_size;
-
-        color = color + sample_with_tile_mode(input.uv + offset) * pair_weight;
-        color = color + sample_with_tile_mode(input.uv - offset) * pair_weight;
-        total_weight = total_weight + pair_weight * 2.0;
-
-        i = i + 2;
+        let weight = exp(-(fi * fi) * inv_2sigma2);
+        let offset = dir * fi * pixel_size;
+        color = color + sample_with_tile_mode(input.uv + offset) * weight;
+        total_weight = total_weight + weight;
     }
 
-    return color / total_weight;
+    return color / max(total_weight, 0.00001);
 }
 "#
     )
@@ -468,12 +521,11 @@ struct OffsetUniforms {
 fn offset_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let tex_size = vec2<f32>(textureDimensions(input_texture));
     let shifted_uv = input.uv - params.offset / max(tex_size, vec2<f32>(1.0));
-
-    if (shifted_uv.x < 0.0 || shifted_uv.x > 1.0 || shifted_uv.y < 0.0 || shifted_uv.y > 1.0) {
-        return vec4<f32>(0.0);
-    }
-
-    return textureSample(input_texture, input_sampler, shifted_uv);
+    let inside =
+        shifted_uv.x >= 0.0 && shifted_uv.x <= 1.0 && shifted_uv.y >= 0.0 && shifted_uv.y <= 1.0;
+    let clamped_uv = clamp(shifted_uv, vec2<f32>(0.0), vec2<f32>(1.0));
+    return textureSample(input_texture, input_sampler, clamped_uv)
+        * select(0.0, 1.0, inside);
 }
 "#
     )
@@ -485,7 +537,7 @@ fn offset_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 /// Transparent regions contribute nothing, so only the effect-processed content
 /// is composited onto the existing surface.
 pub fn blit_shader() -> String {
-    format!(
+    let mut shader = format!(
         "{FULLSCREEN_QUAD_VS}{SDF_ROUNDED_RECT_FN}{}",
         r#"
 @group(0) @binding(0) var input_texture: texture_2d<f32>;
@@ -495,31 +547,61 @@ struct BlitUniforms {
     mask_rect: vec4<f32>,    // x, y, width, height in destination pixels
     mask_radii: vec4<f32>,   // top_left, top_right, bottom_left, bottom_right
     mask_enabled: vec4<f32>, // x > 0 => apply rounded mask
+    sampling: vec4<f32>,     // x = 0 => linear, x = 1 => 4x box resolve
+    dest_viewport: vec4<f32>, // x, y, width, height in destination pixels
+    resolve_span: vec4<f32>, // x, y = exact source pixels covered by one destination pixel
 }
 @group(1) @binding(0) var<uniform> blit: BlitUniforms;
 
+"#
+    );
+    shader.push_str(COMPOSITE_SAMPLE_FN);
+    shader.push_str(
+        r#"
+
 @fragment
 fn blit_fs(input: VertexOutput) -> @location(0) vec4<f32> {
-    let sampled = textureSample(input_texture, input_sampler, input.uv) * blit.alpha.x;
+    let tex_size = vec2<f32>(textureDimensions(input_texture));
+    let use_dest_viewport = blit.dest_viewport.z > 0.0 && blit.dest_viewport.w > 0.0;
+    let dest_pos = input.position.xy;
+    var source_pos = input.uv * tex_size;
+    var resolve_span = blit.resolve_span.xy;
+    if use_dest_viewport {
+        let viewport_max = blit.dest_viewport.xy + blit.dest_viewport.zw;
+        if dest_pos.x < blit.dest_viewport.x || dest_pos.y < blit.dest_viewport.y ||
+            dest_pos.x >= viewport_max.x || dest_pos.y >= viewport_max.y {
+            discard;
+        }
+        let local_dest = dest_pos - blit.dest_viewport.xy;
+        source_pos = vec2<f32>(
+            local_dest.x * tex_size.x / blit.dest_viewport.z,
+            local_dest.y * tex_size.y / blit.dest_viewport.w,
+        );
+        resolve_span = vec2<f32>(
+            tex_size.x / blit.dest_viewport.z,
+            tex_size.y / blit.dest_viewport.w,
+        );
+    }
+    let sampled =
+        composite_sample(source_pos, tex_size, blit.sampling.x, resolve_span) * blit.alpha.x;
     if (blit.mask_enabled.x <= 0.5) {
         return sampled;
     }
 
-    let tex_size = vec2<f32>(textureDimensions(input_texture));
-    let world_pos = input.uv * tex_size;
+    let world_pos = dest_pos;
     let center = blit.mask_rect.xy + blit.mask_rect.zw * 0.5;
     let half_size = blit.mask_rect.zw * 0.5;
     let local_pos = world_pos - center;
-    let dist = sdf_rounded_rect(local_pos, half_size, blit.mask_radii);
-    let has_rounded_corners =
-        max(max(blit.mask_radii.x, blit.mask_radii.y), max(blit.mask_radii.z, blit.mask_radii.w))
-        > 0.0001;
-
-    var coverage = 0.0;
-    if (has_rounded_corners) {
+    let has_radii = (blit.mask_radii[0] > 0.0 || blit.mask_radii[1] > 0.0 ||
+                     blit.mask_radii[2] > 0.0 || blit.mask_radii[3] > 0.0);
+    var coverage: f32;
+    if (has_radii) {
+        let dist = sdf_rounded_rect(local_pos, half_size, blit.mask_radii);
         coverage = 1.0 - smoothstep(-0.5, 0.5, dist);
     } else {
-        coverage = select(0.0, 1.0, dist <= 0.0);
+        let cov_x = clamp(half_size.x + 0.5 - abs(local_pos.x), 0.0, 1.0);
+        let cov_y = clamp(half_size.y + 0.5 - abs(local_pos.y), 0.0, 1.0);
+        coverage = cov_x * cov_y;
     }
 
     if (coverage <= 0.001) {
@@ -527,6 +609,146 @@ fn blit_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     }
     return sampled * coverage;
 }
+"#,
+    );
+    shader
+}
+
+pub fn projective_blit_shader() -> String {
+    let mut shader = r#"
+struct VertexInput {
+    @location(0) position: vec2<f32>,
+}
+
+struct VertexOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) world_pos: vec2<f32>,
+}
+
+struct ProjectiveBlitUniforms {
+    viewport: vec2<f32>,
+    source_size: vec2<f32>,
+    inverse_row0: vec4<f32>,
+    inverse_row1: vec4<f32>,
+    inverse_row2: vec4<f32>,
+    alpha: vec4<f32>,
+    sampling: vec4<f32>,
+}
+
+@group(0) @binding(0) var input_texture: texture_2d<f32>;
+@group(0) @binding(1) var input_sampler: sampler;
+@group(1) @binding(0) var<uniform> blit: ProjectiveBlitUniforms;
 "#
-    )
+    .to_string();
+    shader.push_str(COMPOSITE_SAMPLE_FN);
+    shader.push_str(
+        r#"
+
+@vertex
+fn projective_blit_vs(input: VertexInput) -> VertexOutput {
+    var output: VertexOutput;
+    let x = (input.position.x / blit.viewport.x) * 2.0 - 1.0;
+    let y = 1.0 - (input.position.y / blit.viewport.y) * 2.0;
+    output.clip_position = vec4<f32>(x, y, 0.0, 1.0);
+    output.world_pos = input.position;
+    return output;
+}
+
+@fragment
+fn projective_blit_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+    let p = vec3<f32>(input.world_pos, 1.0);
+    let denom = dot(blit.inverse_row2.xyz, p);
+    if (abs(denom) <= 0.00001) {
+        discard;
+    }
+
+    let source_x = dot(blit.inverse_row0.xyz, p) / denom;
+    let source_y = dot(blit.inverse_row1.xyz, p) / denom;
+    if (source_x < 0.0 || source_y < 0.0 || source_x > blit.source_size.x || source_y > blit.source_size.y) {
+        discard;
+    }
+
+    let source_pos = vec2<f32>(source_x, source_y);
+    return composite_sample(source_pos, blit.source_size, blit.sampling.x, vec2<f32>(0.0, 0.0))
+        * blit.alpha.x;
+}
+"#
+    );
+    shader
+}
+
+#[cfg(test)]
+mod tests {
+    use naga::back::glsl;
+    use naga::ShaderStage;
+
+    fn validate_wgsl_module(source: &str) -> Result<(), String> {
+        let module = naga::front::wgsl::parse_str(source)
+            .map_err(|err| format!("WGSL parse error: {err}"))?;
+        let mut validator = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        );
+        validator
+            .validate(&module)
+            .map_err(|err| format!("WGSL validation error: {err}"))?;
+        Ok(())
+    }
+
+    fn validate_glsl_portability(
+        source: &str,
+        entry_point: &str,
+        shader_stage: ShaderStage,
+    ) -> Result<(), String> {
+        let module = naga::front::wgsl::parse_str(source)
+            .map_err(|err| format!("WGSL parse error: {err}"))?;
+        let mut validator = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        );
+        let module_info = validator
+            .validate(&module)
+            .map_err(|err| format!("WGSL validation error: {err}"))?;
+        let mut glsl_source = String::new();
+        let options = glsl::Options {
+            version: glsl::Version::new_gles(300),
+            writer_flags: glsl::WriterFlags::ADJUST_COORDINATE_SPACE,
+            ..Default::default()
+        };
+        let pipeline_options = glsl::PipelineOptions {
+            shader_stage,
+            entry_point: entry_point.to_string(),
+            multiview: None,
+        };
+        let mut writer = glsl::Writer::new(
+            &mut glsl_source,
+            &module,
+            &module_info,
+            &options,
+            &pipeline_options,
+            naga::proc::BoundsCheckPolicies::default(),
+        )
+        .map_err(|err| format!("GL/WebGL portability validation failed: {err}"))?;
+        writer
+            .write()
+            .map(|_| ())
+            .map_err(|err| format!("GL/WebGL portability emission failed: {err}"))
+    }
+
+    #[test]
+    fn blur_shader_validates_for_webgpu() {
+        assert!(validate_wgsl_module(&super::blur_shader()).is_ok());
+    }
+
+    #[test]
+    fn blur_shader_validates_for_webgl() {
+        let shader = super::blur_shader();
+        assert!(validate_glsl_portability(&shader, "fullscreen_vs", ShaderStage::Vertex).is_ok());
+        assert!(validate_glsl_portability(&shader, "blur_fs", ShaderStage::Fragment).is_ok());
+    }
+
+    #[test]
+    fn offset_shader_validates_for_webgpu() {
+        assert!(validate_wgsl_module(&super::offset_shader()).is_ok());
+    }
 }

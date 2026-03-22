@@ -15,9 +15,10 @@ use cranpose_render_common::software_text_raster::rasterize_text_to_image_with_f
 use cranpose_render_common::text_hyphenation::choose_auto_hyphen_break as choose_shared_auto_hyphen_break;
 use cranpose_ui::text::TextMotion;
 use cranpose_ui::{Brush, TextMeasurer, TextMetrics};
-use cranpose_ui_graphics::{BlendMode, Color, ColorFilter, Rect, TileMode};
+use cranpose_ui_graphics::{BlendMode, Color, ColorFilter, Point, Rect, TileMode};
 
-use crate::scene::{ImageDraw, Scene, TextDraw};
+use crate::pipeline;
+use crate::scene::{ImageDraw, RasterScene, Scene, TextDraw};
 use crate::style::point_in_resolved_rounded_rect;
 
 static FONT: Lazy<FontRef<'static>> = Lazy::new(|| {
@@ -30,6 +31,10 @@ static REPORTED_UNSUPPORTED_PIXELS_BLEND_MODES: AtomicBool = AtomicBool::new(fal
 
 fn is_blend_mode_supported(mode: BlendMode) -> bool {
     matches!(mode, BlendMode::SrcOver | BlendMode::DstOut)
+}
+
+fn snap_delta_for_anchor(anchor: Point) -> Point {
+    Point::new(anchor.x.round() - anchor.x, anchor.y.round() - anchor.y)
 }
 
 pub struct CachedFontTextMeasurer {
@@ -466,10 +471,22 @@ fn measure_text_impl(
 }
 
 pub fn draw_scene(frame: &mut [u8], width: u32, height: u32, scene: &Scene) {
+    if let Some(graph) = scene.graph.as_ref() {
+        let raster_scene = pipeline::build_raster_scene(graph);
+        draw_raster_scene(frame, width, height, &raster_scene);
+    } else {
+        clear_frame(frame);
+    }
+}
+
+fn clear_frame(frame: &mut [u8]) {
     for chunk in frame.chunks_exact_mut(4) {
         chunk.copy_from_slice(&[18, 18, 24, 255]);
     }
+}
 
+fn draw_raster_scene(frame: &mut [u8], width: u32, height: u32, scene: &RasterScene) {
+    clear_frame(frame);
     let mut ordered_items =
         Vec::with_capacity(scene.shapes.len() + scene.images.len() + scene.texts.len());
     for (index, shape) in scene.shapes.iter().enumerate() {
@@ -500,7 +517,15 @@ enum RenderItem {
 }
 
 fn draw_shape(frame: &mut [u8], width: u32, height: u32, draw: &crate::scene::DrawShape) {
-    let clip_bounds = match clip_rect_to_bounds(draw.rect, draw.clip, width, height) {
+    let snap_delta = draw
+        .snap_anchor
+        .map(snap_delta_for_anchor)
+        .unwrap_or_default();
+    let rect = draw.rect.translate(snap_delta.x, snap_delta.y);
+    let clip = draw
+        .clip
+        .map(|clip| clip.translate(snap_delta.x, snap_delta.y));
+    let clip_bounds = match clip_rect_to_bounds(rect, clip, width, height) {
         Some(bounds) => bounds,
         None => return,
     };
@@ -508,7 +533,7 @@ fn draw_shape(frame: &mut [u8], width: u32, height: u32, draw: &crate::scene::Dr
         width: rect_width,
         height: rect_height,
         ..
-    } = draw.rect;
+    } = rect;
     let resolved_shape = draw
         .shape
         .map(|shape| shape.resolve(rect_width, rect_height));
@@ -523,11 +548,11 @@ fn draw_shape(frame: &mut [u8], width: u32, height: u32, draw: &crate::scene::Dr
             let center_x = px as f32 + 0.5;
             let center_y = py as f32 + 0.5;
             if let Some(ref radii) = resolved_shape {
-                if !point_in_resolved_rounded_rect(center_x, center_y, draw.rect, radii) {
+                if !point_in_resolved_rounded_rect(center_x, center_y, rect, radii) {
                     continue;
                 }
             }
-            let sample = sample_brush(&draw.brush, draw.rect, center_x, center_y);
+            let sample = sample_brush(&draw.brush, rect, center_x, center_y);
             let alpha = sample[3];
             if alpha <= 0.0 {
                 continue;
@@ -539,11 +564,20 @@ fn draw_shape(frame: &mut [u8], width: u32, height: u32, draw: &crate::scene::Dr
 }
 
 fn draw_image(frame: &mut [u8], width: u32, height: u32, draw: &ImageDraw) {
-    if draw.alpha <= 0.0 || draw.rect.width <= 0.0 || draw.rect.height <= 0.0 {
+    let snap_delta = draw
+        .snap_anchor
+        .map(snap_delta_for_anchor)
+        .unwrap_or_default();
+    let rect = draw.rect.translate(snap_delta.x, snap_delta.y);
+    let clip = draw
+        .clip
+        .map(|clip| clip.translate(snap_delta.x, snap_delta.y));
+
+    if draw.alpha <= 0.0 || rect.width <= 0.0 || rect.height <= 0.0 {
         return;
     }
 
-    let clip_bounds = match clip_rect_to_bounds(draw.rect, draw.clip, width, height) {
+    let clip_bounds = match clip_rect_to_bounds(rect, clip, width, height) {
         Some(bounds) => bounds,
         None => return,
     };
@@ -566,8 +600,8 @@ fn draw_image(frame: &mut [u8], width: u32, height: u32, draw: &ImageDraw) {
         for px in clip_bounds.min_x..clip_bounds.max_x {
             let sample_x = px as f32 + 0.5;
             let sample_y = py as f32 + 0.5;
-            let u = ((sample_x - draw.rect.x) / draw.rect.width).clamp(0.0, 1.0);
-            let v = ((sample_y - draw.rect.y) / draw.rect.height).clamp(0.0, 1.0);
+            let u = ((sample_x - rect.x) / rect.width).clamp(0.0, 1.0);
+            let v = ((sample_y - rect.y) / rect.height).clamp(0.0, 1.0);
 
             let src_x = ((sr_x + u * sr_w).floor() as i32).clamp(0, img_width as i32 - 1);
             let src_y = ((sr_y + v * sr_h).floor() as i32).clamp(0, img_height as i32 - 1);
@@ -651,6 +685,7 @@ fn draw_text_with_span_styles(frame: &mut [u8], width: u32, height: u32, draw: &
                         width: metrics.width.max(1.0),
                         height: metrics.height.max(1.0),
                     },
+                    snap_anchor: draw.snap_anchor,
                     text: Rc::new(segment),
                     color: chunk_style.resolve_text_color(draw.color),
                     text_style: chunk_style.clone(),
@@ -686,24 +721,35 @@ fn draw_text_plain(frame: &mut [u8], width: u32, height: u32, draw: &TextDraw) {
         .text_motion
         .unwrap_or(TextMotion::Static)
         == TextMotion::Static;
+    let snap_delta = if static_text_motion {
+        draw.snap_anchor
+            .map(snap_delta_for_anchor)
+            .unwrap_or_default()
+    } else {
+        Point::default()
+    };
+    let rect = draw.rect.translate(snap_delta.x, snap_delta.y);
+    let clip = draw
+        .clip
+        .map(|clip| clip.translate(snap_delta.x, snap_delta.y));
 
     let raster_rect = if static_text_motion {
         Rect {
-            x: draw.rect.x.round(),
-            y: draw.rect.y.round(),
-            width: if draw.rect.width > 0.0 {
-                draw.rect.width.ceil().max(1.0)
+            x: rect.x.round(),
+            y: rect.y.round(),
+            width: if rect.width > 0.0 {
+                rect.width.ceil().max(1.0)
             } else {
-                draw.rect.width
+                rect.width
             },
-            height: if draw.rect.height > 0.0 {
-                draw.rect.height.ceil().max(1.0)
+            height: if rect.height > 0.0 {
+                rect.height.ceil().max(1.0)
             } else {
-                draw.rect.height
+                rect.height
             },
         }
     } else {
-        draw.rect
+        rect
     };
 
     let Some(image) = rasterize_text_to_image_with_font(
@@ -725,7 +771,7 @@ fn draw_text_plain(frame: &mut [u8], width: u32, height: u32, draw: &TextDraw) {
         height: image.height() as f32,
     };
 
-    blit_rasterized_text_image(frame, width, height, blit_rect, draw.clip, &image);
+    blit_rasterized_text_image(frame, width, height, blit_rect, clip, &image);
 }
 
 fn blit_rasterized_text_image(
@@ -976,6 +1022,11 @@ fn lerp_color(a: Color, b: Color, t: f32) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cranpose_render_common::graph::{
+        CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
+        PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
+    };
+    use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
 
     fn count_non_background_pixels(frame: &[u8], width: u32, height: u32) -> usize {
         count_non_background_pixels_in_band(frame, width, 0, height)
@@ -986,8 +1037,8 @@ mod tests {
         color: Color,
         x: f32,
     ) -> (u32, u32, Vec<u8>) {
-        let mut scene = Scene::new();
-        scene.push_text(
+        let mut raster_scene = RasterScene::new();
+        raster_scene.push_text(
             11,
             Rect {
                 x,
@@ -1007,7 +1058,7 @@ mod tests {
         let width = 360;
         let height = 140;
         let mut frame = vec![0u8; (width * height * 4) as usize];
-        draw_scene(&mut frame, width, height, &scene);
+        draw_raster_scene(&mut frame, width, height, &raster_scene);
         (width, height, frame)
     }
 
@@ -1100,8 +1151,8 @@ mod tests {
 
     #[test]
     fn multiline_text_renders_second_line_pixels() {
-        let mut scene = Scene::new();
-        scene.push_text(
+        let mut raster_scene = RasterScene::new();
+        raster_scene.push_text(
             1,
             Rect {
                 x: 8.0,
@@ -1123,7 +1174,7 @@ mod tests {
         let width = 220;
         let height = 100;
         let mut frame = vec![0u8; (width * height * 4) as usize];
-        draw_scene(&mut frame, width, height, &scene);
+        draw_raster_scene(&mut frame, width, height, &raster_scene);
 
         // Find the y-range of all ink pixels (font-agnostic approach).
         let (ink_top, ink_bottom) =
@@ -1147,9 +1198,60 @@ mod tests {
     }
 
     #[test]
-    fn text_clip_bounds_prevent_drawing_outside_scroll_window() {
+    fn draw_scene_renders_graph_backed_scene_without_flat_primitives() {
         let mut scene = Scene::new();
-        scene.push_text(
+        scene.graph = Some(RenderGraph::new(LayerNode {
+            node_id: None,
+            local_bounds: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 16.0,
+                height: 16.0,
+            },
+            transform_to_parent: ProjectiveTransform::identity(),
+            motion_context_animated: false,
+            translated_content_context: false,
+            graphics_layer: cranpose_ui_graphics::GraphicsLayer::default(),
+            clip_to_bounds: false,
+            shadow_clip: None,
+            hit_test: None,
+            has_hit_targets: false,
+            isolation: IsolationReasons::default(),
+            cache_policy: CachePolicy::None,
+            cache_hashes: LayerRasterCacheHashes::default(),
+            cache_hashes_valid: false,
+            children: vec![RenderNode::Primitive(PrimitiveEntry {
+                phase: PrimitivePhase::BeforeChildren,
+                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                    primitive: cranpose_ui_graphics::DrawPrimitive::Rect {
+                        rect: Rect {
+                            x: 2.0,
+                            y: 3.0,
+                            width: 6.0,
+                            height: 5.0,
+                        },
+                        brush: Brush::solid(Color::WHITE),
+                    },
+                    clip: None,
+                }),
+            })],
+        }));
+
+        let width = 20;
+        let height = 20;
+        let mut frame = vec![0u8; (width * height * 4) as usize];
+        draw_scene(&mut frame, width, height, &scene);
+
+        assert!(
+            count_non_background_pixels(&frame, width, height) > 0,
+            "graph-backed scenes should render even when flat primitive arrays are empty"
+        );
+    }
+
+    #[test]
+    fn text_clip_bounds_prevent_drawing_outside_scroll_window() {
+        let mut raster_scene = RasterScene::new();
+        raster_scene.push_text(
             2,
             Rect {
                 x: 8.0,
@@ -1174,7 +1276,7 @@ mod tests {
         let width = 220;
         let height = 100;
         let mut frame = vec![0u8; (width * height * 4) as usize];
-        draw_scene(&mut frame, width, height, &scene);
+        draw_raster_scene(&mut frame, width, height, &raster_scene);
 
         let total_ink = count_non_background_pixels_in_band(&frame, width, 0, height);
         assert_eq!(

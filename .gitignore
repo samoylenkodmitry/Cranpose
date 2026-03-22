@@ -19,6 +19,14 @@
 # Temporary test output
 *.tmp
 
+# Nested crate lockfiles (workspace uses root Cargo.lock)
+crates/*/Cargo.lock
+
+# Generated test artifacts
+robot_test_summary.txt
+docs/screenshots/text_scroll_exact_external/
+docs/screenshots/text_scroll_exact_external_old_*/
+
 # Misc
 *.swp
 *.swo

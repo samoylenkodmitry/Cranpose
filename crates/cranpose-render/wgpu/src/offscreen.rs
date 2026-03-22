@@ -64,7 +64,6 @@ impl OffscreenTarget {
         layout: &wgpu::BindGroupLayout,
         sampler: &wgpu::Sampler,
     ) -> std::cell::Ref<'_, wgpu::BindGroup> {
-        // Populate if empty
         {
             let mut slot = self.cached_bind_group.borrow_mut();
             if slot.is_none() {
@@ -98,6 +97,7 @@ impl OffscreenTarget {
 pub(crate) struct OffscreenPool {
     available: Vec<OffscreenTarget>,
     format: wgpu::TextureFormat,
+    max_texture_dim: u32,
 }
 
 /// Maximum pooled targets. Each target is a GPU texture (4 bytes/pixel RGBA).
@@ -105,11 +105,26 @@ pub(crate) struct OffscreenPool {
 const MAX_POOLED_TARGETS: usize = 16;
 
 impl OffscreenPool {
-    pub fn new(format: wgpu::TextureFormat) -> Self {
+    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         Self {
             available: Vec::new(),
             format,
+            max_texture_dim: device.limits().max_texture_dimension_2d,
         }
+    }
+
+    #[cfg(test)]
+    fn new_with_limit(format: wgpu::TextureFormat, max_texture_dim: u32) -> Self {
+        Self {
+            available: Vec::new(),
+            format,
+            max_texture_dim,
+        }
+    }
+
+    /// Maximum texture dimension supported by the GPU.
+    pub fn max_texture_dim(&self) -> u32 {
+        self.max_texture_dim
     }
 
     /// Number of targets currently in the pool.
@@ -136,6 +151,8 @@ impl OffscreenPool {
         height: u32,
         stats: Option<&FrameStats>,
     ) -> OffscreenTarget {
+        let width = width.min(self.max_texture_dim).max(1);
+        let height = height.min(self.max_texture_dim).max(1);
         if let Some(idx) = self
             .available
             .iter()
@@ -216,12 +233,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn offscreen_target_fits() {
-        // We can't create real GPU textures in unit tests, but we can test the fits logic
-        // by constructing an OffscreenTarget with known dimensions.
-        // Since OffscreenTarget::new requires a device, we test the fits method indirectly
-        // through the pool's acquire logic pattern.
-        let pool = OffscreenPool::new(wgpu::TextureFormat::Bgra8Unorm);
+    fn pool_starts_empty() {
+        let pool = OffscreenPool::new_with_limit(wgpu::TextureFormat::Bgra8Unorm, 8192);
         assert!(pool.available.is_empty());
+        assert_eq!(pool.pool_size(), 0);
+    }
+
+    #[test]
+    fn max_texture_dimension_stored() {
+        let pool = OffscreenPool::new_with_limit(wgpu::TextureFormat::Bgra8Unorm, 2048);
+        assert_eq!(pool.max_texture_dim, 2048);
+
+        let pool = OffscreenPool::new_with_limit(wgpu::TextureFormat::Bgra8Unorm, 4096);
+        assert_eq!(pool.max_texture_dim, 4096);
     }
 }

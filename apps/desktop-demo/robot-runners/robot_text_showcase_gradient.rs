@@ -4,35 +4,12 @@
 //! `cargo run --package desktop-app --example robot_text_showcase_gradient --features robot-app`
 
 use cranpose::AppLauncher;
-use cranpose_testing::{crop_screenshot, find_button_in_semantics, find_in_semantics, find_text};
+use cranpose_testing::{
+    crop_screenshot_logical, find_button_exact_in_semantics, find_button_in_semantics,
+    find_in_semantics, find_text,
+};
 use desktop_app::app;
 use std::time::Duration;
-
-fn has_text_exact(elem: &cranpose::SemanticElement, text: &str) -> bool {
-    if elem.text.as_deref() == Some(text) {
-        return true;
-    }
-    elem.children
-        .iter()
-        .any(|child| has_text_exact(child, text))
-}
-
-fn find_button_exact(elem: &cranpose::SemanticElement, text: &str) -> Option<(f32, f32, f32, f32)> {
-    if elem.clickable && has_text_exact(elem, text) {
-        return Some((
-            elem.bounds.x,
-            elem.bounds.y,
-            elem.bounds.width,
-            elem.bounds.height,
-        ));
-    }
-    for child in &elem.children {
-        if let Some(bounds) = find_button_exact(child, text) {
-            return Some(bounds);
-        }
-    }
-    None
-}
 
 fn fail(robot: &cranpose::Robot, message: &str) -> ! {
     println!("FATAL: {message}");
@@ -65,7 +42,7 @@ fn main() {
             let _ = robot.wait_for_idle();
 
             let Some((text_x, text_y, text_w, text_h)) =
-                find_in_semantics(&robot, |elem| find_button_exact(elem, "Text"))
+                find_button_exact_in_semantics(&robot, "Text")
             else {
                 fail(&robot, "Text tab not found after navigating to right-side tabs");
             };
@@ -81,7 +58,7 @@ fn main() {
                 fail(&robot, "Text showcase heading not found after tab switch");
             }
 
-            let Some((anchor_x, anchor_y, anchor_w, anchor_h)) = find_in_semantics(&robot, |elem| {
+            let Some((_anchor_x, _anchor_y, _anchor_w, _anchor_h)) = find_in_semantics(&robot, |elem| {
                 find_text(elem, "brush + alpha + draw_style + platform_style")
             })
             else {
@@ -90,30 +67,28 @@ fn main() {
                     "gradient/stroke anchor label not found in Text showcase semantics",
                 );
             };
-            let sample_y = anchor_y + anchor_h + 2.0;
-            let sample_w = anchor_w.max(280.0);
-            let sample_h = (anchor_h * 2.2).max(28.0);
+            let Some((sample_x, sample_y, sample_w, sample_h)) = find_in_semantics(&robot, |elem| {
+                find_text(elem, "Gradient/alpha/fill/platform")
+            }) else {
+                fail(
+                    &robot,
+                    "gradient/stroke sample text not found in Text showcase semantics",
+                );
+            };
 
             let screenshot = robot
                 .screenshot()
                 .unwrap_or_else(|err| fail(&robot, &format!("screenshot failed: {err}")));
 
-            let left = anchor_x.max(0.0).floor() as u32;
-            let top = sample_y.max(0.0).floor() as u32;
-            let right = (anchor_x + sample_w).max(0.0).ceil() as u32;
-            let bottom = (sample_y + sample_h).max(0.0).ceil() as u32;
-            let width = right.saturating_sub(left).max(1);
-            let height = bottom.saturating_sub(top).max(1);
-            let max_width = screenshot.width.saturating_sub(left);
-            let max_height = screenshot.height.saturating_sub(top);
-            let cropped = crop_screenshot(
+            let crop_padding = 8.0;
+            let cropped = crop_screenshot_logical(
                 &screenshot,
-                left,
-                top,
-                width.min(max_width).max(1),
-                height.min(max_height).max(1),
+                sample_x - crop_padding,
+                sample_y - crop_padding,
+                sample_w + crop_padding * 2.0,
+                sample_h + crop_padding * 2.0,
             )
-            .unwrap_or_else(|| fail(&robot, "failed to crop sample bounds"));
+                .unwrap_or_else(|| fail(&robot, "failed to crop sample bounds"));
 
             let mut colored_pixels = 0usize;
             let mut min_red = 1.0f32;

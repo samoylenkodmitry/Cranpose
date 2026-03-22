@@ -68,6 +68,9 @@ where
     /// - On Move/Up/Cancel: resolve fresh HitTargets from current scene
     /// - Handler closures are preserved (same Rc), so internal state survives
     hit_path_tracker: HitPathTracker,
+    /// Tracks which nodes the pointer is currently hovering over.
+    /// Used to synthesize Enter/Exit events when the hover set changes.
+    hovered_nodes: Vec<NodeId>,
     /// Persistent clipboard for desktop (Linux X11 requires clipboard to stay alive)
     #[cfg(all(
         not(target_arch = "wasm32"),
@@ -130,6 +133,7 @@ where
             is_dirty: true,
             buttons_pressed: PointerButtons::NONE,
             hit_path_tracker: HitPathTracker::new(),
+            hovered_nodes: Vec::new(),
             #[cfg(all(
                 not(target_arch = "wasm32"),
                 not(target_os = "android"),
@@ -387,10 +391,36 @@ where
         }
 
         // No gesture in progress: regular hover move using hit-test.
+        // Diff against previous hover set to synthesize Enter/Exit events.
         let hits = self.renderer.scene().hit_test(x, y);
+        let new_ids: Vec<NodeId> = hits.iter().map(|h| h.node_id()).collect();
+
+        // Dispatch Exit to nodes that are no longer hovered
+        let pos = Point { x, y };
+        for &old_id in &self.hovered_nodes {
+            if !new_ids.contains(&old_id) {
+                if let Some(target) = self.renderer.scene().find_target(old_id) {
+                    let exit_event = PointerEvent::new(PointerEventKind::Exit, pos, pos)
+                        .with_buttons(self.buttons_pressed);
+                    target.dispatch(exit_event);
+                }
+            }
+        }
+
+        // Dispatch Enter to newly hovered nodes
+        for hit in &hits {
+            if !self.hovered_nodes.contains(&hit.node_id()) {
+                let enter_event = PointerEvent::new(PointerEventKind::Enter, pos, pos)
+                    .with_buttons(self.buttons_pressed);
+                hit.dispatch(enter_event);
+            }
+        }
+
+        self.hovered_nodes = new_ids;
+
         if !hits.is_empty() {
-            let event = PointerEvent::new(PointerEventKind::Move, Point { x, y }, Point { x, y })
-                .with_buttons(self.buttons_pressed); // usually NONE here
+            let event = PointerEvent::new(PointerEventKind::Move, pos, pos)
+                .with_buttons(self.buttons_pressed);
             for hit in hits {
                 hit.dispatch(event.clone());
                 if event.is_consumed() {
@@ -598,6 +628,19 @@ where
                 hit.dispatch(event.clone());
             }
         }
+
+        // Dispatch Exit to all previously hovered nodes
+        let pos = Point {
+            x: self.cursor.0,
+            y: self.cursor.1,
+        };
+        for &node_id in &self.hovered_nodes {
+            if let Some(target) = self.renderer.scene().find_target(node_id) {
+                let exit_event = PointerEvent::new(PointerEventKind::Exit, pos, pos);
+                target.dispatch(exit_event);
+            }
+        }
+        self.hovered_nodes.clear();
     }
     /// Routes a keyboard event to the focused text field, if any.
     ///
