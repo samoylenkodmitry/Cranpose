@@ -22,8 +22,15 @@ where
     P: MeasurePolicy + Clone + PartialEq + 'static,
 {
     let policy: Rc<dyn MeasurePolicy> = Rc::new(measure_policy);
+    let modifier_for_reset = modifier.clone();
+    let policy_for_reset = Rc::clone(&policy);
     let id = cranpose_core::with_current_composer(|composer| {
-        composer.emit_node(|| LayoutNode::new(modifier.clone(), Rc::clone(&policy)))
+        composer.emit_recyclable_node(
+            || LayoutNode::new(modifier.clone(), Rc::clone(&policy)),
+            move |node| {
+                *node = LayoutNode::new(modifier_for_reset.clone(), Rc::clone(&policy_for_reset));
+            },
+        )
     });
     if let Err(err) = cranpose_core::with_node_mut(id, |node: &mut LayoutNode| {
         node.set_modifier(modifier.clone());
@@ -95,4 +102,50 @@ where
         height = height.clamp(constraints.min_height, constraints.max_height);
         scope.layout(width, height, placements)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cranpose_core::{location_key, Composition, MemoryApplier, MutableState};
+    use std::cell::Cell;
+
+    #[test]
+    fn layout_recomposes_when_content_reads_state() {
+        thread_local! {
+            static INVOCATIONS: Cell<usize> = const { Cell::new(0) };
+        }
+
+        let mut composition = Composition::new(MemoryApplier::new());
+        let runtime = composition.runtime_handle();
+        let state = MutableState::with_runtime(0_i32, runtime);
+
+        composition
+            .render(location_key(file!(), line!(), column!()), {
+                let observed_state = state;
+                move || {
+                    Layout(
+                        Modifier::empty(),
+                        crate::layout::policies::EmptyMeasurePolicy,
+                        {
+                            let observed_state = observed_state;
+                            move || {
+                                let _ = observed_state.value();
+                                INVOCATIONS.with(|calls| calls.set(calls.get() + 1));
+                            }
+                        },
+                    );
+                }
+            })
+            .expect("initial layout render");
+
+        INVOCATIONS.with(|calls| assert_eq!(calls.get(), 1));
+
+        state.set_value(1);
+        composition
+            .process_invalid_scopes()
+            .expect("layout content recomposition");
+
+        INVOCATIONS.with(|calls| assert_eq!(calls.get(), 2));
+    }
 }

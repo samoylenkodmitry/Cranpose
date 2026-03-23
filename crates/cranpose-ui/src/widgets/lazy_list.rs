@@ -627,9 +627,11 @@ fn LazyColumnImpl(
     if let Err(err) = cranpose_core::with_node_mut(node_id, |node: &mut SubcomposeLayoutNode| {
         node.set_modifier(scroll_modifier.clone());
         node.set_measure_policy(Rc::clone(&policy));
+        node.mark_needs_measure();
     }) {
         debug_assert!(false, "failed to update LazyColumn node: {err}");
     }
+    cranpose_core::bubble_measure_dirty_in_composer(node_id);
 
     // Register layout invalidation callback with the actual node ID.
     // This uses schedule_layout_repass (O(subtree)) instead of request_layout_invalidation (O(app)).
@@ -710,9 +712,11 @@ fn LazyRowImpl(
     if let Err(err) = cranpose_core::with_node_mut(node_id, |node: &mut SubcomposeLayoutNode| {
         node.set_modifier(scroll_modifier.clone());
         node.set_measure_policy(Rc::clone(&policy));
+        node.mark_needs_measure();
     }) {
         debug_assert!(false, "failed to update LazyRow node: {err}");
     }
+    cranpose_core::bubble_measure_dirty_in_composer(node_id);
 
     // Register layout invalidation callback with the actual node ID.
     // This uses schedule_layout_repass (O(subtree)) instead of request_layout_invalidation (O(app)).

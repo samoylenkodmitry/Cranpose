@@ -442,11 +442,11 @@ impl SubcomposeState {
     /// Each slot gets its own isolated slot table, avoiding cursor-based conflicts when
     /// items are subcomposed in different orders.
     pub fn get_or_create_slots(&mut self, slot_id: SlotId) -> Rc<SlotsHost> {
-        Rc::clone(self.slot_compositions.entry(slot_id).or_insert_with(|| {
-            Rc::new(SlotsHost::new(crate::slot_backend::SlotBackend::Baseline(
-                SlotTable::new(),
-            )))
-        }))
+        Rc::clone(
+            self.slot_compositions
+                .entry(slot_id)
+                .or_insert_with(|| Rc::new(SlotsHost::new(SlotTable::new()))),
+        )
     }
 
     /// Returns the latest callback holder for the given slot, creating one if needed.

@@ -603,3 +603,123 @@ fn recursive_layout_depth_decrease_then_increase_restores_branches() {
         "layout tree mismatch after re-increasing depth"
     );
 }
+
+#[test]
+fn tab_switching_node_vec_does_not_grow_unboundedly() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let active_tab = MutableState::with_runtime(0i32, runtime.clone());
+    let progress = MutableState::with_runtime(0.5f32, runtime);
+
+    let key = location_key(file!(), line!(), column!());
+    let mut render = make_tab_renderer(active_tab, progress);
+
+    // Initial render + warmup cycle
+    composition.render(key, &mut render).expect("initial");
+    active_tab.set_value(1);
+    while composition.process_invalid_scopes().expect("switch") {}
+    active_tab.set_value(0);
+    while composition.process_invalid_scopes().expect("switch back") {}
+
+    let baseline_active = composition.applier_mut().len();
+    let baseline_capacity = composition.applier_mut().capacity();
+    let baseline_slots = composition.debug_dump_all_slots().len();
+
+    // Run many cycles
+    for _ in 0..50 {
+        active_tab.set_value(1);
+        while composition.process_invalid_scopes().expect("to tab 1") {}
+        active_tab.set_value(0);
+        while composition.process_invalid_scopes().expect("to tab 0") {}
+    }
+
+    let final_active = composition.applier_mut().len();
+    let final_capacity = composition.applier_mut().capacity();
+    let final_slots = composition.debug_dump_all_slots().len();
+
+    assert_eq!(
+        baseline_active, final_active,
+        "active node count should be stable across tab cycles"
+    );
+    // Node capacity should not grow more than 2x from baseline
+    assert!(
+        final_capacity <= baseline_capacity * 2,
+        "node vec capacity grew from {} to {} ({:.1}x) over 50 cycles - indicates unbounded growth",
+        baseline_capacity,
+        final_capacity,
+        final_capacity as f64 / baseline_capacity as f64,
+    );
+    // Slot count should not grow significantly
+    assert!(
+        final_slots <= baseline_slots + 10,
+        "slot count grew from {} to {} over 50 cycles - indicates unbounded slot growth",
+        baseline_slots,
+        final_slots,
+    );
+}
+
+#[test]
+fn depth_cycling_node_vec_does_not_grow_unboundedly() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let depth_state = MutableState::with_runtime(3usize, runtime);
+    let key = location_key(file!(), line!(), column!());
+
+    composition
+        .render(key, &mut || recursive_layout_root(depth_state))
+        .expect("initial render");
+
+    // Warmup: cycle depth 3→10→3 once
+    for d in 4..=10 {
+        depth_state.set_value(d);
+        while composition.process_invalid_scopes().expect("depth up") {}
+    }
+    for d in (3..10).rev() {
+        depth_state.set_value(d);
+        while composition.process_invalid_scopes().expect("depth down") {}
+    }
+
+    let baseline_active = composition.applier_mut().len();
+    let baseline_capacity = composition.applier_mut().capacity();
+    let baseline_tombstones = composition.applier_mut().tombstone_count();
+    eprintln!(
+        "After warmup: active={}, capacity={}, tombstones={}",
+        baseline_active, baseline_capacity, baseline_tombstones
+    );
+
+    // Run 10 depth cycles
+    for cycle in 0..10 {
+        for d in 4..=10 {
+            depth_state.set_value(d);
+            while composition.process_invalid_scopes().expect("depth up") {}
+        }
+        for d in (3..10).rev() {
+            depth_state.set_value(d);
+            while composition.process_invalid_scopes().expect("depth down") {}
+        }
+        let active = composition.applier_mut().len();
+        let capacity = composition.applier_mut().capacity();
+        let tombstones = composition.applier_mut().tombstone_count();
+        eprintln!(
+            "Cycle {}: active={}, capacity={}, tombstones={}",
+            cycle, active, capacity, tombstones
+        );
+    }
+
+    let final_active = composition.applier_mut().len();
+    let final_capacity = composition.applier_mut().capacity();
+    let final_tombstones = composition.applier_mut().tombstone_count();
+
+    assert_eq!(
+        baseline_active, final_active,
+        "active node count should be stable across depth cycles"
+    );
+    assert!(
+        final_capacity <= baseline_capacity + 100,
+        "node vec capacity grew from {} to {} over 10 depth cycles ({} new tombstones) - \
+         indicates MemoryApplier does not reuse freed indices",
+        baseline_capacity,
+        final_capacity,
+        final_tombstones - baseline_tombstones,
+    );
+}

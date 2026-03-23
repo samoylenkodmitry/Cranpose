@@ -244,6 +244,9 @@ run_test() {
         robot_double_click|robot_multiline_click|robot_multiline_nav)
             timeout_secs=90
             ;;
+        robot_memory_leak)
+            timeout_secs=300
+            ;;
     esac
 
     local headless_env="CRANPOSE_HEADLESS=1"

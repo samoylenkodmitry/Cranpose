@@ -4,7 +4,6 @@ pub mod coordinator;
 pub mod core;
 pub mod policies;
 
-use cranpose_core::collections::map::Entry;
 use cranpose_core::collections::map::HashMap;
 use std::{
     cell::RefCell,
@@ -30,9 +29,9 @@ use crate::modifier::{
 
 use crate::subcompose_layout::SubcomposeLayoutNode;
 use crate::widgets::nodes::{IntrinsicKind, LayoutNode, LayoutNodeCacheHandles};
-use cranpose_foundation::InvalidationKind;
-use cranpose_foundation::ModifierNodeContext;
-use cranpose_foundation::{NodeCapabilities, SemanticsConfiguration};
+use cranpose_foundation::{
+    InvalidationKind, ModifierNodeContext, NodeCapabilities, SemanticsConfiguration,
+};
 use cranpose_ui_layout::{Constraints, MeasurePolicy, MeasureResult};
 
 /// Runtime context for modifier nodes during measurement.
@@ -263,7 +262,7 @@ pub enum SemanticsRole {
 }
 
 /// A single node within the semantics tree.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SemanticsNode {
     pub node_id: NodeId,
     pub role: SemanticsRole,
@@ -291,7 +290,7 @@ impl SemanticsNode {
 }
 
 /// Rooted semantics tree extracted after layout.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SemanticsTree {
     root: SemanticsNode,
 }
@@ -303,40 +302,6 @@ impl SemanticsTree {
 
     pub fn root(&self) -> &SemanticsNode {
         &self.root
-    }
-}
-
-/// Caches semantics configurations for layout nodes, similar to Jetpack Compose's SemanticsOwner.
-/// This enables lazy semantics tree construction and efficient invalidation.
-#[derive(Default)]
-pub struct SemanticsOwner {
-    configurations: RefCell<HashMap<NodeId, Option<SemanticsConfiguration>>>,
-}
-
-impl SemanticsOwner {
-    pub fn new() -> Self {
-        Self {
-            configurations: RefCell::new(HashMap::default()),
-        }
-    }
-
-    /// Returns the cached configuration for the given node, computing it if necessary.
-    pub fn get_or_compute(
-        &self,
-        node_id: NodeId,
-        applier: &mut MemoryApplier,
-    ) -> Option<SemanticsConfiguration> {
-        // Check cache first
-        if let Some(cached) = self.configurations.borrow().get(&node_id) {
-            return cached.clone();
-        }
-
-        // Compute and cache
-        let config = compute_semantics_for_node(applier, node_id);
-        self.configurations
-            .borrow_mut()
-            .insert(node_id, config.clone());
-        config
     }
 }
 
@@ -470,14 +435,14 @@ impl LayoutEngine for MemoryApplier {
 pub struct LayoutMeasurements {
     root: Rc<MeasuredNode>,
     semantics: Option<SemanticsTree>,
-    layout_tree: LayoutTree,
+    layout_tree: Option<LayoutTree>,
 }
 
 impl LayoutMeasurements {
     fn new(
         root: Rc<MeasuredNode>,
         semantics: Option<SemanticsTree>,
-        layout_tree: LayoutTree,
+        layout_tree: Option<LayoutTree>,
     ) -> Self {
         Self {
             root,
@@ -498,23 +463,36 @@ impl LayoutMeasurements {
     /// Consumes the measurements and produces a [`LayoutTree`].
     pub fn into_layout_tree(self) -> LayoutTree {
         self.layout_tree
+            .expect("layout tree was not built for these measurements")
     }
 
     /// Returns a borrowed [`LayoutTree`] for rendering.
     pub fn layout_tree(&self) -> LayoutTree {
-        self.layout_tree.clone()
+        self.layout_tree
+            .clone()
+            .expect("layout tree was not built for these measurements")
     }
+}
+
+/// Builds a semantics tree from an existing [`LayoutTree`].
+///
+/// This is useful for consumers that need semantics on demand without forcing
+/// every layout pass to eagerly allocate a full [`SemanticsTree`].
+pub fn build_semantics_tree_from_layout_tree(layout_tree: &LayoutTree) -> SemanticsTree {
+    SemanticsTree::new(build_semantics_node_from_layout_box(layout_tree.root()))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MeasureLayoutOptions {
     pub collect_semantics: bool,
+    pub build_layout_tree: bool,
 }
 
 impl Default for MeasureLayoutOptions {
     fn default() -> Self {
         Self {
             collect_semantics: true,
+            build_layout_tree: true,
         }
     }
 }
@@ -560,6 +538,8 @@ pub fn measure_layout_with_options(
     max_size: Size,
     options: MeasureLayoutOptions,
 ) -> Result<LayoutMeasurements, NodeError> {
+    process_pending_layout_repasses(applier, root)?;
+
     let constraints = Constraints {
         min_width: 0.0,
         max_width: max_size.width,
@@ -643,25 +623,25 @@ pub fn measure_layout_with_options(
         }
     }
 
-    // ---- Metadata ----------------------------------------------------------
-    let metadata = {
+    let (layout_tree, semantics) = {
         let mut applier_ref = applier_host.borrow_typed();
-        collect_runtime_metadata(&mut applier_ref, &measured)?
-    };
-
-    let semantics = if options.collect_semantics {
-        let semantics_snapshot = {
-            let mut applier_ref = applier_host.borrow_typed();
-            collect_semantics_snapshot(&mut applier_ref, &measured)?
+        let layout_tree = if options.build_layout_tree {
+            Some(build_layout_tree(&mut applier_ref, &measured)?)
+        } else {
+            None
         };
-
-        Some(SemanticsTree::new(build_semantics_node(
-            &measured,
-            &metadata,
-            &semantics_snapshot,
-        )))
-    } else {
-        None
+        let semantics = if options.collect_semantics {
+            let semantics_tree = if let Some(layout_tree) = layout_tree.as_ref() {
+                clear_semantics_dirty_flags(&mut applier_ref, &measured)?;
+                build_semantics_tree_from_layout_tree(layout_tree)
+            } else {
+                build_semantics_tree_from_live_nodes(&mut applier_ref, &measured)?
+            };
+            Some(semantics_tree)
+        } else {
+            None
+        };
+        (layout_tree, semantics)
     };
 
     // Drop builder before guard - slots are already in the shared handle.
@@ -671,9 +651,25 @@ pub fn measure_layout_with_options(
     // DO NOT manually unwrap `applier_host` or replace `applier` here.
     // `ApplierSlotGuard::drop` will restore everything when this function returns.
 
-    let layout_tree = build_layout_tree_from_metadata(&measured, &metadata);
-
     Ok(LayoutMeasurements::new(measured, semantics, layout_tree))
+}
+
+fn process_pending_layout_repasses(
+    applier: &mut MemoryApplier,
+    root: NodeId,
+) -> Result<(), NodeError> {
+    let repass_nodes = crate::take_layout_repass_nodes();
+    if repass_nodes.is_empty() {
+        return Ok(());
+    }
+
+    for node_id in repass_nodes {
+        cranpose_core::bubble_measure_dirty(applier as &mut dyn Applier, node_id);
+        cranpose_core::bubble_layout_dirty(applier as &mut dyn Applier, node_id);
+    }
+
+    applier.get_mut(root)?.mark_needs_measure();
+    Ok(())
 }
 
 struct LayoutBuilder {
@@ -1883,72 +1879,6 @@ impl Default for RuntimeNodeMetadata {
     }
 }
 
-fn collect_runtime_metadata(
-    applier: &mut MemoryApplier,
-    node: &MeasuredNode,
-) -> Result<HashMap<NodeId, RuntimeNodeMetadata>, NodeError> {
-    let mut map = HashMap::default();
-    collect_runtime_metadata_inner(applier, node, &mut map)?;
-    Ok(map)
-}
-
-/// Collects semantics configurations for all nodes in the measured tree using the SemanticsOwner cache.
-fn collect_semantics_with_owner(
-    applier: &mut MemoryApplier,
-    node: &MeasuredNode,
-    owner: &SemanticsOwner,
-) -> Result<(), NodeError> {
-    // Compute and cache configuration for this node
-    owner.get_or_compute(node.node_id, applier);
-
-    // Recurse to children
-    for child in &node.children {
-        collect_semantics_with_owner(applier, &child.node, owner)?;
-    }
-    Ok(())
-}
-
-fn collect_semantics_snapshot(
-    applier: &mut MemoryApplier,
-    node: &MeasuredNode,
-) -> Result<HashMap<NodeId, Option<SemanticsConfiguration>>, NodeError> {
-    let owner = SemanticsOwner::new();
-    collect_semantics_with_owner(applier, node, &owner)?;
-
-    // Extract all cached configurations into a map
-    let mut map = HashMap::default();
-    extract_configurations_recursive(node, &owner, &mut map);
-    Ok(map)
-}
-
-fn extract_configurations_recursive(
-    node: &MeasuredNode,
-    owner: &SemanticsOwner,
-    map: &mut HashMap<NodeId, Option<SemanticsConfiguration>>,
-) {
-    if let Some(config) = owner.configurations.borrow().get(&node.node_id) {
-        map.insert(node.node_id, config.clone());
-    }
-    for child in &node.children {
-        extract_configurations_recursive(&child.node, owner, map);
-    }
-}
-
-fn collect_runtime_metadata_inner(
-    applier: &mut MemoryApplier,
-    node: &MeasuredNode,
-    map: &mut HashMap<NodeId, RuntimeNodeMetadata>,
-) -> Result<(), NodeError> {
-    if let Entry::Vacant(entry) = map.entry(node.node_id) {
-        let meta = runtime_metadata_for(applier, node.node_id)?;
-        entry.insert(meta);
-    }
-    for child in &node.children {
-        collect_runtime_metadata_inner(applier, &child.node, map)?;
-    }
-    Ok(())
-}
-
 fn role_from_modifier_slices(modifier_slices: &ModifierNodeSlices) -> SemanticsRole {
     modifier_slices
         .text_content()
@@ -2004,87 +1934,109 @@ fn runtime_metadata_for(
     Ok(RuntimeNodeMetadata::default())
 }
 
-/// Computes semantics configuration for a node by reading from its modifier chain.
-/// This is the primary entry point for extracting semantics from nodes, replacing
-/// the widget-specific fallbacks with pure modifier-node traversal.
-fn compute_semantics_for_node(
+fn clear_semantics_dirty_flags(
     applier: &mut MemoryApplier,
-    node_id: NodeId,
-) -> Option<SemanticsConfiguration> {
-    // Try LayoutNode (the primary modern path)
-    match applier.with_node::<LayoutNode, _>(node_id, |layout| {
-        let config = layout.semantics_configuration();
+    node: &MeasuredNode,
+) -> Result<(), NodeError> {
+    if let Err(err) = applier.with_node::<LayoutNode, _>(node.node_id, |layout| {
         layout.clear_needs_semantics();
-        config
     }) {
-        Ok(config) => return config,
-        Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => {}
-        Err(_) => return None,
+        match err {
+            NodeError::Missing { .. } | NodeError::TypeMismatch { .. } => {}
+            _ => return Err(err),
+        }
     }
 
-    // Try SubcomposeLayoutNode
-    if let Ok(modifier) =
-        applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| node.modifier())
-    {
-        return collect_semantics_from_modifier(&modifier);
+    for child in &node.children {
+        clear_semantics_dirty_flags(applier, &child.node)?;
     }
 
-    None
+    Ok(())
 }
 
-/// Builds a semantics node from measured tree data and semantics configurations.
-/// Roles and actions are now derived entirely from SemanticsConfiguration, with
-/// metadata consulted only for prior widget type information.
-fn build_semantics_node(
+fn build_semantics_tree_from_live_nodes(
+    applier: &mut MemoryApplier,
     node: &MeasuredNode,
-    metadata: &HashMap<NodeId, RuntimeNodeMetadata>,
-    semantics: &HashMap<NodeId, Option<SemanticsConfiguration>>,
-) -> SemanticsNode {
-    let info = metadata.get(&node.node_id).cloned().unwrap_or_default();
+) -> Result<SemanticsTree, NodeError> {
+    Ok(SemanticsTree::new(build_semantics_node_from_live_nodes(
+        applier, node,
+    )?))
+}
 
-    // Start with the widget-derived role as a fallback
-    let mut role = info.role.clone();
+fn semantics_node_from_parts(
+    node_id: NodeId,
+    mut role: SemanticsRole,
+    config: Option<SemanticsConfiguration>,
+    children: Vec<SemanticsNode>,
+) -> SemanticsNode {
     let mut actions = Vec::new();
     let mut description = None;
 
-    // Override with semantics configuration if present
-    if let Some(config) = semantics.get(&node.node_id).cloned().flatten() {
-        // Role synthesis: prefer semantics flags over widget type
+    if let Some(config) = config {
         if config.is_button {
             role = SemanticsRole::Button;
         }
-
-        // Action synthesis: create click action if node is clickable
         if config.is_clickable {
             actions.push(SemanticsAction::Click {
-                handler: SemanticsCallback::new(node.node_id),
+                handler: SemanticsCallback::new(node_id),
             });
         }
-
-        // Description from configuration
-        if let Some(desc) = config.content_description {
-            description = Some(desc);
-        }
+        description = config.content_description;
     }
 
-    let children = node
-        .children
-        .iter()
-        .map(|child| build_semantics_node(&child.node, metadata, semantics))
-        .collect();
-
-    SemanticsNode::new(node.node_id, role, actions, children, description)
+    SemanticsNode::new(node_id, role, actions, children, description)
 }
 
-fn build_layout_tree_from_metadata(
+fn build_semantics_node_from_live_nodes(
+    applier: &mut MemoryApplier,
     node: &MeasuredNode,
-    metadata: &HashMap<NodeId, RuntimeNodeMetadata>,
-) -> LayoutTree {
+) -> Result<SemanticsNode, NodeError> {
+    let (role, config) = match applier.with_node::<LayoutNode, _>(node.node_id, |layout| {
+        let role = role_from_modifier_slices(&layout.modifier_slices_snapshot());
+        let config = layout.semantics_configuration();
+        layout.clear_needs_semantics();
+        (role, config)
+    }) {
+        Ok(data) => data,
+        Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => {
+            match applier.with_node::<SubcomposeLayoutNode, _>(node.node_id, |subcompose| {
+                (
+                    SemanticsRole::Subcompose,
+                    collect_semantics_from_modifier(&subcompose.modifier()),
+                )
+            }) {
+                Ok(data) => data,
+                Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => {
+                    (SemanticsRole::Unknown, None)
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        Err(err) => return Err(err),
+    };
+
+    let mut children = Vec::with_capacity(node.children.len());
+    for child in &node.children {
+        children.push(build_semantics_node_from_live_nodes(applier, &child.node)?);
+    }
+
+    Ok(semantics_node_from_parts(
+        node.node_id,
+        role,
+        config,
+        children,
+    ))
+}
+
+fn build_layout_tree(
+    applier: &mut MemoryApplier,
+    node: &MeasuredNode,
+) -> Result<LayoutTree, NodeError> {
     fn place(
+        applier: &mut MemoryApplier,
         node: &MeasuredNode,
         origin: Point,
-        metadata: &HashMap<NodeId, RuntimeNodeMetadata>,
-    ) -> LayoutBox {
+    ) -> Result<LayoutBox, NodeError> {
         // Include the node's own offset (from OffsetNode) in its position
         let top_left = Point {
             x: origin.x + node.offset.x,
@@ -2096,29 +2048,69 @@ fn build_layout_tree_from_metadata(
             width: node.size.width,
             height: node.size.height,
         };
-        let info = metadata.get(&node.node_id).cloned().unwrap_or_default();
+        let info = runtime_metadata_for(applier, node.node_id)?;
         let kind = layout_kind_from_metadata(node.node_id, &info);
-        let data = LayoutNodeData::new(
-            info.modifier.clone(),
-            info.resolved_modifiers,
-            info.modifier_slices.clone(),
-            kind,
-        );
-        let children = node
-            .children
-            .iter()
-            .map(|child| {
-                let child_origin = Point {
-                    x: top_left.x + child.offset.x,
-                    y: top_left.y + child.offset.y,
-                };
-                place(&child.node, child_origin, metadata)
-            })
-            .collect();
-        LayoutBox::new(node.node_id, rect, node.content_offset, data, children)
+        let RuntimeNodeMetadata {
+            modifier,
+            resolved_modifiers,
+            modifier_slices,
+            ..
+        } = info;
+        let data = LayoutNodeData::new(modifier, resolved_modifiers, modifier_slices, kind);
+        let mut children = Vec::with_capacity(node.children.len());
+        for child in &node.children {
+            let child_origin = Point {
+                x: top_left.x + child.offset.x,
+                y: top_left.y + child.offset.y,
+            };
+            children.push(place(applier, &child.node, child_origin)?);
+        }
+        Ok(LayoutBox::new(
+            node.node_id,
+            rect,
+            node.content_offset,
+            data,
+            children,
+        ))
     }
 
-    LayoutTree::new(place(node, Point { x: 0.0, y: 0.0 }, metadata))
+    Ok(LayoutTree::new(place(
+        applier,
+        node,
+        Point { x: 0.0, y: 0.0 },
+    )?))
+}
+
+fn semantics_role_from_layout_box(layout_box: &LayoutBox) -> SemanticsRole {
+    match &layout_box.node_data.kind {
+        LayoutNodeKind::Subcompose => SemanticsRole::Subcompose,
+        LayoutNodeKind::Spacer => SemanticsRole::Spacer,
+        LayoutNodeKind::Unknown => SemanticsRole::Unknown,
+        LayoutNodeKind::Button { .. } => SemanticsRole::Button,
+        LayoutNodeKind::Layout => layout_box
+            .node_data
+            .modifier_slices()
+            .text_content()
+            .map(|text| SemanticsRole::Text {
+                value: text.to_string(),
+            })
+            .unwrap_or(SemanticsRole::Layout),
+    }
+}
+
+fn build_semantics_node_from_layout_box(layout_box: &LayoutBox) -> SemanticsNode {
+    let children = layout_box
+        .children
+        .iter()
+        .map(build_semantics_node_from_layout_box)
+        .collect();
+
+    semantics_node_from_parts(
+        layout_box.node_id,
+        semantics_role_from_layout_box(layout_box),
+        collect_semantics_from_modifier(&layout_box.node_data.modifier),
+        children,
+    )
 }
 
 fn layout_kind_from_metadata(_node_id: NodeId, info: &RuntimeNodeMetadata) -> LayoutNodeKind {

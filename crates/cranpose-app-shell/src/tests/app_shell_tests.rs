@@ -462,7 +462,7 @@ fn layout_recovers_after_tab_switching_updates() {
     for frame in 0..200 {
         shell.update();
         assert!(
-            shell.layout_tree.is_some(),
+            shell.layout_tree().is_some(),
             "layout_tree should remain available after update cycle {frame}"
         );
     }
@@ -750,7 +750,56 @@ fn draw_refresh_scope_only_contains_dirty_ancestors() {
     assert!(!refresh_scope.contains(&right_leaf));
 }
 
-fn node_id_at_path(layout: &cranpose_ui::LayoutBox, path: &[usize]) -> cranpose_core::NodeId {
+#[test]
+fn layout_bounds_index_matches_cached_layout_tree() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, nested_branch_content);
+
+    shell.update();
+
+    let (root_id, root_bounds, left_leaf_id, left_leaf_bounds, right_id, right_bounds) = {
+        let layout_tree = shell.layout_tree().expect("expected layout tree");
+        let root = layout_box_at_path(layout_tree.root(), &[]);
+        let left_leaf = layout_box_at_path(layout_tree.root(), &[0, 0]);
+        let right = layout_box_at_path(layout_tree.root(), &[1]);
+
+        (
+            root.node_id,
+            (root.rect.x, root.rect.y, root.rect.width, root.rect.height),
+            left_leaf.node_id,
+            (
+                left_leaf.rect.x,
+                left_leaf.rect.y,
+                left_leaf.rect.width,
+                left_leaf.rect.height,
+            ),
+            right.node_id,
+            (
+                right.rect.x,
+                right.rect.y,
+                right.rect.width,
+                right.rect.height,
+            ),
+        )
+    };
+
+    assert_eq!(
+        shell.root_layout_size(),
+        Some((root_bounds.2, root_bounds.3))
+    );
+    assert_eq!(shell.node_layout_bounds(root_id), Some(root_bounds));
+    assert_eq!(
+        shell.node_layout_bounds(left_leaf_id),
+        Some(left_leaf_bounds)
+    );
+    assert_eq!(shell.node_layout_bounds(right_id), Some(right_bounds));
+}
+
+fn layout_box_at_path<'a>(
+    layout: &'a cranpose_ui::LayoutBox,
+    path: &[usize],
+) -> &'a cranpose_ui::LayoutBox {
     let mut current = layout;
     for &index in path {
         current = current
@@ -758,7 +807,11 @@ fn node_id_at_path(layout: &cranpose_ui::LayoutBox, path: &[usize]) -> cranpose_
             .get(index)
             .expect("expected layout child at path");
     }
-    current.node_id
+    current
+}
+
+fn node_id_at_path(layout: &cranpose_ui::LayoutBox, path: &[usize]) -> cranpose_core::NodeId {
+    layout_box_at_path(layout, path).node_id
 }
 
 fn find_rect_width(scene: &cranpose_ui::RecordedRenderScene, color: Color) -> Option<f32> {

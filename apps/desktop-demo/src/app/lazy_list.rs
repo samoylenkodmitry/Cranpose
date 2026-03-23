@@ -79,13 +79,11 @@ fn LazyListStatsDisplay(list_state: cranpose_foundation::lazy::LazyListState) {
     let stats = list_state.stats();
     let visible = stats.items_in_use;
     let cached = stats.items_in_pool;
-    println!("Cranpose stats text, visible={visible}");
 
     Row(
         Modifier::empty(),
         RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(16.0)),
         move || {
-            println!("Row content closure running, visible={visible}");
             Text(
                 format!("Visible: {}", visible),
                 Modifier::empty()
@@ -114,7 +112,6 @@ fn LazyListStatsDisplay(list_state: cranpose_foundation::lazy::LazyListState) {
 fn FirstVisibleIndexDisplay(list_state: cranpose_foundation::lazy::LazyListState) {
     // Reactive read happens here - isolated from parent scope
     let first_index = list_state.first_visible_item_index();
-    println!("Cranpose ISOLATED FirstIndex text: {}", first_index);
     Text(
         format!("FirstIndex: {}", first_index),
         Modifier::empty()
@@ -148,15 +145,12 @@ where
 #[allow(non_snake_case)]
 #[composable]
 fn LifecycleListItem(index: usize, stats: MutableState<LifecycleStats>) {
-    println!("Cranpose item id={index}");
-
     DisposableEffect!(index, move |_key| {
         stats.update(|current| {
             current.total_composes += 1;
             current.total_effects += 1;
         });
         DisposableEffectResult::new(move || {
-            println!("Dispose item id={index}");
             stats.update(|current| current.total_disposes += 1);
         })
     });

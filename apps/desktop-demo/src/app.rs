@@ -15,6 +15,7 @@ use cranpose_ui::{
     RoundedCornerShape, Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
 };
 use std::cell::RefCell;
+use std::rc::Rc;
 
 mod animations;
 mod hacker_news;
@@ -46,6 +47,7 @@ use xkcd::xkcd_tab;
 thread_local! {
     pub static TEST_COMPOSITION_LOCAL_COUNTER: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
     pub static TEST_ACTIVE_TAB_STATE: RefCell<Option<MutableState<DemoTab>>> = const { RefCell::new(None) };
+    pub static TEST_RECURSIVE_LAYOUT_DEPTH_STATE: RefCell<Option<MutableState<usize>>> = const { RefCell::new(None) };
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -236,6 +238,55 @@ fn random() -> i32 {
     let mut buf = [0u8; 4];
     getrandom::fill(&mut buf).expect("getrandom failed");
     (u32::from_le_bytes(buf) % 10000) as i32
+}
+
+fn cached_recursive_static_text(value: &'static str) -> Rc<cranpose_ui::text::AnnotatedString> {
+    thread_local! {
+        static TEXTS: RefCell<std::collections::HashMap<&'static str, Rc<cranpose_ui::text::AnnotatedString>>> =
+            RefCell::new(std::collections::HashMap::new());
+    }
+
+    TEXTS.with(|texts| {
+        let mut texts = texts.borrow_mut();
+        texts
+            .entry(value)
+            .or_insert_with(|| Rc::new(cranpose_ui::text::AnnotatedString::from(value)))
+            .clone()
+    })
+}
+
+fn cached_depth_text(depth: usize) -> Rc<cranpose_ui::text::AnnotatedString> {
+    thread_local! {
+        static TEXTS: RefCell<Vec<Rc<cranpose_ui::text::AnnotatedString>>> = const { RefCell::new(Vec::new()) };
+    }
+
+    TEXTS.with(|texts| {
+        let mut texts = texts.borrow_mut();
+        while texts.len() <= depth {
+            let next_depth = texts.len();
+            texts.push(Rc::new(cranpose_ui::text::AnnotatedString::from(format!(
+                "Depth {next_depth}"
+            ))));
+        }
+        texts[depth].clone()
+    })
+}
+
+fn cached_current_depth_text(depth: usize) -> Rc<cranpose_ui::text::AnnotatedString> {
+    thread_local! {
+        static TEXTS: RefCell<Vec<Rc<cranpose_ui::text::AnnotatedString>>> = const { RefCell::new(Vec::new()) };
+    }
+
+    TEXTS.with(|texts| {
+        let mut texts = texts.borrow_mut();
+        while texts.len() <= depth {
+            let next_depth = texts.len();
+            texts.push(Rc::new(cranpose_ui::text::AnnotatedString::from(format!(
+                "Current depth: {next_depth}"
+            ))));
+        }
+        texts[depth].clone()
+    })
 }
 
 #[allow(non_snake_case)]
@@ -626,6 +677,9 @@ fn text_input_example() {
 #[composable]
 fn recursive_layout_example() {
     let depth_state = cranpose_core::useState(|| 3usize);
+    TEST_RECURSIVE_LAYOUT_DEPTH_STATE.with(|cell| {
+        *cell.borrow_mut() = Some(depth_state);
+    });
 
     Column(
         Modifier::empty()
@@ -636,7 +690,7 @@ fn recursive_layout_example() {
         ColumnSpec::default(),
         move || {
             Text(
-                "Recursive Layout Playground",
+                cached_recursive_static_text("Recursive Layout Playground"),
                 Modifier::empty()
                     .padding(12.0)
                     .background(Color(1.0, 1.0, 1.0, 0.08))
@@ -659,13 +713,8 @@ fn recursive_layout_example() {
                         let depth = depth_state.get();
                         Button(
                             Modifier::empty()
+                                .background(Color(0.35, 0.45, 0.85, 1.0))
                                 .rounded_corners(16.0)
-                                .draw_behind(|scope| {
-                                    scope.draw_round_rect(
-                                        Brush::solid(Color(0.35, 0.45, 0.85, 1.0)),
-                                        CornerRadii::uniform(16.0),
-                                    );
-                                })
                                 .padding(10.0),
                             {
                                 move || {
@@ -677,7 +726,7 @@ fn recursive_layout_example() {
                             },
                             || {
                                 Text(
-                                    "Increase depth",
+                                    cached_recursive_static_text("Increase depth"),
                                     Modifier::empty().padding(6.0),
                                     TextStyle::default(),
                                 );
@@ -686,13 +735,8 @@ fn recursive_layout_example() {
 
                         Button(
                             Modifier::empty()
+                                .background(Color(0.65, 0.35, 0.35, 1.0))
                                 .rounded_corners(16.0)
-                                .draw_behind(|scope| {
-                                    scope.draw_round_rect(
-                                        Brush::solid(Color(0.65, 0.35, 0.35, 1.0)),
-                                        CornerRadii::uniform(16.0),
-                                    );
-                                })
                                 .padding(10.0),
                             {
                                 move || {
@@ -704,7 +748,7 @@ fn recursive_layout_example() {
                             },
                             || {
                                 Text(
-                                    "Decrease depth",
+                                    cached_recursive_static_text("Decrease depth"),
                                     Modifier::empty().padding(6.0),
                                     TextStyle::default(),
                                 );
@@ -712,7 +756,7 @@ fn recursive_layout_example() {
                         );
 
                         Text(
-                            format!("Current depth: {}", depth.max(1)),
+                            cached_current_depth_text(depth.max(1)),
                             Modifier::empty()
                                 .padding(8.0)
                                 .background(Color(0.12, 0.16, 0.28, 0.8))
@@ -750,27 +794,22 @@ fn recursive_layout_example() {
 
 #[composable]
 fn recursive_layout_node(modifier: Modifier, depth: usize, horizontal: bool, index: usize) {
-    let palette = [
+    let accent = [
         Color(0.25, 0.32, 0.58, 0.75),
         Color(0.30, 0.20, 0.45, 0.75),
         Color(0.20, 0.40, 0.32, 0.75),
         Color(0.45, 0.28, 0.24, 0.75),
-    ];
-    let accent = palette[index % palette.len()];
+    ][index % 4];
 
     Column(
         modifier
+            .background(accent)
             .rounded_corners(18.0)
-            .draw_behind({
-                move |scope| {
-                    scope.draw_round_rect(Brush::solid(accent), CornerRadii::uniform(18.0));
-                }
-            })
             .padding(12.0),
         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
         move || {
             Text(
-                format!("Depth {}", depth),
+                cached_depth_text(depth),
                 Modifier::empty()
                     .padding(6.0)
                     .background(Color(0.0, 0.0, 0.0, 0.25))
@@ -780,7 +819,7 @@ fn recursive_layout_node(modifier: Modifier, depth: usize, horizontal: bool, ind
 
             if depth <= 1 {
                 Text(
-                    format!("Leaf node #{index}"),
+                    cached_recursive_static_text("Leaf node"),
                     Modifier::empty()
                         .padding(6.0)
                         .background(Color(1.0, 1.0, 1.0, 0.12))
@@ -1185,27 +1224,25 @@ pub(crate) fn AsyncRuntimeEngine(
     let duration_ms = spec.animation.duration_millis as f32;
     let progress_state = transition.animateFloat(0.0, 1.0, spec, "async_progress");
     let progress_value = progress_state.value();
-    let progress_key = progress_value.to_bits();
 
     let last_progress = cranpose_core::useState(|| progress_value);
     let last_reset = cranpose_core::useState(|| reset_signal.get());
     let running = is_running.get();
     let reset_key = reset_signal.get();
 
-    cranpose_core::LaunchedEffect!((progress_key, running, reset_key), move |_scope| {
+    // Handle reset via LaunchedEffect (only triggers on reset_key change)
+    cranpose_core::LaunchedEffect!((reset_key,), move |_scope| {
         if last_reset.get() != reset_key {
             last_reset.set(reset_key);
             animation.set(AnimationState::default());
             stats.set(FrameStats::default());
             last_progress.set(progress_value);
-            return;
         }
+    });
 
-        if !running {
-            last_progress.set(progress_value);
-            return;
-        }
-
+    // Per-frame progress tracking: computed inline during composition,
+    // not in a LaunchedEffect (which would re-launch every frame and leak).
+    if running {
         let previous = last_progress.get();
         let delta = progress_value - previous;
         let direction = if delta >= 0.0 { 1.0 } else { -1.0 };
@@ -1219,8 +1256,8 @@ pub(crate) fn AsyncRuntimeEngine(
             anim.progress = progress_value;
             anim.direction = direction;
         });
-        last_progress.set(progress_value);
-    });
+    }
+    last_progress.set(progress_value);
 }
 
 #[composable]
@@ -1285,8 +1322,6 @@ fn counter_app() {
             },
         );
     });
-    LaunchedEffect!(counter.get(), |_| println!("effect call"));
-
     let is_even = counter.get() % 2 == 0;
 
     Column(Modifier::empty(), ColumnSpec::default(), move || {

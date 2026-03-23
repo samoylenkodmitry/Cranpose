@@ -118,10 +118,11 @@ fn recursive_decrease_increase_preserves_structure() {
         println!("  [{}] {}", idx, desc);
     }
 
-    // After decrease, some groups should become gaps
+    // After decrease + compaction, gaps are removed (compaction reclaims them).
+    // The important property is that the group count decreased.
     assert!(
-        decreased_gaps > 0,
-        "Decreasing depth should create gaps with preserved keys"
+        decreased_groups < initial_groups,
+        "Decreasing depth should reduce group count"
     );
 
     // Increase back to depth 3

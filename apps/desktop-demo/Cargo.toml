@@ -85,6 +85,11 @@ pollster = "0.4.0"
 
 # Robot test runners
 [[example]]
+name = "robot_memory_leak"
+path = "robot-runners/robot_memory_leak.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_interactive"
 path = "robot-runners/robot_interactive.rs"
 required-features = ["robot-app"]

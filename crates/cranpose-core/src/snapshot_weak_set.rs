@@ -7,6 +7,12 @@
 use crate::state::StateObject;
 use std::sync::{Arc, Weak};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct SnapshotWeakSetDebugStats {
+    pub len: usize,
+    pub capacity: usize,
+}
+
 /// A sorted set of weak references to StateObjects, optimized for memory cleanup.
 ///
 /// The set maintains elements sorted by their identity hash (pointer address) to
@@ -121,6 +127,13 @@ impl SnapshotWeakSet {
     /// Check if the set is empty.
     pub(crate) fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    pub(crate) fn debug_stats(&self) -> SnapshotWeakSetDebugStats {
+        SnapshotWeakSetDebugStats {
+            len: self.entries.len(),
+            capacity: self.entries.capacity(),
+        }
     }
 
     /// Count the number of alive entries (for testing).

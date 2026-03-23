@@ -6,6 +6,7 @@ use crate::snapshot_v2::{reset_runtime_for_tests, TestRuntimeGuard};
 use crate::state::{MutationPolicy, SnapshotMutableState};
 use crate::SnapshotStateObserver;
 use cranpose_macros::composable;
+use smallvec::SmallVec;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -31,6 +32,18 @@ impl Node for TestTextNode {}
 struct TestDummyNode;
 
 impl Node for TestDummyNode {}
+
+#[derive(Default)]
+struct RehousingDummyNode {
+    marker: usize,
+}
+
+impl Node for RehousingDummyNode {
+    fn rehouse_for_live_compaction(&mut self) -> Option<Box<dyn Node>> {
+        let live = std::mem::take(self);
+        Some(Box::new(live))
+    }
+}
 
 struct MountTrackingNode {
     mounted: Rc<Cell<usize>>,
@@ -69,6 +82,7 @@ thread_local! {
         const { RefCell::new(None) };
     static DROP_REENTRY_ACTIVE: Cell<bool> = const { Cell::new(false) };
     static DROP_REENTRY_LAST_VALUE: Cell<Option<usize>> = const { Cell::new(None) };
+    static STABLE_OUTER_PARENT_ID: Cell<Option<NodeId>> = const { Cell::new(None) };
 }
 
 struct ReentrantDropState {
@@ -1901,11 +1915,28 @@ enum Operation {
 
 #[derive(Default)]
 struct RecordingNode {
-    children: Vec<NodeId>, // FUTURE(no_std): store children in bounded array for tests.
-    operations: Vec<Operation>, // FUTURE(no_std): store operations in bounded array for tests.
+    parent: Option<NodeId>,
+    children: Vec<NodeId>,
+    operations: Vec<Operation>,
 }
 
 impl Node for RecordingNode {
+    fn parent(&self) -> Option<NodeId> {
+        self.parent
+    }
+
+    fn on_attached_to_parent(&mut self, parent: NodeId) {
+        self.parent = Some(parent);
+    }
+
+    fn on_removed_from_parent(&mut self) {
+        self.parent = None;
+    }
+
+    fn children(&self) -> Vec<NodeId> {
+        self.children.clone()
+    }
+
     fn insert_child(&mut self, child: NodeId) {
         self.children.push(child);
         self.operations.push(Operation::Insert(child));
@@ -1953,6 +1984,52 @@ impl Node for TrackingChild {
     }
 }
 
+struct UnmountTrackingNode {
+    children: Vec<NodeId>,
+    parent: Option<NodeId>,
+    unmounts: Rc<Cell<usize>>,
+}
+
+impl UnmountTrackingNode {
+    fn new(unmounts: Rc<Cell<usize>>) -> Self {
+        Self {
+            children: Vec::new(),
+            parent: None,
+            unmounts,
+        }
+    }
+}
+
+impl Node for UnmountTrackingNode {
+    fn unmount(&mut self) {
+        self.unmounts.set(self.unmounts.get() + 1);
+    }
+
+    fn insert_child(&mut self, child: NodeId) {
+        self.children.push(child);
+    }
+
+    fn remove_child(&mut self, child: NodeId) {
+        self.children.retain(|&id| id != child);
+    }
+
+    fn children(&self) -> Vec<NodeId> {
+        self.children.clone()
+    }
+
+    fn on_attached_to_parent(&mut self, parent: NodeId) {
+        self.parent = Some(parent);
+    }
+
+    fn on_removed_from_parent(&mut self) {
+        self.parent = None;
+    }
+
+    fn parent(&self) -> Option<NodeId> {
+        self.parent
+    }
+}
+
 fn apply_child_diff(
     slots: &mut SlotBackend,
     applier: &mut MemoryApplier,
@@ -1969,19 +2046,14 @@ fn apply_child_diff(
     {
         let mut stack = composer.parent_stack();
         let frame = stack.last_mut().expect("parent frame available");
-        frame
-            .remembered
-            .update(|entry| entry.children = previous.clone());
-        frame.previous = previous;
-        frame.new_children = new_children;
+        frame.previous = previous.into();
+        frame.new_children = new_children.into();
     }
     composer.pop_parent();
     let commands = composer.take_commands();
     drop(composer);
     teardown_composer(slots, applier, slots_host, applier_host);
-    for command in commands {
-        command.apply(applier).expect("apply diff command");
-    }
+    commands.apply(applier).expect("apply diff command");
     applier
         .with_node(parent_id, |node: &mut RecordingNode| {
             node.operations.clone()
@@ -2126,6 +2198,157 @@ fn insert_and_remove_emit_expected_ops() {
 }
 
 #[test]
+fn removing_subtree_unmounts_descendants() {
+    let mut applier = MemoryApplier::new();
+    let parent_id = applier.create(Box::new(RecordingNode::default()));
+    let child_unmounts = Rc::new(Cell::new(0));
+    let grandchild_unmounts = Rc::new(Cell::new(0));
+    let child_id = applier.create(Box::new(UnmountTrackingNode::new(Rc::clone(
+        &child_unmounts,
+    ))));
+    let grandchild_id = applier.create(Box::new(UnmountTrackingNode::new(Rc::clone(
+        &grandchild_unmounts,
+    ))));
+
+    insert_child_with_reparenting(&mut applier, parent_id, child_id);
+    insert_child_with_reparenting(&mut applier, child_id, grandchild_id);
+
+    apply_remove_child(&mut applier, parent_id, child_id).expect("remove subtree");
+
+    assert_eq!(child_unmounts.get(), 1);
+    assert_eq!(grandchild_unmounts.get(), 1);
+    assert!(matches!(
+        applier.get_mut(child_id),
+        Err(NodeError::Missing { id }) if id == child_id
+    ));
+    assert!(matches!(
+        applier.get_mut(grandchild_id),
+        Err(NodeError::Missing { id }) if id == grandchild_id
+    ));
+}
+
+#[test]
+fn memory_applier_compact_packs_live_nodes_without_invalidating_stable_ids() {
+    let mut applier = MemoryApplier::new();
+    let root_id = applier.create(Box::new(TestDummyNode));
+    assert_eq!(root_id, 0);
+
+    let removed_ids: Vec<_> = (0..9)
+        .map(|_| applier.create(Box::new(TestDummyNode)))
+        .collect();
+    assert_eq!(removed_ids, (1..=9).collect::<Vec<_>>());
+
+    for &id in &removed_ids {
+        applier.remove(id).expect("remove freed node");
+    }
+
+    let reused_first = applier.create(Box::new(TestDummyNode));
+    let reused_second = applier.create(Box::new(TestDummyNode));
+    applier.compact();
+
+    assert_eq!(applier.len(), 3);
+    assert_eq!(applier.capacity(), 3);
+    assert_eq!(applier.tombstone_count(), 0);
+    assert!(applier.get_mut(root_id).is_ok());
+    assert!(applier.get_mut(reused_first).is_ok());
+    assert!(applier.get_mut(reused_second).is_ok());
+}
+
+#[test]
+fn memory_applier_compact_skips_dense_tables_until_tombstones_dominate() {
+    let mut applier = MemoryApplier::new();
+    let ids: Vec<_> = (0..2_048)
+        .map(|_| applier.create(Box::new(TestDummyNode)))
+        .collect();
+
+    for &id in ids.iter().take(512) {
+        applier.remove(id).expect("remove dense-table node");
+    }
+
+    let dense_capacity = applier.capacity();
+    let dense_live = applier.len();
+    let dense_tombstones = applier.tombstone_count();
+    assert!(
+        dense_capacity > 1_024 && dense_tombstones < dense_live,
+        "expected a dense table before compact: capacity={dense_capacity} live={dense_live} tombstones={dense_tombstones}",
+    );
+
+    applier.compact();
+
+    assert_eq!(
+        applier.capacity(),
+        dense_capacity,
+        "compact should keep dense tables warm for reuse",
+    );
+    assert_eq!(
+        applier.tombstone_count(),
+        dense_tombstones,
+        "dense-table compact should not rewrite storage",
+    );
+
+    for &id in ids.iter().skip(512).take(1_200) {
+        applier.remove(id).expect("remove sparse-table node");
+    }
+
+    let sparse_live = applier.len();
+    let sparse_tombstones = applier.tombstone_count();
+    assert!(
+        sparse_tombstones > sparse_live,
+        "expected sparse teardown before compact: live={sparse_live} tombstones={sparse_tombstones}",
+    );
+
+    applier.compact();
+
+    assert_eq!(
+        applier.capacity(),
+        sparse_live,
+        "compact should pack sparse tables after teardown",
+    );
+    assert_eq!(applier.tombstone_count(), 0);
+}
+
+#[test]
+fn memory_applier_compact_rehouses_live_nodes_after_large_majority_drop() {
+    let mut applier = MemoryApplier::new();
+    let root_id = applier.create(Box::new(RehousingDummyNode { marker: 7 }));
+    let removed_ids: Vec<_> = (0..2_048)
+        .map(|_| applier.create(Box::new(TestDummyNode)))
+        .collect();
+
+    let before_ptr = {
+        let node = applier
+            .get_mut(root_id)
+            .expect("root should remain accessible before compact")
+            .as_any_mut()
+            .downcast_mut::<RehousingDummyNode>()
+            .expect("root node type");
+        node as *mut RehousingDummyNode
+    };
+
+    for id in removed_ids {
+        applier.remove(id).expect("remove sparse-table node");
+    }
+
+    applier.compact();
+
+    let after_ptr = {
+        let node = applier
+            .get_mut(root_id)
+            .expect("root should remain accessible after compact")
+            .as_any_mut()
+            .downcast_mut::<RehousingDummyNode>()
+            .expect("root node type");
+        assert_eq!(node.marker, 7);
+        node as *mut RehousingDummyNode
+    };
+
+    assert_ne!(
+        before_ptr, after_ptr,
+        "large-majority compact should move surviving live nodes onto fresh boxes"
+    );
+}
+
+#[test]
 fn child_diff_handles_interleaved_remove_move_and_insert() {
     let mut slots = SlotBackend::default();
     let mut applier = MemoryApplier::new();
@@ -2220,6 +2443,49 @@ fn composable_skips_when_inputs_unchanged() {
         })
         .expect("render succeeds");
     INVOCATIONS.with(|calls| assert_eq!(calls.get(), 2));
+}
+
+#[test]
+fn unit_return_composable_skips_without_return_slot_storage() {
+    thread_local! {
+        static UNIT_INVOCATIONS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    #[composable]
+    fn unit_leaf(value: i32) {
+        let _ = value;
+        UNIT_INVOCATIONS.with(|calls| calls.set(calls.get() + 1));
+    }
+
+    let mut composition = Composition::new(MemoryApplier::new());
+    let key = location_key(file!(), line!(), column!());
+
+    composition
+        .render(key, || unit_leaf(1))
+        .expect("initial unit render");
+
+    let all_slots = composition.debug_dump_all_slots();
+    let value_count = all_slots.iter().filter(|(_, kind)| kind == "Value").count();
+    let scope_value_count = all_slots
+        .iter()
+        .filter(|(_, kind)| kind == "ScopeValue")
+        .count();
+
+    assert_eq!(
+        value_count, 1,
+        "unit-return composable should store 1 Value (parameter state)",
+    );
+    assert_eq!(
+        scope_value_count, 2,
+        "unit-return composable should store 2 ScopeValue (root + child scopes)",
+    );
+    UNIT_INVOCATIONS.with(|calls| assert_eq!(calls.get(), 1));
+
+    composition
+        .render(key, || unit_leaf(1))
+        .expect("skip render succeeds");
+
+    UNIT_INVOCATIONS.with(|calls| assert_eq!(calls.get(), 1));
 }
 
 #[test]
@@ -2830,6 +3096,37 @@ fn state_write_prunes_dropped_watchers() {
     state.set_value(1);
 
     assert_eq!(state.watcher_count(), 0);
+}
+
+#[test]
+fn runtime_prunes_dropped_watchers_without_state_write() {
+    let runtime = TestRuntime::new();
+    let handle = runtime.handle();
+    let state = MutableState::with_runtime(0i32, handle.clone());
+
+    let scopes: Vec<_> = (0..1024)
+        .map(|_| {
+            let scope = RecomposeScope::new_for_test(handle.clone());
+            state.subscribe_scope_for_test(&scope);
+            scope
+        })
+        .collect();
+
+    assert_eq!(state.watcher_count(), scopes.len());
+    assert!(
+        state.watcher_capacity() >= scopes.len(),
+        "watcher capacity should reflect the retained subscriptions"
+    );
+
+    drop(scopes);
+    handle.prune_dead_state_watchers();
+
+    assert_eq!(state.watcher_count(), 0);
+    assert!(
+        state.watcher_capacity() <= 32,
+        "watcher capacity should shrink after pruning dead scopes; got {}",
+        state.watcher_capacity()
+    );
 }
 
 // ============================================================================
@@ -3531,6 +3828,99 @@ fn tab_switching_with_keyed_children() {
 }
 
 #[test]
+fn stable_outer_parent_node_survives_keyed_inner_switch() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let active_tab = MutableState::with_runtime(0i32, runtime.clone());
+
+    #[composable]
+    fn keyed_switching_tree(active_tab: MutableState<i32>) {
+        let active = active_tab.value();
+        with_current_composer(|composer| {
+            let root = composer.emit_node(RecordingNode::default);
+            composer.push_parent(root);
+
+            let _tab_bar = composer.emit_node(TrackingChild::default);
+            let _spacer = composer.emit_node(TrackingChild::default);
+
+            let outer_parent = composer.emit_node(RecordingNode::default);
+            STABLE_OUTER_PARENT_ID.with(|slot| slot.set(Some(outer_parent)));
+            composer.push_parent(outer_parent);
+
+            cranpose_core::with_key(&active, || {
+                if active == 0 {
+                    let panel = composer.emit_node(RecordingNode::default);
+                    composer.push_parent(panel);
+                    composer.emit_node(|| TrackingChild {
+                        label: "counter".to_string(),
+                        ..Default::default()
+                    });
+                    composer.pop_parent();
+                } else {
+                    let panel = composer.emit_node(RecordingNode::default);
+                    composer.push_parent(panel);
+                    composer.emit_node(|| TrackingChild {
+                        label: "animations-a".to_string(),
+                        ..Default::default()
+                    });
+                    composer.emit_node(|| TrackingChild {
+                        label: "animations-b".to_string(),
+                        ..Default::default()
+                    });
+                    composer.pop_parent();
+                }
+            });
+
+            composer.pop_parent();
+            composer.pop_parent();
+        });
+    }
+
+    let key = location_key(file!(), line!(), column!());
+    composition
+        .render(key, &mut || keyed_switching_tree(active_tab))
+        .expect("initial render");
+
+    let outer_parent_id = STABLE_OUTER_PARENT_ID
+        .with(Cell::get)
+        .expect("outer parent id captured");
+    assert!(
+        composition.applier_mut().get_mut(outer_parent_id).is_ok(),
+        "outer parent should exist after initial render",
+    );
+
+    active_tab.set_value(1);
+    let recomposed = composition
+        .process_invalid_scopes()
+        .expect("recompose after keyed switch");
+    assert!(recomposed, "switching tabs should trigger recomposition");
+
+    let root_id = composition.root().expect("root node exists");
+    let root_children = composition
+        .applier_mut()
+        .with_node(root_id, |node: &mut RecordingNode| node.children.clone())
+        .expect("root recording node exists");
+    let outer_parent_exists = composition.applier_mut().get_mut(outer_parent_id).is_ok();
+    let slot_owns_outer_parent = composition
+        .debug_dump_all_slots()
+        .iter()
+        .any(|(_, desc)| desc == &format!("Node(id={outer_parent_id})"));
+
+    assert!(
+        outer_parent_exists,
+        "stable outer parent node was removed during keyed inner switch: root_children={root_children:?}",
+    );
+    assert!(
+        root_children.contains(&outer_parent_id),
+        "root should still reference outer parent after keyed inner switch: root_children={root_children:?}",
+    );
+    assert!(
+        slot_owns_outer_parent,
+        "slot table must continue owning the stable outer parent node after keyed inner switch",
+    );
+}
+
+#[test]
 fn tab_switching_with_different_node_types() {
     // Test switching between tabs that create different node types
     let mut composition = Composition::new(MemoryApplier::new());
@@ -4186,34 +4576,64 @@ fn tab_switching_preserves_node_order() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Backend Integration Tests
+// SlotTable Integration Tests
 // ════════════════════════════════════════════════════════════════════════════
 
 #[test]
-fn composition_works_with_baseline_backend() {
-    test_composition_with_backend(SlotBackendKind::Baseline);
+fn composition_works_with_slot_table() {
+    test_composition();
+}
+
+fn composable_params_are_preserved_during_recomposition() {
+    thread_local! {
+        static PARAM_VALUES: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+    }
+
+    #[composable]
+    fn param_leaf(value: usize) {
+        PARAM_VALUES.with(|values| values.borrow_mut().push(value));
+    }
+
+    #[composable]
+    fn param_root(value_state: MutableState<usize>) {
+        param_leaf(value_state.get());
+    }
+
+    let runtime = Runtime::new(Arc::new(TestScheduler));
+    let value_state = MutableState::with_runtime(1usize, runtime.handle());
+    let mut composition = Composition::with_runtime(MemoryApplier::new(), runtime);
+    let key = location_key(file!(), line!(), column!());
+
+    PARAM_VALUES.with(|values| values.borrow_mut().clear());
+    composition
+        .render(key, &mut || param_root(value_state))
+        .expect("initial render with selected backend");
+
+    value_state.set(2);
+    while composition
+        .process_invalid_scopes()
+        .expect("recompose composable parameter leaf")
+    {}
+
+    PARAM_VALUES.with(|values| {
+        assert_eq!(
+            values.borrow().as_slice(),
+            &[1, 2],
+            "slot table lost composable parameter state during recomposition",
+        );
+    });
 }
 
 #[test]
-fn composition_works_with_chunked_backend() {
-    test_composition_with_backend(SlotBackendKind::Chunked);
+fn slot_table_preserves_composable_params_during_recomposition() {
+    composable_params_are_preserved_during_recomposition();
 }
 
-#[test]
-fn composition_works_with_split_backend() {
-    test_composition_with_backend(SlotBackendKind::Split);
-}
-
-#[test]
-fn composition_works_with_hierarchical_backend() {
-    test_composition_with_backend(SlotBackendKind::Hierarchical);
-}
-
-fn test_composition_with_backend(backend: SlotBackendKind) {
+fn test_composition() {
     let key = 12345u64;
     let applier = MemoryApplier::new();
     let runtime = Runtime::new(Arc::new(TestScheduler));
-    let mut composition = Composition::with_backend(applier, runtime.clone(), backend);
+    let mut composition = Composition::with_runtime(applier, runtime.clone());
 
     // Track recompositions
     let recranpose_count = Rc::new(Cell::new(0));
@@ -4343,6 +4763,643 @@ fn push_parent_uses_empty_previous_when_not_reused() {
     teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
 }
 
+#[test]
+fn new_parent_attaches_children_immediately_without_sync_children() {
+    let (handle, _runtime) = runtime_handle();
+    let mut slots = SlotBackend::default();
+    let mut applier = MemoryApplier::new();
+
+    let parent_id = applier.create(Box::new(RecordingNode::default()));
+
+    let (composer, slots_host, applier_host) =
+        setup_composer(&mut slots, &mut applier, handle.clone(), None);
+
+    composer.core.last_node_reused.set(Some(false));
+    composer.push_parent(parent_id);
+    let child_id = composer.emit_node(RecordingNode::default);
+    composer.pop_parent();
+
+    let commands = composer.take_commands();
+    assert_eq!(commands.attach_children.len(), 1);
+    assert_eq!(commands.sync_children.len(), 0);
+    assert!(commands.sync_child_ids.is_empty());
+    assert_eq!(commands.attach_children[0].parent_id, parent_id);
+    assert_eq!(commands.attach_children[0].child_id, child_id);
+
+    drop(composer);
+    teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
+}
+
+#[test]
+fn reused_parent_with_existing_children_still_defers_to_sync_children() {
+    let (handle, _runtime) = runtime_handle();
+    let mut slots = SlotBackend::default();
+    let mut applier = MemoryApplier::new();
+
+    let parent_id = applier.create(Box::new(RecordingNode::default()));
+    let child_id = applier.create(Box::new(RecordingNode::default()));
+    applier
+        .with_node(parent_id, |node: &mut RecordingNode| {
+            node.insert_child(child_id);
+        })
+        .expect("parent exists");
+    applier
+        .with_node(child_id, |node: &mut RecordingNode| {
+            node.on_attached_to_parent(parent_id);
+        })
+        .expect("child exists");
+
+    let (composer, slots_host, applier_host) =
+        setup_composer(&mut slots, &mut applier, handle.clone(), None);
+
+    composer.core.last_node_reused.set(Some(true));
+    composer.push_parent(parent_id);
+    {
+        let mut stack = composer.parent_stack();
+        let frame = stack.last_mut().expect("parent frame should exist");
+        frame.new_children.push(child_id);
+    }
+    composer.pop_parent();
+
+    let commands = composer.take_commands();
+    assert_eq!(commands.attach_children.len(), 0);
+    assert_eq!(commands.sync_children.len(), 1);
+    assert_eq!(commands.sync_children[0].parent_id, parent_id);
+    assert_eq!(commands.sync_child_ids.as_slice(), [child_id]);
+
+    drop(composer);
+    teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
+}
+
+#[test]
+fn sync_children_reorders_small_child_lists_without_regressing_behavior() {
+    let mut applier = MemoryApplier::new();
+
+    let parent_id = applier.create(Box::new(RecordingNode::default()));
+    let child_a = applier.create(Box::new(RecordingNode::default()));
+    let child_b = applier.create(Box::new(RecordingNode::default()));
+    let child_c = applier.create(Box::new(RecordingNode::default()));
+    let child_d = applier.create(Box::new(RecordingNode::default()));
+
+    for child_id in [child_a, child_b, child_c] {
+        applier
+            .with_node(parent_id, |node: &mut RecordingNode| {
+                node.insert_child(child_id);
+            })
+            .expect("parent exists");
+        applier
+            .with_node(child_id, |node: &mut RecordingNode| {
+                node.on_attached_to_parent(parent_id);
+            })
+            .expect("child exists");
+    }
+
+    Command::SyncChildren {
+        parent_id,
+        expected_children: SmallVec::<[NodeId; 4]>::from_slice(&[child_c, child_a, child_d]),
+    }
+    .apply(&mut applier)
+    .expect("sync children");
+
+    let final_children = applier
+        .with_node(parent_id, |node: &mut RecordingNode| node.children.clone())
+        .expect("parent exists");
+    assert_eq!(final_children, vec![child_c, child_a, child_d]);
+
+    assert!(
+        matches!(applier.get_mut(child_b), Err(NodeError::Missing { .. })),
+        "removed child should no longer exist in the applier",
+    );
+    let parent_of_d = applier
+        .with_node(child_d, |node: &mut RecordingNode| node.parent())
+        .expect("inserted child exists");
+    assert_eq!(parent_of_d, Some(parent_id));
+}
+
+#[test]
+fn cold_recycled_nodes_are_not_reused_in_same_frame() {
+    #[derive(Default)]
+    struct RecyclableTestNode;
+
+    impl Node for RecyclableTestNode {
+        fn recycle_key(&self) -> Option<std::any::TypeId> {
+            Some(std::any::TypeId::of::<Self>())
+        }
+    }
+
+    let mut applier = MemoryApplier::new();
+    let stable_id = applier.create(Box::new(RecyclableTestNode));
+
+    applier.remove(stable_id).expect("remove recyclable node");
+
+    assert!(
+        applier
+            .take_recycled_node(std::any::TypeId::of::<RecyclableTestNode>())
+            .is_none(),
+        "cold shells removed in the current frame must not be reused immediately",
+    );
+    assert_eq!(applier.node_generation(stable_id), 1);
+}
+
+#[test]
+fn fresh_recyclable_nodes_seed_same_frame_shell_reuse() {
+    #[derive(Default)]
+    struct SeedableNode;
+
+    impl Node for SeedableNode {
+        fn recycle_key(&self) -> Option<std::any::TypeId> {
+            Some(std::any::TypeId::of::<Self>())
+        }
+
+        fn recycle_pool_limit(&self) -> Option<usize> {
+            Some(2)
+        }
+
+        fn rehouse_for_recycle(&self) -> Option<Box<dyn Node>> {
+            Some(Box::new(Self))
+        }
+    }
+
+    let mut applier = MemoryApplier::new();
+    let key = std::any::TypeId::of::<SeedableNode>();
+    let fresh = Box::new(SeedableNode);
+
+    applier.record_fresh_recyclable_creation(key);
+    if let Some(shell) = fresh.rehouse_for_recycle() {
+        applier.seed_recycled_node_shell(key, fresh.recycle_pool_limit(), shell);
+    }
+
+    let recycled = applier
+        .take_recycled_node(key)
+        .expect("fresh miss should seed a reusable same-frame shell");
+    assert_eq!(recycled.stable_id(), 0);
+}
+
+#[test]
+fn recycled_nodes_reuse_stable_ids_without_growing_stable_id_arena() {
+    #[derive(Default)]
+    struct RecyclableTestNode;
+
+    impl Node for RecyclableTestNode {
+        fn recycle_key(&self) -> Option<std::any::TypeId> {
+            Some(std::any::TypeId::of::<Self>())
+        }
+    }
+
+    let mut applier = MemoryApplier::new();
+    let _keep_live = applier.create(Box::new(RecyclableTestNode));
+    let stable_id = applier.create(Box::new(RecyclableTestNode));
+    let next_stable_id_before_remove = applier.debug_stats().next_stable_id;
+
+    applier.remove(stable_id).expect("remove recyclable node");
+    applier.record_fresh_recyclable_creation(std::any::TypeId::of::<RecyclableTestNode>());
+    applier.clear_recycled_nodes();
+
+    let recycled = applier
+        .take_recycled_node(std::any::TypeId::of::<RecyclableTestNode>())
+        .expect("recycled node should be available after the frame boundary");
+    assert_eq!(recycled.stable_id(), stable_id);
+    assert_eq!(applier.node_generation(stable_id), 1);
+
+    let (reused_id, node, warm_origin) = recycled.into_parts();
+    applier
+        .insert_with_id(reused_id, node)
+        .expect("reinsert recycled stable id");
+    applier.set_recycled_node_origin(reused_id, warm_origin);
+
+    let stats = applier.debug_stats();
+    assert_eq!(reused_id, stable_id);
+    assert_eq!(stats.next_stable_id, next_stable_id_before_remove);
+    assert_eq!(stats.stable_generations_len, next_stable_id_before_remove);
+    assert_eq!(applier.node_generation(stable_id), 1);
+}
+
+#[test]
+fn warm_recycled_nodes_can_be_reused_again_in_the_same_frame() {
+    #[derive(Default)]
+    struct RecyclableTestNode;
+
+    impl Node for RecyclableTestNode {
+        fn recycle_key(&self) -> Option<std::any::TypeId> {
+            Some(std::any::TypeId::of::<Self>())
+        }
+    }
+
+    let mut applier = MemoryApplier::new();
+    let _keep_live = applier.create(Box::new(RecyclableTestNode));
+    let stable_id = applier.create(Box::new(RecyclableTestNode));
+
+    applier.remove(stable_id).expect("remove recyclable node");
+    applier.record_fresh_recyclable_creation(std::any::TypeId::of::<RecyclableTestNode>());
+    applier.clear_recycled_nodes();
+
+    let recycled = applier
+        .take_recycled_node(std::any::TypeId::of::<RecyclableTestNode>())
+        .expect("warm recyclable node");
+    let (reused_id, node, warm_origin) = recycled.into_parts();
+    applier
+        .insert_with_id(reused_id, node)
+        .expect("reinsert warm recyclable node");
+    applier.set_recycled_node_origin(reused_id, warm_origin);
+
+    applier
+        .remove(reused_id)
+        .expect("remove warm recyclable node again");
+
+    let recycled_again = applier
+        .take_recycled_node(std::any::TypeId::of::<RecyclableTestNode>())
+        .expect("warm-origin shell should be reusable in the same frame");
+    assert_eq!(recycled_again.stable_id(), stable_id);
+}
+
+#[test]
+fn recycled_node_pool_limit_discards_oldest_shells() {
+    #[derive(Default)]
+    struct LimitedRecycleNode;
+
+    impl Node for LimitedRecycleNode {
+        fn recycle_key(&self) -> Option<std::any::TypeId> {
+            Some(std::any::TypeId::of::<Self>())
+        }
+
+        fn recycle_pool_limit(&self) -> Option<usize> {
+            Some(2)
+        }
+    }
+
+    let mut applier = MemoryApplier::new();
+    let _keep_first = applier.create(Box::new(LimitedRecycleNode));
+    let _keep_second = applier.create(Box::new(LimitedRecycleNode));
+    let first = applier.create(Box::new(LimitedRecycleNode));
+    let second = applier.create(Box::new(LimitedRecycleNode));
+    let third = applier.create(Box::new(LimitedRecycleNode));
+
+    applier.remove(first).expect("remove first recyclable node");
+    applier
+        .remove(second)
+        .expect("remove second recyclable node");
+    applier.remove(third).expect("remove third recyclable node");
+
+    assert_eq!(
+        applier.debug_recycled_node_count_for::<LimitedRecycleNode>(),
+        2,
+        "pending shells still respect the configured pool bound inside the frame",
+    );
+
+    applier.record_fresh_recyclable_creation(std::any::TypeId::of::<LimitedRecycleNode>());
+    applier.record_fresh_recyclable_creation(std::any::TypeId::of::<LimitedRecycleNode>());
+    applier.clear_recycled_nodes();
+
+    assert_eq!(
+        applier.debug_recycled_node_count_for::<LimitedRecycleNode>(),
+        2,
+        "warm recycle cohort should retain only the configured number of shells",
+    );
+
+    let most_recent = applier
+        .take_recycled_node(std::any::TypeId::of::<LimitedRecycleNode>())
+        .expect("most recent recycled node");
+    let next_recent = applier
+        .take_recycled_node(std::any::TypeId::of::<LimitedRecycleNode>())
+        .expect("next recent recycled node");
+
+    assert_eq!(most_recent.stable_id(), third);
+    assert_eq!(next_recent.stable_id(), second);
+}
+
+#[test]
+fn clear_recycled_nodes_trims_warm_pool_without_fresh_demand() {
+    #[derive(Default)]
+    struct LimitedRecycleNode;
+
+    impl Node for LimitedRecycleNode {
+        fn recycle_key(&self) -> Option<std::any::TypeId> {
+            Some(std::any::TypeId::of::<Self>())
+        }
+
+        fn recycle_pool_limit(&self) -> Option<usize> {
+            Some(4)
+        }
+    }
+
+    let mut applier = MemoryApplier::new();
+    let _keep_live = applier.create(Box::new(LimitedRecycleNode));
+    let removed: Vec<_> = (0..4)
+        .map(|_| applier.create(Box::new(LimitedRecycleNode)))
+        .collect();
+
+    for id in removed {
+        applier.remove(id).expect("remove recyclable node");
+    }
+
+    applier.clear_recycled_nodes();
+
+    assert_eq!(
+        applier.debug_recycled_node_count_for::<LimitedRecycleNode>(),
+        0,
+        "warm recycle cohort should be drained when the frame did not miss any recyclable shells",
+    );
+}
+
+#[test]
+fn warm_recycled_nodes_survive_idle_frame_after_recent_demand() {
+    #[derive(Default)]
+    struct LimitedRecycleNode;
+
+    impl Node for LimitedRecycleNode {
+        fn recycle_key(&self) -> Option<std::any::TypeId> {
+            Some(std::any::TypeId::of::<Self>())
+        }
+
+        fn recycle_pool_limit(&self) -> Option<usize> {
+            Some(4)
+        }
+    }
+
+    let mut applier = MemoryApplier::new();
+    let _keep_live = applier.create(Box::new(LimitedRecycleNode));
+    let recycled_id = applier.create(Box::new(LimitedRecycleNode));
+
+    applier.remove(recycled_id).expect("remove recyclable node");
+    applier.record_fresh_recyclable_creation(std::any::TypeId::of::<LimitedRecycleNode>());
+    applier.clear_recycled_nodes();
+
+    assert_eq!(
+        applier.debug_recycled_node_count_for::<LimitedRecycleNode>(),
+        1,
+        "recent fresh demand should promote one warm shell",
+    );
+
+    applier.clear_recycled_nodes();
+
+    assert_eq!(
+        applier.debug_recycled_node_count_for::<LimitedRecycleNode>(),
+        1,
+        "recent demand floor should keep a compact warm shell across an idle frame",
+    );
+}
+
+#[test]
+fn clear_recycled_nodes_rebuilds_warm_pool_from_compact_prototype() {
+    #[derive(Default)]
+    struct PrototypeRecycleNode;
+
+    impl Node for PrototypeRecycleNode {
+        fn recycle_key(&self) -> Option<std::any::TypeId> {
+            Some(std::any::TypeId::of::<Self>())
+        }
+
+        fn recycle_pool_limit(&self) -> Option<usize> {
+            Some(8)
+        }
+
+        fn rehouse_for_recycle(&self) -> Option<Box<dyn Node>> {
+            Some(Box::new(Self))
+        }
+    }
+
+    let mut applier = MemoryApplier::new();
+    let key = std::any::TypeId::of::<PrototypeRecycleNode>();
+    let seed = PrototypeRecycleNode;
+    let shell = seed
+        .rehouse_for_recycle()
+        .expect("seed node should provide a compact shell");
+
+    applier.seed_recycled_node_shell(key, seed.recycle_pool_limit(), shell);
+    let recycled = applier
+        .take_recycled_node(key)
+        .expect("seeded shell should be immediately available");
+    let (reused_id, node, warm_origin) = recycled.into_parts();
+    applier
+        .insert_with_id(reused_id, node)
+        .expect("consumed warm shell should become the live cohort member");
+    applier.set_recycled_node_origin(reused_id, warm_origin);
+
+    for _ in 0..3 {
+        applier.record_fresh_recyclable_creation(key);
+    }
+    applier.clear_recycled_nodes();
+
+    assert_eq!(
+        applier.debug_recycled_node_count_for::<PrototypeRecycleNode>(),
+        3,
+        "recent demand should rebuild the warm pool even after all spare shells were consumed",
+    );
+}
+
+#[test]
+fn large_recycle_pools_converge_to_standing_reserve_on_first_demand() {
+    #[derive(Default)]
+    struct LargeReserveNode;
+
+    impl Node for LargeReserveNode {
+        fn recycle_key(&self) -> Option<std::any::TypeId> {
+            Some(std::any::TypeId::of::<Self>())
+        }
+
+        fn recycle_pool_limit(&self) -> Option<usize> {
+            Some(128)
+        }
+
+        fn rehouse_for_recycle(&self) -> Option<Box<dyn Node>> {
+            Some(Box::new(Self))
+        }
+    }
+
+    let mut applier = MemoryApplier::new();
+    let key = std::any::TypeId::of::<LargeReserveNode>();
+    let shell = LargeReserveNode
+        .rehouse_for_recycle()
+        .expect("large reserve node should provide a compact shell");
+    applier.seed_recycled_node_shell(key, Some(128), shell);
+    let recycled = applier
+        .take_recycled_node(key)
+        .expect("seeded shell should be immediately available");
+    let (reused_id, node, warm_origin) = recycled.into_parts();
+    applier
+        .insert_with_id(reused_id, node)
+        .expect("consumed shell should remain live");
+    applier.set_recycled_node_origin(reused_id, warm_origin);
+
+    applier.record_fresh_recyclable_creation(key);
+    applier.clear_recycled_nodes();
+
+    assert_eq!(
+        applier.debug_recycled_node_count_for::<LargeReserveNode>(),
+        32,
+        "large recyclable types should pre-warm the standing reserve instead of growing it only after a spike",
+    );
+}
+
+#[test]
+fn clear_recycled_nodes_releases_excess_warm_id_capacity() {
+    #[derive(Default)]
+    struct LargeReserveNode;
+
+    impl Node for LargeReserveNode {
+        fn recycle_key(&self) -> Option<std::any::TypeId> {
+            Some(std::any::TypeId::of::<Self>())
+        }
+
+        fn recycle_pool_limit(&self) -> Option<usize> {
+            Some(128)
+        }
+
+        fn rehouse_for_recycle(&self) -> Option<Box<dyn Node>> {
+            Some(Box::new(Self))
+        }
+    }
+
+    let mut applier = MemoryApplier::new();
+    let key = std::any::TypeId::of::<LargeReserveNode>();
+    let mut live_ids = Vec::with_capacity(4096);
+
+    for _ in 0..4096 {
+        if let Some(recycled) = applier.take_recycled_node(key) {
+            let (id, node, warm_origin) = recycled.into_parts();
+            applier
+                .insert_with_id(id, node)
+                .expect("reinsert recycled node");
+            applier.set_recycled_node_origin(id, warm_origin);
+            live_ids.push(id);
+        } else {
+            let node = Box::new(LargeReserveNode);
+            applier.record_fresh_recyclable_creation(key);
+            if let Some(shell) = node.rehouse_for_recycle() {
+                applier.seed_recycled_node_shell(key, node.recycle_pool_limit(), shell);
+            }
+            let id = applier.create(node);
+            live_ids.push(id);
+        }
+    }
+
+    for id in live_ids {
+        applier.remove(id).expect("remove recyclable node");
+    }
+
+    applier.clear_recycled_nodes();
+
+    let stats = applier.debug_stats();
+    assert!(
+        stats.warm_recycled_node_id_count <= 32,
+        "warm id bookkeeping should converge to the standing reserve instead of keeping spike-era ids live: {stats:?}",
+    );
+    assert!(
+        stats.warm_recycled_node_id_capacity
+            <= stats.warm_recycled_node_id_count.max(32).saturating_mul(4),
+        "warm id bookkeeping retained excess capacity after the frame boundary: {stats:?}",
+    );
+}
+
+#[test]
+fn compact_prunes_stable_generation_entries_for_removed_nodes() {
+    #[derive(Default)]
+    struct PlainNode;
+
+    impl Node for PlainNode {}
+
+    let mut applier = MemoryApplier::new();
+    let keep = applier.create(Box::new(PlainNode));
+    let removed: Vec<_> = (0..4096)
+        .map(|_| applier.create(Box::new(PlainNode)))
+        .collect();
+
+    for id in removed {
+        applier.remove(id).expect("remove node");
+    }
+
+    applier.compact();
+
+    let stats = applier.debug_stats();
+    assert_eq!(stats.stable_to_physical_len, 1);
+    assert_eq!(stats.nodes_len, 1);
+    assert_eq!(keep, 0);
+    assert_eq!(
+        stats.stable_generations_len, 1,
+        "dead node generations should be pruned after compaction instead of retaining a dense arena",
+    );
+    assert!(
+        stats.next_stable_id > keep,
+        "stable ids must stay monotonic even after pruning generation entries",
+    );
+}
+
+#[test]
+fn remove_balanced_tree_uses_depth_bounded_traversal_stack() {
+    #[derive(Default)]
+    struct TreeNode {
+        children: Vec<NodeId>,
+        parent: Option<NodeId>,
+    }
+
+    impl Node for TreeNode {
+        fn insert_child(&mut self, child: NodeId) {
+            self.children.push(child);
+        }
+
+        fn remove_child(&mut self, child: NodeId) {
+            self.children.retain(|&id| id != child);
+        }
+
+        fn children(&self) -> Vec<NodeId> {
+            self.children.clone()
+        }
+
+        fn on_attached_to_parent(&mut self, parent: NodeId) {
+            self.parent = Some(parent);
+        }
+
+        fn on_removed_from_parent(&mut self) {
+            self.parent = None;
+        }
+
+        fn parent(&self) -> Option<NodeId> {
+            self.parent
+        }
+    }
+
+    fn build_balanced_binary_tree(applier: &mut MemoryApplier, remaining_depth: usize) -> NodeId {
+        let node_id = applier.create(Box::new(TreeNode::default()));
+        if remaining_depth == 0 {
+            return node_id;
+        }
+
+        let left = build_balanced_binary_tree(applier, remaining_depth - 1);
+        let right = build_balanced_binary_tree(applier, remaining_depth - 1);
+
+        applier
+            .with_node::<TreeNode, _>(node_id, |node| {
+                node.insert_child(left);
+                node.insert_child(right);
+            })
+            .expect("attach children to parent");
+
+        for child_id in [left, right] {
+            applier
+                .with_node::<TreeNode, _>(child_id, |node| {
+                    node.on_attached_to_parent(node_id);
+                })
+                .expect("attach parent to child");
+        }
+
+        node_id
+    }
+
+    let mut applier = MemoryApplier::new();
+    let tree_depth = 12usize;
+    let root = build_balanced_binary_tree(&mut applier, tree_depth);
+
+    let max_depth = applier
+        .debug_remove_max_traversal_depth(root)
+        .expect("remove balanced tree");
+
+    assert!(
+        max_depth <= tree_depth + 1,
+        "removal traversal should scale with tree depth, not subtree size: tree_depth={tree_depth} max_depth={max_depth}",
+    );
+    assert!(applier.is_empty(), "all nodes should be removed");
+}
+
 /// Test that push_parent reuses previous children when the parent node
 /// was reused (last_node_reused = true). This ensures stable parents
 /// correctly track their children across recompositions.
@@ -4353,6 +5410,7 @@ fn push_parent_inherits_previous_when_reused() {
     let mut applier = MemoryApplier::new();
 
     let parent_id = applier.create(Box::new(RecordingNode::default()));
+    let child_id = applier.create(Box::new(RecordingNode::default()));
 
     {
         let (composer, slots_host, applier_host) =
@@ -4362,17 +5420,26 @@ fn push_parent_inherits_previous_when_reused() {
         composer.core.last_node_reused.set(Some(true)); // Pretend parent was reused
         composer.push_parent(parent_id);
 
-        // Simulate adding a child
+        // Add a real child node
         {
             let mut stack = composer.parent_stack();
             let frame = stack.last_mut().expect("parent frame should exist");
-            frame.new_children.push(42); // Fake child ID
+            frame.new_children.push(child_id);
         }
 
         composer.pop_parent();
         drop(composer);
         teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
     }
+
+    // Manually record the child on the parent node so push_parent reads it back
+    applier
+        .with_node(parent_id, |node: &mut RecordingNode| {
+            if !node.children.contains(&child_id) {
+                node.children.push(child_id);
+            }
+        })
+        .expect("parent node exists");
 
     // Reset for second pass
     slots.reset();
@@ -4390,8 +5457,8 @@ fn push_parent_inherits_previous_when_reused() {
             let stack = composer.parent_stack();
             let frame = stack.last().expect("parent frame should exist");
             assert_eq!(
-                frame.previous,
-                vec![42],
+                frame.previous.as_slice(),
+                [child_id],
                 "When parent was reused, previous children should be inherited"
             );
         }
@@ -4502,13 +5569,10 @@ fn emit_node_creates_nodes_when_parent_restored_after_conditional_removal() {
     let third_child_id = child_ids.borrow().last().copied().unwrap();
     println!("Third child ID: {}", third_child_id);
 
-    // CRITICAL: The child should be VALID (non-zero ID) after parent restoration.
-    // The ID may or may not be the same as the first ID (depends on SlotTable behavior),
-    // but the important thing is emit_node succeeded.
+    // The child should exist in the applier after parent restoration.
     assert!(
-        third_child_id > 0,
-        "Child node should be successfully created after parent restoration. \
-         If this fails, emit_node is rejecting node creation when previous is empty."
+        composition.applier_mut().get_mut(third_child_id).is_ok(),
+        "Child node should be successfully created after parent restoration."
     );
 
     // Verify we got two child IDs (one from first render, one from third render)
@@ -4684,4 +5748,28 @@ fn test_stale_state_handle_try_with_returns_none() {
     assert!(!state.is_alive());
     assert_eq!(state.try_value(), None);
     assert_eq!(state.try_with(|v| *v + 1), None);
+}
+
+#[test]
+fn param_state_update_reuses_existing_buffer_via_clone_from() {
+    let mut state = crate::ParamState::<String> {
+        value: Some(String::with_capacity(64)),
+    };
+    state
+        .value
+        .as_mut()
+        .expect("seeded string")
+        .push_str("seed value");
+
+    let initial_ptr = state.value.as_ref().expect("seeded string").as_ptr();
+    let updated = "short replacement";
+    assert!(state.update(&updated.to_string()));
+
+    let stored = state.value.as_ref().expect("updated string");
+    assert_eq!(stored, updated);
+    assert_eq!(
+        stored.as_ptr(),
+        initial_ptr,
+        "ParamState::update should reuse the existing String allocation when capacity permits",
+    );
 }

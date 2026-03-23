@@ -3,6 +3,7 @@
 pub extern crate self as cranpose_core;
 
 pub mod composer_context;
+#[cfg(any(feature = "internal", test))]
 mod frame_clock;
 mod launched_effect;
 pub mod owned;
@@ -28,10 +29,14 @@ pub use launched_effect::{
 pub use owned::Owned;
 pub use platform::{Clock, RuntimeScheduler};
 pub use runtime::{
-    current_runtime_handle, schedule_frame, schedule_node_update, DefaultScheduler, Runtime,
-    RuntimeHandle, StateId, TaskHandle,
+    current_runtime_handle, debug_runtime_thread_local_stats, schedule_frame, schedule_node_update,
+    DefaultScheduler, Runtime, RuntimeDebugStats, RuntimeHandle, RuntimeThreadLocalDebugStats,
+    StateArenaDebugStats, StateId, TaskHandle,
 };
-pub use snapshot_state_observer::SnapshotStateObserver;
+pub use snapshot_pinning::{debug_snapshot_pinning_stats, SnapshotPinningDebugStats};
+pub use snapshot_state_observer::{SnapshotStateObserver, SnapshotStateObserverDebugStats};
+pub use snapshot_v2::{debug_snapshot_v2_stats, SnapshotV2DebugStats};
+pub use state::{debug_snapshot_state_thread_local_stats, SnapshotStateThreadLocalDebugStats};
 
 /// Runs the provided closure inside a mutable snapshot and applies the result.
 ///
@@ -102,6 +107,20 @@ thread_local! {
     pub(crate) static IN_APPLIED_SNAPSHOT: Cell<bool> = const { Cell::new(false) };
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CompositionPassDebugStats {
+    pub commands_len: usize,
+    pub commands_cap: usize,
+    pub command_payload_len_bytes: usize,
+    pub command_payload_cap_bytes: usize,
+    pub sync_children_len: usize,
+    pub sync_children_cap: usize,
+    pub sync_child_ids_len: usize,
+    pub sync_child_ids_cap: usize,
+    pub side_effects_len: usize,
+    pub side_effects_cap: usize,
+}
+
 /// Marks the start of an event handler context.
 /// Call this at the start of keyboard/mouse/touch event handling.
 /// Use `run_in_mutable_snapshot` or `dispatch_ui_event` inside to ensure proper snapshot handling.
@@ -136,25 +155,16 @@ fn compose_debug_enabled() -> bool {
     *COMPOSE_DEBUG.get_or_init(|| std::env::var_os("COMPOSE_DEBUG").is_some())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn input_debug_enabled() -> bool {
-    use std::sync::OnceLock;
-    static INPUT_DEBUG: OnceLock<bool> = OnceLock::new();
-    *INPUT_DEBUG.get_or_init(|| std::env::var_os("CRANPOSE_INPUT_DEBUG").is_some())
-}
-
-#[cfg(target_arch = "wasm32")]
-fn input_debug_enabled() -> bool {
-    false
-}
-
 #[cfg(test)]
 pub use runtime::{TestRuntime, TestScheduler};
 
-use crate::collections::map::HashMap;
+use crate::collections::map::{HashMap, HashSet};
 use crate::state::{NeverEqual, SnapshotMutableState, UpdateScope};
-use std::any::Any;
+use smallvec::SmallVec;
+use std::any::{Any, TypeId};
 use std::cell::{Cell, Ref, RefCell, RefMut};
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
@@ -178,11 +188,6 @@ impl AnchorId {
     /// Invalid anchor that represents no anchor.
     pub(crate) const INVALID: AnchorId = AnchorId(0);
 
-    /// Create a new anchor ID from a raw value.
-    pub(crate) fn new(id: usize) -> Self {
-        Self(id)
-    }
-
     /// Check if this anchor is valid (non-zero).
     pub fn is_valid(&self) -> bool {
         self.0 != 0
@@ -194,8 +199,13 @@ type LocalKey = usize;
 pub(crate) type FrameCallbackId = u64;
 type LocalStackSnapshot = Rc<Vec<LocalContext>>;
 
+thread_local! {
+    static EMPTY_LOCAL_STACK: LocalStackSnapshot = Rc::new(Vec::new());
+}
+
 static NEXT_SCOPE_ID: AtomicUsize = AtomicUsize::new(1);
 static NEXT_LOCAL_KEY: AtomicUsize = AtomicUsize::new(1);
+static LIVE_RECOMPOSE_SCOPE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 fn next_scope_id() -> ScopeId {
     NEXT_SCOPE_ID.fetch_add(1, Ordering::Relaxed)
@@ -205,12 +215,22 @@ fn next_local_key() -> LocalKey {
     NEXT_LOCAL_KEY.fetch_add(1, Ordering::Relaxed)
 }
 
+fn empty_local_stack() -> LocalStackSnapshot {
+    EMPTY_LOCAL_STACK.with(Rc::clone)
+}
+
+enum RecomposeCallback {
+    Static(fn(&Composer)),
+    Dynamic(Box<dyn FnMut(&Composer) + 'static>),
+}
+
 pub(crate) struct RecomposeScopeInner {
     id: ScopeId,
     runtime: RuntimeHandle,
     invalid: Cell<bool>,
     enqueued: Cell<bool>,
     active: Cell<bool>,
+    composed_once: Cell<bool>,
     pending_recompose: Cell<bool>,
     force_reuse: Cell<bool>,
     force_recompose: Cell<bool>,
@@ -222,28 +242,43 @@ pub(crate) struct RecomposeScopeInner {
 
 impl RecomposeScopeInner {
     fn new(runtime: RuntimeHandle) -> Self {
+        LIVE_RECOMPOSE_SCOPE_COUNT.fetch_add(1, Ordering::Relaxed);
         Self {
             id: next_scope_id(),
             runtime,
             invalid: Cell::new(false),
             enqueued: Cell::new(false),
             active: Cell::new(true),
+            composed_once: Cell::new(false),
             pending_recompose: Cell::new(false),
             force_reuse: Cell::new(false),
             force_recompose: Cell::new(false),
             parent_hint: Cell::new(None),
             recompose: RefCell::new(None),
-            local_stack: RefCell::new(Rc::new(Vec::new())),
+            local_stack: RefCell::new(empty_local_stack()),
             slots_host: RefCell::new(None),
         }
     }
 }
 
-type RecomposeCallback = Box<dyn FnMut(&Composer) + 'static>;
+impl Drop for RecomposeScopeInner {
+    fn drop(&mut self) {
+        LIVE_RECOMPOSE_SCOPE_COUNT.fetch_sub(1, Ordering::Relaxed);
+        if self.enqueued.replace(false) {
+            self.runtime.mark_scope_recomposed(self.id);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RecomposeScopeRegistryDebugStats {
+    pub len: usize,
+    pub capacity: usize,
+}
 
 #[derive(Clone)]
 pub struct RecomposeScope {
-    inner: Rc<RecomposeScopeInner>, // FUTURE(no_std): replace Rc with arena-managed scope handles.
+    inner: Rc<RecomposeScopeInner>,
 }
 
 impl PartialEq for RecomposeScope {
@@ -261,6 +296,10 @@ impl RecomposeScope {
         }
     }
 
+    fn downgrade(&self) -> Weak<RecomposeScopeInner> {
+        Rc::downgrade(&self.inner)
+    }
+
     pub fn id(&self) -> ScopeId {
         self.inner.id
     }
@@ -274,14 +313,6 @@ impl RecomposeScope {
     }
 
     fn invalidate(&self) {
-        if input_debug_enabled() {
-            eprintln!(
-                "[CRANPOSE_INPUT_DEBUG] scope invalidate id={} active={} enqueued={}",
-                self.inner.id,
-                self.inner.active.get(),
-                self.inner.enqueued.get()
-            );
-        }
         self.inner.invalid.set(true);
         if !self.inner.active.get() {
             return;
@@ -289,7 +320,7 @@ impl RecomposeScope {
         if !self.inner.enqueued.replace(true) {
             self.inner
                 .runtime
-                .register_invalid_scope(self.inner.id, Rc::downgrade(&self.inner));
+                .register_invalid_scope(self.inner.id, self.downgrade());
         }
     }
 
@@ -310,19 +341,25 @@ impl RecomposeScope {
         }
     }
 
-    fn downgrade(&self) -> Weak<RecomposeScopeInner> {
-        Rc::downgrade(&self.inner)
+    fn set_recompose(&self, callback: Box<dyn FnMut(&Composer) + 'static>) {
+        *self.inner.recompose.borrow_mut() = Some(RecomposeCallback::Dynamic(callback));
     }
 
-    fn set_recompose(&self, callback: RecomposeCallback) {
-        *self.inner.recompose.borrow_mut() = Some(callback);
+    fn set_recompose_fn(&self, callback: fn(&Composer)) {
+        *self.inner.recompose.borrow_mut() = Some(RecomposeCallback::Static(callback));
     }
 
-    fn run_recompose(&self, composer: &Composer) {
-        let mut callback_cell = self.inner.recompose.borrow_mut();
-        if let Some(mut callback) = callback_cell.take() {
-            drop(callback_cell);
-            callback(composer);
+    /// Returns true if a callback was found and executed, false if no callback was registered.
+    fn run_recompose(&self, composer: &Composer) -> bool {
+        let callback = self.inner.recompose.borrow_mut().take();
+        if let Some(callback) = callback {
+            match callback {
+                RecomposeCallback::Static(callback) => callback(composer),
+                RecomposeCallback::Dynamic(mut callback) => callback(composer),
+            }
+            true
+        } else {
+            false
         }
     }
 
@@ -351,7 +388,7 @@ impl RecomposeScope {
             .slots_host
             .borrow()
             .as_ref()
-            .and_then(|weak| weak.upgrade())
+            .and_then(Weak::upgrade)
     }
 
     pub fn deactivate(&self) {
@@ -370,7 +407,7 @@ impl RecomposeScope {
         if self.inner.invalid.get() && !self.inner.enqueued.replace(true) {
             self.inner
                 .runtime
-                .register_invalid_scope(self.inner.id, Rc::downgrade(&self.inner));
+                .register_invalid_scope(self.inner.id, self.downgrade());
         }
     }
 
@@ -395,6 +432,14 @@ impl RecomposeScope {
             return false;
         }
         self.is_invalid()
+    }
+
+    pub fn has_composed_once(&self) -> bool {
+        self.inner.composed_once.get()
+    }
+
+    fn mark_composed_once(&self) {
+        self.inner.composed_once.set(true);
     }
 }
 
@@ -1017,18 +1062,15 @@ pub fn pop_parent() {
 mod slot_storage;
 pub use slot_storage::{GroupId, SlotStorage, StartGroup, ValueSlotId};
 
-pub mod chunked_slot_storage;
-pub mod hierarchical_slot_storage;
 pub mod slot_backend;
-pub mod split_slot_storage;
-pub use slot_backend::{make_backend, SlotBackend, SlotBackendKind};
+pub use slot_backend::SlotBackend;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SlotTable: gap-buffer-based implementation
 // ═══════════════════════════════════════════════════════════════════════════
 
 pub mod slot_table;
-pub use slot_table::SlotTable;
+pub use slot_table::{SlotTable, SlotTableDebugStats, SlotValueTypeDebugStat};
 
 pub trait Node: Any {
     fn mount(&mut self) {}
@@ -1040,6 +1082,12 @@ pub trait Node: Any {
     fn update_children(&mut self, _children: &[NodeId]) {}
     fn children(&self) -> Vec<NodeId> {
         Vec::new()
+    }
+    /// Copies child IDs into the provided scratch buffer without allocating a
+    /// fresh container for every traversal.
+    fn collect_children_into(&self, out: &mut SmallVec<[NodeId; 8]>) {
+        out.clear();
+        out.extend(self.children());
     }
     /// Called after the node is created to record its own ID.
     /// Useful for nodes that need to store their ID for later operations.
@@ -1084,6 +1132,41 @@ pub trait Node: Any {
     /// Default: delegates to on_attached_to_parent for backward compatibility.
     fn set_parent_for_bubbling(&mut self, parent: NodeId) {
         self.on_attached_to_parent(parent);
+    }
+
+    /// Returns a recycle pool key when this node supports shell reuse.
+    fn recycle_key(&self) -> Option<TypeId> {
+        None
+    }
+
+    /// Bounds how many recyclable shells of this node type should be retained.
+    fn recycle_pool_limit(&self) -> Option<usize> {
+        None
+    }
+
+    /// Clears live attachments before the node shell enters a recycle pool.
+    fn prepare_for_recycle(&mut self) {}
+
+    /// Optionally provides a compact replacement box for this recycled shell.
+    ///
+    /// Returning `Some` lets nodes move pooled survivors onto fresh compact
+    /// storage so the recycle pool does not pin large spike-era allocations.
+    fn rehouse_for_recycle(&self) -> Option<Box<dyn Node>> {
+        None
+    }
+
+    /// Optionally moves a live node onto a fresh box during applier compaction.
+    ///
+    /// This is used after large-majority teardowns where a small surviving live
+    /// tree can otherwise pin allocator pages from a much larger spike-era node
+    /// population. Implementations must preserve the node's live state.
+    fn rehouse_for_live_compaction(&mut self) -> Option<Box<dyn Node>> {
+        None
+    }
+
+    /// Returns the node-owned heap retained beyond the node's own box allocation.
+    fn debug_heap_bytes(&self) -> usize {
+        0
     }
 }
 
@@ -1363,10 +1446,60 @@ impl dyn Node {
     }
 }
 
+pub struct RecycledNode {
+    stable_id: NodeId,
+    node: Box<dyn Node>,
+    warm_origin: bool,
+}
+
+impl RecycledNode {
+    fn new(stable_id: NodeId, node: Box<dyn Node>, warm_origin: bool) -> Self {
+        let node = node.rehouse_for_recycle().unwrap_or(node);
+        Self {
+            stable_id,
+            node,
+            warm_origin,
+        }
+    }
+
+    fn from_shell(stable_id: NodeId, node: Box<dyn Node>, warm_origin: bool) -> Self {
+        Self {
+            stable_id,
+            node,
+            warm_origin,
+        }
+    }
+
+    pub fn stable_id(&self) -> NodeId {
+        self.stable_id
+    }
+
+    fn warm_origin(&self) -> bool {
+        self.warm_origin
+    }
+
+    fn set_warm_origin(&mut self, warm_origin: bool) {
+        self.warm_origin = warm_origin;
+    }
+
+    pub fn node_mut(&mut self) -> &mut dyn Node {
+        self.node.as_mut()
+    }
+
+    pub fn into_parts(self) -> (NodeId, Box<dyn Node>, bool) {
+        (self.stable_id, self.node, self.warm_origin)
+    }
+}
+
 pub trait Applier: Any {
     fn create(&mut self, node: Box<dyn Node>) -> NodeId;
     fn get_mut(&mut self, id: NodeId) -> Result<&mut dyn Node, NodeError>;
     fn remove(&mut self, id: NodeId) -> Result<(), NodeError>;
+
+    /// Returns the current generation for a node index.
+    /// Generation is incremented when an index is reused from the freelist,
+    /// preventing stale slot entries from matching recycled nodes.
+    fn node_generation(&self, id: NodeId) -> u32;
 
     /// Inserts a node with a pre-assigned ID.
     ///
@@ -1390,6 +1523,32 @@ pub trait Applier: Any {
     {
         self
     }
+
+    /// Trim trailing tombstones/unused capacity after structural changes.
+    fn compact(&mut self) {}
+
+    /// Returns a previously recycled node shell and its stable ID for the requested concrete type.
+    fn take_recycled_node(&mut self, _key: TypeId) -> Option<RecycledNode> {
+        None
+    }
+
+    /// Marks whether a reinserted recycled node originated from the warm recycle path.
+    fn set_recycled_node_origin(&mut self, _id: NodeId, _warm_origin: bool) {}
+
+    /// Seeds a warm recyclable shell for future reuse without requiring a prior removal.
+    fn seed_recycled_node_shell(
+        &mut self,
+        _key: TypeId,
+        _recycle_pool_limit: Option<usize>,
+        _shell: Box<dyn Node>,
+    ) {
+    }
+
+    /// Records that the current apply pass had to allocate a fresh recyclable shell for this type.
+    fn record_fresh_recyclable_creation(&mut self, _key: TypeId) {}
+
+    /// Drops any recyclable shells that should not survive beyond the current apply pass.
+    fn clear_recycled_nodes(&mut self) {}
 }
 
 type TypedNodeUpdate = fn(&mut dyn Node, NodeId) -> Result<(), NodeError>;
@@ -1465,10 +1624,9 @@ pub(crate) enum Command {
         parent_id: NodeId,
         child_id: NodeId,
     },
-    ReconcileChildren {
+    SyncChildren {
         parent_id: NodeId,
-        expected_children: Vec<NodeId>,
-        needs_dirty_check: bool,
+        expected_children: ChildList,
     },
     Callback(CommandCallback),
 }
@@ -1561,13 +1719,453 @@ impl Command {
                 parent_id,
                 child_id,
             } => apply_remove_child(applier, parent_id, child_id),
-            Self::ReconcileChildren {
+            Self::SyncChildren {
                 parent_id,
                 expected_children,
-                needs_dirty_check,
-            } => reconcile_children(applier, parent_id, &expected_children, needs_dirty_check),
+            } => sync_children(applier, parent_id, &expected_children),
             Self::Callback(callback) => callback(applier),
         }
+    }
+}
+
+const COMMAND_CHUNK_CAPACITY: usize = 1024;
+const COMMAND_FLUSH_THRESHOLD: usize = COMMAND_CHUNK_CAPACITY * 4;
+type ChildList = SmallVec<[NodeId; 4]>;
+const SMALL_CHILD_SYNC_LINEAR_THRESHOLD: usize = 8;
+
+#[derive(Copy, Clone)]
+enum CommandTag {
+    BubbleDirty,
+    UpdateTypedNode,
+    RemoveNode,
+    MountNode,
+    AttachChild,
+    InsertChild,
+    MoveChild,
+    RemoveChild,
+    SyncChildren,
+    Callback,
+}
+
+#[derive(Copy, Clone)]
+struct BubbleDirtyCommand {
+    node_id: NodeId,
+    bubble: DirtyBubble,
+}
+
+#[derive(Copy, Clone)]
+struct UpdateTypedNodeCommand {
+    id: NodeId,
+    updater: TypedNodeUpdate,
+}
+
+#[derive(Copy, Clone)]
+struct AttachChildCommand {
+    parent_id: NodeId,
+    child_id: NodeId,
+    bubble: DirtyBubble,
+}
+
+#[derive(Copy, Clone)]
+struct InsertChildCommand {
+    parent_id: NodeId,
+    child_id: NodeId,
+    appended_index: usize,
+    insert_index: usize,
+    bubble: DirtyBubble,
+}
+
+#[derive(Copy, Clone)]
+struct MoveChildCommand {
+    parent_id: NodeId,
+    from_index: usize,
+    to_index: usize,
+    bubble: DirtyBubble,
+}
+
+#[derive(Copy, Clone)]
+struct RemoveChildCommand {
+    parent_id: NodeId,
+    child_id: NodeId,
+}
+
+struct SyncChildrenCommand {
+    parent_id: NodeId,
+    child_start: usize,
+    child_len: usize,
+}
+
+#[derive(Default)]
+struct CommandQueue {
+    chunks: Vec<Vec<CommandTag>>,
+    len: usize,
+    bubble_dirty: Vec<BubbleDirtyCommand>,
+    update_typed_nodes: Vec<UpdateTypedNodeCommand>,
+    remove_nodes: Vec<NodeId>,
+    mount_nodes: Vec<NodeId>,
+    attach_children: Vec<AttachChildCommand>,
+    insert_children: Vec<InsertChildCommand>,
+    move_children: Vec<MoveChildCommand>,
+    remove_children: Vec<RemoveChildCommand>,
+    sync_children: Vec<SyncChildrenCommand>,
+    sync_child_ids: Vec<NodeId>,
+    callbacks: Vec<CommandCallback>,
+}
+
+impl CommandQueue {
+    fn push_tag(&mut self, tag: CommandTag) {
+        let needs_chunk = self
+            .chunks
+            .last()
+            .map(|chunk| chunk.len() == chunk.capacity())
+            .unwrap_or(true);
+        if needs_chunk {
+            self.chunks.push(Vec::with_capacity(COMMAND_CHUNK_CAPACITY));
+        }
+        self.chunks
+            .last_mut()
+            .expect("command chunk should exist")
+            .push(tag);
+        self.len += 1;
+    }
+
+    fn push(&mut self, command: Command) {
+        match command {
+            Command::BubbleDirty { node_id, bubble } => {
+                self.bubble_dirty
+                    .push(BubbleDirtyCommand { node_id, bubble });
+                self.push_tag(CommandTag::BubbleDirty);
+            }
+            Command::UpdateTypedNode { id, updater } => {
+                self.update_typed_nodes
+                    .push(UpdateTypedNodeCommand { id, updater });
+                self.push_tag(CommandTag::UpdateTypedNode);
+            }
+            Command::RemoveNode { id } => {
+                self.remove_nodes.push(id);
+                self.push_tag(CommandTag::RemoveNode);
+            }
+            Command::MountNode { id } => {
+                self.mount_nodes.push(id);
+                self.push_tag(CommandTag::MountNode);
+            }
+            Command::AttachChild {
+                parent_id,
+                child_id,
+                bubble,
+            } => {
+                self.attach_children.push(AttachChildCommand {
+                    parent_id,
+                    child_id,
+                    bubble,
+                });
+                self.push_tag(CommandTag::AttachChild);
+            }
+            Command::InsertChild {
+                parent_id,
+                child_id,
+                appended_index,
+                insert_index,
+                bubble,
+            } => {
+                self.insert_children.push(InsertChildCommand {
+                    parent_id,
+                    child_id,
+                    appended_index,
+                    insert_index,
+                    bubble,
+                });
+                self.push_tag(CommandTag::InsertChild);
+            }
+            Command::MoveChild {
+                parent_id,
+                from_index,
+                to_index,
+                bubble,
+            } => {
+                self.move_children.push(MoveChildCommand {
+                    parent_id,
+                    from_index,
+                    to_index,
+                    bubble,
+                });
+                self.push_tag(CommandTag::MoveChild);
+            }
+            Command::RemoveChild {
+                parent_id,
+                child_id,
+            } => {
+                self.remove_children.push(RemoveChildCommand {
+                    parent_id,
+                    child_id,
+                });
+                self.push_tag(CommandTag::RemoveChild);
+            }
+            Command::SyncChildren {
+                parent_id,
+                expected_children,
+            } => {
+                let child_start = self.sync_child_ids.len();
+                let child_len = expected_children.len();
+                self.sync_child_ids.extend(expected_children);
+                self.sync_children.push(SyncChildrenCommand {
+                    parent_id,
+                    child_start,
+                    child_len,
+                });
+                self.push_tag(CommandTag::SyncChildren);
+            }
+            Command::Callback(callback) => {
+                self.callbacks.push(callback);
+                self.push_tag(CommandTag::Callback);
+            }
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn capacity(&self) -> usize {
+        self.chunks.iter().map(Vec::capacity).sum()
+    }
+
+    fn payload_len_bytes(&self) -> usize {
+        self.bubble_dirty
+            .len()
+            .saturating_mul(std::mem::size_of::<BubbleDirtyCommand>())
+            .saturating_add(
+                self.update_typed_nodes
+                    .len()
+                    .saturating_mul(std::mem::size_of::<UpdateTypedNodeCommand>()),
+            )
+            .saturating_add(
+                self.remove_nodes
+                    .len()
+                    .saturating_mul(std::mem::size_of::<NodeId>()),
+            )
+            .saturating_add(
+                self.mount_nodes
+                    .len()
+                    .saturating_mul(std::mem::size_of::<NodeId>()),
+            )
+            .saturating_add(
+                self.attach_children
+                    .len()
+                    .saturating_mul(std::mem::size_of::<AttachChildCommand>()),
+            )
+            .saturating_add(
+                self.insert_children
+                    .len()
+                    .saturating_mul(std::mem::size_of::<InsertChildCommand>()),
+            )
+            .saturating_add(
+                self.move_children
+                    .len()
+                    .saturating_mul(std::mem::size_of::<MoveChildCommand>()),
+            )
+            .saturating_add(
+                self.remove_children
+                    .len()
+                    .saturating_mul(std::mem::size_of::<RemoveChildCommand>()),
+            )
+            .saturating_add(
+                self.sync_children
+                    .len()
+                    .saturating_mul(std::mem::size_of::<SyncChildrenCommand>()),
+            )
+            .saturating_add(
+                self.sync_child_ids
+                    .len()
+                    .saturating_mul(std::mem::size_of::<NodeId>()),
+            )
+            .saturating_add(
+                self.callbacks
+                    .len()
+                    .saturating_mul(std::mem::size_of::<CommandCallback>()),
+            )
+    }
+
+    fn payload_capacity_bytes(&self) -> usize {
+        self.bubble_dirty
+            .capacity()
+            .saturating_mul(std::mem::size_of::<BubbleDirtyCommand>())
+            .saturating_add(
+                self.update_typed_nodes
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<UpdateTypedNodeCommand>()),
+            )
+            .saturating_add(
+                self.remove_nodes
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<NodeId>()),
+            )
+            .saturating_add(
+                self.mount_nodes
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<NodeId>()),
+            )
+            .saturating_add(
+                self.attach_children
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<AttachChildCommand>()),
+            )
+            .saturating_add(
+                self.insert_children
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<InsertChildCommand>()),
+            )
+            .saturating_add(
+                self.move_children
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<MoveChildCommand>()),
+            )
+            .saturating_add(
+                self.remove_children
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<RemoveChildCommand>()),
+            )
+            .saturating_add(
+                self.sync_children
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<SyncChildrenCommand>()),
+            )
+            .saturating_add(
+                self.sync_child_ids
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<NodeId>()),
+            )
+            .saturating_add(
+                self.callbacks
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<CommandCallback>()),
+            )
+    }
+
+    fn apply(self, applier: &mut dyn Applier) -> Result<(), NodeError> {
+        let mut bubble_dirty = self.bubble_dirty.into_iter();
+        let mut update_typed_nodes = self.update_typed_nodes.into_iter();
+        let mut remove_nodes = self.remove_nodes.into_iter();
+        let mut mount_nodes = self.mount_nodes.into_iter();
+        let mut attach_children = self.attach_children.into_iter();
+        let mut insert_children = self.insert_children.into_iter();
+        let mut move_children = self.move_children.into_iter();
+        let mut remove_children = self.remove_children.into_iter();
+        let mut sync_children_commands = self.sync_children.into_iter();
+        let sync_child_ids = self.sync_child_ids;
+        let mut callbacks = self.callbacks.into_iter();
+
+        for chunk in self.chunks {
+            for tag in chunk {
+                match tag {
+                    CommandTag::BubbleDirty => {
+                        let BubbleDirtyCommand { node_id, bubble } =
+                            bubble_dirty.next().expect("missing BubbleDirty payload");
+                        Command::BubbleDirty { node_id, bubble }.apply(applier)?;
+                    }
+                    CommandTag::UpdateTypedNode => {
+                        let UpdateTypedNodeCommand { id, updater } = update_typed_nodes
+                            .next()
+                            .expect("missing UpdateTypedNode payload");
+                        Command::UpdateTypedNode { id, updater }.apply(applier)?;
+                    }
+                    CommandTag::RemoveNode => {
+                        let id = remove_nodes.next().expect("missing RemoveNode payload");
+                        Command::RemoveNode { id }.apply(applier)?;
+                    }
+                    CommandTag::MountNode => {
+                        let id = mount_nodes.next().expect("missing MountNode payload");
+                        Command::MountNode { id }.apply(applier)?;
+                    }
+                    CommandTag::AttachChild => {
+                        let AttachChildCommand {
+                            parent_id,
+                            child_id,
+                            bubble,
+                        } = attach_children.next().expect("missing AttachChild payload");
+                        Command::AttachChild {
+                            parent_id,
+                            child_id,
+                            bubble,
+                        }
+                        .apply(applier)?;
+                    }
+                    CommandTag::InsertChild => {
+                        let InsertChildCommand {
+                            parent_id,
+                            child_id,
+                            appended_index,
+                            insert_index,
+                            bubble,
+                        } = insert_children.next().expect("missing InsertChild payload");
+                        Command::InsertChild {
+                            parent_id,
+                            child_id,
+                            appended_index,
+                            insert_index,
+                            bubble,
+                        }
+                        .apply(applier)?;
+                    }
+                    CommandTag::MoveChild => {
+                        let MoveChildCommand {
+                            parent_id,
+                            from_index,
+                            to_index,
+                            bubble,
+                        } = move_children.next().expect("missing MoveChild payload");
+                        Command::MoveChild {
+                            parent_id,
+                            from_index,
+                            to_index,
+                            bubble,
+                        }
+                        .apply(applier)?;
+                    }
+                    CommandTag::RemoveChild => {
+                        let RemoveChildCommand {
+                            parent_id,
+                            child_id,
+                        } = remove_children.next().expect("missing RemoveChild payload");
+                        Command::RemoveChild {
+                            parent_id,
+                            child_id,
+                        }
+                        .apply(applier)?;
+                    }
+                    CommandTag::SyncChildren => {
+                        let SyncChildrenCommand {
+                            parent_id,
+                            child_start,
+                            child_len,
+                        } = sync_children_commands
+                            .next()
+                            .expect("missing SyncChildren payload");
+                        sync_children(
+                            applier,
+                            parent_id,
+                            &sync_child_ids[child_start..child_start + child_len],
+                        )?;
+                    }
+                    CommandTag::Callback => {
+                        let callback = callbacks.next().expect("missing Callback payload");
+                        Command::Callback(callback).apply(applier)?;
+                    }
+                }
+            }
+        }
+
+        debug_assert!(bubble_dirty.next().is_none());
+        debug_assert!(update_typed_nodes.next().is_none());
+        debug_assert!(remove_nodes.next().is_none());
+        debug_assert!(mount_nodes.next().is_none());
+        debug_assert!(attach_children.next().is_none());
+        debug_assert!(insert_children.next().is_none());
+        debug_assert!(move_children.next().is_none());
+        debug_assert!(remove_children.next().is_none());
+        debug_assert!(sync_children_commands.next().is_none());
+        debug_assert!(callbacks.next().is_none());
+        Ok(())
     }
 }
 
@@ -1643,6 +2241,143 @@ fn apply_remove_child(
     Ok(())
 }
 
+fn collect_current_children(applier: &mut dyn Applier, parent_id: NodeId) -> ChildList {
+    let mut scratch = SmallVec::<[NodeId; 8]>::new();
+    if let Ok(node) = applier.get_mut(parent_id) {
+        node.collect_children_into(&mut scratch);
+    }
+    let mut current = ChildList::new();
+    current.extend(scratch);
+    current
+}
+
+fn sync_children(
+    applier: &mut dyn Applier,
+    parent_id: NodeId,
+    expected_children: &[NodeId],
+) -> Result<(), NodeError> {
+    let mut current = collect_current_children(applier, parent_id);
+    let children_changed = current.as_slice() != expected_children;
+
+    if children_changed {
+        if current.len().max(expected_children.len()) <= SMALL_CHILD_SYNC_LINEAR_THRESHOLD {
+            sync_children_small(applier, parent_id, &mut current, expected_children)?;
+        } else {
+            let mut target_positions: HashMap<NodeId, usize> = HashMap::default();
+            target_positions.reserve(expected_children.len());
+            for (index, &child) in expected_children.iter().enumerate() {
+                target_positions.insert(child, index);
+            }
+
+            for index in (0..current.len()).rev() {
+                let child = current[index];
+                if !target_positions.contains_key(&child) {
+                    current.remove(index);
+                    Command::RemoveChild {
+                        parent_id,
+                        child_id: child,
+                    }
+                    .apply(applier)?;
+                }
+            }
+
+            let mut current_positions = build_child_positions(&current);
+            for (target_index, &child) in expected_children.iter().enumerate() {
+                if let Some(current_index) = current_positions.get(&child).copied() {
+                    if current_index != target_index {
+                        let from_index = current_index;
+                        let to_index = move_child_in_diff_state(
+                            &mut current,
+                            &mut current_positions,
+                            from_index,
+                            target_index,
+                        );
+                        Command::MoveChild {
+                            parent_id,
+                            from_index,
+                            to_index,
+                            bubble: DirtyBubble::LAYOUT_AND_MEASURE,
+                        }
+                        .apply(applier)?;
+                    }
+                } else {
+                    let insert_index = target_index.min(current.len());
+                    let appended_index = current.len();
+                    insert_child_into_diff_state(
+                        &mut current,
+                        &mut current_positions,
+                        insert_index,
+                        child,
+                    );
+                    Command::InsertChild {
+                        parent_id,
+                        child_id: child,
+                        appended_index,
+                        insert_index,
+                        bubble: DirtyBubble::LAYOUT_AND_MEASURE,
+                    }
+                    .apply(applier)?;
+                }
+            }
+        }
+    }
+
+    reconcile_children(applier, parent_id, expected_children, !children_changed)
+}
+
+fn sync_children_small(
+    applier: &mut dyn Applier,
+    parent_id: NodeId,
+    current: &mut ChildList,
+    expected_children: &[NodeId],
+) -> Result<(), NodeError> {
+    for index in (0..current.len()).rev() {
+        let child = current[index];
+        if !expected_children.contains(&child) {
+            current.remove(index);
+            Command::RemoveChild {
+                parent_id,
+                child_id: child,
+            }
+            .apply(applier)?;
+        }
+    }
+
+    for (target_index, &child) in expected_children.iter().enumerate() {
+        if let Some(current_index) = current
+            .iter()
+            .position(|&current_child| current_child == child)
+        {
+            if current_index != target_index {
+                let child = current.remove(current_index);
+                let to_index = target_index.min(current.len());
+                current.insert(to_index, child);
+                Command::MoveChild {
+                    parent_id,
+                    from_index: current_index,
+                    to_index,
+                    bubble: DirtyBubble::LAYOUT_AND_MEASURE,
+                }
+                .apply(applier)?;
+            }
+        } else {
+            let insert_index = target_index.min(current.len());
+            let appended_index = current.len();
+            current.insert(insert_index, child);
+            Command::InsertChild {
+                parent_id,
+                child_id: child,
+                appended_index,
+                insert_index,
+                bubble: DirtyBubble::LAYOUT_AND_MEASURE,
+            }
+            .apply(applier)?;
+        }
+    }
+
+    Ok(())
+}
+
 fn reconcile_children(
     applier: &mut dyn Applier,
     parent_id: NodeId,
@@ -1685,21 +2420,160 @@ fn reconcile_children(
 
 #[derive(Default)]
 pub struct MemoryApplier {
-    nodes: Vec<Option<Box<dyn Node>>>, // FUTURE(no_std): migrate to arena-backed node storage.
+    nodes: Vec<Option<Box<dyn Node>>>,
+    /// Stable node ID occupying each physical slot.
+    physical_stable_ids: Vec<u32>,
+    physical_warm_recycled_origins: Vec<bool>,
+    /// Physical storage location for each live stable node ID.
+    stable_to_physical: HashMap<NodeId, usize>,
+    /// Generation counter per stable node ID.
+    stable_generations: HashMap<NodeId, u32>,
+    /// Lowest free physical slots are reused first so the dense storage stays compact.
+    free_ids: BinaryHeap<Reverse<usize>>,
     /// Storage for high-ID nodes (like virtual nodes with IDs starting at 0xFFFFFFFF00000000)
     /// that can't be stored in the Vec without causing capacity overflow.
-    high_id_nodes: std::collections::HashMap<NodeId, Box<dyn Node>>,
+    high_id_nodes: HashMap<NodeId, Box<dyn Node>>,
+    high_id_warm_recycled_origins: HashMap<NodeId, bool>,
+    high_id_generations: HashMap<NodeId, u32>,
+    next_stable_id: NodeId,
     layout_runtime: Option<RuntimeHandle>,
     slots: SlotBackend,
+    recycled_nodes: HashMap<TypeId, Vec<RecycledNode>>,
+    returning_recycled_nodes: HashMap<TypeId, Vec<RecycledNode>>,
+    cold_recycled_nodes: HashMap<TypeId, Vec<RecycledNode>>,
+    recycled_node_limits: HashMap<TypeId, usize>,
+    warm_recycled_node_targets: HashMap<TypeId, usize>,
+    fresh_recyclable_creations: HashMap<TypeId, usize>,
+    recycled_node_prototypes: HashMap<TypeId, Box<dyn Node>>,
+}
+
+struct RemovalFrame {
+    node_id: NodeId,
+    children: SmallVec<[NodeId; 8]>,
+    next_child: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MemoryApplierDebugStats {
+    pub next_stable_id: NodeId,
+    pub nodes_len: usize,
+    pub nodes_cap: usize,
+    pub physical_stable_ids_len: usize,
+    pub physical_stable_ids_cap: usize,
+    pub stable_to_physical_len: usize,
+    pub stable_to_physical_cap: usize,
+    pub stable_generations_len: usize,
+    pub stable_generations_cap: usize,
+    pub free_ids_len: usize,
+    pub free_ids_cap: usize,
+    pub high_id_nodes_len: usize,
+    pub high_id_nodes_cap: usize,
+    pub high_id_generations_len: usize,
+    pub high_id_generations_cap: usize,
+    pub recycled_type_count: usize,
+    pub recycled_type_cap: usize,
+    pub recycled_node_count: usize,
+    pub recycled_node_capacity: usize,
+    pub warm_recycled_node_id_count: usize,
+    pub warm_recycled_node_id_capacity: usize,
 }
 
 impl MemoryApplier {
+    const EAGER_COMPACT_NODE_LEN: usize = 1_024;
+    const INVALID_STABLE_ID: u32 = u32::MAX;
+    const INITIAL_DENSE_NODE_CAP: usize = 32;
+    const LARGE_DENSE_NODE_GROWTH_THRESHOLD: usize = 32 * 1024;
+    const LARGE_DENSE_NODE_GROWTH_DIVISOR: usize = 4;
+
+    fn pack_stable_id(stable_id: NodeId) -> u32 {
+        u32::try_from(stable_id).expect("stable id overflow")
+    }
+
+    fn unpack_stable_id(stable_id: u32) -> NodeId {
+        stable_id as NodeId
+    }
+
+    fn next_dense_node_target_len(old_len: usize) -> usize {
+        if old_len < Self::INITIAL_DENSE_NODE_CAP {
+            return Self::INITIAL_DENSE_NODE_CAP;
+        }
+        if old_len < Self::LARGE_DENSE_NODE_GROWTH_THRESHOLD {
+            return old_len.saturating_mul(2);
+        }
+
+        let incremental_growth =
+            (old_len / Self::LARGE_DENSE_NODE_GROWTH_DIVISOR).max(Self::INITIAL_DENSE_NODE_CAP);
+        old_len.saturating_add(incremental_growth)
+    }
+
+    fn ensure_dense_node_storage_capacity(&mut self) {
+        let len = self
+            .nodes
+            .len()
+            .max(self.physical_stable_ids.len())
+            .max(self.physical_warm_recycled_origins.len());
+        if len < self.nodes.capacity()
+            && len < self.physical_stable_ids.capacity()
+            && len < self.physical_warm_recycled_origins.capacity()
+        {
+            return;
+        }
+
+        let target = Self::next_dense_node_target_len(len);
+        if self.nodes.capacity() < target {
+            self.nodes
+                .reserve_exact(target.saturating_sub(self.nodes.len()));
+        }
+        if self.physical_stable_ids.capacity() < target {
+            self.physical_stable_ids
+                .reserve_exact(target.saturating_sub(self.physical_stable_ids.len()));
+        }
+        if self.physical_warm_recycled_origins.capacity() < target {
+            self.physical_warm_recycled_origins
+                .reserve_exact(target.saturating_sub(self.physical_warm_recycled_origins.len()));
+        }
+    }
+
+    fn ensure_stable_index_capacity(&mut self) {
+        let len = self
+            .stable_to_physical
+            .len()
+            .max(self.stable_generations.len());
+        if len < self.stable_to_physical.capacity() && len < self.stable_generations.capacity() {
+            return;
+        }
+
+        let target = Self::next_dense_node_target_len(len);
+        let additional = target.saturating_sub(len);
+        if self.stable_to_physical.capacity() < target {
+            self.stable_to_physical.reserve(additional);
+        }
+        if self.stable_generations.capacity() < target {
+            self.stable_generations.reserve(additional);
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             nodes: Vec::new(),
-            high_id_nodes: std::collections::HashMap::new(),
+            physical_stable_ids: Vec::new(),
+            physical_warm_recycled_origins: Vec::new(),
+            stable_to_physical: HashMap::default(),
+            stable_generations: HashMap::default(),
+            free_ids: BinaryHeap::new(),
+            high_id_nodes: HashMap::default(),
+            high_id_warm_recycled_origins: HashMap::default(),
+            high_id_generations: HashMap::default(),
+            next_stable_id: 0,
             layout_runtime: None,
             slots: SlotBackend::default(),
+            recycled_nodes: HashMap::default(),
+            returning_recycled_nodes: HashMap::default(),
+            cold_recycled_nodes: HashMap::default(),
+            recycled_node_limits: HashMap::default(),
+            warm_recycled_node_targets: HashMap::default(),
+            fresh_recyclable_creations: HashMap::default(),
+            recycled_node_prototypes: HashMap::default(),
         }
     }
 
@@ -1712,9 +2586,12 @@ impl MemoryApplier {
         id: NodeId,
         f: impl FnOnce(&mut N) -> R,
     ) -> Result<R, NodeError> {
+        let physical_id = self
+            .resolve_node_index(id)
+            .ok_or(NodeError::Missing { id })?;
         let slot = self
             .nodes
-            .get_mut(id)
+            .get_mut(physical_id)
             .ok_or(NodeError::Missing { id })?
             .as_deref_mut()
             .ok_or(NodeError::Missing { id })?;
@@ -1732,8 +2609,101 @@ impl MemoryApplier {
         self.nodes.iter().filter(|n| n.is_some()).count()
     }
 
+    pub fn capacity(&self) -> usize {
+        self.nodes.len()
+    }
+
+    pub fn tombstone_count(&self) -> usize {
+        self.nodes.iter().filter(|n| n.is_none()).count()
+    }
+
+    pub fn freelist_len(&self) -> usize {
+        self.free_ids.len()
+    }
+
+    pub fn debug_recycled_node_count(&self) -> usize {
+        self.total_recycled_node_count()
+    }
+
+    pub fn debug_recycled_node_count_for<N: Node + 'static>(&self) -> usize {
+        let key = TypeId::of::<N>();
+        self.recycled_nodes.get(&key).map(Vec::len).unwrap_or(0)
+            + self
+                .returning_recycled_nodes
+                .get(&key)
+                .map(Vec::len)
+                .unwrap_or(0)
+            + self
+                .cold_recycled_nodes
+                .get(&key)
+                .map(Vec::len)
+                .unwrap_or(0)
+    }
+
+    pub fn debug_stats(&self) -> MemoryApplierDebugStats {
+        let mut recycled_keys: HashSet<TypeId> = HashSet::default();
+        recycled_keys.extend(self.recycled_nodes.keys().copied());
+        recycled_keys.extend(self.returning_recycled_nodes.keys().copied());
+        recycled_keys.extend(self.cold_recycled_nodes.keys().copied());
+
+        MemoryApplierDebugStats {
+            next_stable_id: self.next_stable_id,
+            nodes_len: self.len(),
+            nodes_cap: self.nodes.len(),
+            physical_stable_ids_len: self.physical_stable_ids.len(),
+            physical_stable_ids_cap: self.physical_stable_ids.capacity(),
+            stable_to_physical_len: self.stable_to_physical.len(),
+            stable_to_physical_cap: self.stable_to_physical.capacity(),
+            stable_generations_len: self.stable_generations.len(),
+            stable_generations_cap: self.stable_generations.capacity(),
+            free_ids_len: self.free_ids.len(),
+            free_ids_cap: self.free_ids.capacity(),
+            high_id_nodes_len: self.high_id_nodes.len(),
+            high_id_nodes_cap: self.high_id_nodes.capacity(),
+            high_id_generations_len: self.high_id_generations.len(),
+            high_id_generations_cap: self.high_id_generations.capacity(),
+            recycled_type_count: recycled_keys.len(),
+            recycled_type_cap: self.recycled_nodes.capacity()
+                + self.returning_recycled_nodes.capacity()
+                + self.cold_recycled_nodes.capacity(),
+            recycled_node_count: self.total_recycled_node_count(),
+            recycled_node_capacity: self.total_recycled_node_capacity(),
+            warm_recycled_node_id_count: self.total_warm_recycled_node_id_count(),
+            warm_recycled_node_id_capacity: self.total_warm_recycled_node_id_capacity(),
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    pub fn debug_live_node_heap_bytes(&self) -> usize {
+        let dense_nodes = self
+            .nodes
+            .iter()
+            .flatten()
+            .map(|node| std::mem::size_of_val(&**node) + node.debug_heap_bytes())
+            .sum::<usize>();
+        let high_id_nodes = self
+            .high_id_nodes
+            .values()
+            .map(|node| std::mem::size_of_val(&**node) + node.debug_heap_bytes())
+            .sum::<usize>();
+        dense_nodes + high_id_nodes
+    }
+
+    pub fn debug_recycled_node_heap_bytes(&self) -> usize {
+        let pool_bytes = |pools: &HashMap<TypeId, Vec<RecycledNode>>| {
+            pools
+                .values()
+                .flat_map(|nodes| nodes.iter())
+                .map(|node| std::mem::size_of_val(&*node.node) + node.node.debug_heap_bytes())
+                .sum::<usize>()
+        };
+
+        pool_bytes(&self.recycled_nodes)
+            + pool_bytes(&self.returning_recycled_nodes)
+            + pool_bytes(&self.cold_recycled_nodes)
     }
 
     pub fn set_runtime_handle(&mut self, handle: RuntimeHandle) {
@@ -1748,6 +2718,306 @@ impl MemoryApplier {
         self.layout_runtime.clone()
     }
 
+    fn pool_node_count(pools: &HashMap<TypeId, Vec<RecycledNode>>) -> usize {
+        pools.values().map(Vec::len).sum()
+    }
+
+    fn pool_node_capacity(pools: &HashMap<TypeId, Vec<RecycledNode>>) -> usize {
+        pools.values().map(Vec::capacity).sum()
+    }
+
+    fn total_recycled_node_count(&self) -> usize {
+        Self::pool_node_count(&self.recycled_nodes)
+            + Self::pool_node_count(&self.returning_recycled_nodes)
+            + Self::pool_node_count(&self.cold_recycled_nodes)
+    }
+
+    fn total_recycled_node_capacity(&self) -> usize {
+        Self::pool_node_capacity(&self.recycled_nodes)
+            + Self::pool_node_capacity(&self.returning_recycled_nodes)
+            + Self::pool_node_capacity(&self.cold_recycled_nodes)
+    }
+
+    fn total_warm_recycled_node_id_count(&self) -> usize {
+        self.live_warm_recycled_origin_count()
+            + Self::pool_node_count(&self.recycled_nodes)
+            + Self::pool_node_count(&self.returning_recycled_nodes)
+    }
+
+    fn total_warm_recycled_node_id_capacity(&self) -> usize {
+        self.live_warm_recycled_origin_capacity()
+            + Self::pool_node_capacity(&self.recycled_nodes)
+            + Self::pool_node_capacity(&self.returning_recycled_nodes)
+    }
+
+    fn remember_recycle_pool_limit(&mut self, key: TypeId, recycle_pool_limit: Option<usize>) {
+        if let Some(limit) = recycle_pool_limit {
+            self.recycled_node_limits.insert(key, limit);
+        } else {
+            self.recycled_node_limits.remove(&key);
+        }
+    }
+
+    fn recycle_pool_limit_for(&self, key: TypeId) -> Option<usize> {
+        self.recycled_node_limits.get(&key).copied()
+    }
+
+    fn warm_recycled_pool_len(&self, key: TypeId) -> usize {
+        self.recycled_nodes.get(&key).map(Vec::len).unwrap_or(0)
+    }
+
+    fn warm_recycled_node_target(&self, key: TypeId) -> usize {
+        self.warm_recycled_node_targets
+            .get(&key)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn warm_recycled_node_target_limit(&self, key: TypeId) -> usize {
+        let Some(limit) = self.recycle_pool_limit_for(key) else {
+            return usize::MAX;
+        };
+        if limit <= 8 {
+            limit
+        } else {
+            limit / 4
+        }
+    }
+
+    fn update_warm_recycled_node_target(&mut self, key: TypeId, observed_demand: usize) -> usize {
+        let target_limit = self.warm_recycled_node_target_limit(key);
+        let existing = self.warm_recycled_node_target(key).min(target_limit);
+        if observed_demand == 0 {
+            return existing;
+        }
+
+        let target = match self.recycle_pool_limit_for(key) {
+            Some(limit) if limit > 8 => target_limit,
+            Some(_) => observed_demand.min(target_limit),
+            None => observed_demand,
+        };
+        self.warm_recycled_node_targets.insert(key, target);
+        target
+    }
+
+    fn remember_recycled_node_prototype(&mut self, key: TypeId, shell: &dyn Node) {
+        if self.recycled_node_prototypes.contains_key(&key) {
+            return;
+        }
+        if let Some(prototype) = shell.rehouse_for_recycle() {
+            self.recycled_node_prototypes.insert(key, prototype);
+        }
+    }
+
+    fn live_warm_recycled_origin_count(&self) -> usize {
+        self.physical_warm_recycled_origins
+            .iter()
+            .zip(self.nodes.iter())
+            .filter(|(warm_origin, node)| **warm_origin && node.is_some())
+            .count()
+            + self
+                .high_id_warm_recycled_origins
+                .values()
+                .filter(|warm_origin| **warm_origin)
+                .count()
+    }
+
+    fn live_warm_recycled_origin_capacity(&self) -> usize {
+        self.physical_warm_recycled_origins.capacity()
+            + self.high_id_warm_recycled_origins.capacity()
+    }
+
+    fn push_recycled_node(
+        &mut self,
+        key: TypeId,
+        recycle_pool_limit: Option<usize>,
+        recycled: RecycledNode,
+    ) {
+        self.remember_recycle_pool_limit(key, recycle_pool_limit);
+        self.remember_recycled_node_prototype(key, recycled.node.as_ref());
+
+        let warm_origin = recycled.warm_origin();
+        let pool = if warm_origin {
+            self.returning_recycled_nodes.entry(key).or_default()
+        } else {
+            self.cold_recycled_nodes.entry(key).or_default()
+        };
+        pool.push(recycled);
+        if let Some(limit) = recycle_pool_limit {
+            if pool.len() > limit {
+                let excess = pool.len() - limit;
+                let dropped: Vec<_> = pool.drain(0..excess).collect();
+                drop(dropped);
+            }
+        }
+    }
+
+    fn push_warm_recycled_node(
+        &mut self,
+        key: TypeId,
+        recycle_pool_limit: Option<usize>,
+        mut recycled: RecycledNode,
+    ) {
+        self.remember_recycle_pool_limit(key, recycle_pool_limit);
+
+        recycled.set_warm_origin(true);
+        let mut dropped = Vec::new();
+        let mut remove_pool_entry = false;
+        {
+            let pool = self.recycled_nodes.entry(key).or_default();
+            pool.push(recycled);
+            if let Some(limit) = recycle_pool_limit {
+                if pool.len() > limit {
+                    let excess = pool.len() - limit;
+                    dropped = pool.drain(0..excess).collect();
+                    remove_pool_entry = pool.is_empty();
+                }
+            }
+        }
+        if remove_pool_entry {
+            self.recycled_nodes.remove(&key);
+        }
+        drop(dropped);
+    }
+
+    fn seed_recycled_node_shell_impl(
+        &mut self,
+        key: TypeId,
+        recycle_pool_limit: Option<usize>,
+        shell: Box<dyn Node>,
+    ) {
+        let limit = recycle_pool_limit.unwrap_or(usize::MAX);
+        if self.warm_recycled_pool_len(key) >= limit {
+            return;
+        }
+
+        self.remember_recycled_node_prototype(key, shell.as_ref());
+        let stable_id = self.next_stable_id;
+        self.next_stable_id = self.next_stable_id.saturating_add(1);
+        self.push_warm_recycled_node(
+            key,
+            recycle_pool_limit,
+            RecycledNode::from_shell(stable_id, shell, true),
+        );
+    }
+
+    fn take_recycled_node_from_pool(
+        pools: &mut HashMap<TypeId, Vec<RecycledNode>>,
+        key: TypeId,
+    ) -> Option<RecycledNode> {
+        let pool = pools.get_mut(&key)?;
+        let node = pool.pop();
+        if pool.is_empty() {
+            pools.remove(&key);
+        }
+        node
+    }
+
+    fn compact_idle_warm_pool(&mut self, key: TypeId) {
+        let Some(pool) = self.recycled_nodes.get_mut(&key) else {
+            return;
+        };
+        if pool.capacity() <= pool.len().saturating_mul(4).max(64) {
+            return;
+        }
+
+        let retained = pool.len();
+        let mut compacted = Vec::with_capacity(retained);
+        compacted.append(pool);
+        let remove_pool_entry = compacted.is_empty();
+        *pool = compacted;
+        let _ = pool;
+
+        if remove_pool_entry {
+            self.recycled_nodes.remove(&key);
+        }
+    }
+
+    fn trim_idle_warm_pool_to_target(&mut self, key: TypeId, target: usize) {
+        let pool_len = self.warm_recycled_pool_len(key);
+        if pool_len <= target {
+            return;
+        }
+
+        let Some(pool) = self.recycled_nodes.get_mut(&key) else {
+            return;
+        };
+        let removable = (pool_len - target).min(pool.len());
+        let dropped: Vec<_> = pool.drain(0..removable).collect();
+        let remove_pool_entry = pool.is_empty();
+        let _ = pool;
+
+        if remove_pool_entry {
+            self.recycled_nodes.remove(&key);
+        }
+        drop(dropped);
+    }
+
+    fn replenish_warm_pool_to_target(&mut self, key: TypeId, target: usize) {
+        let missing = target.saturating_sub(self.warm_recycled_pool_len(key));
+        if missing == 0 {
+            return;
+        }
+
+        let recycle_pool_limit = self.recycle_pool_limit_for(key);
+        let mut shells = Vec::with_capacity(missing);
+        if let Some(prototype) = self.recycled_node_prototypes.get(&key) {
+            for _ in 0..missing {
+                let Some(shell) = prototype.rehouse_for_recycle() else {
+                    break;
+                };
+                shells.push(shell);
+            }
+        }
+
+        for shell in shells {
+            self.seed_recycled_node_shell_impl(key, recycle_pool_limit, shell);
+        }
+    }
+
+    fn prune_stable_generations(&mut self) {
+        let retained_len = self.stable_to_physical.len() + self.total_recycled_node_count();
+        if retained_len == self.stable_generations.len() {
+            return;
+        }
+
+        let mut retained = HashMap::default();
+        retained.reserve(retained_len);
+        for stable_id in self.stable_to_physical.keys().copied() {
+            if let Some(generation) = self.stable_generations.get(&stable_id).copied() {
+                retained.insert(stable_id, generation);
+            }
+        }
+        for stable_id in self
+            .recycled_nodes
+            .values()
+            .flat_map(|nodes| nodes.iter().map(RecycledNode::stable_id))
+        {
+            if let Some(generation) = self.stable_generations.get(&stable_id).copied() {
+                retained.insert(stable_id, generation);
+            }
+        }
+        for stable_id in self
+            .returning_recycled_nodes
+            .values()
+            .flat_map(|nodes| nodes.iter().map(RecycledNode::stable_id))
+        {
+            if let Some(generation) = self.stable_generations.get(&stable_id).copied() {
+                retained.insert(stable_id, generation);
+            }
+        }
+        for stable_id in self
+            .cold_recycled_nodes
+            .values()
+            .flat_map(|nodes| nodes.iter().map(RecycledNode::stable_id))
+        {
+            if let Some(generation) = self.stable_generations.get(&stable_id).copied() {
+                retained.insert(stable_id, generation);
+            }
+        }
+        self.stable_generations = retained;
+    }
+
     pub fn dump_tree(&self, root: Option<NodeId>) -> String {
         let mut output = String::new();
         if let Some(root_id) = root {
@@ -1760,7 +3030,10 @@ impl MemoryApplier {
 
     fn dump_node(&self, output: &mut String, id: NodeId, depth: usize) {
         let indent = "  ".repeat(depth);
-        if let Some(Some(node)) = self.nodes.get(id) {
+        if let Some(physical_id) = self.resolve_node_index(id) {
+            let node = self.nodes[physical_id]
+                .as_ref()
+                .expect("resolved physical node must exist");
             let type_name = std::any::type_name_of_val(&**node);
             output.push_str(&format!("{}[{}] {}\n", indent, id, type_name));
 
@@ -1772,19 +3045,194 @@ impl MemoryApplier {
             output.push_str(&format!("{}[{}] (missing)\n", indent, id));
         }
     }
+
+    fn resolve_node_index(&self, id: NodeId) -> Option<usize> {
+        self.stable_to_physical.get(&id).copied()
+    }
+
+    fn get_ref(&self, id: NodeId) -> Result<&dyn Node, NodeError> {
+        if let Some(physical_id) = self.resolve_node_index(id) {
+            let slot = self
+                .nodes
+                .get(physical_id)
+                .ok_or(NodeError::Missing { id })?
+                .as_deref()
+                .ok_or(NodeError::Missing { id })?;
+            return Ok(slot);
+        }
+
+        self.high_id_nodes
+            .get(&id)
+            .map(|node| node.as_ref())
+            .ok_or(NodeError::Missing { id })
+    }
+
+    fn collect_node_children_into(
+        &self,
+        id: NodeId,
+        out: &mut SmallVec<[NodeId; 8]>,
+    ) -> Result<(), NodeError> {
+        self.get_ref(id)?.collect_children_into(out);
+        Ok(())
+    }
+
+    fn node_parent(&self, id: NodeId) -> Result<Option<NodeId>, NodeError> {
+        Ok(self.get_ref(id)?.parent())
+    }
+
+    fn collect_owned_children(
+        &self,
+        node_id: NodeId,
+        out: &mut SmallVec<[NodeId; 8]>,
+    ) -> Result<(), NodeError> {
+        self.collect_node_children_into(node_id, out)?;
+        out.retain(|child_id| {
+            self.node_parent(*child_id)
+                .map(|parent| parent == Some(node_id))
+                .unwrap_or(false)
+        });
+        Ok(())
+    }
+
+    fn remove_node_storage(&mut self, node_id: NodeId) -> Result<(), NodeError> {
+        if self.high_id_nodes.contains_key(&node_id) {
+            if let Some(mut node) = self.high_id_nodes.remove(&node_id) {
+                if let Some(key) = node.recycle_key() {
+                    let recycle_pool_limit = node.recycle_pool_limit();
+                    let warm_origin = self
+                        .high_id_warm_recycled_origins
+                        .remove(&node_id)
+                        .unwrap_or(false);
+                    node.prepare_for_recycle();
+                    self.push_recycled_node(
+                        key,
+                        recycle_pool_limit,
+                        RecycledNode::new(node_id, node, warm_origin),
+                    );
+                }
+            }
+            let generation = self.high_id_generations.entry(node_id).or_insert(0);
+            *generation = generation.wrapping_add(1);
+            return Ok(());
+        }
+
+        let physical_id = self
+            .resolve_node_index(node_id)
+            .ok_or(NodeError::Missing { id: node_id })?;
+        if let Some(mut node) = self.nodes[physical_id].take() {
+            if let Some(key) = node.recycle_key() {
+                let recycle_pool_limit = node.recycle_pool_limit();
+                let warm_origin = self
+                    .physical_warm_recycled_origins
+                    .get_mut(physical_id)
+                    .map(std::mem::take)
+                    .unwrap_or(false);
+                node.prepare_for_recycle();
+                self.push_recycled_node(
+                    key,
+                    recycle_pool_limit,
+                    RecycledNode::new(node_id, node, warm_origin),
+                );
+            }
+        }
+        self.physical_stable_ids[physical_id] = Self::INVALID_STABLE_ID;
+        self.stable_to_physical.remove(&node_id);
+        if let Some(generation) = self.stable_generations.get_mut(&node_id) {
+            *generation = generation.wrapping_add(1);
+        } else {
+            self.stable_generations.insert(node_id, 1);
+        }
+        self.free_ids.push(Reverse(physical_id));
+        Ok(())
+    }
+
+    fn remove_subtree_postorder(&mut self, id: NodeId) -> Result<usize, NodeError> {
+        self.get_ref(id)?;
+
+        let mut root_children = SmallVec::<[NodeId; 8]>::new();
+        self.collect_owned_children(id, &mut root_children)?;
+
+        let mut stack = Vec::new();
+        stack.push(RemovalFrame {
+            node_id: id,
+            children: root_children,
+            next_child: 0,
+        });
+        let mut max_depth = stack.len();
+
+        while let Some(frame) = stack.last_mut() {
+            if frame.next_child < frame.children.len() {
+                let child_id = frame.children[frame.next_child];
+                frame.next_child += 1;
+
+                if let Ok(child) = self.get_mut(child_id) {
+                    child.on_removed_from_parent();
+                    child.unmount();
+                }
+
+                let mut child_children = SmallVec::<[NodeId; 8]>::new();
+                self.collect_owned_children(child_id, &mut child_children)?;
+                stack.push(RemovalFrame {
+                    node_id: child_id,
+                    children: child_children,
+                    next_child: 0,
+                });
+                max_depth = max_depth.max(stack.len());
+                continue;
+            }
+
+            let node_id = frame.node_id;
+            stack.pop();
+            self.remove_node_storage(node_id)?;
+        }
+
+        Ok(max_depth)
+    }
+
+    #[cfg(test)]
+    fn debug_remove_max_traversal_depth(&mut self, id: NodeId) -> Result<usize, NodeError> {
+        self.remove_subtree_postorder(id)
+    }
 }
 
 impl Applier for MemoryApplier {
     fn create(&mut self, node: Box<dyn Node>) -> NodeId {
-        let id = self.nodes.len();
-        self.nodes.push(Some(node));
-        id
+        self.ensure_stable_index_capacity();
+        let stable_id = self.next_stable_id;
+        self.next_stable_id = self.next_stable_id.saturating_add(1);
+        self.stable_generations.insert(stable_id, 0);
+
+        let physical_id = if let Some(Reverse(id)) = self.free_ids.pop() {
+            debug_assert!(self.nodes[id].is_none(), "freelist entry {id} is not None");
+            self.nodes[id] = Some(node);
+            self.physical_stable_ids[id] = Self::pack_stable_id(stable_id);
+            self.physical_warm_recycled_origins[id] = false;
+            id
+        } else {
+            self.ensure_dense_node_storage_capacity();
+            let id = self.nodes.len();
+            self.nodes.push(Some(node));
+            self.physical_stable_ids
+                .push(Self::pack_stable_id(stable_id));
+            self.physical_warm_recycled_origins.push(false);
+            id
+        };
+        self.stable_to_physical.insert(stable_id, physical_id);
+        stable_id
+    }
+
+    fn node_generation(&self, id: NodeId) -> u32 {
+        self.high_id_generations
+            .get(&id)
+            .copied()
+            .or_else(|| self.stable_generations.get(&id).copied())
+            .unwrap_or(0)
     }
 
     fn get_mut(&mut self, id: NodeId) -> Result<&mut dyn Node, NodeError> {
         // Try Vec first (common case for normal nodes), then HashMap for virtual nodes.
-        if id < self.nodes.len() {
-            let slot = self.nodes[id]
+        if let Some(physical_id) = self.resolve_node_index(id) {
+            let slot = self.nodes[physical_id]
                 .as_deref_mut()
                 .ok_or(NodeError::Missing { id })?;
             return Ok(slot);
@@ -1796,34 +3244,7 @@ impl Applier for MemoryApplier {
     }
 
     fn remove(&mut self, id: NodeId) -> Result<(), NodeError> {
-        // Collect children before removing the node.
-        let (children, is_high_id) = if id < self.nodes.len() {
-            let slot = self.nodes.get(id).ok_or(NodeError::Missing { id })?;
-            let node = slot.as_ref().ok_or(NodeError::Missing { id })?;
-            (node.children(), false)
-        } else if let Some(node) = self.high_id_nodes.get(&id) {
-            (node.children(), true)
-        } else {
-            return Err(NodeError::Missing { id });
-        };
-
-        // Recursively remove children owned by this node.
-        for child_id in children {
-            let is_owned = self
-                .get_mut(child_id)
-                .map(|child| child.parent() == Some(id))
-                .unwrap_or(false);
-            if is_owned {
-                let _ = self.remove(child_id);
-            }
-        }
-
-        if is_high_id {
-            self.high_id_nodes.remove(&id);
-        } else {
-            self.nodes[id].take();
-        }
-        Ok(())
+        self.remove_subtree_postorder(id).map(|_| ())
     }
 
     fn insert_with_id(&mut self, id: NodeId, node: Box<dyn Node>) -> Result<(), NodeError> {
@@ -1836,25 +3257,162 @@ impl Applier for MemoryApplier {
                 return Err(NodeError::AlreadyExists { id });
             }
             self.high_id_nodes.insert(id, node);
+            self.high_id_warm_recycled_origins.insert(id, false);
+            self.high_id_generations.entry(id).or_insert(0);
             Ok(())
         } else {
-            // Normal Vec-based insertion for low IDs
-            if id >= self.nodes.len() {
-                self.nodes.resize_with(id + 1, || None);
-            }
-
-            if self.nodes[id].is_some() {
+            if self.stable_to_physical.contains_key(&id) {
                 return Err(NodeError::AlreadyExists { id });
             }
 
-            self.nodes[id] = Some(node);
+            let physical_id = if let Some(Reverse(id)) = self.free_ids.pop() {
+                self.nodes[id] = Some(node);
+                self.physical_stable_ids[id] = Self::pack_stable_id(id);
+                self.physical_warm_recycled_origins[id] = false;
+                id
+            } else {
+                self.ensure_dense_node_storage_capacity();
+                let id = self.nodes.len();
+                self.nodes.push(Some(node));
+                self.physical_stable_ids.push(Self::pack_stable_id(id));
+                self.physical_warm_recycled_origins.push(false);
+                id
+            };
+
+            self.next_stable_id = self.next_stable_id.max(id.saturating_add(1));
+            self.ensure_stable_index_capacity();
+            self.stable_generations.entry(id).or_insert(0);
+            self.physical_stable_ids[physical_id] = Self::pack_stable_id(id);
+            self.stable_to_physical.insert(id, physical_id);
             Ok(())
         }
+    }
+
+    fn compact(&mut self) {
+        let live_count = self.nodes.iter().filter(|slot| slot.is_some()).count();
+        let tombstone_count = self.nodes.len().saturating_sub(live_count);
+        if tombstone_count == 0 {
+            return;
+        }
+        if self.nodes.len() > Self::EAGER_COMPACT_NODE_LEN && tombstone_count < live_count {
+            return;
+        }
+        let rehouse_live_nodes = tombstone_count >= live_count;
+        let mut packed_nodes = Vec::with_capacity(live_count);
+        let mut packed_physical_stable_ids = Vec::with_capacity(live_count);
+        let mut packed_warm_recycled_origins = Vec::with_capacity(live_count);
+        let mut stable_to_physical = HashMap::default();
+        stable_to_physical.reserve(live_count);
+
+        for physical_id in 0..self.nodes.len() {
+            let Some(mut node) = self.nodes[physical_id].take() else {
+                continue;
+            };
+            if rehouse_live_nodes {
+                if let Some(rehoused) = node.rehouse_for_live_compaction() {
+                    node = rehoused;
+                }
+            }
+            let stable_id = std::mem::replace(
+                &mut self.physical_stable_ids[physical_id],
+                Self::INVALID_STABLE_ID,
+            );
+            debug_assert_ne!(
+                stable_id,
+                Self::INVALID_STABLE_ID,
+                "live physical slot must have a stable id",
+            );
+            let stable_id = Self::unpack_stable_id(stable_id);
+            packed_nodes.push(Some(node));
+            packed_physical_stable_ids.push(Self::pack_stable_id(stable_id));
+            packed_warm_recycled_origins.push(self.physical_warm_recycled_origins[physical_id]);
+            stable_to_physical.insert(stable_id, packed_nodes.len() - 1);
+        }
+
+        self.nodes = packed_nodes;
+        self.physical_stable_ids = packed_physical_stable_ids;
+        self.physical_warm_recycled_origins = packed_warm_recycled_origins;
+        self.free_ids = BinaryHeap::new();
+        self.stable_to_physical = stable_to_physical;
+        self.prune_stable_generations();
+    }
+
+    fn take_recycled_node(&mut self, key: TypeId) -> Option<RecycledNode> {
+        Self::take_recycled_node_from_pool(&mut self.returning_recycled_nodes, key)
+            .or_else(|| Self::take_recycled_node_from_pool(&mut self.recycled_nodes, key))
+    }
+
+    fn set_recycled_node_origin(&mut self, id: NodeId, warm_origin: bool) {
+        if let Some(physical_id) = self.resolve_node_index(id) {
+            self.physical_warm_recycled_origins[physical_id] = warm_origin;
+        } else if self.high_id_nodes.contains_key(&id) {
+            self.high_id_warm_recycled_origins.insert(id, warm_origin);
+        }
+    }
+
+    fn seed_recycled_node_shell(
+        &mut self,
+        key: TypeId,
+        recycle_pool_limit: Option<usize>,
+        shell: Box<dyn Node>,
+    ) {
+        self.seed_recycled_node_shell_impl(key, recycle_pool_limit, shell);
+    }
+
+    fn record_fresh_recyclable_creation(&mut self, key: TypeId) {
+        *self.fresh_recyclable_creations.entry(key).or_insert(0) += 1;
+    }
+
+    fn clear_recycled_nodes(&mut self) {
+        let returning = std::mem::take(&mut self.returning_recycled_nodes);
+        for (key, mut nodes) in returning {
+            let pool = self.recycled_nodes.entry(key).or_default();
+            pool.append(&mut nodes);
+        }
+
+        let fresh_recyclable_creations = std::mem::take(&mut self.fresh_recyclable_creations);
+        let cold = std::mem::take(&mut self.cold_recycled_nodes);
+        for (key, mut nodes) in cold {
+            let needed = fresh_recyclable_creations.get(&key).copied().unwrap_or(0);
+            if needed > 0 {
+                let remaining_limit = self
+                    .recycle_pool_limit_for(key)
+                    .unwrap_or(usize::MAX)
+                    .saturating_sub(self.warm_recycled_pool_len(key));
+                let promote = nodes.len().min(needed).min(remaining_limit);
+                let split_at = nodes.len().saturating_sub(promote);
+                let promoted = nodes.split_off(split_at);
+                for mut recycled in promoted {
+                    recycled.set_warm_origin(true);
+                    self.recycled_nodes.entry(key).or_default().push(recycled);
+                }
+            }
+        }
+
+        let mut keys: HashSet<TypeId> = HashSet::default();
+        keys.extend(self.recycled_nodes.keys().copied());
+        keys.extend(self.recycled_node_limits.keys().copied());
+        keys.extend(self.warm_recycled_node_targets.keys().copied());
+        keys.extend(self.recycled_node_prototypes.keys().copied());
+        for key in keys {
+            let observed_demand = fresh_recyclable_creations.get(&key).copied().unwrap_or(0);
+            let target = self.update_warm_recycled_node_target(key, observed_demand);
+            self.replenish_warm_pool_to_target(key, target);
+            self.trim_idle_warm_pool_to_target(key, target);
+            self.compact_idle_warm_pool(key);
+        }
+        self.prune_stable_generations();
+        // Compact the dense physical storage if it has grown very large relative
+        // to the live node count (e.g. after a spike of recyclable nodes that
+        // were all removed). This keeps warm_recycled_node_id_capacity bounded.
+        self.compact();
     }
 }
 
 pub trait ApplierHost {
     fn borrow_dyn(&self) -> RefMut<'_, dyn Applier>;
+    /// Compact internal storage after commands have been applied.
+    fn compact(&self) {}
 }
 
 pub struct ConcreteApplierHost<A: Applier + 'static> {
@@ -1886,6 +3444,10 @@ impl<A: Applier + 'static> ApplierHost for ConcreteApplierHost<A> {
         RefMut::map(self.inner.borrow_mut(), |applier| {
             applier as &mut dyn Applier
         })
+    }
+
+    fn compact(&self) {
+        self.inner.borrow_mut().compact();
     }
 }
 
@@ -1946,7 +3508,7 @@ pub(crate) struct ComposerCore {
     parent_stack: RefCell<Vec<ParentFrame>>,
     subcompose_stack: RefCell<Vec<SubcomposeFrame>>,
     root: Cell<Option<NodeId>>,
-    commands: RefCell<Vec<Command>>,
+    commands: RefCell<CommandQueue>,
     scope_stack: RefCell<Vec<RecomposeScope>>,
     local_stack: RefCell<LocalStackSnapshot>,
     side_effects: RefCell<Vec<Box<dyn FnOnce()>>>,
@@ -1973,9 +3535,9 @@ impl ComposerCore {
         let parent_stack = if let Some(root_id) = root {
             vec![ParentFrame {
                 id: root_id,
-                remembered: Owned::new(ParentChildren::default()),
-                previous: Vec::new(),
-                new_children: Vec::new(),
+                previous: ChildList::new(),
+                new_children: ChildList::new(),
+                attach_mode: ParentAttachMode::DeferredSync,
             }]
         } else {
             Vec::new()
@@ -1990,9 +3552,9 @@ impl ComposerCore {
             parent_stack: RefCell::new(parent_stack),
             subcompose_stack: RefCell::new(Vec::new()),
             root: Cell::new(root),
-            commands: RefCell::new(Vec::new()),
+            commands: RefCell::new(CommandQueue::default()),
             scope_stack: RefCell::new(Vec::new()),
-            local_stack: RefCell::new(Rc::new(Vec::new())),
+            local_stack: RefCell::new(empty_local_stack()),
             side_effects: RefCell::new(Vec::new()),
             pending_scope_options: RefCell::new(None),
             phase: Cell::new(Phase::Compose),
@@ -2006,6 +3568,11 @@ impl ComposerCore {
 #[derive(Clone)]
 pub struct Composer {
     core: Rc<ComposerCore>,
+}
+
+enum EmittedNode {
+    Fresh(Box<dyn Node>),
+    Recycled(RecycledNode),
 }
 
 impl Composer {
@@ -2085,7 +3652,7 @@ impl Composer {
         self.core.subcompose_stack.borrow_mut()
     }
 
-    fn commands_mut(&self) -> RefMut<'_, Vec<Command>> {
+    fn commands_mut(&self) -> RefMut<'_, CommandQueue> {
         self.core.commands.borrow_mut()
     }
 
@@ -2149,11 +3716,35 @@ impl Composer {
     ///
     /// This is used by SubcomposeLayoutNode to get children of virtual nodes
     /// directly from the Applier, where insert_child commands have been applied.
-    pub fn get_node_children(&self, node_id: NodeId) -> Vec<NodeId> {
+    pub fn get_node_children(&self, node_id: NodeId) -> SmallVec<[NodeId; 8]> {
         let mut applier = self.borrow_applier();
         match applier.get_mut(node_id) {
-            Ok(node) => node.children(),
-            Err(_) => Vec::new(),
+            Ok(node) => {
+                let mut children = SmallVec::<[NodeId; 8]>::new();
+                node.collect_children_into(&mut children);
+                children
+            }
+            Err(_) => SmallVec::<[NodeId; 8]>::new(),
+        }
+    }
+
+    /// Records a child node in the current parent frame's expected children list.
+    ///
+    /// Used by SubcomposeLayout's `perform_subcompose` to register virtual nodes
+    /// with the outer composer's parent frame. This ensures that the `pop_parent`
+    /// call at the end of `subcompose_slot` generates a correct `SyncChildren`
+    /// command that preserves (rather than removes) the virtual nodes.
+    ///
+    /// Without this, `pop_parent` would generate `SyncChildren { expected: [] }`,
+    /// which removes all virtual nodes and their subtrees from the applier.
+    pub fn record_subcompose_child(&self, child_id: NodeId) {
+        let mut parent_stack = self.parent_stack();
+        if let Some(frame) = parent_stack.last_mut() {
+            if matches!(frame.attach_mode, ParentAttachMode::DeferredSync)
+                && !frame.new_children.contains(&child_id)
+            {
+                frame.new_children.push(child_id);
+            }
         }
     }
 
@@ -2185,15 +3776,35 @@ impl Composer {
         result
     }
 
+    fn flush_pending_commands_if_large(&self) {
+        let queued = self.core.commands.borrow().len();
+        if queued < COMMAND_FLUSH_THRESHOLD {
+            return;
+        }
+        self.apply_pending_commands()
+            .expect("mid-composition command flush failed");
+    }
+
+    fn drain_orphaned_nodes_from_slots(&self) {
+        let mut applier = self.borrow_applier();
+        self.with_slots_mut(|slots| {
+            slots.drain_orphaned_node_ids_with(|id| {
+                if let Ok(node) = applier.get_mut(id) {
+                    node.unmount();
+                }
+                let _ = applier.remove(id);
+            });
+        });
+    }
+
     pub fn with_group<R>(&self, key: Key, f: impl FnOnce(&Composer) -> R) -> R {
         let (group, scope_ref, restored_from_gap) = self.with_slots_mut(|slots| {
             let StartGroup {
                 group,
                 restored_from_gap,
             } = slots.begin_group(key);
-            let scope_ref = slots
-                .remember(|| RecomposeScope::new(self.runtime_handle()))
-                .with(|scope| scope.clone());
+            let scope_slot = slots.alloc_value_slot(|| RecomposeScope::new(self.runtime_handle()));
+            let scope_ref = SlotStorage::read_value::<RecomposeScope>(slots, scope_slot).clone();
             (group, scope_ref, restored_from_gap)
         });
 
@@ -2235,11 +3846,13 @@ impl Composer {
         }
 
         let result = self.observe_scope(&scope_ref, || f(self));
+        scope_ref.mark_composed_once();
 
         let trimmed = self.with_slots_mut(|slots| slots.finalize_current_group());
         if trimmed {
             scope_ref.force_recompose();
         }
+        self.drain_orphaned_nodes_from_slots();
 
         {
             let mut stack = self.scope_stack();
@@ -2247,6 +3860,7 @@ impl Composer {
         }
         scope_ref.mark_recomposed();
         self.with_slots_mut(|slots| slots.end_group());
+        self.flush_pending_commands_if_large();
         result
     }
 
@@ -2288,7 +3902,7 @@ impl Composer {
     }
 
     pub fn write_slot_value<T: 'static>(&self, idx: usize, value: T) {
-        self.with_slots_mut(|slots| slots.write_value(ValueSlotId::new(idx), value));
+        self.with_slots_mut(|slots| SlotStorage::write_value(slots, ValueSlotId::new(idx), value));
     }
 
     pub fn mutable_state_of<T: Clone + 'static>(&self, initial: T) -> MutableState<T> {
@@ -2456,18 +4070,15 @@ impl Composer {
         core.phase.set(phase);
         *core.local_stack.borrow_mut() = locals;
         let composer = Composer::from_core(core);
-        let (result, mut commands, side_effects) = composer.install(|composer| {
+        let (result, commands, side_effects) = composer.install(|composer| {
             let output = f(composer);
             let commands = composer.take_commands();
             let side_effects = composer.take_side_effects();
             (output, commands, side_effects)
         });
-
         {
             let mut applier = self.borrow_applier();
-            for command in commands.drain(..) {
-                command.apply(&mut *applier)?;
-            }
+            commands.apply(&mut *applier)?;
             for update in runtime_handle.take_updates() {
                 update.apply(&mut *applier)?;
             }
@@ -2527,7 +4138,7 @@ impl Composer {
             core: composer.clone_core(),
             leaked: false,
         };
-        let (result, mut commands, side_effects) = composer.install(|composer| {
+        let (result, commands, side_effects) = composer.install(|composer| {
             let output = f(composer);
             // CRITICAL FIX: Pop the root parent frame to generate insert_child commands.
             // Without this, the root frame's new_children list is populated but never
@@ -2548,9 +4159,7 @@ impl Composer {
 
         {
             let mut applier = self.borrow_applier();
-            for command in commands.drain(..) {
-                command.apply(&mut *applier)?;
-            }
+            commands.apply(&mut *applier)?;
             for update in runtime_handle.take_updates() {
                 update.apply(&mut *applier)?;
             }
@@ -2619,6 +4228,12 @@ impl Composer {
         }
     }
 
+    pub fn set_recranpose_fn(&self, callback: fn(&Composer)) {
+        if let Some(scope) = self.current_recranpose_scope() {
+            scope.set_recompose_fn(callback);
+        }
+    }
+
     pub fn with_composition_locals<R>(
         &self,
         provided: Vec<ProvidedValue>,
@@ -2682,9 +4297,14 @@ impl Composer {
                 let mut locals = self.local_stack();
                 *locals = scope.local_stack();
             }
-            self.observe_scope(scope, || {
-                scope.run_recompose(self);
-            });
+            let callback_ran = self.observe_scope(scope, || scope.run_recompose(self));
+            if !callback_ran {
+                // No recompose callback: preserve all existing slot content by
+                // skipping to the end of the group before closing. end_recompose
+                // marks unvisited slots as gaps, which would destroy slot values
+                // (e.g. OwnedMutableState) that are still needed.
+                self.with_slots_mut(SlotStorage::skip_current_group);
+            }
             {
                 let mut locals = self.local_stack();
                 *locals = saved_locals;
@@ -2694,7 +4314,9 @@ impl Composer {
                 stack.pop();
             }
             self.with_slots_mut(SlotStorage::end_recompose);
+            self.drain_orphaned_nodes_from_slots();
             scope.mark_recomposed();
+            self.flush_pending_commands_if_large();
         } else {
             scope.mark_recomposed();
         }
@@ -2708,56 +4330,59 @@ impl Composer {
         state.with(|state| state.handle())
     }
 
-    pub fn emit_node<N: Node + 'static>(&self, init: impl FnOnce() -> N) -> NodeId {
+    fn emit_node_box<N: Node + 'static>(
+        &self,
+        make_node: impl FnOnce(&mut dyn Applier) -> EmittedNode,
+    ) -> NodeId {
         // Peek at the slot without advancing cursor
-        let (existing_id, type_matches) = {
-            if let Some(id) = self.with_slots_mut(|slots| slots.peek_node()) {
-                // Check if the node type matches
+        let (existing_id, type_matches, gen_matches) = {
+            if let Some((id, slot_gen)) = self.with_slots_mut(|slots| slots.peek_node()) {
                 let mut applier = self.borrow_applier();
-                let matches = match applier.get_mut(id) {
+                let gen_ok = applier.node_generation(id) == slot_gen;
+                let type_ok = match applier.get_mut(id) {
                     Ok(node) => node.as_any_mut().downcast_ref::<N>().is_some(),
                     Err(_) => false,
                 };
-                (Some(id), matches)
+                (Some(id), type_ok, gen_ok)
             } else {
-                (None, false)
+                (None, false, false)
             }
         };
 
-        // If we have a matching node, advance cursor and reuse it
+        // If we have a matching node with correct generation, advance cursor and reuse it
         if let Some(id) = existing_id {
-            if type_matches {
-                // Type matches - reuse this node. The push_parent conditional ensures
-                // that new parents start with empty previous children, so we don't
-                // accidentally inherit children from a different parent.
-                let reuse_allowed = true;
-
+            if type_matches && gen_matches {
+                self.core.last_node_reused.set(Some(true));
                 #[cfg(not(target_arch = "wasm32"))]
                 if compose_debug_enabled() {
-                    eprintln!("emit_node: candidate #{id} reuse_allowed={reuse_allowed}");
+                    eprintln!(
+                        "emit_node: reusing node #{id} as {}",
+                        std::any::type_name::<N>()
+                    );
                 }
+                self.with_slots_mut(|slots| slots.advance_after_node_read());
 
-                if reuse_allowed {
-                    self.core.last_node_reused.set(Some(true));
-                    #[cfg(not(target_arch = "wasm32"))]
-                    if compose_debug_enabled() {
-                        eprintln!(
-                            "emit_node: reusing node #{id} as {}",
-                            std::any::type_name::<N>()
-                        );
-                    }
-                    self.with_slots_mut(|slots| slots.advance_after_node_read());
-
-                    self.commands_mut().push(Command::update_node::<N>(id));
-                    self.attach_to_parent(id);
-                    return id;
-                }
+                self.commands_mut().push(Command::update_node::<N>(id));
+                self.attach_to_parent(id);
+                return id;
             }
         }
 
-        // If there was a mismatched node in this slot, schedule its removal before creating a new one.
+        // If there was a mismatched node in this slot (wrong type or stale generation),
+        // schedule its removal before creating a new one.
         if let Some(old_id) = existing_id {
-            if !type_matches {
+            if !gen_matches {
+                // Stale generation: the slot points to a recycled index.
+                // Don't remove the node — it belongs to a different composition context.
+                #[cfg(not(target_arch = "wasm32"))]
+                if compose_debug_enabled() {
+                    eprintln!(
+                        "emit_node: stale generation for node #{old_id} (current={})",
+                        self.borrow_applier().node_generation(old_id)
+                    );
+                }
+            } else if !type_matches {
+                // Same generation but wrong type: genuinely needs replacement.
                 #[cfg(not(target_arch = "wasm32"))]
                 if compose_debug_enabled() {
                     eprintln!(
@@ -2769,27 +4394,70 @@ impl Composer {
             }
         }
 
-        // Type mismatch or no node: create new node
-        // record_node() will handle replacing the mismatched slot
-        let id = {
+        // Type mismatch, stale generation, or no node: create new node
+        let (id, gen) = {
             let mut applier = self.borrow_applier();
-            applier.create(Box::new(init()))
+            let emitted = make_node(&mut *applier);
+            let id = match emitted {
+                EmittedNode::Fresh(node) => applier.create(node),
+                EmittedNode::Recycled(recycled) => {
+                    let (stable_id, node, warm_origin) = recycled.into_parts();
+                    applier
+                        .insert_with_id(stable_id, node)
+                        .expect("recycled stable id should be available");
+                    applier.set_recycled_node_origin(stable_id, warm_origin);
+                    stable_id
+                }
+            };
+            let gen = applier.node_generation(id);
+            (id, gen)
         };
         self.core.last_node_reused.set(Some(false));
         #[cfg(not(target_arch = "wasm32"))]
         if compose_debug_enabled() {
             eprintln!(
-                "emit_node: creating node #{} as {}",
+                "emit_node: creating node #{} (gen={}) as {}",
                 id,
+                gen,
                 std::any::type_name::<N>()
             );
         }
         {
-            self.with_slots_mut(|slots| slots.record_node(id));
+            self.with_slots_mut(|slots| slots.record_node(id, gen));
         }
         self.commands_mut().push(Command::MountNode { id });
         self.attach_to_parent(id);
         id
+    }
+
+    pub fn emit_node<N: Node + 'static>(&self, init: impl FnOnce() -> N) -> NodeId {
+        self.emit_node_box::<N>(|_| EmittedNode::Fresh(Box::new(init())))
+    }
+
+    pub fn emit_recyclable_node<N: Node + 'static>(
+        &self,
+        init: impl FnOnce() -> N,
+        reset: impl FnOnce(&mut N),
+    ) -> NodeId {
+        self.emit_node_box::<N>(|applier| {
+            let key = TypeId::of::<N>();
+            if let Some(mut recycled) = applier.take_recycled_node(key) {
+                let typed = recycled
+                    .node_mut()
+                    .as_any_mut()
+                    .downcast_mut::<N>()
+                    .expect("recycled node type mismatch");
+                reset(typed);
+                EmittedNode::Recycled(recycled)
+            } else {
+                let node = Box::new(init());
+                applier.record_fresh_recyclable_creation(key);
+                if let Some(shell) = node.rehouse_for_recycle() {
+                    applier.seed_recycled_node_shell(key, node.recycle_pool_limit(), shell);
+                }
+                EmittedNode::Fresh(node)
+            }
+        })
     }
 
     fn attach_to_parent(&self, id: NodeId) {
@@ -2799,46 +4467,68 @@ impl Composer {
         // subcompose frame. Only ROOT nodes (nodes with no active parent)
         // should be added to the subcompose frame.
         let mut parent_stack = self.parent_stack();
-        if let Some(frame) = parent_stack.last_mut() {
-            let parent_id = frame.id;
-            if parent_id == id {
-                return;
-            }
-            frame.new_children.push(id);
-            drop(parent_stack);
-
-            // KEY FIX: Set parent link IMMEDIATELY, matching Jetpack Compose's
-            // LayoutNode.insertAt pattern where _foldedParent is set synchronously.
-            // This ensures that when bubble_measure_dirty runs (in commands),
-            // the parent chain is already established.
-            //
-            // IMPORTANT: Only set parent if node doesn't have one or if the new parent
-            // is not the root. This prevents double-recomposition scenarios where a
-            // child scope (invalidated by CompositionLocalProvider during parent's
-            // recomposition) gets processed again with parent_stack=[root], which would
-            // incorrectly reparent nodes to root.
-            {
+        if let Some(parent_id) = parent_stack.last().map(|frame| frame.id) {
+            let stale_root_parent = self.core.root.get() == Some(parent_id) && {
                 let mut applier = self.borrow_applier();
-                if let Ok(child_node) = applier.get_mut(id) {
-                    let existing_parent = child_node.parent();
-                    // Only set parent if:
-                    // 1. Node has no parent, OR
-                    // 2. New parent is NOT the root (parent_id != 0 or != self.root)
-                    // This prevents root from stealing children that belong to intermediate nodes.
-                    let should_set = match existing_parent {
-                        None => true,
-                        Some(existing) => {
-                            // Don't let root steal children from proper parents
-                            let root_id = self.core.root.get();
-                            parent_id != root_id.unwrap_or(0) || existing == root_id.unwrap_or(0)
+                applier.get_mut(parent_id).is_err()
+            };
+            if stale_root_parent {
+                parent_stack.pop();
+                self.set_root(None);
+            } else {
+                let frame = parent_stack
+                    .last_mut()
+                    .expect("active parent frame should remain available");
+                let attach_mode = frame.attach_mode;
+                if parent_id == id {
+                    return;
+                }
+                if matches!(attach_mode, ParentAttachMode::DeferredSync) {
+                    frame.new_children.push(id);
+                }
+                drop(parent_stack);
+
+                // KEY FIX: Set parent link IMMEDIATELY, matching Jetpack Compose's
+                // LayoutNode.insertAt pattern where _foldedParent is set synchronously.
+                // This ensures that when bubble_measure_dirty runs (in commands),
+                // the parent chain is already established.
+                //
+                // IMPORTANT: Only set parent if node doesn't have one or if the new parent
+                // is not the root. This prevents double-recomposition scenarios where a
+                // child scope (invalidated by CompositionLocalProvider during parent's
+                // recomposition) gets processed again with parent_stack=[root], which would
+                // incorrectly reparent nodes to root.
+                {
+                    let mut applier = self.borrow_applier();
+                    if let Ok(child_node) = applier.get_mut(id) {
+                        let existing_parent = child_node.parent();
+                        // Only set parent if:
+                        // 1. Node has no parent, OR
+                        // 2. New parent is NOT the root (parent_id != 0 or != self.root)
+                        // This prevents root from stealing children that belong to intermediate nodes.
+                        let should_set = match existing_parent {
+                            None => true,
+                            Some(existing) => {
+                                // Don't let root steal children from proper parents
+                                let root_id = self.core.root.get();
+                                parent_id != root_id.unwrap_or(0)
+                                    || existing == root_id.unwrap_or(0)
+                            }
+                        };
+                        if should_set {
+                            child_node.set_parent_for_bubbling(parent_id);
                         }
-                    };
-                    if should_set {
-                        child_node.set_parent_for_bubbling(parent_id);
                     }
                 }
+                if matches!(attach_mode, ParentAttachMode::ImmediateAppend) {
+                    self.commands_mut().push(Command::AttachChild {
+                        parent_id,
+                        child_id: id,
+                        bubble: DirtyBubble::LAYOUT_AND_MEASURE,
+                    });
+                }
+                return;
             }
-            return;
         }
         drop(parent_stack);
 
@@ -2926,23 +4616,29 @@ impl Composer {
     }
 
     pub fn push_parent(&self, id: NodeId) {
-        let remembered = self.remember(ParentChildren::default);
         let reused = self.core.last_node_reused.take().unwrap_or(true);
         let in_subcompose = !self.core.subcompose_stack.borrow().is_empty();
 
-        // Only carry over previous children when the parent was reused (or in subcompose).
-        // Otherwise, start fresh to prevent nodes from teleporting between parents.
-        let previous = if reused || in_subcompose {
-            remembered.with(|entry| entry.children.clone())
+        // Parents with existing children still need a full diff pass. Fresh or
+        // currently-empty parents can append children directly as they are emitted.
+        let previous: ChildList = if reused || in_subcompose {
+            let mut previous = ChildList::new();
+            previous.extend(self.get_node_children(id));
+            previous
         } else {
-            Vec::new()
+            ChildList::new()
+        };
+        let attach_mode = if in_subcompose || !previous.is_empty() {
+            ParentAttachMode::DeferredSync
+        } else {
+            ParentAttachMode::ImmediateAppend
         };
 
         self.parent_stack().push(ParentFrame {
             id,
-            remembered,
             previous,
-            new_children: Vec::new(),
+            new_children: ChildList::new(),
+            attach_mode,
         });
     }
 
@@ -2954,9 +4650,9 @@ impl Composer {
         if let Some(frame) = frame_opt {
             let ParentFrame {
                 id,
-                remembered,
                 previous,
                 new_children,
+                attach_mode,
             } = frame;
 
             #[cfg(not(target_arch = "wasm32"))]
@@ -2965,80 +4661,17 @@ impl Composer {
                 eprintln!("  previous children: {:?}", previous);
                 eprintln!("  new children: {:?}", new_children);
             }
-            let children_changed = previous != new_children;
-
-            if children_changed {
-                let target = &new_children;
-                let mut target_positions = HashMap::default();
-                target_positions.reserve(target.len());
-                for (index, &child) in target.iter().enumerate() {
-                    target_positions.insert(child, index);
-                }
-
-                let mut current = previous;
-
-                for index in (0..current.len()).rev() {
-                    let child = current[index];
-                    if !target_positions.contains_key(&child) {
-                        current.remove(index);
-                        self.commands_mut().push(Command::RemoveChild {
-                            parent_id: id,
-                            child_id: child,
-                        });
-                    }
-                }
-
-                let mut current_positions = build_child_positions(&current);
-                for (target_index, &child) in target.iter().enumerate() {
-                    if let Some(current_index) = current_positions.get(&child).copied() {
-                        if current_index != target_index {
-                            let from_index = current_index;
-                            let to_index = move_child_in_diff_state(
-                                &mut current,
-                                &mut current_positions,
-                                from_index,
-                                target_index,
-                            );
-                            self.commands_mut().push(Command::MoveChild {
-                                parent_id: id,
-                                from_index,
-                                to_index,
-                                bubble: DirtyBubble::LAYOUT_AND_MEASURE,
-                            });
-                        }
-                    } else {
-                        let insert_index = target_index.min(current.len());
-                        let appended_index = current.len();
-                        insert_child_into_diff_state(
-                            &mut current,
-                            &mut current_positions,
-                            insert_index,
-                            child,
-                        );
-                        self.commands_mut().push(Command::InsertChild {
-                            parent_id: id,
-                            child_id: child,
-                            appended_index,
-                            insert_index,
-                            bubble: DirtyBubble::LAYOUT_AND_MEASURE,
-                        });
-                    }
-                }
+            if matches!(attach_mode, ParentAttachMode::DeferredSync) {
+                let _ = previous;
+                self.commands_mut().push(Command::SyncChildren {
+                    parent_id: id,
+                    expected_children: new_children,
+                });
             }
-
-            let expected_children = new_children.clone();
-            let needs_dirty_check = !children_changed;
-            self.commands_mut().push(Command::ReconcileChildren {
-                parent_id: id,
-                expected_children,
-                needs_dirty_check,
-            });
-
-            remembered.update(|entry| entry.children = new_children);
         }
     }
 
-    pub(crate) fn take_commands(&self) -> Vec<Command> {
+    pub(crate) fn take_commands(&self) -> CommandQueue {
         std::mem::take(&mut *self.commands_mut())
     }
 
@@ -3047,13 +4680,11 @@ impl Composer {
     /// This is useful during measure-time subcomposition to ensure newly created
     /// nodes are available for measurement before the full composition is committed.
     pub fn apply_pending_commands(&self) -> Result<(), NodeError> {
-        let mut commands = self.take_commands();
+        let commands = self.take_commands();
         let runtime_handle = self.runtime_handle();
         {
             let mut applier = self.borrow_applier();
-            for command in commands.drain(..) {
-                command.apply(&mut *applier)?;
-            }
+            commands.apply(&mut *applier)?;
             for update in runtime_handle.take_updates() {
                 update.apply(&mut *applier)?;
             }
@@ -3077,11 +4708,6 @@ impl Composer {
     pub(crate) fn set_root(&self, node: Option<NodeId>) {
         self.core.root.set(node);
     }
-}
-
-#[derive(Default, Clone)]
-struct ParentChildren {
-    children: Vec<NodeId>,
 }
 
 fn build_child_positions(children: &[NodeId]) -> HashMap<NodeId, usize> {
@@ -3109,7 +4735,7 @@ fn refresh_child_positions(
 }
 
 fn insert_child_into_diff_state(
-    current: &mut Vec<NodeId>,
+    current: &mut ChildList,
     positions: &mut HashMap<NodeId, usize>,
     index: usize,
     child: NodeId,
@@ -3120,7 +4746,7 @@ fn insert_child_into_diff_state(
 }
 
 fn move_child_in_diff_state(
-    current: &mut Vec<NodeId>,
+    current: &mut ChildList,
     positions: &mut HashMap<NodeId, usize>,
     from_index: usize,
     target_index: usize,
@@ -3139,9 +4765,15 @@ fn move_child_in_diff_state(
 
 struct ParentFrame {
     id: NodeId,
-    remembered: Owned<ParentChildren>,
-    previous: Vec<NodeId>,
-    new_children: Vec<NodeId>,
+    previous: ChildList,
+    new_children: ChildList,
+    attach_mode: ParentAttachMode,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ParentAttachMode {
+    ImmediateAppend,
+    DeferredSync,
 }
 
 #[derive(Default)]
@@ -3159,6 +4791,14 @@ pub(crate) struct MutableStateInner<T: Clone + 'static> {
     state: Arc<SnapshotMutableState<T>>,
     watchers: RefCell<HashMap<ScopeId, Weak<RecomposeScopeInner>>>, // FUTURE(no_std): move to stack-allocated subscription list.
     runtime: RuntimeHandle,
+}
+
+fn shrink_watchers_if_sparse(watchers: &mut HashMap<ScopeId, Weak<RecomposeScopeInner>>) {
+    let len = watchers.len();
+    let capacity = watchers.capacity();
+    if capacity > len.saturating_mul(4).max(32) {
+        watchers.shrink_to_fit();
+    }
 }
 
 impl<T: Clone + 'static> MutableStateInner<T> {
@@ -3200,6 +4840,12 @@ impl<T: Clone + 'static> MutableStateInner<T> {
         }
     }
 
+    pub(crate) fn prune_dead_watchers(&self) {
+        let mut watchers = self.watchers.borrow_mut();
+        watchers.retain(|_, weak| weak.upgrade().is_some());
+        shrink_watchers_if_sparse(&mut watchers);
+    }
+
     fn invalidate_watchers(&self) {
         let watchers: Vec<RecomposeScope> = {
             let mut watchers = self.watchers.borrow_mut();
@@ -3212,18 +4858,9 @@ impl<T: Clone + 'static> MutableStateInner<T> {
                     false
                 }
             });
+            shrink_watchers_if_sparse(&mut watchers);
             live
         };
-
-        if input_debug_enabled() {
-            let scope_ids: Vec<_> = watchers.iter().map(|scope| scope.id()).collect();
-            eprintln!(
-                "[CRANPOSE_INPUT_DEBUG] state {:?} invalidate_watchers count={} scopes={:?}",
-                self.state.id(),
-                scope_ids.len(),
-                scope_ids
-            );
-        }
 
         for watcher in watchers {
             watcher.invalidate();
@@ -3237,16 +4874,7 @@ fn register_current_state_scope<T: Clone + 'static>(inner: &MutableStateInner<T>
     else {
         return;
     };
-    let inserted = inner.register_scope(&scope);
-    if inserted && input_debug_enabled() {
-        let watchers = inner.watchers.borrow();
-        eprintln!(
-            "[CRANPOSE_INPUT_DEBUG] state {:?} subscribe scope={} watchers={}",
-            inner.state.id(),
-            scope.id(),
-            watchers.len()
-        );
-    }
+    inner.register_scope(&scope);
 }
 
 /// Cheap copyable read-only view of a state cell.
@@ -3522,6 +5150,11 @@ impl<T: Clone + 'static> MutableState<T> {
     #[cfg(test)]
     pub(crate) fn watcher_count(&self) -> usize {
         self.with_inner(|inner| inner.watchers.borrow().len())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn watcher_capacity(&self) -> usize {
+        self.with_inner(|inner| inner.watchers.borrow().capacity())
     }
 
     #[cfg(test)]
@@ -3835,9 +5468,13 @@ impl<T> ParamState<T> {
     where
         T: PartialEq + Clone,
     {
-        match &self.value {
+        match self.value.as_mut() {
             Some(old) if old == new_value => false,
-            _ => {
+            Some(old) => {
+                old.clone_from(new_value);
+                true
+            }
+            None => {
                 self.value = Some(new_value.clone());
                 true
             }
@@ -3883,9 +5520,11 @@ impl<T> ParamSlot<T> {
 /// CallbackHolder keeps the latest callback closure alive across recompositions.
 /// It stores the callback in an Rc<RefCell<...>> so that the composer can hand out
 /// lightweight forwarder closures without cloning the underlying callback value.
+type CallbackCell = Rc<RefCell<Option<Box<dyn FnMut()>>>>;
+
 #[derive(Clone)]
 pub struct CallbackHolder {
-    rc: Rc<RefCell<Box<dyn FnMut()>>>,
+    rc: CallbackCell,
 }
 
 impl CallbackHolder {
@@ -3899,14 +5538,16 @@ impl CallbackHolder {
     where
         F: FnMut() + 'static,
     {
-        *self.rc.borrow_mut() = Box::new(f);
+        *self.rc.borrow_mut() = Some(Box::new(f));
     }
 
     /// Produce a forwarder closure that keeps the holder alive and forwards calls to it.
     pub fn clone_rc(&self) -> impl Fn() + 'static {
         let rc = self.rc.clone();
         move || {
-            (rc.borrow_mut())();
+            if let Some(callback) = rc.borrow_mut().as_mut() {
+                callback();
+            }
         }
     }
 }
@@ -3914,7 +5555,7 @@ impl CallbackHolder {
 impl Default for CallbackHolder {
     fn default() -> Self {
         Self {
-            rc: Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>)),
+            rc: Rc::new(RefCell::new(None)),
         }
     }
 }
@@ -3924,7 +5565,7 @@ impl Default for CallbackHolder {
 #[derive(Clone)]
 pub struct CallbackHolder1<A: 'static> {
     #[allow(clippy::type_complexity)]
-    rc: Rc<RefCell<Box<dyn FnMut(A)>>>,
+    rc: Rc<RefCell<Option<Box<dyn FnMut(A)>>>>,
 }
 
 impl<A: 'static> CallbackHolder1<A> {
@@ -3938,14 +5579,16 @@ impl<A: 'static> CallbackHolder1<A> {
     where
         F: FnMut(A) + 'static,
     {
-        *self.rc.borrow_mut() = Box::new(f);
+        *self.rc.borrow_mut() = Some(Box::new(f));
     }
 
     /// Produce a forwarder closure that keeps the holder alive and forwards calls to it.
     pub fn clone_rc(&self) -> impl Fn(A) + 'static {
         let rc = self.rc.clone();
         move |arg| {
-            (rc.borrow_mut())(arg);
+            if let Some(callback) = rc.borrow_mut().as_mut() {
+                callback(arg);
+            }
         }
     }
 }
@@ -3953,7 +5596,7 @@ impl<A: 'static> CallbackHolder1<A> {
 impl<A: 'static> Default for CallbackHolder1<A> {
     fn default() -> Self {
         Self {
-            rc: Rc::new(RefCell::new(Box::new(|_| {}) as Box<dyn FnMut(A)>)),
+            rc: Rc::new(RefCell::new(None)),
         }
     }
 }
@@ -3984,12 +5627,66 @@ impl<T> Default for ReturnSlot<T> {
     }
 }
 
+#[cfg(test)]
+mod callback_holder_tests {
+    use super::{CallbackHolder, CallbackHolder1};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    #[test]
+    fn callback_holder_default_forwarder_is_noop() {
+        let forwarder = CallbackHolder::new().clone_rc();
+        forwarder();
+    }
+
+    #[test]
+    fn callback_holder_forwarder_uses_latest_callback() {
+        let holder = CallbackHolder::new();
+        let total = Rc::new(Cell::new(0));
+        let forwarder = holder.clone_rc();
+
+        let first_total = Rc::clone(&total);
+        holder.update(move || first_total.set(first_total.get() + 1));
+        forwarder();
+
+        let second_total = Rc::clone(&total);
+        holder.update(move || second_total.set(second_total.get() + 10));
+        forwarder();
+
+        assert_eq!(total.get(), 11);
+    }
+
+    #[test]
+    fn callback_holder1_default_forwarder_is_noop() {
+        let forwarder = CallbackHolder1::<i32>::new().clone_rc();
+        forwarder(7);
+    }
+
+    #[test]
+    fn callback_holder1_forwarder_uses_latest_callback() {
+        let holder = CallbackHolder1::<i32>::new();
+        let total = Rc::new(Cell::new(0));
+        let forwarder = holder.clone_rc();
+
+        let first_total = Rc::clone(&total);
+        holder.update(move |value| first_total.set(first_total.get() + value));
+        forwarder(2);
+
+        let second_total = Rc::clone(&total);
+        holder.update(move |value| second_total.set(second_total.get() + value * 5));
+        forwarder(3);
+
+        assert_eq!(total.get(), 17);
+    }
+}
+
 pub struct Composition<A: Applier + 'static> {
     slots: Rc<SlotsHost>,
     applier: Rc<ConcreteApplierHost<A>>,
     runtime: Runtime,
     observer: SnapshotStateObserver,
     root: Option<NodeId>,
+    last_pass_stats: CompositionPassDebugStats,
 }
 
 impl<A: Applier + 'static> Composition<A> {
@@ -3998,12 +5695,7 @@ impl<A: Applier + 'static> Composition<A> {
     }
 
     pub fn with_runtime(applier: A, runtime: Runtime) -> Self {
-        Self::with_backend(applier, runtime, SlotBackendKind::default())
-    }
-
-    pub fn with_backend(applier: A, runtime: Runtime, backend_kind: SlotBackendKind) -> Self {
-        let storage = make_backend(backend_kind);
-        let slots = Rc::new(SlotsHost::new(storage));
+        let slots = Rc::new(SlotsHost::new(SlotTable::new()));
         let applier = Rc::new(ConcreteApplierHost::new(applier));
         let observer_handle = runtime.handle();
         let observer = SnapshotStateObserver::new(move |callback| {
@@ -4016,6 +5708,7 @@ impl<A: Applier + 'static> Composition<A> {
             runtime,
             observer,
             root: None,
+            last_pass_stats: CompositionPassDebugStats::default(),
         }
     }
 
@@ -4027,7 +5720,80 @@ impl<A: Applier + 'static> Composition<A> {
         self.applier.clone()
     }
 
+    fn reset_last_pass_stats(&mut self) {
+        self.last_pass_stats = CompositionPassDebugStats::default();
+    }
+
+    fn record_pass_stats(
+        &mut self,
+        commands: &CommandQueue,
+        side_effects: &Vec<Box<dyn FnOnce()>>,
+    ) {
+        self.last_pass_stats.commands_len = self.last_pass_stats.commands_len.max(commands.len());
+        self.last_pass_stats.commands_cap =
+            self.last_pass_stats.commands_cap.max(commands.capacity());
+        self.last_pass_stats.command_payload_len_bytes = self
+            .last_pass_stats
+            .command_payload_len_bytes
+            .max(commands.payload_len_bytes());
+        self.last_pass_stats.command_payload_cap_bytes = self
+            .last_pass_stats
+            .command_payload_cap_bytes
+            .max(commands.payload_capacity_bytes());
+        self.last_pass_stats.sync_children_len = self
+            .last_pass_stats
+            .sync_children_len
+            .max(commands.sync_children.len());
+        self.last_pass_stats.sync_children_cap = self
+            .last_pass_stats
+            .sync_children_cap
+            .max(commands.sync_children.capacity());
+        self.last_pass_stats.sync_child_ids_len = self
+            .last_pass_stats
+            .sync_child_ids_len
+            .max(commands.sync_child_ids.len());
+        self.last_pass_stats.sync_child_ids_cap = self
+            .last_pass_stats
+            .sync_child_ids_cap
+            .max(commands.sync_child_ids.capacity());
+        self.last_pass_stats.side_effects_len = self
+            .last_pass_stats
+            .side_effects_len
+            .max(side_effects.len());
+        self.last_pass_stats.side_effects_cap = self
+            .last_pass_stats
+            .side_effects_cap
+            .max(side_effects.capacity());
+    }
+
+    fn finalize_compaction(&mut self) -> Result<bool, NodeError> {
+        let mut removed_orphaned = false;
+        let mut orphaned_node_count = 0usize;
+        {
+            let mut applier = self.applier.borrow_dyn();
+            self.slots.borrow_mut().drain_orphaned_node_ids_with(|id| {
+                removed_orphaned = true;
+                orphaned_node_count += 1;
+                if let Ok(node) = applier.get_mut(id) {
+                    node.unmount();
+                }
+                let _ = applier.remove(id);
+            });
+        }
+        if removed_orphaned {
+            log::debug!(
+                "finalize_compaction: removing {} orphaned nodes",
+                orphaned_node_count
+            );
+        }
+        self.slots.borrow_mut().compact();
+        self.applier_host().compact();
+        self.applier.borrow_dyn().clear_recycled_nodes();
+        Ok(removed_orphaned)
+    }
+
     pub fn render(&mut self, key: Key, mut content: impl FnMut()) -> Result<(), NodeError> {
+        self.reset_last_pass_stats();
         self.slots.borrow_mut().reset();
         let runtime_handle = self.runtime_handle();
         runtime_handle.drain_ui();
@@ -4039,19 +5805,18 @@ impl<A: Applier + 'static> Composition<A> {
             self.root,
         );
         self.observer.begin_frame();
-        let (root, mut commands, side_effects) = composer.install(|composer| {
+        let (root, commands, side_effects) = composer.install(|composer| {
             composer.with_group(key, |_| content());
             let root = composer.root();
             let commands = composer.take_commands();
             let side_effects = composer.take_side_effects();
             (root, commands, side_effects)
         });
+        self.record_pass_stats(&commands, &side_effects);
 
         {
             let mut applier = self.applier.borrow_dyn();
-            for command in commands.drain(..) {
-                command.apply(&mut *applier)?;
-            }
+            commands.apply(&mut *applier)?;
             for update in runtime_handle.take_updates() {
                 update.apply(&mut *applier)?;
             }
@@ -4068,7 +5833,10 @@ impl<A: Applier + 'static> Composition<A> {
             let _ = slots.finalize_current_group();
             slots.flush();
         }
+        let _ = self.finalize_compaction()?;
         let _ = self.process_invalid_scopes()?;
+        self.observer.prune_dead_scopes();
+        runtime_handle.prune_dead_state_watchers();
         if !self.runtime.has_updates()
             && !runtime_handle.has_invalid_scopes()
             && !runtime_handle.has_frame_callbacks()
@@ -4111,6 +5879,26 @@ impl<A: Applier + 'static> Composition<A> {
         self.slots.borrow().debug_dump_all_slots()
     }
 
+    pub fn slot_table_heap_bytes(&self) -> usize {
+        self.slots.borrow().heap_bytes()
+    }
+
+    pub fn debug_slot_table_stats(&self) -> SlotTableDebugStats {
+        self.slots.borrow().debug_stats()
+    }
+
+    pub fn debug_slot_value_type_counts(&self, limit: usize) -> Vec<SlotValueTypeDebugStat> {
+        self.slots.borrow().debug_value_type_counts(limit)
+    }
+
+    pub fn debug_observer_stats(&self) -> SnapshotStateObserverDebugStats {
+        self.observer.debug_stats()
+    }
+
+    pub fn debug_last_pass_stats(&self) -> CompositionPassDebugStats {
+        self.last_pass_stats
+    }
+
     pub fn process_invalid_scopes(&mut self) -> Result<bool, NodeError> {
         let runtime_handle = self.runtime_handle();
         let mut did_recompose = false;
@@ -4126,13 +5914,6 @@ impl<A: Applier + 'static> Composition<A> {
             if pending.is_empty() {
                 break;
             }
-            if input_debug_enabled() {
-                let pending_ids: Vec<_> = pending.iter().map(|(id, _)| *id).collect();
-                eprintln!(
-                    "[CRANPOSE_INPUT_DEBUG] process_invalid_scopes pending_ids={:?}",
-                    pending_ids
-                );
-            }
             let mut scopes = Vec::new();
             for (id, weak) in pending {
                 if let Some(inner) = weak.upgrade() {
@@ -4143,13 +5924,6 @@ impl<A: Applier + 'static> Composition<A> {
             }
             if scopes.is_empty() {
                 continue;
-            }
-            if input_debug_enabled() {
-                let scope_ids: Vec<_> = scopes.iter().map(|scope| scope.id()).collect();
-                eprintln!(
-                    "[CRANPOSE_INPUT_DEBUG] process_invalid_scopes live_scope_ids={:?}",
-                    scope_ids
-                );
             }
             did_recompose = true;
             let runtime_clone = runtime_handle.clone();
@@ -4166,39 +5940,37 @@ impl<A: Applier + 'static> Composition<A> {
                     scope_groups.push((host, vec![scope]));
                 }
             }
-            let (mut commands, side_effects) = {
-                let composer = Composer::new(
-                    Rc::clone(&root_host),
-                    self.applier_host(),
-                    runtime_clone,
-                    self.observer.clone(),
-                    self.root,
-                );
-                self.observer.begin_frame();
-                composer.install(|composer| {
-                    for (host, scopes) in scope_groups.into_iter() {
-                        if Rc::ptr_eq(&host, &root_host) {
+            let composer = Composer::new(
+                Rc::clone(&root_host),
+                self.applier_host(),
+                runtime_clone,
+                self.observer.clone(),
+                self.root,
+            );
+            self.observer.begin_frame();
+            let (root, commands, side_effects) = composer.install(|composer| {
+                for (host, scopes) in scope_groups.into_iter() {
+                    if Rc::ptr_eq(&host, &root_host) {
+                        for scope in scopes.iter() {
+                            composer.recranpose_group(scope);
+                        }
+                    } else {
+                        composer.with_slot_override(host, |composer| {
                             for scope in scopes.iter() {
                                 composer.recranpose_group(scope);
                             }
-                        } else {
-                            composer.with_slot_override(host, |composer| {
-                                for scope in scopes.iter() {
-                                    composer.recranpose_group(scope);
-                                }
-                            });
-                        }
+                        });
                     }
-                    let commands = composer.take_commands();
-                    let side_effects = composer.take_side_effects();
-                    (commands, side_effects)
-                })
-            };
+                }
+                let root = composer.root();
+                let commands = composer.take_commands();
+                let side_effects = composer.take_side_effects();
+                (root, commands, side_effects)
+            });
+            self.record_pass_stats(&commands, &side_effects);
             {
                 let mut applier = self.applier.borrow_dyn();
-                for command in commands.drain(..) {
-                    command.apply(&mut *applier)?;
-                }
+                commands.apply(&mut *applier)?;
                 for update in runtime_handle.take_updates() {
                     update.apply(&mut *applier)?;
                 }
@@ -4207,7 +5979,16 @@ impl<A: Applier + 'static> Composition<A> {
                 effect();
             }
             runtime_handle.drain_ui();
+            if root.is_some() {
+                self.root = root;
+            }
+            let removed_orphaned = self.finalize_compaction()?;
+            if removed_orphaned {
+                did_recompose = true;
+            }
         }
+        self.observer.prune_dead_scopes();
+        runtime_handle.prune_dead_state_watchers();
         if !self.runtime.has_updates()
             && !runtime_handle.has_invalid_scopes()
             && !runtime_handle.has_frame_callbacks()
@@ -4241,6 +6022,20 @@ pub fn location_key(file: &str, line: u32, column: u32) -> Key {
         ^ (column as u64)
 }
 
+#[doc(hidden)]
+pub fn debug_live_recompose_scope_count() -> usize {
+    LIVE_RECOMPOSE_SCOPE_COUNT.load(Ordering::Relaxed)
+}
+
+#[doc(hidden)]
+pub fn debug_recompose_scope_registry_stats() -> RecomposeScopeRegistryDebugStats {
+    let live = LIVE_RECOMPOSE_SCOPE_COUNT.load(Ordering::Relaxed);
+    RecomposeScopeRegistryDebugStats {
+        len: live,
+        capacity: live,
+    }
+}
+
 fn hash_key<K: Hash>(key: &K) -> Key {
     let mut hasher = hash::default::new();
     key.hash(&mut hasher);
@@ -4254,10 +6049,6 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/recursive_decrease_increase_test.rs"]
 mod recursive_decrease_increase_test;
-
-#[cfg(test)]
-#[path = "tests/slot_backend_tests.rs"]
-mod slot_backend_tests;
 
 pub mod collections;
 pub mod hash;

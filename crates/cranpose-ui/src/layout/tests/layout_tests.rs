@@ -1092,6 +1092,7 @@ fn measure_layout_can_skip_semantics_until_consumer_is_enabled() -> Result<(), N
         Size::new(100.0, 100.0),
         MeasureLayoutOptions {
             collect_semantics: false,
+            build_layout_tree: true,
         },
     )?;
     assert!(
@@ -1113,6 +1114,82 @@ fn measure_layout_can_skip_semantics_until_consumer_is_enabled() -> Result<(), N
         !applier.with_node::<LayoutNode, _>(node_id, |node| node.needs_semantics())?,
         "collecting semantics should clear the dirty flag"
     );
+
+    Ok(())
+}
+
+#[test]
+fn semantics_tree_matches_with_and_without_layout_tree() -> Result<(), NodeError> {
+    fn build_fixture() -> Result<(MemoryApplier, NodeId), NodeError> {
+        let mut applier = MemoryApplier::new();
+
+        let root_id = applier.create(Box::new(LayoutNode::new(
+            Modifier::empty().semantics(|config| {
+                config.content_description = Some("root".into());
+            }),
+            Rc::new(VerticalStackPolicy),
+        )));
+        let button_id = applier.create(Box::new(LayoutNode::new(
+            Modifier::empty().semantics(|config| {
+                config.is_button = true;
+                config.is_clickable = true;
+                config.content_description = Some("action".into());
+            }),
+            Rc::new(MaxSizePolicy),
+        )));
+        let leaf_id = applier.create(Box::new(LayoutNode::new(
+            Modifier::empty().semantics(|config| {
+                config.content_description = Some("leaf".into());
+            }),
+            Rc::new(MaxSizePolicy),
+        )));
+
+        applier.with_node::<LayoutNode, _>(root_id, |node| {
+            node.set_node_id(root_id);
+            node.children.push(button_id);
+            node.children.push(leaf_id);
+        })?;
+        applier.with_node::<LayoutNode, _>(button_id, |node| {
+            node.set_node_id(button_id);
+            node.set_parent(root_id);
+        })?;
+        applier.with_node::<LayoutNode, _>(leaf_id, |node| {
+            node.set_node_id(leaf_id);
+            node.set_parent(root_id);
+        })?;
+
+        Ok((applier, root_id))
+    }
+
+    let (mut with_layout_tree_applier, with_layout_tree_root) = build_fixture()?;
+    let with_layout_tree = super::measure_layout_with_options(
+        &mut with_layout_tree_applier,
+        with_layout_tree_root,
+        Size::new(100.0, 100.0),
+        MeasureLayoutOptions {
+            collect_semantics: true,
+            build_layout_tree: true,
+        },
+    )?
+    .semantics_tree()
+    .cloned()
+    .expect("semantics with layout tree");
+
+    let (mut live_node_applier, live_node_root) = build_fixture()?;
+    let live_nodes = super::measure_layout_with_options(
+        &mut live_node_applier,
+        live_node_root,
+        Size::new(100.0, 100.0),
+        MeasureLayoutOptions {
+            collect_semantics: true,
+            build_layout_tree: false,
+        },
+    )?
+    .semantics_tree()
+    .cloned()
+    .expect("semantics from live nodes");
+
+    assert_eq!(with_layout_tree, live_nodes);
 
     Ok(())
 }

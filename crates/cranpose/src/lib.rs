@@ -33,6 +33,10 @@ pub use cranpose_core::{
     location_key, with_current_composer, CallbackHolder, Composer, ParamState, ReturnSlot,
 };
 
+/// Robot-side app hook used by desktop tests for deterministic commands on the app thread.
+#[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
+pub type RobotAppHook = dyn FnMut(String, String) -> Result<Option<String>, String>;
+
 /// Convenience imports for Cranpose applications.
 pub mod prelude {
     pub use crate::{AppLauncher, AppSettings};

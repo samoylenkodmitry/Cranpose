@@ -11,14 +11,18 @@ use cranpose_render_common::image_compare::{
     image_difference_stats, normalize_rgba_region, sample_pixel,
 };
 use cranpose_render_common::Renderer;
-use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot};
-use cranpose_ui::text::{AnnotatedString, SpanStyle, TextDrawStyle, TextStyle, TextUnit};
+use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot, WgpuRenderer};
+use cranpose_ui::text::{
+    AnnotatedString, FontStyle, FontWeight, SpanStyle, TextDecoration, TextDrawStyle, TextStyle,
+    TextUnit,
+};
 use cranpose_ui::TextLayoutOptions;
 use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, GraphicsLayer, Point, Rect, RenderEffect};
 
 const FRAME_WIDTH: u32 = 128;
 const FRAME_HEIGHT: u32 = 96;
 const ROOT_SCALE_TEST_SCALE: f32 = 2.0;
+const FRACTIONAL_ROOT_SCALE: f32 = 130.0 / 96.0;
 const ALPHA_LAYER_SIZE: (u32, u32) = (48, 24);
 const BLUR_LAYER_SIZE: (u32, u32) = (28, 28);
 const BACKDROP_LAYER_SIZE: (u32, u32) = (24, 20);
@@ -28,6 +32,8 @@ const TRANSLATED_BACKDROP_PIXEL_TOLERANCE: u32 = 24;
 const TRANSLATED_BACKDROP_MAX_DIFFERING_PIXELS: u32 = 120;
 const TRANSLATED_BACKDROP_MAX_PIXEL_DIFFERENCE: u32 = 360;
 const TRANSLATED_TEXT_LOCAL_SIZE: (u32, u32) = (48, 24);
+const MULTISPAN_FRAME_WIDTH: u32 = 420;
+const MULTISPAN_TEXT_WRAPPER_LOCAL_SIZE: (u32, u32) = (340, 40);
 const TRANSLATED_TEXT_PIXEL_TOLERANCE: u32 = 24;
 const TRANSLATED_TEXT_MAX_DIFFERING_PIXELS: u32 = 240;
 const TRANSLATED_TEXT_MAX_PIXEL_DIFFERENCE: u32 = 420;
@@ -543,6 +549,193 @@ fn translated_content_wrapper_with_decorated_shadow_text_uses_bounded_local_surf
     assert!(
         !isolated.is_empty(),
         "translated-content decorated text should report an isolated text surface in stats: {stats:?}"
+    );
+}
+
+#[test]
+fn translated_multispan_showcase_text_stays_exact_at_fractional_root_scale() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping fractional root-scale multispan text assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    let base_translation = Point::new(12.4, 14.4);
+    let mut base_graph =
+        translation_only_wrapper_with_multispan_showcase_text_fixture(base_translation);
+    mark_translated_text_wrapper(&mut base_graph);
+    renderer.scene_mut().graph = Some(base_graph);
+    let base_frame = capture_logical_frame_with_scale(
+        &mut renderer,
+        MULTISPAN_FRAME_WIDTH,
+        FRAME_HEIGHT,
+        FRACTIONAL_ROOT_SCALE,
+    );
+
+    let moved_translation = Point::new(12.4, 13.4);
+    let mut moved_graph =
+        translation_only_wrapper_with_multispan_showcase_text_fixture(moved_translation);
+    mark_translated_text_wrapper(&mut moved_graph);
+    renderer.scene_mut().graph = Some(moved_graph);
+    let moved_frame = capture_logical_frame_with_scale(
+        &mut renderer,
+        MULTISPAN_FRAME_WIDTH,
+        FRAME_HEIGHT,
+        FRACTIONAL_ROOT_SCALE,
+    );
+
+    let width = scaled_dimension(MULTISPAN_TEXT_WRAPPER_LOCAL_SIZE.0, FRACTIONAL_ROOT_SCALE);
+    let height = scaled_dimension(MULTISPAN_TEXT_WRAPPER_LOCAL_SIZE.1, FRACTIONAL_ROOT_SCALE);
+    let base_normalized = normalize_translated_region_at_scale(
+        &base_frame,
+        base_translation,
+        MULTISPAN_TEXT_WRAPPER_LOCAL_SIZE,
+        FRACTIONAL_ROOT_SCALE,
+    );
+    let moved_normalized = normalize_translated_region_at_scale(
+        &moved_frame,
+        moved_translation,
+        MULTISPAN_TEXT_WRAPPER_LOCAL_SIZE,
+        FRACTIONAL_ROOT_SCALE,
+    );
+
+    assert_exact_normalized_match(
+        "fractional root-scale multispan showcase text",
+        &base_normalized,
+        &moved_normalized,
+        width,
+        height,
+    );
+}
+
+#[test]
+fn translated_showcase_card_surface_stays_exact_at_fractional_root_scale() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping fractional root-scale showcase card assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    let base_translation = Point::new(12.4, 14.4);
+    let mut base_graph = translation_only_wrapper_with_showcase_card_fixture(base_translation);
+    mark_translated_text_wrapper(&mut base_graph);
+    renderer.scene_mut().graph = Some(base_graph);
+    let base_frame = capture_logical_frame_with_scale(
+        &mut renderer,
+        MULTISPAN_FRAME_WIDTH,
+        FRAME_HEIGHT,
+        FRACTIONAL_ROOT_SCALE,
+    );
+
+    let moved_translation = Point::new(12.4, 13.4);
+    let mut moved_graph = translation_only_wrapper_with_showcase_card_fixture(moved_translation);
+    mark_translated_text_wrapper(&mut moved_graph);
+    renderer.scene_mut().graph = Some(moved_graph);
+    let moved_frame = capture_logical_frame_with_scale(
+        &mut renderer,
+        MULTISPAN_FRAME_WIDTH,
+        FRAME_HEIGHT,
+        FRACTIONAL_ROOT_SCALE,
+    );
+
+    let width = scaled_dimension(MULTISPAN_TEXT_WRAPPER_LOCAL_SIZE.0, FRACTIONAL_ROOT_SCALE);
+    let height = scaled_dimension(MULTISPAN_TEXT_WRAPPER_LOCAL_SIZE.1, FRACTIONAL_ROOT_SCALE);
+    let base_normalized = normalize_translated_region_at_scale(
+        &base_frame,
+        base_translation,
+        MULTISPAN_TEXT_WRAPPER_LOCAL_SIZE,
+        FRACTIONAL_ROOT_SCALE,
+    );
+    let moved_normalized = normalize_translated_region_at_scale(
+        &moved_frame,
+        moved_translation,
+        MULTISPAN_TEXT_WRAPPER_LOCAL_SIZE,
+        FRACTIONAL_ROOT_SCALE,
+    );
+
+    assert_exact_normalized_match(
+        "fractional root-scale showcase card surface",
+        &base_normalized,
+        &moved_normalized,
+        width,
+        height,
+    );
+}
+
+#[test]
+fn translated_multispan_showcase_text_with_padding_stays_exact_at_fractional_root_scale() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping fractional root-scale padded multispan text assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    let base_translation = Point::new(12.4, 14.4);
+    let mut base_graph =
+        translation_only_wrapper_with_padded_multispan_showcase_text_fixture(base_translation);
+    mark_translated_text_wrapper(&mut base_graph);
+    renderer.scene_mut().graph = Some(base_graph);
+    let base_frame = capture_logical_frame_with_scale(
+        &mut renderer,
+        MULTISPAN_FRAME_WIDTH,
+        FRAME_HEIGHT,
+        FRACTIONAL_ROOT_SCALE,
+    );
+    let base_stats = renderer.last_frame_stats().expect("base frame stats");
+
+    let moved_translation = Point::new(12.4, 13.4);
+    let mut moved_graph =
+        translation_only_wrapper_with_padded_multispan_showcase_text_fixture(moved_translation);
+    mark_translated_text_wrapper(&mut moved_graph);
+    renderer.scene_mut().graph = Some(moved_graph);
+    let moved_frame = capture_logical_frame_with_scale(
+        &mut renderer,
+        MULTISPAN_FRAME_WIDTH,
+        FRAME_HEIGHT,
+        FRACTIONAL_ROOT_SCALE,
+    );
+    let moved_stats = renderer.last_frame_stats().expect("moved frame stats");
+    assert_eq!(
+        base_stats.isolated_layer_renders,
+        moved_stats.isolated_layer_renders
+    );
+
+    let width = scaled_dimension(MULTISPAN_TEXT_WRAPPER_LOCAL_SIZE.0, FRACTIONAL_ROOT_SCALE);
+    let height = scaled_dimension(MULTISPAN_TEXT_WRAPPER_LOCAL_SIZE.1, FRACTIONAL_ROOT_SCALE);
+    let base_normalized = normalize_translated_region_at_scale(
+        &base_frame,
+        base_translation,
+        MULTISPAN_TEXT_WRAPPER_LOCAL_SIZE,
+        FRACTIONAL_ROOT_SCALE,
+    );
+    let moved_normalized = normalize_translated_region_at_scale(
+        &moved_frame,
+        moved_translation,
+        MULTISPAN_TEXT_WRAPPER_LOCAL_SIZE,
+        FRACTIONAL_ROOT_SCALE,
+    );
+
+    assert_exact_normalized_match(
+        "fractional root-scale padded multispan showcase text",
+        &base_normalized,
+        &moved_normalized,
+        width,
+        height,
     );
 }
 
@@ -1218,6 +1411,224 @@ fn translation_only_wrapper_with_text_style_fixture(
     ])
 }
 
+fn showcase_multispan_text() -> AnnotatedString {
+    AnnotatedString::builder()
+        .push_style(SpanStyle {
+            color: Some(Color(0.5, 0.9, 0.6, 1.0)),
+            font_weight: Some(FontWeight::BOLD),
+            ..Default::default()
+        })
+        .append("This is bold green ")
+        .pop()
+        .append("and this is normal text. ")
+        .push_style(SpanStyle {
+            color: Some(Color(0.9, 0.4, 0.4, 1.0)),
+            font_style: Some(FontStyle::Italic),
+            text_decoration: Some(TextDecoration::UNDERLINE),
+            ..Default::default()
+        })
+        .append("This is red, italic, and underlined!")
+        .pop()
+        .to_annotated_string()
+}
+
+fn translation_only_wrapper_with_multispan_showcase_text_fixture(
+    wrapper_translation: Point,
+) -> RenderGraph {
+    let text_leaf = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 320.0,
+            height: 24.0,
+        },
+        ProjectiveTransform::translation(9.0, 7.0),
+        GraphicsLayer::default(),
+        vec![RenderNode::Primitive(PrimitiveEntry {
+            phase: PrimitivePhase::BeforeChildren,
+            node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+                node_id: 101,
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 320.0,
+                    height: 24.0,
+                },
+                text: showcase_multispan_text(),
+                text_style: TextStyle::from_span_style(SpanStyle::default()),
+                font_size: 16.0,
+                layout_options: TextLayoutOptions::default(),
+                clip: None,
+            })),
+        })],
+    );
+    let wrapper = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: MULTISPAN_TEXT_WRAPPER_LOCAL_SIZE.0 as f32,
+            height: MULTISPAN_TEXT_WRAPPER_LOCAL_SIZE.1 as f32,
+        },
+        ProjectiveTransform::translation(wrapper_translation.x, wrapper_translation.y),
+        GraphicsLayer::default(),
+        vec![RenderNode::Layer(Box::new(text_leaf))],
+    );
+    let frame_rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: MULTISPAN_FRAME_WIDTH as f32,
+        height: FRAME_HEIGHT as f32,
+    };
+
+    RenderGraph::new(layer(
+        frame_rect,
+        ProjectiveTransform::identity(),
+        GraphicsLayer::default(),
+        vec![
+            solid_rect(frame_rect, Color::BLACK),
+            RenderNode::Layer(Box::new(wrapper)),
+        ],
+    ))
+}
+
+fn showcase_card_wrapper(wrapper_translation: Point) -> cranpose_render_common::graph::LayerNode {
+    let text_leaf = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 320.0,
+            height: 24.0,
+        },
+        ProjectiveTransform::translation(9.0, 7.0),
+        GraphicsLayer::default(),
+        vec![
+            RenderNode::Primitive(PrimitiveEntry {
+                phase: PrimitivePhase::BeforeChildren,
+                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                    primitive: DrawPrimitive::RoundRect {
+                        rect: Rect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 320.0,
+                            height: 28.0,
+                        },
+                        brush: Brush::solid(Color(0.18, 0.22, 0.30, 0.94)),
+                        radii: cranpose_ui_graphics::CornerRadii::uniform(8.0),
+                    },
+                    clip: None,
+                }),
+            }),
+            RenderNode::Primitive(PrimitiveEntry {
+                phase: PrimitivePhase::BeforeChildren,
+                node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+                    node_id: 102,
+                    rect: Rect {
+                        x: 8.0,
+                        y: 4.0,
+                        width: 304.0,
+                        height: 24.0,
+                    },
+                    text: showcase_multispan_text(),
+                    text_style: TextStyle::from_span_style(SpanStyle::default()),
+                    font_size: 16.0,
+                    layout_options: TextLayoutOptions::default(),
+                    clip: None,
+                })),
+            }),
+        ],
+    );
+    layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: MULTISPAN_TEXT_WRAPPER_LOCAL_SIZE.0 as f32,
+            height: MULTISPAN_TEXT_WRAPPER_LOCAL_SIZE.1 as f32,
+        },
+        ProjectiveTransform::translation(wrapper_translation.x, wrapper_translation.y),
+        GraphicsLayer::default(),
+        vec![RenderNode::Layer(Box::new(text_leaf))],
+    )
+}
+
+fn translation_only_wrapper_with_showcase_card_fixture(wrapper_translation: Point) -> RenderGraph {
+    let wrapper = showcase_card_wrapper(wrapper_translation);
+    let frame_rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: MULTISPAN_FRAME_WIDTH as f32,
+        height: FRAME_HEIGHT as f32,
+    };
+
+    RenderGraph::new(layer(
+        frame_rect,
+        ProjectiveTransform::identity(),
+        GraphicsLayer::default(),
+        vec![
+            solid_rect(frame_rect, Color::BLACK),
+            RenderNode::Layer(Box::new(wrapper)),
+        ],
+    ))
+}
+
+fn translation_only_wrapper_with_padded_multispan_showcase_text_fixture(
+    wrapper_translation: Point,
+) -> RenderGraph {
+    let text_leaf = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 320.0,
+            height: 24.0,
+        },
+        ProjectiveTransform::translation(9.0, 7.0),
+        GraphicsLayer::default(),
+        vec![RenderNode::Primitive(PrimitiveEntry {
+            phase: PrimitivePhase::BeforeChildren,
+            node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+                node_id: 103,
+                rect: Rect {
+                    x: 8.0,
+                    y: 4.0,
+                    width: 304.0,
+                    height: 24.0,
+                },
+                text: showcase_multispan_text(),
+                text_style: TextStyle::from_span_style(SpanStyle::default()),
+                font_size: 16.0,
+                layout_options: TextLayoutOptions::default(),
+                clip: None,
+            })),
+        })],
+    );
+    let wrapper = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: MULTISPAN_TEXT_WRAPPER_LOCAL_SIZE.0 as f32,
+            height: MULTISPAN_TEXT_WRAPPER_LOCAL_SIZE.1 as f32,
+        },
+        ProjectiveTransform::translation(wrapper_translation.x, wrapper_translation.y),
+        GraphicsLayer::default(),
+        vec![RenderNode::Layer(Box::new(text_leaf))],
+    );
+    let frame_rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: MULTISPAN_FRAME_WIDTH as f32,
+        height: FRAME_HEIGHT as f32,
+    };
+
+    RenderGraph::new(layer(
+        frame_rect,
+        ProjectiveTransform::identity(),
+        GraphicsLayer::default(),
+        vec![
+            solid_rect(frame_rect, Color::BLACK),
+            RenderNode::Layer(Box::new(wrapper)),
+        ],
+    ))
+}
+
 fn gradient_stroke_text_fixture() -> RenderGraph {
     let text_leaf = layer(
         Rect {
@@ -1395,6 +1806,67 @@ fn normalize_translated_backdrop_region(frame: &CapturedFrame, translation: Poin
         output_width,
         output_height,
     )
+}
+
+fn scaled_dimension(logical_size: u32, root_scale: f32) -> u32 {
+    ((logical_size as f32) * root_scale).ceil().max(1.0) as u32
+}
+
+fn capture_logical_frame_with_scale(
+    renderer: &mut WgpuRenderer,
+    logical_width: u32,
+    logical_height: u32,
+    root_scale: f32,
+) -> CapturedFrame {
+    renderer
+        .capture_frame_with_scale(
+            scaled_dimension(logical_width, root_scale),
+            scaled_dimension(logical_height, root_scale),
+            root_scale,
+        )
+        .expect("scaled logical capture should succeed")
+}
+
+fn normalize_translated_region_at_scale(
+    frame: &CapturedFrame,
+    translation: Point,
+    local_size: (u32, u32),
+    root_scale: f32,
+) -> Vec<u8> {
+    let start_x = (translation.x * root_scale).round() as u32;
+    let start_y = (translation.y * root_scale).round() as u32;
+    let width = scaled_dimension(local_size.0, root_scale);
+    let height = scaled_dimension(local_size.1, root_scale);
+    let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+    for y in 0..height {
+        let src_y = start_y + y;
+        let row_start = ((src_y * frame.width + start_x) * 4) as usize;
+        let row_end = row_start + (width * 4) as usize;
+        pixels.extend_from_slice(&frame.pixels[row_start..row_end]);
+    }
+    pixels
+}
+
+fn assert_exact_normalized_match(label: &str, base: &[u8], moved: &[u8], width: u32, height: u32) {
+    let stats = image_difference_stats(base, moved, width, height, 0);
+    if stats.differing_pixels == 0 && stats.max_difference == 0 {
+        return;
+    }
+
+    let diff = stats
+        .first_difference
+        .as_ref()
+        .expect("exact comparison should report first difference");
+    panic!(
+        "{label} changed under a 1px logical scroll at fractional root scale; differing_pixels={} max_diff={} first differing normalized pixel at ({}, {}) base={:?} moved={:?} diff={}",
+        stats.differing_pixels,
+        stats.max_difference,
+        diff.x,
+        diff.y,
+        diff.lhs,
+        diff.rhs,
+        diff.difference
+    );
 }
 
 fn normalize_translated_text_region(frame: &CapturedFrame, translation: Point) -> Vec<u8> {

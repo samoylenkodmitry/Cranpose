@@ -365,7 +365,7 @@ pub(crate) fn render_layout_tree_with_scale(root: &LayoutBox, scene: &mut Scene,
         scene,
         None,
     );
-    scene.graph = Some(graph);
+    scene.replace_graph(graph);
 }
 
 #[cfg(test)]
@@ -2050,7 +2050,7 @@ pub(crate) fn render_from_applier(
         scene,
         None,
     );
-    scene.graph = Some(graph);
+    scene.replace_graph(graph);
 }
 
 fn collect_hits_from_graph(

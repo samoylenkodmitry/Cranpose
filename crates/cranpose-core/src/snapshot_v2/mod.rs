@@ -26,6 +26,7 @@ use crate::collections::map::HashMap; // FUTURE(no_std): replace HashMap/HashSet
 use crate::collections::map::HashSet;
 use crate::snapshot_id_set::{SnapshotId, SnapshotIdSet};
 use crate::snapshot_pinning::{self, PinHandle};
+use crate::snapshot_weak_set::SnapshotWeakSetDebugStats;
 use crate::state::{StateObject, StateRecord};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -60,7 +61,7 @@ pub type ReadObserver = Arc<dyn Fn(&dyn StateObject) + 'static>;
 pub type WriteObserver = Arc<dyn Fn(&dyn StateObject) + 'static>;
 
 /// Apply observer that is called when a snapshot is applied.
-pub type ApplyObserver = Arc<dyn Fn(&[Arc<dyn StateObject>], SnapshotId) + 'static>;
+pub type ApplyObserver = Rc<dyn Fn(&[Arc<dyn StateObject>], SnapshotId) + 'static>;
 
 /// Result of applying a mutable snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -508,6 +509,43 @@ const UNUSED_RECORD_CLEANUP_MIN_SIZE: usize = 64;
 
 thread_local! {
     static LAST_UNUSED_RECORD_CLEANUP: Cell<SnapshotId> = const { Cell::new(0) };
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SnapshotV2DebugStats {
+    pub apply_observers_len: usize,
+    pub apply_observers_cap: usize,
+    pub last_writes_len: usize,
+    pub last_writes_cap: usize,
+    pub extra_state_objects_len: usize,
+    pub extra_state_objects_cap: usize,
+    pub last_unused_record_cleanup: SnapshotId,
+}
+
+pub fn debug_snapshot_v2_stats() -> SnapshotV2DebugStats {
+    let (apply_observers_len, apply_observers_cap) = APPLY_OBSERVERS.with(|cell| {
+        let observers = cell.borrow();
+        (observers.len(), observers.capacity())
+    });
+    let (last_writes_len, last_writes_cap) = LAST_WRITES.with(|cell| {
+        let writes = cell.borrow();
+        (writes.len(), writes.capacity())
+    });
+    let SnapshotWeakSetDebugStats {
+        len: extra_state_objects_len,
+        capacity: extra_state_objects_cap,
+    } = EXTRA_STATE_OBJECTS.with(|cell| cell.borrow().debug_stats());
+    let last_unused_record_cleanup = LAST_UNUSED_RECORD_CLEANUP.with(|cell| cell.get());
+
+    SnapshotV2DebugStats {
+        apply_observers_len,
+        apply_observers_cap,
+        last_writes_len,
+        last_writes_cap,
+        extra_state_objects_len,
+        extra_state_objects_cap,
+        last_unused_record_cleanup,
+    }
 }
 
 /// Register an apply observer.
@@ -991,7 +1029,7 @@ mod tests {
         let received_snapshot_id_clone = received_snapshot_id.clone();
 
         // Register observer
-        let _handle = register_apply_observer(Arc::new(move |modified, snapshot_id| {
+        let _handle = register_apply_observer(Rc::new(move |modified, snapshot_id| {
             *received_snapshot_id_clone.lock().unwrap() = snapshot_id;
             *received_count_clone.lock().unwrap() = modified.len();
         }));
@@ -1016,7 +1054,7 @@ mod tests {
         let received_id = Arc::new(Mutex::new(0));
         let received_id_clone = received_id.clone();
 
-        let _handle = register_apply_observer(Arc::new(move |_, snapshot_id| {
+        let _handle = register_apply_observer(Rc::new(move |_, snapshot_id| {
             *received_id_clone.lock().unwrap() = snapshot_id;
         }));
 
@@ -1039,15 +1077,15 @@ mod tests {
         let call_count3_clone = call_count3.clone();
 
         // Register three observers
-        let _handle1 = register_apply_observer(Arc::new(move |_, _| {
+        let _handle1 = register_apply_observer(Rc::new(move |_, _| {
             *call_count1_clone.lock().unwrap() += 1;
         }));
 
-        let _handle2 = register_apply_observer(Arc::new(move |_, _| {
+        let _handle2 = register_apply_observer(Rc::new(move |_, _| {
             *call_count2_clone.lock().unwrap() += 1;
         }));
 
-        let _handle3 = register_apply_observer(Arc::new(move |_, _| {
+        let _handle3 = register_apply_observer(Rc::new(move |_, _| {
             *call_count3_clone.lock().unwrap() += 1;
         }));
 
@@ -1075,7 +1113,7 @@ mod tests {
         let call_count = Arc::new(Mutex::new(0));
         let call_count_clone = call_count.clone();
 
-        let _handle = register_apply_observer(Arc::new(move |modified, _| {
+        let _handle = register_apply_observer(Rc::new(move |modified, _| {
             // Observer should still be called, but with empty array
             *call_count_clone.lock().unwrap() += 1;
             assert_eq!(modified.len(), 0);
@@ -1096,17 +1134,17 @@ mod tests {
         let calls = Arc::new(Mutex::new(Vec::new()));
 
         let calls1 = calls.clone();
-        let handle1 = register_apply_observer(Arc::new(move |_, _| {
+        let handle1 = register_apply_observer(Rc::new(move |_, _| {
             calls1.lock().unwrap().push(1);
         }));
 
         let calls2 = calls.clone();
-        let handle2 = register_apply_observer(Arc::new(move |_, _| {
+        let handle2 = register_apply_observer(Rc::new(move |_, _| {
             calls2.lock().unwrap().push(2);
         }));
 
         let calls3 = calls.clone();
-        let handle3 = register_apply_observer(Arc::new(move |_, _| {
+        let handle3 = register_apply_observer(Rc::new(move |_, _| {
             calls3.lock().unwrap().push(3);
         }));
 
@@ -1158,17 +1196,17 @@ mod tests {
             let calls = Arc::new(Mutex::new(Vec::new()));
 
             let calls1 = calls.clone();
-            let h1 = register_apply_observer(Arc::new(move |_, _| {
+            let h1 = register_apply_observer(Rc::new(move |_, _| {
                 calls1.lock().unwrap().push(1);
             }));
 
             let calls2 = calls.clone();
-            let h2 = register_apply_observer(Arc::new(move |_, _| {
+            let h2 = register_apply_observer(Rc::new(move |_, _| {
                 calls2.lock().unwrap().push(2);
             }));
 
             let calls3 = calls.clone();
-            let h3 = register_apply_observer(Arc::new(move |_, _| {
+            let h3 = register_apply_observer(Rc::new(move |_, _| {
                 calls3.lock().unwrap().push(3);
             }));
 
@@ -1195,17 +1233,17 @@ mod tests {
             let calls = Arc::new(Mutex::new(Vec::new()));
 
             let calls1 = calls.clone();
-            let h1 = register_apply_observer(Arc::new(move |_, _| {
+            let h1 = register_apply_observer(Rc::new(move |_, _| {
                 calls1.lock().unwrap().push(1);
             }));
 
             let calls2 = calls.clone();
-            let h2 = register_apply_observer(Arc::new(move |_, _| {
+            let h2 = register_apply_observer(Rc::new(move |_, _| {
                 calls2.lock().unwrap().push(2);
             }));
 
             let calls3 = calls.clone();
-            let h3 = register_apply_observer(Arc::new(move |_, _| {
+            let h3 = register_apply_observer(Rc::new(move |_, _| {
                 calls3.lock().unwrap().push(3);
             }));
 
@@ -1235,12 +1273,12 @@ mod tests {
         let calls = Arc::new(Mutex::new(Vec::new()));
 
         let calls1 = calls.clone();
-        let handle1 = register_apply_observer(Arc::new(move |_, snapshot_id| {
+        let handle1 = register_apply_observer(Rc::new(move |_, snapshot_id| {
             calls1.lock().unwrap().push((1, snapshot_id));
         }));
 
         let calls2 = calls.clone();
-        let handle2 = register_apply_observer(Arc::new(move |_, snapshot_id| {
+        let handle2 = register_apply_observer(Rc::new(move |_, snapshot_id| {
             calls2.lock().unwrap().push((2, snapshot_id));
         }));
 
@@ -1259,7 +1297,7 @@ mod tests {
 
         // Register new observer after dropping handle1
         let calls3 = calls.clone();
-        let _handle3 = register_apply_observer(Arc::new(move |_, snapshot_id| {
+        let _handle3 = register_apply_observer(Rc::new(move |_, snapshot_id| {
             calls3.lock().unwrap().push((3, snapshot_id));
         }));
 
@@ -1286,7 +1324,7 @@ mod tests {
         // uniqueness by ensuring all observers get called
         for i in 0..100 {
             let ids_clone = ids.clone();
-            let handle = register_apply_observer(Arc::new(move |_, _| {
+            let handle = register_apply_observer(Rc::new(move |_, _| {
                 ids_clone.lock().unwrap().insert(i);
             }));
             handles.push(handle);

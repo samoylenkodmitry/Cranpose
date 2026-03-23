@@ -245,6 +245,12 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         ReturnType::Default => syn::parse_quote! { () },
         ReturnType::Type(_, ty) => ty.as_ref().clone(),
     };
+    let returns_unit = match &func.sig.output {
+        ReturnType::Default => true,
+        ReturnType::Type(_, ty) => {
+            matches!(ty.as_ref(), Type::Tuple(tuple) if tuple.elems.is_empty())
+        }
+    };
     let _helper_ident = Ident::new(
         &format!("__cranpose_impl_{}", func.sig.ident),
         Span::call_site(),
@@ -465,61 +471,87 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         };
 
-        let helper_body = quote! {
-            let __current_scope = __composer
-                .current_recranpose_scope()
-                .expect("missing recompose scope");
-            let mut __changed = __current_scope.should_recompose();
-            #(#param_setup)*
-            let __result_slot_index = __composer
-                .use_value_slot(|| #core_path::ReturnSlot::<#return_ty>::default());
-            let __has_previous = __composer
-                .with_slot_value::<#core_path::ReturnSlot<#return_ty>, _>(
-                    __result_slot_index,
-                    |slot| slot.get().is_some(),
-                );
-            if !__changed && __has_previous {
-                __composer.skip_current_group();
-                let __result = __composer
-                    .with_slot_value::<#core_path::ReturnSlot<#return_ty>, _>(
-                        __result_slot_index,
-                        |slot| {
-                            slot.get()
-                                .expect("composable return value missing during skip")
-                        },
-                    );
-                return __result;
-            }
-            let __value: #return_ty = {
+        let helper_body = if returns_unit {
+            quote! {
+                let __current_scope = __composer
+                    .current_recranpose_scope()
+                    .expect("missing recompose scope");
+                let mut __changed = __current_scope.should_recompose();
+                #(#param_setup)*
+                if !__changed && __current_scope.has_composed_once() {
+                    __composer.skip_current_group();
+                    return;
+                }
                 #(#rebinds)*
                 #helper_block
-            };
-            __composer.with_slot_value_mut::<#core_path::ReturnSlot<#return_ty>, _>(
-                __result_slot_index,
-                |slot| {
-                    slot.store(__value.clone());
-                },
-            );
-            #recranpose_setter
-            __value
+                #recranpose_setter
+            }
+        } else {
+            quote! {
+                let __current_scope = __composer
+                    .current_recranpose_scope()
+                    .expect("missing recompose scope");
+                let mut __changed = __current_scope.should_recompose();
+                #(#param_setup)*
+                let __result_slot_index = __composer
+                    .use_value_slot(|| #core_path::ReturnSlot::<#return_ty>::default());
+                let __has_previous = __composer
+                    .with_slot_value::<#core_path::ReturnSlot<#return_ty>, _>(
+                        __result_slot_index,
+                        |slot| slot.get().is_some(),
+                    );
+                if !__changed && __has_previous {
+                    __composer.skip_current_group();
+                    let __result = __composer
+                        .with_slot_value::<#core_path::ReturnSlot<#return_ty>, _>(
+                            __result_slot_index,
+                            |slot| {
+                                slot.get()
+                                    .expect("composable return value missing during skip")
+                            },
+                        );
+                    return __result;
+                }
+                let __value: #return_ty = {
+                    #(#rebinds)*
+                    #helper_block
+                };
+                __composer.with_slot_value_mut::<#core_path::ReturnSlot<#return_ty>, _>(
+                    __result_slot_index,
+                    |slot| {
+                        slot.store(__value.clone());
+                    },
+                );
+                #recranpose_setter
+                __value
+            }
         };
 
-        let recranpose_fn_body = quote! {
-            #(#param_setup_recompose)*
-            let __result_slot_index = __composer
-                .use_value_slot(|| #core_path::ReturnSlot::<#return_ty>::default());
-            #(#rebinds_for_recompose)*
-            let __value: #return_ty = {
+        let recranpose_fn_body = if returns_unit {
+            quote! {
+                #(#param_setup_recompose)*
+                #(#rebinds_for_recompose)*
                 #recranpose_block
-            };
-            __composer.with_slot_value_mut::<#core_path::ReturnSlot<#return_ty>, _>(
-                __result_slot_index,
-                |slot| {
-                    slot.store(__value.clone());
-                },
-            );
-            #recranpose_setter
-            __value
+                #recranpose_setter
+            }
+        } else {
+            quote! {
+                #(#param_setup_recompose)*
+                let __result_slot_index = __composer
+                    .use_value_slot(|| #core_path::ReturnSlot::<#return_ty>::default());
+                #(#rebinds_for_recompose)*
+                let __value: #return_ty = {
+                    #recranpose_block
+                };
+                __composer.with_slot_value_mut::<#core_path::ReturnSlot<#return_ty>, _>(
+                    __result_slot_index,
+                    |slot| {
+                        slot.store(__value.clone());
+                    },
+                );
+                #recranpose_setter
+                __value
+            }
         };
 
         let recranpose_fn = quote! {

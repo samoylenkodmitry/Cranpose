@@ -3,8 +3,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use cranpose_core::{
-    self, Applier, ConcreteApplierHost, MutableState, SlotBackend, SlotStorage, SlotsHost,
-    SnapshotStateObserver,
+    self, Applier, ConcreteApplierHost, MutableState, SlotBackend, SlotsHost, SnapshotStateObserver,
 };
 
 #[derive(Default)]
@@ -255,4 +254,20 @@ fn inactive_slots_move_to_reusable_pool() {
             .expect("subcompose layout node");
         assert!(!typed.state().reusable().is_empty());
     }
+}
+
+#[test]
+fn active_children_follow_last_rendered_placements() {
+    let policy: Rc<MeasurePolicy> =
+        Rc::new(|scope, _constraints| scope.layout(0.0, 0.0, Vec::new()));
+    let node = SubcomposeLayoutNode::new(crate::modifier::Modifier::empty(), Rc::clone(&policy));
+
+    {
+        let mut inner = node.inner.borrow_mut();
+        inner.children = vec![11, 22];
+        inner.last_placements = vec![33, 44];
+    }
+
+    assert_eq!(node.active_children(), vec![33, 44]);
+    assert_eq!(cranpose_core::Node::children(&node), vec![33, 44]);
 }

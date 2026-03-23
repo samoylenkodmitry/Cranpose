@@ -98,9 +98,13 @@ impl ReadonlySnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::StateObject;
+    use crate::state::{StateObject, PREEXISTING_SNAPSHOT_ID};
     use std::cell::Cell;
     use std::rc::Rc;
+
+    fn mock_state_record() -> Rc<crate::state::StateRecord> {
+        crate::state::StateRecord::new(PREEXISTING_SNAPSHOT_ID, (), None)
+    }
 
     // Mock StateObject for testing
     #[allow(dead_code)]
@@ -114,7 +118,7 @@ mod tests {
         }
 
         fn first_record(&self) -> Rc<crate::state::StateRecord> {
-            unimplemented!("Not needed for tests")
+            mock_state_record()
         }
 
         fn readable_record(
@@ -122,18 +126,16 @@ mod tests {
             _snapshot_id: crate::snapshot_id_set::SnapshotId,
             _invalid: &SnapshotIdSet,
         ) -> Rc<crate::state::StateRecord> {
-            unimplemented!("Not needed for tests")
+            mock_state_record()
         }
 
-        fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {
-            unimplemented!("Not needed for tests")
-        }
+        fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {}
 
         fn promote_record(
             &self,
             _child_id: crate::snapshot_id_set::SnapshotId,
         ) -> Result<(), &'static str> {
-            unimplemented!("Not needed for tests")
+            Ok(())
         }
 
         fn as_any(&self) -> &dyn std::any::Any {

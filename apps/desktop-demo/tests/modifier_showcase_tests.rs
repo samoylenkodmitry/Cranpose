@@ -414,12 +414,11 @@ fn test_complex_chain_layout() {
 #[test]
 fn test_dynamic_modifiers_layout() {
     let mut composition = Composition::new(MemoryApplier::new());
+    let root_key = location_key(file!(), line!(), column!());
 
     // Test at frame 0
     composition
-        .render(location_key(file!(), line!(), column!()), || {
-            dynamic_modifiers_showcase(0)
-        })
+        .render(root_key, || dynamic_modifiers_showcase(0))
         .unwrap();
 
     let root = composition.root().expect("Should have root");
@@ -449,9 +448,7 @@ fn test_dynamic_modifiers_layout() {
 
     // Recompose at frame 5 - should maintain same structure
     composition
-        .render(location_key(file!(), line!(), column!()), || {
-            dynamic_modifiers_showcase(5)
-        })
+        .render(root_key, || dynamic_modifiers_showcase(5))
         .unwrap();
 
     let mut applier = composition.applier_mut();

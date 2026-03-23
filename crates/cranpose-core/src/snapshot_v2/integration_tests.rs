@@ -328,7 +328,7 @@ mod tests {
         let called_clone = called.clone();
         let count_clone = received_count.clone();
 
-        let _handle = register_apply_observer(Arc::new(move |modified, _snapshot_id| {
+        let _handle = register_apply_observer(Rc::new(move |modified, _snapshot_id| {
             *called_clone.lock().unwrap() = true;
             *count_clone.lock().unwrap() = modified.len();
         }));

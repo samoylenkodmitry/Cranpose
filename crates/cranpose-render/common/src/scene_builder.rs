@@ -4,8 +4,8 @@ use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_ui::text::AnnotatedString;
 use cranpose_ui::text::{resolve_text_direction, TextAlign, TextStyle};
 use cranpose_ui::{
-    prepare_text_layout, DrawCommand, LayoutBox, LayoutNode, Point, Rect, ResolvedModifiers, Size,
-    SubcomposeLayoutNode, TextLayoutOptions, TextOverflow,
+    prepare_text_layout, DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, Rect,
+    ResolvedModifiers, Size, SubcomposeLayoutNode, TextLayoutOptions, TextOverflow,
 };
 use cranpose_ui_graphics::{CompositingStrategy, GraphicsLayer};
 
@@ -42,16 +42,7 @@ struct BuildNodeSnapshot {
 
 struct SnapshotNodeData {
     layout_state: cranpose_ui::widgets::LayoutState,
-    draw_commands: Vec<DrawCommand>,
-    click_actions: Vec<Rc<dyn Fn(Point)>>,
-    pointer_inputs: Vec<Rc<dyn Fn(cranpose_foundation::PointerEvent)>>,
-    clip_to_bounds: bool,
-    motion_context_animated: bool,
-    translated_content_context: bool,
-    annotated_text: Option<AnnotatedString>,
-    text_style: Option<TextStyle>,
-    text_layout_options: Option<TextLayoutOptions>,
-    graphics_layer: Option<GraphicsLayer>,
+    modifier_slices: Rc<ModifierNodeSlices>,
     resolved_modifiers: ResolvedModifiers,
     children: Vec<NodeId>,
 }
@@ -145,6 +136,7 @@ fn build_layer_node_internal(
         annotated_text: annotated_text.as_ref(),
         text_style: text_style.as_ref(),
         text_layout_options,
+        modifier_slices: None,
     }) {
         children.push(RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
@@ -226,16 +218,7 @@ fn build_layer_node_from_applier_internal(
         let modifier_slices = node.modifier_slices_snapshot();
         SnapshotNodeData {
             layout_state: state,
-            draw_commands: modifier_slices.draw_commands().to_vec(),
-            click_actions: modifier_slices.click_handlers().to_vec(),
-            pointer_inputs: modifier_slices.pointer_inputs().to_vec(),
-            clip_to_bounds: modifier_slices.clip_to_bounds(),
-            motion_context_animated: modifier_slices.motion_context_animated(),
-            translated_content_context: modifier_slices.translated_content_context(),
-            annotated_text: modifier_slices.annotated_string(),
-            text_style: modifier_slices.text_style().cloned(),
-            text_layout_options: modifier_slices.text_layout_options(),
-            graphics_layer: modifier_slices.graphics_layer(),
+            modifier_slices,
             resolved_modifiers: node.resolved_modifiers(),
             children,
         }
@@ -255,16 +238,7 @@ fn build_layer_node_from_applier_internal(
         let modifier_slices = node.modifier_slices_snapshot();
         SnapshotNodeData {
             layout_state: state,
-            draw_commands: modifier_slices.draw_commands().to_vec(),
-            click_actions: modifier_slices.click_handlers().to_vec(),
-            pointer_inputs: modifier_slices.pointer_inputs().to_vec(),
-            clip_to_bounds: modifier_slices.clip_to_bounds(),
-            motion_context_animated: modifier_slices.motion_context_animated(),
-            translated_content_context: modifier_slices.translated_content_context(),
-            annotated_text: modifier_slices.annotated_string(),
-            text_style: modifier_slices.text_style().cloned(),
-            text_layout_options: modifier_slices.text_layout_options(),
-            graphics_layer: modifier_slices.graphics_layer(),
+            modifier_slices,
             resolved_modifiers: node.resolved_modifiers(),
             children,
         }
@@ -290,16 +264,7 @@ fn build_layer_node_from_data(
 ) -> Option<LayerNode> {
     let SnapshotNodeData {
         layout_state,
-        draw_commands,
-        click_actions,
-        pointer_inputs,
-        clip_to_bounds,
-        motion_context_animated,
-        translated_content_context,
-        annotated_text,
-        text_style,
-        text_layout_options,
-        graphics_layer,
+        modifier_slices,
         resolved_modifiers,
         children,
     } = data;
@@ -313,7 +278,7 @@ fn build_layer_node_from_data(
         width: layout_state.size.width,
         height: layout_state.size.height,
     };
-    let graphics_layer = graphics_layer.unwrap_or_default();
+    let graphics_layer = modifier_slices.graphics_layer().unwrap_or_default();
     let transform_to_parent =
         layer_transform_to_parent(local_bounds, layout_state.position, &graphics_layer);
     let isolation = isolation_reasons(&graphics_layer);
@@ -322,20 +287,24 @@ fn build_layer_node_from_data(
     } else {
         CachePolicy::None
     };
+    let clip_to_bounds = modifier_slices.clip_to_bounds();
+    let click_actions = modifier_slices.click_handlers();
+    let pointer_inputs = modifier_slices.pointer_inputs();
     let shadow_clip = clip_to_bounds.then_some(local_bounds);
     let hit_test = (!click_actions.is_empty() || !pointer_inputs.is_empty()).then(|| HitTestNode {
         shape: None,
-        click_actions,
-        pointer_inputs,
+        click_actions: click_actions.to_vec(),
+        pointer_inputs: pointer_inputs.to_vec(),
         clip: (clip_to_bounds || graphics_layer.clip).then_some(local_bounds),
     });
 
-    let node_motion_context_animated = inherited_motion_context_animated || motion_context_animated;
+    let node_motion_context_animated =
+        inherited_motion_context_animated || modifier_slices.motion_context_animated();
     let node_translated_content_context =
-        inherited_translated_content_context || translated_content_context;
+        inherited_translated_content_context || modifier_slices.translated_content_context();
 
     let mut render_children = draw_nodes(
-        &draw_commands,
+        modifier_slices.draw_commands(),
         DrawPlacement::Behind,
         layout_state.size,
         PrimitivePhase::BeforeChildren,
@@ -349,9 +318,10 @@ fn build_layer_node_from_data(
             .is_finite()
             .then_some(layout_state.measurement_constraints.max_width),
         resolved_modifiers: &resolved_modifiers,
-        annotated_text: annotated_text.as_ref(),
-        text_style: text_style.as_ref(),
-        text_layout_options,
+        annotated_text: modifier_slices.annotated_text(),
+        text_style: modifier_slices.text_style(),
+        text_layout_options: modifier_slices.text_layout_options(),
+        modifier_slices: Some(modifier_slices.as_ref()),
     }) {
         render_children.push(RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
@@ -380,7 +350,7 @@ fn build_layer_node_from_data(
         render_children.push(RenderNode::Layer(Box::new(child_layer)));
     }
     render_children.extend(draw_nodes(
-        &draw_commands,
+        modifier_slices.draw_commands(),
         DrawPlacement::Overlay,
         layout_state.size,
         PrimitivePhase::AfterChildren,
@@ -440,6 +410,7 @@ struct TextNodeParts<'a> {
     annotated_text: Option<&'a AnnotatedString>,
     text_style: Option<&'a TextStyle>,
     text_layout_options: Option<TextLayoutOptions>,
+    modifier_slices: Option<&'a ModifierNodeSlices>,
 }
 
 fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
@@ -451,6 +422,7 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
         annotated_text,
         text_style,
         text_layout_options,
+        modifier_slices,
     } = parts;
     let value = annotated_text?;
     let default_text_style = TextStyle::default();
@@ -464,12 +436,10 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
 
     let measure_width =
         resolve_text_measure_width(content_width, padding, measured_max_width, options);
-    let prepared = prepare_text_layout(
-        value,
-        &text_style,
-        options,
-        Some(measure_width).filter(|width| width.is_finite() && *width > 0.0),
-    );
+    let max_width = Some(measure_width).filter(|width| width.is_finite() && *width > 0.0);
+    let prepared = modifier_slices
+        .and_then(|slices| slices.prepare_text_layout(max_width))
+        .unwrap_or_else(|| prepare_text_layout(value, &text_style, options, max_width));
     let draw_width = if options.overflow == TextOverflow::Visible {
         prepared.metrics.width
     } else {
@@ -682,6 +652,20 @@ mod tests {
         }
 
         None
+    }
+
+    fn collect_text_labels(layer: &LayerNode, labels: &mut Vec<String>) {
+        for child in &layer.children {
+            match child {
+                RenderNode::Primitive(primitive) => {
+                    let PrimitiveNode::Text(text) = &primitive.node else {
+                        continue;
+                    };
+                    labels.push(text.text.text.clone());
+                }
+                RenderNode::Layer(child_layer) => collect_text_labels(child_layer, labels),
+            }
+        }
     }
 
     fn snapshot_with_translation(tx: f32) -> BuildNodeSnapshot {
@@ -1422,10 +1406,7 @@ mod tests {
             );
         });
 
-        let list_state = state_holder
-            .borrow()
-            .clone()
-            .expect("lazy list state should be captured");
+        let list_state = (*state_holder.borrow()).expect("lazy list state should be captured");
         list_state.scroll_to_item(3, 0.0);
 
         let root = composition.root().expect("lazy column root");
@@ -1442,6 +1423,38 @@ mod tests {
             )
             .expect("lazy column layout");
         let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("lazy column graph");
+        let active_children = applier
+            .with_node::<SubcomposeLayoutNode, _>(root, |node| node.active_children())
+            .expect("lazy column should be subcompose");
+        let child_debug: Vec<String> = active_children
+            .iter()
+            .map(|&child_id| {
+                if let Ok(summary) = applier.with_node::<LayoutNode, _>(child_id, |node| {
+                    format!(
+                        "layout#{child_id} placed={} text={:?} children={:?}",
+                        node.layout_state().is_placed,
+                        node.modifier_slices_snapshot()
+                            .text_content()
+                            .map(str::to_string),
+                        node.children.clone()
+                    )
+                }) {
+                    summary
+                } else if let Ok(summary) =
+                    applier.with_node::<SubcomposeLayoutNode, _>(child_id, |node| {
+                        format!(
+                            "subcompose#{child_id} placed={} active_children={:?}",
+                            node.layout_state().is_placed,
+                            node.active_children()
+                        )
+                    })
+                {
+                    summary
+                } else {
+                    format!("missing#{child_id}")
+                }
+            })
+            .collect();
         applier.clear_runtime_handle();
 
         let first_index = list_state.first_visible_item_index();
@@ -1449,9 +1462,15 @@ mod tests {
             first_index > 0,
             "lazy list should move away from origin before graph building, observed first_index={first_index}"
         );
+        let mut labels = Vec::new();
+        collect_text_labels(&graph.root, &mut labels);
         assert_eq!(
             find_text_motion(&graph.root, &format!("LazyMotion {first_index}")),
-            Some(None)
+            Some(None),
+            "graph labels after scroll: {:?}, active_children={:?}, child_debug={:?}",
+            labels,
+            active_children,
+            child_debug
         );
     }
 

@@ -2,25 +2,14 @@
 //!
 //! This module defines the high-level interface that all slot storage backends
 //! must implement. The `Composer` and composition engine interact exclusively
-//! through this trait, allowing different storage strategies (gap buffers,
-//! chunked storage, hierarchical, split layout/payload, etc.) to be used
-//! interchangeably.
+//! through this trait while keeping the composer decoupled from the concrete
+//! slot table representation.
 
 use crate::{Key, NodeId, Owned, ScopeId};
 
 /// Opaque handle to a group in the slot storage.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct GroupId(pub(crate) usize);
-
-impl GroupId {
-    pub(crate) fn new(index: usize) -> Self {
-        Self(index)
-    }
-
-    pub(crate) fn index(&self) -> usize {
-        self.0
-    }
-}
 
 /// Opaque handle to a value slot in the slot storage.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
@@ -102,10 +91,11 @@ pub trait SlotStorage {
     // ── nodes ──────────────────────────────────────────────────────────────
 
     /// Peek a node at the current cursor (don't advance).
-    fn peek_node(&self) -> Option<NodeId>;
+    /// Returns (NodeId, generation) so emit_node can verify the node hasn't been recycled.
+    fn peek_node(&self) -> Option<(NodeId, u32)>;
 
     /// Record a node at the current cursor (and advance).
-    fn record_node(&mut self, id: NodeId);
+    fn record_node(&mut self, id: NodeId, gen: u32);
 
     /// Advance after we've read a node via the applier path.
     fn advance_after_node_read(&mut self);

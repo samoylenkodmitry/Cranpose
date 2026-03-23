@@ -582,13 +582,17 @@ mod tests {
         value: Cell<i32>,
     }
 
+    fn mock_state_record() -> Rc<crate::state::StateRecord> {
+        crate::state::StateRecord::new(crate::state::PREEXISTING_SNAPSHOT_ID, (), None)
+    }
+
     impl StateObject for MockStateObject {
         fn object_id(&self) -> crate::state::ObjectId {
             crate::state::ObjectId(0)
         }
 
         fn first_record(&self) -> Rc<crate::state::StateRecord> {
-            unimplemented!("Not needed for tests")
+            mock_state_record()
         }
 
         fn readable_record(
@@ -596,18 +600,16 @@ mod tests {
             _snapshot_id: crate::snapshot_id_set::SnapshotId,
             _invalid: &SnapshotIdSet,
         ) -> Rc<crate::state::StateRecord> {
-            unimplemented!("Not needed for tests")
+            mock_state_record()
         }
 
-        fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {
-            unimplemented!("Not needed for tests")
-        }
+        fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {}
 
         fn promote_record(
             &self,
             _child_id: crate::snapshot_id_set::SnapshotId,
         ) -> Result<(), &'static str> {
-            unimplemented!("Not needed for tests")
+            Ok(())
         }
 
         fn as_any(&self) -> &dyn std::any::Any {
@@ -809,7 +811,7 @@ mod tests {
         let applied_count = StdArc::new(Mutex::new(0));
         let applied_count_clone = applied_count.clone();
 
-        let observer = Arc::new(
+        let observer = Rc::new(
             move |_modified: &[Arc<dyn StateObject>], _snapshot_id: SnapshotId| {
                 *applied_count_clone.lock().unwrap() += 1;
             },

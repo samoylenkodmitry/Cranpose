@@ -11,7 +11,7 @@ use crate::widgets::{
 use crate::{run_test_composition, LayoutEngine};
 use cranpose_core::{
     self, location_key, Applier, Composer, Composition, ConcreteApplierHost, MemoryApplier, NodeId,
-    Phase, SlotBackend, SlotStorage, SlotsHost, SnapshotStateObserver, State,
+    Phase, SlotBackend, SlotsHost, SnapshotStateObserver, State,
 };
 use cranpose_ui_layout::{HorizontalAlignment, LinearArrangement, VerticalAlignment};
 use std::cell::{Cell, RefCell};

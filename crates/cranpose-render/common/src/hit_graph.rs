@@ -112,9 +112,11 @@ mod tests {
     use crate::graph::{CachePolicy, HitTestNode, IsolationReasons};
     use crate::raster_cache::LayerRasterCacheHashes;
 
+    type RecordedHit = (NodeId, Rect, [[f32; 2]; 4], Option<Rect>, usize);
+
     #[derive(Default)]
     struct TestSink {
-        hits: Vec<(NodeId, Rect, [[f32; 2]; 4], Option<Rect>, usize)>,
+        hits: Vec<RecordedHit>,
     }
 
     impl HitGraphSink for TestSink {

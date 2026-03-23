@@ -177,6 +177,10 @@ impl Scene {
         });
         self.node_index.insert(node_id, hit_index);
     }
+
+    pub fn replace_graph(&mut self, graph: RenderGraph) {
+        self.graph = Some(graph);
+    }
 }
 
 impl Default for Scene {

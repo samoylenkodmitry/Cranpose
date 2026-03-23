@@ -1,3 +1,4 @@
+use std::mem::size_of;
 use std::rc::Rc;
 
 use cranpose_core::NodeId;
@@ -6,7 +7,7 @@ use cranpose_ui::text::AnnotatedString;
 use cranpose_ui::{
     GraphicsLayer, Point, Rect, RenderEffect, RoundedCornerShape, TextLayoutOptions, TextStyle,
 };
-use cranpose_ui_graphics::{BlendMode, ColorFilter, DrawPrimitive};
+use cranpose_ui_graphics::{BlendMode, ColorFilter, DrawPrimitive, ShadowPrimitive};
 
 use crate::raster_cache::LayerRasterCacheHashes;
 
@@ -343,6 +344,103 @@ impl RenderGraph {
         root.recompute_raster_cache_hashes();
         Self { root }
     }
+
+    pub fn node_count(&self) -> usize {
+        fn count_layer(layer: &LayerNode) -> usize {
+            1 + layer
+                .children
+                .iter()
+                .map(|child| match child {
+                    RenderNode::Primitive(_) => 1,
+                    RenderNode::Layer(child_layer) => count_layer(child_layer),
+                })
+                .sum::<usize>()
+        }
+
+        count_layer(&self.root)
+    }
+
+    pub fn heap_bytes(&self) -> usize {
+        layer_heap_bytes(&self.root)
+    }
+}
+
+fn layer_heap_bytes(layer: &LayerNode) -> usize {
+    layer.hit_test.as_ref().map_or(0, hit_test_heap_bytes)
+        + size_of::<RenderNode>() * layer.children.capacity()
+        + layer
+            .children
+            .iter()
+            .map(render_node_heap_bytes)
+            .sum::<usize>()
+}
+
+fn render_node_heap_bytes(node: &RenderNode) -> usize {
+    match node {
+        RenderNode::Primitive(entry) => primitive_entry_heap_bytes(entry),
+        RenderNode::Layer(layer) => size_of::<LayerNode>() + layer_heap_bytes(layer),
+    }
+}
+
+fn primitive_entry_heap_bytes(entry: &PrimitiveEntry) -> usize {
+    match &entry.node {
+        PrimitiveNode::Draw(draw) => draw_primitive_heap_bytes(&draw.primitive),
+        PrimitiveNode::Text(text) => {
+            size_of::<TextPrimitiveNode>() + annotated_string_heap_bytes(&text.text)
+        }
+    }
+}
+
+fn draw_primitive_heap_bytes(primitive: &DrawPrimitive) -> usize {
+    match primitive {
+        DrawPrimitive::Content | DrawPrimitive::Rect { .. } | DrawPrimitive::RoundRect { .. } => 0,
+        DrawPrimitive::Blend { primitive, .. } => {
+            size_of::<DrawPrimitive>() + draw_primitive_heap_bytes(primitive)
+        }
+        DrawPrimitive::Image { .. } => 0,
+        DrawPrimitive::Shadow(shadow) => shadow_primitive_heap_bytes(shadow),
+    }
+}
+
+fn shadow_primitive_heap_bytes(shadow: &ShadowPrimitive) -> usize {
+    match shadow {
+        ShadowPrimitive::Drop { shape, .. } => {
+            size_of::<DrawPrimitive>() + draw_primitive_heap_bytes(shape)
+        }
+        ShadowPrimitive::Inner { fill, cutout, .. } => {
+            size_of::<DrawPrimitive>() * 2
+                + draw_primitive_heap_bytes(fill)
+                + draw_primitive_heap_bytes(cutout)
+        }
+    }
+}
+
+fn annotated_string_heap_bytes(text: &AnnotatedString) -> usize {
+    text.text.capacity()
+        + text.span_styles.capacity() * size_of::<usize>() * 2
+        + text.paragraph_styles.capacity() * size_of::<usize>() * 2
+        + text.string_annotations.capacity() * size_of::<usize>() * 2
+        + text.link_annotations.capacity() * size_of::<usize>() * 2
+        + text
+            .string_annotations
+            .iter()
+            .map(|annotation| {
+                annotation.item.tag.capacity() + annotation.item.annotation.capacity()
+            })
+            .sum::<usize>()
+        + text
+            .link_annotations
+            .iter()
+            .map(|annotation| match &annotation.item {
+                cranpose_ui::text::LinkAnnotation::Url(url) => url.capacity(),
+                cranpose_ui::text::LinkAnnotation::Clickable { tag, .. } => tag.capacity(),
+            })
+            .sum::<usize>()
+}
+
+fn hit_test_heap_bytes(hit_test: &HitTestNode) -> usize {
+    hit_test.click_actions.capacity() * size_of::<Rc<dyn Fn(Point)>>()
+        + hit_test.pointer_inputs.capacity() * size_of::<Rc<dyn Fn(PointerEvent)>>()
 }
 
 pub fn quad_bounds(quad: [[f32; 2]; 4]) -> Rect {

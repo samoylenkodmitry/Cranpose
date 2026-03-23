@@ -30,6 +30,9 @@ pub struct AppSettings {
     /// Optional test driver to control the application (robot testing)
     #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
     pub test_driver: Option<Box<dyn FnOnce(crate::desktop::Robot) + Send + 'static>>,
+    /// Optional app-thread hook invoked by robot tests for deterministic state control.
+    #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
+    pub robot_app_hook: Option<Box<crate::RobotAppHook>>,
     /// Optional path to record input events to (for generating robot tests)
     #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
     pub record_to: Option<PathBuf>,
@@ -48,6 +51,8 @@ impl Default for AppSettings {
             dev_options: cranpose_app_shell::DevOptions::default(),
             #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
             test_driver: None,
+            #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
+            robot_app_hook: None,
             #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
             record_to: None,
         }
@@ -309,6 +314,16 @@ impl AppLauncher {
         driver: impl FnOnce(crate::desktop::Robot) + Send + 'static,
     ) -> Self {
         self.settings.test_driver = Some(Box::new(driver));
+        self
+    }
+
+    /// Register an app-thread hook that robot tests can invoke deterministically.
+    #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
+    pub fn with_robot_app_hook(
+        mut self,
+        hook: impl FnMut(String, String) -> Result<Option<String>, String> + 'static,
+    ) -> Self {
+        self.settings.robot_app_hook = Some(Box::new(hook));
         self
     }
 

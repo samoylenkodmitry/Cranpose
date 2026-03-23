@@ -227,7 +227,7 @@ where
     }
 
     /// Get the layout tree if available.
-    fn get_layout_tree(&self) -> Option<&LayoutTree> {
+    fn get_layout_tree(&mut self) -> Option<&LayoutTree> {
         self.shell.layout_tree()
     }
 

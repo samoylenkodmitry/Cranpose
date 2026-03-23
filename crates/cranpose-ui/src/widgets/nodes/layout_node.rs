@@ -11,6 +11,7 @@ use cranpose_foundation::{
     InvalidationKind, ModifierInvalidation, NodeCapabilities, SemanticsConfiguration,
 };
 use cranpose_ui_layout::{Constraints, MeasurePolicy};
+use std::any::TypeId;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -214,11 +215,23 @@ pub struct LayoutNode {
     // Caching for modifier slices to avoid repeated allocation
     modifier_slices_buffer: RefCell<ModifierNodeSlices>,
     modifier_slices_snapshot: RefCell<Rc<ModifierNodeSlices>>,
+    modifier_slices_dirty: Cell<bool>,
 
     /// Retained layout state (size, position) for this node.
     /// Updated by measure/place and read by renderer.
     /// Wrapped in Rc to ensure state is shared across clones (e.g. SubcomposeLayout usage).
     layout_state: Rc<RefCell<LayoutState>>,
+}
+
+pub(crate) const RECYCLED_LAYOUT_NODE_POOL_LIMIT: usize = 128;
+
+thread_local! {
+    static EMPTY_MEASURE_POLICY: Rc<dyn MeasurePolicy> =
+        Rc::new(crate::layout::policies::EmptyMeasurePolicy);
+}
+
+fn empty_measure_policy() -> Rc<dyn MeasurePolicy> {
+    EMPTY_MEASURE_POLICY.with(Rc::clone)
 }
 
 impl LayoutNode {
@@ -229,11 +242,29 @@ impl LayoutNode {
     /// Create a virtual LayoutNode for subcomposition slot containers.
     /// Virtual nodes are transparent - their children are flattened into parent's children list.
     pub fn new_virtual() -> Self {
-        Self::new_with_virtual(
-            Modifier::empty(),
-            Rc::new(crate::layout::policies::EmptyMeasurePolicy),
-            true,
-        )
+        Self::new_with_virtual(Modifier::empty(), empty_measure_policy(), true)
+    }
+
+    fn new_recycled_shell(is_virtual: bool) -> Self {
+        let mut shell =
+            Self::new_with_virtual(Modifier::empty(), empty_measure_policy(), is_virtual);
+        shell.needs_measure.set(false);
+        shell.needs_layout.set(false);
+        shell.needs_semantics.set(false);
+        shell.needs_redraw.set(false);
+        shell.needs_pointer_pass.set(false);
+        shell.needs_focus_sync.set(false);
+        shell.parent.set(None);
+        shell.folded_parent.set(None);
+        shell.id.set(None);
+        shell.debug_modifiers.set(false);
+        shell.virtual_children_count.set(0);
+        shell.cache = LayoutNodeCacheHandles::default();
+        shell.modifier_slices_buffer = RefCell::new(ModifierNodeSlices::default());
+        shell.modifier_slices_snapshot = RefCell::new(Rc::default());
+        shell.modifier_slices_dirty = Cell::new(true);
+        shell.layout_state = Rc::new(RefCell::new(LayoutState::default()));
+        shell
     }
 
     fn new_with_virtual(
@@ -264,6 +295,7 @@ impl LayoutNode {
             virtual_children_count: Cell::new(0),
             modifier_slices_buffer: RefCell::new(ModifierNodeSlices::default()),
             modifier_slices_snapshot: RefCell::new(Rc::default()),
+            modifier_slices_dirty: Cell::new(true),
             layout_state: Rc::new(RefCell::new(LayoutState::default())),
         };
         node.sync_modifier_chain();
@@ -301,12 +333,7 @@ impl LayoutNode {
         self.modifier_capabilities = self.modifier_chain.capabilities();
         self.modifier_child_capabilities = self.modifier_chain.aggregate_child_capabilities();
 
-        // Update modifier slices cache
-        // We reuse the buffer to avoid allocation, then create a shared snapshot
-        use crate::modifier::collect_modifier_slices_into;
-        let mut buffer = self.modifier_slices_buffer.borrow_mut();
-        collect_modifier_slices_into(self.modifier_chain.chain(), &mut buffer);
-        *self.modifier_slices_snapshot.borrow_mut() = Rc::new(buffer.clone());
+        self.update_modifier_slices_cache();
 
         let mut invalidations = self.modifier_chain.take_invalidations();
         invalidations.extend(modifier_local_invalidations);
@@ -314,8 +341,18 @@ impl LayoutNode {
         self.refresh_registry_state();
     }
 
+    fn update_modifier_slices_cache(&self) {
+        use crate::modifier::collect_modifier_slices_into;
+
+        let mut buffer = self.modifier_slices_buffer.borrow_mut();
+        collect_modifier_slices_into(self.modifier_chain.chain(), &mut buffer);
+        *self.modifier_slices_snapshot.borrow_mut() = Rc::new(buffer.clone());
+        self.modifier_slices_dirty.set(false);
+    }
+
     fn dispatch_modifier_invalidations(&self, invalidations: &[ModifierInvalidation]) {
         for invalidation in invalidations {
+            self.modifier_slices_dirty.set(true);
             match invalidation.kind() {
                 InvalidationKind::Layout => {
                     if self.has_layout_modifier_nodes() {
@@ -592,13 +629,10 @@ impl LayoutNode {
     }
 
     pub fn modifier_slices_snapshot(&self) -> Rc<ModifierNodeSlices> {
-        use crate::modifier::collect_modifier_slices_into;
-
-        let mut buffer = self.modifier_slices_buffer.borrow_mut();
-        collect_modifier_slices_into(self.modifier_chain.chain(), &mut buffer);
-        let snapshot = Rc::new(buffer.clone());
-        *self.modifier_slices_snapshot.borrow_mut() = snapshot.clone();
-        snapshot
+        if self.modifier_slices_dirty.get() {
+            self.update_modifier_slices_cache();
+        }
+        self.modifier_slices_snapshot.borrow().clone()
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -704,6 +738,7 @@ impl Clone for LayoutNode {
             virtual_children_count: Cell::new(self.virtual_children_count.get()),
             modifier_slices_buffer: RefCell::new(ModifierNodeSlices::default()),
             modifier_slices_snapshot: RefCell::new(Rc::default()),
+            modifier_slices_dirty: Cell::new(true),
             // Share the same layout state across clones
             layout_state: self.layout_state.clone(),
         };
@@ -778,6 +813,11 @@ impl Node for LayoutNode {
         self.children.clone()
     }
 
+    fn collect_children_into(&self, out: &mut smallvec::SmallVec<[NodeId; 8]>) {
+        out.clear();
+        out.extend(self.children.iter().copied());
+    }
+
     fn on_attached_to_parent(&mut self, parent: NodeId) {
         self.set_parent(parent);
     }
@@ -822,6 +862,64 @@ impl Node for LayoutNode {
     fn set_parent_for_bubbling(&mut self, parent: NodeId) {
         self.parent.set(Some(parent));
     }
+
+    fn recycle_key(&self) -> Option<TypeId> {
+        Some(TypeId::of::<Self>())
+    }
+
+    fn recycle_pool_limit(&self) -> Option<usize> {
+        Some(RECYCLED_LAYOUT_NODE_POOL_LIMIT)
+    }
+
+    fn prepare_for_recycle(&mut self) {
+        *self = Self::new_recycled_shell(self.is_virtual);
+    }
+
+    fn rehouse_for_recycle(&self) -> Option<Box<dyn cranpose_core::Node>> {
+        Some(Box::new(Self::new_recycled_shell(self.is_virtual)))
+    }
+
+    fn rehouse_for_live_compaction(&mut self) -> Option<Box<dyn cranpose_core::Node>> {
+        let mut previous = std::mem::replace(self, Self::new_recycled_shell(self.is_virtual));
+        let node_id = previous.id.replace(None);
+        let parent = previous.parent.get();
+        let folded_parent = previous.folded_parent.get();
+        let debug_modifiers = previous.debug_modifiers.get();
+        let needs_measure = previous.needs_measure.get();
+        let needs_layout = previous.needs_layout.get();
+        let needs_semantics = previous.needs_semantics.get();
+        let needs_redraw = previous.needs_redraw.get();
+        let needs_pointer_pass = previous.needs_pointer_pass.get();
+        let needs_focus_sync = previous.needs_focus_sync.get();
+        let virtual_children_count = previous.virtual_children_count.get();
+        let children = previous.children.to_vec();
+        let modifier = previous.modifier.rehouse_for_live_compaction();
+        let measure_policy = previous.measure_policy.clone();
+        let layout_state = previous.layout_state.clone();
+
+        previous.modifier_chain.chain_mut().detach_nodes();
+
+        let mut compact = Self::new_with_virtual(modifier, measure_policy, previous.is_virtual);
+        compact.children = children;
+        compact.parent.set(parent);
+        compact.folded_parent.set(folded_parent);
+        compact.id.set(node_id);
+        compact.debug_modifiers.set(debug_modifiers);
+        compact.needs_measure.set(needs_measure);
+        compact.needs_layout.set(needs_layout);
+        compact.needs_semantics.set(needs_semantics);
+        compact.needs_redraw.set(needs_redraw);
+        compact.needs_pointer_pass.set(needs_pointer_pass);
+        compact.needs_focus_sync.set(needs_focus_sync);
+        compact.virtual_children_count.set(virtual_children_count);
+        compact.layout_state = layout_state;
+        compact.sync_modifier_chain();
+        if let Some(id) = node_id {
+            register_layout_node(id, &compact);
+        }
+
+        Some(Box::new(compact))
+    }
 }
 
 impl Drop for LayoutNode {
@@ -839,6 +937,15 @@ thread_local! {
     // We use a value compatible with 32-bit (WASM) usize to prevent truncation issues.
     // 0xC0000000 is ~3.2 billion, leaving ~1 billion IDs before overflow.
     static VIRTUAL_NODE_ID_COUNTER: std::sync::atomic::AtomicUsize = const { std::sync::atomic::AtomicUsize::new(0xC0000000) };
+}
+
+const MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY: usize = 128;
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct LayoutNodeRegistryDebugStats {
+    len: usize,
+    capacity: usize,
 }
 
 struct LayoutNodeRegistryEntry {
@@ -864,8 +971,36 @@ pub(crate) fn register_layout_node(id: NodeId, node: &LayoutNode) {
 
 pub(crate) fn unregister_layout_node(id: NodeId) {
     LAYOUT_NODE_REGISTRY.with(|registry| {
-        registry.borrow_mut().remove(&id);
+        let mut registry = registry.borrow_mut();
+        registry.remove(&id);
+        let should_shrink = (registry.len() <= MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY
+            && registry.capacity() > MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY)
+            || registry.capacity()
+                > registry
+                    .len()
+                    .max(MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY)
+                    .saturating_mul(4);
+        if should_shrink {
+            let retained = registry
+                .len()
+                .max(MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY);
+            let mut rebuilt = HashMap::new();
+            rebuilt.reserve(retained);
+            rebuilt.extend(registry.drain());
+            *registry = rebuilt;
+        }
     });
+}
+
+#[cfg(test)]
+fn layout_node_registry_stats() -> LayoutNodeRegistryDebugStats {
+    LAYOUT_NODE_REGISTRY.with(|registry| {
+        let registry = registry.borrow();
+        LayoutNodeRegistryDebugStats {
+            len: registry.len(),
+            capacity: registry.capacity(),
+        }
+    })
 }
 
 pub(crate) fn is_virtual_node(id: NodeId) -> bool {
@@ -963,6 +1098,34 @@ mod tests {
 
     fn fresh_node() -> LayoutNode {
         LayoutNode::new(Modifier::empty(), Rc::new(TestMeasurePolicy))
+    }
+
+    #[test]
+    fn layout_node_registry_retains_warm_capacity_after_large_cleanup() {
+        let nodes: Vec<_> = (0..2048)
+            .map(|_| {
+                let id = allocate_virtual_node_id();
+                let node = fresh_node();
+                register_layout_node(id, &node);
+                (id, node)
+            })
+            .collect();
+
+        for (id, _) in &nodes {
+            unregister_layout_node(*id);
+        }
+
+        let stats = layout_node_registry_stats();
+        assert_eq!(stats.len, 0);
+        assert!(
+            (MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY
+                ..=MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY.saturating_mul(2))
+                .contains(&stats.capacity),
+            "registry warm capacity {} fell outside expected retained range {}..={}",
+            stats.capacity,
+            MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY,
+            MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY.saturating_mul(2),
+        );
     }
 
     fn invalidation(kind: InvalidationKind) -> ModifierInvalidation {

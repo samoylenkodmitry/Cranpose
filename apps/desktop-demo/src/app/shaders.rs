@@ -2214,64 +2214,69 @@ fn NestedLayerEventDemo(
                                 )),
                                 ..Default::default()
                             }
-                        })
-                        .draw_behind(|scope| {
-                            scope.draw_round_rect(
-                                Brush::solid(Color(0.45, 0.75, 1.0, 0.25)),
-                                CornerRadii::uniform(14.0),
-                            );
                         }),
                     BoxSpec::default(),
                     {
                         move || {
-                            Text(
-                                "Parent render_effect",
-                                Modifier::empty()
-                                    .absolute_offset(10.0, 8.0)
-                                    .draw_behind(|scope| {
-                                        scope.draw_round_rect(
-                                            Brush::solid(Color(0.0, 0.0, 0.0, 0.55)),
-                                            CornerRadii::uniform(7.0),
-                                        );
-                                    }),
-                                TextStyle {
-                                    span_style: SpanStyle {
-                                        color: Some(Color(1.0, 1.0, 1.0, 0.95)),
-                                        ..Default::default()
-                                    },
-                                    ..Default::default()
-                                },
-                            );
-
                             Box(
-                                Modifier::empty()
-                                    .absolute_offset(108.0, 36.0)
-                                    .size_points(92.0, 64.0)
-                                    .backdrop_effect(RenderEffect::blur(
-                                        child_backdrop_blur_radius.get(),
-                                    ))
-                                    .draw_behind(|scope| {
-                                        scope.draw_round_rect(
-                                            Brush::solid(Color(0.6, 1.0, 0.7, 0.28)),
-                                            CornerRadii::uniform(12.0),
-                                        );
-                                    }),
-                                BoxSpec::new().content_alignment(Alignment::CENTER),
-                                || {
+                                Modifier::empty().fill_max_size().draw_behind(|scope| {
+                                    scope.draw_round_rect(
+                                        Brush::solid(Color(0.45, 0.75, 1.0, 0.25)),
+                                        CornerRadii::uniform(14.0),
+                                    );
+                                }),
+                                BoxSpec::default(),
+                                move || {
                                     Text(
-                                        "Child backdrop",
-                                        Modifier::empty().draw_behind(|scope| {
-                                            scope.draw_round_rect(
-                                                Brush::solid(Color(0.0, 0.0, 0.0, 0.45)),
-                                                CornerRadii::uniform(6.0),
-                                            );
-                                        }),
+                                        "Parent render_effect",
+                                        Modifier::empty().absolute_offset(10.0, 8.0).draw_behind(
+                                            |scope| {
+                                                scope.draw_round_rect(
+                                                    Brush::solid(Color(0.0, 0.0, 0.0, 0.55)),
+                                                    CornerRadii::uniform(7.0),
+                                                );
+                                            },
+                                        ),
                                         TextStyle {
                                             span_style: SpanStyle {
                                                 color: Some(Color(1.0, 1.0, 1.0, 0.95)),
                                                 ..Default::default()
                                             },
                                             ..Default::default()
+                                        },
+                                    );
+
+                                    Box(
+                                        Modifier::empty()
+                                            .absolute_offset(108.0, 36.0)
+                                            .size_points(92.0, 64.0)
+                                            .backdrop_effect(RenderEffect::blur(
+                                                child_backdrop_blur_radius.get(),
+                                            ))
+                                            .draw_behind(|scope| {
+                                                scope.draw_round_rect(
+                                                    Brush::solid(Color(0.6, 1.0, 0.7, 0.28)),
+                                                    CornerRadii::uniform(12.0),
+                                                );
+                                            }),
+                                        BoxSpec::new().content_alignment(Alignment::CENTER),
+                                        || {
+                                            Text(
+                                                "Child backdrop",
+                                                Modifier::empty().draw_behind(|scope| {
+                                                    scope.draw_round_rect(
+                                                        Brush::solid(Color(0.0, 0.0, 0.0, 0.45)),
+                                                        CornerRadii::uniform(6.0),
+                                                    );
+                                                }),
+                                                TextStyle {
+                                                    span_style: SpanStyle {
+                                                        color: Some(Color(1.0, 1.0, 1.0, 0.95)),
+                                                        ..Default::default()
+                                                    },
+                                                    ..Default::default()
+                                                },
+                                            );
                                         },
                                     );
                                 },

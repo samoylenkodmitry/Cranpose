@@ -832,6 +832,32 @@ thread_local! {
     static PENDING_WRITES: RefCell<HashSet<ObjectId>> = RefCell::new(HashSet::default());
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SnapshotStateThreadLocalDebugStats {
+    pub active_updates_len: usize,
+    pub active_updates_cap: usize,
+    pub pending_writes_len: usize,
+    pub pending_writes_cap: usize,
+}
+
+pub fn debug_snapshot_state_thread_local_stats() -> SnapshotStateThreadLocalDebugStats {
+    let (active_updates_len, active_updates_cap) = ACTIVE_UPDATES.with(|active| {
+        let active = active.borrow();
+        (active.len(), active.capacity())
+    });
+    let (pending_writes_len, pending_writes_cap) = PENDING_WRITES.with(|pending| {
+        let pending = pending.borrow();
+        (pending.len(), pending.capacity())
+    });
+
+    SnapshotStateThreadLocalDebugStats {
+        active_updates_len,
+        active_updates_cap,
+        pending_writes_len,
+        pending_writes_cap,
+    }
+}
+
 pub(crate) struct UpdateScope {
     id: ObjectId,
     finished: bool,

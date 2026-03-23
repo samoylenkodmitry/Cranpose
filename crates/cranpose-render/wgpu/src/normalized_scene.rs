@@ -183,6 +183,37 @@ pub(crate) fn collected_layer_bounds(
     bounds
 }
 
+fn hidden_content_precedes_visible_bounds(visible_bounds: Rect, full_bounds: Rect) -> bool {
+    const TOLERANCE: f32 = 1e-4;
+
+    full_bounds.x < visible_bounds.x - TOLERANCE || full_bounds.y < visible_bounds.y - TOLERANCE
+}
+
+pub(crate) fn motion_stable_capture_bounds(
+    layer: &LayerNode,
+    scene: &CompositorScene,
+    child_layers: &[ChildLayerComposite<'_>],
+    requirements: SurfaceRequirementSet,
+) -> Option<Rect> {
+    let visible_bounds = collected_layer_bounds(scene, child_layers, true);
+    if !requirements.contains(SurfaceRequirement::MotionStableCapture)
+        || layer.effect().is_some()
+        || layer.backdrop().is_some()
+    {
+        return visible_bounds;
+    }
+
+    let full_bounds = collected_layer_bounds(scene, child_layers, false);
+    match (visible_bounds, full_bounds) {
+        (Some(visible_bounds), Some(full_bounds))
+            if hidden_content_precedes_visible_bounds(visible_bounds, full_bounds) =>
+        {
+            Some(full_bounds)
+        }
+        _ => visible_bounds.or(full_bounds),
+    }
+}
+
 fn graphics_layer_supports_rigid_snap(layer: &GraphicsLayer) -> bool {
     (layer.scale - 1.0).abs() <= NORMALIZED_SCENE_AFFINE_TOLERANCE
         && (layer.scale_x - 1.0).abs() <= NORMALIZED_SCENE_AFFINE_TOLERANCE
@@ -532,7 +563,6 @@ fn collect_layer_contents_into<'a>(
                     );
                     continue;
                 }
-
                 flush_translated_local_picture(
                     local_scene,
                     &mut translated_local_picture_state,
@@ -631,10 +661,9 @@ pub(crate) fn collect_layer_contents_with_translation_context<'a>(
 ) -> CollectedLayer<'a> {
     let mut local_scene = CompositorScene::new();
     let mut child_layers = Vec::new();
-    collect_layer_contents_into(
+    collect_layer_contents_with_translation_context_into(
         layer,
         inherited_clip,
-        Point::default(),
         inherited_translated_snap_anchor,
         translation_context,
         &mut local_scene,
@@ -647,6 +676,32 @@ pub(crate) fn collect_layer_contents_with_translation_context<'a>(
         scene: local_scene,
         child_layers,
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn collect_layer_contents_with_translation_context_into<'a>(
+    layer: &'a LayerNode,
+    inherited_clip: Option<Rect>,
+    inherited_translated_snap_anchor: Option<SnapAnchor>,
+    translation_context: TranslationRenderContext,
+    local_scene: &mut CompositorScene,
+    child_layers: &mut Vec<ChildLayerComposite<'a>>,
+    layer_surface_rect_cache: &mut HashMap<usize, Rect>,
+    layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
+) {
+    local_scene.clear();
+    child_layers.clear();
+    collect_layer_contents_into(
+        layer,
+        inherited_clip,
+        Point::default(),
+        inherited_translated_snap_anchor,
+        translation_context,
+        local_scene,
+        child_layers,
+        layer_surface_rect_cache,
+        layer_surface_requirements_cache,
+    );
 }
 
 #[cfg(test)]
@@ -679,15 +734,11 @@ pub(crate) fn estimate_layer_surface_rect_cached(
     );
     let surface_requirements =
         layer_surface_requirements_cached(layer, layer_surface_requirements_cache);
-    let capture_full_bounds = surface_requirements
-        .surface_requirements
-        .contains(SurfaceRequirement::MotionStableCapture)
-        && layer.effect().is_none()
-        && layer.backdrop().is_none();
-    let bounds = collected_layer_bounds(
+    let bounds = motion_stable_capture_bounds(
+        layer,
         &collected.scene,
         &collected.child_layers,
-        !capture_full_bounds,
+        surface_requirements.surface_requirements,
     );
     let rect = resolved_layer_surface_rect(layer, bounds);
     layer_surface_rect_cache.insert(cache_key, rect);
