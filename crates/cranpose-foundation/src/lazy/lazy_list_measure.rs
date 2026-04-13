@@ -49,7 +49,7 @@ pub struct LazyListMeasureConfig {
     pub spacing: f32,
 
     /// Number of items to keep composed beyond visible bounds.
-    /// Default is 2 items before and after.
+    /// Default is 4 items before and after.
     pub beyond_bounds_item_count: usize,
 
     /// Vertical arrangement for distributing items.
@@ -69,7 +69,7 @@ impl Default for LazyListMeasureConfig {
             before_content_padding: 0.0,
             after_content_padding: 0.0,
             spacing: 0.0,
-            beyond_bounds_item_count: 2,
+            beyond_bounds_item_count: 4,
             vertical_arrangement: None,
             horizontal_arrangement: None,
         }

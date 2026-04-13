@@ -13,7 +13,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::OnceLock;
 
-use cranpose_core::MutableState;
+use cranpose_core::{MutableState, NodeId};
 use cranpose_macros::composable;
 
 use super::nearest_range::NearestRangeState;
@@ -277,9 +277,11 @@ struct LazyListStateInner {
     invalidate_callbacks: Vec<(u64, Rc<dyn Fn()>)>,
     next_callback_id: u64,
 
-    /// Whether a layout invalidation callback has been registered for this state.
-    /// Used to prevent duplicate registrations on recomposition.
-    has_layout_invalidation_callback: bool,
+    /// Registered layout invalidation callback id, if any.
+    /// Used to prevent duplicate registrations on recomposition and to
+    /// allow clean re-registration after a branch is disposed and restored.
+    layout_invalidation_callback_id: Option<u64>,
+    layout_invalidation_node_id: Option<NodeId>,
 
     /// Diagnostic counters (non-reactive - not typically displayed in UI).
     total_composed: usize,
@@ -351,7 +353,8 @@ pub fn remember_lazy_list_state_with_position(
             layout_info: LazyListLayoutInfo::default(),
             invalidate_callbacks: Vec::new(),
             next_callback_id: 1,
-            has_layout_invalidation_callback: false,
+            layout_invalidation_callback_id: None,
+            layout_invalidation_node_id: None,
             total_composed: 0,
             reuse_count: 0,
             item_size_cache: std::collections::HashMap::new(),
@@ -921,24 +924,35 @@ impl LazyListState {
         })
     }
 
-    /// Tries to register a layout invalidation callback.
+    /// Tries to register a layout invalidation callback for the specified node.
     ///
-    /// Returns true if the callback was registered, false if one was already registered.
-    /// This prevents duplicate registrations on recomposition.
-    pub fn try_register_layout_callback(&self, callback: Rc<dyn Fn()>) -> bool {
+    /// Returns the callback id if it was registered, or `None` if the same node already
+    /// holds the active callback. If a different node is currently registered, its
+    /// callback is replaced so scroll invalidation targets the current list host.
+    pub fn try_register_layout_callback(
+        &self,
+        node_id: NodeId,
+        callback: Rc<dyn Fn()>,
+    ) -> Option<u64> {
         if !self.inner.is_alive() {
-            return false;
+            return None;
         }
         self.inner.with(|rc| {
             let mut inner = rc.borrow_mut();
-            if inner.has_layout_invalidation_callback {
-                return false;
+            if let Some(existing_id) = inner.layout_invalidation_callback_id {
+                if inner.layout_invalidation_node_id == Some(node_id) {
+                    return Some(existing_id);
+                }
+                inner
+                    .invalidate_callbacks
+                    .retain(|(cb_id, _)| *cb_id != existing_id);
             }
-            inner.has_layout_invalidation_callback = true;
             let id = inner.next_callback_id;
             inner.next_callback_id += 1;
             inner.invalidate_callbacks.push((id, callback));
-            true
+            inner.layout_invalidation_callback_id = Some(id);
+            inner.layout_invalidation_node_id = Some(node_id);
+            Some(id)
         })
     }
 
@@ -948,9 +962,12 @@ impl LazyListState {
             return;
         }
         self.inner.with(|rc| {
-            rc.borrow_mut()
-                .invalidate_callbacks
-                .retain(|(cb_id, _)| *cb_id != id);
+            let mut inner = rc.borrow_mut();
+            inner.invalidate_callbacks.retain(|(cb_id, _)| *cb_id != id);
+            if inner.layout_invalidation_callback_id == Some(id) {
+                inner.layout_invalidation_callback_id = None;
+                inner.layout_invalidation_node_id = None;
+            }
         });
     }
 
@@ -1064,7 +1081,8 @@ pub mod test_helpers {
             layout_info: LazyListLayoutInfo::default(),
             invalidate_callbacks: Vec::new(),
             next_callback_id: 1,
-            has_layout_invalidation_callback: false,
+            layout_invalidation_callback_id: None,
+            layout_invalidation_node_id: None,
             total_composed: 0,
             reuse_count: 0,
             item_size_cache: std::collections::HashMap::new(),
@@ -1181,6 +1199,52 @@ mod tests {
             // Opposite-direction input changes pending and should invalidate again.
             state.dispatch_scroll_delta(100.0);
             assert_eq!(invalidations.get(), 2);
+        });
+    }
+
+    #[test]
+    fn layout_callback_can_be_registered_again_after_removal() {
+        with_test_runtime(|| {
+            let state = new_lazy_list_state();
+            let first_node: cranpose_core::NodeId = 1;
+            let second_node: cranpose_core::NodeId = 2;
+
+            let first_id = state
+                .try_register_layout_callback(first_node, Rc::new(|| {}))
+                .expect("first layout callback should register");
+            let duplicate_id = state
+                .try_register_layout_callback(first_node, Rc::new(|| {}))
+                .expect("duplicate register should return existing callback id");
+            assert_eq!(
+                first_id, duplicate_id,
+                "duplicate registration should return the existing callback id",
+            );
+
+            state.remove_invalidate_callback(first_id);
+
+            let second_id = state
+                .try_register_layout_callback(second_node, Rc::new(|| {}))
+                .expect("layout callback should register again after removal");
+            assert_ne!(first_id, second_id);
+        });
+    }
+
+    #[test]
+    fn layout_callback_rebinds_when_node_id_changes() {
+        with_test_runtime(|| {
+            let state = new_lazy_list_state();
+            let first_node: cranpose_core::NodeId = 11;
+            let second_node: cranpose_core::NodeId = 22;
+
+            let first_id = state
+                .try_register_layout_callback(first_node, Rc::new(|| {}))
+                .expect("first layout callback should register");
+
+            let second_id = state
+                .try_register_layout_callback(second_node, Rc::new(|| {}))
+                .expect("layout callback should rebind to a new node");
+
+            assert_ne!(first_id, second_id);
         });
     }
 

@@ -155,11 +155,26 @@ fn compose_debug_enabled() -> bool {
     *COMPOSE_DEBUG.get_or_init(|| std::env::var_os("COMPOSE_DEBUG").is_some())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn debug_scope_tracking_enabled() -> bool {
+    use std::sync::OnceLock;
+    static DEBUG_SCOPE_TRACKING: OnceLock<bool> = OnceLock::new();
+    *DEBUG_SCOPE_TRACKING.get_or_init(|| {
+        std::env::var_os("CRANPOSE_DEBUG_SCOPE_LABELS").is_some()
+            || std::env::var_os("RECOMPOSE_TRACE").is_some()
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+fn debug_scope_tracking_enabled() -> bool {
+    false
+}
+
 #[cfg(test)]
 pub use runtime::{TestRuntime, TestScheduler};
 
 use crate::collections::map::{HashMap, HashSet};
-use crate::state::{NeverEqual, SnapshotMutableState, UpdateScope};
+use crate::state::{MutationPolicy, SnapshotMutableState, UpdateScope};
 use smallvec::SmallVec;
 use std::any::{Any, TypeId};
 use std::cell::{Cell, Ref, RefCell, RefMut};
@@ -203,6 +218,15 @@ thread_local! {
     static EMPTY_LOCAL_STACK: LocalStackSnapshot = Rc::new(Vec::new());
 }
 
+thread_local! {
+    static DEBUG_SCOPE_LABELS: RefCell<HashMap<usize, &'static str>> = RefCell::new(HashMap::default());
+}
+
+thread_local! {
+    static DEBUG_SCOPE_INVALIDATION_SOURCES: RefCell<HashMap<usize, Vec<String>>> =
+        RefCell::new(HashMap::default());
+}
+
 static NEXT_SCOPE_ID: AtomicUsize = AtomicUsize::new(1);
 static NEXT_LOCAL_KEY: AtomicUsize = AtomicUsize::new(1);
 static LIVE_RECOMPOSE_SCOPE_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -234,8 +258,10 @@ pub(crate) struct RecomposeScopeInner {
     pending_recompose: Cell<bool>,
     force_reuse: Cell<bool>,
     force_recompose: Cell<bool>,
+    group_anchor: Cell<AnchorId>,
     parent_hint: Cell<Option<NodeId>>,
     recompose: RefCell<Option<RecomposeCallback>>,
+    parent_scope: RefCell<Option<Weak<RecomposeScopeInner>>>,
     local_stack: RefCell<LocalStackSnapshot>,
     slots_host: RefCell<Option<Weak<SlotsHost>>>,
 }
@@ -253,8 +279,10 @@ impl RecomposeScopeInner {
             pending_recompose: Cell::new(false),
             force_reuse: Cell::new(false),
             force_recompose: Cell::new(false),
+            group_anchor: Cell::new(AnchorId::INVALID),
             parent_hint: Cell::new(None),
             recompose: RefCell::new(None),
+            parent_scope: RefCell::new(None),
             local_stack: RefCell::new(empty_local_stack()),
             slots_host: RefCell::new(None),
         }
@@ -363,6 +391,18 @@ impl RecomposeScope {
         }
     }
 
+    fn has_recompose_callback(&self) -> bool {
+        self.inner.recompose.borrow().is_some()
+    }
+
+    fn set_group_anchor(&self, anchor: AnchorId) {
+        self.inner.group_anchor.set(anchor);
+    }
+
+    fn group_anchor(&self) -> AnchorId {
+        self.inner.group_anchor.get()
+    }
+
     fn snapshot_locals(&self, stack: LocalStackSnapshot) {
         *self.inner.local_stack.borrow_mut() = stack;
     }
@@ -373,6 +413,30 @@ impl RecomposeScope {
 
     fn set_parent_hint(&self, parent: Option<NodeId>) {
         self.inner.parent_hint.set(parent);
+    }
+
+    fn set_parent_scope(&self, parent: Option<RecomposeScope>) {
+        *self.inner.parent_scope.borrow_mut() = parent.map(|scope| scope.downgrade());
+    }
+
+    fn parent_scope(&self) -> Option<RecomposeScope> {
+        self.inner
+            .parent_scope
+            .borrow()
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .map(|inner| RecomposeScope { inner })
+    }
+
+    fn callback_promotion_target(&self) -> Option<RecomposeScope> {
+        let mut current = self.parent_scope();
+        while let Some(scope) = current {
+            if scope.has_recompose_callback() {
+                return Some(scope);
+            }
+            current = scope.parent_scope();
+        }
+        None
     }
 
     fn parent_hint(&self) -> Option<NodeId> {
@@ -778,10 +842,26 @@ struct LocalStateEntry<T: Clone + 'static> {
     state: OwnedMutableState<T>,
 }
 
+type LocalEquivalentFn<T> = dyn Fn(&T, &T) -> bool + Send + Sync + 'static;
+
+struct LocalValuePolicy<T: Clone + 'static> {
+    equivalent: Arc<LocalEquivalentFn<T>>,
+}
+
+impl<T: Clone + 'static> MutationPolicy<T> for LocalValuePolicy<T> {
+    fn equivalent(&self, a: &T, b: &T) -> bool {
+        (self.equivalent)(a, b)
+    }
+}
+
 impl<T: Clone + 'static> LocalStateEntry<T> {
-    fn new(initial: T, runtime: RuntimeHandle) -> Self {
+    fn new(initial: T, runtime: RuntimeHandle, equivalent: Arc<LocalEquivalentFn<T>>) -> Self {
         Self {
-            state: OwnedMutableState::with_runtime(initial, runtime),
+            state: OwnedMutableState::with_runtime_and_policy(
+                initial,
+                runtime,
+                Arc::new(LocalValuePolicy { equivalent }),
+            ),
         }
     }
 
@@ -818,6 +898,7 @@ impl<T: Clone + 'static> StaticLocalEntry<T> {
 pub struct CompositionLocal<T: Clone + 'static> {
     key: LocalKey,
     default: Rc<dyn Fn() -> T>, // FUTURE(no_std): store default provider in arena-managed cell.
+    equivalent: Arc<LocalEquivalentFn<T>>,
 }
 
 impl<T: Clone + 'static> PartialEq for CompositionLocal<T> {
@@ -831,12 +912,18 @@ impl<T: Clone + 'static> Eq for CompositionLocal<T> {}
 impl<T: Clone + 'static> CompositionLocal<T> {
     pub fn provides(&self, value: T) -> ProvidedValue {
         let key = self.key;
+        let equivalent = Arc::clone(&self.equivalent);
         ProvidedValue {
             key,
             apply: Box::new(move |composer: &Composer| {
                 let runtime = composer.runtime_handle();
-                let entry_ref = composer
-                    .remember(|| Rc::new(LocalStateEntry::new(value.clone(), runtime.clone())));
+                let entry_ref = composer.remember(|| {
+                    Rc::new(LocalStateEntry::new(
+                        value.clone(),
+                        runtime.clone(),
+                        Arc::clone(&equivalent),
+                    ))
+                });
                 entry_ref.update(|entry| entry.set(value.clone()));
                 entry_ref.with(|entry| entry.clone() as Rc<dyn Any>) // FUTURE(no_std): expose erased handle without Rc boxing.
             }),
@@ -853,12 +940,21 @@ impl<T: Clone + 'static> CompositionLocal<T> {
 }
 
 #[allow(non_snake_case)]
-pub fn compositionLocalOf<T: Clone + 'static>(
+pub fn compositionLocalOf<T: Clone + PartialEq + 'static>(
     default: impl Fn() -> T + 'static,
+) -> CompositionLocal<T> {
+    compositionLocalOfWithPolicy(default, |current, next| current == next)
+}
+
+#[allow(non_snake_case)]
+pub fn compositionLocalOfWithPolicy<T: Clone + 'static>(
+    default: impl Fn() -> T + 'static,
+    equivalent: impl Fn(&T, &T) -> bool + Send + Sync + 'static,
 ) -> CompositionLocal<T> {
     CompositionLocal {
         key: next_local_key(),
         default: Rc::new(default), // FUTURE(no_std): allocate default provider in arena storage.
+        equivalent: Arc::new(equivalent),
     }
 }
 
@@ -1631,6 +1727,35 @@ pub(crate) enum Command {
     Callback(CommandCallback),
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct DeferredChildCleanup {
+    child_id: NodeId,
+    generation: u32,
+    removed_from_parent: bool,
+}
+
+#[derive(Default)]
+struct DeferredChildCleanupQueue {
+    pending: Vec<DeferredChildCleanup>,
+}
+
+impl DeferredChildCleanupQueue {
+    fn push(&mut self, child_id: NodeId, generation: u32, removed_from_parent: bool) {
+        self.pending.push(DeferredChildCleanup {
+            child_id,
+            generation,
+            removed_from_parent,
+        });
+    }
+
+    fn flush(self, applier: &mut dyn Applier) -> Result<(), NodeError> {
+        for cleanup in self.pending {
+            cleanup_detached_child(applier, cleanup)?;
+        }
+        Ok(())
+    }
+}
+
 impl Command {
     pub(crate) fn update_node<N: Node + 'static>(id: NodeId) -> Self {
         Self::UpdateTypedNode {
@@ -1646,6 +1771,16 @@ impl Command {
     }
 
     pub(crate) fn apply(self, applier: &mut dyn Applier) -> Result<(), NodeError> {
+        let mut deferred_cleanup = DeferredChildCleanupQueue::default();
+        self.apply_with_cleanup(applier, &mut deferred_cleanup)?;
+        deferred_cleanup.flush(applier)
+    }
+
+    fn apply_with_cleanup(
+        self,
+        applier: &mut dyn Applier,
+        deferred_cleanup: &mut DeferredChildCleanupQueue,
+    ) -> Result<(), NodeError> {
         match self {
             Self::BubbleDirty { node_id, bubble } => {
                 bubble.apply(applier, node_id);
@@ -1718,11 +1853,11 @@ impl Command {
             Self::RemoveChild {
                 parent_id,
                 child_id,
-            } => apply_remove_child(applier, parent_id, child_id),
+            } => apply_remove_child(applier, parent_id, child_id, deferred_cleanup),
             Self::SyncChildren {
                 parent_id,
                 expected_children,
-            } => sync_children(applier, parent_id, &expected_children),
+            } => sync_children(applier, parent_id, &expected_children, deferred_cleanup),
             Self::Callback(callback) => callback(applier),
         }
     }
@@ -2054,6 +2189,7 @@ impl CommandQueue {
         let mut sync_children_commands = self.sync_children.into_iter();
         let sync_child_ids = self.sync_child_ids;
         let mut callbacks = self.callbacks.into_iter();
+        let mut deferred_cleanup = DeferredChildCleanupQueue::default();
 
         for chunk in self.chunks {
             for tag in chunk {
@@ -2061,21 +2197,25 @@ impl CommandQueue {
                     CommandTag::BubbleDirty => {
                         let BubbleDirtyCommand { node_id, bubble } =
                             bubble_dirty.next().expect("missing BubbleDirty payload");
-                        Command::BubbleDirty { node_id, bubble }.apply(applier)?;
+                        Command::BubbleDirty { node_id, bubble }
+                            .apply_with_cleanup(applier, &mut deferred_cleanup)?;
                     }
                     CommandTag::UpdateTypedNode => {
                         let UpdateTypedNodeCommand { id, updater } = update_typed_nodes
                             .next()
                             .expect("missing UpdateTypedNode payload");
-                        Command::UpdateTypedNode { id, updater }.apply(applier)?;
+                        Command::UpdateTypedNode { id, updater }
+                            .apply_with_cleanup(applier, &mut deferred_cleanup)?;
                     }
                     CommandTag::RemoveNode => {
                         let id = remove_nodes.next().expect("missing RemoveNode payload");
-                        Command::RemoveNode { id }.apply(applier)?;
+                        Command::RemoveNode { id }
+                            .apply_with_cleanup(applier, &mut deferred_cleanup)?;
                     }
                     CommandTag::MountNode => {
                         let id = mount_nodes.next().expect("missing MountNode payload");
-                        Command::MountNode { id }.apply(applier)?;
+                        Command::MountNode { id }
+                            .apply_with_cleanup(applier, &mut deferred_cleanup)?;
                     }
                     CommandTag::AttachChild => {
                         let AttachChildCommand {
@@ -2088,7 +2228,7 @@ impl CommandQueue {
                             child_id,
                             bubble,
                         }
-                        .apply(applier)?;
+                        .apply_with_cleanup(applier, &mut deferred_cleanup)?;
                     }
                     CommandTag::InsertChild => {
                         let InsertChildCommand {
@@ -2105,7 +2245,7 @@ impl CommandQueue {
                             insert_index,
                             bubble,
                         }
-                        .apply(applier)?;
+                        .apply_with_cleanup(applier, &mut deferred_cleanup)?;
                     }
                     CommandTag::MoveChild => {
                         let MoveChildCommand {
@@ -2120,7 +2260,7 @@ impl CommandQueue {
                             to_index,
                             bubble,
                         }
-                        .apply(applier)?;
+                        .apply_with_cleanup(applier, &mut deferred_cleanup)?;
                     }
                     CommandTag::RemoveChild => {
                         let RemoveChildCommand {
@@ -2131,7 +2271,7 @@ impl CommandQueue {
                             parent_id,
                             child_id,
                         }
-                        .apply(applier)?;
+                        .apply_with_cleanup(applier, &mut deferred_cleanup)?;
                     }
                     CommandTag::SyncChildren => {
                         let SyncChildrenCommand {
@@ -2141,15 +2281,19 @@ impl CommandQueue {
                         } = sync_children_commands
                             .next()
                             .expect("missing SyncChildren payload");
+                        let expected_children =
+                            &sync_child_ids[child_start..child_start + child_len];
                         sync_children(
                             applier,
                             parent_id,
-                            &sync_child_ids[child_start..child_start + child_len],
+                            expected_children,
+                            &mut deferred_cleanup,
                         )?;
                     }
                     CommandTag::Callback => {
                         let callback = callbacks.next().expect("missing Callback payload");
-                        Command::Callback(callback).apply(applier)?;
+                        Command::Callback(callback)
+                            .apply_with_cleanup(applier, &mut deferred_cleanup)?;
                     }
                 }
             }
@@ -2165,7 +2309,7 @@ impl CommandQueue {
         debug_assert!(remove_children.next().is_none());
         debug_assert!(sync_children_commands.next().is_none());
         debug_assert!(callbacks.next().is_none());
-        Ok(())
+        deferred_cleanup.flush(applier)
     }
 }
 
@@ -2211,6 +2355,7 @@ fn apply_remove_child(
     applier: &mut dyn Applier,
     parent_id: NodeId,
     child_id: NodeId,
+    deferred_cleanup: &mut DeferredChildCleanupQueue,
 ) -> Result<(), NodeError> {
     if let Ok(parent_node) = applier.get_mut(parent_id) {
         parent_node.remove_child(child_id);
@@ -2218,27 +2363,61 @@ fn apply_remove_child(
     bubble_layout_dirty(applier, parent_id);
     bubble_measure_dirty(applier, parent_id);
 
-    let should_remove = if let Ok(node) = applier.get_mut(child_id) {
+    let generation = applier.node_generation(child_id);
+    let removed_from_parent = if let Ok(node) = applier.get_mut(child_id) {
         match node.parent() {
             Some(existing_parent_id) if existing_parent_id == parent_id => {
                 node.on_removed_from_parent();
-                node.unmount();
                 true
             }
-            None => {
-                node.unmount();
-                true
-            }
-            Some(_) => false,
+            None => false,
+            Some(_) => return Ok(()),
         }
     } else {
-        true
+        return Ok(());
     };
 
-    if should_remove {
-        let _ = applier.remove(child_id);
-    }
+    deferred_cleanup.push(child_id, generation, removed_from_parent);
     Ok(())
+}
+
+fn cleanup_detached_child(
+    applier: &mut dyn Applier,
+    cleanup: DeferredChildCleanup,
+) -> Result<(), NodeError> {
+    if applier.node_generation(cleanup.child_id) != cleanup.generation {
+        return Ok(());
+    }
+
+    let parent_id = match applier.get_mut(cleanup.child_id) {
+        Ok(node) => node.parent(),
+        Err(NodeError::Missing { .. }) => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    if parent_id.is_some() {
+        return Ok(());
+    }
+
+    if let Ok(node) = applier.get_mut(cleanup.child_id) {
+        if !cleanup.removed_from_parent {
+            node.on_removed_from_parent();
+        }
+        node.unmount();
+    }
+    match applier.remove(cleanup.child_id) {
+        Ok(()) | Err(NodeError::Missing { .. }) => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+fn remove_child_and_cleanup_now(
+    applier: &mut dyn Applier,
+    parent_id: NodeId,
+    child_id: NodeId,
+) -> Result<(), NodeError> {
+    let mut deferred_cleanup = DeferredChildCleanupQueue::default();
+    apply_remove_child(applier, parent_id, child_id, &mut deferred_cleanup)?;
+    deferred_cleanup.flush(applier)
 }
 
 fn collect_current_children(applier: &mut dyn Applier, parent_id: NodeId) -> ChildList {
@@ -2255,13 +2434,20 @@ fn sync_children(
     applier: &mut dyn Applier,
     parent_id: NodeId,
     expected_children: &[NodeId],
+    deferred_cleanup: &mut DeferredChildCleanupQueue,
 ) -> Result<(), NodeError> {
     let mut current = collect_current_children(applier, parent_id);
     let children_changed = current.as_slice() != expected_children;
 
     if children_changed {
         if current.len().max(expected_children.len()) <= SMALL_CHILD_SYNC_LINEAR_THRESHOLD {
-            sync_children_small(applier, parent_id, &mut current, expected_children)?;
+            sync_children_small(
+                applier,
+                parent_id,
+                &mut current,
+                expected_children,
+                deferred_cleanup,
+            )?;
         } else {
             let mut target_positions: HashMap<NodeId, usize> = HashMap::default();
             target_positions.reserve(expected_children.len());
@@ -2273,11 +2459,7 @@ fn sync_children(
                 let child = current[index];
                 if !target_positions.contains_key(&child) {
                     current.remove(index);
-                    Command::RemoveChild {
-                        parent_id,
-                        child_id: child,
-                    }
-                    .apply(applier)?;
+                    apply_remove_child(applier, parent_id, child, deferred_cleanup)?;
                 }
             }
 
@@ -2330,16 +2512,13 @@ fn sync_children_small(
     parent_id: NodeId,
     current: &mut ChildList,
     expected_children: &[NodeId],
+    deferred_cleanup: &mut DeferredChildCleanupQueue,
 ) -> Result<(), NodeError> {
     for index in (0..current.len()).rev() {
         let child = current[index];
         if !expected_children.contains(&child) {
             current.remove(index);
-            Command::RemoveChild {
-                parent_id,
-                child_id: child,
-            }
-            .apply(applier)?;
+            apply_remove_child(applier, parent_id, child, deferred_cleanup)?;
         }
     }
 
@@ -3516,6 +3695,7 @@ pub(crate) struct ComposerCore {
     phase: Cell<Phase>,
     last_node_reused: Cell<Option<bool>>,
     recranpose_parent_hint: Cell<Option<NodeId>>,
+    root_render_requested: Cell<bool>,
     _not_send: PhantomData<*const ()>,
 }
 
@@ -3560,6 +3740,7 @@ impl ComposerCore {
             phase: Cell::new(Phase::Compose),
             last_node_reused: Cell::new(None),
             recranpose_parent_hint: Cell::new(None),
+            root_render_requested: Cell::new(false),
             _not_send: PhantomData,
         }
     }
@@ -3599,6 +3780,14 @@ impl Composer {
         self.core.observer.clone()
     }
 
+    fn request_root_render(&self) {
+        self.core.root_render_requested.set(true);
+    }
+
+    fn take_root_render_request(&self) -> bool {
+        self.core.root_render_requested.replace(false)
+    }
+
     fn observe_scope<R>(&self, scope: &RecomposeScope, block: impl FnOnce() -> R) -> R {
         let observer = self.observer();
         let scope_clone = scope.clone();
@@ -3615,15 +3804,31 @@ impl Composer {
     }
 
     fn with_slots<R>(&self, f: impl FnOnce(&SlotBackend) -> R) -> R {
-        let host = self.active_slots_host();
-        let slots = host.borrow();
-        f(&slots)
+        let override_host = {
+            let overrides = self.core.slots_override.borrow();
+            overrides.last().cloned()
+        };
+        if let Some(host) = override_host {
+            let slots = host.borrow();
+            f(&slots)
+        } else {
+            let slots = self.core.slots.borrow();
+            f(&slots)
+        }
     }
 
     fn with_slots_mut<R>(&self, f: impl FnOnce(&mut SlotBackend) -> R) -> R {
-        let host = self.active_slots_host();
-        let mut slots = host.borrow_mut();
-        f(&mut slots)
+        let override_host = {
+            let overrides = self.core.slots_override.borrow();
+            overrides.last().cloned()
+        };
+        if let Some(host) = override_host {
+            let mut slots = host.borrow_mut();
+            f(&mut slots)
+        } else {
+            let mut slots = self.core.slots.borrow_mut();
+            f(&mut slots)
+        }
     }
 
     fn with_slot_override<R>(&self, slots: Rc<SlotsHost>, f: impl FnOnce(&Composer) -> R) -> R {
@@ -3786,31 +3991,63 @@ impl Composer {
     }
 
     fn drain_orphaned_nodes_from_slots(&self) {
+        let orphaned = self.with_slots_mut(|slots| slots.drain_orphaned_node_ids());
+        if orphaned.is_empty() {
+            return;
+        }
+        let mut deferred = Vec::new();
         let mut applier = self.borrow_applier();
-        self.with_slots_mut(|slots| {
-            slots.drain_orphaned_node_ids_with(|id| {
-                if let Ok(node) = applier.get_mut(id) {
-                    node.unmount();
+        for orphaned in orphaned {
+            match self.with_slots(|slots| slots.orphaned_node_state(orphaned)) {
+                crate::slot_table::NodeSlotState::Active => continue,
+                crate::slot_table::NodeSlotState::PreservedGap => {
+                    deferred.push(orphaned);
+                    continue;
                 }
-                let _ = applier.remove(id);
+                crate::slot_table::NodeSlotState::Missing => {}
+            }
+            if applier.node_generation(orphaned.id) != orphaned.generation {
+                continue;
+            }
+            let parent_id = applier
+                .get_mut(orphaned.id)
+                .ok()
+                .and_then(|node| node.parent());
+            if let Some(parent_id) = parent_id {
+                let _ = remove_child_and_cleanup_now(&mut *applier, parent_id, orphaned.id);
+                continue;
+            }
+            if let Ok(node) = applier.get_mut(orphaned.id) {
+                node.on_removed_from_parent();
+                node.unmount();
+            }
+            let _ = applier.remove(orphaned.id);
+        }
+        if !deferred.is_empty() {
+            self.with_slots_mut(|slots| {
+                for orphaned in deferred {
+                    slots.requeue_orphaned_node(orphaned);
+                }
             });
-        });
+        }
     }
 
     pub fn with_group<R>(&self, key: Key, f: impl FnOnce(&Composer) -> R) -> R {
-        let (group, scope_ref, restored_from_gap) = self.with_slots_mut(|slots| {
+        let parent_scope = self.current_recranpose_scope();
+        let (group, group_anchor, scope_ref, restored_from_gap) = self.with_slots_mut(|slots| {
             let StartGroup {
                 group,
+                anchor,
                 restored_from_gap,
             } = slots.begin_group(key);
             let scope_slot = slots.alloc_value_slot(|| RecomposeScope::new(self.runtime_handle()));
             let scope_ref = SlotStorage::read_value::<RecomposeScope>(slots, scope_slot).clone();
-            (group, scope_ref, restored_from_gap)
+            (group, anchor, scope_ref, restored_from_gap)
         });
 
-        if restored_from_gap {
-            scope_ref.force_recompose();
-        }
+        scope_ref.reactivate();
+        scope_ref.set_group_anchor(group_anchor);
+        scope_ref.set_parent_scope(parent_scope);
 
         if let Some(options) = self.pending_scope_options().take() {
             if options.force_recompose {
@@ -3818,6 +4055,9 @@ impl Composer {
             } else if options.force_reuse {
                 scope_ref.force_reuse();
             }
+        }
+        if restored_from_gap {
+            scope_ref.force_recompose();
         }
 
         self.with_slots_mut(|slots| {
@@ -3846,6 +4086,7 @@ impl Composer {
         }
 
         let result = self.observe_scope(&scope_ref, || f(self));
+
         scope_ref.mark_composed_once();
 
         let trimmed = self.with_slots_mut(|slots| slots.finalize_current_group());
@@ -4138,8 +4379,9 @@ impl Composer {
             core: composer.clone_core(),
             leaked: false,
         };
+        let root_group_key = location_key(file!(), line!(), column!());
         let (result, commands, side_effects) = composer.install(|composer| {
-            let output = f(composer);
+            let output = composer.with_group(root_group_key, |composer| f(composer));
             // CRITICAL FIX: Pop the root parent frame to generate insert_child commands.
             // Without this, the root frame's new_children list is populated but never
             // processed, so children are never attached to the virtual node.
@@ -4169,35 +4411,33 @@ impl Composer {
             effect();
         }
         runtime_handle.drain_ui();
-        // DON'T finalize or flush - for subcompose reuse, we need to keep all groups
-        // in place so they can be found via O(1) HashMap lookup on the next measurement
-        // pass. Calling finalize_current_group would convert valid lazy list item
-        // groups to gaps if the cursor didn't reach them.
+        {
+            let mut slots_mut = slots.borrow_mut();
+            let _ = slots_mut.finalize_current_group();
+            slots_mut.flush();
+        }
         Ok((result, frame.scopes))
+    }
+
+    fn skipped_group_root_nodes(&self, nodes: &[NodeId]) -> Vec<NodeId> {
+        let node_set: std::collections::HashSet<NodeId> = nodes.iter().copied().collect();
+        let mut applier = self.borrow_applier();
+        nodes
+            .iter()
+            .copied()
+            .filter(|id| {
+                let parent = applier.get_mut(*id).ok().and_then(|node| node.parent());
+                parent.is_none_or(|parent_id| !node_set.contains(&parent_id))
+            })
+            .collect()
     }
 
     pub fn skip_current_group(&self) {
         let nodes = self.with_slots(|slots| slots.nodes_in_current_group());
+        let root_nodes = self.skipped_group_root_nodes(&nodes);
         self.with_slots_mut(|slots| slots.skip_current_group());
-        // Get the current parent from the stack (if any)
-        let current_parent = {
-            let stack = self.parent_stack();
-            stack.last().map(|frame| frame.id)
-        };
-
-        // Only attach nodes whose parent matches the current parent in the stack.
-        // This ensures we only attach direct children of the current parent,
-        // not nested nodes that belong to other nodes within the skipped group.
-        let mut applier = self.borrow_applier();
-        for id in nodes {
-            if let Ok(node) = applier.get_mut(id) {
-                let node_parent = node.parent();
-                if node_parent.is_none() || node_parent == current_parent {
-                    drop(applier);
-                    self.attach_to_parent(id);
-                    applier = self.borrow_applier();
-                }
-            }
+        for id in root_nodes {
+            self.attach_to_parent_with_mode(id, true);
         }
     }
 
@@ -4269,7 +4509,20 @@ impl Composer {
             scope.mark_recomposed();
             return;
         }
-        let started = self.with_slots_mut(|slots| slots.begin_recranpose_at_scope(scope.id()));
+        #[cfg(not(target_arch = "wasm32"))]
+        let trace_recompose = std::env::var_os("RECOMPOSE_TRACE").is_some();
+        let started = self.with_slots_mut(|slots| {
+            slots.begin_recranpose_at_anchor(scope.group_anchor(), scope.id())
+        });
+        #[cfg(not(target_arch = "wasm32"))]
+        if trace_recompose {
+            eprintln!(
+                "recompose trace: scope_id={} label={:?} started_at={started:?} sources={:?}",
+                scope.id(),
+                debug_scope_label(scope.id()),
+                debug_scope_invalidation_sources(scope.id()),
+            );
+        }
         if started.is_some() {
             let previous_hint = self
                 .core
@@ -4298,12 +4551,24 @@ impl Composer {
                 *locals = scope.local_stack();
             }
             let callback_ran = self.observe_scope(scope, || scope.run_recompose(self));
+            #[cfg(not(target_arch = "wasm32"))]
+            if trace_recompose {
+                eprintln!(
+                    "recompose trace: scope_id={} label={:?} callback_ran={}",
+                    scope.id(),
+                    debug_scope_label(scope.id()),
+                    callback_ran,
+                );
+            }
             if !callback_ran {
-                // No recompose callback: preserve all existing slot content by
-                // skipping to the end of the group before closing. end_recompose
-                // marks unvisited slots as gaps, which would destroy slot values
-                // (e.g. OwnedMutableState) that are still needed.
-                self.with_slots_mut(SlotStorage::skip_current_group);
+                if let Some(ancestor_scope) = scope.callback_promotion_target() {
+                    ancestor_scope.invalidate();
+                } else {
+                    self.request_root_render();
+                }
+                // Preserve all existing slot content until the promoted ancestor
+                // or the requested root render replays the subtree.
+                self.skip_current_group();
             }
             {
                 let mut locals = self.local_stack();
@@ -4314,6 +4579,14 @@ impl Composer {
                 stack.pop();
             }
             self.with_slots_mut(SlotStorage::end_recompose);
+            #[cfg(not(target_arch = "wasm32"))]
+            if trace_recompose {
+                eprintln!(
+                    "recompose trace: scope_id={} label={:?} ended",
+                    scope.id(),
+                    debug_scope_label(scope.id()),
+                );
+            }
             self.drain_orphaned_nodes_from_slots();
             scope.mark_recomposed();
             self.flush_pending_commands_if_large();
@@ -4355,9 +4628,15 @@ impl Composer {
                 self.core.last_node_reused.set(Some(true));
                 #[cfg(not(target_arch = "wasm32"))]
                 if compose_debug_enabled() {
+                    let scope_debug = self
+                        .current_recranpose_scope()
+                        .map(|scope| (scope.id(), debug_scope_label(scope.id())))
+                        .unwrap_or((0, None));
                     eprintln!(
-                        "emit_node: reusing node #{id} as {}",
-                        std::any::type_name::<N>()
+                        "emit_node: reusing node #{id} as {} [scope_id={} scope_label={:?}]",
+                        std::any::type_name::<N>(),
+                        scope_debug.0,
+                        scope_debug.1,
                     );
                 }
                 self.with_slots_mut(|slots| slots.advance_after_node_read());
@@ -4415,11 +4694,17 @@ impl Composer {
         self.core.last_node_reused.set(Some(false));
         #[cfg(not(target_arch = "wasm32"))]
         if compose_debug_enabled() {
+            let scope_debug = self
+                .current_recranpose_scope()
+                .map(|scope| (scope.id(), debug_scope_label(scope.id())))
+                .unwrap_or((0, None));
             eprintln!(
-                "emit_node: creating node #{} (gen={}) as {}",
+                "emit_node: creating node #{} (gen={}) as {} [scope_id={} scope_label={:?}]",
                 id,
                 gen,
-                std::any::type_name::<N>()
+                std::any::type_name::<N>(),
+                scope_debug.0,
+                scope_debug.1,
             );
         }
         {
@@ -4461,6 +4746,10 @@ impl Composer {
     }
 
     fn attach_to_parent(&self, id: NodeId) {
+        self.attach_to_parent_with_mode(id, false);
+    }
+
+    fn attach_to_parent_with_mode(&self, id: NodeId, force_reparent_current_parent: bool) {
         // IMPORTANT: Check parent_stack FIRST.
         // During subcomposition, if there's an active parent (e.g., Row),
         // child nodes (e.g., Text) should attach to that parent, NOT to the
@@ -4506,13 +4795,17 @@ impl Composer {
                         // 1. Node has no parent, OR
                         // 2. New parent is NOT the root (parent_id != 0 or != self.root)
                         // This prevents root from stealing children that belong to intermediate nodes.
-                        let should_set = match existing_parent {
-                            None => true,
-                            Some(existing) => {
-                                // Don't let root steal children from proper parents
-                                let root_id = self.core.root.get();
-                                parent_id != root_id.unwrap_or(0)
-                                    || existing == root_id.unwrap_or(0)
+                        let should_set = if force_reparent_current_parent {
+                            existing_parent != Some(parent_id)
+                        } else {
+                            match existing_parent {
+                                None => true,
+                                Some(existing) => {
+                                    // Don't let root steal children from proper parents
+                                    let root_id = self.core.root.get();
+                                    parent_id != root_id.unwrap_or(0)
+                                        || existing == root_id.unwrap_or(0)
+                                }
                             }
                         };
                         if should_set {
@@ -4619,15 +4912,18 @@ impl Composer {
         let reused = self.core.last_node_reused.take().unwrap_or(true);
         let in_subcompose = !self.core.subcompose_stack.borrow().is_empty();
 
-        // Parents with existing children still need a full diff pass. Fresh or
-        // currently-empty parents can append children directly as they are emitted.
-        let previous: ChildList = if reused || in_subcompose {
-            let mut previous = ChildList::new();
+        // Fresh parents usually append children directly, but a restored or otherwise
+        // non-reused node can still carry attached children in the applier. In that case
+        // we must diff against the live child list or stale descendants remain mounted.
+        let mut previous = ChildList::new();
+        if reused || in_subcompose {
             previous.extend(self.get_node_children(id));
-            previous
         } else {
-            ChildList::new()
-        };
+            let existing_children = self.get_node_children(id);
+            if !existing_children.is_empty() {
+                previous.extend(existing_children);
+            }
+        }
         let attach_mode = if in_subcompose || !previous.is_empty() {
             ParentAttachMode::DeferredSync
         } else {
@@ -4791,6 +5087,7 @@ pub(crate) struct MutableStateInner<T: Clone + 'static> {
     state: Arc<SnapshotMutableState<T>>,
     watchers: RefCell<HashMap<ScopeId, Weak<RecomposeScopeInner>>>, // FUTURE(no_std): move to stack-allocated subscription list.
     runtime: RuntimeHandle,
+    debug_state_id: Cell<Option<StateId>>,
 }
 
 fn shrink_watchers_if_sparse(watchers: &mut HashMap<ScopeId, Weak<RecomposeScopeInner>>) {
@@ -4802,15 +5099,21 @@ fn shrink_watchers_if_sparse(watchers: &mut HashMap<ScopeId, Weak<RecomposeScope
 }
 
 impl<T: Clone + 'static> MutableStateInner<T> {
-    fn new(value: T, runtime: RuntimeHandle) -> Self {
+    fn new_with_policy(
+        value: T,
+        runtime: RuntimeHandle,
+        policy: Arc<dyn MutationPolicy<T>>,
+    ) -> Self {
         Self {
-            state: SnapshotMutableState::new_in_arc(value, Arc::new(NeverEqual)),
+            state: SnapshotMutableState::new_in_arc(value, policy),
             watchers: RefCell::new(HashMap::default()),
             runtime,
+            debug_state_id: Cell::new(None),
         }
     }
 
     fn install_snapshot_observer(&self, state_id: StateId) {
+        self.debug_state_id.set(Some(state_id));
         let runtime_handle = self.runtime.clone();
         self.state.add_apply_observer(Box::new(move || {
             let runtime = runtime_handle.clone();
@@ -4863,6 +5166,7 @@ impl<T: Clone + 'static> MutableStateInner<T> {
         };
 
         for watcher in watchers {
+            debug_record_scope_invalidation::<T>(watcher.id(), self.debug_state_id.get());
             watcher.invalidate();
         }
     }
@@ -5073,10 +5377,9 @@ impl<T: Clone + 'static> MutableState<T> {
                 let tracker = UpdateScope::new(inner.state.id());
                 let result = f(&mut value);
                 let wrote_elsewhere = tracker.finish();
-                if !wrote_elsewhere {
-                    inner.state.set(value);
+                if !wrote_elsewhere && inner.state.set(value) {
+                    inner.invalidate_watchers();
                 }
-                inner.invalidate_watchers();
                 result
             })
         })
@@ -5095,8 +5398,9 @@ impl<T: Clone + 'static> MutableState<T> {
         runtime.with_state_arena(|arena| {
             if arena
                 .with_typed_opt::<T, ()>(self.state_id(), |inner| {
-                    inner.state.set(value);
-                    inner.invalidate_watchers();
+                    if inner.state.set(value) {
+                        inner.invalidate_watchers();
+                    }
                 })
                 .is_none()
             {
@@ -5172,6 +5476,19 @@ impl<T: Clone + 'static> OwnedMutableState<T> {
     /// Creates a reclaimable state owned by this Rust value.
     pub fn with_runtime(value: T, runtime: RuntimeHandle) -> Self {
         let lease = runtime.alloc_state(value);
+        Self {
+            state: MutableState::from_lease(&lease),
+            _lease: lease,
+            _marker: PhantomData,
+        }
+    }
+
+    pub(crate) fn with_runtime_and_policy(
+        value: T,
+        runtime: RuntimeHandle,
+        policy: Arc<dyn MutationPolicy<T>>,
+    ) -> Self {
+        let lease = runtime.alloc_state_with_policy(value, policy);
         Self {
             state: MutableState::from_lease(&lease),
             _lease: lease,
@@ -5521,10 +5838,50 @@ impl<T> ParamSlot<T> {
 /// It stores the callback in an Rc<RefCell<...>> so that the composer can hand out
 /// lightweight forwarder closures without cloning the underlying callback value.
 type CallbackCell = Rc<RefCell<Option<Box<dyn FnMut()>>>>;
+type CallbackScopeCell = Rc<RefCell<Option<RecomposeScope>>>;
+
+struct CallbackScopeGuard {
+    core: Rc<ComposerCore>,
+}
+
+impl CallbackScopeGuard {
+    fn push(composer: &Composer, scope: RecomposeScope) -> Self {
+        composer.core.scope_stack.borrow_mut().push(scope);
+        Self {
+            core: composer.clone_core(),
+        }
+    }
+}
+
+impl Drop for CallbackScopeGuard {
+    fn drop(&mut self) {
+        self.core.scope_stack.borrow_mut().pop();
+    }
+}
+
+fn with_callback_scope<R>(scope: &CallbackScopeCell, f: impl FnOnce() -> R) -> R {
+    let captured_scope = scope.borrow().clone();
+    let mut f = Some(f);
+    if let Some(saved_scope) = captured_scope {
+        if let Some(result) = with_current_composer_opt(|composer| {
+            let _scope_guard = CallbackScopeGuard::push(composer, saved_scope);
+            f.take().expect("callback closure already taken")()
+        }) {
+            return result;
+        }
+    }
+
+    f.take().expect("callback closure already taken")()
+}
+
+fn callback_owner_scope(composer: &Composer) -> Option<RecomposeScope> {
+    composer.core.scope_stack.borrow().last().cloned()
+}
 
 #[derive(Clone)]
 pub struct CallbackHolder {
     rc: CallbackCell,
+    creator_scope: CallbackScopeCell,
 }
 
 impl CallbackHolder {
@@ -5539,15 +5896,20 @@ impl CallbackHolder {
         F: FnMut() + 'static,
     {
         *self.rc.borrow_mut() = Some(Box::new(f));
+        *self.creator_scope.borrow_mut() =
+            with_current_composer_opt(callback_owner_scope).flatten();
     }
 
     /// Produce a forwarder closure that keeps the holder alive and forwards calls to it.
     pub fn clone_rc(&self) -> impl Fn() + 'static {
         let rc = self.rc.clone();
+        let creator_scope = self.creator_scope.clone();
         move || {
-            if let Some(callback) = rc.borrow_mut().as_mut() {
-                callback();
-            }
+            with_callback_scope(&creator_scope, || {
+                if let Some(callback) = rc.borrow_mut().as_mut() {
+                    callback();
+                }
+            });
         }
     }
 }
@@ -5556,6 +5918,7 @@ impl Default for CallbackHolder {
     fn default() -> Self {
         Self {
             rc: Rc::new(RefCell::new(None)),
+            creator_scope: Rc::new(RefCell::new(None)),
         }
     }
 }
@@ -5566,6 +5929,7 @@ impl Default for CallbackHolder {
 pub struct CallbackHolder1<A: 'static> {
     #[allow(clippy::type_complexity)]
     rc: Rc<RefCell<Option<Box<dyn FnMut(A)>>>>,
+    creator_scope: CallbackScopeCell,
 }
 
 impl<A: 'static> CallbackHolder1<A> {
@@ -5580,15 +5944,20 @@ impl<A: 'static> CallbackHolder1<A> {
         F: FnMut(A) + 'static,
     {
         *self.rc.borrow_mut() = Some(Box::new(f));
+        *self.creator_scope.borrow_mut() =
+            with_current_composer_opt(callback_owner_scope).flatten();
     }
 
     /// Produce a forwarder closure that keeps the holder alive and forwards calls to it.
     pub fn clone_rc(&self) -> impl Fn(A) + 'static {
         let rc = self.rc.clone();
+        let creator_scope = self.creator_scope.clone();
         move |arg| {
-            if let Some(callback) = rc.borrow_mut().as_mut() {
-                callback(arg);
-            }
+            with_callback_scope(&creator_scope, || {
+                if let Some(callback) = rc.borrow_mut().as_mut() {
+                    callback(arg);
+                }
+            });
         }
     }
 }
@@ -5597,6 +5966,7 @@ impl<A: 'static> Default for CallbackHolder1<A> {
     fn default() -> Self {
         Self {
             rc: Rc::new(RefCell::new(None)),
+            creator_scope: Rc::new(RefCell::new(None)),
         }
     }
 }
@@ -5686,6 +6056,7 @@ pub struct Composition<A: Applier + 'static> {
     runtime: Runtime,
     observer: SnapshotStateObserver,
     root: Option<NodeId>,
+    root_render_requested: bool,
     last_pass_stats: CompositionPassDebugStats,
 }
 
@@ -5708,6 +6079,7 @@ impl<A: Applier + 'static> Composition<A> {
             runtime,
             observer,
             root: None,
+            root_render_requested: false,
             last_pass_stats: CompositionPassDebugStats::default(),
         }
     }
@@ -5722,6 +6094,10 @@ impl<A: Applier + 'static> Composition<A> {
 
     fn reset_last_pass_stats(&mut self) {
         self.last_pass_stats = CompositionPassDebugStats::default();
+    }
+
+    pub fn take_root_render_request(&mut self) -> bool {
+        std::mem::take(&mut self.root_render_requested)
     }
 
     fn record_pass_stats(
@@ -5769,71 +6145,94 @@ impl<A: Applier + 'static> Composition<A> {
     fn finalize_compaction(&mut self) -> Result<bool, NodeError> {
         let mut removed_orphaned = false;
         let mut orphaned_node_count = 0usize;
+        self.slots.borrow_mut().compact();
+        let orphaned = self.slots.borrow_mut().drain_orphaned_node_ids();
         {
             let mut applier = self.applier.borrow_dyn();
-            self.slots.borrow_mut().drain_orphaned_node_ids_with(|id| {
+            for orphaned in orphaned {
+                if !matches!(
+                    self.slots.borrow().orphaned_node_state(orphaned),
+                    crate::slot_table::NodeSlotState::Missing
+                ) {
+                    continue;
+                }
+                if applier.node_generation(orphaned.id) != orphaned.generation {
+                    continue;
+                }
                 removed_orphaned = true;
                 orphaned_node_count += 1;
-                if let Ok(node) = applier.get_mut(id) {
+                let parent_id = applier
+                    .get_mut(orphaned.id)
+                    .ok()
+                    .and_then(|node| node.parent());
+                if let Some(parent_id) = parent_id {
+                    let _ = remove_child_and_cleanup_now(&mut *applier, parent_id, orphaned.id);
+                    continue;
+                }
+                if let Ok(node) = applier.get_mut(orphaned.id) {
+                    node.on_removed_from_parent();
                     node.unmount();
                 }
-                let _ = applier.remove(id);
-            });
+                let _ = applier.remove(orphaned.id);
+            }
         }
+        self.applier_host().compact();
+        self.applier.borrow_dyn().clear_recycled_nodes();
         if removed_orphaned {
             log::debug!(
                 "finalize_compaction: removing {} orphaned nodes",
                 orphaned_node_count
             );
         }
-        self.slots.borrow_mut().compact();
-        self.applier_host().compact();
-        self.applier.borrow_dyn().clear_recycled_nodes();
         Ok(removed_orphaned)
     }
 
     pub fn render(&mut self, key: Key, mut content: impl FnMut()) -> Result<(), NodeError> {
         self.reset_last_pass_stats();
+        self.root_render_requested = false;
         self.slots.borrow_mut().reset();
         let runtime_handle = self.runtime_handle();
         runtime_handle.drain_ui();
-        let composer = Composer::new(
-            Rc::clone(&self.slots),
-            self.applier.clone(),
-            runtime_handle.clone(),
-            self.observer.clone(),
-            self.root,
-        );
-        self.observer.begin_frame();
-        let (root, commands, side_effects) = composer.install(|composer| {
-            composer.with_group(key, |_| content());
-            let root = composer.root();
-            let commands = composer.take_commands();
-            let side_effects = composer.take_side_effects();
-            (root, commands, side_effects)
-        });
-        self.record_pass_stats(&commands, &side_effects);
-
-        {
-            let mut applier = self.applier.borrow_dyn();
-            commands.apply(&mut *applier)?;
-            for update in runtime_handle.take_updates() {
-                update.apply(&mut *applier)?;
+        let side_effects = {
+            let _teardown = runtime::enter_state_teardown_scope();
+            let composer = Composer::new(
+                Rc::clone(&self.slots),
+                self.applier.clone(),
+                runtime_handle.clone(),
+                self.observer.clone(),
+                self.root,
+            );
+            self.observer.begin_frame();
+            let (root, commands, side_effects) = composer.install(|composer| {
+                composer.with_group(key, |_| content());
+                let root = composer.root();
+                let commands = composer.take_commands();
+                let side_effects = composer.take_side_effects();
+                (root, commands, side_effects)
+            });
+            self.record_pass_stats(&commands, &side_effects);
+            {
+                let mut applier = self.applier.borrow_dyn();
+                commands.apply(&mut *applier)?;
+                for update in runtime_handle.take_updates() {
+                    update.apply(&mut *applier)?;
+                }
             }
-        }
 
+            self.root = root;
+            {
+                let mut slots = self.slots.borrow_mut();
+                let _ = slots.finalize_current_group();
+                slots.flush();
+            }
+            let _ = self.finalize_compaction()?;
+            side_effects
+        };
         runtime_handle.drain_ui();
         for effect in side_effects {
             effect();
         }
         runtime_handle.drain_ui();
-        self.root = root;
-        {
-            let mut slots = self.slots.borrow_mut();
-            let _ = slots.finalize_current_group();
-            slots.flush();
-        }
-        let _ = self.finalize_compaction()?;
         let _ = self.process_invalid_scopes()?;
         self.observer.prune_dead_scopes();
         runtime_handle.prune_dead_state_watchers();
@@ -5844,6 +6243,7 @@ impl<A: Applier + 'static> Composition<A> {
         {
             self.runtime.set_needs_frame(false);
         }
+        self.root_render_requested = false;
         Ok(())
     }
 
@@ -5940,51 +6340,69 @@ impl<A: Applier + 'static> Composition<A> {
                     scope_groups.push((host, vec![scope]));
                 }
             }
-            let composer = Composer::new(
-                Rc::clone(&root_host),
-                self.applier_host(),
-                runtime_clone,
-                self.observer.clone(),
-                self.root,
-            );
-            self.observer.begin_frame();
-            let (root, commands, side_effects) = composer.install(|composer| {
-                for (host, scopes) in scope_groups.into_iter() {
-                    if Rc::ptr_eq(&host, &root_host) {
-                        for scope in scopes.iter() {
-                            composer.recranpose_group(scope);
-                        }
-                    } else {
-                        composer.with_slot_override(host, |composer| {
-                            for scope in scopes.iter() {
-                                composer.recranpose_group(scope);
+            let side_effects = {
+                let _teardown = runtime::enter_state_teardown_scope();
+                let composer = Composer::new(
+                    Rc::clone(&root_host),
+                    self.applier_host(),
+                    runtime_clone,
+                    self.observer.clone(),
+                    self.root,
+                );
+                self.observer.begin_frame();
+                let (root, commands, side_effects, requested_root_render) =
+                    composer.install(|composer| {
+                        for (host, scopes) in scope_groups.into_iter() {
+                            if Rc::ptr_eq(&host, &root_host) {
+                                for scope in scopes.iter() {
+                                    composer.recranpose_group(scope);
+                                }
+                            } else {
+                                composer.with_slot_override(host, |composer| {
+                                    for scope in scopes.iter() {
+                                        composer.recranpose_group(scope);
+                                    }
+                                });
                             }
-                        });
+                        }
+                        let root = composer.root();
+                        let commands = composer.take_commands();
+                        let side_effects = composer.take_side_effects();
+                        let requested_root_render = composer.take_root_render_request();
+                        (root, commands, side_effects, requested_root_render)
+                    });
+                self.record_pass_stats(&commands, &side_effects);
+                {
+                    let mut applier = self.applier.borrow_dyn();
+                    commands.apply(&mut *applier)?;
+                    for update in runtime_handle.take_updates() {
+                        update.apply(&mut *applier)?;
                     }
                 }
-                let root = composer.root();
-                let commands = composer.take_commands();
-                let side_effects = composer.take_side_effects();
-                (root, commands, side_effects)
-            });
-            self.record_pass_stats(&commands, &side_effects);
-            {
-                let mut applier = self.applier.borrow_dyn();
-                commands.apply(&mut *applier)?;
-                for update in runtime_handle.take_updates() {
-                    update.apply(&mut *applier)?;
+                if root.is_some() {
+                    self.root = root;
                 }
-            }
+                {
+                    let mut slots = self.slots.borrow_mut();
+                    slots.flush();
+                }
+                let removed_orphaned = self.finalize_compaction()?;
+                if removed_orphaned {
+                    did_recompose = true;
+                    self.root_render_requested = true;
+                }
+                if requested_root_render {
+                    self.root_render_requested = true;
+                }
+                side_effects
+            };
+            runtime_handle.drain_ui();
             for effect in side_effects {
                 effect();
             }
             runtime_handle.drain_ui();
-            if root.is_some() {
-                self.root = root;
-            }
-            let removed_orphaned = self.finalize_compaction()?;
-            if removed_orphaned {
-                did_recompose = true;
+            if self.root_render_requested {
+                break;
             }
         }
         self.observer.prune_dead_scopes();
@@ -6020,6 +6438,75 @@ pub fn location_key(file: &str, line: u32, column: u32) -> Key {
         .wrapping_mul(0x9E37_79B9_7F4A_7C15) // cheap mix
         ^ ((line as u64) << 32)
         ^ (column as u64)
+}
+
+#[doc(hidden)]
+pub fn debug_label_current_scope(name: &'static str) {
+    if !debug_scope_tracking_enabled() {
+        let _ = name;
+        return;
+    }
+    with_current_composer(|composer| {
+        if let Some(scope) = composer.current_recranpose_scope() {
+            DEBUG_SCOPE_LABELS.with(|labels| {
+                labels.borrow_mut().insert(scope.id(), name);
+            });
+        }
+    });
+}
+
+fn debug_record_scope_invalidation<T: 'static>(scope_id: usize, state_id: Option<StateId>) {
+    if !debug_scope_tracking_enabled() {
+        let _ = scope_id;
+        let _ = state_id;
+        return;
+    }
+    let source = match state_id {
+        Some(id) => format!(
+            "slot={} gen={} {}",
+            id.slot(),
+            id.generation(),
+            std::any::type_name::<T>()
+        ),
+        None => std::any::type_name::<T>().to_string(),
+    };
+    DEBUG_SCOPE_INVALIDATION_SOURCES.with(|sources| {
+        sources
+            .borrow_mut()
+            .entry(scope_id)
+            .or_default()
+            .push(source);
+    });
+}
+
+#[doc(hidden)]
+pub fn debug_scope_label(scope_id: usize) -> Option<&'static str> {
+    if !debug_scope_tracking_enabled() {
+        let _ = scope_id;
+        return None;
+    }
+    DEBUG_SCOPE_LABELS.with(|labels| labels.borrow().get(&scope_id).copied())
+}
+
+#[doc(hidden)]
+pub fn debug_scope_invalidation_sources(scope_id: usize) -> Vec<String> {
+    if !debug_scope_tracking_enabled() {
+        let _ = scope_id;
+        return Vec::new();
+    }
+    DEBUG_SCOPE_INVALIDATION_SOURCES.with(|sources| {
+        let Some(entries) = sources.borrow().get(&scope_id).cloned() else {
+            return Vec::new();
+        };
+        let mut deduped = Vec::new();
+        let mut seen: HashSet<String> = HashSet::default();
+        for entry in entries {
+            if seen.insert(entry.clone()) {
+                deduped.push(entry);
+            }
+        }
+        deduped
+    })
 }
 
 #[doc(hidden)]

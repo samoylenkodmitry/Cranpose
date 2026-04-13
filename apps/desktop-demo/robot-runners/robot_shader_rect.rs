@@ -11,6 +11,36 @@ use cranpose_testing::{
 use desktop_app::app;
 use std::time::Duration;
 
+fn wait_for_button(
+    robot: &cranpose::Robot,
+    text: &str,
+    attempts: usize,
+    delay: Duration,
+) -> Option<(f32, f32, f32, f32)> {
+    for _ in 0..attempts {
+        if let Some(bounds) = find_button_in_semantics(robot, text) {
+            return Some(bounds);
+        }
+        std::thread::sleep(delay);
+    }
+    None
+}
+
+fn wait_for_text(
+    robot: &cranpose::Robot,
+    text: &str,
+    attempts: usize,
+    delay: Duration,
+) -> Option<(f32, f32, f32, f32)> {
+    for _ in 0..attempts {
+        if let Some(bounds) = find_text_in_semantics(robot, text) {
+            return Some(bounds);
+        }
+        std::thread::sleep(delay);
+    }
+    None
+}
+
 fn main() {
     env_logger::init();
     println!("=== Robot Shader Rect Test ===");
@@ -21,11 +51,10 @@ fn main() {
         .with_headless(true)
         .with_test_driver(|robot| {
             std::thread::sleep(Duration::from_millis(600));
-            let _ = robot.wait_for_idle();
 
             // Navigate to Shader Rect tab
             let Some((tab_x, tab_y, tab_w, tab_h)) =
-                find_button_in_semantics(&robot, "Shader Rect")
+                wait_for_button(&robot, "Shader Rect", 30, Duration::from_millis(100))
             else {
                 println!("FATAL: Shader Rect tab button not found");
                 robot.exit().ok();
@@ -33,10 +62,9 @@ fn main() {
             };
             robot.click(tab_x + tab_w / 2.0, tab_y + tab_h / 2.0).ok();
             std::thread::sleep(Duration::from_millis(500));
-            let _ = robot.wait_for_idle();
 
             // Verify tab content loaded
-            if find_text_in_semantics(&robot, "SDF Halo Border").is_none() {
+            if wait_for_text(&robot, "SDF Halo Border", 30, Duration::from_millis(100)).is_none() {
                 println!("FATAL: Tab header text not found");
                 robot.exit().ok();
                 std::process::exit(1);
@@ -93,7 +121,6 @@ fn main() {
             // ========== Fire shader test ==========
             // Wait a frame for the fire animation to produce some output
             std::thread::sleep(Duration::from_millis(200));
-            let _ = robot.wait_for_idle();
 
             // The fire shader box should be visible (may need to scroll)
             let fire_text = find_text_in_semantics(&robot, "Fire");
@@ -101,7 +128,6 @@ fn main() {
                 // Try scrolling down
                 robot.mouse_scroll(0.0, -300.0).ok();
                 std::thread::sleep(Duration::from_millis(400));
-                let _ = robot.wait_for_idle();
             }
 
             let screenshot2 = match robot.screenshot() {
@@ -113,7 +139,8 @@ fn main() {
                 }
             };
 
-            let Some((fire_x, fire_y, fire_w, fire_h)) = find_text_in_semantics(&robot, "Fire")
+            let Some((fire_x, fire_y, fire_w, fire_h)) =
+                wait_for_text(&robot, "Fire", 20, Duration::from_millis(100))
             else {
                 println!("FATAL: Fire text not found (even after scroll)");
                 robot.exit().ok();

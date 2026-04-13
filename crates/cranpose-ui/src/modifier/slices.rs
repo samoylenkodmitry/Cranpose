@@ -26,6 +26,7 @@ pub struct ModifierNodeSlices {
     clip_to_bounds: bool,
     motion_context_animated: bool,
     translated_content_context: bool,
+    translated_content_context_identity: Option<usize>,
     text_content: Option<Rc<crate::text::AnnotatedString>>,
     text_style: Option<TextStyle>,
     text_layout_options: Option<TextLayoutOptions>,
@@ -48,6 +49,7 @@ impl Clone for ModifierNodeSlices {
             clip_to_bounds: self.clip_to_bounds,
             motion_context_animated: self.motion_context_animated,
             translated_content_context: self.translated_content_context,
+            translated_content_context_identity: self.translated_content_context_identity,
             text_content: self.text_content.clone(),
             text_style: self.text_style.clone(),
             text_layout_options: self.text_layout_options,
@@ -150,6 +152,10 @@ impl ModifierNodeSlices {
         self.translated_content_context
     }
 
+    pub fn translated_content_context_identity(&self) -> Option<usize> {
+        self.translated_content_context_identity
+    }
+
     pub fn text_content(&self) -> Option<&str> {
         self.text_content.as_ref().map(|a| a.text.as_str())
     }
@@ -201,7 +207,7 @@ impl ModifierNodeSlices {
         layer: GraphicsLayer,
         resolver: Option<Rc<dyn Fn() -> GraphicsLayer>>,
     ) {
-        let existing_snapshot = self.graphics_layer();
+        let existing_snapshot = self.graphics_layer.clone();
         let next_snapshot = existing_snapshot
             .as_ref()
             .map(|current| merge_graphics_layers(current.clone(), layer.clone()))
@@ -242,6 +248,7 @@ impl ModifierNodeSlices {
         self.clip_to_bounds = false;
         self.motion_context_animated = false;
         self.translated_content_context = false;
+        self.translated_content_context_identity = None;
         self.text_content = None;
         self.text_style = None;
         self.text_layout_options = None;
@@ -263,6 +270,10 @@ impl fmt::Debug for ModifierNodeSlices {
             .field(
                 "translated_content_context",
                 &self.translated_content_context,
+            )
+            .field(
+                "translated_content_context_identity",
+                &self.translated_content_context_identity,
             )
             .field("text_content", &self.text_content)
             .field("text_style", &self.text_style)
@@ -361,7 +372,10 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
                 }
 
                 if let Some(layer_node) = any.downcast_ref::<GraphicsLayerNode>() {
-                    slices.push_graphics_layer(layer_node.layer(), layer_node.layer_resolver());
+                    slices.push_graphics_layer(
+                        layer_node.layer_snapshot(),
+                        layer_node.layer_resolver(),
+                    );
                 }
 
                 if any.is::<ClipToBoundsNode>() {
@@ -387,6 +401,8 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
                     any.downcast_ref::<TranslatedContentContextNode>()
                 {
                     slices.translated_content_context = translated_content_node.is_active();
+                    slices.translated_content_context_identity =
+                        Some(translated_content_node.identity());
                 }
 
                 if let Some(text_node) = any.downcast_ref::<TextModifierNode>() {

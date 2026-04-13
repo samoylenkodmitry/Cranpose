@@ -1,4 +1,4 @@
-use cranpose_core::compositionLocalOf;
+use cranpose_core::compositionLocalOfWithPolicy;
 use cranpose_core::CompositionLocal;
 use cranpose_core::CompositionLocalProvider;
 use cranpose_macros::composable;
@@ -66,7 +66,10 @@ pub fn local_uri_handler() -> CompositionLocal<UriHandlerRef> {
     LOCAL_URI_HANDLER.with(|cell| {
         let mut local = cell.borrow_mut();
         if local.is_none() {
-            *local = Some(compositionLocalOf(default_uri_handler));
+            *local = Some(compositionLocalOfWithPolicy(
+                default_uri_handler,
+                Rc::ptr_eq,
+            ));
         }
         local
             .as_ref()

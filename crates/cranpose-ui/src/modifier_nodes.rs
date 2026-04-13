@@ -671,9 +671,7 @@ impl GraphicsLayerNode {
             state: NodeState::new(),
         };
         node.ensure_lazy_observation();
-        if let Some(resolve) = node.layer_resolver() {
-            node.layer = resolve();
-        }
+        node.layer = node.layer();
         node
     }
 
@@ -683,6 +681,10 @@ impl GraphicsLayerNode {
         } else {
             self.layer.clone()
         }
+    }
+
+    pub fn layer_snapshot(&self) -> GraphicsLayer {
+        self.layer.clone()
     }
 
     pub fn layer_resolver(&self) -> Option<Rc<dyn Fn() -> GraphicsLayer>> {
@@ -713,9 +715,7 @@ impl GraphicsLayerNode {
     fn set_lazy(&mut self, layer_resolver: Rc<dyn Fn() -> GraphicsLayer>) {
         self.layer_resolver = Some(layer_resolver);
         self.ensure_lazy_observation();
-        if let Some(resolve) = self.layer_resolver() {
-            self.layer = resolve();
-        }
+        self.layer = self.layer();
     }
 
     fn ensure_lazy_observation(&mut self) {

@@ -18,6 +18,7 @@ pub mod software_text_raster;
 pub mod style_shared;
 pub mod text_hyphenation;
 
+use cranpose_core::MemoryApplier;
 use cranpose_foundation::nodes::input::PointerEvent;
 use cranpose_ui::LayoutTree;
 use cranpose_ui_graphics::Size;
@@ -29,9 +30,27 @@ pub trait HitTestTarget {
     /// Dispatches a pointer event to this target's handlers.
     fn dispatch(&self, event: PointerEvent);
 
+    /// Dispatches a pointer event using the current live node state when available.
+    ///
+    /// Render-scene hit targets may cache closures from an older scene build. Pointer
+    /// dispatch goes through this hook so implementations can resolve fresh handlers
+    /// from the current applier while still using the target's geometry snapshot.
+    fn dispatch_with_applier(&self, _applier: &mut MemoryApplier, event: PointerEvent) {
+        self.dispatch(event);
+    }
+
     /// Returns the NodeId associated with this hit target.
     /// Used by HitPathTracker to cache stable identity instead of geometry.
     fn node_id(&self) -> cranpose_core::NodeId;
+
+    /// Returns the node capture path that should stay attached to this target's gesture.
+    ///
+    /// The default is just this target's own node. Renderers can override this to
+    /// include stable ancestor pointer-input nodes that must continue receiving
+    /// Move/Up/Cancel even if the original descendant target is recycled.
+    fn capture_path(&self) -> Vec<cranpose_core::NodeId> {
+        vec![self.node_id()]
+    }
 }
 
 /// Trait describing the minimal surface area required by the application

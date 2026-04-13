@@ -14,7 +14,6 @@ use crate::subcompose_layout::{
     MeasurePolicy, Placement, SubcomposeLayoutNode, SubcomposeLayoutScope, SubcomposeMeasureScope,
     SubcomposeMeasureScopeImpl,
 };
-use crate::widgets::nodes::cranpose_node;
 use cranpose_core::{NodeId, SlotId};
 use cranpose_foundation::lazy::{
     measure_lazy_list, LazyListIntervalContent, LazyListMeasureConfig, LazyListMeasuredItem,
@@ -48,7 +47,7 @@ impl Default for LazyColumnSpec {
             vertical_arrangement: LinearArrangement::Start,
             content_padding_top: 0.0,
             content_padding_bottom: 0.0,
-            beyond_bounds_item_count: 2,
+            beyond_bounds_item_count: 4,
             reverse_layout: false,
         }
     }
@@ -104,7 +103,7 @@ impl Default for LazyRowSpec {
             horizontal_arrangement: LinearArrangement::Start,
             content_padding_start: 0.0,
             content_padding_end: 0.0,
-            beyond_bounds_item_count: 2,
+            beyond_bounds_item_count: 4,
             reverse_layout: false,
         }
     }
@@ -587,18 +586,20 @@ fn LazyColumnImpl(
         vertical_arrangement: Some(spec.vertical_arrangement),
         horizontal_arrangement: None,
     };
-    let config_state = cranpose_core::rememberUpdatedState(config);
+    let config_cell =
+        cranpose_core::remember(|| Rc::new(RefCell::new(config.clone()))).with(|cell| cell.clone());
+    *config_cell.borrow_mut() = config;
 
     // Create measure policy with stable identity using remember.
     // The policy reads latest values via state references, so it can be memoized.
     let content_for_policy = content_cell.clone();
     let policy: Rc<MeasurePolicy> = cranpose_core::remember(move || {
-        let cfg = config_state;
+        let config_ref = config_cell.clone();
         let content_ref = content_for_policy.clone();
         let policy: Rc<MeasurePolicy> = Rc::new(
             move |scope: &mut SubcomposeMeasureScopeImpl<'_>, constraints: Constraints| {
                 let content = content_ref.borrow();
-                let config = cfg.value();
+                let config = config_ref.borrow().clone();
                 measure_lazy_list_internal(
                     scope,
                     constraints,
@@ -612,6 +613,7 @@ fn LazyColumnImpl(
         policy
     })
     .with(|p| p.clone());
+    let list_state_id = std::ptr::addr_of!(*state.inner_ptr()) as usize;
 
     // Apply clipping and scroll gesture handling to modifier
     let scroll_modifier = modifier
@@ -619,10 +621,14 @@ fn LazyColumnImpl(
         .lazy_vertical_scroll(state, spec.reverse_layout);
 
     // Create and register the subcompose layout node with the composer
-    let node_id = cranpose_node({
-        let scroll_modifier = scroll_modifier.clone();
-        let policy = Rc::clone(&policy);
-        move || SubcomposeLayoutNode::with_content_type_policy(scroll_modifier, policy)
+    let node_id = cranpose_core::with_current_composer(|composer| {
+        composer.with_key(&(list_state_id, "LazyColumnNode"), |composer| {
+            composer.emit_node({
+                let scroll_modifier = scroll_modifier.clone();
+                let policy = Rc::clone(&policy);
+                move || SubcomposeLayoutNode::with_content_type_policy(scroll_modifier, policy)
+            })
+        })
     });
     if let Err(err) = cranpose_core::with_node_mut(node_id, |node: &mut SubcomposeLayoutNode| {
         node.set_modifier(scroll_modifier.clone());
@@ -633,13 +639,19 @@ fn LazyColumnImpl(
     }
     cranpose_core::bubble_measure_dirty_in_composer(node_id);
 
-    // Register layout invalidation callback with the actual node ID.
-    // This uses schedule_layout_repass (O(subtree)) instead of request_layout_invalidation (O(app)).
-    // The callback is used for scroll_to_item() and similar programmatic scrolls.
-    // Note: try_register_layout_callback prevents duplicate registrations on recomposition.
-    state.try_register_layout_callback(Rc::new(move || {
-        crate::schedule_layout_repass(node_id);
-    }));
+    cranpose_core::DisposableEffect!((state.inner_ptr() as usize, node_id), move |scope| {
+        let callback_id = state.try_register_layout_callback(
+            node_id,
+            Rc::new(move || {
+                crate::schedule_layout_repass(node_id);
+            }),
+        );
+        scope.on_dispose(move || {
+            if let Some(callback_id) = callback_id {
+                state.remove_invalidate_callback(callback_id);
+            }
+        })
+    });
 
     node_id
 }
@@ -673,17 +685,19 @@ fn LazyRowImpl(
         vertical_arrangement: None,
         horizontal_arrangement: Some(spec.horizontal_arrangement),
     };
-    let config_state = cranpose_core::rememberUpdatedState(config);
+    let config_cell =
+        cranpose_core::remember(|| Rc::new(RefCell::new(config.clone()))).with(|cell| cell.clone());
+    *config_cell.borrow_mut() = config;
 
     // Create measure policy with stable identity using remember.
     let content_for_policy = content_cell.clone();
     let policy: Rc<MeasurePolicy> = cranpose_core::remember(move || {
-        let cfg = config_state;
+        let config_ref = config_cell.clone();
         let content_ref = content_for_policy.clone();
         let policy: Rc<MeasurePolicy> = Rc::new(
             move |scope: &mut SubcomposeMeasureScopeImpl<'_>, constraints: Constraints| {
                 let content = content_ref.borrow();
-                let config = cfg.value();
+                let config = config_ref.borrow().clone();
                 measure_lazy_list_internal(
                     scope,
                     constraints,
@@ -697,6 +711,7 @@ fn LazyRowImpl(
         policy
     })
     .with(|p| p.clone());
+    let list_state_id = std::ptr::addr_of!(*state.inner_ptr()) as usize;
 
     // Apply clipping and scroll gesture handling to modifier
     let scroll_modifier = modifier
@@ -704,10 +719,14 @@ fn LazyRowImpl(
         .lazy_horizontal_scroll(state, spec.reverse_layout);
 
     // Create and register the subcompose layout node with the composer
-    let node_id = cranpose_node({
-        let scroll_modifier = scroll_modifier.clone();
-        let policy = Rc::clone(&policy);
-        move || SubcomposeLayoutNode::with_content_type_policy(scroll_modifier, policy)
+    let node_id = cranpose_core::with_current_composer(|composer| {
+        composer.with_key(&(list_state_id, "LazyRowNode"), |composer| {
+            composer.emit_node({
+                let scroll_modifier = scroll_modifier.clone();
+                let policy = Rc::clone(&policy);
+                move || SubcomposeLayoutNode::with_content_type_policy(scroll_modifier, policy)
+            })
+        })
     });
     if let Err(err) = cranpose_core::with_node_mut(node_id, |node: &mut SubcomposeLayoutNode| {
         node.set_modifier(scroll_modifier.clone());
@@ -718,12 +737,19 @@ fn LazyRowImpl(
     }
     cranpose_core::bubble_measure_dirty_in_composer(node_id);
 
-    // Register layout invalidation callback with the actual node ID.
-    // This uses schedule_layout_repass (O(subtree)) instead of request_layout_invalidation (O(app)).
-    // Note: try_register_layout_callback prevents duplicate registrations on recomposition.
-    state.try_register_layout_callback(Rc::new(move || {
-        crate::schedule_layout_repass(node_id);
-    }));
+    cranpose_core::DisposableEffect!((state.inner_ptr() as usize, node_id), move |scope| {
+        let callback_id = state.try_register_layout_callback(
+            node_id,
+            Rc::new(move || {
+                crate::schedule_layout_repass(node_id);
+            }),
+        );
+        scope.on_dispose(move || {
+            if let Some(callback_id) = callback_id {
+                state.remove_invalidate_callback(callback_id);
+            }
+        })
+    });
 
     node_id
 }
@@ -735,6 +761,7 @@ fn LazyColumnNode(
     spec: LazyColumnSpec,
     content: LazyListContentHandle,
 ) -> NodeId {
+    cranpose_core::debug_label_current_scope("LazyColumnNode");
     LazyColumnImpl(modifier, state, spec, content)
 }
 
@@ -745,6 +772,7 @@ fn LazyRowNode(
     spec: LazyRowSpec,
     content: LazyListContentHandle,
 ) -> NodeId {
+    cranpose_core::debug_label_current_scope("LazyRowNode");
     LazyRowImpl(modifier, state, spec, content)
 }
 

@@ -13,9 +13,63 @@
 //! ```
 
 use cranpose::AppLauncher;
-use cranpose_testing::find_button_in_semantics;
+use cranpose_testing::find_text_by_prefix_in_semantics;
 use desktop_app::app;
 use std::time::Duration;
+
+fn fail(robot: &cranpose::Robot, message: &str) -> ! {
+    let _ = robot;
+    panic!("{message}");
+}
+
+fn counter_value(robot: &cranpose::Robot) -> Option<i32> {
+    find_text_by_prefix_in_semantics(robot, "Counter:")
+        .and_then(|(_, _, _, _, text)| text.split(':').nth(1)?.trim().parse().ok())
+}
+
+fn counter_values(robot: &cranpose::Robot) -> Vec<i32> {
+    fn collect(elem: &cranpose::SemanticElement, out: &mut Vec<i32>) {
+        if let Some(text) = &elem.text {
+            if let Some(value) = text
+                .strip_prefix("Counter:")
+                .and_then(|value| value.trim().parse().ok())
+            {
+                out.push(value);
+            }
+        }
+        for child in &elem.children {
+            collect(child, out);
+        }
+    }
+
+    let mut values = Vec::new();
+    if let Ok(semantics) = robot.get_semantics() {
+        for elem in &semantics {
+            collect(elem, &mut values);
+        }
+    }
+    values
+}
+
+fn wait_for_counter_value(
+    robot: &cranpose::Robot,
+    expected: i32,
+    attempts: usize,
+    delay: Duration,
+) -> Option<i32> {
+    for _ in 0..attempts {
+        if let Some(value) = counter_value(robot) {
+            if value == expected {
+                return Some(value);
+            }
+        }
+        let _ = robot.wait_for_idle();
+        std::thread::sleep(delay);
+    }
+
+    let _ = robot.wait_for_idle();
+    counter_value(robot)
+}
 
 fn main() {
     env_logger::init();
@@ -37,39 +91,16 @@ fn main() {
 
             // Helper to find button center
             let find_button_center = |robot: &cranpose::Robot, name: &str| -> Option<(f32, f32)> {
-                find_button_in_semantics(robot, name).map(|(x, y, w, h)| (x + w / 2.0, y + h / 2.0))
-            };
-
-            // Helper to get counter value
-            let get_counter = |robot: &cranpose::Robot| -> Option<i32> {
-                if let Ok(semantics) = robot.get_semantics() {
-                    for elem in &semantics {
-                        fn find_counter(elem: &cranpose::SemanticElement) -> Option<i32> {
-                            if let Some(ref text) = elem.text {
-                                if text.starts_with("Counter:") {
-                                    return text
-                                        .split(':')
-                                        .nth(1)
-                                        .and_then(|s| s.trim().parse().ok());
-                                }
-                            }
-                            for child in &elem.children {
-                                if let Some(v) = find_counter(child) {
-                                    return Some(v);
-                                }
-                            }
-                            None
-                        }
-                        if let Some(v) = find_counter(elem) {
-                            return Some(v);
-                        }
-                    }
-                }
-                None
+                robot
+                    .find_button_bounds(name)
+                    .ok()
+                    .flatten()
+                    .map(|(x, y, w, h)| (x + w / 2.0, y + h / 2.0))
             };
 
             println!("--- Step 1: Verify Initial State ---");
-            let initial_counter = get_counter(&robot).unwrap_or(-1);
+            let initial_counter = counter_value(&robot)
+                .unwrap_or_else(|| fail(&robot, "initial counter value not found"));
             println!("  Initial counter value: {}", initial_counter);
 
             println!("\n--- Step 2: Click CompositionLocal Test Tab ---");
@@ -78,10 +109,15 @@ fn main() {
                     "  Found 'CompositionLocal Test' tab at ({:.1}, {:.1})",
                     x, y
                 );
-                robot.click(x, y).ok();
+                robot.click(x, y).unwrap_or_else(|err| {
+                    fail(
+                        &robot,
+                        &format!("failed to click 'CompositionLocal Test': {err}"),
+                    )
+                });
                 println!("  ✓ Clicked");
             } else {
-                println!("  ✗ Tab not found!");
+                fail(&robot, "tab 'CompositionLocal Test' not found");
             }
             std::thread::sleep(Duration::from_millis(300));
 
@@ -89,10 +125,12 @@ fn main() {
             let counter_app_pos = find_button_center(&robot, "Counter App");
             if let Some((x, y)) = counter_app_pos {
                 println!("  Found 'Counter App' tab at ({:.1}, {:.1})", x, y);
-                robot.click(x, y).ok();
+                robot.click(x, y).unwrap_or_else(|err| {
+                    fail(&robot, &format!("failed to click 'Counter App': {err}"))
+                });
                 println!("  ✓ Clicked");
             } else {
-                println!("  ✗ Tab not found!");
+                fail(&robot, "tab 'Counter App' not found");
             }
             std::thread::sleep(Duration::from_millis(300));
 
@@ -116,10 +154,14 @@ fn main() {
                     let progress = step as f32 / 19.0;
                     let x = tab_x + (gradient_x - tab_x) * progress;
                     let y = tab_y + (gradient_y - tab_y) * progress;
-                    robot.mouse_move(x, y).ok();
+                    robot.mouse_move(x, y).unwrap_or_else(|err| {
+                        fail(&robot, &format!("failed to move mouse through gradient area: {err}"))
+                    });
                     std::thread::sleep(Duration::from_millis(25));
                 }
                 println!("  ✓ Cursor moved through gradient area (triggering recomposition)");
+            } else {
+                fail(&robot, "counter tab position missing before gradient walk");
             }
             std::thread::sleep(Duration::from_millis(200));
 
@@ -131,21 +173,30 @@ fn main() {
                 println!("  Found 'Increment' button at ({:.1}, {:.1})", x, y);
 
                 // First move to the button position (may trigger additional recomposition)
-                robot.mouse_move(x, y).ok();
+                robot.mouse_move(x, y).unwrap_or_else(|err| {
+                    fail(&robot, &format!("failed to move mouse to Increment button: {err}"))
+                });
                 std::thread::sleep(Duration::from_millis(100));
 
                 // Then click - this tests that Up event reaches the button
                 // even if Down event triggered recomposition
-                robot.click(x, y).ok();
+                robot.click(x, y).unwrap_or_else(|err| {
+                    fail(&robot, &format!("failed to click Increment button: {err}"))
+                });
                 println!("  ✓ Clicked Increment");
             } else {
-                println!("  ✗ Increment button not found!");
+                fail(&robot, "Increment button not found after tab roundtrip");
             }
             std::thread::sleep(Duration::from_millis(300));
 
             println!("\n--- Step 6: Verify Counter Incremented ---");
-            let final_counter = get_counter(&robot).unwrap_or(-1);
+            let _ = robot.wait_for_idle();
+            let final_counter =
+                wait_for_counter_value(&robot, initial_counter + 1, 40, Duration::from_millis(50))
+                    .unwrap_or(-1);
+            let all_counters = counter_values(&robot);
             println!("  Final counter value: {}", final_counter);
+            println!("  All counter texts: {:?}", all_counters);
 
             println!("\n=== Test Summary ===");
             if final_counter == initial_counter + 1 {
@@ -154,20 +205,15 @@ fn main() {
                     "  Counter incremented from {} to {}",
                     initial_counter, final_counter
                 );
-            } else if final_counter == initial_counter {
-                println!("✗ FAIL: Counter did NOT increment");
-                println!(
-                    "  Counter stayed at {} (expected {})",
-                    final_counter,
-                    initial_counter + 1
-                );
-                println!("\n  This indicates the Increment button click didn't register.");
             } else {
-                println!("✗ FAIL: Unexpected counter value");
-                println!(
-                    "  Expected: {}, Got: {}",
-                    initial_counter + 1,
-                    final_counter
+                fail(
+                    &robot,
+                    &format!(
+                        "counter value mismatch after robot click: expected {}, got {}, all counters {:?}",
+                        initial_counter + 1,
+                        final_counter,
+                        all_counters,
+                    ),
                 );
             }
 

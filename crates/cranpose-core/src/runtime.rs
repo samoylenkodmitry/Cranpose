@@ -1,5 +1,6 @@
 use crate::collections::map::HashMap;
 use crate::collections::map::HashSet;
+use crate::state::{MutationPolicy, NeverEqual};
 use crate::MutableStateInner;
 use std::any::Any;
 use std::cell::{Cell, RefCell};
@@ -94,6 +95,15 @@ pub(crate) struct StateArena {
 
 impl StateArena {
     pub(crate) fn alloc<T: Clone + 'static>(&self, value: T, runtime: RuntimeHandle) -> StateId {
+        self.alloc_with_policy(value, runtime, Arc::new(NeverEqual))
+    }
+
+    pub(crate) fn alloc_with_policy<T: Clone + 'static>(
+        &self,
+        value: T,
+        runtime: RuntimeHandle,
+        policy: Arc<dyn MutationPolicy<T>>,
+    ) -> StateId {
         let (slot, generation) = {
             let mut inner = self.inner.borrow_mut();
             match inner.free.pop() {
@@ -119,7 +129,7 @@ impl StateArena {
             }
         };
         let id = StateId::new(slot, generation);
-        let inner = MutableStateInner::new(value, runtime.clone());
+        let inner = MutableStateInner::new_with_policy(value, runtime.clone(), policy);
         inner.install_snapshot_observer(id);
         let typed_cell = Rc::new(TypedStateCell { inner });
         let cell: Rc<dyn Any> = typed_cell.clone();
@@ -932,6 +942,21 @@ impl RuntimeHandle {
         lease
     }
 
+    pub(crate) fn alloc_state_with_policy<T: Clone + 'static>(
+        &self,
+        value: T,
+        policy: Arc<dyn MutationPolicy<T>>,
+    ) -> Rc<StateHandleLease> {
+        let id =
+            self.with_state_arena(|arena| arena.alloc_with_policy(value, self.clone(), policy));
+        let lease = Rc::new(StateHandleLease {
+            id,
+            runtime: self.clone(),
+        });
+        self.with_state_arena(|arena| arena.register_lease(id, &lease));
+        lease
+    }
+
     pub(crate) fn alloc_persistent_state<T: Clone + 'static>(
         &self,
         value: T,
@@ -1142,6 +1167,14 @@ impl RuntimeHandle {
             .unwrap_or(false)
     }
 
+    #[doc(hidden)]
+    pub fn debug_invalid_scope_ids(&self) -> Vec<usize> {
+        self.inner
+            .upgrade()
+            .map(|inner| inner.invalid_scopes.borrow().iter().copied().collect())
+            .unwrap_or_default()
+    }
+
     pub fn has_frame_callbacks(&self) -> bool {
         self.inner
             .upgrade()
@@ -1159,6 +1192,12 @@ impl RuntimeHandle {
 
     pub fn dispatcher(&self) -> UiDispatcher {
         self.dispatcher.clone()
+    }
+
+    #[doc(hidden)]
+    pub fn with_deferred_state_releases<R>(&self, f: impl FnOnce() -> R) -> R {
+        let _scope = enter_state_teardown_scope();
+        f()
     }
 }
 

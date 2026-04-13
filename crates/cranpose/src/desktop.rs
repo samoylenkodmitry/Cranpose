@@ -76,12 +76,20 @@ enum SemanticTextMatchKind {
 #[cfg(feature = "robot")]
 #[derive(Debug, Clone)]
 struct SemanticQueryResult {
+    node_id: cranpose_core::NodeId,
     bounds: SemanticRect,
     text: Option<String>,
 }
 
 #[cfg(feature = "robot")]
 type TextMatchBounds = (f32, f32, f32, f32, String);
+
+#[cfg(feature = "robot")]
+fn pump_robot_frame(app: &mut AppShell<WgpuRenderer>) {
+    if app.needs_redraw() || app.has_active_animations() {
+        app.update();
+    }
+}
 
 /// RGBA screenshot captured from the current render scene.
 #[cfg(feature = "robot")]
@@ -1468,26 +1476,33 @@ impl ApplicationHandler for App {
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
                     RobotCommand::GetSemantics => {
+                        pump_robot_frame(app);
                         let semantics = extract_semantics(app);
                         let _ = controller.tx.send(RobotResponse::Semantics(semantics));
                     }
                     RobotCommand::FindText { text, match_kind } => {
+                        pump_robot_frame(app);
                         let result = find_text_in_app(app, &text, match_kind);
                         let _ = controller.tx.send(RobotResponse::SemanticQuery(result));
                     }
                     RobotCommand::FindButton { text, match_kind } => {
+                        pump_robot_frame(app);
                         let result = find_button_in_app(app, &text, match_kind);
                         let _ = controller.tx.send(RobotResponse::SemanticQuery(result));
                     }
-                    RobotCommand::GetScreenshot => match capture_screenshot(app) {
-                        Ok(screenshot) => {
-                            let _ = controller.tx.send(RobotResponse::Screenshot(screenshot));
+                    RobotCommand::GetScreenshot => {
+                        pump_robot_frame(app);
+                        match capture_screenshot(app) {
+                            Ok(screenshot) => {
+                                let _ = controller.tx.send(RobotResponse::Screenshot(screenshot));
+                            }
+                            Err(err) => {
+                                let _ = controller.tx.send(RobotResponse::Error(err));
+                            }
                         }
-                        Err(err) => {
-                            let _ = controller.tx.send(RobotResponse::Error(err));
-                        }
-                    },
+                    }
                     RobotCommand::GetScreenshotWithScale(scale) => {
+                        pump_robot_frame(app);
                         match capture_screenshot_with_scale(app, scale) {
                             Ok(screenshot) => {
                                 let _ = controller.tx.send(RobotResponse::Screenshot(screenshot));
@@ -1930,7 +1945,16 @@ fn find_text_in_app(
     let layout_tree = app.layout_tree()?.clone();
     let root = app.semantics_tree()?.root().clone();
     let bounds_by_node = build_semantic_bounds_index(layout_tree.root());
-    find_text_in_semantics_tree(&bounds_by_node, &root, query, match_kind)
+    let result = find_text_in_semantics_tree(&bounds_by_node, &root, query, match_kind);
+    if desktop_input_debug_enabled() {
+        eprintln!(
+            "[CRANPOSE_INPUT_DEBUG] find_text query={query:?} result={:?}",
+            result
+                .as_ref()
+                .map(|result| (result.node_id, result.bounds, result.text.clone()))
+        );
+    }
+    result
 }
 
 #[cfg(feature = "robot")]
@@ -1942,7 +1966,16 @@ fn find_button_in_app(
     let layout_tree = app.layout_tree()?.clone();
     let root = app.semantics_tree()?.root().clone();
     let bounds_by_node = build_semantic_bounds_index(layout_tree.root());
-    find_button_in_semantics_tree(&bounds_by_node, &root, query, match_kind)
+    let result = find_button_in_semantics_tree(&bounds_by_node, &root, query, match_kind);
+    if desktop_input_debug_enabled() {
+        eprintln!(
+            "[CRANPOSE_INPUT_DEBUG] find_button query={query:?} result={:?}",
+            result
+                .as_ref()
+                .map(|result| (result.node_id, result.bounds, result.text.clone()))
+        );
+    }
+    result
 }
 
 #[cfg(feature = "robot")]
@@ -1971,6 +2004,7 @@ fn find_text_in_semantics_tree(
     if let Some(text) = semantics_node_text(sem_node) {
         if semantics_text_matches(text, query, match_kind) {
             return Some(SemanticQueryResult {
+                node_id: sem_node.node_id,
                 bounds: semantic_rect_for_node(bounds_by_node, sem_node.node_id),
                 text: Some(text.to_string()),
             });
@@ -1998,6 +2032,7 @@ fn find_button_in_semantics_tree(
         && subtree_contains_matching_text(sem_node, query, match_kind)
     {
         return Some(SemanticQueryResult {
+            node_id: sem_node.node_id,
             bounds: semantic_rect_for_node(bounds_by_node, sem_node.node_id),
             text: semantics_node_text(sem_node).map(str::to_string),
         });
@@ -2079,6 +2114,7 @@ fn find_text_in_trees(
     if let Some(text) = semantics_node_text(sem_node) {
         if semantics_text_matches(text, query, match_kind) {
             return Some(SemanticQueryResult {
+                node_id: layout_box.node_id,
                 bounds: bounds_from_layout_box(layout_box),
                 text: Some(text.to_string()),
             });
@@ -2123,6 +2159,7 @@ fn find_button_in_trees(
         && subtree_contains_matching_text(sem_node, query, match_kind)
     {
         return Some(SemanticQueryResult {
+            node_id: layout_box.node_id,
             bounds: bounds_from_layout_box(layout_box),
             text: semantics_node_text(sem_node).map(str::to_string),
         });

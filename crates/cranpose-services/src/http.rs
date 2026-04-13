@@ -1,4 +1,4 @@
-use cranpose_core::{compositionLocalOf, CompositionLocal};
+use cranpose_core::{compositionLocalOfWithPolicy, CompositionLocal};
 #[cfg(target_arch = "wasm32")]
 use futures_util::{stream, StreamExt};
 use std::future::Future;
@@ -364,7 +364,10 @@ pub fn local_http_client() -> CompositionLocal<HttpClientRef> {
     LOCAL_HTTP_CLIENT.with(|cell| {
         let mut local = cell.borrow_mut();
         if local.is_none() {
-            *local = Some(compositionLocalOf(default_http_client));
+            *local = Some(compositionLocalOfWithPolicy(
+                default_http_client,
+                Arc::ptr_eq,
+            ));
         }
         local
             .as_ref()

@@ -127,6 +127,8 @@ struct SnapshotStateObserverInner {
     owned_scopes: RefCell<Vec<Rc<RefCell<ScopeEntry>>>>,
     fast_scopes: RefCell<HashMap<ScopeId, Rc<RefCell<ScopeEntry>>>>,
     pause_count: Rc<Cell<usize>>,
+    active_read_targets: Rc<RefCell<Vec<Rc<RefCell<ObservedIds>>>>>,
+    read_dispatcher: ReadObserver,
     apply_handle: RefCell<Option<crate::snapshot_v2::ObserverHandle>>,
     weak_self: RefCell<Weak<SnapshotStateObserverInner>>,
     frame_version: Cell<u64>,
@@ -136,11 +138,27 @@ impl SnapshotStateObserverInner {
     const MIN_RETAINED_SCOPE_CAPACITY: usize = 256;
 
     fn new(on_changed_executor: impl Fn(Box<dyn FnOnce() + 'static>) + 'static) -> Self {
+        let pause_count = Rc::new(Cell::new(0));
+        let active_read_targets = Rc::new(RefCell::new(Vec::<Rc<RefCell<ObservedIds>>>::new()));
+        let dispatcher_pause_count = Rc::clone(&pause_count);
+        let dispatcher_targets = Rc::clone(&active_read_targets);
+        let read_dispatcher: ReadObserver = Arc::new(move |state| {
+            if dispatcher_pause_count.get() > 0 {
+                return;
+            }
+            let observed = dispatcher_targets.borrow().last().cloned();
+            if let Some(observed) = observed {
+                observed.borrow_mut().insert(state.object_id().as_usize());
+            }
+        });
+
         Self {
             executor: Rc::new(on_changed_executor),
             owned_scopes: RefCell::new(Vec::new()),
             fast_scopes: RefCell::new(HashMap::default()),
-            pause_count: Rc::new(Cell::new(0)),
+            pause_count,
+            active_read_targets,
+            read_dispatcher,
             apply_handle: RefCell::new(None),
             weak_self: RefCell::new(Weak::new()),
             frame_version: Cell::new(0),
@@ -190,18 +208,23 @@ impl SnapshotStateObserverInner {
             }
         }
 
-        let pause_count = self.pause_count.clone();
         let observed = Rc::new(RefCell::new(ObservedIds::new()));
-        let observed_for_read = Rc::clone(&observed);
-        let read_observer: ReadObserver = Arc::new(move |state| {
-            if pause_count.get() > 0 {
-                return;
+        self.active_read_targets
+            .borrow_mut()
+            .push(Rc::clone(&observed));
+        struct ActiveObservationGuard {
+            stack: Rc<RefCell<Vec<Rc<RefCell<ObservedIds>>>>>,
+        }
+        impl Drop for ActiveObservationGuard {
+            fn drop(&mut self) {
+                self.stack.borrow_mut().pop();
             }
-            let id = state.object_id().as_usize();
-            observed_for_read.borrow_mut().insert(id);
-        });
+        }
+        let _guard = ActiveObservationGuard {
+            stack: Rc::clone(&self.active_read_targets),
+        };
 
-        let result = self.run_with_read_observer(read_observer, block);
+        let result = self.run_with_read_observer(block);
 
         if observed.borrow().is_empty() {
             if existing_entry.is_some() {
@@ -357,18 +380,15 @@ impl SnapshotStateObserverInner {
         }
     }
 
-    fn run_with_read_observer<R>(
-        &self,
-        read_observer: ReadObserver,
-        block: impl FnOnce() -> R,
-    ) -> R {
+    fn run_with_read_observer<R>(&self, block: impl FnOnce() -> R) -> R {
         // Kotlin uses Snapshot.observeInternal which creates a TransparentObserverMutableSnapshot,
         // not a readonly snapshot. This allows writes to happen during observation (composition).
         use crate::snapshot_v2::take_transparent_observer_mutable_snapshot;
 
         // Create a transparent mutable snapshot (not readonly!) for observation
         // This matches Kotlin's Snapshot.observeInternal behavior
-        let snapshot = take_transparent_observer_mutable_snapshot(Some(read_observer), None);
+        let snapshot =
+            take_transparent_observer_mutable_snapshot(Some(self.read_dispatcher.clone()), None);
         let result = snapshot.enter(block);
         snapshot.dispose();
         result
@@ -722,6 +742,50 @@ mod tests {
         snapshot.apply().check();
 
         assert_eq!(triggered.get(), 0);
+        observer.stop();
+    }
+
+    #[test]
+    fn nested_observe_reads_attributes_state_to_innermost_scope_only() {
+        let _guard = reset_runtime();
+
+        let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
+        let outer_triggered = Rc::new(Cell::new(0));
+        let inner_triggered = Rc::new(Cell::new(0));
+
+        let observer = SnapshotStateObserver::new(|callback| callback());
+        observer.start();
+
+        let outer_scope = TestScope("outer");
+        let inner_scope = TestScope("inner");
+        observer.observe_reads(
+            outer_scope.clone(),
+            {
+                let outer_triggered = Rc::clone(&outer_triggered);
+                move |_| outer_triggered.set(outer_triggered.get() + 1)
+            },
+            || {
+                observer.observe_reads(
+                    inner_scope.clone(),
+                    {
+                        let inner_triggered = Rc::clone(&inner_triggered);
+                        move |_| inner_triggered.set(inner_triggered.get() + 1)
+                    },
+                    || {
+                        let _ = state.get();
+                    },
+                );
+            },
+        );
+
+        let snapshot = take_mutable_snapshot(None, None);
+        snapshot.enter(|| {
+            state.set(1);
+        });
+        snapshot.apply().check();
+
+        assert_eq!(outer_triggered.get(), 0);
+        assert_eq!(inner_triggered.get(), 1);
         observer.stop();
     }
 

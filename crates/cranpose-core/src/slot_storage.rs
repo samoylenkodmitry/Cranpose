@@ -5,7 +5,7 @@
 //! through this trait while keeping the composer decoupled from the concrete
 //! slot table representation.
 
-use crate::{Key, NodeId, Owned, ScopeId};
+use crate::{AnchorId, Key, NodeId, Owned, ScopeId};
 
 /// Opaque handle to a group in the slot storage.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
@@ -28,6 +28,7 @@ impl ValueSlotId {
 /// Result of starting a group.
 pub struct StartGroup<G> {
     pub group: G,
+    pub anchor: AnchorId,
     /// True if this group was restored from a gap (unstable children).
     pub restored_from_gap: bool,
 }
@@ -64,9 +65,13 @@ pub trait SlotStorage {
 
     // ── recomposition ───────────────────────────────────────────────────────
 
-    /// Start recomposing the group that owns `scope`. Returns the group we
-    /// started, or `None` if that scope is gone.
-    fn begin_recranpose_at_scope(&mut self, scope: ScopeId) -> Option<Self::Group>;
+    /// Start recomposing the group that owns `anchor` and is still owned by
+    /// `scope`. Returns the group we started, or `None` if that scope is gone.
+    fn begin_recranpose_at_anchor(
+        &mut self,
+        anchor: AnchorId,
+        scope: ScopeId,
+    ) -> Option<Self::Group>;
 
     /// Finish the recomposition started with `begin_recranpose_at_scope`.
     fn end_recompose(&mut self);

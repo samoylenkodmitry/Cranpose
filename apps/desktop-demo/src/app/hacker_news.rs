@@ -17,6 +17,8 @@ use cranpose_ui::{
     VerticalAlignment,
 };
 use serde::Deserialize;
+#[cfg(test)]
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -878,6 +880,10 @@ fn AutoLoadMore(
     auto_load_guard: cranpose_core::MutableState<usize>,
     load_more_trigger: cranpose_core::MutableState<u64>,
 ) {
+    #[cfg(test)]
+    cranpose_core::debug_label_current_scope("AutoLoadMore");
+    #[cfg(test)]
+    DebugScopeTag("AutoLoadMore");
     let visible_start = list_state.first_visible_item_index();
     let visible_count = list_state.stats().items_in_use;
     let visible_end = visible_start.saturating_add(visible_count.saturating_sub(1));
@@ -911,6 +917,10 @@ fn AutoLoadMoreComments(
     auto_load_guard: cranpose_core::MutableState<usize>,
     load_more_trigger: cranpose_core::MutableState<u64>,
 ) {
+    #[cfg(test)]
+    cranpose_core::debug_label_current_scope("AutoLoadMoreComments");
+    #[cfg(test)]
+    DebugScopeTag("AutoLoadMoreComments");
     let visible_start = list_state.first_visible_item_index();
     let visible_count = list_state.stats().items_in_use;
     let visible_end = visible_start.saturating_add(visible_count.saturating_sub(1));
@@ -951,12 +961,36 @@ fn discussion_status_detail(data: &CommentThreadData) -> String {
     detail
 }
 
+#[cfg(test)]
+thread_local! {
+    static DEBUG_SCOPE_TAGS: RefCell<HashMap<usize, &'static str>> = RefCell::new(HashMap::new());
+    static STORIES_PANE_CALLS: Cell<usize> = const { Cell::new(0) };
+    static THREAD_PANE_CALLS: Cell<usize> = const { Cell::new(0) };
+    static LAST_STORIES_PANE_NODE_ID: RefCell<Option<usize>> = const { RefCell::new(None) };
+    static LAST_STORIES_LIST_STATE: RefCell<Option<cranpose_foundation::lazy::LazyListState>> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+#[composable]
+fn DebugScopeTag(name: &'static str) {
+    cranpose_core::with_current_composer(|composer| {
+        if let Some(scope) = composer.current_recranpose_scope() {
+            DEBUG_SCOPE_TAGS.with(|tags| {
+                tags.borrow_mut().insert(scope.id(), name);
+            });
+        }
+    });
+}
+
 #[allow(non_snake_case)]
 #[composable]
 fn ActionButton<F>(label: String, background: Color, text_color: Color, on_click: F)
 where
     F: FnMut() + 'static,
 {
+    #[cfg(test)]
+    DebugScopeTag("ActionButton");
     Button(
         rounded_surface(Modifier::empty(), background, 8.0).padding_symmetric(10.0, 6.0),
         on_click,
@@ -990,6 +1024,8 @@ fn StatusCard(
     title_color: Color,
     detail_color: Color,
 ) {
+    #[cfg(test)]
+    DebugScopeTag("StatusCard");
     Column(
         rounded_surface(modifier, background, 14.0).padding(14.0),
         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(6.0)),
@@ -1020,6 +1056,8 @@ fn HackerNewsHeader<F1, F2, F3>(
     F2: FnMut() + 'static,
     F3: FnMut() + 'static,
 {
+    #[cfg(test)]
+    DebugScopeTag("HackerNewsHeader");
     let on_back: Rc<RefCell<dyn FnMut()>> = Rc::new(RefCell::new(on_back));
     let on_refresh: Rc<RefCell<dyn FnMut()>> = Rc::new(RefCell::new(on_refresh));
     let on_toggle_theme: Rc<RefCell<dyn FnMut()>> = Rc::new(RefCell::new(on_toggle_theme));
@@ -1140,6 +1178,8 @@ fn StoryItem<F>(
 ) where
     F: FnMut() + 'static,
 {
+    #[cfg(test)]
+    DebugScopeTag("StoryItem");
     let on_select_thread: Rc<RefCell<dyn FnMut()>> = Rc::new(RefCell::new(on_select_thread));
     let title = story
         .title
@@ -1273,6 +1313,14 @@ fn StoriesPane(
     thread_refresh_trigger: cranpose_core::MutableState<u64>,
     palette: HackerNewsPalette,
 ) {
+    #[cfg(test)]
+    STORIES_PANE_CALLS.with(|count| count.set(count.get() + 1));
+    #[cfg(test)]
+    LAST_STORIES_LIST_STATE.with(|slot| *slot.borrow_mut() = Some(list_state));
+    #[cfg(test)]
+    cranpose_core::debug_label_current_scope("StoriesPane");
+    #[cfg(test)]
+    DebugScopeTag("StoriesPane");
     let status_label = match &news_state {
         NewsState::Idle => "Waiting for data".to_string(),
         NewsState::Loading => "Fetching top stories".to_string(),
@@ -1282,7 +1330,7 @@ fn StoriesPane(
         }
     };
 
-    Column(
+    let _node_id = Column(
         rounded_surface(modifier, palette.panel, 18.0).padding(14.0),
         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(10.0)),
         move || {
@@ -1433,6 +1481,8 @@ fn StoriesPane(
             );
         },
     );
+    #[cfg(test)]
+    LAST_STORIES_PANE_NODE_ID.with(|slot| *slot.borrow_mut() = Some(_node_id));
 }
 
 #[allow(non_snake_case)]
@@ -1646,6 +1696,12 @@ fn ThreadPane(
     comment_auto_load_guard: cranpose_core::MutableState<usize>,
     palette: HackerNewsPalette,
 ) {
+    #[cfg(test)]
+    THREAD_PANE_CALLS.with(|count| count.set(count.get() + 1));
+    #[cfg(test)]
+    cranpose_core::debug_label_current_scope("ThreadPane");
+    #[cfg(test)]
+    DebugScopeTag("ThreadPane");
     Column(
         rounded_surface(modifier, palette.panel, 18.0).padding(14.0),
         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(12.0)),
@@ -1849,6 +1905,10 @@ fn ThreadPane(
 
 #[composable]
 pub fn hacker_news_tab() {
+    #[cfg(test)]
+    cranpose_core::debug_label_current_scope("hacker_news_tab");
+    #[cfg(test)]
+    DebugScopeTag("hacker_news_tab");
     let news_state = cranpose_core::useState(|| NewsState::Idle);
     let thread_state = cranpose_core::useState(|| ThreadState::Idle);
     let refresh_trigger = cranpose_core::useState(|| 0u64);
@@ -1907,6 +1967,10 @@ pub fn hacker_news_tab() {
             BoxWithConstraints(
                 Modifier::empty().fill_max_size().clip_to_bounds(),
                 move |scope| {
+                    #[cfg(test)]
+                    cranpose_core::debug_label_current_scope("hacker_news_tab_box_content");
+                    #[cfg(test)]
+                    DebugScopeTag("hacker_news_tab_box_content");
                     let is_two_pane = scope.max_width().0 >= TWO_PANE_BREAKPOINT;
                     let list_pane_width = (scope.max_width().0 * 0.38).clamp(320.0, 420.0);
                     let show_back = !is_two_pane && selected_story_for_constraints.is_some();
@@ -1918,6 +1982,8 @@ pub fn hacker_news_tab() {
                         Modifier::empty().fill_max_size().clip_to_bounds(),
                         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(12.0)),
                         move || {
+                            #[cfg(test)]
+                            cranpose_core::debug_label_current_scope("hacker_news_tab_body");
                             HackerNewsHeader(
                                 palette,
                                 show_back,
@@ -1948,6 +2014,10 @@ pub fn hacker_news_tab() {
                             );
 
                             if is_two_pane {
+                                #[cfg(test)]
+                                cranpose_core::debug_label_current_scope(
+                                    "hacker_news_tab_two_pane",
+                                );
                                 let selected_story_for_row = selected_story_for_layout.clone();
                                 let current_news_for_row = current_news_for_layout.clone();
                                 let current_thread_for_row = current_thread_for_layout.clone();
@@ -1982,26 +2052,48 @@ pub fn hacker_news_tab() {
                                         );
                                     },
                                 );
-                            } else if selected_story_for_layout.is_some() {
-                                ThreadPane(
-                                    Modifier::empty().fill_max_width().weight(1.0),
-                                    selected_story_for_layout.clone(),
-                                    current_thread_for_layout.clone(),
-                                    thread_refresh_trigger,
-                                    comment_load_more_trigger,
-                                    comment_auto_load_guard,
-                                    palette,
-                                );
                             } else {
-                                StoriesPane(
-                                    Modifier::empty().fill_max_width().weight(1.0),
-                                    list_state,
-                                    current_news_for_layout.clone(),
-                                    None,
-                                    selected_story_state,
-                                    thread_refresh_trigger,
-                                    palette,
-                                );
+                                let single_pane_key =
+                                    selected_story_for_layout.as_ref().map(|story| story.id);
+                                cranpose_core::with_key(&single_pane_key, {
+                                    let selected_story_for_single_pane =
+                                        selected_story_for_layout.clone();
+                                    let current_thread_for_single_pane =
+                                        current_thread_for_layout.clone();
+                                    let current_news_for_single_pane =
+                                        current_news_for_layout.clone();
+                                    move || {
+                                        if selected_story_for_single_pane.is_some() {
+                                            #[cfg(test)]
+                                            cranpose_core::debug_label_current_scope(
+                                                "hacker_news_tab_thread_only",
+                                            );
+                                            ThreadPane(
+                                                Modifier::empty().fill_max_width().weight(1.0),
+                                                selected_story_for_single_pane.clone(),
+                                                current_thread_for_single_pane.clone(),
+                                                thread_refresh_trigger,
+                                                comment_load_more_trigger,
+                                                comment_auto_load_guard,
+                                                palette,
+                                            );
+                                        } else {
+                                            #[cfg(test)]
+                                            cranpose_core::debug_label_current_scope(
+                                                "hacker_news_tab_stories_only",
+                                            );
+                                            StoriesPane(
+                                                Modifier::empty().fill_max_width().weight(1.0),
+                                                list_state,
+                                                current_news_for_single_pane.clone(),
+                                                None,
+                                                selected_story_state,
+                                                thread_refresh_trigger,
+                                                palette,
+                                            );
+                                        }
+                                    }
+                                });
                             }
                         },
                     );
@@ -2014,17 +2106,30 @@ pub fn hacker_news_tab() {
 #[cfg(test)]
 mod tests {
     use super::{
-        fetch_stories_page, html_to_plain_text, load_comment_page, load_initial_comment_page,
-        story_comments_url, story_target_url, CommentThreadData, Story,
+        fetch_stories_page, hacker_news_tab, html_to_plain_text, load_comment_page,
+        load_initial_comment_page, story_comments_url, story_target_url, CommentThreadData, Story,
     };
+    use cranpose_core::{run_in_mutable_snapshot, CompositionLocalProvider};
+    use cranpose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEventKind};
     use cranpose_services::{HttpClient, HttpClientRef, HttpFuture};
+    use cranpose_testing::robot::{create_headless_robot_test, RobotTestRule, TestRenderer};
+    use cranpose_ui::{LayoutBox, SemanticsAction, SemanticsNode, SemanticsRole};
     use serde_json::json;
     use std::collections::HashMap;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc,
+        Arc, Mutex, MutexGuard, OnceLock,
     };
     use std::time::Duration;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn test_guard() -> MutexGuard<'static, ()> {
+        static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("test lock poisoned")
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     struct RequestConcurrencyTracker {
@@ -2158,6 +2263,587 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     fn comment_ids(data: &CommentThreadData) -> Vec<u64> {
         data.comments.iter().map(|comment| comment.id).collect()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    const REGRESSION_MOCK_COMMENT_COUNT: usize = 40;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    struct RegressionHttpClient {
+        ids: Vec<u64>,
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    impl RegressionHttpClient {
+        fn new() -> Self {
+            Self::new_with_story_count(3)
+        }
+
+        fn new_with_story_count(story_count: usize) -> Self {
+            Self {
+                ids: (0..story_count)
+                    .map(|index| 900_001 + index as u64)
+                    .collect(),
+            }
+        }
+
+        fn topstories_json(&self) -> String {
+            json!(self.ids).to_string()
+        }
+
+        fn story_json(&self, id: u64) -> String {
+            let index = self
+                .ids
+                .iter()
+                .position(|candidate| *candidate == id)
+                .expect("story id should be known");
+            let comment_ids = (1..=REGRESSION_MOCK_COMMENT_COUNT)
+                .map(|suffix| id * 100 + suffix as u64)
+                .collect::<Vec<_>>();
+            json!({
+                "id": id,
+                "title": format!("Regression Story #{}", index + 1),
+                "text": format!(
+                    "<p>{}</p>",
+                    "A deterministic thread payload used to reproduce the Hacker News back-navigation redraw leak.".repeat(2)
+                ),
+                "by": "regression-bot",
+                "score": 100 + index as i32,
+                "time": 1_700_000_000 + index as i64 * 60,
+                "url": format!("https://example.com/story/{id}"),
+                "descendants": REGRESSION_MOCK_COMMENT_COUNT,
+                "kids": comment_ids,
+                "type": "story"
+            })
+            .to_string()
+        }
+
+        fn comment_json(&self, id: u64) -> Option<String> {
+            let story_id = id / 100;
+            let suffix = id % 100;
+            if !self.ids.contains(&story_id) {
+                return None;
+            }
+            if suffix == 0 || suffix > REGRESSION_MOCK_COMMENT_COUNT as u64 {
+                return None;
+            }
+
+            Some(
+                json!({
+                    "id": id,
+                    "by": format!("commenter-{suffix}"),
+                    "text": format!(
+                        "Regression comment #{suffix}. {}",
+                        "This body is long enough to exercise the comments lazy list path without relying on network state.".repeat((suffix as usize % 3) + 1)
+                    ),
+                    "kids": [],
+                    "type": "comment"
+                })
+                .to_string(),
+            )
+        }
+
+        fn parse_item_id(url: &str) -> Option<u64> {
+            let suffix = url.split("/item/").nth(1)?;
+            let id_str = suffix.strip_suffix(".json")?;
+            id_str.parse::<u64>().ok()
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    impl HttpClient for RegressionHttpClient {
+        fn get_text<'a>(&'a self, url: &'a str) -> HttpFuture<'a, String> {
+            let response = if url.ends_with("/topstories.json") {
+                Ok(self.topstories_json())
+            } else if let Some(id) = Self::parse_item_id(url) {
+                if let Some(payload) = self.comment_json(id) {
+                    Ok(payload)
+                } else if self.ids.contains(&id) {
+                    Ok(self.story_json(id))
+                } else {
+                    Err(cranpose_services::HttpError::RequestFailed {
+                        url: url.to_string(),
+                        message: "unknown mock item".to_string(),
+                    })
+                }
+            } else {
+                Err(cranpose_services::HttpError::RequestFailed {
+                    url: url.to_string(),
+                    message: "unknown mock endpoint".to_string(),
+                })
+            };
+
+            Box::pin(async move { response })
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn layout_texts(robot: &mut RobotTestRule<TestRenderer>) -> Vec<String> {
+        robot.get_all_text()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn semantics_node_text(node: &SemanticsNode) -> Option<&str> {
+        match &node.role {
+            SemanticsRole::Text { value } => Some(value.as_str()),
+            _ => node.description.as_deref(),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn semantics_contains_text(node: &SemanticsNode, text: &str) -> bool {
+        semantics_node_text(node) == Some(text)
+            || node
+                .children
+                .iter()
+                .any(|child| semantics_contains_text(child, text))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn find_clickable_node_with_text(node: &SemanticsNode, text: &str) -> Option<usize> {
+        let has_click = node
+            .actions
+            .iter()
+            .any(|action| matches!(action, SemanticsAction::Click { .. }));
+        if has_click && semantics_contains_text(node, text) {
+            return Some(node.node_id);
+        }
+
+        node.children
+            .iter()
+            .find_map(|child| find_clickable_node_with_text(child, text))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn find_story_list_layout_box(layout: &LayoutBox) -> Option<&LayoutBox> {
+        let slices = layout.node_data.modifier_slices();
+        let is_story_list_host = matches!(
+            layout.node_data.kind,
+            cranpose_ui::LayoutNodeKind::Subcompose
+        ) && slices.translated_content_context()
+            && !slices.pointer_inputs().is_empty();
+        if is_story_list_host {
+            return Some(layout);
+        }
+
+        layout.children.iter().find_map(find_story_list_layout_box)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn find_parent_node_id(
+        layout: &LayoutBox,
+        target_node_id: usize,
+        parent_node_id: Option<usize>,
+    ) -> Option<usize> {
+        if layout.node_id == target_node_id {
+            return parent_node_id;
+        }
+
+        layout
+            .children
+            .iter()
+            .find_map(|child| find_parent_node_id(child, target_node_id, Some(layout.node_id)))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn hacker_news_list_node_id(robot: &mut RobotTestRule<TestRenderer>) -> Option<usize> {
+        let layout_tree = robot.shell_mut().layout_tree()?;
+        let stories_pane_node_id = super::LAST_STORIES_PANE_NODE_ID.with(|slot| *slot.borrow())?;
+        let stories_pane = find_layout_box_by_node_id(layout_tree.root(), stories_pane_node_id)?;
+        find_story_list_layout_box(stories_pane).map(|layout| layout.node_id)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn stories_list_state() -> cranpose_foundation::lazy::LazyListState {
+        super::LAST_STORIES_LIST_STATE
+            .with(|slot| (*slot.borrow()).expect("stories list state should be captured"))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn stories_list_parent_node_id(robot: &mut RobotTestRule<TestRenderer>) -> Option<usize> {
+        let list_node_id = hacker_news_list_node_id(robot)?;
+        let layout_tree = robot.shell_mut().layout_tree()?;
+        find_parent_node_id(layout_tree.root(), list_node_id, None)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn interesting_slot_groups(
+        robot: &mut RobotTestRule<TestRenderer>,
+    ) -> Vec<(usize, &'static str, usize)> {
+        robot
+            .shell_mut()
+            .debug_slot_table_groups()
+            .into_iter()
+            .filter_map(|(start, _key, scope_id, len)| {
+                let label = scope_id
+                    .and_then(|scope_id| {
+                        super::DEBUG_SCOPE_TAGS.with(|tags| {
+                            tags.borrow()
+                                .get(&scope_id)
+                                .copied()
+                                .or_else(|| cranpose_core::debug_scope_label(scope_id))
+                        })
+                    })
+                    .filter(|label| {
+                        matches!(
+                            *label,
+                            "hacker_news_tab"
+                                | "hacker_news_tab_box_content"
+                                | "hacker_news_tab_body"
+                                | "hacker_news_tab_stories_only"
+                                | "StoriesPane"
+                                | "LazyColumnNode"
+                        )
+                    })?;
+                Some((start, label, len))
+            })
+            .collect()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn find_live_subcompose_node_by_scope_label(
+        robot: &mut RobotTestRule<TestRenderer>,
+        label: &'static str,
+    ) -> Option<usize> {
+        let live = robot.shell_mut().debug_live_subcompose_scope_ids();
+        live.iter()
+            .find_map(|(node_id, slot_scopes)| {
+                let matches = slot_scopes.iter().any(|(_, scope_ids)| {
+                    scope_ids.iter().any(|scope_id| {
+                        super::DEBUG_SCOPE_TAGS.with(|tags| {
+                            tags.borrow()
+                                .get(scope_id)
+                                .copied()
+                                .or_else(|| cranpose_core::debug_scope_label(*scope_id))
+                        }) == Some(label)
+                    })
+                });
+                matches.then_some(*node_id)
+            })
+            .or_else(|| live.iter().map(|(node_id, _)| *node_id).min())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn subcompose_slot_table(
+        robot: &mut RobotTestRule<TestRenderer>,
+        node_id: usize,
+        slot_id: u64,
+    ) -> Vec<(usize, String)> {
+        robot
+            .shell_mut()
+            .debug_subcompose_slot_table(node_id, slot_id)
+            .unwrap_or_default()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn subcompose_interesting_groups(
+        robot: &mut RobotTestRule<TestRenderer>,
+        node_id: usize,
+        slot_id: u64,
+    ) -> Vec<(usize, &'static str, usize)> {
+        robot
+            .shell_mut()
+            .debug_subcompose_slot_groups(node_id, slot_id)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(start, _key, scope_id, len)| {
+                let label = scope_id
+                    .and_then(|scope_id| {
+                        super::DEBUG_SCOPE_TAGS.with(|tags| {
+                            tags.borrow()
+                                .get(&scope_id)
+                                .copied()
+                                .or_else(|| cranpose_core::debug_scope_label(scope_id))
+                        })
+                    })
+                    .filter(|label| {
+                        matches!(
+                            *label,
+                            "hacker_news_tab_box_content"
+                                | "hacker_news_tab_body"
+                                | "hacker_news_tab_stories_only"
+                                | "StoriesPane"
+                                | "LazyColumnNode"
+                        )
+                    })?;
+                Some((start, label, len))
+            })
+            .collect()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn subcompose_slot_window_around_node(
+        robot: &mut RobotTestRule<TestRenderer>,
+        node_id: usize,
+        slot_id: u64,
+        target_node_id: usize,
+        radius: usize,
+    ) -> Vec<(usize, String)> {
+        let slots = subcompose_slot_table(robot, node_id, slot_id);
+        let needle = format!("Node(id={target_node_id})");
+        let Some(index) = slots.iter().position(|(_, entry)| entry == &needle) else {
+            return Vec::new();
+        };
+        let start = index.saturating_sub(radius);
+        let end = (index + radius + 1).min(slots.len());
+        slots[start..end].to_vec()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn slot_window_around_node(
+        robot: &mut RobotTestRule<TestRenderer>,
+        node_id: usize,
+        radius: usize,
+    ) -> Vec<(usize, String)> {
+        let slots = robot.shell_mut().debug_all_slots();
+        let needle = format!("Node(id={node_id})");
+        let Some(index) = slots.iter().position(|(_, entry)| entry == &needle) else {
+            return Vec::new();
+        };
+        let start = index.saturating_sub(radius);
+        let end = (index + radius + 1).min(slots.len());
+        slots[start..end].to_vec()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn find_layout_box_by_node_id(layout: &LayoutBox, node_id: usize) -> Option<&LayoutBox> {
+        if layout.node_id == node_id {
+            return Some(layout);
+        }
+
+        layout
+            .children
+            .iter()
+            .find_map(|child| find_layout_box_by_node_id(child, node_id))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn layout_subtree_summary(layout: &LayoutBox) -> Vec<String> {
+        fn walk(layout: &LayoutBox, depth: usize, lines: &mut Vec<String>) {
+            let semantics =
+                cranpose_ui::collect_semantics_from_modifier(&layout.node_data.modifier)
+                    .and_then(|config| config.content_description);
+            let slices = layout.node_data.modifier_slices();
+            lines.push(format!(
+                "{:indent$}node={} kind={:?} translated={} pointer_inputs={} semantics={:?}",
+                "",
+                layout.node_id,
+                layout.node_data.kind,
+                slices.translated_content_context(),
+                slices.pointer_inputs().len(),
+                semantics,
+                indent = depth * 2,
+            ));
+            for child in &layout.children {
+                walk(child, depth + 1, lines);
+            }
+        }
+
+        let mut lines = Vec::new();
+        walk(layout, 0, &mut lines);
+        lines
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn pump_robot_until(
+        robot: &mut RobotTestRule<TestRenderer>,
+        max_steps: usize,
+        predicate: impl Fn(&mut RobotTestRule<TestRenderer>) -> bool,
+        context: &str,
+    ) {
+        for _ in 0..max_steps {
+            robot.shell_mut().update();
+            if predicate(robot) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        let stories_pane_node_id = super::LAST_STORIES_PANE_NODE_ID.with(|slot| *slot.borrow());
+        let stories_pane_bounds =
+            stories_pane_node_id.and_then(|node_id| robot.shell_mut().node_layout_bounds(node_id));
+        let stories_pane_child_count = stories_pane_node_id.and_then(|node_id| {
+            let layout_tree = robot.shell_mut().layout_tree()?;
+            find_layout_box_by_node_id(layout_tree.root(), node_id)
+                .map(|layout| layout.children.len())
+        });
+        let stories_pane_layout = stories_pane_node_id.and_then(|node_id| {
+            let layout_tree = robot.shell_mut().layout_tree()?;
+            find_layout_box_by_node_id(layout_tree.root(), node_id).map(layout_subtree_summary)
+        });
+
+        panic!(
+            "{context}; visible_texts={:?} stories_pane_calls={} thread_pane_calls={} stories_pane_node_id={stories_pane_node_id:?} stories_pane_bounds={stories_pane_bounds:?} stories_pane_child_count={stories_pane_child_count:?} stories_pane_layout={stories_pane_layout:?}",
+            layout_texts(robot),
+            super::STORIES_PANE_CALLS.with(|count| count.get()),
+            super::THREAD_PANE_CALLS.with(|count| count.get()),
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn invoke_click(robot: &mut RobotTestRule<TestRenderer>, node_id: usize) {
+        let (x, y, width, height) = robot
+            .shell_mut()
+            .node_layout_bounds(node_id)
+            .unwrap_or_else(|| panic!("missing layout bounds for node {node_id}"));
+        let handlers = {
+            let layout_tree = robot
+                .shell_mut()
+                .layout_tree()
+                .expect("layout tree should be available");
+            let layout_box = find_layout_box_by_node_id(layout_tree.root(), node_id)
+                .unwrap_or_else(|| panic!("missing layout box for node {node_id}"));
+            layout_box
+                .node_data
+                .modifier_slices()
+                .pointer_inputs()
+                .to_vec()
+        };
+
+        assert!(
+            !handlers.is_empty(),
+            "node {node_id} should expose pointer handlers"
+        );
+
+        let local = cranpose_ui::Point {
+            x: width * 0.5,
+            y: height * 0.5,
+        };
+        let global = cranpose_ui::Point {
+            x: x + width * 0.5,
+            y: y + height * 0.5,
+        };
+
+        run_in_mutable_snapshot(|| {
+            let down = PointerEvent::new(PointerEventKind::Down, local, global)
+                .with_buttons(PointerButtons::default().with(PointerButton::Primary));
+            for handler in &handlers {
+                handler(down.clone());
+                if down.is_consumed() {
+                    break;
+                }
+            }
+
+            let up = PointerEvent::new(PointerEventKind::Up, local, global);
+            for handler in &handlers {
+                handler(up.clone());
+                if up.is_consumed() {
+                    break;
+                }
+            }
+        })
+        .expect("click should run inside a mutable snapshot");
+        robot.shell_mut().update();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn raw_drag_story_list(
+        robot: &mut RobotTestRule<TestRenderer>,
+        list_bounds: (f32, f32, f32, f32),
+        steps: usize,
+    ) -> Vec<usize> {
+        let (list_x, list_y, list_w, list_h) = list_bounds;
+        let drag_x = list_x + list_w * 0.5;
+        let drag_start_y = list_y + list_h * 0.82;
+        let drag_end_y = list_y + list_h * 0.22;
+        let mut seen = Vec::new();
+
+        robot.shell_mut().set_cursor(drag_x, drag_start_y);
+        robot.shell_mut().update();
+        std::thread::sleep(Duration::from_millis(50));
+        seen.push(
+            hacker_news_list_node_id(robot).expect("HackerNewsList should exist before drag"),
+        );
+
+        robot.shell_mut().pointer_pressed();
+        robot.shell_mut().update();
+        std::thread::sleep(Duration::from_millis(50));
+        seen.push(hacker_news_list_node_id(robot).expect("HackerNewsList should exist after down"));
+
+        for step in 1..=steps {
+            let t = step as f32 / steps as f32;
+            let y = drag_start_y + (drag_end_y - drag_start_y) * t;
+            robot.shell_mut().set_cursor(drag_x, y);
+            robot.shell_mut().update();
+            std::thread::sleep(Duration::from_millis(16));
+            seen.push(
+                hacker_news_list_node_id(robot)
+                    .expect("HackerNewsList should exist during drag move"),
+            );
+        }
+
+        robot.shell_mut().pointer_released();
+        robot.shell_mut().update();
+        std::thread::sleep(Duration::from_millis(50));
+        seen.push(hacker_news_list_node_id(robot).expect("HackerNewsList should exist after drag"));
+        seen
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn visible_regression_story_numbers(robot: &mut RobotTestRule<TestRenderer>) -> Vec<usize> {
+        let mut numbers = layout_texts(robot)
+            .into_iter()
+            .filter_map(|text| {
+                text.strip_prefix("Regression Story #")
+                    .and_then(|suffix| suffix.parse::<usize>().ok())
+            })
+            .collect::<Vec<_>>();
+        numbers.sort_unstable();
+        numbers.dedup();
+        numbers
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn programmatic_story_scroll_node_ids(
+        robot: &mut RobotTestRule<TestRenderer>,
+        delta: f32,
+        steps: usize,
+        _phase: &str,
+    ) -> (
+        Vec<usize>,
+        Vec<usize>,
+        Vec<usize>,
+        Vec<Vec<(usize, Option<&'static str>)>>,
+    ) {
+        let list_state = stories_list_state();
+        let mut list_host_ids = Vec::new();
+        let mut stories_pane_ids = Vec::new();
+        let mut list_parent_ids = Vec::new();
+        let mut invalid_scope_tags_per_step = Vec::new();
+        for _ in 0..steps {
+            list_state.dispatch_scroll_delta(delta);
+            let invalid_scope_ids = robot.shell_mut().runtime_handle().debug_invalid_scope_ids();
+            let invalid_scope_tags = super::DEBUG_SCOPE_TAGS.with(|tags| {
+                invalid_scope_ids
+                    .iter()
+                    .map(|scope_id| {
+                        let app_tag = tags.borrow().get(scope_id).copied();
+                        let framework_tag = cranpose_core::debug_scope_label(*scope_id);
+                        (*scope_id, app_tag.or(framework_tag))
+                    })
+                    .collect::<Vec<_>>()
+            });
+            invalid_scope_tags_per_step.push(invalid_scope_tags);
+            robot.shell_mut().update();
+            robot.wait_for_idle();
+            list_host_ids.push(
+                hacker_news_list_node_id(robot)
+                    .expect("HackerNewsList should exist during programmatic scroll"),
+            );
+            stories_pane_ids.push(
+                super::LAST_STORIES_PANE_NODE_ID
+                    .with(|slot| *slot.borrow())
+                    .expect("StoriesPane node should exist during programmatic scroll"),
+            );
+            list_parent_ids
+                .push(stories_list_parent_node_id(robot).expect("list parent should exist"));
+        }
+        (
+            list_host_ids,
+            stories_pane_ids,
+            list_parent_ids,
+            invalid_scope_tags_per_step,
+        )
     }
 
     #[test]
@@ -2324,5 +3010,428 @@ mod tests {
         assert_eq!(comment_ids(&thread), vec![1, 11, 111, 2]);
         assert!(!thread.has_more());
         assert_eq!(thread.loaded_count(), 4);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn single_pane_back_navigation_settles_after_opening_comments() {
+        let _guard = test_guard();
+        let mock_client: HttpClientRef = Arc::new(RegressionHttpClient::new());
+
+        let mut robot = create_headless_robot_test(390, 844, {
+            let mock_client = mock_client.clone();
+            move || {
+                let local = cranpose_services::local_http_client();
+                CompositionLocalProvider(vec![local.provides(mock_client.clone())], move || {
+                    hacker_news_tab();
+                });
+            }
+        });
+        robot.shell_mut().set_semantics_enabled(true);
+
+        pump_robot_until(
+            &mut robot,
+            200,
+            |robot| {
+                robot.shell_mut().update();
+                let Some(root) = robot
+                    .shell_mut()
+                    .semantics_tree()
+                    .map(|tree| tree.root().clone())
+                else {
+                    return false;
+                };
+                find_clickable_node_with_text(
+                    &root,
+                    &format!("View {REGRESSION_MOCK_COMMENT_COUNT} comments"),
+                )
+                .is_some()
+            },
+            "comments entry point never appeared",
+        );
+
+        let comments_node_id = {
+            let root = robot
+                .shell_mut()
+                .semantics_tree()
+                .expect("semantics tree should be present")
+                .root()
+                .clone();
+            find_clickable_node_with_text(
+                &root,
+                &format!("View {REGRESSION_MOCK_COMMENT_COUNT} comments"),
+            )
+            .expect("first comments button should be clickable")
+        };
+        invoke_click(&mut robot, comments_node_id);
+
+        pump_robot_until(
+            &mut robot,
+            200,
+            |robot| layout_texts(robot).iter().any(|text| text == "Back"),
+            "back button never appeared after opening the first thread",
+        );
+
+        let back_node_id = {
+            let root = robot
+                .shell_mut()
+                .semantics_tree()
+                .expect("semantics tree should be present")
+                .root()
+                .clone();
+            find_clickable_node_with_text(&root, "Back").expect("back button should be clickable")
+        };
+        invoke_click(&mut robot, back_node_id);
+
+        pump_robot_until(
+            &mut robot,
+            200,
+            |robot| {
+                let texts = layout_texts(robot);
+                texts.iter().any(|text| text == "Top stories")
+                    && texts.iter().all(|text| text != "Back")
+            },
+            "back navigation did not restore the story list",
+        );
+
+        let mut settled = false;
+        for _ in 0..120 {
+            robot.shell_mut().update();
+            if !robot.shell_mut().needs_redraw() {
+                settled = true;
+                break;
+            }
+        }
+
+        let stats = robot.shell_mut().debug_runtime_leak_stats();
+        let invalid_scope_ids = robot.shell_mut().runtime_handle().debug_invalid_scope_ids();
+        let slot_groups = robot.shell_mut().debug_slot_table_groups();
+        let live_subcompose_scope_ids = robot.shell_mut().debug_live_subcompose_scope_ids();
+        let invalid_scope_sources = invalid_scope_ids
+            .iter()
+            .map(|scope_id| {
+                (
+                    *scope_id,
+                    cranpose_core::debug_scope_invalidation_sources(*scope_id),
+                )
+            })
+            .collect::<Vec<_>>();
+        let invalid_scope_tags = super::DEBUG_SCOPE_TAGS.with(|tags| {
+            invalid_scope_ids
+                .iter()
+                .map(|scope_id| {
+                    let app_tag = tags.borrow().get(scope_id).copied();
+                    let framework_tag = cranpose_core::debug_scope_label(*scope_id);
+                    (*scope_id, app_tag.or(framework_tag))
+                })
+                .collect::<Vec<_>>()
+        });
+        let invalid_root_groups = slot_groups
+            .iter()
+            .filter(|(_, _, scope_id, _)| {
+                scope_id.is_some_and(|scope_id| invalid_scope_ids.contains(&scope_id))
+            })
+            .copied()
+            .collect::<Vec<_>>();
+        assert!(
+            settled,
+            "shell kept requesting redraws after returning from comments; invalid_scope_ids={invalid_scope_ids:?} invalid_scope_tags={invalid_scope_tags:?} invalid_scope_sources={invalid_scope_sources:?} invalid_root_groups={invalid_root_groups:?} live_subcompose_scope_ids={live_subcompose_scope_ids:?} runtime={:?} pass={:?} texts={:?}",
+            stats.runtime_stats,
+            stats.pass_stats,
+            layout_texts(&mut robot),
+        );
+        assert_eq!(
+            stats.runtime_stats.frame_callbacks_len, 0,
+            "back navigation should not leave active frame callbacks behind"
+        );
+        assert!(
+            !cranpose_ui::has_pending_layout_repasses(),
+            "back navigation should not leave pending layout repasses behind"
+        );
+        assert!(
+            !cranpose_ui::has_pending_draw_repasses(),
+            "back navigation should not leave pending draw repasses behind"
+        );
+        assert!(
+            !cranpose_ui::has_pending_pointer_repasses(),
+            "back navigation should not leave pending pointer repasses behind"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn restored_single_pane_story_list_keeps_same_host_during_drag() {
+        let _guard = test_guard();
+        let mock_client: HttpClientRef = Arc::new(RegressionHttpClient::new_with_story_count(60));
+
+        let mut robot = create_headless_robot_test(390, 844, {
+            let mock_client = mock_client.clone();
+            move || {
+                let local = cranpose_services::local_http_client();
+                CompositionLocalProvider(vec![local.provides(mock_client.clone())], move || {
+                    hacker_news_tab();
+                });
+            }
+        });
+        robot.shell_mut().set_semantics_enabled(true);
+
+        pump_robot_until(
+            &mut robot,
+            200,
+            |robot| {
+                robot.shell_mut().update();
+                layout_texts(robot)
+                    .iter()
+                    .any(|text| text == "Regression Story #1")
+            },
+            "story list never appeared",
+        );
+
+        let initial_list_node_id =
+            hacker_news_list_node_id(&mut robot).expect("HackerNewsList should exist");
+        let list_bounds = robot
+            .shell_mut()
+            .node_layout_bounds(initial_list_node_id)
+            .expect("HackerNewsList should have layout bounds");
+
+        let comments_node_id = {
+            let root = robot
+                .shell_mut()
+                .semantics_tree()
+                .expect("semantics tree should be present")
+                .root()
+                .clone();
+            find_clickable_node_with_text(
+                &root,
+                &format!("View {REGRESSION_MOCK_COMMENT_COUNT} comments"),
+            )
+            .expect("comments button should be clickable")
+        };
+        invoke_click(&mut robot, comments_node_id);
+
+        pump_robot_until(
+            &mut robot,
+            200,
+            |robot| layout_texts(robot).iter().any(|text| text == "Back"),
+            "back button never appeared after opening comments",
+        );
+
+        let back_node_id = {
+            let root = robot
+                .shell_mut()
+                .semantics_tree()
+                .expect("semantics tree should be present")
+                .root()
+                .clone();
+            find_clickable_node_with_text(&root, "Back").expect("back button should be clickable")
+        };
+        invoke_click(&mut robot, back_node_id);
+
+        pump_robot_until(
+            &mut robot,
+            200,
+            |robot| {
+                let texts = layout_texts(robot);
+                texts.iter().any(|text| text == "Top stories")
+                    && texts.iter().all(|text| text != "Back")
+                    && hacker_news_list_node_id(robot).is_some()
+            },
+            "story list did not return after Back",
+        );
+
+        let restored_list_node_id =
+            hacker_news_list_node_id(&mut robot).expect("restored HackerNewsList should exist");
+        let seen_node_ids = raw_drag_story_list(&mut robot, list_bounds, 12);
+        let mut unique_node_ids = seen_node_ids.clone();
+        unique_node_ids.sort_unstable();
+        unique_node_ids.dedup();
+
+        assert_eq!(
+            unique_node_ids,
+            vec![restored_list_node_id],
+            "restored HackerNewsList host changed during drag; initial_list_node_id={initial_list_node_id} restored_list_node_id={restored_list_node_id} seen_node_ids={seen_node_ids:?} stories_pane_calls={} thread_pane_calls={} visible_texts={:?}",
+            super::STORIES_PANE_CALLS.with(|count| count.get()),
+            super::THREAD_PANE_CALLS.with(|count| count.get()),
+            layout_texts(&mut robot),
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn restored_single_pane_programmatic_scroll_keeps_same_list_host() {
+        let _guard = test_guard();
+        let mock_client: HttpClientRef = Arc::new(RegressionHttpClient::new_with_story_count(60));
+
+        let mut robot = create_headless_robot_test(390, 844, {
+            let mock_client = mock_client.clone();
+            move || {
+                let local = cranpose_services::local_http_client();
+                CompositionLocalProvider(vec![local.provides(mock_client.clone())], move || {
+                    hacker_news_tab();
+                });
+            }
+        });
+        robot.shell_mut().set_semantics_enabled(true);
+
+        pump_robot_until(
+            &mut robot,
+            200,
+            |robot| {
+                layout_texts(robot)
+                    .iter()
+                    .any(|text| text == "Regression Story #1")
+            },
+            "story list never appeared",
+        );
+
+        let fresh_list_node_id =
+            hacker_news_list_node_id(&mut robot).expect("fresh HackerNewsList should exist");
+        let fresh_before = visible_regression_story_numbers(&mut robot);
+        let (
+            fresh_seen_node_ids,
+            fresh_seen_stories_pane_ids,
+            fresh_seen_parent_ids,
+            _fresh_invalid_scope_tags,
+        ) = programmatic_story_scroll_node_ids(&mut robot, -120.0, 6, "fresh");
+        let fresh_after = visible_regression_story_numbers(&mut robot);
+        assert!(
+            fresh_after
+                .iter()
+                .copied()
+                .min()
+                .unwrap_or(0)
+                .saturating_sub(fresh_before.iter().copied().min().unwrap_or(0))
+                >= 2,
+            "fresh programmatic scroll should move the list; before={fresh_before:?} after={fresh_after:?}",
+        );
+        assert_eq!(
+            fresh_seen_node_ids,
+            vec![fresh_list_node_id; fresh_seen_node_ids.len()],
+            "fresh programmatic scroll changed the list host; node_ids={fresh_seen_node_ids:?} stories_pane_ids={fresh_seen_stories_pane_ids:?} list_parent_ids={fresh_seen_parent_ids:?}",
+        );
+
+        let comments_node_id = {
+            let root = robot
+                .shell_mut()
+                .semantics_tree()
+                .expect("semantics tree should be present")
+                .root()
+                .clone();
+            find_clickable_node_with_text(
+                &root,
+                &format!("View {REGRESSION_MOCK_COMMENT_COUNT} comments"),
+            )
+            .expect("comments button should be clickable")
+        };
+        invoke_click(&mut robot, comments_node_id);
+
+        pump_robot_until(
+            &mut robot,
+            200,
+            |robot| layout_texts(robot).iter().any(|text| text == "Back"),
+            "back button never appeared after opening comments",
+        );
+
+        let back_node_id = {
+            let root = robot
+                .shell_mut()
+                .semantics_tree()
+                .expect("semantics tree should be present")
+                .root()
+                .clone();
+            find_clickable_node_with_text(&root, "Back").expect("back button should be clickable")
+        };
+        invoke_click(&mut robot, back_node_id);
+
+        pump_robot_until(
+            &mut robot,
+            200,
+            |robot| {
+                let texts = layout_texts(robot);
+                texts.iter().any(|text| text == "Top stories")
+                    && texts.iter().all(|text| text != "Back")
+            },
+            "story list did not return after Back",
+        );
+
+        let restored_list_node_id =
+            hacker_news_list_node_id(&mut robot).expect("restored HackerNewsList should exist");
+        let restored_list_parent_node_id =
+            stories_list_parent_node_id(&mut robot).expect("restored list parent should exist");
+        let box_slot_node_id =
+            find_live_subcompose_node_by_scope_label(&mut robot, "BoxWithConstraints.slot(0)")
+                .expect("BoxWithConstraints slot host should exist");
+        let restored_before = visible_regression_story_numbers(&mut robot);
+        let slot_groups_before = interesting_slot_groups(&mut robot);
+        let slot_window_before = slot_window_around_node(&mut robot, restored_list_node_id, 12);
+        let box_slot_window_before = subcompose_slot_table(&mut robot, box_slot_node_id, 0);
+        let box_group_labels_before =
+            subcompose_interesting_groups(&mut robot, box_slot_node_id, 0);
+        let box_list_window_before = subcompose_slot_window_around_node(
+            &mut robot,
+            box_slot_node_id,
+            0,
+            restored_list_node_id,
+            12,
+        );
+        let restored_stories_pane_node_id = super::LAST_STORIES_PANE_NODE_ID
+            .with(|slot| *slot.borrow())
+            .expect("restored StoriesPane should exist");
+        let stories_pane_layout_before = {
+            let layout_tree = robot
+                .shell_mut()
+                .layout_tree()
+                .expect("layout tree should exist");
+            let stories_pane =
+                find_layout_box_by_node_id(layout_tree.root(), restored_stories_pane_node_id)
+                    .expect("stories pane should exist before scroll");
+            layout_subtree_summary(stories_pane)
+        };
+        let (
+            restored_seen_node_ids,
+            restored_seen_stories_pane_ids,
+            restored_seen_parent_ids,
+            restored_invalid_scope_tags,
+        ) = programmatic_story_scroll_node_ids(&mut robot, -120.0, 6, "restored");
+        let restored_after = visible_regression_story_numbers(&mut robot);
+        let slot_groups_after = interesting_slot_groups(&mut robot);
+        let slot_window_after = slot_window_around_node(&mut robot, restored_list_node_id, 12);
+        let box_slot_window_after = subcompose_slot_table(&mut robot, box_slot_node_id, 0);
+        let box_group_labels_after = subcompose_interesting_groups(&mut robot, box_slot_node_id, 0);
+        let box_list_window_after = subcompose_slot_window_around_node(
+            &mut robot,
+            box_slot_node_id,
+            0,
+            restored_seen_node_ids
+                .last()
+                .copied()
+                .unwrap_or(restored_list_node_id),
+            12,
+        );
+        let stories_pane_layout_after = {
+            let layout_tree = robot
+                .shell_mut()
+                .layout_tree()
+                .expect("layout tree should exist");
+            let stories_pane =
+                find_layout_box_by_node_id(layout_tree.root(), restored_stories_pane_node_id)
+                    .expect("stories pane should exist after scroll");
+            layout_subtree_summary(stories_pane)
+        };
+        assert!(
+            restored_after
+                .iter()
+                .copied()
+                .min()
+                .unwrap_or(0)
+                .saturating_sub(restored_before.iter().copied().min().unwrap_or(0))
+                >= 2,
+            "restored programmatic scroll should move the list; before={restored_before:?} after={restored_after:?}",
+        );
+        assert_eq!(
+            restored_seen_node_ids,
+            vec![restored_list_node_id; restored_seen_node_ids.len()],
+            "restored programmatic scroll changed the list host; node_ids={restored_seen_node_ids:?} list_parent_id={restored_list_parent_node_id} list_parent_ids_after={restored_seen_parent_ids:?} stories_pane_id={restored_stories_pane_node_id} stories_pane_ids_after={restored_seen_stories_pane_ids:?} restored_invalid_scope_tags={restored_invalid_scope_tags:?} box_slot_node_id={box_slot_node_id} fresh_before={fresh_before:?} fresh_after={fresh_after:?} restored_before={restored_before:?} restored_after={restored_after:?} slot_groups_before={slot_groups_before:?} slot_groups_after={slot_groups_after:?} slot_window_before={slot_window_before:?} slot_window_after={slot_window_after:?} box_group_labels_before={box_group_labels_before:?} box_group_labels_after={box_group_labels_after:?} box_list_window_before={box_list_window_before:?} box_list_window_after={box_list_window_after:?} box_slot_window_before={box_slot_window_before:?} box_slot_window_after={box_slot_window_after:?} stories_pane_layout_before={stories_pane_layout_before:?} stories_pane_layout_after={stories_pane_layout_after:?}",
+        );
     }
 }

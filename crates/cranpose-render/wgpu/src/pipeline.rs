@@ -2067,6 +2067,7 @@ fn collect_hits_from_graph(
         fn push_hit(
             &mut self,
             node_id: NodeId,
+            capture_path: &[NodeId],
             geometry: cranpose_render_common::graph_scene::HitGeometry,
             shape: Option<RoundedCornerShape>,
             click_actions: &[Rc<dyn Fn(Point)>],
@@ -2074,6 +2075,7 @@ fn collect_hits_from_graph(
         ) {
             self.scene.push_hit(
                 node_id,
+                capture_path.to_vec(),
                 geometry,
                 shape,
                 click_actions

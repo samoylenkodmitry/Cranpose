@@ -47,6 +47,9 @@ use xkcd::xkcd_tab;
 thread_local! {
     pub static TEST_COMPOSITION_LOCAL_COUNTER: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
     pub static TEST_ACTIVE_TAB_STATE: RefCell<Option<MutableState<DemoTab>>> = const { RefCell::new(None) };
+    pub static TEST_COUNTER_APP_COUNTER_STATE: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
+    pub static TEST_COUNTER_APP_POINTER_DOWN_STATE: RefCell<Option<MutableState<bool>>> = const { RefCell::new(None) };
+    pub static TEST_COUNTER_APP_POINTER_POSITION_STATE: RefCell<Option<MutableState<Point>>> = const { RefCell::new(None) };
     pub static TEST_RECURSIVE_LAYOUT_DEPTH_STATE: RefCell<Option<MutableState<usize>>> = const { RefCell::new(None) };
 }
 
@@ -382,10 +385,12 @@ pub fn combined_app() {
     combined_app_with_startup(StartupSelection::default());
 }
 
-#[cfg(any(test, target_arch = "wasm32"))]
 #[composable]
-pub(crate) fn combined_app_with_initial_tab(initial_tab: Option<DemoTab>) {
-    combined_app_with_startup(StartupSelection::from_requested(initial_tab, None));
+pub fn combined_app_with_initial_tab(initial_tab: Option<DemoTab>) {
+    combined_app_with_startup(StartupSelection {
+        initial_tab,
+        initial_shader_section: None,
+    });
 }
 
 #[composable]
@@ -1276,6 +1281,15 @@ fn counter_app() {
     let counter = cranpose_core::useState(|| 0);
     let pointer_position = cranpose_core::useState(|| Point { x: 0.0, y: 0.0 });
     let pointer_down = cranpose_core::useState(|| false);
+    TEST_COUNTER_APP_COUNTER_STATE.with(|cell| {
+        *cell.borrow_mut() = Some(counter);
+    });
+    TEST_COUNTER_APP_POINTER_DOWN_STATE.with(|cell| {
+        *cell.borrow_mut() = Some(pointer_down);
+    });
+    TEST_COUNTER_APP_POINTER_POSITION_STATE.with(|cell| {
+        *cell.borrow_mut() = Some(pointer_position);
+    });
     let async_message =
         cranpose_core::useState(|| "Tap \"Fetch async value\" to run background work".to_string());
     let fetch_request = cranpose_core::useState(|| 0u64);

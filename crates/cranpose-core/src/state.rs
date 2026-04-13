@@ -729,7 +729,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         );
     }
 
-    pub(crate) fn set(&self, new_value: T) {
+    pub(crate) fn set(&self, new_value: T) -> bool {
         // Debug-only check: warn if modifying state in event handler without proper snapshot
         #[cfg(debug_assertions)]
         {
@@ -747,6 +747,29 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         }
 
         let snapshot = active_snapshot();
+        let snapshot_id = snapshot.snapshot_id();
+        let equivalent = match &snapshot {
+            AnySnapshot::Global(_) => self
+                .first_record()
+                .with_value(|current: &T| self.policy.equivalent(current, &new_value)),
+            AnySnapshot::Mutable(_)
+            | AnySnapshot::NestedMutable(_)
+            | AnySnapshot::TransparentMutable(_) => {
+                let invalid = snapshot.invalid();
+                self.readable_for(snapshot_id, &invalid)
+                    .map(|record| {
+                        record.with_value(|current: &T| self.policy.equivalent(current, &new_value))
+                    })
+                    .unwrap_or(false)
+            }
+            AnySnapshot::Readonly(_)
+            | AnySnapshot::NestedReadonly(_)
+            | AnySnapshot::TransparentReadonly(_) => false,
+        };
+        if equivalent {
+            return false;
+        }
+
         let mut written_state: Option<Arc<dyn StateObject>> = None;
         if let Some(state) = self
             .weak_self
@@ -760,8 +783,6 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
             written_state = Some(trait_object);
         }
         mark_update_write(self.id);
-
-        let snapshot_id = snapshot.snapshot_id();
 
         match &snapshot {
             AnySnapshot::Global(global) => {
@@ -806,11 +827,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
             | AnySnapshot::TransparentMutable(_) => {
                 let invalid = snapshot.invalid();
                 let record = self.writable_record(snapshot_id, &invalid);
-                let equivalent =
-                    record.with_value(|current: &T| self.policy.equivalent(current, &new_value));
-                if !equivalent {
-                    record.replace_value(new_value);
-                }
+                record.replace_value(new_value);
                 self.assert_chain_integrity("set(child-writable)", Some(snapshot_id));
             }
             AnySnapshot::Readonly(_)
@@ -824,6 +841,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         // Compose proper prunes when it can prove no readers exist; for now we keep
         // the historical chain with tombstoned values to avoid use-after-free crashes
         // under heavy UI load.
+        true
     }
 }
 

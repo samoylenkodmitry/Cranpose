@@ -2,17 +2,20 @@ use super::*;
 use crate::composable;
 use crate::layout::LayoutBox;
 use crate::modifier::{Modifier, Size};
+use crate::renderer::{HeadlessRenderer, RenderOp};
 use crate::subcompose_layout::{Constraints, SubcomposeLayoutNode};
 use crate::text::TextStyle;
 use crate::widgets::nodes::LayoutNode;
 use crate::widgets::{
-    BoxWithConstraints, Column, ColumnSpec, DynamicTextSource, Row, RowSpec, Spacer, Text,
+    BoxWithConstraints, Column, ColumnSpec, DynamicTextSource, LazyColumn, LazyColumnSpec, Row,
+    RowSpec, Spacer, Text,
 };
 use crate::{run_test_composition, LayoutEngine};
 use cranpose_core::{
     self, location_key, Applier, Composer, Composition, ConcreteApplierHost, MemoryApplier, NodeId,
     Phase, SlotBackend, SlotsHost, SnapshotStateObserver, State,
 };
+use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope, LazyListState};
 use cranpose_ui_layout::{HorizontalAlignment, LinearArrangement, VerticalAlignment};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -20,6 +23,8 @@ use std::rc::Rc;
 thread_local! {
     static COUNTER_ROW_INVOCATIONS: Cell<usize> = const { Cell::new(0) };
     static COUNTER_TEXT_ID: RefCell<Option<NodeId>> = const { RefCell::new(None) };
+    static CONDITIONAL_LAZY_LIST_STATE: RefCell<Option<LazyListState>> = const { RefCell::new(None) };
+    static CONDITIONAL_LAZY_LIST_NODE_ID: RefCell<Option<NodeId>> = const { RefCell::new(None) };
 }
 
 fn prepare_measure_composer(
@@ -189,6 +194,36 @@ fn capture_subcompose_child_constraints(
     captured_constraints
 }
 
+fn render_texts(
+    composition: &mut Composition<MemoryApplier>,
+    root: NodeId,
+    size: Size,
+) -> Vec<String> {
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    let layout = applier.compute_layout(root, size).expect("layout");
+    applier.clear_runtime_handle();
+    let renderer = HeadlessRenderer::new();
+    let scene = renderer.render(&layout);
+    scene
+        .operations()
+        .iter()
+        .filter_map(|op| match op {
+            RenderOp::Text { value, .. } => Some(value.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn measure_root(composition: &mut Composition<MemoryApplier>, root: NodeId, size: Size) {
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    let _ = applier.compute_layout(root, size).expect("layout");
+    applier.clear_runtime_handle();
+}
+
 #[composable]
 fn CounterRow(label: &'static str, count: State<i32>) -> NodeId {
     COUNTER_ROW_INVOCATIONS.with(|calls| calls.set(calls.get() + 1));
@@ -207,6 +242,258 @@ fn CounterRow(label: &'static str, count: State<i32>) -> NodeId {
         );
         COUNTER_TEXT_ID.with(|slot| *slot.borrow_mut() = Some(text_id));
     })
+}
+
+#[composable]
+fn PrimitiveStoriesBranch() {
+    Text("Stories", Modifier::empty(), TextStyle::default());
+}
+
+#[composable]
+fn PrimitiveThreadBranch() {
+    Text("Thread", Modifier::empty(), TextStyle::default());
+}
+
+#[composable]
+fn PrimitiveStoriesPaneLike(modifier: Modifier) {
+    Column(modifier, ColumnSpec::default(), move || {
+        Text("Top stories", Modifier::empty(), TextStyle::default());
+        Text("Story body", Modifier::empty(), TextStyle::default());
+    });
+}
+
+#[composable]
+fn PrimitiveThreadPaneLike(modifier: Modifier) {
+    Column(modifier, ColumnSpec::default(), move || {
+        Text("Back", Modifier::empty(), TextStyle::default());
+        Text("Thread body", Modifier::empty(), TextStyle::default());
+    });
+}
+
+#[composable]
+fn PrimitiveHeaderWithOptionalBack(show_back: bool) {
+    Row(
+        Modifier::empty().fill_max_width(),
+        RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
+        move || {
+            if show_back {
+                Text("Back", Modifier::empty(), TextStyle::default());
+            }
+            Text("Header", Modifier::empty(), TextStyle::default());
+        },
+    );
+}
+
+#[composable]
+fn PrimitiveStoriesListBranch(list_state: LazyListState) {
+    LazyColumn(
+        Modifier::empty().fill_max_width().weight(1.0),
+        list_state,
+        LazyColumnSpec::default(),
+        |scope| {
+            scope.item(Some(0), None, || {
+                Text("Stories", Modifier::empty(), TextStyle::default());
+            });
+        },
+    );
+}
+
+#[composable]
+fn PrimitiveScrollReactiveStoriesBranch(list_state: LazyListState) {
+    CONDITIONAL_LAZY_LIST_STATE.with(|slot| {
+        *slot.borrow_mut() = Some(list_state);
+    });
+
+    Column(
+        Modifier::empty().fill_max_size(),
+        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
+        move || {
+            Text(
+                format!("First visible {}", list_state.first_visible_item_index()),
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+            let node_id = LazyColumn(
+                Modifier::empty().fill_max_width().weight(1.0),
+                list_state,
+                LazyColumnSpec::default(),
+                |scope| {
+                    scope.items(
+                        40,
+                        None::<fn(usize) -> u64>,
+                        None::<fn(usize) -> u64>,
+                        |index| {
+                            Text(
+                                format!("Item {}", index),
+                                Modifier::empty(),
+                                TextStyle::default(),
+                            );
+                        },
+                    );
+                },
+            );
+            CONDITIONAL_LAZY_LIST_NODE_ID.with(|slot| {
+                *slot.borrow_mut() = Some(node_id);
+            });
+        },
+    );
+}
+
+#[composable]
+fn PrimitiveStoriesPaneWithIndicator(modifier: Modifier, list_state: LazyListState) {
+    Column(
+        modifier,
+        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
+        move || {
+            Text("Top stories", Modifier::empty(), TextStyle::default());
+            Text("40 loaded of 40", Modifier::empty(), TextStyle::default());
+            Row(
+                Modifier::empty().fill_max_width().weight(1.0),
+                RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
+                move || {
+                    Column(
+                        Modifier::empty().weight(1.0).fill_max_height(),
+                        ColumnSpec::default(),
+                        move || {
+                            let node_id = LazyColumn(
+                                Modifier::empty().fill_max_size(),
+                                list_state,
+                                LazyColumnSpec::default(),
+                                |scope| {
+                                    scope.items(
+                                        40,
+                                        None::<fn(usize) -> u64>,
+                                        None::<fn(usize) -> u64>,
+                                        |index| {
+                                            Text(
+                                                format!("Item {}", index),
+                                                Modifier::empty(),
+                                                TextStyle::default(),
+                                            );
+                                        },
+                                    );
+                                },
+                            );
+                            CONDITIONAL_LAZY_LIST_STATE.with(|slot| {
+                                *slot.borrow_mut() = Some(list_state);
+                            });
+                            CONDITIONAL_LAZY_LIST_NODE_ID.with(|slot| {
+                                *slot.borrow_mut() = Some(node_id);
+                            });
+                        },
+                    );
+                    Column(
+                        Modifier::empty().width(28.0).fill_max_height(),
+                        ColumnSpec::default(),
+                        move || {
+                            Text(
+                                format!("At {}", list_state.first_visible_item_index()),
+                                Modifier::empty(),
+                                TextStyle::default(),
+                            );
+                        },
+                    );
+                },
+            );
+        },
+    );
+}
+
+#[composable]
+fn PrimitiveStoriesPaneWithDynamicStatus(
+    modifier: Modifier,
+    list_state: LazyListState,
+    loaded_count: cranpose_core::MutableState<usize>,
+) {
+    Column(
+        modifier,
+        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
+        move || {
+            Text("Top stories", Modifier::empty(), TextStyle::default());
+            Text(
+                format!("{} loaded of 60", loaded_count.value()),
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+            Row(
+                Modifier::empty().fill_max_width().weight(1.0),
+                RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
+                move || {
+                    Column(
+                        Modifier::empty().weight(1.0).fill_max_height(),
+                        ColumnSpec::default(),
+                        move || {
+                            let node_id = LazyColumn(
+                                Modifier::empty().fill_max_size(),
+                                list_state,
+                                LazyColumnSpec::default(),
+                                |scope| {
+                                    scope.items(
+                                        40,
+                                        None::<fn(usize) -> u64>,
+                                        None::<fn(usize) -> u64>,
+                                        |index| {
+                                            Text(
+                                                format!("Item {}", index),
+                                                Modifier::empty(),
+                                                TextStyle::default(),
+                                            );
+                                        },
+                                    );
+                                },
+                            );
+                            CONDITIONAL_LAZY_LIST_STATE.with(|slot| {
+                                *slot.borrow_mut() = Some(list_state);
+                            });
+                            CONDITIONAL_LAZY_LIST_NODE_ID.with(|slot| {
+                                *slot.borrow_mut() = Some(node_id);
+                            });
+                        },
+                    );
+                    Column(
+                        Modifier::empty().width(28.0).fill_max_height(),
+                        ColumnSpec::default(),
+                        move || {
+                            Text(
+                                format!("At {}", list_state.first_visible_item_index()),
+                                Modifier::empty(),
+                                TextStyle::default(),
+                            );
+                        },
+                    );
+                },
+            );
+        },
+    );
+}
+
+fn captured_conditional_lazy_list_state() -> LazyListState {
+    CONDITIONAL_LAZY_LIST_STATE
+        .with(|slot| (*slot.borrow()).expect("conditional lazy list state should be captured"))
+}
+
+fn captured_conditional_lazy_list_node_id() -> NodeId {
+    CONDITIONAL_LAZY_LIST_NODE_ID
+        .with(|slot| (*slot.borrow()).expect("conditional lazy list node id should be captured"))
+}
+
+fn node_generation(composition: &mut Composition<MemoryApplier>, node_id: NodeId) -> u32 {
+    composition.applier_mut().node_generation(node_id)
+}
+
+fn settle_scroll_recomposition(
+    composition: &mut Composition<MemoryApplier>,
+    root: NodeId,
+    size: Size,
+) {
+    measure_root(composition, root, size);
+    while composition
+        .process_invalid_scopes()
+        .expect("scroll-driven recomposition should succeed")
+    {
+        measure_root(composition, root, size);
+    }
+    measure_root(composition, root, size);
 }
 
 #[test]
@@ -399,6 +686,67 @@ fn box_with_constraints_reacts_to_constraint_changes() {
 }
 
 #[test]
+fn box_with_constraints_reinstalls_slot_root_callback_after_recompose() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let value = cranpose_core::MutableState::with_runtime(0_i32, runtime);
+
+    composition
+        .render(location_key(file!(), line!(), column!()), || {
+            BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
+                let current = value.value();
+                Column(
+                    Modifier::empty().fill_max_size(),
+                    ColumnSpec::default(),
+                    move || {
+                        Text(
+                            format!("Value {current}"),
+                            Modifier::empty(),
+                            TextStyle::default(),
+                        );
+                    },
+                );
+            });
+        })
+        .expect("initial render");
+
+    let root = composition.root().expect("root node");
+    let size = Size {
+        width: 160.0,
+        height: 120.0,
+    };
+
+    let texts = render_texts(&mut composition, root, size);
+    assert!(texts.iter().any(|text| text == "Value 0"));
+
+    value.set_value(1);
+    while composition
+        .process_invalid_scopes()
+        .expect("first box-with-constraints recomposition")
+    {
+        let _ = render_texts(&mut composition, root, size);
+    }
+    let texts = render_texts(&mut composition, root, size);
+    assert!(
+        texts.iter().any(|text| text == "Value 1"),
+        "first box-with-constraints recomposition should refresh content, got {texts:?}",
+    );
+
+    value.set_value(2);
+    while composition
+        .process_invalid_scopes()
+        .expect("second box-with-constraints recomposition")
+    {
+        let _ = render_texts(&mut composition, root, size);
+    }
+    let texts = render_texts(&mut composition, root, size);
+    assert!(
+        texts.iter().any(|text| text == "Value 2"),
+        "second box-with-constraints recomposition should still refresh content, got {texts:?}",
+    );
+}
+
+#[test]
 fn box_with_constraints_measures_children_with_finite_constraints() {
     let mut composition = Composition::new(MemoryApplier::new());
     let recorded = Rc::new(RefCell::new(Vec::new()));
@@ -431,6 +779,603 @@ fn box_with_constraints_measures_children_with_finite_constraints() {
             max_height: 80.0,
         }]
     );
+}
+
+#[test]
+fn box_with_constraints_restores_conditional_branch_after_toggle() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let show_thread = cranpose_core::MutableState::with_runtime(false, runtime.clone());
+
+    composition
+        .render(location_key(file!(), line!(), column!()), || {
+            BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
+                Column(
+                    Modifier::empty().fill_max_size(),
+                    ColumnSpec::default(),
+                    move || {
+                        Text("Header", Modifier::empty(), TextStyle::default());
+                        if show_thread.value() {
+                            Text("Thread", Modifier::empty(), TextStyle::default());
+                        } else {
+                            Text("Stories", Modifier::empty(), TextStyle::default());
+                        }
+                    },
+                );
+            });
+        })
+        .expect("initial render");
+
+    let root = composition.root().expect("root node");
+    let size = Size {
+        width: 200.0,
+        height: 200.0,
+    };
+    let texts = render_texts(&mut composition, root, size);
+    assert!(texts.iter().any(|text| text == "Header"));
+    assert!(texts.iter().any(|text| text == "Stories"));
+
+    show_thread.set_value(true);
+    composition
+        .process_invalid_scopes()
+        .expect("switch to thread branch");
+    let texts = render_texts(&mut composition, root, size);
+    assert!(texts.iter().any(|text| text == "Thread"));
+    assert!(!texts.iter().any(|text| text == "Stories"));
+
+    show_thread.set_value(false);
+    composition
+        .process_invalid_scopes()
+        .expect("restore stories branch");
+    let texts = render_texts(&mut composition, root, size);
+    assert!(
+        texts.iter().any(|text| text == "Stories"),
+        "restored branch should render again, got {texts:?}",
+    );
+    assert!(!texts.iter().any(|text| text == "Thread"));
+}
+
+#[test]
+fn box_with_constraints_restores_conditional_composable_branch_after_toggle() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let show_thread = cranpose_core::MutableState::with_runtime(false, runtime.clone());
+
+    composition
+        .render(location_key(file!(), line!(), column!()), || {
+            BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
+                Column(
+                    Modifier::empty().fill_max_size(),
+                    ColumnSpec::default(),
+                    move || {
+                        Text("Header", Modifier::empty(), TextStyle::default());
+                        if show_thread.value() {
+                            PrimitiveThreadBranch();
+                        } else {
+                            PrimitiveStoriesBranch();
+                        }
+                    },
+                );
+            });
+        })
+        .expect("initial render");
+
+    let root = composition.root().expect("root node");
+    let size = Size {
+        width: 200.0,
+        height: 200.0,
+    };
+    let texts = render_texts(&mut composition, root, size);
+    assert!(texts.iter().any(|text| text == "Stories"));
+
+    show_thread.set_value(true);
+    composition
+        .process_invalid_scopes()
+        .expect("switch to thread branch");
+    let texts = render_texts(&mut composition, root, size);
+    assert!(texts.iter().any(|text| text == "Thread"));
+    assert!(!texts.iter().any(|text| text == "Stories"));
+
+    show_thread.set_value(false);
+    composition
+        .process_invalid_scopes()
+        .expect("restore stories branch");
+    let texts = render_texts(&mut composition, root, size);
+    assert!(
+        texts.iter().any(|text| text == "Stories"),
+        "restored composable branch should render again, got {texts:?}",
+    );
+    assert!(!texts.iter().any(|text| text == "Thread"));
+}
+
+#[test]
+fn box_with_constraints_restores_conditional_lazy_list_branch_after_toggle() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let show_thread = cranpose_core::MutableState::with_runtime(false, runtime.clone());
+
+    composition
+        .render(location_key(file!(), line!(), column!()), || {
+            let list_state = remember_lazy_list_state();
+            BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
+                Column(
+                    Modifier::empty().fill_max_size(),
+                    ColumnSpec::default(),
+                    move || {
+                        Text("Header", Modifier::empty(), TextStyle::default());
+                        if show_thread.value() {
+                            PrimitiveThreadBranch();
+                        } else {
+                            PrimitiveStoriesListBranch(list_state);
+                        }
+                    },
+                );
+            });
+        })
+        .expect("initial render");
+
+    let root = composition.root().expect("root node");
+    let size = Size {
+        width: 200.0,
+        height: 200.0,
+    };
+    let texts = render_texts(&mut composition, root, size);
+    assert!(texts.iter().any(|text| text == "Stories"));
+
+    show_thread.set_value(true);
+    composition
+        .process_invalid_scopes()
+        .expect("switch to thread branch");
+    let texts = render_texts(&mut composition, root, size);
+    assert!(texts.iter().any(|text| text == "Thread"));
+    assert!(!texts.iter().any(|text| text == "Stories"));
+
+    show_thread.set_value(false);
+    composition
+        .process_invalid_scopes()
+        .expect("restore stories branch");
+    let texts = render_texts(&mut composition, root, size);
+    assert!(
+        texts.iter().any(|text| text == "Stories"),
+        "restored lazy-list branch should render again, got {texts:?}",
+    );
+    assert!(!texts.iter().any(|text| text == "Thread"));
+}
+
+#[test]
+fn box_with_constraints_restored_lazy_list_branch_keeps_host_generation_during_scroll() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let selected_story = cranpose_core::MutableState::with_runtime(None::<u64>, runtime.clone());
+
+    CONDITIONAL_LAZY_LIST_STATE.with(|slot| {
+        *slot.borrow_mut() = None;
+    });
+    CONDITIONAL_LAZY_LIST_NODE_ID.with(|slot| {
+        *slot.borrow_mut() = None;
+    });
+
+    composition
+        .render(location_key(file!(), line!(), column!()), || {
+            let list_state = remember_lazy_list_state();
+            BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
+                Column(
+                    Modifier::empty().fill_max_size(),
+                    ColumnSpec::default(),
+                    move || {
+                        Text("Header", Modifier::empty(), TextStyle::default());
+                        let single_pane_key = selected_story.value();
+                        cranpose_core::with_key(&single_pane_key, move || {
+                            if single_pane_key.is_some() {
+                                PrimitiveThreadPaneLike(
+                                    Modifier::empty().fill_max_width().weight(1.0),
+                                );
+                            } else {
+                                PrimitiveScrollReactiveStoriesBranch(list_state);
+                            }
+                        });
+                    },
+                );
+            });
+        })
+        .expect("initial render");
+
+    let root = composition.root().expect("root node");
+    let size = Size {
+        width: 260.0,
+        height: 320.0,
+    };
+    settle_scroll_recomposition(&mut composition, root, size);
+
+    let list_state = captured_conditional_lazy_list_state();
+    let fresh_node_id = captured_conditional_lazy_list_node_id();
+    let fresh_generation = node_generation(&mut composition, fresh_node_id);
+
+    list_state.dispatch_scroll_delta(-120.0);
+    settle_scroll_recomposition(&mut composition, root, size);
+
+    let fresh_after_node_id = captured_conditional_lazy_list_node_id();
+    let fresh_after_generation = node_generation(&mut composition, fresh_after_node_id);
+    assert_eq!(
+        (fresh_after_node_id, fresh_after_generation),
+        (fresh_node_id, fresh_generation),
+        "fresh scroll should not recreate the lazy list host"
+    );
+
+    selected_story.set_value(Some(1));
+    while composition
+        .process_invalid_scopes()
+        .expect("switch to thread branch")
+    {
+        settle_scroll_recomposition(&mut composition, root, size);
+    }
+    settle_scroll_recomposition(&mut composition, root, size);
+
+    selected_story.set_value(None);
+    while composition
+        .process_invalid_scopes()
+        .expect("restore stories branch")
+    {
+        settle_scroll_recomposition(&mut composition, root, size);
+    }
+    settle_scroll_recomposition(&mut composition, root, size);
+
+    let restored_node_id = captured_conditional_lazy_list_node_id();
+    let restored_generation = node_generation(&mut composition, restored_node_id);
+
+    let mut seen = Vec::new();
+    for _ in 0..4 {
+        list_state.dispatch_scroll_delta(-120.0);
+        settle_scroll_recomposition(&mut composition, root, size);
+        let node_id = captured_conditional_lazy_list_node_id();
+        let generation = node_generation(&mut composition, node_id);
+        seen.push((node_id, generation));
+    }
+
+    assert_eq!(
+        seen,
+        vec![(restored_node_id, restored_generation); seen.len()],
+        "restored lazy-list host changed across scroll-driven recompositions; restored=({restored_node_id}, {restored_generation}) seen={seen:?}",
+    );
+}
+
+#[test]
+fn box_with_constraints_restored_weighted_lazy_list_branch_keeps_host_generation_during_scroll() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let selected_story = cranpose_core::MutableState::with_runtime(None::<u64>, runtime.clone());
+
+    CONDITIONAL_LAZY_LIST_STATE.with(|slot| {
+        *slot.borrow_mut() = None;
+    });
+    CONDITIONAL_LAZY_LIST_NODE_ID.with(|slot| {
+        *slot.borrow_mut() = None;
+    });
+
+    composition
+        .render(location_key(file!(), line!(), column!()), || {
+            let list_state = remember_lazy_list_state();
+            BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
+                Column(
+                    Modifier::empty().fill_max_size(),
+                    ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(12.0)),
+                    move || {
+                        Text("Header", Modifier::empty(), TextStyle::default());
+                        let single_pane_key = selected_story.value();
+                        cranpose_core::with_key(&single_pane_key, move || {
+                            if single_pane_key.is_some() {
+                                PrimitiveThreadPaneLike(
+                                    Modifier::empty().fill_max_width().weight(1.0),
+                                );
+                            } else {
+                                PrimitiveStoriesPaneWithIndicator(
+                                    Modifier::empty().fill_max_width().weight(1.0),
+                                    list_state,
+                                );
+                            }
+                        });
+                    },
+                );
+            });
+        })
+        .expect("initial render");
+
+    let root = composition.root().expect("root node");
+    let size = Size {
+        width: 260.0,
+        height: 360.0,
+    };
+    settle_scroll_recomposition(&mut composition, root, size);
+
+    let list_state = captured_conditional_lazy_list_state();
+    let fresh_node_id = captured_conditional_lazy_list_node_id();
+    let fresh_generation = node_generation(&mut composition, fresh_node_id);
+
+    list_state.dispatch_scroll_delta(-120.0);
+    settle_scroll_recomposition(&mut composition, root, size);
+
+    let fresh_after_node_id = captured_conditional_lazy_list_node_id();
+    let fresh_after_generation = node_generation(&mut composition, fresh_after_node_id);
+    assert_eq!(
+        (fresh_after_node_id, fresh_after_generation),
+        (fresh_node_id, fresh_generation),
+        "fresh weighted scroll should not recreate the lazy list host"
+    );
+
+    selected_story.set_value(Some(1));
+    while composition
+        .process_invalid_scopes()
+        .expect("switch to thread branch")
+    {
+        settle_scroll_recomposition(&mut composition, root, size);
+    }
+    settle_scroll_recomposition(&mut composition, root, size);
+
+    selected_story.set_value(None);
+    while composition
+        .process_invalid_scopes()
+        .expect("restore stories branch")
+    {
+        settle_scroll_recomposition(&mut composition, root, size);
+    }
+    settle_scroll_recomposition(&mut composition, root, size);
+
+    let restored_node_id = captured_conditional_lazy_list_node_id();
+    let restored_generation = node_generation(&mut composition, restored_node_id);
+
+    let mut seen = Vec::new();
+    for _ in 0..4 {
+        list_state.dispatch_scroll_delta(-120.0);
+        settle_scroll_recomposition(&mut composition, root, size);
+        let node_id = captured_conditional_lazy_list_node_id();
+        let generation = node_generation(&mut composition, node_id);
+        seen.push((node_id, generation));
+    }
+
+    assert_eq!(
+        seen,
+        vec![(restored_node_id, restored_generation); seen.len()],
+        "restored weighted lazy-list host changed across scroll-driven recompositions; restored=({restored_node_id}, {restored_generation}) seen={seen:?}",
+    );
+}
+
+#[test]
+fn box_with_constraints_restored_weighted_lazy_list_branch_keeps_host_during_status_recompose() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let selected_story = cranpose_core::MutableState::with_runtime(None::<u64>, runtime.clone());
+    let loaded_count = cranpose_core::MutableState::with_runtime(20usize, runtime.clone());
+
+    CONDITIONAL_LAZY_LIST_STATE.with(|slot| {
+        *slot.borrow_mut() = None;
+    });
+    CONDITIONAL_LAZY_LIST_NODE_ID.with(|slot| {
+        *slot.borrow_mut() = None;
+    });
+
+    composition
+        .render(location_key(file!(), line!(), column!()), || {
+            let list_state = remember_lazy_list_state();
+            BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
+                Column(
+                    Modifier::empty().fill_max_size(),
+                    ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(12.0)),
+                    move || {
+                        Text("Header", Modifier::empty(), TextStyle::default());
+                        let single_pane_key = selected_story.value();
+                        cranpose_core::with_key(&single_pane_key, move || {
+                            if single_pane_key.is_some() {
+                                PrimitiveThreadPaneLike(
+                                    Modifier::empty().fill_max_width().weight(1.0),
+                                );
+                            } else {
+                                PrimitiveStoriesPaneWithDynamicStatus(
+                                    Modifier::empty().fill_max_width().weight(1.0),
+                                    list_state,
+                                    loaded_count,
+                                );
+                            }
+                        });
+                    },
+                );
+            });
+        })
+        .expect("initial render");
+
+    let root = composition.root().expect("root node");
+    let size = Size {
+        width: 260.0,
+        height: 360.0,
+    };
+    settle_scroll_recomposition(&mut composition, root, size);
+
+    selected_story.set_value(Some(1));
+    while composition
+        .process_invalid_scopes()
+        .expect("switch to thread branch")
+    {
+        settle_scroll_recomposition(&mut composition, root, size);
+    }
+    settle_scroll_recomposition(&mut composition, root, size);
+
+    selected_story.set_value(None);
+    while composition
+        .process_invalid_scopes()
+        .expect("restore stories branch")
+    {
+        settle_scroll_recomposition(&mut composition, root, size);
+    }
+    settle_scroll_recomposition(&mut composition, root, size);
+
+    let restored_node_id = captured_conditional_lazy_list_node_id();
+    let restored_generation = node_generation(&mut composition, restored_node_id);
+
+    loaded_count.set_value(40);
+    settle_scroll_recomposition(&mut composition, root, size);
+
+    let after_node_id = captured_conditional_lazy_list_node_id();
+    let after_generation = node_generation(&mut composition, after_node_id);
+
+    assert_eq!(
+        (after_node_id, after_generation),
+        (restored_node_id, restored_generation),
+        "restored weighted lazy-list host changed during a plain status-text recomposition; restored=({restored_node_id}, {restored_generation}) after=({after_node_id}, {after_generation})",
+    );
+}
+
+#[test]
+fn box_with_constraints_restored_weighted_branch_after_header_toggle_keeps_host_during_scroll() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let selected_story = cranpose_core::MutableState::with_runtime(None::<u64>, runtime.clone());
+
+    CONDITIONAL_LAZY_LIST_STATE.with(|slot| {
+        *slot.borrow_mut() = None;
+    });
+    CONDITIONAL_LAZY_LIST_NODE_ID.with(|slot| {
+        *slot.borrow_mut() = None;
+    });
+
+    composition
+        .render(location_key(file!(), line!(), column!()), || {
+            let list_state = remember_lazy_list_state();
+            BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
+                Column(
+                    Modifier::empty().fill_max_size(),
+                    ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(12.0)),
+                    move || {
+                        PrimitiveHeaderWithOptionalBack(selected_story.value().is_some());
+                        let single_pane_key = selected_story.value();
+                        cranpose_core::with_key(&single_pane_key, move || {
+                            if single_pane_key.is_some() {
+                                PrimitiveThreadPaneLike(
+                                    Modifier::empty().fill_max_width().weight(1.0),
+                                );
+                            } else {
+                                PrimitiveStoriesPaneWithIndicator(
+                                    Modifier::empty().fill_max_width().weight(1.0),
+                                    list_state,
+                                );
+                            }
+                        });
+                    },
+                );
+            });
+        })
+        .expect("initial render");
+
+    let root = composition.root().expect("root node");
+    let size = Size {
+        width: 260.0,
+        height: 360.0,
+    };
+    settle_scroll_recomposition(&mut composition, root, size);
+
+    let list_state = captured_conditional_lazy_list_state();
+    let fresh_node_id = captured_conditional_lazy_list_node_id();
+    let fresh_generation = node_generation(&mut composition, fresh_node_id);
+
+    list_state.dispatch_scroll_delta(-120.0);
+    settle_scroll_recomposition(&mut composition, root, size);
+    assert_eq!(
+        (
+            captured_conditional_lazy_list_node_id(),
+            node_generation(&mut composition, captured_conditional_lazy_list_node_id())
+        ),
+        (fresh_node_id, fresh_generation),
+        "fresh scroll should not recreate the lazy list host",
+    );
+
+    selected_story.set_value(Some(1));
+    while composition
+        .process_invalid_scopes()
+        .expect("switch to thread branch")
+    {
+        settle_scroll_recomposition(&mut composition, root, size);
+    }
+    settle_scroll_recomposition(&mut composition, root, size);
+
+    selected_story.set_value(None);
+    while composition
+        .process_invalid_scopes()
+        .expect("restore stories branch")
+    {
+        settle_scroll_recomposition(&mut composition, root, size);
+    }
+    settle_scroll_recomposition(&mut composition, root, size);
+
+    let restored_node_id = captured_conditional_lazy_list_node_id();
+    let restored_generation = node_generation(&mut composition, restored_node_id);
+
+    let mut seen = Vec::new();
+    for _ in 0..4 {
+        list_state.dispatch_scroll_delta(-120.0);
+        settle_scroll_recomposition(&mut composition, root, size);
+        let node_id = captured_conditional_lazy_list_node_id();
+        let generation = node_generation(&mut composition, node_id);
+        seen.push((node_id, generation));
+    }
+
+    assert_eq!(
+        seen,
+        vec![(restored_node_id, restored_generation); seen.len()],
+        "restored weighted branch after header toggle changed host across scroll-driven recompositions; restored=({restored_node_id}, {restored_generation}) seen={seen:?}",
+    );
+}
+
+#[test]
+fn box_with_constraints_restores_weighted_layout_branch_after_toggle() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let show_thread = cranpose_core::MutableState::with_runtime(false, runtime.clone());
+
+    composition
+        .render(location_key(file!(), line!(), column!()), || {
+            BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
+                Column(
+                    Modifier::empty().fill_max_size(),
+                    ColumnSpec::default(),
+                    move || {
+                        Text("Header", Modifier::empty(), TextStyle::default());
+                        if show_thread.value() {
+                            PrimitiveThreadPaneLike(Modifier::empty().fill_max_width().weight(1.0));
+                        } else {
+                            PrimitiveStoriesPaneLike(
+                                Modifier::empty().fill_max_width().weight(1.0),
+                            );
+                        }
+                    },
+                );
+            });
+        })
+        .expect("initial render");
+
+    let root = composition.root().expect("root node");
+    let size = Size {
+        width: 200.0,
+        height: 200.0,
+    };
+    let texts = render_texts(&mut composition, root, size);
+    assert!(texts.iter().any(|text| text == "Top stories"));
+
+    show_thread.set_value(true);
+    composition
+        .process_invalid_scopes()
+        .expect("switch to thread pane");
+    let texts = render_texts(&mut composition, root, size);
+    assert!(texts.iter().any(|text| text == "Thread body"));
+    assert!(!texts.iter().any(|text| text == "Top stories"));
+
+    show_thread.set_value(false);
+    composition
+        .process_invalid_scopes()
+        .expect("restore stories pane");
+    let texts = render_texts(&mut composition, root, size);
+    assert!(
+        texts.iter().any(|text| text == "Top stories"),
+        "restored weighted layout branch should render again, got {texts:?}",
+    );
+    assert!(!texts.iter().any(|text| text == "Thread body"));
 }
 
 #[test]

@@ -14,6 +14,8 @@ use std::rc::Rc;
 
 use crate::{CallbackHolder, NodeId, RecomposeScope, SlotTable, SlotsHost};
 
+pub type DebugSlotGroup = (usize, crate::Key, Option<usize>, usize);
+
 /// Identifier for a subcomposed slot.
 ///
 /// This mirrors the `slotId` concept in Jetpack Compose where callers provide
@@ -782,6 +784,27 @@ impl SubcomposeState {
     /// This is useful for tracking composition statistics in lazy layouts.
     pub fn was_last_slot_reused(&self) -> Option<bool> {
         self.last_slot_reused
+    }
+
+    #[doc(hidden)]
+    pub fn debug_scope_ids_by_slot(&self) -> Vec<(u64, Vec<usize>)> {
+        self.mapping
+            .slot_to_scopes
+            .iter()
+            .map(|(slot, scopes)| (slot.raw(), scopes.iter().map(RecomposeScope::id).collect()))
+            .collect()
+    }
+
+    #[doc(hidden)]
+    pub fn debug_slot_table_for_slot(&self, slot_id: SlotId) -> Option<Vec<(usize, String)>> {
+        let slots = self.slot_compositions.get(&slot_id)?;
+        Some(slots.borrow().debug_dump_all_slots())
+    }
+
+    #[doc(hidden)]
+    pub fn debug_slot_table_groups_for_slot(&self, slot_id: SlotId) -> Option<Vec<DebugSlotGroup>> {
+        let slots = self.slot_compositions.get(&slot_id)?;
+        Some(slots.borrow().debug_dump_groups())
     }
 
     /// Returns a snapshot of precomposed nodes.

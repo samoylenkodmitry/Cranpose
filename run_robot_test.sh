@@ -209,6 +209,9 @@ run_test() {
             timeout_secs=180
             ;;
         robot_hacker_news_scroll)
+            timeout_secs=240
+            ;;
+        robot_hacker_news_back_drag_scroll)
             timeout_secs=120
             ;;
         robot_markdown_end_drag_up)

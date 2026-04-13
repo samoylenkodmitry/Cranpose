@@ -2213,7 +2213,7 @@ fn removing_subtree_unmounts_descendants() {
     insert_child_with_reparenting(&mut applier, parent_id, child_id);
     insert_child_with_reparenting(&mut applier, child_id, grandchild_id);
 
-    apply_remove_child(&mut applier, parent_id, child_id).expect("remove subtree");
+    remove_child_and_cleanup_now(&mut applier, parent_id, child_id).expect("remove subtree");
 
     assert_eq!(child_unmounts.get(), 1);
     assert_eq!(grandchild_unmounts.get(), 1);
@@ -2616,6 +2616,137 @@ fn composition_local_simple_subscription_test() {
 }
 
 #[test]
+fn composition_local_unchanged_value_does_not_reinvalidate_reader() {
+    thread_local! {
+        static ROOT_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
+        static READER_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
+        static LAST_VALUE: Cell<i32> = const { Cell::new(-1) };
+    }
+
+    let local_value = compositionLocalOf(|| 7);
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let trigger = MutableState::with_runtime(0, runtime.clone());
+
+    #[composable]
+    fn reader(local_value: CompositionLocal<i32>) {
+        READER_RECOMPOSITIONS.with(|c| c.set(c.get() + 1));
+        LAST_VALUE.with(|v| v.set(local_value.current()));
+    }
+
+    #[composable]
+    fn root(local_value: CompositionLocal<i32>, trigger: MutableState<i32>) {
+        ROOT_RECOMPOSITIONS.with(|c| c.set(c.get() + 1));
+        let _ = trigger.value();
+        CompositionLocalProvider(vec![local_value.provides(7)], || {
+            reader(local_value.clone());
+        });
+    }
+
+    composition
+        .render(1, || root(local_value.clone(), trigger))
+        .expect("initial composition");
+
+    assert_eq!(ROOT_RECOMPOSITIONS.with(|c| c.get()), 1);
+    assert_eq!(READER_RECOMPOSITIONS.with(|c| c.get()), 1);
+    assert_eq!(LAST_VALUE.with(|v| v.get()), 7);
+
+    trigger.set_value(1);
+    let did_recompose = composition
+        .process_invalid_scopes()
+        .expect("process unchanged provider value");
+
+    assert!(did_recompose, "parent should recompose for trigger change");
+    assert_eq!(ROOT_RECOMPOSITIONS.with(|c| c.get()), 2);
+    assert_eq!(
+        READER_RECOMPOSITIONS.with(|c| c.get()),
+        1,
+        "unchanged provided value must not invalidate the reader",
+    );
+    assert_eq!(LAST_VALUE.with(|v| v.get()), 7);
+    assert!(
+        !runtime.has_invalid_scopes(),
+        "unchanged provider value must not leave invalid scopes behind",
+    );
+}
+
+#[test]
+fn composition_local_custom_policy_uses_equivalence_for_updates() {
+    thread_local! {
+        static ROOT_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
+        static READER_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
+        static LAST_VALUE: Cell<i32> = const { Cell::new(-1) };
+    }
+
+    let local_value = compositionLocalOfWithPolicy(
+        || Arc::new(0),
+        |current: &Arc<i32>, next: &Arc<i32>| Arc::ptr_eq(current, next),
+    );
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let shared = Arc::new(7);
+    let provided_state = MutableState::with_runtime(shared.clone(), runtime.clone());
+
+    #[composable]
+    fn reader(local_value: CompositionLocal<Arc<i32>>) {
+        READER_RECOMPOSITIONS.with(|c| c.set(c.get() + 1));
+        LAST_VALUE.with(|v| v.set(*local_value.current()));
+    }
+
+    #[composable]
+    fn root(local_value: CompositionLocal<Arc<i32>>, provided_state: MutableState<Arc<i32>>) {
+        ROOT_RECOMPOSITIONS.with(|c| c.set(c.get() + 1));
+        let current = provided_state.value();
+        CompositionLocalProvider(vec![local_value.provides(current.clone())], || {
+            reader(local_value.clone());
+        });
+    }
+
+    composition
+        .render(1, || root(local_value.clone(), provided_state))
+        .expect("initial composition");
+
+    assert_eq!(ROOT_RECOMPOSITIONS.with(|c| c.get()), 1);
+    assert_eq!(READER_RECOMPOSITIONS.with(|c| c.get()), 1);
+    assert_eq!(LAST_VALUE.with(|v| v.get()), 7);
+
+    provided_state.set_value(shared.clone());
+    let did_recompose = composition
+        .process_invalid_scopes()
+        .expect("process equivalent provider value");
+
+    assert!(
+        did_recompose,
+        "provider scope should recompose for state change"
+    );
+    assert_eq!(ROOT_RECOMPOSITIONS.with(|c| c.get()), 2);
+    assert_eq!(
+        READER_RECOMPOSITIONS.with(|c| c.get()),
+        1,
+        "equivalent pointer value must not invalidate the reader",
+    );
+    assert_eq!(LAST_VALUE.with(|v| v.get()), 7);
+    assert!(
+        !runtime.has_invalid_scopes(),
+        "equivalent provider value must not leave invalid scopes behind",
+    );
+
+    provided_state.set_value(Arc::new(9));
+    let did_recompose = composition
+        .process_invalid_scopes()
+        .expect("process distinct provider value");
+
+    assert!(did_recompose, "distinct provider value should recompose");
+    assert_eq!(ROOT_RECOMPOSITIONS.with(|c| c.get()), 3);
+    assert_eq!(READER_RECOMPOSITIONS.with(|c| c.get()), 2);
+    assert_eq!(LAST_VALUE.with(|v| v.get()), 9);
+    assert!(
+        !runtime.has_invalid_scopes(),
+        "distinct provider value should settle after recomposition",
+    );
+}
+
+#[test]
 fn composition_local_tracks_reads_and_recomposes_selectively() {
     // This test verifies that CompositionLocal establishes subscriptions
     // and ONLY recomposes composables that actually read .current()
@@ -2943,6 +3074,399 @@ fn inactive_scopes_delay_invalidation_until_reactivated() {
         .expect("recomposition after reactivation");
 
     assert_eq!(INVOCATIONS.with(|count| count.get()), 2);
+}
+
+#[test]
+fn callbackless_scope_promotes_via_parent_scope_metadata() {
+    thread_local! {
+        static CHILD_SCOPE: RefCell<Option<RecomposeScope>> = const { RefCell::new(None) };
+        static PARENT_SCOPE: RefCell<Option<RecomposeScope>> = const { RefCell::new(None) };
+        static PARENT_SCOPE_ID: Cell<Option<ScopeId>> = const { Cell::new(None) };
+        static PARENT_INVOCATIONS: Cell<usize> = const { Cell::new(0) };
+        static OBSERVED_VALUES: RefCell<Vec<i32>> = const { RefCell::new(Vec::new()) };
+    }
+
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let state = MutableState::with_runtime(0, runtime.clone());
+    let root_key = location_key(file!(), line!(), column!());
+
+    PARENT_INVOCATIONS.with(|count| count.set(0));
+    CHILD_SCOPE.with(|slot| slot.borrow_mut().take());
+    PARENT_SCOPE.with(|slot| slot.borrow_mut().take());
+    PARENT_SCOPE_ID.with(|slot| slot.set(None));
+    OBSERVED_VALUES.with(|values| values.borrow_mut().clear());
+
+    #[composable]
+    fn parent(state: MutableState<i32>) {
+        PARENT_INVOCATIONS.with(|count| count.set(count.get() + 1));
+        with_current_composer(|composer| {
+            let scope = composer
+                .current_recranpose_scope()
+                .expect("parent scope available");
+            PARENT_SCOPE.with(|slot| slot.replace(Some(scope.clone())));
+            PARENT_SCOPE_ID.with(|slot| slot.set(Some(scope.id())));
+        });
+
+        cranpose_core::with_key(&"callbackless-child", || {
+            with_current_composer(|composer| {
+                let scope = composer
+                    .current_recranpose_scope()
+                    .expect("child scope available");
+                assert!(
+                    scope.group_anchor().is_valid(),
+                    "callbackless scope should own a stable group anchor",
+                );
+                CHILD_SCOPE.with(|slot| slot.replace(Some(scope)));
+            });
+            OBSERVED_VALUES.with(|values| values.borrow_mut().push(state.value()));
+        });
+    }
+
+    composition
+        .render(root_key, || parent(state))
+        .expect("initial composition");
+
+    let child_scope = CHILD_SCOPE
+        .with(|slot| slot.borrow().clone())
+        .expect("captured callbackless child scope");
+    let parent_scope = PARENT_SCOPE
+        .with(|slot| slot.borrow().clone())
+        .expect("captured parent scope");
+    assert!(
+        !child_scope.has_recompose_callback(),
+        "with_key child should stay callbackless so promotion uses scope metadata",
+    );
+    assert!(
+        parent_scope.has_recompose_callback(),
+        "parent composable scope should own the recomposition callback",
+    );
+    assert_eq!(
+        child_scope.parent_scope().map(|scope| scope.id()),
+        PARENT_SCOPE_ID.with(|slot| slot.get()),
+        "callbackless scope should point at its parent scope without slot-table scans",
+    );
+    assert_eq!(
+        child_scope
+            .callback_promotion_target()
+            .map(|scope| scope.id()),
+        Some(parent_scope.id()),
+        "callbackless promotion should resolve directly to the callback-owning parent scope",
+    );
+
+    state.set_value(1);
+    let recomposed = composition
+        .process_invalid_scopes()
+        .expect("process callbackless invalid scope");
+    assert!(
+        recomposed,
+        "expected callbackless invalidation to recompose"
+    );
+    assert!(
+        !composition.take_root_render_request(),
+        "callbackless promotion should invalidate the parent scope instead of requesting a root render",
+    );
+    assert_eq!(PARENT_INVOCATIONS.with(|count| count.get()), 2);
+    OBSERVED_VALUES.with(|values| {
+        assert_eq!(values.borrow().as_slice(), &[0, 1]);
+    });
+}
+
+#[test]
+fn process_invalid_scopes_preserves_later_fresh_subtree_when_earlier_scope_runs_after_it() {
+    thread_local! {
+        static EARLY_SCOPE: RefCell<Option<RecomposeScope>> = const { RefCell::new(None) };
+        static LATE_STATE: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
+        static EARLY_INVOCATIONS: Cell<usize> = const { Cell::new(0) };
+        static LATE_INVOCATIONS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let show_late = MutableState::with_runtime(false, runtime.clone());
+    let root_key = location_key(file!(), line!(), column!());
+
+    #[composable]
+    fn earlier_sibling() {
+        EARLY_INVOCATIONS.with(|count| count.set(count.get() + 1));
+        with_current_composer(|composer| {
+            let scope = composer
+                .current_recranpose_scope()
+                .expect("scope available");
+            EARLY_SCOPE.with(|slot| slot.replace(Some(scope)));
+        });
+    }
+
+    #[composable]
+    fn later_sibling(show_late: MutableState<bool>) {
+        LATE_INVOCATIONS.with(|count| count.set(count.get() + 1));
+        if show_late.value() {
+            let state = useState(|| 0i32);
+            LATE_STATE.with(|slot| {
+                *slot.borrow_mut() = Some(state);
+            });
+        } else {
+            LATE_STATE.with(|slot| {
+                slot.borrow_mut().take();
+            });
+        }
+    }
+
+    #[composable]
+    fn root(show_late: MutableState<bool>) {
+        earlier_sibling();
+        later_sibling(show_late);
+    }
+
+    composition
+        .render(root_key, || root(show_late))
+        .expect("initial composition");
+
+    assert_eq!(EARLY_INVOCATIONS.with(|count| count.get()), 1);
+    assert_eq!(LATE_INVOCATIONS.with(|count| count.get()), 1);
+    assert!(
+        LATE_STATE.with(|slot| slot.borrow().is_none()),
+        "late branch should start hidden",
+    );
+
+    let earlier_scope = EARLY_SCOPE
+        .with(|slot| slot.borrow().clone())
+        .expect("captured earlier scope");
+
+    show_late.set_value(true);
+    earlier_scope.invalidate();
+
+    while composition
+        .process_invalid_scopes()
+        .expect("process invalid scopes")
+    {}
+
+    assert_eq!(
+        EARLY_INVOCATIONS.with(|count| count.get()),
+        2,
+        "earlier scope should have recomposed after explicit invalidation",
+    );
+    assert_eq!(
+        LATE_INVOCATIONS.with(|count| count.get()),
+        2,
+        "later scope should have recomposed when its branch became visible",
+    );
+
+    let late_state = LATE_STATE
+        .with(|slot| slot.borrow().as_ref().copied())
+        .expect("late state registered after branch became visible");
+    assert!(
+        late_state.is_alive(),
+        "later fresh subtree state must survive unrelated earlier-scope recomposition",
+    );
+    assert_eq!(late_state.get(), 0);
+
+    late_state.set_value(1);
+    while composition
+        .process_invalid_scopes()
+        .expect("recompose after late state update")
+    {}
+
+    let live_late_state = LATE_STATE
+        .with(|slot| slot.borrow().as_ref().copied())
+        .expect("late state still registered after update");
+    assert!(live_late_state.is_alive());
+    assert_eq!(live_late_state.get(), 1);
+}
+
+#[test]
+fn gapped_scope_kept_alive_externally_stays_inactive_until_restored() {
+    thread_local! {
+        static CAPTURED_SCOPE: RefCell<Option<RecomposeScope>> = const { RefCell::new(None) };
+        static INVOCATIONS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let show_branch = MutableState::with_runtime(true, runtime.clone());
+    let observed = MutableState::with_runtime(0, runtime.clone());
+    let root_key = location_key(file!(), line!(), column!());
+
+    #[composable]
+    fn conditional_branch(observed: MutableState<i32>) {
+        INVOCATIONS.with(|count| count.set(count.get() + 1));
+        with_current_composer(|composer| {
+            let scope = composer
+                .current_recranpose_scope()
+                .expect("scope available");
+            CAPTURED_SCOPE.with(|slot| slot.replace(Some(scope)));
+        });
+        let _ = observed.value();
+    }
+
+    #[composable]
+    fn root(show_branch: MutableState<bool>, observed: MutableState<i32>) {
+        if show_branch.value() {
+            conditional_branch(observed);
+        }
+    }
+
+    composition
+        .render(root_key, || root(show_branch, observed))
+        .expect("initial composition");
+
+    assert_eq!(INVOCATIONS.with(|count| count.get()), 1);
+
+    let scope = CAPTURED_SCOPE
+        .with(|slot| slot.borrow().clone())
+        .expect("captured scope");
+    assert!(
+        scope.is_active(),
+        "visible branch scope should start active"
+    );
+
+    show_branch.set_value(false);
+    let _ = composition
+        .process_invalid_scopes()
+        .expect("hide branch recomposition");
+
+    assert!(
+        !scope.is_active(),
+        "scope retained outside the slot table must deactivate once its group is gapped; scope_id={} groups={:?} slots={:?}",
+        scope.id(),
+        composition.debug_dump_slot_table_groups(),
+        composition.debug_dump_all_slots(),
+    );
+
+    observed.set_value(1);
+    let _ = composition
+        .process_invalid_scopes()
+        .expect("hidden scope invalidation should be ignored");
+
+    assert_eq!(
+        INVOCATIONS.with(|count| count.get()),
+        1,
+        "a hidden gapped scope must not recompose just because an external clone kept it alive"
+    );
+}
+
+#[test]
+fn skipped_group_reparents_root_nodes_when_moved_to_a_new_parent() {
+    thread_local! {
+        static ROOT_ID: Cell<Option<NodeId>> = const { Cell::new(None) };
+        static PARENT_ID: Cell<Option<NodeId>> = const { Cell::new(None) };
+        static CHILD_ID: Cell<Option<NodeId>> = const { Cell::new(None) };
+    }
+
+    #[composable]
+    fn movable_child() -> NodeId {
+        let id = cranpose_core::with_current_composer(|composer| {
+            composer.emit_node(TrackingChild::default)
+        });
+        CHILD_ID.with(|slot| slot.set(Some(id)));
+        id
+    }
+
+    #[composable]
+    fn keyed_movable_child() -> NodeId {
+        let node_id = Cell::new(None);
+        cranpose_core::with_key(&"movable-child", || {
+            node_id.set(Some(movable_child()));
+        });
+        node_id
+            .get()
+            .expect("keyed movable child should emit a node")
+    }
+
+    #[composable]
+    fn movable_parent(show_child_inside: bool) -> NodeId {
+        let id = cranpose_core::with_current_composer(|composer| {
+            composer.emit_node(RecordingNode::default)
+        });
+        PARENT_ID.with(|slot| slot.set(Some(id)));
+        cranpose_core::push_parent(id);
+        if show_child_inside {
+            keyed_movable_child();
+        }
+        cranpose_core::pop_parent();
+        id
+    }
+
+    #[composable]
+    fn movable_root(show_child_inside: MutableState<bool>) -> NodeId {
+        let show_child_inside = show_child_inside.value();
+        let id = cranpose_core::with_current_composer(|composer| {
+            composer.emit_node(RecordingNode::default)
+        });
+        ROOT_ID.with(|slot| slot.set(Some(id)));
+        cranpose_core::push_parent(id);
+        movable_parent(show_child_inside);
+        if !show_child_inside {
+            keyed_movable_child();
+        }
+        cranpose_core::pop_parent();
+        id
+    }
+
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let show_child_inside = MutableState::with_runtime(true, runtime);
+    let root_key = location_key(file!(), line!(), column!());
+
+    composition
+        .render(root_key, || {
+            movable_root(show_child_inside);
+        })
+        .expect("initial render");
+
+    let root_id = ROOT_ID.with(|slot| slot.get()).expect("root id");
+    let parent_id = PARENT_ID.with(|slot| slot.get()).expect("parent id");
+    let child_id = CHILD_ID.with(|slot| slot.get()).expect("child id");
+
+    {
+        let mut applier = composition.applier_mut();
+        let child_parent = applier
+            .with_node::<TrackingChild, _>(child_id, |node| node.parent())
+            .expect("child should exist");
+        let parent_children = applier
+            .with_node::<RecordingNode, _>(parent_id, |node| node.children.clone())
+            .expect("parent should exist");
+        assert_eq!(child_parent, Some(parent_id));
+        assert_eq!(parent_children, vec![child_id]);
+    }
+
+    show_child_inside.set(false);
+    while composition
+        .process_invalid_scopes()
+        .expect("recompose after moving child")
+    {}
+
+    let current_child_id = CHILD_ID.with(|slot| slot.get()).expect("current child id");
+    let mut applier = composition.applier_mut();
+    let tree = applier.dump_tree(Some(root_id));
+    assert_eq!(
+        current_child_id, child_id,
+        "moving a skipped child between parents must reuse the same node; tree=\n{tree}",
+    );
+    let child_parent = applier
+        .with_node::<TrackingChild, _>(child_id, |node| node.parent())
+        .expect("child should still exist after move");
+    let root_children = applier
+        .with_node::<RecordingNode, _>(root_id, |node| node.children.clone())
+        .expect("root should exist");
+    let parent_children = applier
+        .with_node::<RecordingNode, _>(parent_id, |node| node.children.clone())
+        .expect("parent should exist");
+
+    assert_eq!(
+        child_parent,
+        Some(root_id),
+        "a skipped moved group must reattach its root node to the new parent; tree=\n{tree}",
+    );
+    assert_eq!(
+        root_children,
+        vec![parent_id, child_id],
+        "root should now own the moved child directly; tree=\n{tree}",
+    );
+    assert!(
+        parent_children.is_empty(),
+        "old parent must release the moved child when the skipped group changes parents; tree=\n{tree}",
+    );
 }
 
 struct SumPolicy;
@@ -4221,6 +4745,511 @@ fn tab_switching_with_nested_components() {
 }
 
 #[test]
+fn restored_keyed_branch_forces_deep_regular_param_recompose() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let active_tab = MutableState::with_runtime(0i32, runtime.clone());
+    let version_state = MutableState::with_runtime(0i32, runtime);
+    let key = location_key(file!(), line!(), column!());
+
+    thread_local! {
+        static STORED_ACTION: RefCell<Option<Box<dyn FnMut()>>> = const { RefCell::new(None) };
+        static OBSERVED_VALUE: Cell<i32> = const { Cell::new(-1) };
+    }
+
+    #[composable]
+    fn callback_sink(on_action: impl FnMut() + 'static) {
+        STORED_ACTION.with(|slot| {
+            *slot.borrow_mut() = Some(Box::new(on_action));
+        });
+    }
+
+    #[composable]
+    fn action_binding(version_state: MutableState<i32>) {
+        let version = version_state.value();
+        crate::with_key(&version, || {
+            let token = useState(|| version);
+            callback_sink(move || {
+                OBSERVED_VALUE.with(|cell| cell.set(token.get()));
+            });
+        });
+    }
+
+    #[composable]
+    fn stage_three(version_state: MutableState<i32>) {
+        action_binding(version_state);
+    }
+
+    #[composable]
+    fn stage_two(version_state: MutableState<i32>) {
+        stage_three(version_state);
+    }
+
+    #[composable]
+    fn stage_one(version_state: MutableState<i32>) {
+        stage_two(version_state);
+    }
+
+    #[composable]
+    fn inactive_tab() {}
+
+    let mut render = move || {
+        let active = active_tab.value();
+        crate::with_key(&active, || {
+            if active == 0 {
+                stage_one(version_state);
+            } else {
+                inactive_tab();
+            }
+        });
+    };
+
+    composition
+        .render(key, &mut render)
+        .expect("initial render");
+    let initial_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        STORED_ACTION.with(|slot| {
+            slot.borrow_mut()
+                .as_mut()
+                .expect("initial callback should be installed")();
+        });
+    }));
+    assert!(
+        initial_result.is_ok(),
+        "initial deep callback should be callable"
+    );
+    assert_eq!(
+        OBSERVED_VALUE.with(|cell| cell.get()),
+        0,
+        "initial callback should observe the initial keyed token",
+    );
+
+    active_tab.set_value(1);
+    composition.render(key, &mut render).expect("switch away");
+
+    version_state.set_value(1);
+
+    active_tab.set_value(0);
+    composition.render(key, &mut render).expect("switch back");
+
+    let restored_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        STORED_ACTION.with(|slot| {
+            slot.borrow_mut()
+                .as_mut()
+                .expect("restored callback should be installed")();
+        });
+    }));
+    assert!(
+        restored_result.is_ok(),
+        "restored keyed branch should refresh deep callbacks instead of keeping stale ones",
+    );
+    assert_eq!(
+        OBSERVED_VALUE.with(|cell| cell.get()),
+        1,
+        "deep callback should observe the restored keyed token after tab switch",
+    );
+}
+
+#[test]
+fn restored_branch_refreshes_deep_callback_after_recompose_via_content_lambda() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let active_tab = MutableState::with_runtime(0i32, runtime.clone());
+    let hover_state = MutableState::with_runtime(0i32, runtime);
+    let key = location_key(file!(), line!(), column!());
+
+    thread_local! {
+        static STORED_ACTION: RefCell<Option<Box<dyn FnMut()>>> = const { RefCell::new(None) };
+        static OBSERVED_VALUE: Cell<i32> = const { Cell::new(-1) };
+    }
+
+    #[composable]
+    fn callback_sink(on_action: impl FnMut() + 'static) {
+        STORED_ACTION.with(|slot| {
+            *slot.borrow_mut() = Some(Box::new(on_action));
+        });
+    }
+
+    #[composable]
+    fn content_host(content: impl FnMut() + 'static) {
+        content();
+    }
+
+    #[composable]
+    fn counter_tab(hover_state: MutableState<i32>) {
+        let token = useState(|| 41i32);
+        let _hover = hover_state.value();
+
+        content_host(move || {
+            callback_sink(move || {
+                OBSERVED_VALUE.with(|cell| cell.set(token.get()));
+            });
+        });
+    }
+
+    #[composable]
+    fn inactive_tab() {}
+
+    let mut render = move || {
+        let active = active_tab.value();
+        crate::with_key(&active, || {
+            if active == 0 {
+                counter_tab(hover_state);
+            } else {
+                inactive_tab();
+            }
+        });
+    };
+
+    fn drain_invalid_scopes(
+        composition: &mut Composition<MemoryApplier>,
+        key: Key,
+        render: &mut dyn FnMut(),
+    ) {
+        let _ = composition
+            .process_invalid_scopes()
+            .expect("recompose invalid scopes");
+        if composition.take_root_render_request() {
+            composition
+                .render(key, render)
+                .expect("render requested root");
+        }
+    }
+
+    composition
+        .render(key, &mut render)
+        .expect("initial render");
+
+    let initial_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        STORED_ACTION.with(|slot| {
+            slot.borrow_mut()
+                .as_mut()
+                .expect("initial callback should be installed")();
+        });
+    }));
+    assert!(
+        initial_result.is_ok(),
+        "initial callback should be callable"
+    );
+    assert_eq!(
+        OBSERVED_VALUE.with(|cell| cell.get()),
+        41,
+        "initial callback should observe the initial tab-local state",
+    );
+
+    active_tab.set_value(1);
+    drain_invalid_scopes(&mut composition, key, &mut render);
+
+    active_tab.set_value(0);
+    drain_invalid_scopes(&mut composition, key, &mut render);
+
+    hover_state.set_value(1);
+    drain_invalid_scopes(&mut composition, key, &mut render);
+
+    let restored_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        STORED_ACTION.with(|slot| {
+            slot.borrow_mut()
+                .as_mut()
+                .expect("restored callback should stay installed")();
+        });
+    }));
+    assert!(
+        restored_result.is_ok(),
+        "restored callback should refresh through ancestor recomposition instead of reading a removed state cell",
+    );
+    assert_eq!(
+        OBSERVED_VALUE.with(|cell| cell.get()),
+        41,
+        "restored callback should still observe the live tab-local state after ancestor recomposition",
+    );
+}
+
+#[test]
+fn restored_keyed_first_sibling_keeps_later_live_subtree_and_descendant_scope_identity() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let active_tab = MutableState::with_runtime(0i32, runtime);
+    let key = location_key(file!(), line!(), column!());
+
+    thread_local! {
+        static ROOT_ID: Cell<Option<NodeId>> = const { Cell::new(None) };
+        static CONTENT_ROOT_ID: Cell<Option<NodeId>> = const { Cell::new(None) };
+        static COUNTER_LABEL_ID: Cell<Option<NodeId>> = const { Cell::new(None) };
+        static PARITY_LABEL_ID: Cell<Option<NodeId>> = const { Cell::new(None) };
+        static COUNTER_STATE: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
+        static WAVE_STATE: RefCell<Option<MutableState<f32>>> = const { RefCell::new(None) };
+        static ANIMATED_SCOPE_ID: Cell<Option<ScopeId>> = const { Cell::new(None) };
+        static ANIMATED_SCOPE_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    fn set_text(id: NodeId, text: String) {
+        with_node_mut(id, |node: &mut TestTextNode| {
+            node.text = text;
+        })
+        .expect("update test text node");
+    }
+
+    fn drain_invalid_scopes(
+        composition: &mut Composition<MemoryApplier>,
+        key: Key,
+        render: &mut dyn FnMut(),
+    ) {
+        loop {
+            let recomposed = composition
+                .process_invalid_scopes()
+                .expect("process invalid scopes");
+            let requested_root = composition.take_root_render_request();
+            if requested_root {
+                composition
+                    .render(key, &mut *render)
+                    .expect("render requested root");
+            }
+            if !recomposed && !requested_root {
+                break;
+            }
+        }
+    }
+
+    #[composable]
+    fn tab_button(label: &'static str) {
+        let id = cranpose_test_node(TestTextNode::default);
+        set_text(id, label.to_string());
+    }
+
+    #[composable]
+    fn parity_branch(counter: MutableState<i32>) {
+        crate::debug_label_current_scope("parity_branch");
+        let is_even = counter.get() % 2 == 0;
+        crate::with_key(&is_even, || {
+            let id = cranpose_test_node(TestTextNode::default);
+            PARITY_LABEL_ID.with(|slot| slot.set(Some(id)));
+            set_text(
+                id,
+                if is_even {
+                    "if counter % 2 == 0".to_string()
+                } else {
+                    "if counter % 2 != 0".to_string()
+                },
+            );
+        });
+    }
+
+    #[composable]
+    fn animated_descendant(wave: MutableState<f32>) {
+        crate::debug_label_current_scope("animated_descendant");
+        ANIMATED_SCOPE_RECOMPOSITIONS.with(|count| count.set(count.get() + 1));
+        with_current_composer(|composer| {
+            let scope = composer
+                .current_recranpose_scope()
+                .expect("animated scope available");
+            ANIMATED_SCOPE_ID.with(|slot| slot.set(Some(scope.id())));
+        });
+        let id = cranpose_test_node(TestTextNode::default);
+        set_text(id, format!("Wave: {:.2}", wave.get()));
+    }
+
+    #[composable]
+    fn animated_subtree(wave: MutableState<f32>) {
+        with_current_composer(|composer| {
+            let wrapper = composer.emit_node(RecordingNode::default);
+            composer.push_parent(wrapper);
+            animated_descendant(wave);
+            composer.pop_parent();
+        });
+    }
+
+    #[composable]
+    fn main_content(counter: MutableState<i32>, wave: MutableState<f32>) {
+        crate::debug_label_current_scope("main_content");
+        with_current_composer(|composer| {
+            let content_root = composer.emit_node(RecordingNode::default);
+            CONTENT_ROOT_ID.with(|slot| slot.set(Some(content_root)));
+            composer.push_parent(content_root);
+
+            let counter_label = composer.emit_node(TestTextNode::default);
+            COUNTER_LABEL_ID.with(|slot| slot.set(Some(counter_label)));
+            set_text(counter_label, format!("Counter: {}", counter.get()));
+
+            animated_subtree(wave);
+
+            composer.pop_parent();
+        });
+    }
+
+    #[composable]
+    fn counter_tab() {
+        crate::debug_label_current_scope("counter_tab");
+        let counter = useState(|| 0i32);
+        let wave = useState(|| 0.0f32);
+        COUNTER_STATE.with(|slot| {
+            *slot.borrow_mut() = Some(counter);
+        });
+        WAVE_STATE.with(|slot| {
+            *slot.borrow_mut() = Some(wave);
+        });
+
+        parity_branch(counter);
+        main_content(counter, wave);
+    }
+
+    #[composable]
+    fn inactive_tab() {
+        COUNTER_STATE.with(|slot| {
+            slot.borrow_mut().take();
+        });
+        WAVE_STATE.with(|slot| {
+            slot.borrow_mut().take();
+        });
+        let id = cranpose_test_node(TestTextNode::default);
+        set_text(id, "Inactive Tab".to_string());
+    }
+
+    let mut render = move || {
+        with_current_composer(|composer| {
+            let root = composer.emit_node(RecordingNode::default);
+            ROOT_ID.with(|slot| slot.set(Some(root)));
+            composer.push_parent(root);
+
+            tab_button("Counter App");
+            tab_button("Other Tab");
+
+            let active = active_tab.value();
+            crate::with_key(&active, || {
+                if active == 0 {
+                    counter_tab();
+                } else {
+                    inactive_tab();
+                }
+            });
+
+            composer.pop_parent();
+        });
+    };
+
+    composition
+        .render(key, &mut render)
+        .expect("initial render");
+
+    let initial_root_id = ROOT_ID
+        .with(|slot| slot.get())
+        .expect("root id after initial render");
+    let initial_content_root = CONTENT_ROOT_ID
+        .with(|slot| slot.get())
+        .expect("content root after initial render");
+    let initial_counter_label = COUNTER_LABEL_ID
+        .with(|slot| slot.get())
+        .expect("counter label after initial render");
+    let initial_animated_scope = ANIMATED_SCOPE_ID
+        .with(|slot| slot.get())
+        .expect("animated scope after initial render");
+
+    let initial_root_children = composition
+        .applier_mut()
+        .with_node::<RecordingNode, _>(initial_root_id, |node| node.children.clone())
+        .expect("root recording node after initial render");
+    assert!(
+        initial_root_children.contains(&initial_content_root),
+        "initial root should own the live content subtree",
+    );
+    assert_eq!(
+        composition
+            .applier_mut()
+            .with_node::<TestTextNode, _>(initial_counter_label, |node| node.text.clone())
+            .expect("counter label text after initial render"),
+        "Counter: 0",
+    );
+
+    active_tab.set_value(1);
+    drain_invalid_scopes(&mut composition, key, &mut render);
+
+    active_tab.set_value(0);
+    drain_invalid_scopes(&mut composition, key, &mut render);
+
+    let restored_counter = COUNTER_STATE
+        .with(|slot| slot.borrow().as_ref().copied())
+        .expect("counter state after restore");
+    let restored_wave = WAVE_STATE
+        .with(|slot| slot.borrow().as_ref().copied())
+        .expect("wave state after restore");
+    let restored_content_root = CONTENT_ROOT_ID
+        .with(|slot| slot.get())
+        .expect("content root after restore");
+    let restored_counter_label = COUNTER_LABEL_ID
+        .with(|slot| slot.get())
+        .expect("counter label after restore");
+    let restored_animated_scope = ANIMATED_SCOPE_ID
+        .with(|slot| slot.get())
+        .expect("animated scope after restore");
+
+    assert_eq!(
+        restored_counter.get(),
+        0,
+        "restored counter should restart at zero"
+    );
+    assert_ne!(
+        restored_animated_scope, initial_animated_scope,
+        "roundtripping the whole tab should create a fresh descendant scope",
+    );
+    assert_eq!(
+        composition
+            .applier_mut()
+            .with_node::<TestTextNode, _>(restored_counter_label, |node| node.text.clone())
+            .expect("counter label text after restore"),
+        "Counter: 0",
+    );
+
+    restored_wave.set_value(0.5);
+    restored_counter.set_value(1);
+    drain_invalid_scopes(&mut composition, key, &mut render);
+
+    let root_children = composition
+        .applier_mut()
+        .with_node::<RecordingNode, _>(initial_root_id, |node| node.children.clone())
+        .expect("root recording node after counter update");
+    let slot_groups_after_counter = composition.debug_dump_slot_table_groups();
+    let slots_after_counter = composition.debug_dump_all_slots();
+    let counter_label_text = composition
+        .applier_mut()
+        .with_node::<TestTextNode, _>(restored_counter_label, |node| node.text.clone())
+        .unwrap_or_else(|err| {
+            panic!(
+                "counter label text after counter update: {err:?}; root_children={root_children:?}; groups={slot_groups_after_counter:?}; slots={slots_after_counter:?}"
+            )
+        });
+    let parity_text = composition
+        .applier_mut()
+        .with_node::<TestTextNode, _>(
+            PARITY_LABEL_ID
+                .with(|slot| slot.get())
+                .expect("parity label after counter update"),
+            |node| node.text.clone(),
+        )
+        .expect("parity label text after counter update");
+    let animated_scope_after_counter = ANIMATED_SCOPE_ID
+        .with(|slot| slot.get())
+        .expect("animated scope after counter update");
+    let animated_recompositions = ANIMATED_SCOPE_RECOMPOSITIONS.with(Cell::get);
+
+    assert!(
+        root_children.contains(&restored_content_root),
+        "counter flip after restore must keep the later live subtree attached to the root: root_children={root_children:?}; groups={slot_groups_after_counter:?}; slots={slots_after_counter:?}",
+    );
+    assert_eq!(
+        counter_label_text, "Counter: 1",
+        "counter flip after restore must update the later live subtree instead of dropping it",
+    );
+    assert_eq!(parity_text, "if counter % 2 != 0");
+    assert_eq!(
+        animated_scope_after_counter, restored_animated_scope,
+        "descendant animated scope identity must stay stable across sibling recomposition after restore",
+    );
+    assert!(
+        animated_recompositions >= 2,
+        "wave invalidation should recompose the descendant animated scope at least once after restore",
+    );
+}
+
+#[test]
 fn debug_nested_component_slot_table_state() {
     // Debug test to understand slot table state during nested component recomposition
     let mut composition = Composition::new(MemoryApplier::new());
@@ -4832,6 +5861,57 @@ fn reused_parent_with_existing_children_still_defers_to_sync_children() {
 }
 
 #[test]
+fn non_reused_parent_with_existing_children_still_defers_to_sync_children() {
+    let (handle, _runtime) = runtime_handle();
+    let mut slots = SlotBackend::default();
+    let mut applier = MemoryApplier::new();
+
+    let parent_id = applier.create(Box::new(RecordingNode::default()));
+    let stale_child_id = applier.create(Box::new(RecordingNode::default()));
+    let new_child_id = applier.create(Box::new(RecordingNode::default()));
+    applier
+        .with_node(parent_id, |node: &mut RecordingNode| {
+            node.insert_child(stale_child_id);
+        })
+        .expect("parent exists");
+    applier
+        .with_node(stale_child_id, |node: &mut RecordingNode| {
+            node.on_attached_to_parent(parent_id);
+        })
+        .expect("stale child exists");
+
+    let (composer, slots_host, applier_host) =
+        setup_composer(&mut slots, &mut applier, handle.clone(), None);
+
+    composer.core.last_node_reused.set(Some(false));
+    composer.push_parent(parent_id);
+    {
+        let stack = composer.parent_stack();
+        let frame = stack.last().expect("parent frame should exist");
+        assert_eq!(
+            frame.previous.as_slice(),
+            [stale_child_id],
+            "non-reused parents must still diff existing live children",
+        );
+    }
+    {
+        let mut stack = composer.parent_stack();
+        let frame = stack.last_mut().expect("parent frame should exist");
+        frame.new_children.push(new_child_id);
+    }
+    composer.pop_parent();
+
+    let commands = composer.take_commands();
+    assert_eq!(commands.attach_children.len(), 0);
+    assert_eq!(commands.sync_children.len(), 1);
+    assert_eq!(commands.sync_children[0].parent_id, parent_id);
+    assert_eq!(commands.sync_child_ids.as_slice(), [new_child_id]);
+
+    drop(composer);
+    teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
+}
+
+#[test]
 fn sync_children_reorders_small_child_lists_without_regressing_behavior() {
     let mut applier = MemoryApplier::new();
 
@@ -4874,6 +5954,80 @@ fn sync_children_reorders_small_child_lists_without_regressing_behavior() {
         .with_node(child_d, |node: &mut RecordingNode| node.parent())
         .expect("inserted child exists");
     assert_eq!(parent_of_d, Some(parent_id));
+}
+
+#[test]
+fn queued_sync_children_preserves_child_reparented_later_in_same_apply() {
+    let mut applier = MemoryApplier::new();
+    let old_parent = applier.create(Box::new(RecordingNode::default()));
+    let new_parent = applier.create(Box::new(RecordingNode::default()));
+    let unmounts = Rc::new(Cell::new(0));
+    let child = applier.create(Box::new(UnmountTrackingNode::new(Rc::clone(&unmounts))));
+
+    insert_child_with_reparenting(&mut applier, old_parent, child);
+
+    let mut commands = CommandQueue::default();
+    commands.push(Command::SyncChildren {
+        parent_id: old_parent,
+        expected_children: SmallVec::new(),
+    });
+    commands.push(Command::AttachChild {
+        parent_id: new_parent,
+        child_id: child,
+        bubble: DirtyBubble::LAYOUT_AND_MEASURE,
+    });
+
+    commands
+        .apply(&mut applier)
+        .expect("same-frame reparent should succeed");
+
+    assert_eq!(
+        unmounts.get(),
+        0,
+        "child must stay live until the later attach command reparents it",
+    );
+    let child_parent = applier
+        .with_node(child, |node: &mut UnmountTrackingNode| node.parent())
+        .expect("child should remain live");
+    assert_eq!(child_parent, Some(new_parent));
+    let old_children = applier
+        .with_node(old_parent, |node: &mut RecordingNode| node.children.clone())
+        .expect("old parent exists");
+    assert!(
+        old_children.is_empty(),
+        "old parent should no longer list the reparented child",
+    );
+    let new_children = applier
+        .with_node(new_parent, |node: &mut RecordingNode| node.children.clone())
+        .expect("new parent exists");
+    assert_eq!(new_children, vec![child]);
+}
+
+#[test]
+fn skipped_group_root_nodes_only_considers_direct_parent_membership() {
+    let (handle, _runtime) = runtime_handle();
+    let mut slots = SlotBackend::default();
+    let mut applier = MemoryApplier::new();
+
+    let grandparent = applier.create(Box::new(RecordingNode::default()));
+    let parent = applier.create(Box::new(RecordingNode::default()));
+    let child = applier.create(Box::new(RecordingNode::default()));
+
+    insert_child_with_reparenting(&mut applier, grandparent, parent);
+    insert_child_with_reparenting(&mut applier, parent, child);
+
+    let (composer, slots_host, applier_host) =
+        setup_composer(&mut slots, &mut applier, handle, None);
+
+    let roots = composer.skipped_group_root_nodes(&[grandparent, child]);
+    assert_eq!(
+        roots,
+        vec![grandparent, child],
+        "a node stays a skipped-group root when only a higher ancestor is in the skipped set",
+    );
+
+    drop(composer);
+    teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
 }
 
 #[test]
@@ -5010,6 +6164,67 @@ fn warm_recycled_nodes_can_be_reused_again_in_the_same_frame() {
         .take_recycled_node(std::any::TypeId::of::<RecyclableTestNode>())
         .expect("warm-origin shell should be reusable in the same frame");
     assert_eq!(recycled_again.stable_id(), stable_id);
+}
+
+#[test]
+fn orphaned_cleanup_skips_recycled_nodes_with_new_generation() {
+    #[derive(Default)]
+    struct RecyclableTestNode;
+
+    impl Node for RecyclableTestNode {
+        fn recycle_key(&self) -> Option<std::any::TypeId> {
+            Some(std::any::TypeId::of::<Self>())
+        }
+    }
+
+    let mut composition = Composition::new(MemoryApplier::new());
+    let key = std::any::TypeId::of::<RecyclableTestNode>();
+    let stable_id = composition
+        .applier_mut()
+        .create(Box::new(RecyclableTestNode));
+    let old_generation = composition.applier_mut().node_generation(stable_id);
+
+    {
+        let mut applier = composition.applier_mut();
+        applier
+            .remove(stable_id)
+            .expect("remove recyclable node before reuse");
+        applier.record_fresh_recyclable_creation(key);
+        applier.clear_recycled_nodes();
+
+        let recycled = applier
+            .take_recycled_node(key)
+            .expect("warm recyclable node should be available");
+        let (reused_id, node, warm_origin) = recycled.into_parts();
+        assert_eq!(reused_id, stable_id);
+        applier
+            .insert_with_id(reused_id, node)
+            .expect("reinsert warm recyclable node");
+        applier.set_recycled_node_origin(reused_id, warm_origin);
+    }
+
+    let new_generation = composition.applier_mut().node_generation(stable_id);
+    assert_ne!(
+        old_generation, new_generation,
+        "same-frame recycle must advance the stable generation",
+    );
+
+    composition
+        .slots
+        .borrow_mut()
+        .push_orphaned_node_for_test(stable_id, old_generation);
+
+    let removed_any = composition
+        .finalize_compaction()
+        .expect("orphaned cleanup should succeed");
+    assert!(
+        !removed_any,
+        "stale orphaned generation should not remove the recycled live node",
+    );
+    assert!(
+        composition.applier_mut().get_mut(stable_id).is_ok(),
+        "recycled live node should survive stale orphan cleanup",
+    );
 }
 
 #[test]

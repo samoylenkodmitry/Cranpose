@@ -127,12 +127,9 @@ fn test_conditional_composable_preserves_siblings() {
 
         assert_eq!(rule.applier_mut().len(), 4);
 
-        eprintln!("TEST: Setting show_middle to false");
         show_middle.set_value(false);
-        eprintln!("TEST: Calling recomposition()");
         rule.recomposition()
             .expect("second render with middle hidden");
-        eprintln!("TEST: Calling pump_until_idle()");
         rule.pump_until_idle()
             .expect("drain pending work after hiding middle");
         assert_eq!(rule.applier_mut().len(), 3);

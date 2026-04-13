@@ -502,6 +502,44 @@ fn animations_to_other_tabs_preserve_tab_content_markers() {
 }
 
 #[test]
+fn animations_to_other_tabs_preserve_tab_content_markers_in_composition() {
+    TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow_mut().take());
+    TEST_COMPOSITION_LOCAL_COUNTER.with(|cell| cell.borrow_mut().take());
+
+    let mut composition = Composition::new(MemoryApplier::new());
+    let key = location_key(file!(), line!(), column!());
+    composition
+        .render(key, combined_app)
+        .expect("install combined app content");
+    drain_all(&mut composition).expect("initial drain");
+
+    set_active_tab(DemoTab::Animations);
+    drain_all(&mut composition).expect("switch to animations tab");
+    assert_composition_contains_text(&mut composition, "Animations Showcase", "before tab walk");
+
+    let tab_markers = [
+        (DemoTab::Counter, "Cranpose Playground"),
+        (DemoTab::CompositionLocal, "READING local:"),
+        (DemoTab::Async, "Async Runtime Demo"),
+        (DemoTab::WebFetch, "Fetch data from the web"),
+    ];
+
+    for (tab, marker) in tab_markers {
+        set_active_tab(tab);
+        drain_all(&mut composition)
+            .unwrap_or_else(|_| panic!("switch to {:?} in composition", tab));
+        assert_composition_contains_text(
+            &mut composition,
+            marker,
+            &format!(
+                "after switching from Animations to {:?} in direct composition",
+                tab
+            ),
+        );
+    }
+}
+
+#[test]
 fn animations_tab_keeps_tree_after_frame_recomposition() {
     TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow_mut().take());
 

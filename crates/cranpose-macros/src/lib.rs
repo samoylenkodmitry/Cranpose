@@ -478,13 +478,13 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     .expect("missing recompose scope");
                 let mut __changed = __current_scope.should_recompose();
                 #(#param_setup)*
+                #recranpose_setter
                 if !__changed && __current_scope.has_composed_once() {
                     __composer.skip_current_group();
                     return;
                 }
                 #(#rebinds)*
                 #helper_block
-                #recranpose_setter
             }
         } else {
             quote! {
@@ -493,6 +493,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     .expect("missing recompose scope");
                 let mut __changed = __current_scope.should_recompose();
                 #(#param_setup)*
+                #recranpose_setter
                 let __result_slot_index = __composer
                     .use_value_slot(|| #core_path::ReturnSlot::<#return_ty>::default());
                 let __has_previous = __composer
@@ -522,7 +523,6 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                         slot.store(__value.clone());
                     },
                 );
-                #recranpose_setter
                 __value
             }
         };

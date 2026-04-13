@@ -66,25 +66,24 @@ impl ComposeTestRule {
             }
 
             if self.composition.should_render() {
-                eprintln!("pump_until_idle: should_render() is true");
                 self.render()?;
                 progressed = true;
             }
 
             let handle = self.composition.runtime_handle();
             if handle.has_updates() {
-                eprintln!("pump_until_idle: has_updates() is true");
                 self.composition.flush_pending_node_updates()?;
                 progressed = true;
             }
 
             if handle.has_invalid_scopes() {
-                eprintln!("pump_until_idle: has_invalid_scopes() is true");
                 let changed = self.composition.process_invalid_scopes()?;
                 if changed {
-                    eprintln!("pump_until_idle: process_invalid_scopes returned true");
                     // Request render invalidation so tests can detect composition changes
                     request_render_invalidation();
+                }
+                if self.composition.take_root_render_request() {
+                    self.render()?;
                 }
                 progressed = true;
             }

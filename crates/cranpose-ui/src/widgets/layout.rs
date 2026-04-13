@@ -16,7 +16,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 #[composable]
-pub fn Layout<F, P>(modifier: Modifier, measure_policy: P, content: F) -> NodeId
+pub fn Layout<F, P>(modifier: Modifier, measure_policy: P, mut content: F) -> NodeId
 where
     F: FnMut() + 'static,
     P: MeasurePolicy + Clone + PartialEq + 'static,
@@ -50,13 +50,43 @@ pub fn SubcomposeLayout(
     measure_policy: impl for<'scope> Fn(&mut SubcomposeMeasureScopeImpl<'scope>, Constraints) -> MeasureResult
         + 'static,
 ) -> NodeId {
-    let policy: Rc<SubcomposeMeasurePolicy> = Rc::new(measure_policy);
+    cranpose_core::debug_label_current_scope("SubcomposeLayout");
+    let policy_cell =
+        cranpose_core::remember(|| Rc::new(RefCell::new(None::<Rc<SubcomposeMeasurePolicy>>)))
+            .with(|cell| cell.clone());
+    let current_policy: Rc<SubcomposeMeasurePolicy> = Rc::new(measure_policy);
+    let policy_captures_changed = {
+        let mut policy_cell_ref = policy_cell.borrow_mut();
+        let changed = policy_cell_ref
+            .as_ref()
+            .is_none_or(|previous| !Rc::ptr_eq(previous, &current_policy));
+        *policy_cell_ref = Some(current_policy);
+        changed
+    };
+    let policy: Rc<SubcomposeMeasurePolicy> = cranpose_core::remember(move || {
+        let policy_cell = policy_cell.clone();
+        let policy: Rc<SubcomposeMeasurePolicy> = Rc::new(move |scope, constraints| {
+            let current = {
+                policy_cell
+                    .borrow()
+                    .as_ref()
+                    .expect("subcompose measure policy should be initialized")
+                    .clone()
+            };
+            current(scope, constraints)
+        });
+        policy
+    })
+    .with(|policy| policy.clone());
     let id = cranpose_core::with_current_composer(|composer| {
         composer.emit_node(|| SubcomposeLayoutNode::new(modifier.clone(), Rc::clone(&policy)))
     });
     if let Err(err) = cranpose_core::with_node_mut(id, |node: &mut SubcomposeLayoutNode| {
         node.set_modifier(modifier.clone());
         node.set_measure_policy(Rc::clone(&policy));
+        if policy_captures_changed {
+            node.request_measure_recompose();
+        }
     }) {
         debug_assert!(false, "failed to update SubcomposeLayout node: {err}");
     }
@@ -75,6 +105,7 @@ where
         let measurables = {
             let content_ref = Rc::clone(&content_ref);
             scope.subcompose(SlotId::new(0), move || {
+                cranpose_core::debug_label_current_scope("BoxWithConstraints.slot(0)");
                 let mut content = content_ref.borrow_mut();
                 content(scope_for_content);
             })
