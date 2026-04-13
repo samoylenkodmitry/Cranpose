@@ -748,27 +748,6 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
 
         let snapshot = active_snapshot();
         let snapshot_id = snapshot.snapshot_id();
-        let equivalent = match &snapshot {
-            AnySnapshot::Global(_) => self
-                .first_record()
-                .with_value(|current: &T| self.policy.equivalent(current, &new_value)),
-            AnySnapshot::Mutable(_)
-            | AnySnapshot::NestedMutable(_)
-            | AnySnapshot::TransparentMutable(_) => {
-                let invalid = snapshot.invalid();
-                self.readable_for(snapshot_id, &invalid)
-                    .map(|record| {
-                        record.with_value(|current: &T| self.policy.equivalent(current, &new_value))
-                    })
-                    .unwrap_or(false)
-            }
-            AnySnapshot::Readonly(_)
-            | AnySnapshot::NestedReadonly(_)
-            | AnySnapshot::TransparentReadonly(_) => false,
-        };
-        if equivalent {
-            return false;
-        }
 
         let mut written_state: Option<Arc<dyn StateObject>> = None;
         if let Some(state) = self
@@ -826,6 +805,15 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
             | AnySnapshot::NestedMutable(_)
             | AnySnapshot::TransparentMutable(_) => {
                 let invalid = snapshot.invalid();
+                let equivalent = self
+                    .readable_for(snapshot_id, &invalid)
+                    .map(|record| {
+                        record.with_value(|current: &T| self.policy.equivalent(current, &new_value))
+                    })
+                    .unwrap_or(false);
+                if equivalent {
+                    return false;
+                }
                 let record = self.writable_record(snapshot_id, &invalid);
                 record.replace_value(new_value);
                 self.assert_chain_integrity("set(child-writable)", Some(snapshot_id));

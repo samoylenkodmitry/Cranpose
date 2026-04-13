@@ -317,8 +317,8 @@ impl AppLauncher {
         self
     }
 
-    /// Register an app-thread hook that robot tests can invoke deterministically.
     #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
+    #[doc(hidden)]
     pub fn with_robot_app_hook(
         mut self,
         hook: impl FnMut(String, String) -> Result<Option<String>, String> + 'static,

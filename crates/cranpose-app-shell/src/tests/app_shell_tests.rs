@@ -122,6 +122,9 @@ fn live_slot_count(slots: &[(usize, String)]) -> usize {
 thread_local! {
     static APP_SHELL_ACTIVE_TAB_STATE: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
     static APP_SHELL_COUNTER_STATE: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
+    static FRAME_STABLE_HANDLER_MODE: RefCell<Option<MutableState<bool>>> = const { RefCell::new(None) };
+    static FRAME_STABLE_RENDERED_CLICKS: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
+    static FRAME_STABLE_PENDING_CLICKS: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
 }
 
 fn app_shell_local_count() -> CompositionLocal<i32> {
@@ -632,6 +635,47 @@ fn tabbed_progress_content() {
 fn empty_content() {}
 
 #[composable]
+fn frame_stable_pointer_handler_content() {
+    let use_pending_handler = useState(|| false);
+    let rendered_clicks = useState(|| 0i32);
+    let pending_clicks = useState(|| 0i32);
+    FRAME_STABLE_HANDLER_MODE.with(|slot| {
+        *slot.borrow_mut() = Some(use_pending_handler);
+    });
+    FRAME_STABLE_RENDERED_CLICKS.with(|slot| {
+        *slot.borrow_mut() = Some(rendered_clicks);
+    });
+    FRAME_STABLE_PENDING_CLICKS.with(|slot| {
+        *slot.borrow_mut() = Some(pending_clicks);
+    });
+
+    let pending_handler = use_pending_handler.value();
+    let rendered_clicks_state = rendered_clicks;
+    let pending_clicks_state = pending_clicks;
+    Button(
+        Modifier::empty().padding(8.0),
+        move || {
+            if pending_handler {
+                pending_clicks_state.set_value(pending_clicks_state.value() + 1);
+            } else {
+                rendered_clicks_state.set_value(rendered_clicks_state.value() + 1);
+            }
+        },
+        move || {
+            Text(
+                if pending_handler {
+                    "Pending Handler"
+                } else {
+                    "Rendered Handler"
+                },
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+        },
+    );
+}
+
+#[composable]
 fn box_content() {
     Box(
         Modifier::empty().size(Size {
@@ -834,7 +878,7 @@ fn pointer_scrolled_dispatches_to_hovered_targets_and_respects_consumption() {
 }
 
 #[test]
-fn captured_gesture_does_not_rebind_when_original_target_disappears() {
+fn captured_gesture_falls_back_to_original_targets_when_scene_targets_disappear() {
     let _guard = test_guard();
     let first_target_events = Rc::new(RefCell::new(Vec::new()));
     let rebound_target_events = Rc::new(RefCell::new(Vec::new()));
@@ -877,12 +921,12 @@ fn captured_gesture_does_not_rebind_when_original_target_disappears() {
     }];
 
     assert!(
-        !shell.set_cursor(30.0, 30.0),
-        "move should not be rebound to a fresh hit target"
+        shell.set_cursor(30.0, 30.0),
+        "move should stay on the original captured target"
     );
     assert!(
-        !shell.pointer_released(),
-        "up should not dispatch to an unrelated target after the original one disappears"
+        shell.pointer_released(),
+        "up should stay on the original captured target after the scene target disappears"
     );
 
     assert_eq!(
@@ -891,55 +935,15 @@ fn captured_gesture_does_not_rebind_when_original_target_disappears() {
             .iter()
             .map(|event| event.kind)
             .collect::<Vec<_>>(),
-        vec![PointerEventKind::Down]
+        vec![
+            PointerEventKind::Down,
+            PointerEventKind::Move,
+            PointerEventKind::Up
+        ]
     );
     assert!(
         rebound_target_events.borrow().is_empty(),
-        "captured gesture must not retarget to a different node"
-    );
-}
-
-#[test]
-fn retargeted_capture_context_targets_receive_synthetic_down() {
-    let _guard = test_guard();
-    let retargeted_events = Rc::new(RefCell::new(Vec::new()));
-    let root_key = location_key(file!(), line!(), column!());
-    let mut shell = AppShell::new(
-        ScrollDispatchRenderer::new(RecordingScene::default()),
-        root_key,
-        empty_content,
-    );
-    shell.buttons_pressed.insert(PointerButton::Primary);
-    shell.gesture_target_ids.insert(PointerId::PRIMARY, vec![1]);
-
-    let target = RecordingHitTarget {
-        node_id: 2,
-        consume: false,
-        events: retargeted_events.clone(),
-        capture_path: vec![2],
-    };
-    shell.prime_retargeted_capture_context_targets(
-        PointerId::PRIMARY,
-        Point { x: 10.0, y: 20.0 },
-        std::slice::from_ref(&target),
-    );
-    shell.prime_retargeted_capture_context_targets(
-        PointerId::PRIMARY,
-        Point { x: 11.0, y: 21.0 },
-        &[target],
-    );
-
-    assert_eq!(
-        retargeted_events
-            .borrow()
-            .iter()
-            .map(|event| event.kind)
-            .collect::<Vec<_>>(),
-        vec![PointerEventKind::Down]
-    );
-    assert_eq!(
-        shell.gesture_target_ids.get(&PointerId::PRIMARY),
-        Some(&vec![2])
+        "captured gesture must not retarget to a different live node"
     );
 }
 
@@ -1029,6 +1033,65 @@ fn pointer_scrolled_returns_false_without_hit_targets() {
     assert!(
         !shell.pointer_scrolled(0.0, 32.0),
         "wheel dispatch should return false when no handlers are hit"
+    );
+}
+
+#[test]
+fn pointer_dispatch_uses_rendered_frame_handlers_when_recomposition_is_pending() {
+    let _guard = test_guard();
+    FRAME_STABLE_HANDLER_MODE.with(|slot| slot.borrow_mut().take());
+    FRAME_STABLE_RENDERED_CLICKS.with(|slot| slot.borrow_mut().take());
+    FRAME_STABLE_PENDING_CLICKS.with(|slot| slot.borrow_mut().take());
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        frame_stable_pointer_handler_content,
+    );
+    shell.update();
+
+    let layout_tree = shell.layout_tree().expect("layout tree available");
+    let button = find_layout_box_with_text(layout_tree.root(), "Rendered Handler")
+        .expect("rendered handler button in layout tree");
+    let center_x = button.rect.x + button.rect.width * 0.5;
+    let center_y = button.rect.y + button.rect.height * 0.5;
+
+    FRAME_STABLE_HANDLER_MODE.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .expect("handler mode state")
+            .set_value(true);
+    });
+
+    assert!(
+        shell.set_cursor(center_x, center_y),
+        "hover should still resolve against the rendered frame"
+    );
+    assert!(
+        shell.pointer_pressed(),
+        "pointer down should hit the rendered frame target"
+    );
+    assert!(
+        shell.pointer_released(),
+        "pointer up should complete the gesture"
+    );
+
+    let rendered_clicks = FRAME_STABLE_RENDERED_CLICKS.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .expect("rendered click counter")
+            .get()
+    });
+    let pending_clicks = FRAME_STABLE_PENDING_CLICKS
+        .with(|slot| slot.borrow().as_ref().expect("pending click counter").get());
+    assert_eq!(
+        rendered_clicks, 1,
+        "pointer dispatch must stay on the frame the user actually saw"
+    );
+    assert_eq!(
+        pending_clicks, 0,
+        "pending recomposition handlers must not replace the rendered-frame handler before dispatch"
     );
 }
 

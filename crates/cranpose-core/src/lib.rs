@@ -28,14 +28,19 @@ pub use launched_effect::{
 };
 pub use owned::Owned;
 pub use platform::{Clock, RuntimeScheduler};
+#[doc(hidden)]
 pub use runtime::{
     current_runtime_handle, debug_runtime_thread_local_stats, schedule_frame, schedule_node_update,
     DefaultScheduler, Runtime, RuntimeDebugStats, RuntimeHandle, RuntimeThreadLocalDebugStats,
     StateArenaDebugStats, StateId, TaskHandle,
 };
+#[doc(hidden)]
 pub use snapshot_pinning::{debug_snapshot_pinning_stats, SnapshotPinningDebugStats};
+#[doc(hidden)]
 pub use snapshot_state_observer::{SnapshotStateObserver, SnapshotStateObserverDebugStats};
+#[doc(hidden)]
 pub use snapshot_v2::{debug_snapshot_v2_stats, SnapshotV2DebugStats};
+#[doc(hidden)]
 pub use state::{debug_snapshot_state_thread_local_stats, SnapshotStateThreadLocalDebugStats};
 
 /// Runs the provided closure inside a mutable snapshot and applies the result.
@@ -155,7 +160,7 @@ fn compose_debug_enabled() -> bool {
     *COMPOSE_DEBUG.get_or_init(|| std::env::var_os("COMPOSE_DEBUG").is_some())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
 fn debug_scope_tracking_enabled() -> bool {
     use std::sync::OnceLock;
     static DEBUG_SCOPE_TRACKING: OnceLock<bool> = OnceLock::new();
@@ -165,7 +170,7 @@ fn debug_scope_tracking_enabled() -> bool {
     })
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(not(debug_assertions), target_arch = "wasm32"))]
 fn debug_scope_tracking_enabled() -> bool {
     false
 }
@@ -216,14 +221,10 @@ type LocalStackSnapshot = Rc<Vec<LocalContext>>;
 
 thread_local! {
     static EMPTY_LOCAL_STACK: LocalStackSnapshot = Rc::new(Vec::new());
-}
-
-thread_local! {
+    #[cfg(debug_assertions)]
     static DEBUG_SCOPE_LABELS: RefCell<HashMap<usize, &'static str>> = RefCell::new(HashMap::default());
-}
-
-thread_local! {
-    static DEBUG_SCOPE_INVALIDATION_SOURCES: RefCell<HashMap<usize, Vec<String>>> =
+    #[cfg(debug_assertions)]
+    static DEBUG_SCOPE_INVALIDATION_SOURCES: RefCell<HashMap<usize, HashSet<String>>> =
         RefCell::new(HashMap::default());
 }
 
@@ -292,6 +293,15 @@ impl RecomposeScopeInner {
 impl Drop for RecomposeScopeInner {
     fn drop(&mut self) {
         LIVE_RECOMPOSE_SCOPE_COUNT.fetch_sub(1, Ordering::Relaxed);
+        #[cfg(debug_assertions)]
+        {
+            let _ = DEBUG_SCOPE_LABELS.try_with(|labels| {
+                labels.borrow_mut().remove(&self.id);
+            });
+            let _ = DEBUG_SCOPE_INVALIDATION_SOURCES.try_with(|sources| {
+                sources.borrow_mut().remove(&self.id);
+            });
+        }
         if self.enqueued.replace(false) {
             self.runtime.mark_scope_recomposed(self.id);
         }
@@ -6446,6 +6456,7 @@ pub fn debug_label_current_scope(name: &'static str) {
         let _ = name;
         return;
     }
+    #[cfg(debug_assertions)]
     with_current_composer(|composer| {
         if let Some(scope) = composer.current_recranpose_scope() {
             DEBUG_SCOPE_LABELS.with(|labels| {
@@ -6461,22 +6472,25 @@ fn debug_record_scope_invalidation<T: 'static>(scope_id: usize, state_id: Option
         let _ = state_id;
         return;
     }
-    let source = match state_id {
-        Some(id) => format!(
-            "slot={} gen={} {}",
-            id.slot(),
-            id.generation(),
-            std::any::type_name::<T>()
-        ),
-        None => std::any::type_name::<T>().to_string(),
-    };
-    DEBUG_SCOPE_INVALIDATION_SOURCES.with(|sources| {
-        sources
-            .borrow_mut()
-            .entry(scope_id)
-            .or_default()
-            .push(source);
-    });
+    #[cfg(debug_assertions)]
+    {
+        let source = match state_id {
+            Some(id) => format!(
+                "slot={} gen={} {}",
+                id.slot(),
+                id.generation(),
+                std::any::type_name::<T>()
+            ),
+            None => std::any::type_name::<T>().to_string(),
+        };
+        DEBUG_SCOPE_INVALIDATION_SOURCES.with(|sources| {
+            sources
+                .borrow_mut()
+                .entry(scope_id)
+                .or_default()
+                .insert(source);
+        });
+    }
 }
 
 #[doc(hidden)]
@@ -6485,7 +6499,12 @@ pub fn debug_scope_label(scope_id: usize) -> Option<&'static str> {
         let _ = scope_id;
         return None;
     }
-    DEBUG_SCOPE_LABELS.with(|labels| labels.borrow().get(&scope_id).copied())
+    #[cfg(debug_assertions)]
+    {
+        return DEBUG_SCOPE_LABELS.with(|labels| labels.borrow().get(&scope_id).copied());
+    }
+    #[allow(unreachable_code)]
+    None
 }
 
 #[doc(hidden)]
@@ -6494,19 +6513,19 @@ pub fn debug_scope_invalidation_sources(scope_id: usize) -> Vec<String> {
         let _ = scope_id;
         return Vec::new();
     }
-    DEBUG_SCOPE_INVALIDATION_SOURCES.with(|sources| {
-        let Some(entries) = sources.borrow().get(&scope_id).cloned() else {
-            return Vec::new();
-        };
-        let mut deduped = Vec::new();
-        let mut seen: HashSet<String> = HashSet::default();
-        for entry in entries {
-            if seen.insert(entry.clone()) {
-                deduped.push(entry);
-            }
-        }
-        deduped
-    })
+    #[cfg(debug_assertions)]
+    {
+        return DEBUG_SCOPE_INVALIDATION_SOURCES.with(|sources| {
+            let Some(entries) = sources.borrow().get(&scope_id).cloned() else {
+                return Vec::new();
+            };
+            let mut entries: Vec<_> = entries.into_iter().collect();
+            entries.sort();
+            entries
+        });
+    }
+    #[allow(unreachable_code)]
+    Vec::new()
 }
 
 #[doc(hidden)]

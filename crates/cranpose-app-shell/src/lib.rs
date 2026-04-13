@@ -17,7 +17,7 @@ use cranpose_core::{
     debug_recompose_scope_registry_stats, debug_snapshot_pinning_stats,
     debug_snapshot_state_thread_local_stats, debug_snapshot_v2_stats, enter_event_handler,
     exit_event_handler, location_key, run_in_mutable_snapshot, Applier, Composition, Key,
-    MemoryApplier, MemoryApplierDebugStats, Node, NodeError, NodeId, SlotId,
+    MemoryApplier, MemoryApplierDebugStats, NodeError, NodeId, SlotId,
 };
 use cranpose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEventKind};
 use cranpose_render_common::{HitTestTarget, RenderScene, Renderer};
@@ -42,14 +42,6 @@ pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType, Modifiers};
 enum DispatchInvalidationKind {
     Pointer,
     Focus,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum GestureTargetSource {
-    HitPath,
-    CaptureContext,
-    Captured,
-    None,
 }
 
 pub struct AppShell<R>
@@ -88,10 +80,6 @@ where
     /// Tracks which nodes the pointer is currently hovering over.
     /// Used to synthesize Enter/Exit events when the hover set changes.
     hovered_nodes: Vec<NodeId>,
-    /// Stable translated-content identities for active pointer gestures.
-    capture_contexts: HashMap<PointerId, usize>,
-    /// Node IDs that most recently received gesture events for each pointer.
-    gesture_target_ids: HashMap<PointerId, Vec<NodeId>>,
     /// Persistent clipboard for desktop (Linux X11 requires clipboard to stay alive)
     #[cfg(all(
         not(target_arch = "wasm32"),
@@ -145,151 +133,6 @@ where
     R: Renderer,
     R::Error: Debug,
 {
-    fn node_parent(&mut self, node_id: NodeId) -> Option<NodeId> {
-        if let Ok(parent) = self
-            .composition
-            .applier_mut()
-            .with_node::<LayoutNode, _>(node_id, |node| node.folded_parent())
-        {
-            return parent;
-        }
-
-        self.composition
-            .applier_mut()
-            .with_node::<SubcomposeLayoutNode, _>(node_id, |node| node.parent())
-            .ok()
-            .flatten()
-    }
-
-    fn node_translated_content_context_identity(&mut self, node_id: NodeId) -> Option<usize> {
-        if let Ok(identity) =
-            self.composition
-                .applier_mut()
-                .with_node::<LayoutNode, _>(node_id, |node| {
-                    node.modifier_slices_snapshot()
-                        .translated_content_context_identity()
-                })
-        {
-            return identity;
-        }
-
-        self.composition
-            .applier_mut()
-            .with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-                node.modifier_slices_snapshot()
-                    .translated_content_context_identity()
-            })
-            .ok()
-            .flatten()
-    }
-
-    fn node_has_pointer_handlers(&mut self, node_id: NodeId) -> bool {
-        if let Ok(has_handlers) = self
-            .composition
-            .applier_mut()
-            .with_node::<LayoutNode, _>(node_id, |node| {
-                !node.modifier_slices_snapshot().pointer_inputs().is_empty()
-            })
-        {
-            return has_handlers;
-        }
-
-        self.composition
-            .applier_mut()
-            .with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-                !node.modifier_slices_snapshot().pointer_inputs().is_empty()
-            })
-            .unwrap_or(false)
-    }
-
-    fn translated_content_context_identity_for_hits(
-        &mut self,
-        hit_node_ids: &[NodeId],
-    ) -> Option<usize> {
-        for &node_id in hit_node_ids {
-            let mut current = Some(node_id);
-            while let Some(candidate) = current {
-                if let Some(identity) = self.node_translated_content_context_identity(candidate) {
-                    return Some(identity);
-                }
-                current = self.node_parent(candidate);
-            }
-        }
-
-        None
-    }
-
-    fn collect_live_node_ids(
-        applier: &mut MemoryApplier,
-        node_id: NodeId,
-        depth: usize,
-        out: &mut Vec<(usize, NodeId)>,
-    ) {
-        out.push((depth, node_id));
-
-        if let Ok(children) =
-            applier.with_node::<LayoutNode, _>(node_id, |node| node.children.clone())
-        {
-            for child_id in children {
-                Self::collect_live_node_ids(applier, child_id, depth + 1, out);
-            }
-            return;
-        }
-
-        if let Ok(children) =
-            applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| node.active_children())
-        {
-            for child_id in children {
-                Self::collect_live_node_ids(applier, child_id, depth + 1, out);
-            }
-        }
-    }
-
-    fn resolve_capture_context_targets(
-        &mut self,
-        pointer: PointerId,
-    ) -> Vec<<<R as Renderer>::Scene as RenderScene>::HitTarget> {
-        let Some(identity) = self.capture_contexts.get(&pointer).copied() else {
-            return Vec::new();
-        };
-        let mut candidates = Vec::new();
-        let Some(root_id) = self.composition.root() else {
-            return Vec::new();
-        };
-        {
-            let mut applier = self.composition.applier_mut();
-            Self::collect_live_node_ids(&mut applier, root_id, 0, &mut candidates);
-        }
-        candidates.sort_by_key(|candidate| candidate.0);
-
-        let mut resolved = Vec::new();
-        let mut seen = HashSet::new();
-        for (_, node_id) in candidates {
-            if !seen.insert(node_id) {
-                continue;
-            }
-            if self.node_translated_content_context_identity(node_id) != Some(identity) {
-                continue;
-            }
-            if !self.node_has_pointer_handlers(node_id) {
-                continue;
-            }
-            if let Some(target) = self.renderer.scene().find_target(node_id) {
-                resolved.push(target);
-            }
-        }
-
-        if input_pipeline_debug_enabled() {
-            let resolved_ids: Vec<_> = resolved.iter().map(|target| target.node_id()).collect();
-            eprintln!(
-                "[CRANPOSE_INPUT_DEBUG] resolve_capture_context_targets pointer={:?} identity={} resolved={:?}",
-                pointer, identity, resolved_ids
-            );
-        }
-
-        resolved
-    }
-
     fn captured_targets_for_pointer(
         &self,
         pointer: PointerId,
@@ -301,61 +144,26 @@ where
     }
 
     fn resolve_gesture_targets(
-        &mut self,
+        &self,
         pointer: PointerId,
-    ) -> (
-        Vec<<<R as Renderer>::Scene as RenderScene>::HitTarget>,
-        GestureTargetSource,
-    ) {
+    ) -> Vec<<<R as Renderer>::Scene as RenderScene>::HitTarget> {
         let targets = self.resolve_hit_path(pointer);
         if !targets.is_empty() {
-            return (targets, GestureTargetSource::HitPath);
+            return targets;
         }
 
-        if self.capture_contexts.contains_key(&pointer) {
-            let capture_context_targets = self.resolve_capture_context_targets(pointer);
-            if !capture_context_targets.is_empty() {
-                return (capture_context_targets, GestureTargetSource::CaptureContext);
-            }
-
-            let captured_targets = self.captured_targets_for_pointer(pointer);
-            if !captured_targets.is_empty() {
-                return (captured_targets, GestureTargetSource::Captured);
-            }
+        let captured_targets = self.captured_targets_for_pointer(pointer);
+        if input_pipeline_debug_enabled() && !captured_targets.is_empty() {
+            let node_ids: Vec<_> = captured_targets
+                .iter()
+                .map(|target| target.node_id())
+                .collect();
+            eprintln!(
+                "[CRANPOSE_INPUT_DEBUG] resolve_gesture_targets pointer={:?} using captured targets {:?}",
+                pointer, node_ids
+            );
         }
-
-        (Vec::new(), GestureTargetSource::None)
-    }
-
-    fn record_gesture_target_ids(
-        &mut self,
-        pointer: PointerId,
-        targets: &[<<R as Renderer>::Scene as RenderScene>::HitTarget],
-    ) {
-        let node_ids = targets.iter().map(|target| target.node_id()).collect();
-        self.gesture_target_ids.insert(pointer, node_ids);
-    }
-
-    fn prime_retargeted_capture_context_targets(
-        &mut self,
-        pointer: PointerId,
-        previous_position: Point,
-        targets: &[<<R as Renderer>::Scene as RenderScene>::HitTarget],
-    ) {
-        let current_ids: Vec<_> = targets.iter().map(|target| target.node_id()).collect();
-        let previous_ids = self
-            .gesture_target_ids
-            .get(&pointer)
-            .cloned()
-            .unwrap_or_default();
-        if current_ids == previous_ids {
-            return;
-        }
-
-        let event = PointerEvent::new(PointerEventKind::Down, previous_position, previous_position)
-            .with_buttons(self.buttons_pressed);
-        self.dispatch_targets(targets.iter().cloned(), event, true);
-        self.gesture_target_ids.insert(pointer, current_ids);
+        captured_targets
     }
 
     pub fn new(mut renderer: R, root_key: Key, content: impl FnMut() + 'static) -> Self {
@@ -389,8 +197,6 @@ where
             hit_path_tracker: HitPathTracker::new(),
             captured_targets: HashMap::new(),
             hovered_nodes: Vec::new(),
-            capture_contexts: HashMap::new(),
-            gesture_target_ids: HashMap::new(),
             #[cfg(all(
                 not(target_arch = "wasm32"),
                 not(target_os = "android"),
@@ -537,52 +343,12 @@ where
     where
         I: IntoIterator<Item = <<R as Renderer>::Scene as RenderScene>::HitTarget>,
     {
-        let mut applier = self.composition.applier_mut();
         for target in targets {
-            target.dispatch_with_applier(&mut applier, event.clone());
+            target.dispatch(event.clone());
             if stop_on_consume && event.is_consumed() {
                 break;
             }
         }
-    }
-
-    fn sync_pending_input_recompositions(&mut self) {
-        let runtime_handle = self.runtime.runtime_handle();
-        runtime_handle.with_deferred_state_releases(|| {
-            if self.composition.should_render() {
-                match self.composition.process_invalid_scopes() {
-                    Ok(changed) => {
-                        if changed {
-                            fps_monitor::record_recomposition();
-                            self.layout_dirty = true;
-                            request_render_invalidation();
-                        }
-                    }
-                    Err(NodeError::Missing { id }) => {
-                        log::debug!(
-                            "Recomposition skipped during input sync: node {id} no longer exists"
-                        );
-                        self.layout_dirty = true;
-                        request_render_invalidation();
-                    }
-                    Err(err) => {
-                        log::error!("input sync recomposition failed: {err}");
-                        self.layout_dirty = true;
-                        request_render_invalidation();
-                    }
-                }
-            }
-
-            if self.composition.take_root_render_request() {
-                if let Err(err) = self.composition.render(self.root_key, &mut *self.content) {
-                    log::error!("input sync root render failed: {err}");
-                } else {
-                    fps_monitor::record_recomposition();
-                    self.layout_dirty = true;
-                    request_render_invalidation();
-                }
-            }
-        });
     }
 
     pub fn update(&mut self) {
@@ -682,11 +448,6 @@ where
     }
 
     fn set_cursor_inner(&mut self, x: f32, y: f32) -> bool {
-        self.sync_pending_input_recompositions();
-        let previous_position = Point {
-            x: self.cursor.0,
-            y: self.cursor.1,
-        };
         self.cursor = (x, y);
 
         // During a gesture (button pressed), ONLY dispatch to the tracked hit path.
@@ -694,17 +455,8 @@ where
         // This maintains the invariant: the path that receives Down must receive Move and Up/Cancel.
         if self.buttons_pressed != PointerButtons::NONE {
             if self.hit_path_tracker.has_path(PointerId::PRIMARY) {
-                let (targets, source) = self.resolve_gesture_targets(PointerId::PRIMARY);
+                let targets = self.resolve_gesture_targets(PointerId::PRIMARY);
                 if !targets.is_empty() {
-                    if source == GestureTargetSource::CaptureContext {
-                        self.prime_retargeted_capture_context_targets(
-                            PointerId::PRIMARY,
-                            previous_position,
-                            &targets,
-                        );
-                    } else {
-                        self.record_gesture_target_ids(PointerId::PRIMARY, &targets);
-                    }
                     let event =
                         PointerEvent::new(PointerEventKind::Move, Point { x, y }, Point { x, y })
                             .with_buttons(self.buttons_pressed);
@@ -773,7 +525,6 @@ where
     }
 
     fn pointer_pressed_inner(&mut self) -> bool {
-        self.sync_pending_input_recompositions();
         // Track button state
         self.buttons_pressed.insert(PointerButton::Primary);
 
@@ -796,30 +547,20 @@ where
                 }
             }
         }
-        let raw_node_ids: Vec<_> = hits.iter().map(|hit| hit.node_id()).collect();
         self.hit_path_tracker
             .add_hit_path(PointerId::PRIMARY, node_ids);
-        let capture_identity = self.translated_content_context_identity_for_hits(&raw_node_ids);
-        if let Some(identity) = capture_identity {
-            self.capture_contexts.insert(PointerId::PRIMARY, identity);
-        } else {
-            self.capture_contexts.remove(&PointerId::PRIMARY);
-        }
         if hits.is_empty() {
             self.captured_targets.remove(&PointerId::PRIMARY);
-            self.gesture_target_ids.remove(&PointerId::PRIMARY);
         } else {
             self.captured_targets.insert(
                 PointerId::PRIMARY,
                 self.resolve_hit_path(PointerId::PRIMARY),
             );
-            self.record_gesture_target_ids(PointerId::PRIMARY, &hits);
         }
         if input_pipeline_debug_enabled() {
             eprintln!(
-                "[CRANPOSE_INPUT_DEBUG] pointer_pressed_inner cached_hit_path={:?} capture_identity={:?}",
+                "[CRANPOSE_INPUT_DEBUG] pointer_pressed_inner cached_hit_path={:?}",
                 self.hit_path_tracker.get_path(PointerId::PRIMARY),
-                capture_identity
             );
         }
 
@@ -859,18 +600,15 @@ where
     }
 
     fn pointer_released_inner(&mut self) -> bool {
-        self.sync_pending_input_recompositions();
         // UP events report buttons as "currently pressed" (after release),
         // matching typical platform semantics where primary is already gone.
         self.buttons_pressed.remove(PointerButton::Primary);
         let corrected_buttons = self.buttons_pressed;
-        let (targets, _) = self.resolve_gesture_targets(PointerId::PRIMARY);
+        let targets = self.resolve_gesture_targets(PointerId::PRIMARY);
 
         // Always remove the path, even if targets is empty (node may have been removed)
         self.hit_path_tracker.remove_path(PointerId::PRIMARY);
         self.captured_targets.remove(&PointerId::PRIMARY);
-        self.capture_contexts.remove(&PointerId::PRIMARY);
-        self.gesture_target_ids.remove(&PointerId::PRIMARY);
 
         if !targets.is_empty() {
             let event = PointerEvent::new(
@@ -914,7 +652,6 @@ where
     }
 
     fn pointer_scrolled_inner(&mut self, delta_x: f32, delta_y: f32) -> bool {
-        self.sync_pending_input_recompositions();
         if delta_x.abs() <= f32::EPSILON && delta_y.abs() <= f32::EPSILON {
             return false;
         }
@@ -960,14 +697,11 @@ where
     }
 
     fn cancel_gesture_inner(&mut self) {
-        self.sync_pending_input_recompositions();
-        let (targets, _) = self.resolve_gesture_targets(PointerId::PRIMARY);
+        let targets = self.resolve_gesture_targets(PointerId::PRIMARY);
 
         // Clear tracker and button state
         self.hit_path_tracker.clear();
         self.captured_targets.clear();
-        self.capture_contexts.clear();
-        self.gesture_target_ids.clear();
         self.buttons_pressed = PointerButtons::NONE;
 
         if !targets.is_empty() {
@@ -1266,6 +1000,7 @@ where
             .map(layout_box_bounds)
     }
 
+    #[doc(hidden)]
     pub fn debug_runtime_leak_stats(&mut self) -> RuntimeLeakDebugStats {
         let runtime = self.composition.runtime_handle();
         let (applier_stats, live_node_heap_bytes, recycled_node_heap_bytes) = {
