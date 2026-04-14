@@ -3173,6 +3173,64 @@ fn callbackless_scope_promotes_via_parent_scope_metadata() {
 }
 
 #[test]
+fn render_preserves_root_render_request_raised_during_internal_invalid_scope_processing() {
+    thread_local! {
+        static ROOT_CALLBACKLESS_SCOPE: RefCell<Option<RecomposeScope>> = const { RefCell::new(None) };
+        static INVALIDATED_DURING_SIDE_EFFECT: Cell<bool> = const { Cell::new(false) };
+    }
+
+    let mut composition = Composition::new(MemoryApplier::new());
+    let root_key = location_key(file!(), line!(), column!());
+
+    ROOT_CALLBACKLESS_SCOPE.with(|slot| slot.borrow_mut().take());
+    INVALIDATED_DURING_SIDE_EFFECT.with(|flag| flag.set(false));
+
+    let mut render = || {
+        cranpose_core::with_key(&"root-callbackless", || {
+            with_current_composer(|composer| {
+                let scope = composer
+                    .current_recranpose_scope()
+                    .expect("callbackless root scope available");
+                ROOT_CALLBACKLESS_SCOPE.with(|slot| slot.replace(Some(scope)));
+            });
+        });
+
+        cranpose_core::SideEffect(|| {
+            let already_invalidated =
+                INVALIDATED_DURING_SIDE_EFFECT.with(|flag| flag.replace(true));
+            if already_invalidated {
+                return;
+            }
+
+            ROOT_CALLBACKLESS_SCOPE.with(|slot| {
+                let scope = slot
+                    .borrow()
+                    .clone()
+                    .expect("captured root callbackless scope");
+                assert!(
+                    !scope.has_recompose_callback(),
+                    "root-level with_key scope should stay callbackless",
+                );
+                assert!(
+                    scope.callback_promotion_target().is_none(),
+                    "root-level callbackless scope should request a root render",
+                );
+                scope.invalidate();
+            });
+        });
+    };
+
+    composition
+        .render(root_key, &mut render)
+        .expect("initial render with side effect invalidation");
+
+    assert!(
+        composition.take_root_render_request(),
+        "render() must preserve root render requests raised during its internal invalid-scope pass",
+    );
+}
+
+#[test]
 fn process_invalid_scopes_preserves_later_fresh_subtree_when_earlier_scope_runs_after_it() {
     thread_local! {
         static EARLY_SCOPE: RefCell<Option<RecomposeScope>> = const { RefCell::new(None) };

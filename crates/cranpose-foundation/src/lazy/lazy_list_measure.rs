@@ -49,7 +49,7 @@ pub struct LazyListMeasureConfig {
     pub spacing: f32,
 
     /// Number of items to keep composed beyond visible bounds.
-    /// Default is 4 items before and after.
+    /// Default is 2 items before and after.
     pub beyond_bounds_item_count: usize,
 
     /// Vertical arrangement for distributing items.
@@ -69,7 +69,7 @@ impl Default for LazyListMeasureConfig {
             before_content_padding: 0.0,
             after_content_padding: 0.0,
             spacing: 0.0,
-            beyond_bounds_item_count: 4,
+            beyond_bounds_item_count: 2,
             vertical_arrangement: None,
             horizontal_arrangement: None,
         }
@@ -385,6 +385,13 @@ mod tests {
 
     fn create_test_item(index: usize, size: f32) -> LazyListMeasuredItem {
         LazyListMeasuredItem::new(index, index as u64, None, size, 100.0)
+    }
+
+    #[test]
+    fn lazy_list_measure_config_defaults_to_two_beyond_bounds_items() {
+        let config = LazyListMeasureConfig::default();
+
+        assert_eq!(config.beyond_bounds_item_count, 2);
     }
 
     fn exact_scroll_position(

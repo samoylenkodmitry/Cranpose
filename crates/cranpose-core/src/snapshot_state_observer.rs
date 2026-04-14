@@ -127,7 +127,7 @@ struct SnapshotStateObserverInner {
     owned_scopes: RefCell<Vec<Rc<RefCell<ScopeEntry>>>>,
     fast_scopes: RefCell<HashMap<ScopeId, Rc<RefCell<ScopeEntry>>>>,
     indexed_scopes: RefCell<HashMap<usize, Rc<RefCell<ScopeEntry>>>>,
-    observed_to_scopes: RefCell<HashMap<StateObjectId, Vec<usize>>>,
+    observed_to_scopes: RefCell<HashMap<StateObjectId, HashSet<usize>>>,
     pause_count: Rc<Cell<usize>>,
     active_read_targets: Rc<RefCell<Vec<Rc<RefCell<ObservedIds>>>>>,
     read_dispatcher: ReadObserver,
@@ -478,7 +478,9 @@ impl SnapshotStateObserverInner {
             let indexed_scopes = self.indexed_scopes.borrow();
             for state in modified {
                 if let Some(scope_ids) = observed_to_scopes.get(&state.object_id().as_usize()) {
-                    for &scope_id in scope_ids {
+                    let mut ordered_scope_ids: Vec<_> = scope_ids.iter().copied().collect();
+                    ordered_scope_ids.sort_unstable();
+                    for scope_id in ordered_scope_ids {
                         if seen_scope_ids.insert(scope_id) {
                             if let Some(entry) = indexed_scopes.get(&scope_id) {
                                 to_notify.push(entry.clone());
@@ -519,9 +521,7 @@ impl SnapshotStateObserverInner {
         let mut observed_to_scopes = self.observed_to_scopes.borrow_mut();
         for &state_id in observed.iter() {
             let scope_ids = observed_to_scopes.entry(state_id).or_default();
-            if !scope_ids.contains(&entry_id) {
-                scope_ids.push(entry_id);
-            }
+            scope_ids.insert(entry_id);
         }
     }
 
@@ -530,7 +530,7 @@ impl SnapshotStateObserverInner {
         let mut emptied = SmallVec::<[StateObjectId; MAX_OBSERVED_STATES]>::new();
         for &state_id in observed.iter() {
             if let Some(scope_ids) = observed_to_scopes.get_mut(&state_id) {
-                scope_ids.retain(|tracked_id| *tracked_id != entry_id);
+                scope_ids.remove(&entry_id);
                 if scope_ids.is_empty() {
                     emptied.push(state_id);
                 }
@@ -906,6 +906,94 @@ mod tests {
 
         assert_eq!(outer_triggered.get(), 0);
         assert_eq!(inner_triggered.get(), 1);
+        observer.stop();
+    }
+
+    #[test]
+    fn clearing_one_scope_keeps_shared_state_registered_for_other_scope() {
+        let _guard = reset_runtime();
+
+        let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
+        let first_triggered = Rc::new(Cell::new(0));
+        let second_triggered = Rc::new(Cell::new(0));
+
+        let observer = SnapshotStateObserver::new(|callback| callback());
+        observer.start();
+
+        let first_scope = TestScope("first");
+        let second_scope = TestScope("second");
+        observer.observe_reads(
+            first_scope.clone(),
+            {
+                let first_triggered = Rc::clone(&first_triggered);
+                move |_| first_triggered.set(first_triggered.get() + 1)
+            },
+            || {
+                let _ = state.get();
+            },
+        );
+        observer.observe_reads(
+            second_scope.clone(),
+            {
+                let second_triggered = Rc::clone(&second_triggered);
+                move |_| second_triggered.set(second_triggered.get() + 1)
+            },
+            || {
+                let _ = state.get();
+            },
+        );
+
+        observer.clear(&first_scope);
+
+        let snapshot = take_mutable_snapshot(None, None);
+        snapshot.enter(|| {
+            state.set(1);
+        });
+        snapshot.apply().check();
+
+        assert_eq!(first_triggered.get(), 0);
+        assert_eq!(second_triggered.get(), 1);
+        observer.stop();
+    }
+
+    #[test]
+    fn shared_state_notifies_scopes_in_registration_order() {
+        let _guard = reset_runtime();
+
+        let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
+        let notifications = Rc::new(RefCell::new(Vec::new()));
+
+        let observer = SnapshotStateObserver::new(|callback| callback());
+        observer.start();
+
+        observer.observe_reads(
+            TestScope("first"),
+            {
+                let notifications = Rc::clone(&notifications);
+                move |_| notifications.borrow_mut().push("first")
+            },
+            || {
+                let _ = state.get();
+            },
+        );
+        observer.observe_reads(
+            TestScope("second"),
+            {
+                let notifications = Rc::clone(&notifications);
+                move |_| notifications.borrow_mut().push("second")
+            },
+            || {
+                let _ = state.get();
+            },
+        );
+
+        let snapshot = take_mutable_snapshot(None, None);
+        snapshot.enter(|| {
+            state.set(1);
+        });
+        snapshot.apply().check();
+
+        assert_eq!(notifications.borrow().as_slice(), &["first", "second"]);
         observer.stop();
     }
 

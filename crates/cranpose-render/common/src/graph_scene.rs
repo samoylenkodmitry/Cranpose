@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_foundation::{PointerEvent, PointerEventKind};
@@ -10,6 +11,8 @@ use cranpose_ui_graphics::{Point, Rect, RoundedCornerShape};
 
 use crate::graph::{ProjectiveTransform, RenderGraph};
 use crate::{HitTestTarget, RenderScene};
+
+static LIVE_MODIFIER_SLICE_LOOKUP_MISS_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone)]
 pub enum ClickAction {
@@ -59,6 +62,10 @@ pub struct HitRegion {
 }
 
 impl HitRegion {
+    pub fn live_modifier_slice_lookup_miss_count() -> usize {
+        LIVE_MODIFIER_SLICE_LOOKUP_MISS_COUNT.load(Ordering::Relaxed)
+    }
+
     fn contains(&self, x: f32, y: f32) -> bool {
         if !self.rect.contains(x, y) {
             return false;
@@ -181,6 +188,7 @@ impl HitTestTarget for HitRegion {
             return;
         }
 
+        LIVE_MODIFIER_SLICE_LOOKUP_MISS_COUNT.fetch_add(1, Ordering::Relaxed);
         self.dispatch_cached_handlers(event);
     }
 }
@@ -768,5 +776,59 @@ mod tests {
         ));
 
         assert_eq!(*local_positions.borrow(), vec![Point { x: 2.5, y: 3.5 }]);
+    }
+
+    #[test]
+    fn dispatch_with_applier_counts_live_modifier_slice_lookup_misses() {
+        let handler_calls = Rc::new(Cell::new(0));
+        let handler_calls_for_handler = Rc::clone(&handler_calls);
+        let hit = HitRegion {
+            node_id: 42,
+            capture_path: vec![42],
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 50.0,
+                height: 50.0,
+            },
+            quad: rect_to_quad(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 50.0,
+                height: 50.0,
+            }),
+            local_bounds: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 50.0,
+                height: 50.0,
+            },
+            world_to_local: ProjectiveTransform::identity(),
+            shape: None,
+            click_actions: Vec::new(),
+            pointer_inputs: vec![Rc::new(move |_event: PointerEvent| {
+                handler_calls_for_handler.set(handler_calls_for_handler.get() + 1);
+            })],
+            z_index: 0,
+            hit_clip_bounds: None,
+            hit_clips: Vec::new(),
+        };
+        let misses_before = HitRegion::live_modifier_slice_lookup_miss_count();
+        let mut applier = MemoryApplier::new();
+
+        hit.dispatch_with_applier(
+            &mut applier,
+            PointerEvent::new(
+                PointerEventKind::Down,
+                Point { x: 10.0, y: 10.0 },
+                Point { x: 10.0, y: 10.0 },
+            ),
+        );
+
+        assert_eq!(handler_calls.get(), 1);
+        assert_eq!(
+            HitRegion::live_modifier_slice_lookup_miss_count(),
+            misses_before + 1
+        );
     }
 }

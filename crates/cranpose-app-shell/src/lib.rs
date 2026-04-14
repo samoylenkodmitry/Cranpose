@@ -28,8 +28,8 @@ use cranpose_ui::{
     peek_pointer_invalidation, peek_render_invalidation, process_focus_invalidations,
     process_pointer_repasses, request_render_invalidation, take_draw_repass_nodes,
     take_focus_invalidation, take_layout_invalidation, take_pointer_invalidation,
-    take_render_invalidation, HeadlessRenderer, LayoutBox, LayoutNode, LayoutNodeData,
-    LayoutNodeKind, LayoutTree, MeasureLayoutOptions, SemanticsTree, SubcomposeLayoutNode,
+    take_render_invalidation, HeadlessRenderer, LayoutBox, LayoutNode, LayoutTree,
+    MeasureLayoutOptions, SemanticsTree, SubcomposeLayoutNode,
 };
 use cranpose_ui_graphics::{Point, Size};
 use hit_path_tracker::{HitPathTracker, PointerId};
@@ -514,19 +514,10 @@ where
         // Perform hit test and cache the NodeIds (not geometry!)
         // The key insight from Jetpack Compose: cache identity, resolve fresh geometry per dispatch
         let hits = self.renderer.scene().hit_test(self.cursor.0, self.cursor.1);
-
-        // Cache NodeIds for this pointer
-        let capture_paths = hits.iter().map(|hit| hit.capture_path()).collect();
-        self.hit_path_tracker
-            .add_hit_path(PointerId::PRIMARY, capture_paths);
-        if input_pipeline_debug_enabled() {
-            eprintln!(
-                "[CRANPOSE_INPUT_DEBUG] pointer_pressed_inner cached_hit_path={:?}",
-                self.hit_path_tracker.get_path(PointerId::PRIMARY),
-            );
-        }
-
-        if !hits.is_empty() {
+        if hits.is_empty() {
+            self.hit_path_tracker.remove_path(PointerId::PRIMARY);
+            false
+        } else {
             let event = PointerEvent::new(
                 PointerEventKind::Down,
                 Point {
@@ -540,11 +531,34 @@ where
             )
             .with_buttons(self.buttons_pressed);
 
-            // Dispatch to fresh hits (geometry is already current for Down event)
-            self.dispatch_targets(hits, event, true);
+            let mut delivered_capture_paths = Vec::new();
+            for hit in hits {
+                let node_id = hit.node_id();
+                delivered_capture_paths.push(hit.capture_path());
+                hit.dispatch(event.clone());
+                if input_pipeline_debug_enabled() {
+                    eprintln!(
+                        "[CRANPOSE_INPUT_DEBUG] dispatch {:?} node={} consumed={} stop_on_consume=true",
+                        event.kind,
+                        node_id,
+                        event.is_consumed(),
+                    );
+                }
+                if event.is_consumed() {
+                    break;
+                }
+            }
+
+            self.hit_path_tracker
+                .add_hit_path(PointerId::PRIMARY, delivered_capture_paths);
+            if input_pipeline_debug_enabled() {
+                eprintln!(
+                    "[CRANPOSE_INPUT_DEBUG] pointer_pressed_inner cached_hit_path={:?}",
+                    self.hit_path_tracker.get_path(PointerId::PRIMARY),
+                );
+            }
+
             true
-        } else {
-            false
         }
     }
 
@@ -938,7 +952,6 @@ where
 
     /// Get the current layout tree (for robot/testing)
     pub fn layout_tree(&mut self) -> Option<&LayoutTree> {
-        self.layout_tree = self.snapshot_layout_tree_from_live_nodes();
         self.layout_tree.as_ref()
     }
 
@@ -1057,12 +1070,6 @@ where
             })
             .ok()
             .flatten()
-    }
-
-    fn snapshot_layout_tree_from_live_nodes(&mut self) -> Option<LayoutTree> {
-        let root = self.composition.root()?;
-        let mut applier = self.composition.applier_mut();
-        snapshot_layout_tree_from_root(&mut applier, root)
     }
 
     pub fn set_semantics_enabled(&mut self, enabled: bool) {
@@ -1241,12 +1248,13 @@ where
                 viewport_size,
                 MeasureLayoutOptions {
                     collect_semantics: self.semantics_enabled,
-                    build_layout_tree: false,
+                    build_layout_tree: true,
                 },
             ) {
                 Ok(measurements) => {
-                    self.layout_tree = None;
-                    self.semantics_tree = measurements.semantics_tree().cloned();
+                    let semantics_tree = measurements.semantics_tree().cloned();
+                    self.layout_tree = Some(measurements.into_layout_tree());
+                    self.semantics_tree = semantics_tree;
                     self.scene_dirty = true;
                 }
                 Err(err) => {
@@ -1391,13 +1399,6 @@ where
     }
 }
 
-fn snapshot_layout_tree_from_root(applier: &mut MemoryApplier, root: NodeId) -> Option<LayoutTree> {
-    snapshot_layout_box_recursive(applier, root, Point::default(), Point::default())
-        .ok()
-        .flatten()
-        .map(LayoutTree::new)
-}
-
 fn find_layout_box(layout_box: &LayoutBox, target: NodeId) -> Option<&LayoutBox> {
     if layout_box.node_id == target {
         return Some(layout_box);
@@ -1416,122 +1417,6 @@ fn layout_box_bounds(layout_box: &LayoutBox) -> (f32, f32, f32, f32) {
         layout_box.rect.width,
         layout_box.rect.height,
     )
-}
-
-fn snapshot_layout_box_recursive(
-    applier: &mut MemoryApplier,
-    node_id: NodeId,
-    parent_origin: Point,
-    parent_content_offset: Point,
-) -> Result<Option<LayoutBox>, NodeError> {
-    let Some(snapshot) = with_live_layout_snapshot(
-        applier,
-        node_id,
-        |node| {
-            let state = node.layout_state();
-            (
-                state,
-                node.children.clone(),
-                LayoutNodeData::new(
-                    node.modifier.clone(),
-                    node.resolved_modifiers(),
-                    node.modifier_slices_snapshot(),
-                    LayoutNodeKind::Layout,
-                ),
-            )
-        },
-        |node| {
-            let state = node.layout_state();
-            (
-                state,
-                node.active_children(),
-                LayoutNodeData::new(
-                    node.modifier(),
-                    node.resolved_modifiers(),
-                    node.modifier_slices_snapshot(),
-                    LayoutNodeKind::Subcompose,
-                ),
-            )
-        },
-    )?
-    else {
-        return Ok(None);
-    };
-
-    snapshot_layout_box_from_parts(
-        applier,
-        node_id,
-        parent_origin,
-        parent_content_offset,
-        snapshot,
-    )
-}
-
-fn with_live_layout_snapshot<T, FLayout, FSubcompose>(
-    applier: &mut MemoryApplier,
-    node_id: NodeId,
-    on_layout: FLayout,
-    on_subcompose: FSubcompose,
-) -> Result<Option<T>, NodeError>
-where
-    FLayout: FnOnce(&mut LayoutNode) -> T,
-    FSubcompose: FnOnce(&mut SubcomposeLayoutNode) -> T,
-{
-    match applier.with_node::<LayoutNode, _>(node_id, on_layout) {
-        Ok(snapshot) => Ok(Some(snapshot)),
-        Err(NodeError::TypeMismatch { .. }) => {
-            match applier.with_node::<SubcomposeLayoutNode, _>(node_id, on_subcompose) {
-                Ok(snapshot) => Ok(Some(snapshot)),
-                Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => Ok(None),
-                Err(err) => Err(err),
-            }
-        }
-        Err(NodeError::Missing { .. }) => Ok(None),
-        Err(err) => Err(err),
-    }
-}
-
-fn snapshot_layout_box_from_parts(
-    applier: &mut MemoryApplier,
-    node_id: NodeId,
-    parent_origin: Point,
-    parent_content_offset: Point,
-    snapshot: (
-        cranpose_ui::widgets::LayoutState,
-        Vec<NodeId>,
-        LayoutNodeData,
-    ),
-) -> Result<Option<LayoutBox>, NodeError> {
-    let (state, children, data) = snapshot;
-    if !state.is_placed {
-        return Ok(None);
-    }
-
-    let origin = Point {
-        x: parent_origin.x + parent_content_offset.x + state.position.x,
-        y: parent_origin.y + parent_content_offset.y + state.position.y,
-    };
-    let mut layout_children = Vec::with_capacity(children.len());
-    for child_id in children {
-        if let Some(child) =
-            snapshot_layout_box_recursive(applier, child_id, origin, state.content_offset)?
-        {
-            layout_children.push(child);
-        }
-    }
-
-    Ok(Some(LayoutBox::new(
-        node_id,
-        cranpose_ui::Rect {
-            x: origin.x,
-            y: origin.y,
-            width: state.size.width,
-            height: state.size.height,
-        },
-        state.content_offset,
-        data,
-        layout_children,
-    )))
 }
 
 fn clear_dispatch_invalidation(

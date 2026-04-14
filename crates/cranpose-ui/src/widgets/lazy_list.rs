@@ -47,7 +47,7 @@ impl Default for LazyColumnSpec {
             vertical_arrangement: LinearArrangement::Start,
             content_padding_top: 0.0,
             content_padding_bottom: 0.0,
-            beyond_bounds_item_count: 4,
+            beyond_bounds_item_count: 2,
             reverse_layout: false,
         }
     }
@@ -103,7 +103,7 @@ impl Default for LazyRowSpec {
             horizontal_arrangement: LinearArrangement::Start,
             content_padding_start: 0.0,
             content_padding_end: 0.0,
-            beyond_bounds_item_count: 4,
+            beyond_bounds_item_count: 2,
             reverse_layout: false,
         }
     }
@@ -555,6 +555,17 @@ fn create_lazy_list_placements(
     }
 }
 
+fn lazy_list_state_identity(state: &LazyListState) -> usize {
+    // The remembered state stores its inner payload behind an `Rc`, so this allocation address
+    // remains stable for the lifetime of the live state handle and is safe to use as a list key.
+    let state_ptr = state.inner_ptr();
+    debug_assert!(
+        !state_ptr.is_null(),
+        "lazy list identity requires a live LazyListState"
+    );
+    state_ptr as usize
+}
+
 /// Internal implementation for LazyColumn that takes pre-built content.
 ///
 /// Users should prefer the DSL-based [`LazyColumn`] function instead.
@@ -613,7 +624,7 @@ fn LazyColumnImpl(
         policy
     })
     .with(|p| p.clone());
-    let list_state_id = std::ptr::addr_of!(*state.inner_ptr()) as usize;
+    let list_state_id = lazy_list_state_identity(&state);
 
     // Apply clipping and scroll gesture handling to modifier
     let scroll_modifier = modifier
@@ -639,7 +650,7 @@ fn LazyColumnImpl(
     }
     cranpose_core::bubble_measure_dirty_in_composer(node_id);
 
-    cranpose_core::DisposableEffect!((state.inner_ptr() as usize, node_id), move |scope| {
+    cranpose_core::DisposableEffect!((list_state_id, node_id), move |scope| {
         let callback_id = state.try_register_layout_callback(
             node_id,
             Rc::new(move || {
@@ -711,7 +722,7 @@ fn LazyRowImpl(
         policy
     })
     .with(|p| p.clone());
-    let list_state_id = std::ptr::addr_of!(*state.inner_ptr()) as usize;
+    let list_state_id = lazy_list_state_identity(&state);
 
     // Apply clipping and scroll gesture handling to modifier
     let scroll_modifier = modifier
@@ -737,7 +748,7 @@ fn LazyRowImpl(
     }
     cranpose_core::bubble_measure_dirty_in_composer(node_id);
 
-    cranpose_core::DisposableEffect!((state.inner_ptr() as usize, node_id), move |scope| {
+    cranpose_core::DisposableEffect!((list_state_id, node_id), move |scope| {
         let callback_id = state.try_register_layout_callback(
             node_id,
             Rc::new(move || {
@@ -889,11 +900,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cranpose_core::{location_key, Composition, MemoryApplier};
 
     #[test]
     fn test_lazy_column_spec_default() {
         let spec = LazyColumnSpec::default();
         assert_eq!(spec.vertical_arrangement, LinearArrangement::Start);
+        assert_eq!(spec.beyond_bounds_item_count, 2);
     }
 
     #[test]
@@ -910,6 +923,7 @@ mod tests {
     fn test_lazy_row_spec_default() {
         let spec = LazyRowSpec::default();
         assert_eq!(spec.horizontal_arrangement, LinearArrangement::Start);
+        assert_eq!(spec.beyond_bounds_item_count, 2);
     }
 
     #[test]
@@ -923,5 +937,25 @@ mod tests {
         let spec = LazyColumnSpec::new().content_padding_all(24.0);
         assert_eq!(spec.content_padding_top, 24.0);
         assert_eq!(spec.content_padding_bottom, 24.0);
+    }
+
+    #[test]
+    fn lazy_list_state_identity_is_stable_for_copied_state() {
+        let mut composition = Composition::new(MemoryApplier::new());
+        let key = location_key(file!(), line!(), column!());
+        let mut state = None;
+        composition
+            .render(key, || {
+                state = Some(cranpose_foundation::lazy::remember_lazy_list_state());
+            })
+            .expect("lazy list state render should succeed");
+        let state = state.expect("lazy list state should be captured");
+        let copied_state = state;
+
+        assert_ne!(state.inner_ptr(), std::ptr::null());
+        assert_eq!(
+            lazy_list_state_identity(&state),
+            lazy_list_state_identity(&copied_state)
+        );
     }
 }

@@ -3246,6 +3246,71 @@ mod tests {
     }
 
     #[test]
+    fn restored_hidden_group_can_be_gapped_again_before_compaction() {
+        let mut table = SlotTable::new();
+
+        table.reset();
+        let root = table.start(1);
+        let group = table.start(2);
+        let value_slot = table.use_value_slot(|| String::from("persist"));
+        table.end();
+        table.end();
+        table.flush_anchors_if_dirty();
+
+        let group_anchor = table.group_anchor_at(group);
+        let group_end = match table.slots[group] {
+            Slot::Group { len, .. } => group + super::unpack_slot_len(len),
+            _ => panic!("group should remain a group"),
+        };
+
+        assert!(
+            table.mark_range_as_gaps(group, group_end, Some(root)),
+            "group should become hidden behind a gap",
+        );
+
+        table.reset();
+        let reused_root = table.start(1);
+        assert_eq!(reused_root, root);
+        let restored_group = table.start(2);
+        assert_eq!(restored_group, group);
+        let restored_slot = table.use_value_slot(|| String::from("new"));
+        assert_eq!(restored_slot, value_slot);
+        assert_eq!(table.read_value::<String>(restored_slot), "persist");
+        table.end();
+        table.end();
+        table.flush_anchors_if_dirty();
+
+        assert_eq!(
+            table.resolve_anchor(group_anchor),
+            Some(group),
+            "restored group should continue to own the original anchor before being hidden again",
+        );
+
+        let restored_group_end = match table.slots[group] {
+            Slot::Group { len, .. } => group + super::unpack_slot_len(len),
+            _ => panic!("restored group should remain live before re-gapping"),
+        };
+
+        assert!(
+            table.mark_range_as_gaps(group, restored_group_end, Some(root)),
+            "restored group should be able to hide behind a gap again immediately",
+        );
+
+        table.compact();
+
+        assert_eq!(
+            table.slots.len(),
+            1,
+            "compaction should remove the re-gapped restored group and its child values",
+        );
+        assert_eq!(
+            table.resolve_anchor(group_anchor),
+            None,
+            "re-gapped group anchor should be released once compaction removes the hidden group",
+        );
+    }
+
+    #[test]
     fn orphaned_node_state_reports_preserved_gap_nodes() {
         let mut table = SlotTable::new();
         let anchor = AnchorId(1);

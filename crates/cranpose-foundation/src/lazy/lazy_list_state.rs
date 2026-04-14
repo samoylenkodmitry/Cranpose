@@ -382,8 +382,10 @@ pub fn remember_lazy_list_state_with_position(
 }
 
 impl LazyListState {
-    /// Returns a pointer to the inner state for unique identification.
-    /// Used by scroll gesture detection to create unique keys.
+    /// Returns a stable identity pointer for the live inner state allocation.
+    ///
+    /// The pointer comes from the `Rc` stored inside `inner`, so it remains stable for the
+    /// lifetime of a live `LazyListState` and can be used as a composition identity key.
     pub fn inner_ptr(&self) -> *const () {
         self.inner
             .try_with(|rc| Rc::as_ptr(rc) as *const ())

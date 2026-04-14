@@ -1020,6 +1020,84 @@ fn captured_gesture_continues_on_render_supplied_ancestor_when_child_disappears(
 }
 
 #[test]
+fn consumed_pointer_down_only_captures_targets_that_received_the_down_event() {
+    let _guard = test_guard();
+    let top_events = Rc::new(RefCell::new(Vec::new()));
+    let lower_events = Rc::new(RefCell::new(Vec::new()));
+    let active_hits = Rc::new(RefCell::new(vec![
+        RecordingHitTarget {
+            node_id: 1,
+            consume: true,
+            events: top_events.clone(),
+            capture_path: vec![1],
+        },
+        RecordingHitTarget {
+            node_id: 2,
+            consume: false,
+            events: lower_events.clone(),
+            capture_path: vec![2],
+        },
+    ]));
+
+    let root_key = location_key(file!(), line!(), column!());
+    let scene = MutableRecordingScene::new(active_hits);
+    let mut shell = AppShell::new(
+        MutableRecordingRenderer::new(scene),
+        root_key,
+        empty_content,
+    );
+
+    assert!(
+        shell.set_cursor(10.0, 10.0),
+        "hover should find both overlapping hits"
+    );
+    top_events.borrow_mut().clear();
+    lower_events.borrow_mut().clear();
+
+    assert!(
+        shell.pointer_pressed(),
+        "pointer down should dispatch to the top-most hit"
+    );
+    assert_eq!(
+        top_events
+            .borrow()
+            .iter()
+            .map(|event| event.kind)
+            .collect::<Vec<_>>(),
+        vec![PointerEventKind::Down]
+    );
+    assert!(
+        lower_events.borrow().is_empty(),
+        "covered hit must not receive Down once the top hit consumes it",
+    );
+
+    top_events.borrow_mut().clear();
+    lower_events.borrow_mut().clear();
+
+    assert!(
+        shell.set_cursor(20.0, 20.0),
+        "drag move should stay on the captured gesture path",
+    );
+    assert!(
+        shell.pointer_released(),
+        "pointer up should resolve through the captured gesture path",
+    );
+
+    assert_eq!(
+        top_events
+            .borrow()
+            .iter()
+            .map(|event| event.kind)
+            .collect::<Vec<_>>(),
+        vec![PointerEventKind::Move, PointerEventKind::Up]
+    );
+    assert!(
+        lower_events.borrow().is_empty(),
+        "targets that never received Down must not receive Move or Up follow-ups",
+    );
+}
+
+#[test]
 fn captured_gesture_preserves_hit_order_when_paths_share_an_ancestor() {
     let _guard = test_guard();
     let first_child_events = Rc::new(RefCell::new(Vec::new()));
@@ -1262,6 +1340,10 @@ fn draw_repass_updates_render_data_without_layout() {
     });
 
     shell.update();
+    assert!(
+        shell.layout_tree.is_some(),
+        "update should populate the retained layout tree cache"
+    );
     let initial_scene = shell
         .renderer
         .last_scene
@@ -1282,6 +1364,10 @@ fn draw_repass_updates_render_data_without_layout() {
         .process_invalid_scopes()
         .expect("recompose after width change");
     shell.run_render_phase();
+    assert!(
+        shell.layout_tree.is_some(),
+        "draw-only refresh should keep the retained layout tree available"
+    );
 
     let updated_scene = shell
         .renderer
@@ -1467,9 +1553,22 @@ fn layout_bounds_index_matches_cached_layout_tree() {
     let mut shell = AppShell::new(TestRenderer::default(), root_key, nested_branch_content);
 
     shell.update();
+    assert!(
+        shell.layout_tree.is_some(),
+        "update should retain the measured layout tree for query helpers"
+    );
+
+    let cached_tree_ptr = shell
+        .layout_tree
+        .as_ref()
+        .map(|tree| tree as *const cranpose_ui::LayoutTree)
+        .expect("expected retained layout tree");
 
     let (root_id, root_bounds, left_leaf_id, left_leaf_bounds, right_id, right_bounds) = {
-        let layout_tree = shell.layout_tree().expect("expected layout tree");
+        let layout_tree = shell
+            .layout_tree
+            .as_ref()
+            .expect("expected cached layout tree");
         let root = layout_box_at_path(layout_tree.root(), &[]);
         let left_leaf = layout_box_at_path(layout_tree.root(), &[0, 0]);
         let right = layout_box_at_path(layout_tree.root(), &[1]);
@@ -1498,12 +1597,28 @@ fn layout_bounds_index_matches_cached_layout_tree() {
         shell.root_layout_size(),
         Some((root_bounds.2, root_bounds.3))
     );
+    assert_eq!(
+        shell
+            .layout_tree
+            .as_ref()
+            .map(|tree| tree as *const cranpose_ui::LayoutTree),
+        Some(cached_tree_ptr),
+        "root_layout_size should reuse the retained layout tree cache",
+    );
     assert_eq!(shell.node_layout_bounds(root_id), Some(root_bounds));
     assert_eq!(
         shell.node_layout_bounds(left_leaf_id),
         Some(left_leaf_bounds)
     );
     assert_eq!(shell.node_layout_bounds(right_id), Some(right_bounds));
+    assert_eq!(
+        shell
+            .layout_tree
+            .as_ref()
+            .map(|tree| tree as *const cranpose_ui::LayoutTree),
+        Some(cached_tree_ptr),
+        "layout bound queries should not rebuild the layout tree",
+    );
 }
 
 #[composable]

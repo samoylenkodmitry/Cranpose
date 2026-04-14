@@ -6253,7 +6253,6 @@ impl<A: Applier + 'static> Composition<A> {
         {
             self.runtime.set_needs_frame(false);
         }
-        self.root_render_requested = false;
         Ok(())
     }
 
