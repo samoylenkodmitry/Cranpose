@@ -50,6 +50,11 @@ impl StdScheduler {
         self.frame_requested.swap(false, Ordering::SeqCst)
     }
 
+    /// Returns whether a frame is currently pending without consuming the request.
+    pub fn has_frame_request(&self) -> bool {
+        self.frame_requested.load(Ordering::SeqCst)
+    }
+
     /// Registers a waker that will be invoked whenever a new frame is scheduled.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_frame_waker(&self, waker: impl Fn() + Send + Sync + 'static) {
@@ -179,6 +184,10 @@ impl StdRuntime {
     /// Returns whether a frame was requested since the last poll.
     pub fn take_frame_request(&self) -> bool {
         self.scheduler.take_frame_request()
+    }
+
+    pub fn has_frame_request(&self) -> bool {
+        self.scheduler.has_frame_request()
     }
 
     /// Registers a waker to be called when the runtime schedules a new frame.

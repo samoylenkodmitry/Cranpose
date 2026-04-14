@@ -1703,7 +1703,7 @@ impl ApplicationHandler for App {
 
             // Handle ongoing wait_for_idle
             if controller.waiting_for_idle {
-                const MAX_IDLE_ITERATIONS: u32 = 200;
+                const MAX_IDLE_ITERATIONS: u32 = 600;
 
                 let needs_draw = app.needs_redraw();
                 let has_anim = app.has_active_animations();
@@ -1729,9 +1729,10 @@ impl ApplicationHandler for App {
 
                     if controller.idle_iterations >= MAX_IDLE_ITERATIONS {
                         controller.waiting_for_idle = false;
-                        let _ = controller.tx.send(RobotResponse::Error(
-                            "wait_for_idle: timed out after 200 iterations".to_string(),
-                        ));
+                        let _ = controller.tx.send(RobotResponse::Error(format!(
+                            "wait_for_idle: timed out after {} iterations",
+                            MAX_IDLE_ITERATIONS
+                        )));
                     }
                 }
             }

@@ -878,7 +878,7 @@ fn pointer_scrolled_dispatches_to_hovered_targets_and_respects_consumption() {
 }
 
 #[test]
-fn captured_gesture_falls_back_to_original_targets_when_scene_targets_disappear() {
+fn captured_gesture_cancels_when_original_targets_disappear() {
     let _guard = test_guard();
     let first_target_events = Rc::new(RefCell::new(Vec::new()));
     let rebound_target_events = Rc::new(RefCell::new(Vec::new()));
@@ -921,12 +921,12 @@ fn captured_gesture_falls_back_to_original_targets_when_scene_targets_disappear(
     }];
 
     assert!(
-        shell.set_cursor(30.0, 30.0),
-        "move should stay on the original captured target"
+        !shell.set_cursor(30.0, 30.0),
+        "move should cancel when no live captured node survives"
     );
     assert!(
-        shell.pointer_released(),
-        "up should stay on the original captured target after the scene target disappears"
+        !shell.pointer_released(),
+        "up should not replay detached handlers after the captured node disappears"
     );
 
     assert_eq!(
@@ -935,11 +935,7 @@ fn captured_gesture_falls_back_to_original_targets_when_scene_targets_disappear(
             .iter()
             .map(|event| event.kind)
             .collect::<Vec<_>>(),
-        vec![
-            PointerEventKind::Down,
-            PointerEventKind::Move,
-            PointerEventKind::Up
-        ]
+        vec![PointerEventKind::Down]
     );
     assert!(
         rebound_target_events.borrow().is_empty(),
@@ -1020,6 +1016,162 @@ fn captured_gesture_continues_on_render_supplied_ancestor_when_child_disappears(
     assert!(
         unrelated_events.borrow().is_empty(),
         "captured gesture must not retarget to unrelated fresh hits"
+    );
+}
+
+#[test]
+fn captured_gesture_preserves_hit_order_when_paths_share_an_ancestor() {
+    let _guard = test_guard();
+    let first_child_events = Rc::new(RefCell::new(Vec::new()));
+    let second_child_events = Rc::new(RefCell::new(Vec::new()));
+    let shared_ancestor_events = Rc::new(RefCell::new(Vec::new()));
+    let active_hits = Rc::new(RefCell::new(vec![
+        RecordingHitTarget {
+            node_id: 1,
+            consume: false,
+            events: first_child_events.clone(),
+            capture_path: vec![1, 99],
+        },
+        RecordingHitTarget {
+            node_id: 2,
+            consume: false,
+            events: second_child_events.clone(),
+            capture_path: vec![2, 99],
+        },
+    ]));
+
+    let root_key = location_key(file!(), line!(), column!());
+    let scene = MutableRecordingScene::new(active_hits.clone());
+    let mut shell = AppShell::new(
+        MutableRecordingRenderer::new(scene),
+        root_key,
+        empty_content,
+    );
+
+    shell.set_cursor(10.0, 10.0);
+    assert!(
+        shell.pointer_pressed(),
+        "down should record both overlapping hits"
+    );
+
+    first_child_events.borrow_mut().clear();
+    second_child_events.borrow_mut().clear();
+    shared_ancestor_events.borrow_mut().clear();
+    *active_hits.borrow_mut() = vec![
+        RecordingHitTarget {
+            node_id: 1,
+            consume: false,
+            events: first_child_events.clone(),
+            capture_path: vec![1, 99],
+        },
+        RecordingHitTarget {
+            node_id: 2,
+            consume: false,
+            events: second_child_events.clone(),
+            capture_path: vec![2, 99],
+        },
+        RecordingHitTarget {
+            node_id: 99,
+            consume: true,
+            events: shared_ancestor_events.clone(),
+            capture_path: vec![99],
+        },
+    ];
+
+    assert!(
+        shell.set_cursor(20.0, 20.0),
+        "move should resolve the live capture tree"
+    );
+    assert!(
+        shell.pointer_released(),
+        "up should dispatch through the merged capture tree"
+    );
+
+    assert_eq!(
+        first_child_events
+            .borrow()
+            .iter()
+            .map(|event| event.kind)
+            .collect::<Vec<_>>(),
+        vec![PointerEventKind::Move, PointerEventKind::Up]
+    );
+    assert_eq!(
+        second_child_events
+            .borrow()
+            .iter()
+            .map(|event| event.kind)
+            .collect::<Vec<_>>(),
+        vec![PointerEventKind::Move, PointerEventKind::Up]
+    );
+    assert_eq!(
+        shared_ancestor_events
+            .borrow()
+            .iter()
+            .map(|event| event.kind)
+            .collect::<Vec<_>>(),
+        vec![PointerEventKind::Move, PointerEventKind::Up]
+    );
+}
+
+#[test]
+fn captured_gesture_release_reaches_ancestor_even_when_child_consumes() {
+    let _guard = test_guard();
+    let child_events = Rc::new(RefCell::new(Vec::new()));
+    let ancestor_events = Rc::new(RefCell::new(Vec::new()));
+    let active_hits = Rc::new(RefCell::new(vec![RecordingHitTarget {
+        node_id: 1,
+        consume: true,
+        events: child_events.clone(),
+        capture_path: vec![1, 99],
+    }]));
+
+    let root_key = location_key(file!(), line!(), column!());
+    let scene = MutableRecordingScene::new(active_hits.clone());
+    let mut shell = AppShell::new(
+        MutableRecordingRenderer::new(scene),
+        root_key,
+        empty_content,
+    );
+
+    shell.set_cursor(10.0, 10.0);
+    assert!(shell.pointer_pressed(), "down should hit the child target");
+
+    child_events.borrow_mut().clear();
+    *active_hits.borrow_mut() = vec![
+        RecordingHitTarget {
+            node_id: 1,
+            consume: true,
+            events: child_events.clone(),
+            capture_path: vec![1, 99],
+        },
+        RecordingHitTarget {
+            node_id: 99,
+            consume: false,
+            events: ancestor_events.clone(),
+            capture_path: vec![99],
+        },
+    ];
+
+    assert!(
+        shell.pointer_released(),
+        "up should resolve the captured path"
+    );
+
+    assert_eq!(
+        child_events
+            .borrow()
+            .iter()
+            .map(|event| event.kind)
+            .collect::<Vec<_>>(),
+        vec![PointerEventKind::Up]
+    );
+    assert_eq!(
+        ancestor_events
+            .borrow()
+            .iter()
+            .map(|event| event.kind)
+            .collect::<Vec<_>>(),
+        vec![PointerEventKind::Up]
     );
 }
 

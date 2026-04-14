@@ -1638,15 +1638,6 @@ impl GpuRenderer {
 
         let result = self.render_graph(text_state, view, graph, width, height, root_scale);
 
-        // Reclaim atlas space occupied by glyphs that were not prepared this
-        // frame. Invalidate all cached text batch signatures so the next frame
-        // will re-prepare every slot, re-marking the needed glyphs as in-use
-        // before the subsequent trim.
-        self.text_atlas.trim();
-        for slot in &mut self.text_renderer_pool {
-            slot.last_signature = None;
-        }
-
         // Trim text renderer pool to the number of slots actually used this frame,
         // plus a small margin to avoid thrashing on minor batch count fluctuations.
         const TEXT_POOL_MARGIN: usize = 4;
@@ -1655,15 +1646,8 @@ impl GpuRenderer {
             self.text_renderer_pool.truncate(target_pool_size);
         }
 
-        let stale_text_keys: Vec<TextCacheKey> = text_state
-            .text_cache
-            .iter()
-            .map(|(key, _)| key.clone())
-            .filter(|key| !self.text_cache_seen_this_frame.contains(key))
-            .collect();
-        for key in &stale_text_keys {
-            let _ = text_state.text_cache.pop(key);
-        }
+        // Shared text buffers already live inside a bounded LRU. Keep them across
+        // frames so temporarily hidden content does not thrash shaping caches.
         self.text_cache_seen_this_frame.clear();
         if self.text_cache_seen_this_frame.capacity() > RETAINED_TEXT_CACHE_SEEN_THIS_FRAME_CAPACITY
         {
@@ -1680,20 +1664,9 @@ impl GpuRenderer {
         self.staged_uploads
             .shrink_retained_capacity(RETAINED_STAGED_UPLOAD_BYTES, RETAINED_STAGED_UPLOAD_COPIES);
 
-        // Evict layer cache entries for layers not referenced this frame.
-        // Without this, switching tabs would leave stale entries occupying
-        // GPU memory indefinitely (until the 64 MB byte limit is hit).
-        let stale_ids: Vec<usize> = self
-            .layer_surface_cache_identity
-            .keys()
-            .filter(|id| !self.layer_cache_seen_this_frame.contains(id))
-            .copied()
-            .collect();
-        for stable_id in stale_ids {
-            if let Some(key) = self.layer_surface_cache_identity.remove(&stable_id) {
-                self.remove_cached_layer_surface(&key);
-            }
-        }
+        // Layer surfaces are already bounded by an item-count LRU plus a byte cap.
+        // Keep entries across brief visibility gaps so scrolling and tab switches
+        // can reuse GPU work instead of churning allocations every frame.
         self.layer_cache_seen_this_frame.clear();
         if self.layer_cache_seen_this_frame.capacity() > RETAINED_LAYER_SEEN_THIS_FRAME_CAPACITY {
             self.layer_cache_seen_this_frame
@@ -3598,9 +3571,8 @@ impl GpuRenderer {
             0
         };
 
-        // Skip prepare() when the batch signature matches — the slot's cached vertex
-        // buffers are still valid. Note: trim() at end-of-frame invalidates all
-        // signatures, so every slot re-prepares at least once per frame.
+        // Skip prepare() when the batch signature matches — the slot's cached
+        // vertex buffers remain valid until an atlas-full recovery invalidates them.
         let batch_signature =
             prepared_text_batch_signature(layer_texts.clone(), width, height, root_scale);
         if batch_signature.is_some()

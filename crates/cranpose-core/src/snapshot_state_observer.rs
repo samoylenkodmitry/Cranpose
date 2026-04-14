@@ -126,12 +126,15 @@ struct SnapshotStateObserverInner {
     executor: Rc<Executor>,
     owned_scopes: RefCell<Vec<Rc<RefCell<ScopeEntry>>>>,
     fast_scopes: RefCell<HashMap<ScopeId, Rc<RefCell<ScopeEntry>>>>,
+    indexed_scopes: RefCell<HashMap<usize, Rc<RefCell<ScopeEntry>>>>,
+    observed_to_scopes: RefCell<HashMap<StateObjectId, Vec<usize>>>,
     pause_count: Rc<Cell<usize>>,
     active_read_targets: Rc<RefCell<Vec<Rc<RefCell<ObservedIds>>>>>,
     read_dispatcher: ReadObserver,
     apply_handle: RefCell<Option<crate::snapshot_v2::ObserverHandle>>,
     weak_self: RefCell<Weak<SnapshotStateObserverInner>>,
     frame_version: Cell<u64>,
+    next_entry_id: Cell<usize>,
 }
 
 impl SnapshotStateObserverInner {
@@ -156,12 +159,15 @@ impl SnapshotStateObserverInner {
             executor: Rc::new(on_changed_executor),
             owned_scopes: RefCell::new(Vec::new()),
             fast_scopes: RefCell::new(HashMap::default()),
+            indexed_scopes: RefCell::new(HashMap::default()),
+            observed_to_scopes: RefCell::new(HashMap::default()),
             pause_count,
             active_read_targets,
             read_dispatcher,
             apply_handle: RefCell::new(None),
             weak_self: RefCell::new(Weak::new()),
             frame_version: Cell::new(0),
+            next_entry_id: Cell::new(0),
         }
     }
 
@@ -242,13 +248,13 @@ impl SnapshotStateObserverInner {
         {
             let mut entry_mut = entry.borrow_mut();
             entry_mut.update(scope, on_changed);
-            entry_mut.observed = observed;
             entry_mut.last_seen_version = if has_frame_version {
                 frame_version
             } else {
                 u64::MAX
             };
         }
+        self.replace_observed_ids(&entry, observed);
 
         result
     }
@@ -266,27 +272,62 @@ impl SnapshotStateObserverInner {
         T: Any + PartialEq + 'static,
     {
         if let Some(rc_scope) = (scope as &dyn Any).downcast_ref::<RecomposeScope>() {
-            self.fast_scopes.borrow_mut().remove(&rc_scope.id());
+            if let Some(entry) = self.fast_scopes.borrow_mut().remove(&rc_scope.id()) {
+                self.unregister_entry(&entry);
+            }
             return;
         }
 
-        self.owned_scopes
-            .borrow_mut()
-            .retain(|entry| !entry.borrow().matches_scope(scope));
+        let removed = {
+            let mut owned_scopes = self.owned_scopes.borrow_mut();
+            owned_scopes
+                .iter()
+                .position(|entry| entry.borrow().matches_scope(scope))
+                .map(|index| owned_scopes.remove(index))
+        };
+        if let Some(entry) = removed {
+            self.unregister_entry(&entry);
+        }
     }
 
     fn clear_if(&self, predicate: impl Fn(&dyn Any) -> bool) {
-        self.fast_scopes
-            .borrow_mut()
-            .retain(|_, entry| !entry.borrow().matches_predicate(&predicate));
-        self.owned_scopes
-            .borrow_mut()
-            .retain(|entry| !entry.borrow().matches_predicate(&predicate));
+        let removed_fast = {
+            let mut fast_scopes = self.fast_scopes.borrow_mut();
+            let removed_ids: Vec<_> = fast_scopes
+                .iter()
+                .filter(|(_, entry)| entry.borrow().matches_predicate(&predicate))
+                .map(|(scope_id, _)| *scope_id)
+                .collect();
+            removed_ids
+                .into_iter()
+                .filter_map(|scope_id| fast_scopes.remove(&scope_id))
+                .collect::<Vec<_>>()
+        };
+        let removed_owned = {
+            let mut owned_scopes = self.owned_scopes.borrow_mut();
+            let mut retained = Vec::with_capacity(owned_scopes.len());
+            let mut removed = Vec::new();
+            for entry in owned_scopes.drain(..) {
+                if entry.borrow().matches_predicate(&predicate) {
+                    removed.push(entry);
+                } else {
+                    retained.push(entry);
+                }
+            }
+            *owned_scopes = retained;
+            removed
+        };
+
+        for entry in removed_fast.into_iter().chain(removed_owned) {
+            self.unregister_entry(&entry);
+        }
     }
 
     fn clear_all(&self) {
         self.fast_scopes.borrow_mut().clear();
         self.owned_scopes.borrow_mut().clear();
+        self.indexed_scopes.borrow_mut().clear();
+        self.observed_to_scopes.borrow_mut().clear();
     }
 
     fn start(&self, weak_self: Weak<SnapshotStateObserverInner>) {
@@ -328,10 +369,15 @@ impl SnapshotStateObserverInner {
         scope: impl Any + Clone + PartialEq + 'static,
         on_changed: Rc<dyn Fn(&dyn Any)>,
     ) -> Rc<RefCell<ScopeEntry>> {
+        let entry_id = self.next_entry_id.get();
+        self.next_entry_id.set(entry_id.wrapping_add(1));
         let recompose_scope_id = (&scope as &dyn Any)
             .downcast_ref::<RecomposeScope>()
             .map(RecomposeScope::id);
-        let entry = Rc::new(RefCell::new(ScopeEntry::new(scope, on_changed)));
+        let entry = Rc::new(RefCell::new(ScopeEntry::new(entry_id, scope, on_changed)));
+        self.indexed_scopes
+            .borrow_mut()
+            .insert(entry_id, Rc::clone(&entry));
         if let Some(scope_id) = recompose_scope_id {
             self.fast_scopes
                 .borrow_mut()
@@ -343,14 +389,40 @@ impl SnapshotStateObserverInner {
     }
 
     fn prune_dead_scopes(&self) {
-        let mut fast_scopes = self.fast_scopes.borrow_mut();
-        fast_scopes.retain(|_, entry| entry.borrow().should_retain());
-        shrink_map_if_sparse(&mut fast_scopes, Self::MIN_RETAINED_SCOPE_CAPACITY);
-        drop(fast_scopes);
+        let removed_fast = {
+            let mut fast_scopes = self.fast_scopes.borrow_mut();
+            let removed_ids: Vec<_> = fast_scopes
+                .iter()
+                .filter(|(_, entry)| !entry.borrow().should_retain())
+                .map(|(scope_id, _)| *scope_id)
+                .collect();
+            let removed = removed_ids
+                .into_iter()
+                .filter_map(|scope_id| fast_scopes.remove(&scope_id))
+                .collect::<Vec<_>>();
+            shrink_map_if_sparse(&mut fast_scopes, Self::MIN_RETAINED_SCOPE_CAPACITY);
+            removed
+        };
 
-        let mut owned_scopes = self.owned_scopes.borrow_mut();
-        owned_scopes.retain(|entry| entry.borrow().should_retain());
-        shrink_vec_if_sparse(&mut owned_scopes, Self::MIN_RETAINED_SCOPE_CAPACITY);
+        let removed_owned = {
+            let mut owned_scopes = self.owned_scopes.borrow_mut();
+            let mut retained = Vec::with_capacity(owned_scopes.len());
+            let mut removed = Vec::new();
+            for entry in owned_scopes.drain(..) {
+                if entry.borrow().should_retain() {
+                    retained.push(entry);
+                } else {
+                    removed.push(entry);
+                }
+            }
+            *owned_scopes = retained;
+            shrink_vec_if_sparse(&mut owned_scopes, Self::MIN_RETAINED_SCOPE_CAPACITY);
+            removed
+        };
+
+        for entry in removed_fast.into_iter().chain(removed_owned) {
+            self.unregister_entry(&entry);
+        }
     }
 
     fn debug_stats(&self) -> SnapshotStateObserverDebugStats {
@@ -399,23 +471,20 @@ impl SnapshotStateObserverInner {
             return;
         }
 
-        let mut modified_ids: SmallVec<[usize; MAX_OBSERVED_STATES]> = SmallVec::new();
-        for state in modified {
-            modified_ids.push(state.object_id().as_usize());
-        }
-
+        let mut seen_scope_ids = HashSet::default();
         let mut to_notify: Vec<Rc<RefCell<ScopeEntry>>> = Vec::new();
         {
-            let owned_scopes = self.owned_scopes.borrow();
-            let fast_scopes = self.fast_scopes.borrow();
-            for entry in owned_scopes.iter().chain(fast_scopes.values()) {
-                let entry_ref = entry.borrow();
-                if entry_ref
-                    .observed
-                    .iter()
-                    .any(|id| modified_ids.contains(id))
-                {
-                    to_notify.push(entry.clone());
+            let observed_to_scopes = self.observed_to_scopes.borrow();
+            let indexed_scopes = self.indexed_scopes.borrow();
+            for state in modified {
+                if let Some(scope_ids) = observed_to_scopes.get(&state.object_id().as_usize()) {
+                    for &scope_id in scope_ids {
+                        if seen_scope_ids.insert(scope_id) {
+                            if let Some(entry) = indexed_scopes.get(&scope_id) {
+                                to_notify.push(entry.clone());
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -432,6 +501,55 @@ impl SnapshotStateObserverInner {
                 }
             }));
         }
+    }
+
+    fn replace_observed_ids(&self, entry: &Rc<RefCell<ScopeEntry>>, observed: ObservedIds) {
+        let (entry_id, previous) = {
+            let mut entry_mut = entry.borrow_mut();
+            let entry_id = entry_mut.id;
+            let previous = std::mem::replace(&mut entry_mut.observed, observed);
+            (entry_id, previous)
+        };
+        self.unregister_observed_ids(entry_id, &previous);
+        let entry_ref = entry.borrow();
+        self.register_observed_ids(entry_id, &entry_ref.observed);
+    }
+
+    fn register_observed_ids(&self, entry_id: usize, observed: &ObservedIds) {
+        let mut observed_to_scopes = self.observed_to_scopes.borrow_mut();
+        for &state_id in observed.iter() {
+            let scope_ids = observed_to_scopes.entry(state_id).or_default();
+            if !scope_ids.contains(&entry_id) {
+                scope_ids.push(entry_id);
+            }
+        }
+    }
+
+    fn unregister_observed_ids(&self, entry_id: usize, observed: &ObservedIds) {
+        let mut observed_to_scopes = self.observed_to_scopes.borrow_mut();
+        let mut emptied = SmallVec::<[StateObjectId; MAX_OBSERVED_STATES]>::new();
+        for &state_id in observed.iter() {
+            if let Some(scope_ids) = observed_to_scopes.get_mut(&state_id) {
+                scope_ids.retain(|tracked_id| *tracked_id != entry_id);
+                if scope_ids.is_empty() {
+                    emptied.push(state_id);
+                }
+            }
+        }
+        for state_id in emptied {
+            observed_to_scopes.remove(&state_id);
+        }
+        shrink_map_if_sparse(&mut observed_to_scopes, Self::MIN_RETAINED_SCOPE_CAPACITY);
+    }
+
+    fn unregister_entry(&self, entry: &Rc<RefCell<ScopeEntry>>) {
+        let (entry_id, observed) = {
+            let mut entry_mut = entry.borrow_mut();
+            let observed = std::mem::replace(&mut entry_mut.observed, ObservedIds::new());
+            (entry_mut.id, observed)
+        };
+        self.unregister_observed_ids(entry_id, &observed);
+        self.indexed_scopes.borrow_mut().remove(&entry_id);
     }
 }
 use smallvec::SmallVec;
@@ -537,6 +655,7 @@ enum ScopeStorage {
 }
 
 struct ScopeEntry {
+    id: usize,
     scope: ScopeStorage,
     on_changed: Rc<dyn Fn(&dyn Any)>,
     observed: ObservedIds,
@@ -544,11 +663,12 @@ struct ScopeEntry {
 }
 
 impl ScopeEntry {
-    fn new<T>(scope: T, on_changed: Rc<dyn Fn(&dyn Any)>) -> Self
+    fn new<T>(id: usize, scope: T, on_changed: Rc<dyn Fn(&dyn Any)>) -> Self
     where
         T: Any + 'static,
     {
         Self {
+            id,
             scope: ScopeStorage::from_value(scope),
             on_changed,
             observed: ObservedIds::new(),

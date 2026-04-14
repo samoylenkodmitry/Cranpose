@@ -13,6 +13,21 @@ use cranpose_testing::{find_button_in_semantics, find_by_text_recursive, find_te
 use desktop_app::app;
 use std::time::Duration;
 
+fn wait_for_condition(
+    description: &str,
+    timeout_ms: u64,
+    predicate: impl Fn() -> bool,
+) -> Result<(), String> {
+    let attempts = (timeout_ms / 100).max(1);
+    for _ in 0..attempts {
+        if predicate() {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    Err(format!("timed out waiting for {description}"))
+}
+
 fn find_exact_text(elements: &[SemanticElement], text: &str) -> Option<(f32, f32, f32, f32)> {
     for elem in elements {
         if let Some(bounds) = find_text_exact(elem, text) {
@@ -33,7 +48,10 @@ fn main() {
         .with_test_driver(|robot| {
             println!("App launched! Waiting for initial render...");
             std::thread::sleep(Duration::from_secs(1));
-            robot.wait_for_idle().expect("Failed to wait for idle");
+            wait_for_condition("Modifiers Showcase tab", 5_000, || {
+                find_button_in_semantics(&robot, "Modifiers Showcase").is_some()
+            })
+            .expect("Failed to observe initial tab bar");
 
             // =====================================================
             // Step 1: Navigate to Modifiers Showcase tab
@@ -53,10 +71,13 @@ fn main() {
                 std::process::exit(1);
             }
             std::thread::sleep(Duration::from_millis(500));
-            match robot.wait_for_idle() {
-                Ok(_) => println!("   Tab ready"),
-                Err(e) => println!("   Tab switched ({})", e),
-            }
+            wait_for_condition("Positioned Boxes menu", 5_000, || {
+                robot.get_semantics().ok().is_some_and(|semantics| {
+                    find_exact_text(&semantics, "Positioned Boxes").is_some()
+                })
+            })
+            .ok();
+            println!("   Tab ready");
 
             // =====================================================
             // Step 2: Select "Positioned Boxes" showcase
@@ -68,7 +89,14 @@ fn main() {
                 std::process::exit(1);
             }
             std::thread::sleep(Duration::from_millis(500));
-            robot.wait_for_idle().ok();
+            wait_for_condition("Positioned Boxes header", 5_000, || {
+                robot
+                    .get_semantics()
+                    .ok()
+                    .and_then(|semantics| find_exact_text(&semantics, "=== Positioned Boxes ==="))
+                    .is_some()
+            })
+            .ok();
 
             // Validate positioned boxes
             println!("\n   Validating positioned boxes:");
@@ -165,7 +193,14 @@ fn main() {
                 std::process::exit(1);
             }
             std::thread::sleep(Duration::from_millis(500));
-            robot.wait_for_idle().ok();
+            wait_for_condition("Dynamic Modifiers header", 5_000, || {
+                robot
+                    .get_semantics()
+                    .ok()
+                    .and_then(|semantics| find_exact_text(&semantics, "=== Dynamic Modifiers ==="))
+                    .is_some()
+            })
+            .ok();
             let semantics = robot.get_semantics().expect("Failed to get semantics");
             if find_exact_text(&semantics, "=== Dynamic Modifiers ===").is_none() {
                 println!("   ✗ Dynamic Modifiers header not found (selection stuck?)");
@@ -198,7 +233,7 @@ fn main() {
                     std::process::exit(1);
                 }
                 std::thread::sleep(Duration::from_millis(300));
-                robot.wait_for_idle().ok();
+                std::thread::sleep(Duration::from_millis(200));
 
                 // Get semantics and check dynamic element positions
                 let semantics = robot.get_semantics().expect("Failed to get semantics");

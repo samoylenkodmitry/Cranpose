@@ -749,22 +749,19 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         let snapshot = active_snapshot();
         let snapshot_id = snapshot.snapshot_id();
 
-        let mut written_state: Option<Arc<dyn StateObject>> = None;
-        if let Some(state) = self
-            .weak_self
-            .lock()
-            .expect("Weak self lock poisoned")
-            .as_ref()
-            .and_then(|weak| weak.upgrade())
-        {
-            let trait_object: Arc<dyn StateObject> = state.clone();
-            snapshot.record_write(trait_object.clone());
-            written_state = Some(trait_object);
-        }
-        mark_update_write(self.id);
-
         match &snapshot {
             AnySnapshot::Global(global) => {
+                let invalid = snapshot.invalid();
+                let equivalent = self
+                    .readable_for(snapshot_id, &invalid)
+                    .map(|record| {
+                        record.with_value(|current: &T| self.policy.equivalent(current, &new_value))
+                    })
+                    .unwrap_or(false);
+                if equivalent {
+                    return false;
+                }
+
                 if global.has_pending_children() {
                     panic!(
                         "SnapshotMutableState::set attempted global write while pending children {:?} exist (state {:?}, snapshot_id={})",
@@ -773,6 +770,20 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
                         snapshot_id
                     );
                 }
+
+                let mut written_state: Option<Arc<dyn StateObject>> = None;
+                if let Some(state) = self
+                    .weak_self
+                    .lock()
+                    .expect("Weak self lock poisoned")
+                    .as_ref()
+                    .and_then(|weak| weak.upgrade())
+                {
+                    let trait_object: Arc<dyn StateObject> = state.clone();
+                    snapshot.record_write(trait_object.clone());
+                    written_state = Some(trait_object);
+                }
+                mark_update_write(self.id);
 
                 let new_id = allocate_record_id();
                 let record = new_overwritable_record_as_head_locked(self);
@@ -814,6 +825,19 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
                 if equivalent {
                     return false;
                 }
+
+                if let Some(state) = self
+                    .weak_self
+                    .lock()
+                    .expect("Weak self lock poisoned")
+                    .as_ref()
+                    .and_then(|weak| weak.upgrade())
+                {
+                    let trait_object: Arc<dyn StateObject> = state.clone();
+                    snapshot.record_write(trait_object);
+                }
+                mark_update_write(self.id);
+
                 let record = self.writable_record(snapshot_id, &invalid);
                 record.replace_value(new_value);
                 self.assert_chain_integrity("set(child-writable)", Some(snapshot_id));

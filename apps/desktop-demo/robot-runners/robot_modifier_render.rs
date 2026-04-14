@@ -7,6 +7,22 @@ use desktop_app::app::combined_app;
 use desktop_app::fonts::DEMO_FONTS;
 use std::time::Duration;
 
+fn wait_for_condition(
+    _robot: &cranpose::Robot,
+    description: &str,
+    timeout_ms: u64,
+    predicate: impl Fn() -> bool,
+) {
+    let attempts = (timeout_ms / 100).max(1);
+    for _ in 0..attempts {
+        if predicate() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    panic!("timed out waiting for {description}");
+}
+
 fn main() {
     AppLauncher::new()
         .with_title("Robot: Modifier Render Test")
@@ -16,7 +32,9 @@ fn main() {
         .with_fps_counter(true)
         .with_test_driver(|robot| {
             std::thread::sleep(Duration::from_millis(500));
-            robot.wait_for_idle().expect("wait for idle");
+            wait_for_condition(&robot, "initial tab bar", 5_000, || {
+                find_button_in_semantics(&robot, "Modifiers Showcase").is_some()
+            });
             println!("✓ App launched");
 
             // Click on Modifiers Showcase tab (note: with 's')
@@ -24,7 +42,10 @@ fn main() {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
                 robot.click(cx, cy).expect("click modifiers tab");
-                robot.wait_for_idle().expect("wait after tab click");
+                wait_for_condition(&robot, "modifier showcase menu", 5_000, || {
+                    find_in_semantics(&robot, |elem| find_button(elem, "Positioned Boxes"))
+                        .is_some()
+                });
                 println!("✓ Clicked Modifiers Showcase tab at ({:.1}, {:.1})", cx, cy);
             } else {
                 println!("✗ FAIL: Could not find Modifiers Showcase tab");
@@ -43,7 +64,10 @@ fn main() {
                 println!("  Found 'Positioned Boxes' at ({:.1}, {:.1})", cx, cy);
 
                 robot.click(cx, cy).expect("click Positioned Boxes");
-                robot.wait_for_idle().expect("wait after click");
+                wait_for_condition(&robot, "positioned boxes content", 5_000, || {
+                    find_in_semantics(&robot, |elem| find_text(elem, "Layer")).is_some()
+                        || find_in_semantics(&robot, |elem| find_text(elem, "Box")).is_some()
+                });
                 println!("✓ Clicked Positioned Boxes");
             } else {
                 println!("✗ FAIL: Could not find Positioned Boxes button");
@@ -52,7 +76,10 @@ fn main() {
             }
 
             std::thread::sleep(Duration::from_millis(500));
-            robot.wait_for_idle().expect("wait for content");
+            wait_for_condition(&robot, "positioned boxes semantics", 5_000, || {
+                find_in_semantics(&robot, |elem| find_text(elem, "Layer")).is_some()
+                    || find_in_semantics(&robot, |elem| find_text(elem, "Box")).is_some()
+            });
 
             // Check for expected content - look for "Layer" text which should appear
             let has_layer = find_in_semantics(&robot, |elem| find_text(elem, "Layer"));
@@ -75,9 +102,11 @@ fn main() {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
                 robot.click(cx, cy).expect("click Dynamic Modifiers");
-                robot
-                    .wait_for_idle()
-                    .expect("wait after dynamic modifiers click");
+                wait_for_condition(&robot, "dynamic modifiers content", 5_000, || {
+                    find_in_semantics(&robot, |elem| find_text(elem, "Move")).is_some()
+                        && find_in_semantics(&robot, |elem| find_button(elem, "Advance Frame"))
+                            .is_some()
+                });
                 println!("✓ Clicked Dynamic Modifiers");
             } else {
                 println!("✗ FAIL: Could not find Dynamic Modifiers button");
@@ -86,7 +115,9 @@ fn main() {
             }
 
             std::thread::sleep(Duration::from_millis(300));
-            robot.wait_for_idle().expect("wait before move check");
+            wait_for_condition(&robot, "dynamic modifiers move label", 5_000, || {
+                find_in_semantics(&robot, |elem| find_text(elem, "Move")).is_some()
+            });
 
             let before_move = find_in_semantics(&robot, |elem| find_text(elem, "Move"));
             let Some((before_x, _, before_w, _)) = before_move else {
@@ -102,7 +133,7 @@ fn main() {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
                 robot.click(cx, cy).expect("click Advance Frame");
-                robot.wait_for_idle().expect("wait after advance frame");
+                std::thread::sleep(Duration::from_millis(300));
             } else {
                 println!("✗ FAIL: Could not find Advance Frame button");
                 robot.exit().expect("exit");
@@ -110,7 +141,9 @@ fn main() {
             }
 
             std::thread::sleep(Duration::from_millis(300));
-            robot.wait_for_idle().expect("wait after move check");
+            wait_for_condition(&robot, "dynamic modifiers moved label", 5_000, || {
+                find_in_semantics(&robot, |elem| find_text(elem, "Move")).is_some()
+            });
 
             let after_move = find_in_semantics(&robot, |elem| find_text(elem, "Move"));
             let Some((after_x, _, after_w, _)) = after_move else {

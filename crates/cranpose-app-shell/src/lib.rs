@@ -33,7 +33,7 @@ use cranpose_ui::{
 };
 use cranpose_ui_graphics::{Point, Size};
 use hit_path_tracker::{HitPathTracker, PointerId};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 // Re-export key event types for use by cranpose
 pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType, Modifiers};
@@ -72,11 +72,6 @@ where
     /// - On Move/Up/Cancel: resolve fresh HitTargets from current scene
     /// - Handler closures are preserved (same Rc), so internal state survives
     hit_path_tracker: HitPathTracker,
-    /// Original hit targets captured on PointerDown.
-    ///
-    /// These preserve handler closure state even if node IDs disappear from the
-    /// current scene during a gesture.
-    captured_targets: HashMap<PointerId, Vec<<<R as Renderer>::Scene as RenderScene>::HitTarget>>,
     /// Tracks which nodes the pointer is currently hovering over.
     /// Used to synthesize Enter/Exit events when the hover set changes.
     hovered_nodes: Vec<NodeId>,
@@ -133,37 +128,11 @@ where
     R: Renderer,
     R::Error: Debug,
 {
-    fn captured_targets_for_pointer(
-        &self,
-        pointer: PointerId,
-    ) -> Vec<<<R as Renderer>::Scene as RenderScene>::HitTarget> {
-        self.captured_targets
-            .get(&pointer)
-            .cloned()
-            .unwrap_or_default()
-    }
-
     fn resolve_gesture_targets(
         &self,
         pointer: PointerId,
     ) -> Vec<<<R as Renderer>::Scene as RenderScene>::HitTarget> {
-        let targets = self.resolve_hit_path(pointer);
-        if !targets.is_empty() {
-            return targets;
-        }
-
-        let captured_targets = self.captured_targets_for_pointer(pointer);
-        if input_pipeline_debug_enabled() && !captured_targets.is_empty() {
-            let node_ids: Vec<_> = captured_targets
-                .iter()
-                .map(|target| target.node_id())
-                .collect();
-            eprintln!(
-                "[CRANPOSE_INPUT_DEBUG] resolve_gesture_targets pointer={:?} using captured targets {:?}",
-                pointer, node_ids
-            );
-        }
-        captured_targets
+        self.resolve_hit_path(pointer)
     }
 
     pub fn new(mut renderer: R, root_key: Key, content: impl FnMut() + 'static) -> Self {
@@ -195,7 +164,6 @@ where
             is_dirty: true,
             buttons_pressed: PointerButtons::NONE,
             hit_path_tracker: HitPathTracker::new(),
-            captured_targets: HashMap::new(),
             hovered_nodes: Vec::new(),
             #[cfg(all(
                 not(target_arch = "wasm32"),
@@ -269,7 +237,7 @@ where
         {
             return true;
         }
-        self.runtime.take_frame_request() || self.composition.should_render()
+        self.runtime.has_frame_request() || self.composition.should_render()
     }
 
     /// Returns true if the shell needs to redraw (dirty flag, layout dirty, active animations).
@@ -300,7 +268,7 @@ where
 
     /// Returns true if there are active animations or pending recompositions.
     pub fn has_active_animations(&self) -> bool {
-        self.runtime.take_frame_request() || self.composition.should_render()
+        self.runtime.has_frame_request() || self.composition.should_render()
     }
 
     /// Returns the next scheduled event time for cursor blink.
@@ -319,7 +287,7 @@ where
         &self,
         pointer: PointerId,
     ) -> Vec<<<R as Renderer>::Scene as RenderScene>::HitTarget> {
-        let Some(node_ids) = self.hit_path_tracker.get_path(pointer) else {
+        let Some(node_ids) = self.hit_path_tracker.dispatch_order(pointer) else {
             return Vec::new();
         };
 
@@ -344,7 +312,17 @@ where
         I: IntoIterator<Item = <<R as Renderer>::Scene as RenderScene>::HitTarget>,
     {
         for target in targets {
+            let node_id = target.node_id();
             target.dispatch(event.clone());
+            if input_pipeline_debug_enabled() {
+                eprintln!(
+                    "[CRANPOSE_INPUT_DEBUG] dispatch {:?} node={} consumed={} stop_on_consume={}",
+                    event.kind,
+                    node_id,
+                    event.is_consumed(),
+                    stop_on_consume,
+                );
+            }
             if stop_on_consume && event.is_consumed() {
                 break;
             }
@@ -460,7 +438,7 @@ where
                     let event =
                         PointerEvent::new(PointerEventKind::Move, Point { x, y }, Point { x, y })
                             .with_buttons(self.buttons_pressed);
-                    self.dispatch_targets(targets, event, true);
+                    self.dispatch_targets(targets, event, false);
                     return true;
                 }
 
@@ -538,25 +516,9 @@ where
         let hits = self.renderer.scene().hit_test(self.cursor.0, self.cursor.1);
 
         // Cache NodeIds for this pointer
-        let mut node_ids = Vec::new();
-        let mut seen = HashSet::new();
-        for hit in &hits {
-            for node_id in hit.capture_path() {
-                if seen.insert(node_id) {
-                    node_ids.push(node_id);
-                }
-            }
-        }
+        let capture_paths = hits.iter().map(|hit| hit.capture_path()).collect();
         self.hit_path_tracker
-            .add_hit_path(PointerId::PRIMARY, node_ids);
-        if hits.is_empty() {
-            self.captured_targets.remove(&PointerId::PRIMARY);
-        } else {
-            self.captured_targets.insert(
-                PointerId::PRIMARY,
-                self.resolve_hit_path(PointerId::PRIMARY),
-            );
-        }
+            .add_hit_path(PointerId::PRIMARY, capture_paths);
         if input_pipeline_debug_enabled() {
             eprintln!(
                 "[CRANPOSE_INPUT_DEBUG] pointer_pressed_inner cached_hit_path={:?}",
@@ -608,7 +570,6 @@ where
 
         // Always remove the path, even if targets is empty (node may have been removed)
         self.hit_path_tracker.remove_path(PointerId::PRIMARY);
-        self.captured_targets.remove(&PointerId::PRIMARY);
 
         if !targets.is_empty() {
             let event = PointerEvent::new(
@@ -624,7 +585,7 @@ where
             )
             .with_buttons(corrected_buttons);
 
-            self.dispatch_targets(targets, event, true);
+            self.dispatch_targets(targets, event, false);
             true
         } else {
             false
@@ -701,7 +662,6 @@ where
 
         // Clear tracker and button state
         self.hit_path_tracker.clear();
-        self.captured_targets.clear();
         self.buttons_pressed = PointerButtons::NONE;
 
         if !targets.is_empty() {

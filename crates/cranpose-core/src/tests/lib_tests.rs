@@ -3491,7 +3491,7 @@ fn snapshot_state_global_write_then_read() {
 }
 
 #[test]
-fn snapshot_state_global_equivalent_write_notifies_apply_observers() {
+fn snapshot_state_global_equivalent_write_preserves_mutation_policy() {
     let _guard = reset_snapshot_runtime();
     let state = SnapshotMutableState::new_in_arc(0, Arc::new(SumPolicy));
     let notifications = Rc::new(RefCell::new(Vec::new()));
@@ -3508,12 +3508,8 @@ fn snapshot_state_global_equivalent_write_notifies_apply_observers() {
     let notifications = notifications.borrow();
     assert_eq!(
         notifications.len(),
-        1,
-        "global equivalent writes must still notify apply observers"
-    );
-    assert_eq!(
-        notifications[0].0, 1,
-        "the equivalent global write must report the modified state object"
+        0,
+        "global equivalent writes must not notify apply observers"
     );
 }
 
