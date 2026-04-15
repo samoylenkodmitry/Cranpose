@@ -1,6 +1,7 @@
 use super::*;
 use crate::layout::policies::LeafMeasurePolicy;
 use crate::modifier::{Modifier, Size};
+use crate::subcompose_layout::SubcomposeLayoutScope;
 use cranpose_core::{Applier, ConcreteApplierHost, MemoryApplier, Node};
 use cranpose_ui_layout::{MeasurePolicy, MeasureResult, Placement};
 use std::{cell::RefCell, rc::Rc};
@@ -861,6 +862,81 @@ fn tree_needs_layout_api() -> Result<(), NodeError> {
         tree_needs_layout(&mut applier as &mut dyn Applier, root_id)?,
         "Tree with dirty child should need layout"
     );
+
+    Ok(())
+}
+
+#[test]
+fn tree_needs_layout_supports_subcompose_root_nodes() -> Result<(), NodeError> {
+    use super::tree_needs_layout;
+    use crate::subcompose_layout::{MeasurePolicy, SubcomposeLayoutNode};
+
+    let mut applier = MemoryApplier::new();
+    let policy: Rc<MeasurePolicy> =
+        Rc::new(|scope, _constraints| scope.layout(0.0, 0.0, Vec::new()));
+    let node_id = applier.create(Box::new(SubcomposeLayoutNode::new(
+        Modifier::empty(),
+        Rc::clone(&policy),
+    )));
+
+    assert!(tree_needs_layout(
+        &mut applier as &mut dyn Applier,
+        node_id
+    )?);
+
+    applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
+        node.clear_needs_measure_for_tests();
+        node.clear_needs_layout_for_tests();
+    })?;
+    assert!(!tree_needs_layout(
+        &mut applier as &mut dyn Applier,
+        node_id
+    )?);
+
+    applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
+        node.mark_needs_layout();
+    })?;
+    assert!(tree_needs_layout(
+        &mut applier as &mut dyn Applier,
+        node_id
+    )?);
+
+    Ok(())
+}
+
+#[test]
+fn tree_needs_semantics_supports_subcompose_root_nodes() -> Result<(), NodeError> {
+    use super::tree_needs_semantics;
+    use crate::subcompose_layout::{MeasurePolicy, SubcomposeLayoutNode};
+
+    let mut applier = MemoryApplier::new();
+    let policy: Rc<MeasurePolicy> =
+        Rc::new(|scope, _constraints| scope.layout(0.0, 0.0, Vec::new()));
+    let node_id = applier.create(Box::new(SubcomposeLayoutNode::new(
+        Modifier::empty(),
+        Rc::clone(&policy),
+    )));
+
+    assert!(tree_needs_semantics(
+        &mut applier as &mut dyn Applier,
+        node_id
+    )?);
+
+    applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
+        node.clear_needs_semantics_for_tests();
+    })?;
+    assert!(!tree_needs_semantics(
+        &mut applier as &mut dyn Applier,
+        node_id
+    )?);
+
+    applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
+        node.mark_needs_semantics();
+    })?;
+    assert!(tree_needs_semantics(
+        &mut applier as &mut dyn Applier,
+        node_id
+    )?);
 
     Ok(())
 }

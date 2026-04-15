@@ -840,6 +840,32 @@ fn ime_delete_surrounding_marks_dirty() {
 }
 
 #[test]
+fn pending_layout_request_skips_clean_tree_without_forcing_measure() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, || {
+        Text(
+            "steady".to_string(),
+            Modifier::empty(),
+            TextStyle::default(),
+        );
+    });
+
+    shell.scene_dirty = false;
+    shell.layout_requested = true;
+    shell.force_layout_pass = false;
+
+    shell.run_layout_phase();
+
+    assert!(
+        !shell.scene_dirty,
+        "clean trees should not trigger a fresh layout pass when the request is not forced",
+    );
+    assert!(!shell.layout_requested);
+    assert!(!shell.force_layout_pass);
+}
+
+#[test]
 fn pointer_scrolled_dispatches_to_hovered_targets_and_respects_consumption() {
     let _guard = test_guard();
     let consumed_events = Rc::new(RefCell::new(Vec::new()));

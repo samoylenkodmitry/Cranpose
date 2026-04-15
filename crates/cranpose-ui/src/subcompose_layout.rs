@@ -195,12 +195,19 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
         // the virtual subtree instead of deleting it after subcomposition.
         self.composer.record_subcompose_child(virtual_node_id);
 
-        // Manually link parent
+        // Keep both the retained virtual-node clone and the applier copy wired to the
+        // live subcompose root so bubbling can cross the virtual slot boundary.
         if let Some(v_node) = inner.virtual_nodes.get(&virtual_node_id) {
             v_node.set_parent(self.root_id);
         }
 
         drop(inner);
+
+        let _ = self
+            .composer
+            .with_node_mut::<LayoutNode, _>(virtual_node_id, |node| {
+                node.set_parent(self.root_id);
+            });
 
         // CRITICAL FIX: Clear children of reused virtual nodes BEFORE subcomposing new content.
         // Without this, old children remain attached when the node is reused for different items,
@@ -594,6 +601,16 @@ impl SubcomposeLayoutNode {
         self.needs_measure.get()
     }
 
+    #[cfg(test)]
+    pub(crate) fn clear_needs_measure_for_tests(&self) {
+        self.needs_measure.set(false);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn clear_needs_layout_for_tests(&self) {
+        self.needs_layout.set(false);
+    }
+
     /// Mark this node as needing semantics recomputation.
     pub fn mark_needs_semantics(&self) {
         self.needs_semantics.set(true);
@@ -602,6 +619,11 @@ impl SubcomposeLayoutNode {
     /// Returns true when semantics need to be recomputed.
     pub fn needs_semantics_flag(&self) -> bool {
         self.needs_semantics.get()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn clear_needs_semantics_for_tests(&self) {
+        self.needs_semantics.set(false);
     }
 
     /// Returns true when this node requested a redraw since the last render pass.

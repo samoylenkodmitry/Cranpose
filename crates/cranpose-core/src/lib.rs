@@ -30,18 +30,11 @@ pub use owned::Owned;
 pub use platform::{Clock, RuntimeScheduler};
 #[doc(hidden)]
 pub use runtime::{
-    current_runtime_handle, debug_runtime_thread_local_stats, schedule_frame, schedule_node_update,
-    DefaultScheduler, Runtime, RuntimeDebugStats, RuntimeHandle, RuntimeThreadLocalDebugStats,
-    StateArenaDebugStats, StateId, TaskHandle,
+    current_runtime_handle, schedule_frame, schedule_node_update, DefaultScheduler, Runtime,
+    RuntimeHandle, StateId, TaskHandle,
 };
 #[doc(hidden)]
-pub use snapshot_pinning::{debug_snapshot_pinning_stats, SnapshotPinningDebugStats};
-#[doc(hidden)]
-pub use snapshot_state_observer::{SnapshotStateObserver, SnapshotStateObserverDebugStats};
-#[doc(hidden)]
-pub use snapshot_v2::{debug_snapshot_v2_stats, SnapshotV2DebugStats};
-#[doc(hidden)]
-pub use state::{debug_snapshot_state_thread_local_stats, SnapshotStateThreadLocalDebugStats};
+pub use snapshot_state_observer::SnapshotStateObserver;
 
 /// Runs the provided closure inside a mutable snapshot and applies the result.
 ///
@@ -162,6 +155,10 @@ fn compose_debug_enabled() -> bool {
 
 #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
 fn debug_scope_tracking_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(enabled) = DEBUG_SCOPE_TRACKING_OVERRIDE.with(Cell::get) {
+        return enabled;
+    }
     use std::sync::OnceLock;
     static DEBUG_SCOPE_TRACKING: OnceLock<bool> = OnceLock::new();
     *DEBUG_SCOPE_TRACKING.get_or_init(|| {
@@ -226,6 +223,8 @@ thread_local! {
     #[cfg(debug_assertions)]
     static DEBUG_SCOPE_INVALIDATION_SOURCES: RefCell<HashMap<usize, HashSet<String>>> =
         RefCell::new(HashMap::default());
+    #[cfg(all(test, debug_assertions))]
+    static DEBUG_SCOPE_TRACKING_OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
 }
 
 static NEXT_SCOPE_ID: AtomicUsize = AtomicUsize::new(1);
@@ -326,6 +325,12 @@ impl PartialEq for RecomposeScope {
 }
 
 impl Eq for RecomposeScope {}
+
+impl Hash for RecomposeScope {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id().hash(state);
+    }
+}
 
 impl RecomposeScope {
     fn new(runtime: RuntimeHandle) -> Self {
@@ -6300,7 +6305,7 @@ impl<A: Applier + 'static> Composition<A> {
         self.slots.borrow().debug_value_type_counts(limit)
     }
 
-    pub fn debug_observer_stats(&self) -> SnapshotStateObserverDebugStats {
+    pub fn debug_observer_stats(&self) -> snapshot_state_observer::SnapshotStateObserverDebugStats {
         self.observer.debug_stats()
     }
 
@@ -6525,6 +6530,11 @@ pub fn debug_scope_invalidation_sources(scope_id: usize) -> Vec<String> {
     }
     #[allow(unreachable_code)]
     Vec::new()
+}
+
+#[cfg(test)]
+pub(crate) fn set_debug_scope_tracking_override_for_tests(enabled: Option<bool>) {
+    DEBUG_SCOPE_TRACKING_OVERRIDE.with(|override_flag| override_flag.set(enabled));
 }
 
 #[doc(hidden)]

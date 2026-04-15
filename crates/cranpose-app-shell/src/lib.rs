@@ -14,10 +14,8 @@ use std::sync::OnceLock;
 use web_time::Instant;
 
 use cranpose_core::{
-    debug_recompose_scope_registry_stats, debug_snapshot_pinning_stats,
-    debug_snapshot_state_thread_local_stats, debug_snapshot_v2_stats, enter_event_handler,
-    exit_event_handler, location_key, run_in_mutable_snapshot, Applier, Composition, Key,
-    MemoryApplier, MemoryApplierDebugStats, NodeError, NodeId, SlotId,
+    enter_event_handler, exit_event_handler, location_key, run_in_mutable_snapshot, Applier,
+    Composition, Key, MemoryApplier, NodeError, NodeId,
 };
 use cranpose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEventKind};
 use cranpose_render_common::{HitTestTarget, RenderScene, Renderer};
@@ -37,6 +35,20 @@ use std::collections::HashSet;
 
 // Re-export key event types for use by cranpose
 pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType, Modifiers};
+
+#[cfg(any(test, feature = "test-support"))]
+use cranpose_core::{
+    debug_recompose_scope_registry_stats, slot_table::SlotTableDebugStats, MemoryApplierDebugStats,
+    RecomposeScopeRegistryDebugStats,
+};
+#[cfg(any(test, feature = "test-support"))]
+use cranpose_core::{
+    runtime::{RuntimeDebugStats, StateArenaDebugStats},
+    snapshot_pinning::{debug_snapshot_pinning_stats, SnapshotPinningDebugStats},
+    snapshot_state_observer::SnapshotStateObserverDebugStats,
+    snapshot_v2::{debug_snapshot_v2_stats, SnapshotV2DebugStats},
+    CompositionPassDebugStats, SlotId,
+};
 
 #[derive(Copy, Clone)]
 enum DispatchInvalidationKind {
@@ -60,7 +72,8 @@ where
     layout_tree: Option<LayoutTree>,
     semantics_tree: Option<SemanticsTree>,
     semantics_enabled: bool,
-    layout_dirty: bool,
+    layout_requested: bool,
+    force_layout_pass: bool,
     scene_dirty: bool,
     is_dirty: bool,
     /// Tracks which mouse buttons are currently pressed
@@ -100,6 +113,7 @@ pub struct DevOptions {
     pub layout_timing: bool,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug)]
 pub struct RuntimeLeakDebugStats {
@@ -107,15 +121,14 @@ pub struct RuntimeLeakDebugStats {
     pub live_node_heap_bytes: usize,
     pub recycled_node_heap_bytes: usize,
     pub slot_table_heap_bytes: usize,
-    pub pass_stats: cranpose_core::CompositionPassDebugStats,
-    pub slot_stats: cranpose_core::SlotTableDebugStats,
-    pub observer_stats: cranpose_core::SnapshotStateObserverDebugStats,
-    pub runtime_stats: cranpose_core::RuntimeDebugStats,
-    pub state_arena_stats: cranpose_core::StateArenaDebugStats,
-    pub recompose_scope_stats: cranpose_core::RecomposeScopeRegistryDebugStats,
-    pub snapshot_v2_stats: cranpose_core::SnapshotV2DebugStats,
-    pub snapshot_pinning_stats: cranpose_core::SnapshotPinningDebugStats,
-    pub snapshot_state_stats: cranpose_core::SnapshotStateThreadLocalDebugStats,
+    pub pass_stats: CompositionPassDebugStats,
+    pub slot_stats: SlotTableDebugStats,
+    pub observer_stats: SnapshotStateObserverDebugStats,
+    pub runtime_stats: RuntimeDebugStats,
+    pub state_arena_stats: StateArenaDebugStats,
+    pub recompose_scope_stats: RecomposeScopeRegistryDebugStats,
+    pub snapshot_v2_stats: SnapshotV2DebugStats,
+    pub snapshot_pinning_stats: SnapshotPinningDebugStats,
 }
 
 fn input_pipeline_debug_enabled() -> bool {
@@ -159,7 +172,8 @@ where
             layout_tree: None,
             semantics_tree: None,
             semantics_enabled: false,
-            layout_dirty: true,
+            layout_requested: true,
+            force_layout_pass: true,
             scene_dirty: true,
             is_dirty: true,
             buttons_pressed: PointerButtons::NONE,
@@ -192,7 +206,7 @@ where
 
     pub fn set_viewport(&mut self, width: f32, height: f32) {
         self.viewport = (width, height);
-        self.layout_dirty = true;
+        self.request_forced_layout_pass();
         self.mark_dirty();
         self.process_frame();
     }
@@ -228,7 +242,7 @@ where
     }
 
     pub fn should_render(&self) -> bool {
-        if self.layout_dirty
+        if self.layout_requested
             || self.scene_dirty
             || peek_render_invalidation()
             || peek_pointer_invalidation()
@@ -244,7 +258,7 @@ where
     /// Note: Cursor blink is now timer-based and uses WaitUntil scheduling, not continuous redraw.
     pub fn needs_redraw(&self) -> bool {
         if self.is_dirty
-            || self.layout_dirty
+            || self.layout_requested
             || self.scene_dirty
             || peek_render_invalidation()
             || peek_pointer_invalidation()
@@ -264,6 +278,15 @@ where
     /// Marks the shell as dirty, indicating a redraw is needed.
     pub fn mark_dirty(&mut self) {
         self.is_dirty = true;
+    }
+
+    fn request_layout_pass(&mut self) {
+        self.layout_requested = true;
+    }
+
+    fn request_forced_layout_pass(&mut self) {
+        self.layout_requested = true;
+        self.force_layout_pass = true;
     }
 
     /// Returns true if there are active animations or pending recompositions.
@@ -342,8 +365,8 @@ where
             let should_render = self.composition.should_render();
             if input_pipeline_debug_enabled() && should_render {
                 eprintln!(
-                    "[CRANPOSE_INPUT_DEBUG] update begin: should_render=true layout_dirty={} scene_dirty={} is_dirty={}",
-                    self.layout_dirty, self.scene_dirty, self.is_dirty
+                    "[CRANPOSE_INPUT_DEBUG] update begin: should_render=true layout_requested={} scene_dirty={} is_dirty={}",
+                    self.layout_requested, self.scene_dirty, self.is_dirty
                 );
             }
             if should_render {
@@ -357,26 +380,7 @@ where
                         }
                         if changed {
                             fps_monitor::record_recomposition();
-                            self.layout_dirty = true;
-                            // Force root needs_measure since bubbling may fail for
-                            // subcomposition nodes with broken parent chains (node 226 issue)
-                            if let Some(root_id) = self.composition.root() {
-                                let mut applier = self.composition.applier_mut();
-                                match applier.with_node::<LayoutNode, _>(root_id, |node| {
-                                    node.mark_needs_measure();
-                                }) {
-                                    Ok(()) | Err(NodeError::Missing { .. }) => {}
-                                    Err(NodeError::TypeMismatch { .. }) => {
-                                        let _ = applier.with_node::<SubcomposeLayoutNode, _>(
-                                            root_id,
-                                            |node| {
-                                                node.mark_needs_measure();
-                                            },
-                                        );
-                                    }
-                                    Err(_) => {}
-                                }
-                            }
+                            self.request_layout_pass();
                             request_render_invalidation();
                         }
                     }
@@ -384,12 +388,12 @@ where
                         // Node was removed (likely due to conditional render or tab switch)
                         // This is expected when scopes try to recompose after their nodes are gone
                         log::debug!("Recomposition skipped: node {} no longer exists", id);
-                        self.layout_dirty = true;
+                        self.request_layout_pass();
                         request_render_invalidation();
                     }
                     Err(err) => {
                         log::error!("recomposition failed: {err}");
-                        self.layout_dirty = true;
+                        self.request_layout_pass();
                         request_render_invalidation();
                     }
                 }
@@ -399,7 +403,7 @@ where
                     log::error!("root render fallback failed: {err}");
                 } else {
                     fps_monitor::record_recomposition();
-                    self.layout_dirty = true;
+                    self.request_layout_pass();
                     request_render_invalidation();
                 }
             }
@@ -752,7 +756,7 @@ where
                         if let (Some(text), Some(clipboard)) = (text, self.clipboard.as_mut()) {
                             let _ = clipboard.set_text(&text);
                             self.mark_dirty();
-                            self.layout_dirty = true;
+                            self.request_layout_pass();
                             return true;
                         }
                     }
@@ -787,9 +791,9 @@ where
         .unwrap_or(false);
 
         if handled {
-            // Mark both dirty (for redraw) and layout_dirty (to rebuild semantics tree)
+            // Mark both dirty (for redraw) and request a layout pass to rebuild semantics.
             self.mark_dirty();
-            self.layout_dirty = true;
+            self.request_layout_pass();
         }
 
         handled
@@ -808,7 +812,7 @@ where
 
         if handled {
             self.mark_dirty();
-            self.layout_dirty = true;
+            self.request_layout_pass();
         }
 
         handled
@@ -831,7 +835,7 @@ where
 
         if text.is_some() {
             self.mark_dirty();
-            self.layout_dirty = true;
+            self.request_layout_pass();
         }
 
         text
@@ -908,7 +912,7 @@ where
         if handled {
             self.mark_dirty();
             // IME composition changes the visible text, needs layout update
-            self.layout_dirty = true;
+            self.request_layout_pass();
         }
 
         handled
@@ -924,7 +928,7 @@ where
 
         if handled {
             self.mark_dirty();
-            self.layout_dirty = true;
+            self.request_layout_pass();
         }
 
         handled
@@ -973,6 +977,7 @@ where
             .map(layout_box_bounds)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn debug_runtime_leak_stats(&mut self) -> RuntimeLeakDebugStats {
         let runtime = self.composition.runtime_handle();
@@ -997,25 +1002,28 @@ where
             recompose_scope_stats: debug_recompose_scope_registry_stats(),
             snapshot_v2_stats: debug_snapshot_v2_stats(),
             snapshot_pinning_stats: debug_snapshot_pinning_stats(),
-            snapshot_state_stats: debug_snapshot_state_thread_local_stats(),
         }
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn debug_slot_table_groups(&self) -> Vec<(usize, Key, Option<usize>, usize)> {
         self.composition.debug_dump_slot_table_groups()
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn debug_all_slots(&self) -> Vec<(usize, String)> {
         self.composition.debug_dump_all_slots()
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn runtime_handle(&self) -> cranpose_core::RuntimeHandle {
         self.composition.runtime_handle()
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn debug_live_subcompose_scope_ids(&mut self) -> Vec<(NodeId, Vec<(u64, Vec<usize>)>)> {
         fn collect_node_ids(layout: &LayoutBox, out: &mut Vec<NodeId>) {
@@ -1042,6 +1050,7 @@ where
         result
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn debug_subcompose_slot_table(
         &mut self,
@@ -1057,6 +1066,7 @@ where
             .flatten()
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn debug_subcompose_slot_groups(
         &mut self,
@@ -1078,7 +1088,7 @@ where
         }
         self.semantics_enabled = enabled;
         if enabled {
-            self.layout_dirty = true;
+            self.request_forced_layout_pass();
             self.mark_dirty();
         } else {
             self.semantics_tree = None;
@@ -1106,43 +1116,7 @@ where
     }
 
     fn run_layout_phase(&mut self) {
-        // ═══════════════════════════════════════════════════════════════════════════════
-        // SCOPED LAYOUT REPASSES (preferred path for local changes)
-        // ═══════════════════════════════════════════════════════════════════════════════
-        // Process node-specific layout invalidations (e.g., from scroll).
-        // This bubbles dirty flags up from specific nodes WITHOUT invalidating all caches.
-        // Result: O(subtree) remeasurement, not O(app).
-        let repass_nodes = cranpose_ui::take_layout_repass_nodes();
-        let had_repass_nodes = !repass_nodes.is_empty();
-        if had_repass_nodes {
-            let root = self.composition.root();
-            let mut applier = self.composition.applier_mut();
-            for node_id in repass_nodes {
-                // Bubble measure dirty flags up to root so cache epoch increments.
-                // This uses the centralized function in cranpose-core.
-                cranpose_core::bubble_measure_dirty(
-                    &mut *applier as &mut dyn cranpose_core::Applier,
-                    node_id,
-                );
-                cranpose_core::bubble_layout_dirty(
-                    &mut *applier as &mut dyn cranpose_core::Applier,
-                    node_id,
-                );
-            }
-
-            // IMPORTANT: Also mark the actual root as needing measure.
-            // The bubble may not reach root if intermediate nodes (e.g., subcomposed slot roots
-            // from SubcomposeLayout) have broken parent chains. This ensures the epoch
-            // is incremented so SubcomposeLayout re-measures its items.
-            if let Some(root) = root {
-                if let Ok(node) = applier.get_mut(root) {
-                    node.mark_needs_measure();
-                }
-            }
-
-            drop(applier);
-            self.layout_dirty = true;
-        }
+        let has_scoped_repasses = cranpose_ui::has_pending_layout_repasses();
 
         // ═══════════════════════════════════════════════════════════════════════════════
         // GLOBAL LAYOUT INVALIDATION (rare fallback for true global events)
@@ -1163,13 +1137,7 @@ where
         // someone is abusing request_layout_invalidation() - investigate!
         let invalidation_requested = take_layout_invalidation();
 
-        // Only do global cache invalidation if:
-        // 1. Invalidation was requested (flag was set)
-        // 2. AND there were no scoped repass nodes (which handle layout more efficiently)
-        //
-        // If scoped repasses were handled above, they've already marked the tree dirty
-        // and bubbled up the hierarchy. We don't need to also invalidate all caches.
-        if invalidation_requested && !had_repass_nodes {
+        if invalidation_requested && !has_scoped_repasses {
             // Invalidate all caches (O(app size) - expensive!)
             // This is internal-only API, only accessible via the internal path
             cranpose_ui::layout::invalidate_all_layout_caches();
@@ -1192,15 +1160,12 @@ where
                     Err(_) => {}
                 }
             }
-            self.layout_dirty = true;
-        } else if invalidation_requested {
-            // Invalidation was requested but scoped repasses already handled it.
-            // Just make sure layout_dirty is set.
-            self.layout_dirty = true;
+            self.request_forced_layout_pass();
+        } else if invalidation_requested || has_scoped_repasses {
+            self.request_layout_pass();
         }
 
-        // Early exit if layout is not needed (viewport didn't change, etc.)
-        if !self.layout_dirty {
+        if !self.layout_requested {
             return;
         }
 
@@ -1213,8 +1178,6 @@ where
             let mut applier = self.composition.applier_mut();
             applier.set_runtime_handle(handle);
 
-            // Selective measure optimization: skip layout if tree is clean (O(1) check)
-            // UNLESS layout_dirty was explicitly set (e.g., from keyboard input)
             let tree_needs_layout_check = cranpose_ui::tree_needs_layout(&mut *applier, root)
                 .unwrap_or_else(|err| {
                     log::warn!(
@@ -1225,21 +1188,30 @@ where
                     true // Assume dirty on error
                 });
 
-            // Force layout if either:
-            // 1. Tree nodes are marked dirty (tree_needs_layout_check = true)
-            // 2. layout_dirty was explicitly set (e.g., from keyboard/external events)
-            let needs_layout = tree_needs_layout_check || self.layout_dirty;
+            let tree_needs_semantics_check = self.semantics_enabled
+                && cranpose_ui::tree_needs_semantics(&mut *applier, root).unwrap_or_else(|err| {
+                    log::warn!(
+                        "Cannot check semantics dirty status for root #{}: {}",
+                        root,
+                        err
+                    );
+                    true
+                });
+            let needs_layout = self.force_layout_pass
+                || has_scoped_repasses
+                || tree_needs_layout_check
+                || tree_needs_semantics_check;
 
             if !needs_layout {
-                // Tree is clean and no external dirtying - skip layout computation
                 log::trace!("Skipping layout: tree is clean");
-                self.layout_dirty = false;
+                self.layout_requested = false;
+                self.force_layout_pass = false;
                 applier.clear_runtime_handle();
                 return;
             }
 
-            // Tree needs layout - compute it
-            self.layout_dirty = false;
+            self.layout_requested = false;
+            self.force_layout_pass = false;
 
             // Ensure slots exist and borrow mutably (handled inside measure_layout via MemoryApplier)
             match cranpose_ui::measure_layout_with_options(
@@ -1269,7 +1241,8 @@ where
             self.layout_tree = None;
             self.semantics_tree = None;
             self.scene_dirty = true;
-            self.layout_dirty = false;
+            self.layout_requested = false;
+            self.force_layout_pass = false;
         }
     }
 

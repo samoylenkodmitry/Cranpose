@@ -30,7 +30,8 @@ pub use cranpose_core::{mutableStateOf, remember, rememberUpdatedState, useState
 
 #[doc(hidden)]
 pub use cranpose_core::{
-    location_key, with_current_composer, CallbackHolder, Composer, ParamState, ReturnSlot,
+    debug_label_current_scope, location_key, with_current_composer, CallbackHolder, Composer,
+    ParamState, ReturnSlot,
 };
 
 #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]

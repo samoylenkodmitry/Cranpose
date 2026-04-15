@@ -1,6 +1,6 @@
 use cranpose_core::{
-    debug_recompose_scope_registry_stats, debug_snapshot_pinning_stats,
-    debug_snapshot_state_thread_local_stats, debug_snapshot_v2_stats, MutableState,
+    debug_recompose_scope_registry_stats, snapshot_pinning::debug_snapshot_pinning_stats,
+    snapshot_v2::debug_snapshot_v2_stats, MutableState,
 };
 use cranpose_testing::ComposeTestRule;
 use desktop_app::app::{
@@ -57,14 +57,13 @@ fn wait_for_recursive_depth_registration(rule: &mut ComposeTestRule) {
 #[derive(Clone, Copy, Debug)]
 struct RuntimeLeakDebugStats {
     pass_stats: cranpose_core::CompositionPassDebugStats,
-    slot_stats: cranpose_core::SlotTableDebugStats,
-    observer_stats: cranpose_core::SnapshotStateObserverDebugStats,
-    runtime_stats: cranpose_core::RuntimeDebugStats,
-    state_arena_stats: cranpose_core::StateArenaDebugStats,
+    slot_stats: cranpose_core::slot_table::SlotTableDebugStats,
+    observer_stats: cranpose_core::snapshot_state_observer::SnapshotStateObserverDebugStats,
+    runtime_stats: cranpose_core::runtime::RuntimeDebugStats,
+    state_arena_stats: cranpose_core::runtime::StateArenaDebugStats,
     recompose_scope_stats: cranpose_core::RecomposeScopeRegistryDebugStats,
-    snapshot_v2_stats: cranpose_core::SnapshotV2DebugStats,
-    snapshot_pinning_stats: cranpose_core::SnapshotPinningDebugStats,
-    snapshot_state_stats: cranpose_core::SnapshotStateThreadLocalDebugStats,
+    snapshot_v2_stats: cranpose_core::snapshot_v2::SnapshotV2DebugStats,
+    snapshot_pinning_stats: cranpose_core::snapshot_pinning::SnapshotPinningDebugStats,
 }
 
 fn capture_runtime_debug_stats(rule: &mut ComposeTestRule) -> RuntimeLeakDebugStats {
@@ -78,7 +77,6 @@ fn capture_runtime_debug_stats(rule: &mut ComposeTestRule) -> RuntimeLeakDebugSt
         recompose_scope_stats: debug_recompose_scope_registry_stats(),
         snapshot_v2_stats: debug_snapshot_v2_stats(),
         snapshot_pinning_stats: debug_snapshot_pinning_stats(),
-        snapshot_state_stats: debug_snapshot_state_thread_local_stats(),
     }
 }
 

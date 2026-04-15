@@ -52,9 +52,10 @@ pub use layout::{
         Alignment, Arrangement, HorizontalAlignment, LinearArrangement, Measurable, Placeable,
         VerticalAlignment,
     },
-    measure_layout, measure_layout_with_options, tree_needs_layout, LayoutBox, LayoutEngine,
-    LayoutMeasurements, LayoutNodeData, LayoutNodeKind, LayoutTree, MeasureLayoutOptions,
-    SemanticsAction, SemanticsCallback, SemanticsNode, SemanticsRole, SemanticsTree,
+    measure_layout, measure_layout_with_options, tree_needs_layout, tree_needs_semantics,
+    LayoutBox, LayoutEngine, LayoutMeasurements, LayoutNodeData, LayoutNodeKind, LayoutTree,
+    MeasureLayoutOptions, SemanticsAction, SemanticsCallback, SemanticsNode, SemanticsRole,
+    SemanticsTree,
 };
 pub use modifier::{
     collect_modifier_slices, collect_semantics_from_modifier, collect_slices_from_modifier,

@@ -505,16 +505,16 @@ impl Default for MeasureLayoutOptions {
 ///
 /// Returns Result to force caller to handle errors explicitly. No more unwrap_or(true) safety net.
 pub fn tree_needs_layout(applier: &mut dyn Applier, root: NodeId) -> Result<bool, NodeError> {
-    // Just check root - bubbling ensures it's dirty if any descendant is dirty
-    let node = applier.get_mut(root)?;
-    let layout_node =
-        node.as_any_mut()
-            .downcast_mut::<LayoutNode>()
-            .ok_or(NodeError::TypeMismatch {
-                id: root,
-                expected: std::any::type_name::<LayoutNode>(),
-            })?;
-    Ok(layout_node.needs_layout())
+    Ok(applier.get_mut(root)?.needs_layout())
+}
+
+/// Check if the root semantics snapshot is dirty.
+///
+/// Semantics invalidations bubble to the root the same way layout invalidations do,
+/// so a root check is sufficient to determine whether the next layout pass needs to
+/// rebuild semantic data even when geometry is otherwise unchanged.
+pub fn tree_needs_semantics(applier: &mut dyn Applier, root: NodeId) -> Result<bool, NodeError> {
+    Ok(applier.get_mut(root)?.needs_semantics())
 }
 
 /// Test helper: bubbles layout dirty flag to root.

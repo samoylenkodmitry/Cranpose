@@ -226,6 +226,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     }
 
+    let scope_label_ident = func.sig.ident.clone();
     let original_block = func.block.clone();
     let helper_block = original_block.clone();
     let recranpose_block = original_block.clone();
@@ -473,6 +474,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
 
         let helper_body = if returns_unit {
             quote! {
+                #core_path::debug_label_current_scope(stringify!(#scope_label_ident));
                 let __current_scope = __composer
                     .current_recranpose_scope()
                     .expect("missing recompose scope");
@@ -488,6 +490,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         } else {
             quote! {
+                #core_path::debug_label_current_scope(stringify!(#scope_label_ident));
                 let __current_scope = __composer
                     .current_recranpose_scope()
                     .expect("missing recompose scope");
@@ -604,6 +607,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         let wrapped = quote!({
             #core_path::with_current_composer(|__composer: &#core_path::Composer| {
                 __composer.with_group(#key_expr, |__scope: &#core_path::Composer| {
+                    #core_path::debug_label_current_scope(stringify!(#scope_label_ident));
                     #(#rebinds_for_no_skip)*
                     #original_block
                 })

@@ -5427,6 +5427,44 @@ fn debug_nested_component_slot_table_state() {
 }
 
 #[test]
+fn composable_macro_injects_scope_label() {
+    let _guard = reset_snapshot_runtime();
+    crate::set_debug_scope_tracking_override_for_tests(Some(true));
+    crate::DEBUG_SCOPE_LABELS.with(|labels| labels.borrow_mut().clear());
+
+    thread_local! {
+        static AUTO_SCOPE_ID: Cell<Option<usize>> = const { Cell::new(None) };
+    }
+
+    #[composable]
+    fn auto_labeled_leaf() {
+        with_current_composer(|composer| {
+            let scope = composer
+                .current_recranpose_scope()
+                .expect("auto-labeled scope should exist");
+            AUTO_SCOPE_ID.with(|slot| slot.set(Some(scope.id())));
+        });
+    }
+
+    let mut composition = Composition::new(MemoryApplier::new());
+    composition
+        .render(location_key(file!(), line!(), column!()), &mut || {
+            auto_labeled_leaf()
+        })
+        .expect("render auto-labeled composable");
+
+    let scope_id = AUTO_SCOPE_ID
+        .with(|slot| slot.get())
+        .expect("scope id should be captured");
+    assert_eq!(
+        crate::debug_scope_label(scope_id),
+        Some("auto_labeled_leaf")
+    );
+
+    crate::set_debug_scope_tracking_override_for_tests(None);
+}
+
+#[test]
 fn tab_switching_memory_slot_reuse() {
     // Verify that slots are properly reused and not leaked during tab switches
     let mut composition = Composition::new(MemoryApplier::new());

@@ -1073,37 +1073,29 @@ pub fn AsyncRuntimeTabContent(
                                     }),
                                 RowSpec::default(),
                                 move || {
-                                    // WORKAROUND: Use with_key to prevent slot truncation from destroying
-                                    // sibling component scopes when conditional rendering changes structure.
-                                    // TODO: Remove once proper "gaps" support is implemented in cranpose-core
-                                    cranpose_core::with_key(&(progress_value > 0.0), || {
-                                        if progress_value > 0.0 {
-                                            Row(
-                                                Modifier::empty()
-                                                    .fill_max_width_fraction(progress_value)
-                                                    .height(26.0)
-                                                    .then(Modifier::empty().rounded_corners(13.0))
-                                                    .semantics(
-                                                        |config: &mut SemanticsConfiguration| {
-                                                            config.content_description = Some(
-                                                                "AsyncProgressBarFill".to_string(),
-                                                            );
-                                                        },
-                                                    )
-                                                    .draw_behind(|scope| {
-                                                        scope.draw_round_rect(
-                                                            Brush::linear_gradient(vec![
-                                                                Color(0.25, 0.55, 0.95, 1.0),
-                                                                Color(0.15, 0.35, 0.80, 1.0),
-                                                            ]),
-                                                            CornerRadii::uniform(13.0),
-                                                        );
-                                                    }),
-                                                RowSpec::default(),
-                                                || {},
-                                            );
-                                        }
-                                    });
+                                    if progress_value > 0.0 {
+                                        Row(
+                                            Modifier::empty()
+                                                .fill_max_width_fraction(progress_value)
+                                                .height(26.0)
+                                                .then(Modifier::empty().rounded_corners(13.0))
+                                                .semantics(|config: &mut SemanticsConfiguration| {
+                                                    config.content_description =
+                                                        Some("AsyncProgressBarFill".to_string());
+                                                })
+                                                .draw_behind(|scope| {
+                                                    scope.draw_round_rect(
+                                                        Brush::linear_gradient(vec![
+                                                            Color(0.25, 0.55, 0.95, 1.0),
+                                                            Color(0.15, 0.35, 0.80, 1.0),
+                                                        ]),
+                                                        CornerRadii::uniform(13.0),
+                                                    );
+                                                }),
+                                            RowSpec::default(),
+                                            || {},
+                                        );
+                                    }
                                 },
                             );
                         }

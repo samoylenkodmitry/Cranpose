@@ -22,7 +22,7 @@ android =["cranpose-platform-android", "dep:android-activity", "dep:android_logg
 web = ["cranpose-platform-web", "dep:wasm-bindgen", "dep:web-sys"]
 renderer-pixels = ["cranpose-render-pixels", "dep:pixels"]
 renderer-wgpu = ["cranpose-render-wgpu", "dep:wgpu", "dep:pollster"]
-robot = [] # Enable robot testing support (cranpose-ui now always included)
+robot = ["cranpose-app-shell/test-support"] # Enable robot testing support (cranpose-ui now always included)
 
 [dependencies]
 cranpose-app-shell = { workspace = true }

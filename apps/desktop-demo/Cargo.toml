@@ -78,7 +78,7 @@ wasm-bindgen-futures = "0.4.64"
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 
 [dev-dependencies]
-cranpose-app-shell = { path = "../../crates/cranpose-app-shell" }
+cranpose-app-shell = { path = "../../crates/cranpose-app-shell", features = ["test-support"] }
 cranpose-macros = { path = "../../crates/cranpose-macros" }
 cranpose-render-common = { path = "../../crates/cranpose-render/common" }
 cranpose-render-wgpu = { path = "../../crates/cranpose-render/wgpu" }
