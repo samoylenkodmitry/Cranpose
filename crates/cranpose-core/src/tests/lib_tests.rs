@@ -140,7 +140,7 @@ fn cranpose_test_node<N: Node + 'static>(init: impl FnOnce() -> N) -> NodeId {
 }
 
 fn setup_composer(
-    slots: &mut SlotBackend,
+    slots: &mut SlotTable,
     applier: &mut MemoryApplier,
     handle: RuntimeHandle,
     root: Option<NodeId>,
@@ -166,7 +166,7 @@ fn setup_composer(
 }
 
 fn teardown_composer(
-    slots: &mut SlotBackend,
+    slots: &mut SlotTable,
     applier: &mut MemoryApplier,
     slots_host: Rc<SlotsHost>,
     applier_host: Rc<ConcreteApplierHost<MemoryApplier>>,
@@ -183,7 +183,7 @@ fn teardown_composer(
 #[should_panic(expected = "subcompose() may only be called during measure or layout")]
 fn subcompose_panics_outside_measure_or_layout() {
     let (handle, _runtime) = runtime_handle();
-    let mut slots = SlotBackend::default();
+    let mut slots = SlotTable::default();
     let mut applier = MemoryApplier::new();
     let (composer, slots_host, applier_host) =
         setup_composer(&mut slots, &mut applier, handle, None);
@@ -196,7 +196,7 @@ fn subcompose_panics_outside_measure_or_layout() {
 #[test]
 fn subcompose_reuses_nodes_across_calls() {
     let (handle, _runtime) = runtime_handle();
-    let mut slots = SlotBackend::default();
+    let mut slots = SlotTable::default();
     let mut applier = MemoryApplier::new();
     let mut state = SubcomposeState::default();
     let first_id;
@@ -233,7 +233,7 @@ fn subcompose_reuses_nodes_across_calls() {
 #[test]
 fn apply_pending_commands_makes_subcomposed_nodes_available() {
     let (handle, _runtime) = runtime_handle();
-    let mut slots = SlotBackend::default();
+    let mut slots = SlotTable::default();
     let mut applier = MemoryApplier::new();
     let mut state = SubcomposeState::default();
     let mounted = Rc::new(Cell::new(0));
@@ -262,7 +262,7 @@ fn apply_pending_commands_makes_subcomposed_nodes_available() {
 #[test]
 fn with_slot_value_reads_and_updates() {
     let (handle, _runtime) = runtime_handle();
-    let mut slots = SlotBackend::default();
+    let mut slots = SlotTable::default();
     let mut applier = MemoryApplier::new();
     let (composer, slots_host, applier_host) =
         setup_composer(&mut slots, &mut applier, handle, None);
@@ -2031,7 +2031,7 @@ impl Node for UnmountTrackingNode {
 }
 
 fn apply_child_diff(
-    slots: &mut SlotBackend,
+    slots: &mut SlotTable,
     applier: &mut MemoryApplier,
     runtime: &Runtime,
     parent_id: NodeId,
@@ -2063,7 +2063,7 @@ fn apply_child_diff(
 
 #[test]
 fn reorder_keyed_children_emits_moves() {
-    let mut slots = SlotBackend::default();
+    let mut slots = SlotTable::default();
     let mut applier = MemoryApplier::new();
     let runtime = Runtime::new(Arc::new(TestScheduler));
     let parent_id = applier.create(Box::new(RecordingNode::default()));
@@ -2128,7 +2128,7 @@ fn reorder_keyed_children_emits_moves() {
 
 #[test]
 fn insert_and_remove_emit_expected_ops() {
-    let mut slots = SlotBackend::default();
+    let mut slots = SlotTable::default();
     let mut applier = MemoryApplier::new();
     let runtime = Runtime::new(Arc::new(TestScheduler));
     let parent_id = applier.create(Box::new(RecordingNode::default()));
@@ -2350,7 +2350,7 @@ fn memory_applier_compact_rehouses_live_nodes_after_large_majority_drop() {
 
 #[test]
 fn child_diff_handles_interleaved_remove_move_and_insert() {
-    let mut slots = SlotBackend::default();
+    let mut slots = SlotTable::default();
     let mut applier = MemoryApplier::new();
     let runtime = Runtime::new(Arc::new(TestScheduler));
     let parent_id = applier.create(Box::new(RecordingNode::default()));
@@ -5841,7 +5841,7 @@ fn test_composition() {
 #[test]
 fn emit_node_rejects_reuse_when_parent_did_not_own_child() {
     let (handle, _runtime) = runtime_handle();
-    let mut slots = SlotBackend::default();
+    let mut slots = SlotTable::default();
     let mut applier = MemoryApplier::new();
 
     // Create a parent and child node in the applier
@@ -5884,7 +5884,7 @@ fn emit_node_rejects_reuse_when_parent_did_not_own_child() {
 #[test]
 fn push_parent_uses_empty_previous_when_not_reused() {
     let (handle, _runtime) = runtime_handle();
-    let mut slots = SlotBackend::default();
+    let mut slots = SlotTable::default();
     let mut applier = MemoryApplier::new();
 
     let parent_id = applier.create(Box::new(RecordingNode::default()));
@@ -5914,7 +5914,7 @@ fn push_parent_uses_empty_previous_when_not_reused() {
 #[test]
 fn new_parent_attaches_children_immediately_without_sync_children() {
     let (handle, _runtime) = runtime_handle();
-    let mut slots = SlotBackend::default();
+    let mut slots = SlotTable::default();
     let mut applier = MemoryApplier::new();
 
     let parent_id = applier.create(Box::new(RecordingNode::default()));
@@ -5941,7 +5941,7 @@ fn new_parent_attaches_children_immediately_without_sync_children() {
 #[test]
 fn reused_parent_with_existing_children_still_defers_to_sync_children() {
     let (handle, _runtime) = runtime_handle();
-    let mut slots = SlotBackend::default();
+    let mut slots = SlotTable::default();
     let mut applier = MemoryApplier::new();
 
     let parent_id = applier.create(Box::new(RecordingNode::default()));
@@ -5982,7 +5982,7 @@ fn reused_parent_with_existing_children_still_defers_to_sync_children() {
 #[test]
 fn non_reused_parent_with_existing_children_still_defers_to_sync_children() {
     let (handle, _runtime) = runtime_handle();
-    let mut slots = SlotBackend::default();
+    let mut slots = SlotTable::default();
     let mut applier = MemoryApplier::new();
 
     let parent_id = applier.create(Box::new(RecordingNode::default()));
@@ -6125,7 +6125,7 @@ fn queued_sync_children_preserves_child_reparented_later_in_same_apply() {
 #[test]
 fn skipped_group_root_nodes_only_considers_direct_parent_membership() {
     let (handle, _runtime) = runtime_handle();
-    let mut slots = SlotBackend::default();
+    let mut slots = SlotTable::default();
     let mut applier = MemoryApplier::new();
 
     let grandparent = applier.create(Box::new(RecordingNode::default()));
@@ -6740,7 +6740,7 @@ fn remove_balanced_tree_uses_depth_bounded_traversal_stack() {
 #[test]
 fn push_parent_inherits_previous_when_reused() {
     let (handle, _runtime) = runtime_handle();
-    let mut slots = SlotBackend::default();
+    let mut slots = SlotTable::default();
     let mut applier = MemoryApplier::new();
 
     let parent_id = applier.create(Box::new(RecordingNode::default()));
@@ -6923,7 +6923,7 @@ fn emit_node_creates_nodes_when_parent_restored_after_conditional_removal() {
 #[test]
 fn emit_node_works_with_new_parent_having_empty_previous() {
     let (handle, _runtime) = runtime_handle();
-    let mut slots = SlotBackend::default();
+    let mut slots = SlotTable::default();
     let mut applier = MemoryApplier::new();
 
     let parent_id = applier.create(Box::new(RecordingNode::default()));

@@ -13,7 +13,6 @@ use cranpose_render_wgpu::{DebugCpuAllocationStats, RenderStatsSnapshot};
 #[cfg(feature = "robot")]
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::OnceLock;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ButtonSource, ElementState, MouseButton, WindowEvent};
@@ -25,11 +24,6 @@ use cranpose_ui::{SemanticsAction, SemanticsNode, SemanticsRole};
 
 #[cfg(feature = "robot")]
 use std::sync::mpsc;
-
-fn desktop_input_debug_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_INPUT_DEBUG").is_some())
-}
 
 /// Serializable semantic element combining semantics + geometry
 ///
@@ -817,17 +811,32 @@ impl Robot {
     /// Robot::print_semantics(&semantics, 0);
     /// ```
     pub fn print_semantics(elements: &[SemanticElement], indent: usize) {
-        for elem in elements {
-            let prefix = "  ".repeat(indent);
-            let text_info = elem
-                .text
-                .as_ref()
-                .map(|t| format!(" text=\"{}\"", t))
-                .unwrap_or_default();
-            let clickable = if elem.clickable { " [CLICKABLE]" } else { "" };
-            println!("{}role={}{}{}", prefix, elem.role, text_info, clickable);
-            Self::print_semantics(&elem.children, indent + 1);
+        let report = Self::format_semantics(elements, indent);
+        log::info!(target: "cranpose::robot::semantics", "\n{report}");
+    }
+
+    /// Format the semantic tree as a plain-text hierarchy for caller-controlled output.
+    pub fn format_semantics(elements: &[SemanticElement], indent: usize) -> String {
+        fn format_semantics_into(output: &mut String, elements: &[SemanticElement], indent: usize) {
+            for elem in elements {
+                let prefix = "  ".repeat(indent);
+                let text_info = elem
+                    .text
+                    .as_ref()
+                    .map(|t| format!(" text=\"{}\"", t))
+                    .unwrap_or_default();
+                let clickable = if elem.clickable { " [CLICKABLE]" } else { "" };
+                let _ = std::fmt::Write::write_fmt(
+                    output,
+                    format_args!("{prefix}role={}{}{}\n", elem.role, text_info, clickable),
+                );
+                format_semantics_into(output, &elem.children, indent + 1);
+            }
         }
+
+        let mut output = String::new();
+        format_semantics_into(&mut output, elements, indent);
+        output
     }
 }
 
@@ -1144,12 +1153,12 @@ impl ApplicationHandler for App {
             WindowEvent::PointerMoved { position, .. } => {
                 let logical = platform.pointer_position(position);
                 self.last_cursor_position = Some((logical.x, logical.y));
-                if desktop_input_debug_enabled() {
-                    eprintln!(
-                        "[CRANPOSE_INPUT_DEBUG] desktop pointer move ({:.2},{:.2})",
-                        logical.x, logical.y
-                    );
-                }
+                log::trace!(
+                    target: "cranpose::input",
+                    "desktop pointer move ({:.2},{:.2})",
+                    logical.x,
+                    logical.y
+                );
                 app.set_cursor(logical.x, logical.y);
                 if let Some(recorder) = &mut self.recorder {
                     recorder.record_mouse_move(logical.x, logical.y);
@@ -1175,12 +1184,13 @@ impl ApplicationHandler for App {
                     logical_delta.y = 0.0;
                 }
 
-                if desktop_input_debug_enabled() {
-                    eprintln!(
-                        "[CRANPOSE_INPUT_DEBUG] desktop wheel delta ({:.2},{:.2}) alt={}",
-                        logical_delta.x, logical_delta.y, alt_pressed
-                    );
-                }
+                log::trace!(
+                    target: "cranpose::input",
+                    "desktop wheel delta ({:.2},{:.2}) alt={}",
+                    logical_delta.x,
+                    logical_delta.y,
+                    alt_pressed
+                );
 
                 app.pointer_scrolled(logical_delta.x, logical_delta.y);
             }
@@ -1190,12 +1200,13 @@ impl ApplicationHandler for App {
                 ..
             } => {
                 if let Some((x, y)) = self.last_cursor_position {
-                    if desktop_input_debug_enabled() {
-                        eprintln!(
-                            "[CRANPOSE_INPUT_DEBUG] desktop pointer button {:?} at ({:.2},{:.2})",
-                            state, x, y
-                        );
-                    }
+                    log::trace!(
+                        target: "cranpose::input",
+                        "desktop pointer button {:?} at ({:.2},{:.2})",
+                        state,
+                        x,
+                        y
+                    );
                     app.set_cursor(x, y);
                 }
                 match state {
@@ -1365,9 +1376,7 @@ impl ApplicationHandler for App {
                 app.cancel_gesture();
             }
             WindowEvent::RedrawRequested => {
-                if desktop_input_debug_enabled() {
-                    eprintln!("[CRANPOSE_INPUT_DEBUG] desktop redraw requested");
-                }
+                log::trace!(target: "cranpose::input", "desktop redraw requested");
                 app.update();
 
                 let output = match surface.get_current_texture() {
@@ -1739,10 +1748,10 @@ impl ApplicationHandler for App {
         }
 
         let needs_redraw = app.needs_redraw();
-        if desktop_input_debug_enabled() && needs_redraw {
-            eprintln!(
-                "[CRANPOSE_INPUT_DEBUG] about_to_wait needs_redraw={}",
-                needs_redraw
+        if needs_redraw {
+            log::trace!(
+                target: "cranpose::input",
+                "about_to_wait needs_redraw={needs_redraw}"
             );
         }
         if needs_redraw {
@@ -1947,14 +1956,13 @@ fn find_text_in_app(
     let root = app.semantics_tree()?.root().clone();
     let bounds_by_node = build_semantic_bounds_index(layout_tree.root());
     let result = find_text_in_semantics_tree(&bounds_by_node, &root, query, match_kind);
-    if desktop_input_debug_enabled() {
-        eprintln!(
-            "[CRANPOSE_INPUT_DEBUG] find_text query={query:?} result={:?}",
-            result
-                .as_ref()
-                .map(|result| (result.node_id, result.bounds, result.text.clone()))
-        );
-    }
+    log::trace!(
+        target: "cranpose::input",
+        "find_text query={query:?} result={:?}",
+        result
+            .as_ref()
+            .map(|result| (result.node_id, result.bounds, result.text.clone()))
+    );
     result
 }
 
@@ -1968,14 +1976,13 @@ fn find_button_in_app(
     let root = app.semantics_tree()?.root().clone();
     let bounds_by_node = build_semantic_bounds_index(layout_tree.root());
     let result = find_button_in_semantics_tree(&bounds_by_node, &root, query, match_kind);
-    if desktop_input_debug_enabled() {
-        eprintln!(
-            "[CRANPOSE_INPUT_DEBUG] find_button query={query:?} result={:?}",
-            result
-                .as_ref()
-                .map(|result| (result.node_id, result.bounds, result.text.clone()))
-        );
-    }
+    log::trace!(
+        target: "cranpose::input",
+        "find_button query={query:?} result={:?}",
+        result
+            .as_ref()
+            .map(|result| (result.node_id, result.bounds, result.text.clone()))
+    );
     result
 }
 

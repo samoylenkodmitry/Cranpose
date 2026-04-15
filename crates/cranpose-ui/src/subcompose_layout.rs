@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use cranpose_core::{
-    Composer, NodeError, NodeId, Phase, SlotBackend, SlotId, SlotsHost, SubcomposeState,
+    Composer, NodeError, NodeId, Phase, SlotId, SlotTable, SlotsHost, SubcomposeState,
 };
 
 use crate::modifier::{
@@ -1040,7 +1040,7 @@ impl SubcomposeLayoutNodeInner {
             state: SubcomposeState::default(),
             measure_policy,
             children: Vec::new(),
-            slots: Rc::new(SlotsHost::new(SlotBackend::default())),
+            slots: Rc::new(SlotsHost::new(SlotTable::default())),
             debug_modifiers: false,
             virtual_nodes: HashMap::new(),
             last_placements: Vec::new(),
@@ -1053,7 +1053,7 @@ impl SubcomposeLayoutNodeInner {
         // from per-item slot scopes. When a widget updates the data captured by
         // the measure lambda through shared cells, the next layout pass must not
         // reuse the previous root measure group wholesale.
-        *self.slots.borrow_mut() = SlotBackend::default();
+        *self.slots.borrow_mut() = SlotTable::default();
     }
 
     /// Updates the modifier and collects invalidations without dispatching them.

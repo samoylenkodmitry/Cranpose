@@ -8,8 +8,7 @@ pub use fps_monitor::{
     current_fps, fps_display, fps_display_detailed, fps_stats, record_recomposition, FpsStats,
 };
 
-use std::fmt::Debug;
-use std::sync::OnceLock;
+use std::fmt::{Debug, Write};
 // Use web_time for cross-platform time support (native + WASM) - compatible with winit
 use web_time::Instant;
 
@@ -21,13 +20,13 @@ use cranpose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEv
 use cranpose_render_common::{HitTestTarget, RenderScene, Renderer};
 use cranpose_runtime_std::StdRuntime;
 use cranpose_ui::{
-    has_pending_focus_invalidations, has_pending_pointer_repasses, log_layout_tree,
-    log_render_scene, log_screen_summary, peek_focus_invalidation, peek_layout_invalidation,
-    peek_pointer_invalidation, peek_render_invalidation, process_focus_invalidations,
-    process_pointer_repasses, request_render_invalidation, take_draw_repass_nodes,
-    take_focus_invalidation, take_layout_invalidation, take_pointer_invalidation,
-    take_render_invalidation, HeadlessRenderer, LayoutBox, LayoutNode, LayoutTree,
-    MeasureLayoutOptions, SemanticsTree, SubcomposeLayoutNode,
+    format_layout_tree, format_render_scene, format_screen_summary,
+    has_pending_focus_invalidations, has_pending_pointer_repasses, peek_focus_invalidation,
+    peek_layout_invalidation, peek_pointer_invalidation, peek_render_invalidation,
+    process_focus_invalidations, process_pointer_repasses, request_render_invalidation,
+    take_draw_repass_nodes, take_focus_invalidation, take_layout_invalidation,
+    take_pointer_invalidation, take_render_invalidation, HeadlessRenderer, LayoutBox, LayoutNode,
+    LayoutTree, MeasureLayoutOptions, SemanticsTree, SubcomposeLayoutNode,
 };
 use cranpose_ui_graphics::{Point, Size};
 use hit_path_tracker::{HitPathTracker, PointerId};
@@ -131,11 +130,6 @@ pub struct RuntimeLeakDebugStats {
     pub snapshot_pinning_stats: SnapshotPinningDebugStats,
 }
 
-fn input_pipeline_debug_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_INPUT_DEBUG").is_some())
-}
-
 impl<R> AppShell<R>
 where
     R: Renderer,
@@ -146,6 +140,28 @@ where
         pointer: PointerId,
     ) -> Vec<<<R as Renderer>::Scene as RenderScene>::HitTarget> {
         self.resolve_hit_path(pointer)
+    }
+
+    fn drain_root_render_requests(&mut self) {
+        for _ in 0..100 {
+            if !self.composition.take_root_render_request() {
+                return;
+            }
+
+            match self.composition.render(self.root_key, &mut *self.content) {
+                Ok(()) => {
+                    fps_monitor::record_recomposition();
+                    self.request_layout_pass();
+                    request_render_invalidation();
+                }
+                Err(err) => {
+                    log::error!("root render fallback failed: {err}");
+                    return;
+                }
+            }
+        }
+
+        log::error!("root render fallback looped too many times");
     }
 
     pub fn new(mut renderer: R, root_key: Key, content: impl FnMut() + 'static) -> Self {
@@ -187,6 +203,7 @@ where
             clipboard: arboard::Clipboard::new().ok(),
             dev_options: DevOptions::default(),
         };
+        shell.drain_root_render_requests();
         shell.process_frame();
         shell
     }
@@ -319,14 +336,11 @@ where
             .iter()
             .filter_map(|&id| scene.find_target(id))
             .collect();
-        if input_pipeline_debug_enabled() {
-            eprintln!(
-                "[CRANPOSE_INPUT_DEBUG] resolve_hit_path pointer={:?} cached={:?} resolved_count={}",
-                pointer,
-                node_ids,
-                targets.len()
-            );
-        }
+        log::trace!(
+            target: "cranpose::input",
+            "resolve_hit_path pointer={pointer:?} cached={node_ids:?} resolved_count={}",
+            targets.len()
+        );
         targets
     }
 
@@ -337,15 +351,14 @@ where
         for target in targets {
             let node_id = target.node_id();
             target.dispatch(event.clone());
-            if input_pipeline_debug_enabled() {
-                eprintln!(
-                    "[CRANPOSE_INPUT_DEBUG] dispatch {:?} node={} consumed={} stop_on_consume={}",
-                    event.kind,
-                    node_id,
-                    event.is_consumed(),
-                    stop_on_consume,
-                );
-            }
+            log::trace!(
+                target: "cranpose::input",
+                "dispatch {:?} node={} consumed={} stop_on_consume={}",
+                event.kind,
+                node_id,
+                event.is_consumed(),
+                stop_on_consume,
+            );
             if stop_on_consume && event.is_consumed() {
                 break;
             }
@@ -363,21 +376,22 @@ where
             self.runtime.drain_frame_callbacks(frame_time);
             runtime_handle.drain_ui();
             let should_render = self.composition.should_render();
-            if input_pipeline_debug_enabled() && should_render {
-                eprintln!(
-                    "[CRANPOSE_INPUT_DEBUG] update begin: should_render=true layout_requested={} scene_dirty={} is_dirty={}",
-                    self.layout_requested, self.scene_dirty, self.is_dirty
+            if should_render {
+                log::trace!(
+                    target: "cranpose::input",
+                    "update begin: should_render=true layout_requested={} scene_dirty={} is_dirty={}",
+                    self.layout_requested,
+                    self.scene_dirty,
+                    self.is_dirty
                 );
             }
             if should_render {
                 match self.composition.process_invalid_scopes() {
                     Ok(changed) => {
-                        if input_pipeline_debug_enabled() {
-                            eprintln!(
-                                "[CRANPOSE_INPUT_DEBUG] process_invalid_scopes changed={}",
-                                changed
-                            );
-                        }
+                        log::trace!(
+                            target: "cranpose::input",
+                            "process_invalid_scopes changed={changed}"
+                        );
                         if changed {
                             fps_monitor::record_recomposition();
                             self.request_layout_pass();
@@ -398,15 +412,7 @@ where
                     }
                 }
             }
-            if self.composition.take_root_render_request() {
-                if let Err(err) = self.composition.render(self.root_key, &mut *self.content) {
-                    log::error!("root render fallback failed: {err}");
-                } else {
-                    fps_monitor::record_recomposition();
-                    self.request_layout_pass();
-                    request_render_invalidation();
-                }
-            }
+            self.drain_root_render_requests();
             self.process_frame();
             // Clear dirty flag after update (frame has been processed)
             self.is_dirty = false;
@@ -420,12 +426,10 @@ where
         if result {
             self.mark_dirty();
         }
-        if input_pipeline_debug_enabled() {
-            eprintln!(
-                "[CRANPOSE_INPUT_DEBUG] set_cursor ({:.2},{:.2}) -> {}",
-                x, y, result
-            );
-        }
+        log::trace!(
+            target: "cranpose::input",
+            "set_cursor ({x:.2},{y:.2}) -> {result}"
+        );
         result
     }
 
@@ -500,9 +504,7 @@ where
         if result {
             self.mark_dirty();
         }
-        if input_pipeline_debug_enabled() {
-            eprintln!("[CRANPOSE_INPUT_DEBUG] pointer_pressed -> {}", result);
-        }
+        log::trace!(target: "cranpose::input", "pointer_pressed -> {result}");
         result
     }
 
@@ -540,14 +542,13 @@ where
                 let node_id = hit.node_id();
                 delivered_capture_paths.push(hit.capture_path());
                 hit.dispatch(event.clone());
-                if input_pipeline_debug_enabled() {
-                    eprintln!(
-                        "[CRANPOSE_INPUT_DEBUG] dispatch {:?} node={} consumed={} stop_on_consume=true",
-                        event.kind,
-                        node_id,
-                        event.is_consumed(),
-                    );
-                }
+                log::trace!(
+                    target: "cranpose::input",
+                    "dispatch {:?} node={} consumed={} stop_on_consume=true",
+                    event.kind,
+                    node_id,
+                    event.is_consumed(),
+                );
                 if event.is_consumed() {
                     break;
                 }
@@ -555,12 +556,11 @@ where
 
             self.hit_path_tracker
                 .add_hit_path(PointerId::PRIMARY, delivered_capture_paths);
-            if input_pipeline_debug_enabled() {
-                eprintln!(
-                    "[CRANPOSE_INPUT_DEBUG] pointer_pressed_inner cached_hit_path={:?}",
-                    self.hit_path_tracker.get_path(PointerId::PRIMARY),
-                );
-            }
+            log::trace!(
+                target: "cranpose::input",
+                "pointer_pressed_inner cached_hit_path={:?}",
+                self.hit_path_tracker.get_path(PointerId::PRIMARY),
+            );
 
             true
         }
@@ -573,9 +573,7 @@ where
         if result {
             self.mark_dirty();
         }
-        if input_pipeline_debug_enabled() {
-            eprintln!("[CRANPOSE_INPUT_DEBUG] pointer_released -> {}", result);
-        }
+        log::trace!(target: "cranpose::input", "pointer_released -> {result}");
         result
     }
 
@@ -621,12 +619,10 @@ where
         if result {
             self.mark_dirty();
         }
-        if input_pipeline_debug_enabled() {
-            eprintln!(
-                "[CRANPOSE_INPUT_DEBUG] pointer_scrolled ({:.2},{:.2}) -> {}",
-                delta_x, delta_y, result
-            );
-        }
+        log::trace!(
+            target: "cranpose::input",
+            "pointer_scrolled ({delta_x:.2},{delta_y:.2}) -> {result}"
+        );
         result
     }
 
@@ -934,24 +930,30 @@ where
         handled
     }
 
-    pub fn log_debug_info(&mut self) {
-        println!("\n\n");
-        println!("════════════════════════════════════════════════════════");
-        println!("           DEBUG: CURRENT SCREEN STATE");
-        println!("════════════════════════════════════════════════════════");
-
+    pub fn debug_info_report(&mut self) -> String {
+        let mut report = String::new();
+        writeln!(report, "=== DEBUG: CURRENT SCREEN STATE ===").ok();
         if let Some(layout_tree) = self.layout_tree() {
-            log_layout_tree(layout_tree);
             let renderer = HeadlessRenderer::new();
             let render_scene = renderer.render(layout_tree);
-            log_render_scene(&render_scene);
-            log_screen_summary(layout_tree, &render_scene);
+            writeln!(report, "{}", format_layout_tree(layout_tree)).ok();
+            writeln!(report, "{}", format_render_scene(&render_scene)).ok();
+            writeln!(
+                report,
+                "{}",
+                format_screen_summary(layout_tree, &render_scene)
+            )
+            .ok();
         } else {
-            println!("No layout available");
+            writeln!(report, "No layout available").ok();
         }
+        report
+    }
 
-        println!("════════════════════════════════════════════════════════");
-        println!("\n\n");
+    pub fn log_debug_info(&mut self) -> String {
+        let report = self.debug_info_report();
+        log::info!(target: "cranpose::debug::screen", "\n{report}");
+        report
     }
 
     /// Get the current layout tree (for robot/testing)

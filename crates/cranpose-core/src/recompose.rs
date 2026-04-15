@@ -1,0 +1,91 @@
+use super::*;
+
+impl Composer {
+    pub(crate) fn recranpose_group(&self, scope: &RecomposeScope) {
+        // CRITICAL FIX: Check if scope is still invalid before recomposing.
+        // When parent and child scopes are both invalidated, the child may be
+        // visited (and marked recomposed) during parent's recomposition.
+        // Without this check, we'd recompose the child again with wrong parent_stack,
+        // causing nodes to get attached to root instead of their actual parent.
+        if !scope.is_invalid() {
+            scope.mark_recomposed();
+            return;
+        }
+        let started = self.with_slots_mut(|slots| {
+            slots.begin_recranpose_at_anchor(scope.group_anchor(), scope.id())
+        });
+        log::trace!(
+            target: "cranpose::compose::recompose",
+            "scope_id={} label={:?} started_at={started:?} sources={:?}",
+            scope.id(),
+            debug_scope_label(scope.id()),
+            debug_scope_invalidation_sources(scope.id()),
+        );
+        if started.is_some() {
+            let previous_hint = self
+                .core
+                .recranpose_parent_hint
+                .replace(scope.parent_hint());
+            struct HintGuard {
+                core: Rc<ComposerCore>,
+                previous: Option<NodeId>,
+            }
+            impl Drop for HintGuard {
+                fn drop(&mut self) {
+                    self.core.recranpose_parent_hint.set(self.previous);
+                }
+            }
+            let _hint_guard = HintGuard {
+                core: self.clone_core(),
+                previous: previous_hint,
+            };
+            {
+                let mut stack = self.scope_stack();
+                stack.push(scope.clone());
+            }
+            let saved_locals = self.current_local_stack();
+            {
+                let mut locals = self.local_stack();
+                *locals = scope.local_stack();
+            }
+            let callback_ran = self.observe_scope(scope, || scope.run_recompose(self));
+            log::trace!(
+                target: "cranpose::compose::recompose",
+                "scope_id={} label={:?} callback_ran={}",
+                scope.id(),
+                debug_scope_label(scope.id()),
+                callback_ran,
+            );
+            if !callback_ran {
+                if let Some(ancestor_scope) = scope.callback_promotion_target() {
+                    ancestor_scope.invalidate();
+                } else {
+                    self.request_root_render();
+                }
+                // Preserve all existing slot content until the promoted ancestor
+                // or the requested root render replays the subtree.
+                self.skip_current_group();
+            }
+            {
+                let mut locals = self.local_stack();
+                *locals = saved_locals;
+            }
+            {
+                let mut stack = self.scope_stack();
+                stack.pop();
+            }
+            self.with_slots_mut(SlotStorage::end_recompose);
+            log::trace!(
+                target: "cranpose::compose::recompose",
+                "scope_id={} label={:?} ended",
+                scope.id(),
+                debug_scope_label(scope.id()),
+            );
+            self.drain_orphaned_nodes_from_slots();
+            scope.mark_recomposed();
+            self.flush_pending_commands_if_large();
+        } else {
+            scope.mark_recomposed();
+        }
+    }
+}

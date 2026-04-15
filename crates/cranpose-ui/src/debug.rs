@@ -28,57 +28,22 @@ use cranpose_foundation::{ModifierNodeChain, NodeCapabilities};
 use std::fmt::Write;
 use std::sync::{Arc, Mutex, OnceLock};
 
-/// Logs the current layout tree to stdout with indentation showing hierarchy
+/// Logs the current layout tree through the logger with indentation showing hierarchy.
 pub fn log_layout_tree(layout: &LayoutTree) {
-    println!("\n=== LAYOUT TREE (Current Screen) ===");
-    log_layout_box(layout.root(), 0);
-    println!("=== END LAYOUT TREE ===\n");
-}
-
-fn log_layout_box(layout_box: &LayoutBox, depth: usize) {
-    let indent = "  ".repeat(depth);
-    let rect = &layout_box.rect;
-
-    println!(
-        "{}[Node #{}] pos: ({:.1}, {:.1}), size: ({:.1}x{:.1})",
-        indent, layout_box.node_id, rect.x, rect.y, rect.width, rect.height
+    log::info!(
+        target: "cranpose::debug::layout",
+        "\n{}",
+        format_layout_tree(layout)
     );
-
-    for child in &layout_box.children {
-        log_layout_box(child, depth + 1);
-    }
 }
 
-/// Logs the current render scene to stdout showing all draw operations
+/// Logs the current render scene through the logger.
 pub fn log_render_scene(scene: &RecordedRenderScene) {
-    println!("\n=== RENDER SCENE (Current Screen) ===");
-    println!("Total operations: {}", scene.operations().len());
-
-    for (idx, op) in scene.operations().iter().enumerate() {
-        match op {
-            RenderOp::Primitive {
-                node_id,
-                layer,
-                primitive,
-            } => {
-                println!(
-                    "[{}] Node #{} - Layer: {:?}, Primitive: {:?}",
-                    idx, node_id, layer, primitive
-                );
-            }
-            RenderOp::Text {
-                node_id,
-                rect,
-                value,
-            } => {
-                println!(
-                    "[{}] Node #{} - Text at ({:.1}, {:.1}): \"{}\"",
-                    idx, node_id, rect.x, rect.y, value
-                );
-            }
-        }
-    }
-    println!("=== END RENDER SCENE ===\n");
+    log::info!(
+        target: "cranpose::debug::render",
+        "\n{}",
+        format_render_scene(scene)
+    );
 }
 
 /// Returns a formatted string representation of the layout tree
@@ -144,10 +109,16 @@ pub fn format_render_scene(scene: &RecordedRenderScene) -> String {
     output
 }
 
-/// Logs a compact summary of what's on screen (counts by type)
-pub fn log_screen_summary(layout: &LayoutTree, scene: &RecordedRenderScene) {
-    println!("\n=== SCREEN SUMMARY ===");
-    println!("Total nodes in layout: {}", count_nodes(layout.root()));
+/// Returns a compact summary of what's on screen (counts by type).
+pub fn format_screen_summary(layout: &LayoutTree, scene: &RecordedRenderScene) -> String {
+    let mut output = String::new();
+    writeln!(output, "=== SCREEN SUMMARY ===").ok();
+    writeln!(
+        output,
+        "Total nodes in layout: {}",
+        count_nodes(layout.root())
+    )
+    .ok();
 
     let mut text_count = 0;
     let mut primitive_count = 0;
@@ -159,10 +130,20 @@ pub fn log_screen_summary(layout: &LayoutTree, scene: &RecordedRenderScene) {
         }
     }
 
-    println!("Render operations:");
-    println!("  - Text elements: {}", text_count);
-    println!("  - Primitive shapes: {}", primitive_count);
-    println!("=== END SUMMARY ===\n");
+    writeln!(output, "Render operations:").ok();
+    writeln!(output, "  - Text elements: {}", text_count).ok();
+    writeln!(output, "  - Primitive shapes: {}", primitive_count).ok();
+    writeln!(output, "=== END SUMMARY ===").ok();
+    output
+}
+
+/// Logs a compact summary of what's on screen (counts by type).
+pub fn log_screen_summary(layout: &LayoutTree, scene: &RecordedRenderScene) {
+    log::info!(
+        target: "cranpose::debug::screen",
+        "\n{}",
+        format_screen_summary(layout, scene)
+    );
 }
 
 fn count_nodes(layout_box: &LayoutBox) -> usize {
@@ -171,8 +152,11 @@ fn count_nodes(layout_box: &LayoutBox) -> usize {
 
 /// Logs the contents of a modifier node chain including capabilities.
 pub fn log_modifier_chain(chain: &ModifierNodeChain, nodes: &[ModifierChainInspectorNode]) {
-    let dump = format_modifier_chain(chain, nodes);
-    print!("{}", dump);
+    log::info!(
+        target: "cranpose::debug::modifier",
+        "\n{}",
+        format_modifier_chain(chain, nodes)
+    );
 }
 
 /// Formats the modifier chain using inspector data.

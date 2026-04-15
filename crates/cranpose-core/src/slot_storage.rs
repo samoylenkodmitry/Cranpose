@@ -1,9 +1,8 @@
 //! Abstract slot storage trait and related types.
 //!
-//! This module defines the high-level interface that all slot storage backends
-//! must implement. The `Composer` and composition engine interact exclusively
-//! through this trait while keeping the composer decoupled from the concrete
-//! slot table representation.
+//! This module defines the shared slot storage contract implemented by
+//! [`crate::SlotTable`]. The composer and composition engine rely on this
+//! interface so the slot table details stay localized to the storage layer.
 
 use crate::{AnchorId, Key, NodeId, Owned, ScopeId};
 
@@ -33,9 +32,9 @@ pub struct StartGroup<G> {
     pub restored_from_gap: bool,
 }
 
-/// Abstract slot API that the composer / composition engine talks to.
-/// Concrete backends (SlotTable with gap buffer, chunked storage, arena, etc.)
-/// implement this and can keep whatever internal layout they want.
+/// Slot API that the composer / composition engine talks to.
+/// The single [`crate::SlotTable`] implementation keeps the concrete storage
+/// layout behind this contract.
 pub trait SlotStorage {
     /// Opaque handle to a started group.
     type Group: Copy + Eq;

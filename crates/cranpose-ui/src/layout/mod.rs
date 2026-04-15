@@ -14,7 +14,7 @@ use std::{
 
 use cranpose_core::{
     Applier, ApplierHost, Composer, ConcreteApplierHost, MemoryApplier, NodeError, NodeId, Phase,
-    RuntimeHandle, SlotBackend, SlotsHost, SnapshotStateObserver,
+    RuntimeHandle, SlotTable, SlotsHost, SnapshotStateObserver,
 };
 
 use self::coordinator::NodeCoordinator;
@@ -106,13 +106,13 @@ pub fn invalidate_all_layout_caches() {
 
 /// RAII guard that:
 /// - moves the current MemoryApplier into a ConcreteApplierHost
-/// - holds a shared handle to the SlotBackend used by LayoutBuilder
+/// - holds a shared handle to the `SlotTable` used by `LayoutBuilder`
 /// - on Drop, always:
 ///   * restores slots into the host from the shared handle
 ///   * moves the original MemoryApplier back into the Composition
 ///
 /// This makes `measure_layout` panic/Err-safe wrt both the applier and slots.
-/// The key invariant: guard and builder share the same `Rc<RefCell<SlotBackend>>`,
+/// The key invariant: guard and builder share the same `Rc<RefCell<SlotTable>>`,
 /// so the guard never loses access to the authoritative slots even on panic.
 struct ApplierSlotGuard<'a> {
     /// The `MemoryApplier` inside the Composition::applier that we must restore into.
@@ -121,7 +121,7 @@ struct ApplierSlotGuard<'a> {
     host: Rc<ConcreteApplierHost<MemoryApplier>>,
     /// Shared handle to the slot table. Both the guard and the builder hold a clone.
     /// On Drop, we write whatever is in this handle back into the applier.
-    slots: Rc<RefCell<SlotBackend>>,
+    slots: Rc<RefCell<SlotTable>>,
 }
 
 impl<'a> ApplierSlotGuard<'a> {
@@ -154,7 +154,7 @@ impl<'a> ApplierSlotGuard<'a> {
 
     /// Returns the shared handle to slots for the builder to use.
     /// The builder clones this Rc, so both guard and builder share the same slots.
-    fn slots_handle(&self) -> Rc<RefCell<SlotBackend>> {
+    fn slots_handle(&self) -> Rc<RefCell<SlotTable>> {
         Rc::clone(&self.slots)
     }
 }
@@ -538,6 +538,8 @@ pub fn measure_layout_with_options(
     max_size: Size,
     options: MeasureLayoutOptions,
 ) -> Result<LayoutMeasurements, NodeError> {
+    #[cfg(test)]
+    crate::reset_render_state_for_tests();
     process_pending_layout_repasses(applier, root)?;
 
     let constraints = Constraints {
@@ -588,7 +590,7 @@ pub fn measure_layout_with_options(
     // Move the current applier into a host and set up a guard that will
     // ALWAYS restore:
     // - the MemoryApplier back into `applier`
-    // - the SlotBackend back into that MemoryApplier
+    // - the SlotTable back into that MemoryApplier
     //
     // IMPORTANT: Declare the guard *before* the builder so the builder
     // is dropped first (both on Ok and on unwind).
@@ -597,7 +599,7 @@ pub fn measure_layout_with_options(
     let slots_handle = guard.slots_handle();
 
     // Give the builder the shared slots handle - both guard and builder
-    // now share access to the same SlotBackend via Rc<RefCell<_>>.
+    // now share access to the same SlotTable via Rc<RefCell<_>>.
     let mut builder =
         LayoutBuilder::new_with_epoch(Rc::clone(&applier_host), epoch, Rc::clone(&slots_handle));
 
@@ -680,7 +682,7 @@ impl LayoutBuilder {
     fn new_with_epoch(
         applier: Rc<ConcreteApplierHost<MemoryApplier>>,
         epoch: u64,
-        slots: Rc<RefCell<SlotBackend>>,
+        slots: Rc<RefCell<SlotTable>>,
     ) -> Self {
         Self {
             state: Rc::new(RefCell::new(LayoutBuilderState::new_with_epoch(
@@ -707,7 +709,7 @@ struct LayoutBuilderState {
     runtime_handle: Option<RuntimeHandle>,
     /// Shared handle to the slot table. This is shared with ApplierSlotGuard
     /// to ensure panic-safety: even if we panic, the guard can restore slots.
-    slots: Rc<RefCell<SlotBackend>>,
+    slots: Rc<RefCell<SlotTable>>,
     cache_epoch: u64,
     tmp_measurables: ScratchVecPool<Box<dyn Measurable>>,
     tmp_records: ScratchVecPool<(NodeId, ChildRecord)>,
@@ -719,7 +721,7 @@ impl LayoutBuilderState {
     fn new_with_epoch(
         applier: Rc<ConcreteApplierHost<MemoryApplier>>,
         epoch: u64,
-        slots: Rc<RefCell<SlotBackend>>,
+        slots: Rc<RefCell<SlotTable>>,
     ) -> Self {
         let runtime_handle = applier.borrow_typed().runtime_handle();
 
@@ -1470,7 +1472,7 @@ impl Drop for VecPools {
 
 struct SlotsGuard {
     state: Rc<RefCell<LayoutBuilderState>>,
-    slots: Option<SlotBackend>,
+    slots: Option<SlotTable>,
 }
 
 impl SlotsGuard {
@@ -1491,7 +1493,7 @@ impl SlotsGuard {
         Rc::new(SlotsHost::new(slots))
     }
 
-    fn restore(&mut self, slots: SlotBackend) {
+    fn restore(&mut self, slots: SlotTable) {
         debug_assert!(self.slots.is_none());
         self.slots = Some(slots);
     }
@@ -1849,11 +1851,8 @@ fn measure_node_with_host(
         Some(handle) => Some(handle),
         None => applier.borrow_typed().runtime_handle(),
     };
-    let mut builder = LayoutBuilder::new_with_epoch(
-        applier,
-        epoch,
-        Rc::new(RefCell::new(SlotBackend::default())),
-    );
+    let mut builder =
+        LayoutBuilder::new_with_epoch(applier, epoch, Rc::new(RefCell::new(SlotTable::default())));
     builder.set_runtime_handle(runtime_handle);
     builder.measure_node(node_id, constraints)
 }

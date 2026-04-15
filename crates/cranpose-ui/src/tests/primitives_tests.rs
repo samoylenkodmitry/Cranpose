@@ -13,7 +13,7 @@ use crate::widgets::{
 use crate::{run_test_composition, LayoutEngine};
 use cranpose_core::{
     self, location_key, Applier, Composer, Composition, ConcreteApplierHost, MemoryApplier, NodeId,
-    Phase, SlotBackend, SlotsHost, SnapshotStateObserver, State,
+    Phase, SlotTable, SlotsHost, SnapshotStateObserver, State,
 };
 use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope, LazyListState};
 use cranpose_ui_layout::{HorizontalAlignment, LinearArrangement, VerticalAlignment};
@@ -28,7 +28,7 @@ thread_local! {
 }
 
 fn prepare_measure_composer(
-    slots: &mut SlotBackend,
+    slots: &mut SlotTable,
     applier: &mut MemoryApplier,
     handle: &cranpose_core::RuntimeHandle,
     root: Option<NodeId>,
@@ -54,7 +54,7 @@ fn prepare_measure_composer(
 }
 
 fn restore_measure_composer(
-    slots: &mut SlotBackend,
+    slots: &mut SlotTable,
     applier: &mut MemoryApplier,
     slots_host: Rc<SlotsHost>,
     applier_host: Rc<ConcreteApplierHost<MemoryApplier>>,
@@ -68,7 +68,7 @@ fn restore_measure_composer(
 }
 
 fn run_subcompose_measure(
-    slots: &mut SlotBackend,
+    slots: &mut SlotTable,
     applier: &mut MemoryApplier,
     handle: &cranpose_core::RuntimeHandle,
     node_id: NodeId,
@@ -141,7 +141,7 @@ fn column_with_alignment_updates_node_fields() {
 
 fn measure_subcompose_node(
     composition: &mut Composition<MemoryApplier>,
-    slots: &mut SlotBackend,
+    slots: &mut SlotTable,
     handle: &cranpose_core::RuntimeHandle,
     root: NodeId,
     constraints: Constraints,
@@ -154,7 +154,7 @@ fn measure_subcompose_node(
 
 fn capture_subcompose_child_constraints(
     composition: &mut Composition<MemoryApplier>,
-    slots: &mut SlotBackend,
+    slots: &mut SlotTable,
     handle: &cranpose_core::RuntimeHandle,
     root: NodeId,
     constraints: Constraints,
@@ -222,6 +222,54 @@ fn measure_root(composition: &mut Composition<MemoryApplier>, root: NodeId, size
     applier.set_runtime_handle(handle);
     let _ = applier.compute_layout(root, size).expect("layout");
     applier.clear_runtime_handle();
+}
+
+fn assert_box_with_constraints_branch_toggle<F>(
+    initial_text: &'static str,
+    toggled_text: &'static str,
+    restore_message: &'static str,
+    mut content: F,
+) where
+    F: FnMut(cranpose_core::MutableState<bool>) + 'static,
+{
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let show_thread = cranpose_core::MutableState::with_runtime(false, runtime.clone());
+    let render_state = show_thread;
+
+    composition
+        .render(location_key(file!(), line!(), column!()), move || {
+            content(render_state);
+        })
+        .expect("initial render");
+
+    let root = composition.root().expect("root node");
+    let size = Size {
+        width: 200.0,
+        height: 200.0,
+    };
+    let texts = render_texts(&mut composition, root, size);
+    assert!(texts.iter().any(|text| text == "Header"));
+    assert!(texts.iter().any(|text| text == initial_text));
+
+    show_thread.set_value(true);
+    composition
+        .process_invalid_scopes()
+        .expect("switch to alternate branch");
+    let texts = render_texts(&mut composition, root, size);
+    assert!(texts.iter().any(|text| text == toggled_text));
+    assert!(!texts.iter().any(|text| text == initial_text));
+
+    show_thread.set_value(false);
+    composition
+        .process_invalid_scopes()
+        .expect("restore original branch");
+    let texts = render_texts(&mut composition, root, size);
+    assert!(
+        texts.iter().any(|text| text == initial_text),
+        "{restore_message}, got {texts:?}",
+    );
+    assert!(!texts.iter().any(|text| text == toggled_text));
 }
 
 #[composable]
@@ -629,7 +677,7 @@ fn box_with_constraints_composes_different_content() {
 
     let root = composition.root().expect("root node");
     let handle = composition.runtime_handle();
-    let mut slots = SlotBackend::default();
+    let mut slots = SlotTable::default();
 
     measure_subcompose_node(
         &mut composition,
@@ -674,7 +722,7 @@ fn box_with_constraints_reacts_to_constraint_changes() {
 
     let root = composition.root().expect("root node");
     let handle = composition.runtime_handle();
-    let mut slots = SlotBackend::default();
+    let mut slots = SlotTable::default();
 
     for width in [120.0, 60.0] {
         let constraints = Constraints::tight(width, 40.0);
@@ -760,7 +808,7 @@ fn box_with_constraints_measures_children_with_finite_constraints() {
 
     let root = composition.root().expect("root node");
     let handle = composition.runtime_handle();
-    let mut slots = SlotBackend::default();
+    let mut slots = SlotTable::default();
     let captured = capture_subcompose_child_constraints(
         &mut composition,
         &mut slots,
@@ -783,12 +831,11 @@ fn box_with_constraints_measures_children_with_finite_constraints() {
 
 #[test]
 fn box_with_constraints_restores_conditional_branch_after_toggle() {
-    let mut composition = Composition::new(MemoryApplier::new());
-    let runtime = composition.runtime_handle();
-    let show_thread = cranpose_core::MutableState::with_runtime(false, runtime.clone());
-
-    composition
-        .render(location_key(file!(), line!(), column!()), || {
+    assert_box_with_constraints_branch_toggle(
+        "Stories",
+        "Thread",
+        "restored branch should render again",
+        move |show_thread| {
             BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
                 Column(
                     Modifier::empty().fill_max_size(),
@@ -803,46 +850,17 @@ fn box_with_constraints_restores_conditional_branch_after_toggle() {
                     },
                 );
             });
-        })
-        .expect("initial render");
-
-    let root = composition.root().expect("root node");
-    let size = Size {
-        width: 200.0,
-        height: 200.0,
-    };
-    let texts = render_texts(&mut composition, root, size);
-    assert!(texts.iter().any(|text| text == "Header"));
-    assert!(texts.iter().any(|text| text == "Stories"));
-
-    show_thread.set_value(true);
-    composition
-        .process_invalid_scopes()
-        .expect("switch to thread branch");
-    let texts = render_texts(&mut composition, root, size);
-    assert!(texts.iter().any(|text| text == "Thread"));
-    assert!(!texts.iter().any(|text| text == "Stories"));
-
-    show_thread.set_value(false);
-    composition
-        .process_invalid_scopes()
-        .expect("restore stories branch");
-    let texts = render_texts(&mut composition, root, size);
-    assert!(
-        texts.iter().any(|text| text == "Stories"),
-        "restored branch should render again, got {texts:?}",
+        },
     );
-    assert!(!texts.iter().any(|text| text == "Thread"));
 }
 
 #[test]
 fn box_with_constraints_restores_conditional_composable_branch_after_toggle() {
-    let mut composition = Composition::new(MemoryApplier::new());
-    let runtime = composition.runtime_handle();
-    let show_thread = cranpose_core::MutableState::with_runtime(false, runtime.clone());
-
-    composition
-        .render(location_key(file!(), line!(), column!()), || {
+    assert_box_with_constraints_branch_toggle(
+        "Stories",
+        "Thread",
+        "restored composable branch should render again",
+        move |show_thread| {
             BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
                 Column(
                     Modifier::empty().fill_max_size(),
@@ -857,45 +875,17 @@ fn box_with_constraints_restores_conditional_composable_branch_after_toggle() {
                     },
                 );
             });
-        })
-        .expect("initial render");
-
-    let root = composition.root().expect("root node");
-    let size = Size {
-        width: 200.0,
-        height: 200.0,
-    };
-    let texts = render_texts(&mut composition, root, size);
-    assert!(texts.iter().any(|text| text == "Stories"));
-
-    show_thread.set_value(true);
-    composition
-        .process_invalid_scopes()
-        .expect("switch to thread branch");
-    let texts = render_texts(&mut composition, root, size);
-    assert!(texts.iter().any(|text| text == "Thread"));
-    assert!(!texts.iter().any(|text| text == "Stories"));
-
-    show_thread.set_value(false);
-    composition
-        .process_invalid_scopes()
-        .expect("restore stories branch");
-    let texts = render_texts(&mut composition, root, size);
-    assert!(
-        texts.iter().any(|text| text == "Stories"),
-        "restored composable branch should render again, got {texts:?}",
+        },
     );
-    assert!(!texts.iter().any(|text| text == "Thread"));
 }
 
 #[test]
 fn box_with_constraints_restores_conditional_lazy_list_branch_after_toggle() {
-    let mut composition = Composition::new(MemoryApplier::new());
-    let runtime = composition.runtime_handle();
-    let show_thread = cranpose_core::MutableState::with_runtime(false, runtime.clone());
-
-    composition
-        .render(location_key(file!(), line!(), column!()), || {
+    assert_box_with_constraints_branch_toggle(
+        "Stories",
+        "Thread",
+        "restored lazy-list branch should render again",
+        move |show_thread| {
             let list_state = remember_lazy_list_state();
             BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
                 Column(
@@ -911,35 +901,8 @@ fn box_with_constraints_restores_conditional_lazy_list_branch_after_toggle() {
                     },
                 );
             });
-        })
-        .expect("initial render");
-
-    let root = composition.root().expect("root node");
-    let size = Size {
-        width: 200.0,
-        height: 200.0,
-    };
-    let texts = render_texts(&mut composition, root, size);
-    assert!(texts.iter().any(|text| text == "Stories"));
-
-    show_thread.set_value(true);
-    composition
-        .process_invalid_scopes()
-        .expect("switch to thread branch");
-    let texts = render_texts(&mut composition, root, size);
-    assert!(texts.iter().any(|text| text == "Thread"));
-    assert!(!texts.iter().any(|text| text == "Stories"));
-
-    show_thread.set_value(false);
-    composition
-        .process_invalid_scopes()
-        .expect("restore stories branch");
-    let texts = render_texts(&mut composition, root, size);
-    assert!(
-        texts.iter().any(|text| text == "Stories"),
-        "restored lazy-list branch should render again, got {texts:?}",
+        },
     );
-    assert!(!texts.iter().any(|text| text == "Thread"));
 }
 
 #[test]
@@ -1325,12 +1288,11 @@ fn box_with_constraints_restored_weighted_branch_after_header_toggle_keeps_host_
 
 #[test]
 fn box_with_constraints_restores_weighted_layout_branch_after_toggle() {
-    let mut composition = Composition::new(MemoryApplier::new());
-    let runtime = composition.runtime_handle();
-    let show_thread = cranpose_core::MutableState::with_runtime(false, runtime.clone());
-
-    composition
-        .render(location_key(file!(), line!(), column!()), || {
+    assert_box_with_constraints_branch_toggle(
+        "Top stories",
+        "Thread body",
+        "restored weighted layout branch should render again",
+        move |show_thread| {
             BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
                 Column(
                     Modifier::empty().fill_max_size(),
@@ -1347,35 +1309,8 @@ fn box_with_constraints_restores_weighted_layout_branch_after_toggle() {
                     },
                 );
             });
-        })
-        .expect("initial render");
-
-    let root = composition.root().expect("root node");
-    let size = Size {
-        width: 200.0,
-        height: 200.0,
-    };
-    let texts = render_texts(&mut composition, root, size);
-    assert!(texts.iter().any(|text| text == "Top stories"));
-
-    show_thread.set_value(true);
-    composition
-        .process_invalid_scopes()
-        .expect("switch to thread pane");
-    let texts = render_texts(&mut composition, root, size);
-    assert!(texts.iter().any(|text| text == "Thread body"));
-    assert!(!texts.iter().any(|text| text == "Top stories"));
-
-    show_thread.set_value(false);
-    composition
-        .process_invalid_scopes()
-        .expect("restore stories pane");
-    let texts = render_texts(&mut composition, root, size);
-    assert!(
-        texts.iter().any(|text| text == "Top stories"),
-        "restored weighted layout branch should render again, got {texts:?}",
+        },
     );
-    assert!(!texts.iter().any(|text| text == "Thread body"));
 }
 
 #[test]

@@ -125,6 +125,7 @@ thread_local! {
     static FRAME_STABLE_HANDLER_MODE: RefCell<Option<MutableState<bool>>> = const { RefCell::new(None) };
     static FRAME_STABLE_RENDERED_CLICKS: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
     static FRAME_STABLE_PENDING_CLICKS: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
+    static ROOT_RENDER_TEST_INVALIDATED: Cell<bool> = const { Cell::new(false) };
 }
 
 fn app_shell_local_count() -> CompositionLocal<i32> {
@@ -141,6 +142,29 @@ fn app_shell_local_count() -> CompositionLocal<i32> {
             .expect("app shell local count initialized")
             .clone()
     })
+}
+
+#[composable]
+fn callbackless_root_render_probe(render_count: Rc<Cell<usize>>) {
+    let root_trigger = useState(|| false);
+    render_count.set(render_count.get() + 1);
+    cranpose_core::with_key(&"root-render-probe", || {
+        let _ = root_trigger.value();
+    });
+
+    Text(
+        format!("Render {}", render_count.get()),
+        Modifier::empty(),
+        TextStyle::default(),
+    );
+
+    cranpose_core::SideEffect(move || {
+        let already_invalidated = ROOT_RENDER_TEST_INVALIDATED.with(|flag| flag.replace(true));
+        if already_invalidated {
+            return;
+        }
+        root_trigger.set_value(true);
+    });
 }
 
 #[derive(Default, Clone)]
@@ -1407,6 +1431,35 @@ fn draw_repass_updates_render_data_without_layout() {
     assert!(
         (updated_width - 120.0).abs() < 0.1,
         "updated width should reflect latest state"
+    );
+}
+
+#[test]
+fn app_shell_new_drains_root_render_requests_before_first_frame() {
+    let _guard = test_guard();
+    ROOT_RENDER_TEST_INVALIDATED.with(|flag| flag.set(false));
+
+    let root_key = location_key(file!(), line!(), column!());
+    let render_count = Rc::new(Cell::new(0));
+    let render_count_for_app = Rc::clone(&render_count);
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, move || {
+        callbackless_root_render_probe(Rc::clone(&render_count_for_app));
+    });
+
+    assert_eq!(
+        render_count.get(),
+        2,
+        "AppShell::new must replay pending root renders before publishing the first frame"
+    );
+    assert!(
+        !shell.composition.take_root_render_request(),
+        "initial shell setup should not leave a pending root render request behind"
+    );
+
+    let texts = layout_tree_texts(shell.layout_tree.as_ref().expect("layout tree available"));
+    assert!(
+        texts.iter().any(|text| text == "Render 2"),
+        "initial frame should reflect the replayed root render, got {texts:?}"
     );
 }
 

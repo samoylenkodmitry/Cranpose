@@ -1,7 +1,7 @@
 use cranpose_core::{
     location_key, ApplierGuard, Composition, Key, MemoryApplier, NodeError, NodeId, RuntimeHandle,
 };
-use cranpose_ui::request_render_invalidation;
+use cranpose_ui::{request_render_invalidation, reset_render_state_for_tests};
 
 #[cfg(test)]
 use cranpose_core::{
@@ -27,6 +27,7 @@ pub struct ComposeTestRule {
 impl ComposeTestRule {
     /// Create a new test rule backed by the default in-memory applier.
     pub fn new() -> Self {
+        reset_render_state_for_tests();
         Self {
             composition: Composition::new(MemoryApplier::new()),
             content: None,
@@ -132,11 +133,28 @@ impl ComposeTestRule {
     fn render(&mut self) -> Result<(), NodeError> {
         if let Some(content) = self.content.as_mut() {
             self.composition.render(self.root_key, &mut **content)?;
+            self.drain_root_render_requests()?;
             // After composition runs, request render invalidation
             // so that tests can detect when content has changed
             request_render_invalidation();
         }
         Ok(())
+    }
+
+    fn drain_root_render_requests(&mut self) -> Result<(), NodeError> {
+        for _ in 0..100 {
+            if !self.composition.take_root_render_request() {
+                return Ok(());
+            }
+            let content = self
+                .content
+                .as_mut()
+                .expect("root render replay requires installed content");
+            self.composition.render(self.root_key, &mut **content)?;
+            request_render_invalidation();
+        }
+
+        panic!("root render replay looped too many times");
     }
 }
 

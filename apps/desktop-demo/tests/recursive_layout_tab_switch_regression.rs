@@ -53,7 +53,6 @@ fn wait_for_recursive_depth_registration(rule: &mut ComposeTestRule) {
     );
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 struct RuntimeLeakDebugStats {
     pass_stats: cranpose_core::CompositionPassDebugStats,
@@ -78,6 +77,29 @@ fn capture_runtime_debug_stats(rule: &mut ComposeTestRule) -> RuntimeLeakDebugSt
         snapshot_v2_stats: debug_snapshot_v2_stats(),
         snapshot_pinning_stats: debug_snapshot_pinning_stats(),
     }
+}
+
+fn touch_runtime_debug_stats(stats: RuntimeLeakDebugStats) {
+    let RuntimeLeakDebugStats {
+        pass_stats,
+        slot_stats,
+        observer_stats,
+        runtime_stats,
+        state_arena_stats,
+        recompose_scope_stats,
+        snapshot_v2_stats,
+        snapshot_pinning_stats,
+    } = stats;
+    let _ = (
+        pass_stats,
+        slot_stats,
+        observer_stats,
+        runtime_stats,
+        state_arena_stats,
+        recompose_scope_stats,
+        snapshot_v2_stats,
+        snapshot_pinning_stats,
+    );
 }
 
 #[test]
@@ -133,6 +155,10 @@ fn switching_away_from_deep_recursive_layout_releases_actual_app_tree() {
     let after_recycled_heap = rule.applier_mut().debug_recycled_node_heap_bytes();
     let after_runtime = capture_runtime_debug_stats(&mut rule);
     let after_slot_value_types = rule.composition().debug_slot_value_type_counts(12);
+
+    touch_runtime_debug_stats(baseline_runtime);
+    touch_runtime_debug_stats(peak_runtime);
+    touch_runtime_debug_stats(after_runtime);
 
     println!(
         "baseline: active={baseline_active} capacity={baseline_capacity} slots={baseline_slots} recycled_nodes={baseline_recycled_nodes} recycled_heap={baseline_recycled_heap}"
