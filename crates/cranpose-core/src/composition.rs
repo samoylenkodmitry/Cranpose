@@ -14,9 +14,27 @@ pub struct Composition<A: Applier + 'static> {
     pub(crate) runtime: Runtime,
     pub(crate) observer: SnapshotStateObserver,
     pub(crate) root: Option<NodeId>,
+    pub(crate) root_key: Option<Key>,
     pub(crate) root_render_requested: bool,
     pub(crate) last_pass_stats: CompositionPassDebugStats,
 }
+
+/// Upper bound on chained root-render replays and scope-recomposition rounds.
+///
+/// Each root render clears `root_render_requested` but may re-raise it if a
+/// recompose pass inside `render()` promotes a scope callback to the root
+/// (see `Composer::recranpose_group` in recompose.rs — callbacks that cannot
+/// run invalidate their `callback_promotion_target`, and if no ancestor can
+/// absorb the callback, `request_root_render()` is called). Each promotion
+/// walks up one parent scope, so natural convergence is bounded by the
+/// composition depth. The same invariant bounds `process_invalid_scopes`:
+/// recomposing a scope may invalidate others, but the chain must terminate.
+///
+/// This constant is a safety net for reentrant-render bugs. Exceeding it
+/// trips a `debug_assert!` in dev/test builds (loud failure so regressions
+/// are caught immediately) and falls back to a break + `log::error!` in
+/// release builds so end users do not see the UI thread panic.
+pub const ROOT_RENDER_REPLAY_LIMIT: usize = 100;
 
 impl<A: Applier + 'static> Composition<A> {
     pub fn new(applier: A) -> Self {
@@ -37,9 +55,16 @@ impl<A: Applier + 'static> Composition<A> {
             runtime,
             observer,
             root: None,
+            root_key: None,
             root_render_requested: false,
             last_pass_stats: CompositionPassDebugStats::default(),
         }
+    }
+
+    /// Returns the root group key captured from the most recent `render()` call,
+    /// or `None` before the first render.
+    pub fn root_key(&self) -> Option<Key> {
+        self.root_key
     }
 
     fn slots_host(&self) -> Rc<SlotsHost> {
@@ -147,6 +172,7 @@ impl<A: Applier + 'static> Composition<A> {
 
     pub fn render(&mut self, key: Key, mut content: impl FnMut()) -> Result<(), NodeError> {
         self.reset_last_pass_stats();
+        self.root_key = Some(key);
         self.root_render_requested = false;
         self.slots.borrow_mut().reset();
         let runtime_handle = self.runtime_handle();
@@ -261,9 +287,13 @@ impl<A: Applier + 'static> Composition<A> {
         let mut loop_count = 0;
         loop {
             loop_count += 1;
-            if loop_count > 100 {
+            if loop_count > ROOT_RENDER_REPLAY_LIMIT {
+                debug_assert!(
+                    false,
+                    "process_invalid_scopes exceeded {ROOT_RENDER_REPLAY_LIMIT} iterations — reentrant recomposition bug (a scope keeps re-invalidating)"
+                );
                 log::error!(
-                    "process_invalid_scopes looped too many times! Breaking loop to prevent freeze."
+                    "process_invalid_scopes looped past {ROOT_RENDER_REPLAY_LIMIT} iterations; breaking to keep UI responsive"
                 );
                 break;
             }

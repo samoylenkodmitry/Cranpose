@@ -541,7 +541,8 @@ impl SnapshotStateObserverInner {
             let indexed_scopes = self.indexed_scopes.borrow();
             for state in modified {
                 if let Some(scope_ids) = observed_to_scopes.get(&state.object_id().as_usize()) {
-                    let mut ordered_scope_ids: Vec<_> = scope_ids.iter().copied().collect();
+                    let mut ordered_scope_ids: SmallVec<[usize; 8]> =
+                        scope_ids.iter().copied().collect();
                     ordered_scope_ids.sort_unstable();
                     for scope_id in ordered_scope_ids {
                         if seen_scope_ids.insert(scope_id) {

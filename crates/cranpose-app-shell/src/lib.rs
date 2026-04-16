@@ -14,7 +14,7 @@ use web_time::Instant;
 
 use cranpose_core::{
     enter_event_handler, exit_event_handler, location_key, run_in_mutable_snapshot, Applier,
-    Composition, Key, MemoryApplier, NodeError, NodeId,
+    Composition, Key, MemoryApplier, NodeError, NodeId, ROOT_RENDER_REPLAY_LIMIT,
 };
 use cranpose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEventKind};
 use cranpose_render_common::{HitTestTarget, RenderScene, Renderer};
@@ -61,7 +61,6 @@ where
 {
     runtime: StdRuntime,
     composition: Composition<MemoryApplier>,
-    root_key: Key,
     content: Box<dyn FnMut()>,
     renderer: R,
     cursor: (f32, f32),
@@ -143,12 +142,17 @@ where
     }
 
     fn drain_root_render_requests(&mut self) {
-        for _ in 0..100 {
-            if !self.composition.take_root_render_request() {
-                return;
-            }
-
-            match self.composition.render(self.root_key, &mut *self.content) {
+        // Root render requests chain when a recompose pass inside `render()`
+        // promotes a scope callback to the root (recompose.rs:67). Each
+        // promotion walks up one parent, so convergence is bounded by the
+        // composition depth. `ROOT_RENDER_REPLAY_LIMIT` is a safety net that
+        // catches reentrant-render bugs loudly in debug builds.
+        let Some(root_key) = self.composition.root_key() else {
+            return;
+        };
+        let mut iterations = 0;
+        while self.composition.take_root_render_request() {
+            match self.composition.render(root_key, &mut *self.content) {
                 Ok(()) => {
                     fps_monitor::record_recomposition();
                     self.request_layout_pass();
@@ -159,9 +163,18 @@ where
                     return;
                 }
             }
+            iterations += 1;
+            if iterations >= ROOT_RENDER_REPLAY_LIMIT {
+                debug_assert!(
+                    false,
+                    "root render replay exceeded {ROOT_RENDER_REPLAY_LIMIT} iterations — reentrant render bug"
+                );
+                log::error!(
+                    "root render fallback looped past {ROOT_RENDER_REPLAY_LIMIT} iterations; breaking to keep UI responsive"
+                );
+                return;
+            }
         }
-
-        log::error!("root render fallback looped too many times");
     }
 
     pub fn new(mut renderer: R, root_key: Key, content: impl FnMut() + 'static) -> Self {
@@ -178,7 +191,6 @@ where
         let mut shell = Self {
             runtime,
             composition,
-            root_key,
             content: build,
             renderer,
             cursor: (0.0, 0.0),

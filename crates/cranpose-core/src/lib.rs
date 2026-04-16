@@ -30,7 +30,7 @@ pub mod internal {
 }
 pub use composer::Composer;
 pub(crate) use composer::{ComposerCore, EmittedNode, ParentAttachMode, ParentFrame};
-pub use composition::Composition;
+pub use composition::{Composition, ROOT_RENDER_REPLAY_LIMIT};
 #[cfg(test)]
 pub(crate) use debug_trace::set_debug_scope_tracking_override_for_tests;
 #[doc(hidden)]
