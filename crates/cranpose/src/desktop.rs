@@ -2,7 +2,7 @@
 //!
 //! This module provides the desktop event loop implementation using winit.
 
-use crate::launcher::AppSettings;
+use crate::launcher::{AppSettings, LaunchError};
 #[cfg(feature = "robot")]
 use cranpose_app_shell::RuntimeLeakDebugStats;
 use cranpose_app_shell::{default_root_key, AppShell};
@@ -10,8 +10,10 @@ use cranpose_platform_desktop_winit::DesktopWinitPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
 #[cfg(feature = "robot")]
 use cranpose_render_wgpu::{DebugCpuAllocationStats, RenderStatsSnapshot};
+use std::cell::RefCell;
 #[cfg(feature = "robot")]
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Arc;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -868,10 +870,16 @@ struct App {
     robot_app_hook: Option<Box<crate::RobotAppHook>>,
     /// Input recorder for generating robot tests
     recorder: Option<crate::recorder::InputRecorder>,
+    /// Launch failure captured during window/GPU initialization.
+    launch_error: Rc<RefCell<Option<LaunchError>>>,
 }
 
 impl App {
-    fn new(mut settings: AppSettings, content: impl FnMut() + 'static) -> Self {
+    fn new(
+        mut settings: AppSettings,
+        content: impl FnMut() + 'static,
+        launch_error: Rc<RefCell<Option<LaunchError>>>,
+    ) -> Self {
         // Create recorder if recording is enabled
         let recorder = settings
             .record_to
@@ -895,7 +903,16 @@ impl App {
             #[cfg(feature = "robot")]
             robot_app_hook,
             recorder,
+            launch_error,
         }
+    }
+
+    fn abort_launch(&self, event_loop: &dyn ActiveEventLoop, error: LaunchError) {
+        let mut slot = self.launch_error.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(error);
+        }
+        event_loop.exit();
     }
 
     #[cfg(feature = "robot")]
@@ -915,19 +932,22 @@ impl ApplicationHandler for App {
         let initial_height = self.settings.initial_height;
         let headless = self.settings.headless;
 
-        let window: Arc<dyn Window> = event_loop
-            .create_window(
-                WindowAttributes::default()
-                    .with_title(self.settings.window_title.clone())
-                    .with_surface_size(LogicalSize::new(
-                        initial_width as f64,
-                        initial_height as f64,
-                    ))
-                    // Hide window in headless mode for parallel robot testing
-                    .with_visible(!headless),
-            )
-            .expect("failed to create window")
-            .into();
+        let window: Arc<dyn Window> = match event_loop.create_window(
+            WindowAttributes::default()
+                .with_title(self.settings.window_title.clone())
+                .with_surface_size(LogicalSize::new(
+                    initial_width as f64,
+                    initial_height as f64,
+                ))
+                // Hide window in headless mode for parallel robot testing
+                .with_visible(!headless),
+        ) {
+            Ok(window) => window.into(),
+            Err(error) => {
+                self.abort_launch(event_loop, LaunchError::WindowCreate(error));
+                return;
+            }
+        };
 
         // Initialize WGPU
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -935,9 +955,13 @@ impl ApplicationHandler for App {
             ..Default::default()
         });
 
-        let surface = instance
-            .create_surface(window.clone())
-            .expect("failed to create surface");
+        let surface = match instance.create_surface(window.clone()) {
+            Ok(surface) => surface,
+            Err(error) => {
+                self.abort_launch(event_loop, LaunchError::SurfaceCreate(error));
+                return;
+            }
+        };
 
         let adapter =
             match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -946,75 +970,28 @@ impl ApplicationHandler for App {
                 force_fallback_adapter: false,
             })) {
                 Ok(adapter) => adapter,
-                Err(e) => {
-                    // Provide helpful error message for GPU issues
-                    eprintln!(
-                        "\n╔══════════════════════════════════════════════════════════════════╗"
-                    );
-                    eprintln!(
-                        "║                    GPU ADAPTER NOT FOUND                          ║"
-                    );
-                    eprintln!(
-                        "╠══════════════════════════════════════════════════════════════════╣"
-                    );
-                    eprintln!(
-                        "║ No suitable graphics adapter was found. This usually means:      ║"
-                    );
-                    eprintln!(
-                        "║                                                                  ║"
-                    );
-                    eprintln!(
-                        "║   • GPU drivers are not installed or not working                 ║"
-                    );
-                    eprintln!(
-                        "║   • Vulkan/OpenGL support is missing or broken                   ║"
-                    );
-                    eprintln!(
-                        "║   • A recent system update broke graphics drivers                ║"
-                    );
-                    eprintln!(
-                        "║                                                                  ║"
-                    );
-                    eprintln!(
-                        "║ To fix this on Linux:                                            ║"
-                    );
-                    eprintln!(
-                        "║   1. Check Vulkan: vulkaninfo | head -20                         ║"
-                    );
-                    eprintln!(
-                        "║   2. Reinstall drivers:                                          ║"
-                    );
-                    eprintln!(
-                        "║      - Mesa: sudo pacman -S mesa vulkan-mesa-layers              ║"
-                    );
-                    eprintln!(
-                        "║      - NVIDIA: sudo pacman -S nvidia-utils                       ║"
-                    );
-                    eprintln!(
-                        "║   3. Reboot your system                                          ║"
-                    );
-                    eprintln!(
-                        "║                                                                  ║"
-                    );
-                    eprintln!("║ Technical details: {:?}", e);
-                    eprintln!(
-                        "╚══════════════════════════════════════════════════════════════════╝\n"
-                    );
-                    event_loop.exit();
+                Err(error) => {
+                    self.abort_launch(event_loop, LaunchError::NoAdapter(error));
                     return;
                 }
             };
         let adapter_info = adapter.get_info();
 
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("Main Device"),
-            required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::default(),
-            experimental_features: wgpu::ExperimentalFeatures::disabled(),
-            memory_hints: wgpu::MemoryHints::default(),
-            trace: wgpu::Trace::Off,
-        }))
-        .expect("failed to create device");
+        let (device, queue) =
+            match pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                label: Some("Main Device"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                memory_hints: wgpu::MemoryHints::default(),
+                trace: wgpu::Trace::Off,
+            })) {
+                Ok(pair) => pair,
+                Err(error) => {
+                    self.abort_launch(event_loop, LaunchError::DeviceCreate(error));
+                    return;
+                }
+            };
 
         let size = window.surface_size();
         let surface_caps = surface.get_capabilities(&adapter);
@@ -1786,10 +1763,14 @@ impl ApplicationHandler for App {
 ///
 /// **Note:** Applications should use `AppLauncher` instead of calling this directly.
 #[allow(unused_mut)]
-pub fn run(mut settings: AppSettings, content: impl FnMut() + 'static) -> ! {
+pub fn try_run(
+    mut settings: AppSettings,
+    content: impl FnMut() + 'static,
+) -> Result<(), LaunchError> {
     let event_loop = EventLoop::builder()
         .build()
-        .expect("failed to create event loop");
+        .map_err(LaunchError::EventLoopCreate)?;
+    let launch_error = Rc::new(RefCell::new(None));
 
     // Spawn test driver if present
     #[cfg(feature = "robot")]
@@ -1803,15 +1784,28 @@ pub fn run(mut settings: AppSettings, content: impl FnMut() + 'static) -> ! {
         None
     };
 
-    let mut app = App::new(settings, content);
+    let mut app = App::new(settings, content, Rc::clone(&launch_error));
 
     #[cfg(feature = "robot")]
     if let Some(controller) = robot_controller {
         app.set_robot_controller(controller);
     }
 
-    let _ = event_loop.run_app(app);
+    let run_result = event_loop.run_app(app);
+    if let Some(error) = launch_error.borrow_mut().take() {
+        return Err(error);
+    }
 
+    run_result.map_err(LaunchError::EventLoopRun)
+}
+
+/// Runs a desktop application and exits the process on success.
+///
+/// Use [`try_run`] when the caller needs to handle launch failures explicitly.
+#[allow(unused_mut)]
+pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
+    try_run(settings, content)
+        .unwrap_or_else(|error| panic!("failed to launch desktop app: {error}"));
     std::process::exit(0)
 }
 

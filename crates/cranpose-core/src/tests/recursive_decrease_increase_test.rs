@@ -64,7 +64,7 @@ fn recursive_decrease_increase_preserves_structure() {
     let key = location_key(file!(), line!(), column!());
 
     // Initial render at depth 3
-    println!("\n=== Initial render at depth 3 ===");
+    eprintln!("\n=== Initial render at depth 3 ===");
     composition
         .render(key, &mut || {
             recursive_root(depth_state);
@@ -73,11 +73,11 @@ fn recursive_decrease_increase_preserves_structure() {
 
     let initial_groups = count_groups(&composition);
     let initial_gaps = count_gap_groups(&composition);
-    println!(
+    eprintln!(
         "Groups: {}, Gaps with keys: {}",
         initial_groups, initial_gaps
     );
-    println!(
+    eprintln!(
         "Group keys: {:?}",
         composition
             .debug_dump_slot_table_groups()
@@ -88,7 +88,7 @@ fn recursive_decrease_increase_preserves_structure() {
     assert!(initial_groups > 0, "Should have groups at depth 3");
 
     // Decrease to depth 2
-    println!("\n=== Decrease to depth 2 ===");
+    eprintln!("\n=== Decrease to depth 2 ===");
     depth_state.set(2);
     let mut recomp_count = 0;
     while composition
@@ -97,15 +97,15 @@ fn recursive_decrease_increase_preserves_structure() {
     {
         recomp_count += 1;
     }
-    println!("Recomposed {} times", recomp_count);
+    eprintln!("Recomposed {} times", recomp_count);
 
     let decreased_groups = count_groups(&composition);
     let decreased_gaps = count_gap_groups(&composition);
-    println!(
+    eprintln!(
         "Groups: {}, Gaps with keys: {}",
         decreased_groups, decreased_gaps
     );
-    println!(
+    eprintln!(
         "Group keys: {:?}",
         composition
             .debug_dump_slot_table_groups()
@@ -113,9 +113,9 @@ fn recursive_decrease_increase_preserves_structure() {
             .map(|(idx, key, _, _)| (idx, key))
             .collect::<Vec<_>>()
     );
-    println!("All slots:");
+    eprintln!("All slots:");
     for (idx, desc) in composition.debug_dump_all_slots() {
-        println!("  [{}] {}", idx, desc);
+        eprintln!("  [{}] {}", idx, desc);
     }
 
     // After decrease + compaction, gaps are removed (compaction reclaims them).
@@ -126,7 +126,7 @@ fn recursive_decrease_increase_preserves_structure() {
     );
 
     // Increase back to depth 3
-    println!("\n=== Increase back to depth 3 ===");
+    eprintln!("\n=== Increase back to depth 3 ===");
     depth_state.set(3);
     while composition
         .process_invalid_scopes()
@@ -135,11 +135,11 @@ fn recursive_decrease_increase_preserves_structure() {
 
     let restored_groups = count_groups(&composition);
     let restored_gaps = count_gap_groups(&composition);
-    println!(
+    eprintln!(
         "Groups: {}, Gaps with keys: {}",
         restored_groups, restored_gaps
     );
-    println!(
+    eprintln!(
         "Group keys: {:?}",
         composition
             .debug_dump_slot_table_groups()
@@ -147,15 +147,15 @@ fn recursive_decrease_increase_preserves_structure() {
             .map(|(idx, key, _, _)| (idx, key))
             .collect::<Vec<_>>()
     );
-    println!("All slots (first 30):");
+    eprintln!("All slots (first 30):");
     for (idx, desc) in composition.debug_dump_all_slots().iter().take(30) {
-        println!("  [{}] {}", idx, desc);
+        eprintln!("  [{}] {}", idx, desc);
     }
 
     // After increasing back, we should have restored the original structure exactly
-    println!("\nComparison:");
-    println!("  Initial groups: {}", initial_groups);
-    println!("  Restored groups: {}", restored_groups);
+    eprintln!("\nComparison:");
+    eprintln!("  Initial groups: {}", initial_groups);
+    eprintln!("  Restored groups: {}", restored_groups);
 
     assert_eq!(
         restored_groups,
@@ -187,11 +187,11 @@ fn recursive_decrease_increase_multiple_cycles() {
         .iter()
         .map(|(_idx, key, _, _)| *key)
         .collect();
-    println!("Initial keys: {:?}", initial_keys);
+    eprintln!("Initial keys: {:?}", initial_keys);
 
     // Do multiple decrease-increase cycles
     for cycle in 0..3 {
-        println!("\n=== Cycle {} ===", cycle);
+        eprintln!("\n=== Cycle {} ===", cycle);
 
         // Decrease
         depth_state.set(2);
@@ -199,7 +199,7 @@ fn recursive_decrease_increase_multiple_cycles() {
 
         let gaps_after_decrease = count_gap_groups(&composition);
         let gap_keys = get_gap_keys(&composition);
-        println!(
+        eprintln!(
             "After decrease: {} gaps with keys: {:?}",
             gaps_after_decrease, gap_keys
         );
@@ -215,11 +215,11 @@ fn recursive_decrease_increase_multiple_cycles() {
             .map(|(_idx, key, _, _)| *key)
             .collect();
         let gaps_after_increase = count_gap_groups(&composition);
-        println!(
+        eprintln!(
             "After cycle {}: {} groups (initial: {}), {} gaps remaining",
             cycle, groups, initial_groups, gaps_after_increase
         );
-        println!("Current keys: {:?}", current_keys);
+        eprintln!("Current keys: {:?}", current_keys);
 
         // Check for duplicate keys
         let mut key_counts: crate::collections::map::HashMap<u64, i32> =
@@ -229,14 +229,14 @@ fn recursive_decrease_increase_multiple_cycles() {
         }
         for (k, count) in key_counts.iter() {
             if *count > 1 {
-                println!("DUPLICATE KEY FOUND: {:?} appears {} times", k, count);
+                eprintln!("DUPLICATE KEY FOUND: {:?} appears {} times", k, count);
             }
         }
 
         // Check for missing keys
         for k in &initial_keys {
             if !current_keys.contains(k) {
-                println!("MISSING KEY: {:?}", k);
+                eprintln!("MISSING KEY: {:?}", k);
             }
         }
 

@@ -1,4 +1,8 @@
-use super::*;
+use crate::{
+    debug_scope_invalidation_sources, debug_scope_label, Composer, ComposerCore, NodeId,
+    RecomposeScope,
+};
+use std::rc::Rc;
 
 impl Composer {
     pub(crate) fn recranpose_group(&self, scope: &RecomposeScope) {
@@ -12,7 +16,7 @@ impl Composer {
             return;
         }
         let started = self.with_slots_mut(|slots| {
-            slots.begin_recranpose_at_anchor(scope.group_anchor(), scope.id())
+            slots.start_recranpose_at_anchor(scope.group_anchor(), scope.id())
         });
         log::trace!(
             target: "cranpose::compose::recompose",
@@ -74,7 +78,7 @@ impl Composer {
                 let mut stack = self.scope_stack();
                 stack.pop();
             }
-            self.with_slots_mut(SlotStorage::end_recompose);
+            self.with_slots_mut(|slots| slots.end_recompose());
             log::trace!(
                 target: "cranpose::compose::recompose",
                 "scope_id={} label={:?} ended",

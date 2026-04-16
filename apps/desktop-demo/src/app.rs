@@ -32,7 +32,7 @@ mod winamp;
 mod xkcd;
 
 use animations::AnimationsTab;
-use hacker_news::hacker_news_tab;
+use hacker_news::HackerNewsTab;
 use images::images_tab;
 use lazy_list::lazy_list_example;
 use markdown::markdown_viewer_tab;
@@ -447,7 +447,7 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection) {
         DemoTab::ModifierShowcase => modifier_showcase_tab(),
         DemoTab::LazyList => lazy_list_example(),
         DemoTab::Mineswapper2 => mineswapper2::mineswapper2_tab(),
-        DemoTab::HackerNews => hacker_news_tab(),
+        DemoTab::HackerNews => HackerNewsTab(),
         DemoTab::Images => images_tab(),
         DemoTab::Text => TextShowcaseTab(),
         DemoTab::Winamp => WinampTab(),

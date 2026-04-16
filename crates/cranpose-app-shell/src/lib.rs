@@ -268,7 +268,7 @@ where
         {
             return true;
         }
-        self.runtime.has_frame_request() || self.composition.should_render()
+        self.composition.should_render()
     }
 
     /// Returns true if the shell needs to redraw (dirty flag, layout dirty, active animations).
@@ -308,7 +308,7 @@ where
 
     /// Returns true if there are active animations or pending recompositions.
     pub fn has_active_animations(&self) -> bool {
-        self.runtime.has_frame_request() || self.composition.should_render()
+        self.composition.should_render()
     }
 
     /// Returns the next scheduled event time for cursor blink.

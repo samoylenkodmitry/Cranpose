@@ -6,15 +6,15 @@ pub mod policies;
 
 use cranpose_core::collections::map::HashMap;
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     fmt,
     rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use cranpose_core::{
-    Applier, ApplierHost, Composer, ConcreteApplierHost, MemoryApplier, NodeError, NodeId, Phase,
-    RuntimeHandle, SlotTable, SlotsHost, SnapshotStateObserver,
+    Applier, ApplierHost, Composer, ConcreteApplierHost, MemoryApplier, Node, NodeError, NodeId,
+    Phase, RuntimeHandle, SlotTable, SlotsHost, SnapshotStateObserver,
 };
 
 use self::coordinator::NodeCoordinator;
@@ -538,8 +538,6 @@ pub fn measure_layout_with_options(
     max_size: Size,
     options: MeasureLayoutOptions,
 ) -> Result<LayoutMeasurements, NodeError> {
-    #[cfg(test)]
-    crate::reset_render_state_for_tests();
     process_pending_layout_repasses(applier, root)?;
 
     let constraints = Constraints {
@@ -570,8 +568,10 @@ pub fn measure_layout_with_options(
         Ok(tuple) => tuple,
         Err(NodeError::TypeMismatch { .. }) => {
             let node = applier.get_mut(root)?;
-            // For non-LayoutNode roots, check needs_layout as fallback
-            let measure_dirty = node.needs_layout();
+            // Non-LayoutNode roots still expose Node dirty flags.
+            // Use needs_measure here so layout-only subtree repasses can reuse
+            // the existing cache epoch instead of invalidating the whole tree.
+            let measure_dirty = node.needs_measure();
             let semantics_dirty = node.needs_semantics();
             (measure_dirty, semantics_dirty, 0)
         }
@@ -664,13 +664,10 @@ fn process_pending_layout_repasses(
     if repass_nodes.is_empty() {
         return Ok(());
     }
-
     for node_id in repass_nodes {
-        cranpose_core::bubble_measure_dirty(applier as &mut dyn Applier, node_id);
         cranpose_core::bubble_layout_dirty(applier as &mut dyn Applier, node_id);
     }
-
-    applier.get_mut(root)?.mark_needs_measure();
+    applier.get_mut(root)?.mark_needs_layout();
     Ok(())
 }
 
@@ -954,7 +951,6 @@ impl LayoutBuilderState {
             ),
             Rc::clone(&measure_error),
         )?;
-
         slots_guard.restore(slots_host.take());
 
         if let Some(err) = measure_error.borrow_mut().take() {
@@ -991,6 +987,8 @@ impl LayoutBuilderState {
         if let Ok(mut applier) = applier_host.try_borrow_typed() {
             let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |parent_node| {
                 parent_node.set_measured_size(Size { width, height });
+                parent_node.clear_needs_measure();
+                parent_node.clear_needs_layout();
             });
         }
 
@@ -1211,6 +1209,7 @@ impl LayoutBuilderState {
         let LayoutNodeSnapshot {
             measure_policy,
             cache,
+            needs_layout,
             needs_measure,
         } = snapshot;
         cache.activate(cache_epoch);
@@ -1219,10 +1218,10 @@ impl LayoutBuilderState {
             // Node has needs_measure=true
         }
 
-        // Only check cache if not marked as needing measure.
-        // When needs_measure=true, we MUST re-run measure() even if constraints match,
-        // because something else changed (e.g., scroll offset, modifier state).
-        if !needs_measure {
+        // Only check cache when the node is fully clean.
+        // needs_layout=true means either the node itself or one of its descendants
+        // must be revisited even if the node's own measured size can stay cached.
+        if !needs_measure && !needs_layout {
             // Check cache for current constraints
             if let Some(cached) = cache.get_measurement(constraints) {
                 // Clear dirty flag after successful cache hit
@@ -1260,18 +1259,37 @@ impl LayoutBuilderState {
             let data = {
                 let mut applier = applier_host.borrow_typed();
                 match applier.with_node::<LayoutNode, _>(child_id, |n| {
-                    (n.cache_handles(), n.layout_state_handle())
+                    (
+                        n.cache_handles(),
+                        n.layout_state_handle(),
+                        n.needs_layout(),
+                        n.needs_measure(),
+                    )
                 }) {
-                    Ok((cache, state)) => Some((cache, Some(state))),
+                    Ok((cache, state, needs_layout, needs_measure)) => {
+                        Some((cache, Some(state), needs_layout, needs_measure))
+                    }
                     Err(NodeError::TypeMismatch { .. }) => {
-                        Some((LayoutNodeCacheHandles::default(), None))
+                        match applier.with_node::<SubcomposeLayoutNode, _>(child_id, |n| {
+                            (n.needs_layout(), n.needs_measure())
+                        }) {
+                            Ok((needs_layout, needs_measure)) => Some((
+                                LayoutNodeCacheHandles::default(),
+                                None,
+                                needs_layout,
+                                needs_measure,
+                            )),
+                            Err(NodeError::TypeMismatch { .. }) => None,
+                            Err(NodeError::Missing { .. }) => None,
+                            Err(err) => return Err(err),
+                        }
                     }
                     Err(NodeError::Missing { .. }) => None,
                     Err(err) => return Err(err),
                 }
             };
 
-            let Some((cache_handles, layout_state)) = data else {
+            let Some((cache_handles, layout_state, needs_layout, needs_measure)) = data else {
                 continue;
             };
 
@@ -1293,6 +1311,7 @@ impl LayoutBuilderState {
                 runtime_handle.clone(),
                 cache_handles,
                 cache_epoch,
+                needs_layout || needs_measure,
                 Some(measure_handle.clone()),
                 layout_state,
             )));
@@ -1386,6 +1405,7 @@ impl LayoutBuilderState {
 struct LayoutNodeSnapshot {
     measure_policy: Rc<dyn MeasurePolicy>,
     cache: LayoutNodeCacheHandles,
+    needs_layout: bool,
     /// Whether this specific node needs to be measured (vs using cached measurement)
     needs_measure: bool,
 }
@@ -1395,6 +1415,7 @@ impl LayoutNodeSnapshot {
         Self {
             measure_policy: Rc::clone(&node.measure_policy),
             cache: node.cache_handles(),
+            needs_layout: node.needs_layout(),
             needs_measure: node.needs_measure(),
         }
     }
@@ -1576,6 +1597,7 @@ struct LayoutChildMeasurable {
     runtime_handle: Option<RuntimeHandle>,
     cache: LayoutNodeCacheHandles,
     cache_epoch: u64,
+    force_remeasure: Cell<bool>,
     measure_handle: Option<LayoutMeasureHandle>,
     layout_state: Option<Rc<RefCell<crate::widgets::nodes::layout_node::LayoutState>>>,
 }
@@ -1591,6 +1613,7 @@ impl LayoutChildMeasurable {
         runtime_handle: Option<RuntimeHandle>,
         cache: LayoutNodeCacheHandles,
         cache_epoch: u64,
+        force_remeasure: bool,
         measure_handle: Option<LayoutMeasureHandle>,
         layout_state: Option<Rc<RefCell<crate::widgets::nodes::layout_node::LayoutState>>>,
     ) -> Self {
@@ -1604,6 +1627,7 @@ impl LayoutChildMeasurable {
             runtime_handle,
             cache,
             cache_epoch,
+            force_remeasure: Cell::new(force_remeasure),
             measure_handle,
             layout_state,
         }
@@ -1632,12 +1656,15 @@ impl LayoutChildMeasurable {
 
     fn intrinsic_measure(&self, constraints: Constraints) -> Option<Rc<MeasuredNode>> {
         self.cache.activate(self.cache_epoch);
-        if let Some(cached) = self.cache.get_measurement(constraints) {
-            return Some(cached);
+        if !self.force_remeasure.get() {
+            if let Some(cached) = self.cache.get_measurement(constraints) {
+                return Some(cached);
+            }
         }
 
         match self.perform_measure(constraints) {
             Ok(measured) => {
+                self.force_remeasure.set(false);
                 self.cache
                     .store_measurement(constraints, Rc::clone(&measured));
                 Some(measured)
@@ -1654,12 +1681,33 @@ impl Measurable for LayoutChildMeasurable {
     fn measure(&self, constraints: Constraints) -> Placeable {
         self.cache.activate(self.cache_epoch);
         let measured_size;
-        if let Some(cached) = self.cache.get_measurement(constraints) {
-            measured_size = cached.size;
-            *self.measured.borrow_mut() = Some(Rc::clone(&cached));
+        if !self.force_remeasure.get() {
+            if let Some(cached) = self.cache.get_measurement(constraints) {
+                measured_size = cached.size;
+                *self.measured.borrow_mut() = Some(Rc::clone(&cached));
+            } else {
+                match self.perform_measure(constraints) {
+                    Ok(measured) => {
+                        self.force_remeasure.set(false);
+                        measured_size = measured.size;
+                        self.cache
+                            .store_measurement(constraints, Rc::clone(&measured));
+                        *self.measured.borrow_mut() = Some(measured);
+                    }
+                    Err(err) => {
+                        self.record_error(err);
+                        self.measured.borrow_mut().take();
+                        measured_size = Size {
+                            width: 0.0,
+                            height: 0.0,
+                        };
+                    }
+                }
+            }
         } else {
             match self.perform_measure(constraints) {
                 Ok(measured) => {
+                    self.force_remeasure.set(false);
                     measured_size = measured.size;
                     self.cache
                         .store_measurement(constraints, Rc::clone(&measured));
@@ -1740,8 +1788,10 @@ impl Measurable for LayoutChildMeasurable {
     fn min_intrinsic_width(&self, height: f32) -> f32 {
         let kind = IntrinsicKind::MinWidth(height);
         self.cache.activate(self.cache_epoch);
-        if let Some(value) = self.cache.get_intrinsic(&kind) {
-            return value;
+        if !self.force_remeasure.get() {
+            if let Some(value) = self.cache.get_intrinsic(&kind) {
+                return value;
+            }
         }
         let constraints = Constraints {
             min_width: 0.0,
@@ -1761,8 +1811,10 @@ impl Measurable for LayoutChildMeasurable {
     fn max_intrinsic_width(&self, height: f32) -> f32 {
         let kind = IntrinsicKind::MaxWidth(height);
         self.cache.activate(self.cache_epoch);
-        if let Some(value) = self.cache.get_intrinsic(&kind) {
-            return value;
+        if !self.force_remeasure.get() {
+            if let Some(value) = self.cache.get_intrinsic(&kind) {
+                return value;
+            }
         }
         let constraints = Constraints {
             min_width: 0.0,
@@ -1782,8 +1834,10 @@ impl Measurable for LayoutChildMeasurable {
     fn min_intrinsic_height(&self, width: f32) -> f32 {
         let kind = IntrinsicKind::MinHeight(width);
         self.cache.activate(self.cache_epoch);
-        if let Some(value) = self.cache.get_intrinsic(&kind) {
-            return value;
+        if !self.force_remeasure.get() {
+            if let Some(value) = self.cache.get_intrinsic(&kind) {
+                return value;
+            }
         }
         let constraints = Constraints {
             min_width: width,
@@ -1803,8 +1857,10 @@ impl Measurable for LayoutChildMeasurable {
     fn max_intrinsic_height(&self, width: f32) -> f32 {
         let kind = IntrinsicKind::MaxHeight(width);
         self.cache.activate(self.cache_epoch);
-        if let Some(value) = self.cache.get_intrinsic(&kind) {
-            return value;
+        if !self.force_remeasure.get() {
+            if let Some(value) = self.cache.get_intrinsic(&kind) {
+                return value;
+            }
         }
         let constraints = Constraints {
             min_width: 0.0,

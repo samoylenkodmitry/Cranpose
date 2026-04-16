@@ -601,13 +601,11 @@ impl SubcomposeLayoutNode {
         self.needs_measure.get()
     }
 
-    #[cfg(test)]
-    pub(crate) fn clear_needs_measure_for_tests(&self) {
+    pub(crate) fn clear_needs_measure(&self) {
         self.needs_measure.set(false);
     }
 
-    #[cfg(test)]
-    pub(crate) fn clear_needs_layout_for_tests(&self) {
+    pub(crate) fn clear_needs_layout(&self) {
         self.needs_layout.set(false);
     }
 

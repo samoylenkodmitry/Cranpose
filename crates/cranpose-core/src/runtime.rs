@@ -31,13 +31,13 @@ struct TypedStateCell<T: Clone + 'static> {
     inner: MutableStateInner<T>,
 }
 
-trait PrunableCell {
-    fn prune_dead_watchers(&self);
+trait ScopeWatchCell {
+    fn unregister_scope(&self, scope_id: ScopeId);
 }
 
-impl<T: Clone + 'static> PrunableCell for TypedStateCell<T> {
-    fn prune_dead_watchers(&self) {
-        self.inner.prune_dead_watchers();
+impl<T: Clone + 'static> ScopeWatchCell for TypedStateCell<T> {
+    fn unregister_scope(&self, scope_id: ScopeId) {
+        self.inner.unregister_scope(scope_id);
     }
 }
 
@@ -49,7 +49,7 @@ struct RawStateCell<T: 'static> {
 struct StateArenaSlot {
     generation: u32,
     cell: Option<Rc<dyn Any>>,
-    prunable_cell: Option<Rc<dyn PrunableCell>>,
+    watcher_cell: Option<Rc<dyn ScopeWatchCell>>,
     lease: Option<Weak<StateHandleLease>>,
 }
 
@@ -121,7 +121,7 @@ impl StateArena {
                     inner.cells.push(StateArenaSlot {
                         generation: 0,
                         cell: None,
-                        prunable_cell: None,
+                        watcher_cell: None,
                         lease: None,
                     });
                     (slot, 0)
@@ -133,11 +133,11 @@ impl StateArena {
         inner.install_snapshot_observer(id);
         let typed_cell = Rc::new(TypedStateCell { inner });
         let cell: Rc<dyn Any> = typed_cell.clone();
-        let prunable_cell: Rc<dyn PrunableCell> = typed_cell;
+        let watcher_cell: Rc<dyn ScopeWatchCell> = typed_cell;
         let mut arena = self.inner.borrow_mut();
         let slot_entry = &mut arena.cells[slot as usize];
         slot_entry.cell = Some(cell);
-        slot_entry.prunable_cell = Some(prunable_cell);
+        slot_entry.watcher_cell = Some(watcher_cell);
         id
     }
 
@@ -160,7 +160,7 @@ impl StateArena {
                     inner.cells.push(StateArenaSlot {
                         generation: 0,
                         cell: None,
-                        prunable_cell: None,
+                        watcher_cell: None,
                         lease: None,
                     });
                     (slot, 0)
@@ -172,7 +172,7 @@ impl StateArena {
         let mut arena = self.inner.borrow_mut();
         let slot_entry = &mut arena.cells[slot as usize];
         slot_entry.cell = Some(cell);
-        slot_entry.prunable_cell = None;
+        slot_entry.watcher_cell = None;
         id
     }
 
@@ -248,7 +248,7 @@ impl StateArena {
                 return;
             }
             slot.lease = None;
-            slot.prunable_cell = None;
+            slot.watcher_cell = None;
             let cell = slot.cell.take();
             if cell.is_some() {
                 inner.free.push(id.slot());
@@ -273,12 +273,18 @@ impl StateArena {
         }
     }
 
-    pub(crate) fn prune_dead_watchers(&self) {
-        let inner = self.inner.borrow();
-        for slot in &inner.cells {
-            if let Some(prunable_cell) = slot.prunable_cell.as_ref() {
-                prunable_cell.prune_dead_watchers();
-            }
+    pub(crate) fn unregister_scope(&self, id: StateId, scope_id: ScopeId) {
+        let watcher_cell = {
+            let inner = self.inner.borrow();
+            inner
+                .cells
+                .get(id.slot_index())
+                .filter(|slot| slot.generation == id.generation())
+                .and_then(|slot| slot.watcher_cell.as_ref())
+                .cloned()
+        };
+        if let Some(watcher_cell) = watcher_cell {
+            watcher_cell.unregister_scope(scope_id);
         }
     }
 
@@ -1013,8 +1019,10 @@ impl RuntimeHandle {
             .unwrap_or_default()
     }
 
-    pub(crate) fn prune_dead_state_watchers(&self) {
-        self.with_state_arena(StateArena::prune_dead_watchers);
+    pub(crate) fn unregister_state_scope(&self, id: StateId, scope_id: ScopeId) {
+        if let Some(inner) = self.inner.upgrade() {
+            inner.state_arena.unregister_scope(id, scope_id);
+        }
     }
 
     pub fn schedule(&self) {

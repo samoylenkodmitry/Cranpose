@@ -4,7 +4,10 @@ use crate::modifier::{Modifier, Size};
 use crate::subcompose_layout::SubcomposeLayoutScope;
 use cranpose_core::{Applier, ConcreteApplierHost, MemoryApplier, Node};
 use cranpose_ui_layout::{MeasurePolicy, MeasureResult, Placement};
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use super::core::Measurable;
 
@@ -144,6 +147,50 @@ impl MeasurePolicy for RecordingPolicy {
 
     fn max_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
         0.0
+    }
+}
+
+#[derive(Clone)]
+struct MutableLeafPolicy {
+    size: Rc<Cell<Size>>,
+    calls: Rc<Cell<usize>>,
+}
+
+impl MeasurePolicy for MutableLeafPolicy {
+    fn measure(
+        &self,
+        _measurables: &[Box<dyn Measurable>],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        self.calls.set(self.calls.get() + 1);
+        let size = self.size.get();
+        MeasureResult::new(
+            Size {
+                width: size
+                    .width
+                    .clamp(constraints.min_width, constraints.max_width),
+                height: size
+                    .height
+                    .clamp(constraints.min_height, constraints.max_height),
+            },
+            Vec::new(),
+        )
+    }
+
+    fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+        self.size.get().width
+    }
+
+    fn max_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+        self.size.get().width
+    }
+
+    fn min_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+        self.size.get().height
+    }
+
+    fn max_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+        self.size.get().height
     }
 }
 
@@ -587,6 +634,390 @@ fn selective_measure_with_tree_hierarchy() -> Result<(), NodeError> {
 }
 
 #[test]
+fn scoped_layout_repass_remeasures_only_dirty_subtree() -> Result<(), NodeError> {
+    let _guard = crate::render_state::render_state_test_guard();
+    crate::reset_render_state_for_tests();
+    let dirty_size = Rc::new(Cell::new(Size::new(10.0, 10.0)));
+    let dirty_calls = Rc::new(Cell::new(0usize));
+    let clean_size = Rc::new(Cell::new(Size::new(5.0, 5.0)));
+    let clean_calls = Rc::new(Cell::new(0usize));
+
+    let mut applier = MemoryApplier::new();
+    let dirty_child = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(MutableLeafPolicy {
+            size: Rc::clone(&dirty_size),
+            calls: Rc::clone(&dirty_calls),
+        }),
+    )));
+    let clean_child = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(MutableLeafPolicy {
+            size: Rc::clone(&clean_size),
+            calls: Rc::clone(&clean_calls),
+        }),
+    )));
+
+    let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
+    root.children.push(dirty_child);
+    root.children.push(clean_child);
+    let root_id = applier.create(Box::new(root));
+
+    applier.with_node::<LayoutNode, _>(root_id, |node| node.set_node_id(root_id))?;
+    applier.with_node::<LayoutNode, _>(dirty_child, |node| {
+        node.set_node_id(dirty_child);
+        node.set_parent(root_id);
+    })?;
+    applier.with_node::<LayoutNode, _>(clean_child, |node| {
+        node.set_node_id(clean_child);
+        node.set_parent(root_id);
+    })?;
+
+    let first = measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
+    assert_eq!(first.root_size().height, 15.0);
+    assert_eq!(
+        dirty_calls.get(),
+        1,
+        "dirty child should measure once initially"
+    );
+    assert_eq!(
+        clean_calls.get(),
+        1,
+        "clean child should measure once initially"
+    );
+
+    for node_id in [root_id, dirty_child, clean_child] {
+        applier.with_node::<LayoutNode, _>(node_id, |node| {
+            node.clear_needs_measure();
+            node.clear_needs_layout();
+        })?;
+    }
+
+    let epoch_before =
+        applier.with_node::<LayoutNode, _>(root_id, |node| node.cache_handles().epoch())?;
+
+    dirty_size.set(Size::new(10.0, 20.0));
+    applier.with_node::<LayoutNode, _>(dirty_child, |node| {
+        node.mark_needs_measure();
+    })?;
+
+    crate::schedule_layout_repass(dirty_child);
+    super::process_pending_layout_repasses(&mut applier, root_id)?;
+
+    let root_needs_measure =
+        applier.with_node::<LayoutNode, _>(root_id, |node| node.needs_measure())?;
+    let root_needs_layout =
+        applier.with_node::<LayoutNode, _>(root_id, |node| node.needs_layout())?;
+
+    assert!(
+        !root_needs_measure,
+        "scoped repass should not force the root into global remeasure"
+    );
+    assert!(
+        root_needs_layout,
+        "scoped repass should still bubble layout work to the root"
+    );
+
+    let second = measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
+    let epoch_after =
+        applier.with_node::<LayoutNode, _>(root_id, |node| node.cache_handles().epoch())?;
+
+    assert_eq!(
+        second.root_size().height,
+        25.0,
+        "root height should reflect the dirty child's new measured size"
+    );
+    assert_eq!(
+        epoch_before, epoch_after,
+        "scoped subtree repass should preserve the global cache epoch"
+    );
+    assert_eq!(
+        dirty_calls.get(),
+        2,
+        "dirty child should be remeasured exactly once"
+    );
+    assert_eq!(
+        clean_calls.get(),
+        1,
+        "clean sibling should reuse its cached measurement"
+    );
+
+    crate::reset_render_state_for_tests();
+
+    Ok(())
+}
+
+#[test]
+fn scoped_layout_repass_remeasures_dirty_subcompose_child() -> Result<(), NodeError> {
+    let _guard = crate::render_state::render_state_test_guard();
+    crate::reset_render_state_for_tests();
+
+    let child_size = Rc::new(Cell::new(Size::new(10.0, 10.0)));
+    let child_calls = Rc::new(Cell::new(0usize));
+
+    let policy: Rc<crate::subcompose_layout::MeasurePolicy> = {
+        let child_size = Rc::clone(&child_size);
+        let child_calls = Rc::clone(&child_calls);
+        Rc::new(move |scope, constraints| {
+            child_calls.set(child_calls.get() + 1);
+            let size = child_size.get();
+            scope.layout(
+                size.width
+                    .clamp(constraints.min_width, constraints.max_width),
+                size.height
+                    .clamp(constraints.min_height, constraints.max_height),
+                Vec::new(),
+            )
+        })
+    };
+
+    let mut applier = MemoryApplier::new();
+    let composition = cranpose_core::Composition::new(MemoryApplier::new());
+    applier.set_runtime_handle(composition.runtime_handle());
+    let child_id = applier.create(Box::new(
+        crate::subcompose_layout::SubcomposeLayoutNode::new(Modifier::empty(), policy),
+    ));
+
+    let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
+    root.children.push(child_id);
+    let root_id = applier.create(Box::new(root));
+
+    applier.with_node::<LayoutNode, _>(root_id, |node| node.set_node_id(root_id))?;
+    applier.with_node::<crate::subcompose_layout::SubcomposeLayoutNode, _>(child_id, |node| {
+        node.set_node_id(child_id);
+        node.set_parent_for_bubbling(root_id);
+    })?;
+
+    let first = measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
+    assert_eq!(first.root_size().height, 10.0);
+    assert_eq!(
+        child_calls.get(),
+        1,
+        "subcompose child should measure once initially"
+    );
+    let root_clean = applier.with_node::<LayoutNode, _>(root_id, |node| {
+        !node.needs_measure() && !node.needs_layout()
+    })?;
+    let child_clean = applier
+        .with_node::<crate::subcompose_layout::SubcomposeLayoutNode, _>(child_id, |node| {
+            !node.needs_measure() && !node.needs_layout()
+        })?;
+    assert!(
+        root_clean,
+        "root should be clean after the initial measure pass"
+    );
+    assert!(
+        child_clean,
+        "subcompose child should clear dirty flags after a successful measure pass"
+    );
+
+    let epoch_before =
+        applier.with_node::<LayoutNode, _>(root_id, |node| node.cache_handles().epoch())?;
+
+    child_size.set(Size::new(10.0, 20.0));
+    applier.with_node::<crate::subcompose_layout::SubcomposeLayoutNode, _>(child_id, |node| {
+        node.mark_needs_layout_flag();
+    })?;
+
+    crate::schedule_layout_repass(child_id);
+    super::process_pending_layout_repasses(&mut applier, root_id)?;
+
+    let root_needs_measure =
+        applier.with_node::<LayoutNode, _>(root_id, |node| node.needs_measure())?;
+    let root_needs_layout =
+        applier.with_node::<LayoutNode, _>(root_id, |node| node.needs_layout())?;
+
+    assert!(
+        !root_needs_measure,
+        "layout-only repass should not force the root into global remeasure"
+    );
+    assert!(
+        root_needs_layout,
+        "layout-only repass should still bubble layout work to the root"
+    );
+
+    let second = measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
+    let epoch_after =
+        applier.with_node::<LayoutNode, _>(root_id, |node| node.cache_handles().epoch())?;
+
+    assert_eq!(
+        second.root_size().height,
+        20.0,
+        "root height should reflect the subcompose child's updated layout pass"
+    );
+    assert_eq!(
+        epoch_before, epoch_after,
+        "layout-only subcompose repass should preserve the global cache epoch"
+    );
+    assert_eq!(
+        child_calls.get(),
+        2,
+        "dirty subcompose child should be remeasured exactly once"
+    );
+
+    crate::reset_render_state_for_tests();
+
+    Ok(())
+}
+
+#[test]
+fn measure_layout_consumes_pending_scoped_repass_for_dirty_child() -> Result<(), NodeError> {
+    let _guard = crate::render_state::render_state_test_guard();
+    crate::reset_render_state_for_tests();
+
+    let dirty_size = Rc::new(Cell::new(Size::new(10.0, 10.0)));
+    let dirty_calls = Rc::new(Cell::new(0usize));
+    let clean_size = Rc::new(Cell::new(Size::new(5.0, 5.0)));
+    let clean_calls = Rc::new(Cell::new(0usize));
+
+    let mut applier = MemoryApplier::new();
+    let dirty_child = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(MutableLeafPolicy {
+            size: Rc::clone(&dirty_size),
+            calls: Rc::clone(&dirty_calls),
+        }),
+    )));
+    let clean_child = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(MutableLeafPolicy {
+            size: Rc::clone(&clean_size),
+            calls: Rc::clone(&clean_calls),
+        }),
+    )));
+
+    let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
+    root.children.push(dirty_child);
+    root.children.push(clean_child);
+    let root_id = applier.create(Box::new(root));
+
+    applier.with_node::<LayoutNode, _>(root_id, |node| node.set_node_id(root_id))?;
+    applier.with_node::<LayoutNode, _>(dirty_child, |node| {
+        node.set_node_id(dirty_child);
+        node.set_parent(root_id);
+    })?;
+    applier.with_node::<LayoutNode, _>(clean_child, |node| {
+        node.set_node_id(clean_child);
+        node.set_parent(root_id);
+    })?;
+
+    let first = measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
+    assert_eq!(first.root_size().height, 15.0);
+    let epoch_before =
+        applier.with_node::<LayoutNode, _>(root_id, |node| node.cache_handles().epoch())?;
+
+    dirty_size.set(Size::new(10.0, 20.0));
+    applier.with_node::<LayoutNode, _>(dirty_child, |node| {
+        node.mark_needs_measure();
+    })?;
+    crate::schedule_layout_repass(dirty_child);
+
+    let second = measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
+    let epoch_after =
+        applier.with_node::<LayoutNode, _>(root_id, |node| node.cache_handles().epoch())?;
+
+    assert_eq!(
+        second.root_size().height,
+        25.0,
+        "measure_layout should honor the pending scoped repass before consulting root caches"
+    );
+    assert_eq!(
+        epoch_before, epoch_after,
+        "consuming a scoped layout repass should preserve the global cache epoch"
+    );
+    assert_eq!(
+        dirty_calls.get(),
+        2,
+        "dirty child should be remeasured exactly once through the public entrypoint"
+    );
+    assert_eq!(
+        clean_calls.get(),
+        1,
+        "clean sibling should continue to reuse its cached measurement"
+    );
+
+    crate::reset_render_state_for_tests();
+
+    Ok(())
+}
+
+#[test]
+fn measure_layout_consumes_pending_scoped_repass_for_subcompose_child() -> Result<(), NodeError> {
+    let _guard = crate::render_state::render_state_test_guard();
+    crate::reset_render_state_for_tests();
+
+    let child_size = Rc::new(Cell::new(Size::new(10.0, 10.0)));
+    let child_calls = Rc::new(Cell::new(0usize));
+
+    let policy: Rc<crate::subcompose_layout::MeasurePolicy> = {
+        let child_size = Rc::clone(&child_size);
+        let child_calls = Rc::clone(&child_calls);
+        Rc::new(move |scope, constraints| {
+            child_calls.set(child_calls.get() + 1);
+            let size = child_size.get();
+            scope.layout(
+                size.width
+                    .clamp(constraints.min_width, constraints.max_width),
+                size.height
+                    .clamp(constraints.min_height, constraints.max_height),
+                Vec::new(),
+            )
+        })
+    };
+
+    let mut applier = MemoryApplier::new();
+    let composition = cranpose_core::Composition::new(MemoryApplier::new());
+    applier.set_runtime_handle(composition.runtime_handle());
+    let child_id = applier.create(Box::new(
+        crate::subcompose_layout::SubcomposeLayoutNode::new(Modifier::empty(), policy),
+    ));
+
+    let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
+    root.children.push(child_id);
+    let root_id = applier.create(Box::new(root));
+
+    applier.with_node::<LayoutNode, _>(root_id, |node| node.set_node_id(root_id))?;
+    applier.with_node::<crate::subcompose_layout::SubcomposeLayoutNode, _>(child_id, |node| {
+        node.set_node_id(child_id);
+        node.set_parent_for_bubbling(root_id);
+    })?;
+
+    let first = measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
+    assert_eq!(first.root_size().height, 10.0);
+    let epoch_before =
+        applier.with_node::<LayoutNode, _>(root_id, |node| node.cache_handles().epoch())?;
+
+    child_size.set(Size::new(10.0, 20.0));
+    applier.with_node::<crate::subcompose_layout::SubcomposeLayoutNode, _>(child_id, |node| {
+        node.mark_needs_layout_flag();
+    })?;
+    crate::schedule_layout_repass(child_id);
+
+    let second = measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
+    let epoch_after =
+        applier.with_node::<LayoutNode, _>(root_id, |node| node.cache_handles().epoch())?;
+
+    assert_eq!(
+        second.root_size().height,
+        20.0,
+        "measure_layout should consume a pending scoped subcompose repass before reusing the root cache"
+    );
+    assert_eq!(
+        epoch_before, epoch_after,
+        "layout-only subcompose repasses must preserve the global cache epoch"
+    );
+    assert_eq!(
+        child_calls.get(),
+        2,
+        "layout-only scoped repasses should remeasure the dirty subcompose child exactly once"
+    );
+
+    crate::reset_render_state_for_tests();
+
+    Ok(())
+}
+
+#[test]
 fn nested_measurement_returns_multiple_scratch_vecs_to_pool() -> Result<(), NodeError> {
     let mut applier = MemoryApplier::new();
 
@@ -885,8 +1316,8 @@ fn tree_needs_layout_supports_subcompose_root_nodes() -> Result<(), NodeError> {
     )?);
 
     applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-        node.clear_needs_measure_for_tests();
-        node.clear_needs_layout_for_tests();
+        node.clear_needs_measure();
+        node.clear_needs_layout();
     })?;
     assert!(!tree_needs_layout(
         &mut applier as &mut dyn Applier,
@@ -942,7 +1373,7 @@ fn tree_needs_semantics_supports_subcompose_root_nodes() -> Result<(), NodeError
 }
 
 #[test]
-fn bubbling_stops_at_already_dirty_ancestor() -> Result<(), NodeError> {
+fn bubbling_reaches_clean_ancestors_above_dirty_intermediate() -> Result<(), NodeError> {
     use super::bubble_layout_dirty;
 
     let mut applier = MemoryApplier::new();
@@ -989,15 +1420,15 @@ fn bubbling_stops_at_already_dirty_ancestor() -> Result<(), NodeError> {
     })?;
     bubble_layout_dirty(&mut applier, leaf);
 
-    // Root should still be clean (bubbling should have stopped at middle)
+    // Root must still become dirty even though the intermediate node was already dirty.
+    // Scoped layout repasses can strand a dirty node under clean ancestors until the next
+    // descendant invalidation reconnects the path.
     let root_needs_layout =
         applier.with_node::<LayoutNode, _>(root_id, |node| node.needs_layout())?;
 
-    // The unified bubbling API now implements the O(1) optimization:
-    // bubbling stops when it encounters an already-dirty ancestor
     assert!(
-        !root_needs_layout,
-        "Bubbling should stop at already dirty ancestor (O(1) optimization)"
+        root_needs_layout,
+        "Bubbling must continue past an already dirty intermediate node when ancestors above it are still clean"
     );
 
     Ok(())
@@ -1099,6 +1530,7 @@ fn flex_parent_data_uses_resolved_weight() {
         None,
         cache,
         1,
+        false,
         None,
         None, // layout_state
     );

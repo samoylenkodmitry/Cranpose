@@ -928,9 +928,11 @@ impl LazyListState {
 
     /// Tries to register a layout invalidation callback for the specified node.
     ///
-    /// Returns the callback id if it was registered, or `None` if the same node already
-    /// holds the active callback. If a different node is currently registered, its
-    /// callback is replaced so scroll invalidation targets the current list host.
+    /// Returns the callback id for the active layout callback.
+    ///
+    /// Registering again always replaces the previous active layout callback, even when
+    /// the node id stays the same. This keeps ownership tied to the latest effect
+    /// instance so disposing an older scope cannot unregister the live callback.
     pub fn try_register_layout_callback(
         &self,
         node_id: NodeId,
@@ -942,9 +944,6 @@ impl LazyListState {
         self.inner.with(|rc| {
             let mut inner = rc.borrow_mut();
             if let Some(existing_id) = inner.layout_invalidation_callback_id {
-                if inner.layout_invalidation_node_id == Some(node_id) {
-                    return Some(existing_id);
-                }
                 inner
                     .invalidate_callbacks
                     .retain(|(cb_id, _)| *cb_id != existing_id);
@@ -1216,10 +1215,17 @@ mod tests {
                 .expect("first layout callback should register");
             let duplicate_id = state
                 .try_register_layout_callback(first_node, Rc::new(|| {}))
-                .expect("duplicate register should return existing callback id");
+                .expect("duplicate register should replace with a fresh callback id");
             assert_eq!(
+                state
+                    .inner
+                    .with(|rc| rc.borrow().layout_invalidation_callback_id),
+                Some(duplicate_id),
+                "duplicate registration should become the active callback",
+            );
+            assert_ne!(
                 first_id, duplicate_id,
-                "duplicate registration should return the existing callback id",
+                "duplicate registration should replace the old callback id",
             );
 
             state.remove_invalidate_callback(first_id);
@@ -1247,6 +1253,52 @@ mod tests {
                 .expect("layout callback should rebind to a new node");
 
             assert_ne!(first_id, second_id);
+        });
+    }
+
+    #[test]
+    fn stale_layout_callback_disposer_cannot_remove_replaced_same_node_callback() {
+        with_test_runtime(|| {
+            let state = new_lazy_list_state();
+            let node_id: cranpose_core::NodeId = 7;
+            let first_hits = Rc::new(Cell::new(0u32));
+            let second_hits = Rc::new(Cell::new(0u32));
+
+            let first_id = state
+                .try_register_layout_callback(
+                    node_id,
+                    Rc::new({
+                        let first_hits = Rc::clone(&first_hits);
+                        move || first_hits.set(first_hits.get() + 1)
+                    }),
+                )
+                .expect("first layout callback should register");
+
+            let second_id = state
+                .try_register_layout_callback(
+                    node_id,
+                    Rc::new({
+                        let second_hits = Rc::clone(&second_hits);
+                        move || second_hits.set(second_hits.get() + 1)
+                    }),
+                )
+                .expect("same-node registration should replace the active callback");
+
+            assert_ne!(first_id, second_id);
+
+            state.remove_invalidate_callback(first_id);
+            state.dispatch_scroll_delta(-12.0);
+
+            assert_eq!(
+                first_hits.get(),
+                0,
+                "replaced callback should not be invoked after removal",
+            );
+            assert_eq!(
+                second_hits.get(),
+                1,
+                "active callback should survive stale disposer cleanup",
+            );
         });
     }
 

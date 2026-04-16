@@ -11,7 +11,7 @@
 
 use crate::{
     collections::map::HashMap,
-    slot_storage::{GroupId, SlotStorage, StartGroup, ValueSlotId},
+    slot_storage::{GroupId, StartGroup},
     AnchorId, Key, NodeId, Owned, RecomposeScope, ScopeId,
 };
 use std::any::{Any, TypeId};
@@ -1881,7 +1881,7 @@ impl SlotTable {
         }
     }
 
-    fn end_recompose(&mut self) {
+    pub fn end_recompose(&mut self) {
         if let Some(frame) = self.group_stack.pop() {
             let actual_end = self.cursor;
             if actual_end < frame.end {
@@ -2573,27 +2573,8 @@ impl Default for SlotTable {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// SlotStorage implementation for SlotTable
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Baseline SlotStorage implementation using a gap-buffer strategy.
-///
-/// This is the reference / most-feature-complete backend, supporting:
-/// - Gap-based slot reuse (preserving sibling state during conditional rendering)
-/// - Anchor-based positional stability during group moves and insertions
-/// - Efficient group skipping and recomposition via scope-based entry
-/// - Batch anchor rebuilding for large structural changes
-///
-/// **Implementation Strategy:**
-/// Uses UFCS (Uniform Function Call Syntax) to delegate to SlotTable's
-/// inherent methods, avoiding infinite recursion while keeping the trait
-/// implementation clean.
-impl SlotStorage for SlotTable {
-    type Group = GroupId;
-    type ValueSlot = ValueSlotId;
-
-    fn begin_group(&mut self, key: Key) -> StartGroup<Self::Group> {
+impl SlotTable {
+    pub fn begin_group(&mut self, key: Key) -> StartGroup<GroupId> {
         let idx = SlotTable::start(self, key);
         let restored = SlotTable::take_last_start_was_gap(self);
         StartGroup {
@@ -2603,80 +2584,23 @@ impl SlotStorage for SlotTable {
         }
     }
 
-    fn set_group_scope(&mut self, group: Self::Group, scope: ScopeId) {
-        SlotTable::set_group_scope(self, group.0, scope);
-    }
-
-    fn end_group(&mut self) {
+    pub fn end_group(&mut self) {
         SlotTable::end(self);
     }
 
-    fn skip_current_group(&mut self) {
+    pub fn skip_current_group(&mut self) {
         SlotTable::skip_current(self);
     }
 
-    fn nodes_in_current_group(&self) -> Vec<NodeId> {
+    pub fn nodes_in_current_group(&self) -> Vec<NodeId> {
         SlotTable::node_ids_in_current_group(self)
     }
 
-    fn begin_recranpose_at_anchor(
-        &mut self,
-        anchor: AnchorId,
-        scope: ScopeId,
-    ) -> Option<Self::Group> {
-        SlotTable::start_recranpose_at_anchor(self, anchor, scope).map(GroupId)
-    }
-
-    fn end_recompose(&mut self) {
-        SlotTable::end_recompose(self);
-    }
-
-    fn alloc_value_slot<T: 'static>(&mut self, init: impl FnOnce() -> T) -> Self::ValueSlot {
-        let idx = SlotTable::use_value_slot(self, init);
-        ValueSlotId(idx)
-    }
-
-    fn read_value<T: 'static>(&self, slot: Self::ValueSlot) -> &T {
-        SlotTable::read_value(self, slot.0)
-    }
-
-    fn read_value_mut<T: 'static>(&mut self, slot: Self::ValueSlot) -> &mut T {
-        SlotTable::read_value_mut(self, slot.0)
-    }
-
-    fn write_value<T: 'static>(&mut self, slot: Self::ValueSlot, value: T) {
-        SlotTable::write_value(self, slot.0, value);
-    }
-
-    fn remember<T: 'static>(&mut self, init: impl FnOnce() -> T) -> Owned<T> {
-        SlotTable::remember(self, init)
-    }
-
-    fn peek_node(&self) -> Option<(NodeId, u32)> {
-        SlotTable::peek_node(self)
-    }
-
-    fn record_node(&mut self, id: NodeId, gen: u32) {
-        SlotTable::record_node(self, id, gen);
-    }
-
-    fn advance_after_node_read(&mut self) {
-        SlotTable::advance_after_node_read(self);
-    }
-
-    fn step_back(&mut self) {
-        SlotTable::step_back(self);
-    }
-
-    fn finalize_current_group(&mut self) -> bool {
+    pub fn finalize_current_group(&mut self) -> bool {
         SlotTable::trim_to_cursor(self)
     }
 
-    fn reset(&mut self) {
-        SlotTable::reset(self);
-    }
-
-    fn flush(&mut self) {
+    pub fn flush(&mut self) {
         SlotTable::flush_anchors_if_dirty(self);
     }
 }

@@ -659,6 +659,34 @@ fn tabbed_progress_content() {
 fn empty_content() {}
 
 #[composable]
+fn one_shot_frame_request_content() {
+    let phase = useState(|| 0i32);
+    let phase_state = phase;
+    launched_effect_async_impl(
+        location_key(file!(), line!(), column!()),
+        (),
+        move |scope| {
+            let phase = phase_state;
+            Box::pin(async move {
+                let clock = scope.runtime().frame_clock();
+                let _ = clock.next_frame().await;
+                phase.set_value(1);
+            })
+        },
+    );
+
+    Text(
+        if phase.value() == 0 {
+            "Waiting For Frame"
+        } else {
+            "Frame Applied"
+        },
+        Modifier::empty(),
+        TextStyle::default(),
+    );
+}
+
+#[composable]
 fn frame_stable_pointer_handler_content() {
     let use_pending_handler = useState(|| false);
     let rendered_clicks = useState(|| 0i32);
@@ -3330,6 +3358,46 @@ fn headless_shell_actual_like_counter_click_updates_with_robot_click_order() {
     assert!(
         texts.iter().any(|text| text.contains("Counter: 1")),
         "actual-like counter text did not update after robot-style click order: {texts:?}",
+    );
+}
+
+#[test]
+fn app_shell_single_frame_callback_returns_to_idle() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        one_shot_frame_request_content,
+    );
+
+    let mut saw_applied_frame = false;
+    for _ in 0..8 {
+        pump_like_robot(&mut shell);
+        let texts = layout_tree_texts(shell.layout_tree().expect("layout tree available"));
+        if texts.iter().any(|text| text == "Frame Applied") {
+            saw_applied_frame = true;
+            break;
+        }
+    }
+
+    assert!(
+        saw_applied_frame,
+        "one-shot frame callback never completed: {:?}",
+        layout_tree_texts(shell.layout_tree().expect("layout tree available"))
+    );
+
+    for _ in 0..3 {
+        pump_like_robot(&mut shell);
+    }
+
+    assert!(
+        !shell.has_active_animations(),
+        "shell remained active after the one-shot frame callback completed"
+    );
+    assert!(
+        !shell.needs_redraw(),
+        "shell kept requesting redraw after the one-shot frame callback completed"
     );
 }
 

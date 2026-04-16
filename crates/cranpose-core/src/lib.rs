@@ -2,13 +2,13 @@
 
 pub extern crate self as cranpose_core;
 
+mod composer;
 pub mod composer_context;
 mod composition;
 mod debug_trace;
 mod emit;
 #[cfg(any(feature = "internal", test))]
 mod frame_clock;
-mod key;
 mod launched_effect;
 pub mod owned;
 pub mod platform;
@@ -28,7 +28,9 @@ pub mod subcompose;
 pub mod internal {
     pub use crate::frame_clock::{FrameCallbackRegistration, FrameClock};
 }
-use debug_trace::debug_record_scope_invalidation;
+pub use composer::Composer;
+pub(crate) use composer::{ComposerCore, EmittedNode, ParentAttachMode, ParentFrame};
+pub use composition::Composition;
 #[cfg(test)]
 pub(crate) use debug_trace::set_debug_scope_tracking_override_for_tests;
 #[doc(hidden)]
@@ -36,7 +38,6 @@ pub use debug_trace::{
     debug_label_current_scope, debug_live_recompose_scope_count,
     debug_recompose_scope_registry_stats, debug_scope_invalidation_sources, debug_scope_label,
 };
-pub use key::location_key;
 pub use launched_effect::{
     __launched_effect_async_impl, __launched_effect_impl, CancelToken, LaunchedEffectScope,
 };
@@ -159,15 +160,13 @@ pub fn in_applied_snapshot() -> bool {
 pub use runtime::{TestRuntime, TestScheduler};
 
 use crate::collections::map::{HashMap, HashSet};
-use crate::state::{MutationPolicy, SnapshotMutableState, UpdateScope};
+use crate::state::MutationPolicy;
 use smallvec::SmallVec;
 use std::any::{Any, TypeId};
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
-use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::rc::{Rc, Weak}; // FUTURE(no_std): replace Rc/Weak with arena-managed handles.
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -175,6 +174,11 @@ use std::sync::Arc;
 
 pub type Key = u64;
 pub type NodeId = usize;
+
+pub fn location_key(file: &str, line: u32, column: u32) -> Key {
+    let base = file.as_ptr() as u64;
+    base.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ ((line as u64) << 32) ^ (column as u64)
+}
 
 /// Stable identifier for a slot in the slot table.
 ///
@@ -197,7 +201,7 @@ impl AnchorId {
 pub(crate) type ScopeId = usize;
 type LocalKey = usize;
 pub(crate) type FrameCallbackId = u64;
-type LocalStackSnapshot = Rc<Vec<LocalContext>>;
+type LocalStackSnapshot = Rc<Vec<composer::LocalContext>>;
 
 thread_local! {
     static EMPTY_LOCAL_STACK: LocalStackSnapshot = Rc::new(Vec::new());
@@ -247,6 +251,7 @@ pub(crate) struct RecomposeScopeInner {
     parent_scope: RefCell<Option<Weak<RecomposeScopeInner>>>,
     local_stack: RefCell<LocalStackSnapshot>,
     slots_host: RefCell<Option<Weak<SlotsHost>>>,
+    state_subscriptions: RefCell<HashSet<StateId>>,
 }
 
 impl RecomposeScopeInner {
@@ -268,6 +273,7 @@ impl RecomposeScopeInner {
             parent_scope: RefCell::new(None),
             local_stack: RefCell::new(empty_local_stack()),
             slots_host: RefCell::new(None),
+            state_subscriptions: RefCell::new(HashSet::default()),
         }
     }
 }
@@ -275,6 +281,10 @@ impl RecomposeScopeInner {
 impl Drop for RecomposeScopeInner {
     fn drop(&mut self) {
         LIVE_RECOMPOSE_SCOPE_COUNT.fetch_sub(1, Ordering::Relaxed);
+        let subscriptions = std::mem::take(self.state_subscriptions.get_mut());
+        for state_id in subscriptions {
+            self.runtime.unregister_state_scope(state_id, self.id);
+        }
         #[cfg(debug_assertions)]
         {
             let _ = DEBUG_SCOPE_LABELS.try_with(|labels| {
@@ -336,6 +346,10 @@ impl RecomposeScope {
 
     pub fn is_active(&self) -> bool {
         self.inner.active.get()
+    }
+
+    fn record_state_subscription(&self, state_id: StateId) {
+        self.inner.state_subscriptions.borrow_mut().insert(state_id);
     }
 
     fn invalidate(&self) {
@@ -1150,11 +1164,11 @@ pub fn pop_parent() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Public SlotStorage trait and newtypes
+// Public slot storage helper types
 // ═══════════════════════════════════════════════════════════════════════════
 
 mod slot_storage;
-pub use slot_storage::{GroupId, SlotStorage, StartGroup, ValueSlotId};
+pub use slot_storage::{GroupId, StartGroup};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SlotTable: gap-buffer-based implementation
@@ -1390,12 +1404,11 @@ fn bubble_layout_dirty_applier(applier: &mut dyn Applier, mut node_id: NodeId) {
             Some(pid) => {
                 // Mark parent as needing layout
                 if let Ok(parent) = applier.get_mut(pid) {
-                    if !parent.needs_layout() {
+                    let parent_already_dirty = parent.needs_layout();
+                    if !parent_already_dirty {
                         parent.mark_needs_layout();
-                        node_id = pid; // Continue bubbling
-                    } else {
-                        break; // Already dirty, stop
                     }
+                    node_id = pid;
                 } else {
                     break;
                 }
@@ -1426,10 +1439,8 @@ fn bubble_measure_dirty_applier(applier: &mut dyn Applier, mut node_id: NodeId) 
                 if let Ok(parent) = applier.get_mut(pid) {
                     if !parent.needs_measure() {
                         parent.mark_needs_measure();
-                        node_id = pid; // Continue bubbling
-                    } else {
-                        break; // Already dirty, stop
                     }
+                    node_id = pid;
                 } else {
                     break;
                 }
@@ -1458,10 +1469,8 @@ fn bubble_semantics_dirty_applier(applier: &mut dyn Applier, mut node_id: NodeId
                 if let Ok(parent) = applier.get_mut(pid) {
                     if !parent.needs_semantics() {
                         parent.mark_needs_semantics();
-                        node_id = pid;
-                    } else {
-                        break;
                     }
+                    node_id = pid;
                 } else {
                     break;
                 }
@@ -1485,17 +1494,15 @@ fn bubble_layout_dirty_composer<N: Node + 'static>(mut node_id: NodeId) {
         let parent_id = pid;
 
         // Mark parent as needing layout
-        let should_continue = with_node_mut(parent_id, |node: &mut N| {
+        let advanced = with_node_mut(parent_id, |node: &mut N| {
             if !node.needs_layout() {
                 node.mark_needs_layout();
-                true // Continue bubbling
-            } else {
-                false // Already dirty, stop (O(1) optimization)
             }
+            true
         })
         .unwrap_or(false);
 
-        if should_continue {
+        if advanced {
             node_id = parent_id;
         } else {
             break;
@@ -1513,17 +1520,15 @@ fn bubble_semantics_dirty_composer<N: Node + 'static>(mut node_id: NodeId) {
     while let Ok(Some(pid)) = with_node_mut(node_id, |node: &mut N| node.parent()) {
         let parent_id = pid;
 
-        let should_continue = with_node_mut(parent_id, |node: &mut N| {
+        let advanced = with_node_mut(parent_id, |node: &mut N| {
             if !node.needs_semantics() {
                 node.mark_needs_semantics();
-                true
-            } else {
-                false
             }
+            true
         })
         .unwrap_or(false);
 
-        if should_continue {
+        if advanced {
             node_id = parent_id;
         } else {
             break;
@@ -3673,828 +3678,6 @@ impl SlotsHost {
     }
 }
 
-pub(crate) struct ComposerCore {
-    slots: Rc<SlotsHost>,
-    slots_override: RefCell<Vec<Rc<SlotsHost>>>,
-    applier: Rc<dyn ApplierHost>,
-    runtime: RuntimeHandle,
-    observer: SnapshotStateObserver,
-    parent_stack: RefCell<Vec<ParentFrame>>,
-    subcompose_stack: RefCell<Vec<SubcomposeFrame>>,
-    root: Cell<Option<NodeId>>,
-    commands: RefCell<CommandQueue>,
-    scope_stack: RefCell<Vec<RecomposeScope>>,
-    local_stack: RefCell<LocalStackSnapshot>,
-    side_effects: RefCell<Vec<Box<dyn FnOnce()>>>,
-    pending_scope_options: RefCell<Option<RecomposeOptions>>,
-    phase: Cell<Phase>,
-    last_node_reused: Cell<Option<bool>>,
-    recranpose_parent_hint: Cell<Option<NodeId>>,
-    root_render_requested: Cell<bool>,
-    _not_send: PhantomData<*const ()>,
-}
-
-impl ComposerCore {
-    pub fn new(
-        slots: Rc<SlotsHost>,
-        applier: Rc<dyn ApplierHost>,
-        runtime: RuntimeHandle,
-        observer: SnapshotStateObserver,
-        root: Option<NodeId>,
-    ) -> Self {
-        // Initialize parent_stack with root if provided.
-        // This enables subcomposed nodes to be properly attached as children of the root
-        // during composition via normal insert_child commands from pop_parent.
-        // IMPORTANT: When using this, do NOT use set_active_children - let the composer
-        // manage children naturally to avoid conflicts.
-        let parent_stack = if let Some(root_id) = root {
-            vec![ParentFrame {
-                id: root_id,
-                previous: ChildList::new(),
-                new_children: ChildList::new(),
-                attach_mode: ParentAttachMode::DeferredSync,
-            }]
-        } else {
-            Vec::new()
-        };
-
-        Self {
-            slots,
-            slots_override: RefCell::new(Vec::new()),
-            applier,
-            runtime,
-            observer,
-            parent_stack: RefCell::new(parent_stack),
-            subcompose_stack: RefCell::new(Vec::new()),
-            root: Cell::new(root),
-            commands: RefCell::new(CommandQueue::default()),
-            scope_stack: RefCell::new(Vec::new()),
-            local_stack: RefCell::new(empty_local_stack()),
-            side_effects: RefCell::new(Vec::new()),
-            pending_scope_options: RefCell::new(None),
-            phase: Cell::new(Phase::Compose),
-            last_node_reused: Cell::new(None),
-            recranpose_parent_hint: Cell::new(None),
-            root_render_requested: Cell::new(false),
-            _not_send: PhantomData,
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct Composer {
-    core: Rc<ComposerCore>,
-}
-
-enum EmittedNode {
-    Fresh(Box<dyn Node>),
-    Recycled(RecycledNode),
-}
-
-impl Composer {
-    pub fn new(
-        slots: Rc<SlotsHost>,
-        applier: Rc<dyn ApplierHost>,
-        runtime: RuntimeHandle,
-        observer: SnapshotStateObserver,
-        root: Option<NodeId>,
-    ) -> Self {
-        let core = Rc::new(ComposerCore::new(slots, applier, runtime, observer, root));
-        Self { core }
-    }
-
-    pub(crate) fn from_core(core: Rc<ComposerCore>) -> Self {
-        Self { core }
-    }
-
-    pub(crate) fn clone_core(&self) -> Rc<ComposerCore> {
-        Rc::clone(&self.core)
-    }
-
-    fn observer(&self) -> SnapshotStateObserver {
-        self.core.observer.clone()
-    }
-
-    fn request_root_render(&self) {
-        self.core.root_render_requested.set(true);
-    }
-
-    fn take_root_render_request(&self) -> bool {
-        self.core.root_render_requested.replace(false)
-    }
-
-    fn observe_scope<R>(&self, scope: &RecomposeScope, block: impl FnOnce() -> R) -> R {
-        let observer = self.observer();
-        let scope_clone = scope.clone();
-        observer.observe_reads(scope_clone, move |scope_ref| scope_ref.invalidate(), block)
-    }
-
-    fn active_slots_host(&self) -> Rc<SlotsHost> {
-        self.core
-            .slots_override
-            .borrow()
-            .last()
-            .cloned()
-            .unwrap_or_else(|| Rc::clone(&self.core.slots))
-    }
-
-    fn with_slots<R>(&self, f: impl FnOnce(&SlotTable) -> R) -> R {
-        let override_host = {
-            let overrides = self.core.slots_override.borrow();
-            overrides.last().cloned()
-        };
-        if let Some(host) = override_host {
-            let slots = host.borrow();
-            f(&slots)
-        } else {
-            let slots = self.core.slots.borrow();
-            f(&slots)
-        }
-    }
-
-    fn with_slots_mut<R>(&self, f: impl FnOnce(&mut SlotTable) -> R) -> R {
-        let override_host = {
-            let overrides = self.core.slots_override.borrow();
-            overrides.last().cloned()
-        };
-        if let Some(host) = override_host {
-            let mut slots = host.borrow_mut();
-            f(&mut slots)
-        } else {
-            let mut slots = self.core.slots.borrow_mut();
-            f(&mut slots)
-        }
-    }
-
-    fn with_slot_override<R>(&self, slots: Rc<SlotsHost>, f: impl FnOnce(&Composer) -> R) -> R {
-        self.core.slots_override.borrow_mut().push(slots);
-        struct Guard {
-            core: Rc<ComposerCore>,
-        }
-        impl Drop for Guard {
-            fn drop(&mut self) {
-                self.core.slots_override.borrow_mut().pop();
-            }
-        }
-        let guard = Guard {
-            core: self.clone_core(),
-        };
-        let result = f(self);
-        drop(guard);
-        result
-    }
-
-    fn parent_stack(&self) -> RefMut<'_, Vec<ParentFrame>> {
-        self.core.parent_stack.borrow_mut()
-    }
-
-    fn subcompose_stack(&self) -> RefMut<'_, Vec<SubcomposeFrame>> {
-        self.core.subcompose_stack.borrow_mut()
-    }
-
-    fn commands_mut(&self) -> RefMut<'_, CommandQueue> {
-        self.core.commands.borrow_mut()
-    }
-
-    pub(crate) fn enqueue_semantics_invalidation(&self, id: NodeId) {
-        self.commands_mut().push(Command::BubbleDirty {
-            node_id: id,
-            bubble: DirtyBubble::SEMANTICS,
-        });
-    }
-
-    fn scope_stack(&self) -> RefMut<'_, Vec<RecomposeScope>> {
-        self.core.scope_stack.borrow_mut()
-    }
-
-    fn local_stack(&self) -> RefMut<'_, LocalStackSnapshot> {
-        self.core.local_stack.borrow_mut()
-    }
-
-    fn current_local_stack(&self) -> LocalStackSnapshot {
-        self.core.local_stack.borrow().clone()
-    }
-
-    fn side_effects_mut(&self) -> RefMut<'_, Vec<Box<dyn FnOnce()>>> {
-        self.core.side_effects.borrow_mut()
-    }
-
-    fn pending_scope_options(&self) -> RefMut<'_, Option<RecomposeOptions>> {
-        self.core.pending_scope_options.borrow_mut()
-    }
-
-    fn borrow_applier(&self) -> RefMut<'_, dyn Applier> {
-        self.core.applier.borrow_dyn()
-    }
-
-    /// Registers a virtual node in the Applier.
-    ///
-    /// This is used by SubcomposeLayoutNode to register virtual container nodes
-    /// so that subsequent insert_child commands can find them and attach children.
-    /// Without this, virtual nodes would only exist in SubcomposeLayoutNodeInner.virtual_nodes
-    /// and applier.get_mut(virtual_node_id) would fail, breaking child attachment.
-    pub fn register_virtual_node(
-        &self,
-        node_id: NodeId,
-        node: Box<dyn Node>,
-    ) -> Result<(), NodeError> {
-        let mut applier = self.borrow_applier();
-        applier.insert_with_id(node_id, node)
-    }
-
-    /// Checks if a node has no parent (is a root node).
-    /// Used by SubcomposeMeasureScope to filter subcompose results.
-    pub fn node_has_no_parent(&self, node_id: NodeId) -> bool {
-        let mut applier = self.borrow_applier();
-        match applier.get_mut(node_id) {
-            Ok(node) => node.parent().is_none(),
-            Err(_) => true, // If we can't find the node, treat it as root (conservative)
-        }
-    }
-
-    /// Gets the children of a node from the Applier.
-    ///
-    /// This is used by SubcomposeLayoutNode to get children of virtual nodes
-    /// directly from the Applier, where insert_child commands have been applied.
-    pub fn get_node_children(&self, node_id: NodeId) -> SmallVec<[NodeId; 8]> {
-        let mut applier = self.borrow_applier();
-        match applier.get_mut(node_id) {
-            Ok(node) => {
-                let mut children = SmallVec::<[NodeId; 8]>::new();
-                node.collect_children_into(&mut children);
-                children
-            }
-            Err(_) => SmallVec::<[NodeId; 8]>::new(),
-        }
-    }
-
-    /// Records a child node in the current parent frame's expected children list.
-    ///
-    /// Used by SubcomposeLayout's `perform_subcompose` to register virtual nodes
-    /// with the outer composer's parent frame. This ensures that the `pop_parent`
-    /// call at the end of `subcompose_slot` generates a correct `SyncChildren`
-    /// command that preserves (rather than removes) the virtual nodes.
-    ///
-    /// Without this, `pop_parent` would generate `SyncChildren { expected: [] }`,
-    /// which removes all virtual nodes and their subtrees from the applier.
-    pub fn record_subcompose_child(&self, child_id: NodeId) {
-        let mut parent_stack = self.parent_stack();
-        if let Some(frame) = parent_stack.last_mut() {
-            if matches!(frame.attach_mode, ParentAttachMode::DeferredSync)
-                && !frame.new_children.contains(&child_id)
-            {
-                frame.new_children.push(child_id);
-            }
-        }
-    }
-
-    /// Clears all children of a node in the Applier.
-    ///
-    /// This is used by SubcomposeLayoutNode when reusing a virtual node for
-    /// different content. Without clearing, old children remain attached,
-    /// causing duplicate/interleaved items in lazy lists after scrolling.
-    pub fn clear_node_children(&self, node_id: NodeId) {
-        let mut applier = self.borrow_applier();
-        if let Ok(node) = applier.get_mut(node_id) {
-            // Use update_children with empty slice to clear all children
-            node.update_children(&[]);
-        }
-    }
-
-    pub fn install<R>(&self, f: impl FnOnce(&Composer) -> R) -> R {
-        let _composer_guard = composer_context::enter(self);
-        runtime::push_active_runtime(&self.core.runtime);
-        struct Guard;
-        impl Drop for Guard {
-            fn drop(&mut self) {
-                runtime::pop_active_runtime();
-            }
-        }
-        let guard = Guard;
-        let result = f(self);
-        drop(guard);
-        result
-    }
-
-    fn flush_pending_commands_if_large(&self) {
-        let queued = self.core.commands.borrow().len();
-        if queued < COMMAND_FLUSH_THRESHOLD {
-            return;
-        }
-        self.apply_pending_commands()
-            .expect("mid-composition command flush failed");
-    }
-
-    fn drain_orphaned_nodes_from_slots(&self) {
-        let orphaned = self.with_slots_mut(|slots| slots.drain_orphaned_node_ids());
-        if orphaned.is_empty() {
-            return;
-        }
-        let mut deferred = Vec::new();
-        let mut applier = self.borrow_applier();
-        for orphaned in orphaned {
-            match self.with_slots(|slots| slots.orphaned_node_state(orphaned)) {
-                crate::slot_table::NodeSlotState::Active => continue,
-                crate::slot_table::NodeSlotState::PreservedGap => {
-                    deferred.push(orphaned);
-                    continue;
-                }
-                crate::slot_table::NodeSlotState::Missing => {}
-            }
-            if applier.node_generation(orphaned.id) != orphaned.generation {
-                continue;
-            }
-            let parent_id = applier
-                .get_mut(orphaned.id)
-                .ok()
-                .and_then(|node| node.parent());
-            if let Some(parent_id) = parent_id {
-                let _ = remove_child_and_cleanup_now(&mut *applier, parent_id, orphaned.id);
-                continue;
-            }
-            if let Ok(node) = applier.get_mut(orphaned.id) {
-                node.on_removed_from_parent();
-                node.unmount();
-            }
-            let _ = applier.remove(orphaned.id);
-        }
-        if !deferred.is_empty() {
-            self.with_slots_mut(|slots| {
-                for orphaned in deferred {
-                    slots.requeue_orphaned_node(orphaned);
-                }
-            });
-        }
-    }
-
-    pub fn with_group<R>(&self, key: Key, f: impl FnOnce(&Composer) -> R) -> R {
-        let parent_scope = self.current_recranpose_scope();
-        let (group, group_anchor, scope_ref, restored_from_gap) = self.with_slots_mut(|slots| {
-            let StartGroup {
-                group,
-                anchor,
-                restored_from_gap,
-            } = slots.begin_group(key);
-            let scope_slot = slots.alloc_value_slot(|| RecomposeScope::new(self.runtime_handle()));
-            let scope_ref = SlotStorage::read_value::<RecomposeScope>(slots, scope_slot).clone();
-            (group, anchor, scope_ref, restored_from_gap)
-        });
-
-        scope_ref.reactivate();
-        scope_ref.set_group_anchor(group_anchor);
-        scope_ref.set_parent_scope(parent_scope);
-
-        if let Some(options) = self.pending_scope_options().take() {
-            if options.force_recompose {
-                scope_ref.force_recompose();
-            } else if options.force_reuse {
-                scope_ref.force_reuse();
-            }
-        }
-        if restored_from_gap {
-            scope_ref.force_recompose();
-        }
-
-        self.with_slots_mut(|slots| {
-            SlotStorage::set_group_scope(slots, group, scope_ref.id());
-        });
-
-        let slots_host = self.active_slots_host();
-        scope_ref.set_slots_host(Rc::downgrade(&slots_host));
-
-        {
-            let mut stack = self.scope_stack();
-            stack.push(scope_ref.clone());
-        }
-
-        {
-            let mut stack = self.subcompose_stack();
-            if let Some(frame) = stack.last_mut() {
-                frame.scopes.push(scope_ref.clone());
-            }
-        }
-
-        scope_ref.snapshot_locals(self.current_local_stack());
-        {
-            let parent_hint = self.parent_stack().last().map(|frame| frame.id);
-            scope_ref.set_parent_hint(parent_hint);
-        }
-
-        let result = self.observe_scope(&scope_ref, || f(self));
-
-        scope_ref.mark_composed_once();
-
-        let trimmed = self.with_slots_mut(|slots| slots.finalize_current_group());
-        if trimmed {
-            scope_ref.force_recompose();
-        }
-        self.drain_orphaned_nodes_from_slots();
-
-        {
-            let mut stack = self.scope_stack();
-            stack.pop();
-        }
-        scope_ref.mark_recomposed();
-        self.with_slots_mut(|slots| slots.end_group());
-        self.flush_pending_commands_if_large();
-        result
-    }
-
-    pub fn cranpose_with_reuse<R>(
-        &self,
-        key: Key,
-        options: RecomposeOptions,
-        f: impl FnOnce(&Composer) -> R,
-    ) -> R {
-        self.pending_scope_options().replace(options);
-        self.with_group(key, f)
-    }
-
-    pub fn with_key<K: Hash, R>(&self, key: &K, f: impl FnOnce(&Composer) -> R) -> R {
-        let hashed = hash_key(key);
-        self.with_group(hashed, f)
-    }
-
-    pub fn remember<T: 'static>(&self, init: impl FnOnce() -> T) -> Owned<T> {
-        self.with_slots_mut(|slots| slots.remember(init))
-    }
-
-    pub fn use_value_slot<T: 'static>(&self, init: impl FnOnce() -> T) -> usize {
-        self.with_slots_mut(|slots| slots.alloc_value_slot(init).index())
-    }
-
-    pub fn with_slot_value<T: 'static, R>(&self, idx: usize, f: impl FnOnce(&T) -> R) -> R {
-        self.with_slots(|slots| {
-            let value = SlotStorage::read_value(slots, ValueSlotId::new(idx));
-            f(value)
-        })
-    }
-
-    pub fn with_slot_value_mut<T: 'static, R>(&self, idx: usize, f: impl FnOnce(&mut T) -> R) -> R {
-        self.with_slots_mut(|slots| {
-            let value = SlotStorage::read_value_mut(slots, ValueSlotId::new(idx));
-            f(value)
-        })
-    }
-
-    pub fn write_slot_value<T: 'static>(&self, idx: usize, value: T) {
-        self.with_slots_mut(|slots| SlotStorage::write_value(slots, ValueSlotId::new(idx), value));
-    }
-
-    pub fn mutable_state_of<T: Clone + 'static>(&self, initial: T) -> MutableState<T> {
-        MutableState::with_runtime(initial, self.runtime_handle())
-    }
-
-    pub fn mutable_state_list_of<T, I>(&self, values: I) -> SnapshotStateList<T>
-    where
-        T: Clone + 'static,
-        I: IntoIterator<Item = T>,
-    {
-        SnapshotStateList::with_runtime(values, self.runtime_handle())
-    }
-
-    pub fn mutable_state_map_of<K, V, I>(&self, pairs: I) -> SnapshotStateMap<K, V>
-    where
-        K: Clone + Eq + Hash + 'static,
-        V: Clone + 'static,
-        I: IntoIterator<Item = (K, V)>,
-    {
-        SnapshotStateMap::with_runtime(pairs, self.runtime_handle())
-    }
-
-    pub fn read_composition_local<T: Clone + 'static>(&self, local: &CompositionLocal<T>) -> T {
-        let stack = self.core.local_stack.borrow();
-        for context in stack.iter().rev() {
-            if let Some(entry) = context.values.get(&local.key) {
-                let typed = entry
-                    .clone()
-                    .downcast::<LocalStateEntry<T>>()
-                    .expect("composition local type mismatch");
-                return typed.value();
-            }
-        }
-        local.default_value()
-    }
-
-    pub fn read_static_composition_local<T: Clone + 'static>(
-        &self,
-        local: &StaticCompositionLocal<T>,
-    ) -> T {
-        let stack = self.core.local_stack.borrow();
-        for context in stack.iter().rev() {
-            if let Some(entry) = context.values.get(&local.key) {
-                let typed = entry
-                    .clone()
-                    .downcast::<StaticLocalEntry<T>>()
-                    .expect("static composition local type mismatch");
-                return typed.value();
-            }
-        }
-        local.default_value()
-    }
-
-    pub fn current_recranpose_scope(&self) -> Option<RecomposeScope> {
-        self.core.scope_stack.borrow().last().cloned()
-    }
-
-    pub fn phase(&self) -> Phase {
-        self.core.phase.get()
-    }
-
-    pub(crate) fn set_phase(&self, phase: Phase) {
-        self.core.phase.set(phase);
-    }
-
-    pub fn enter_phase(&self, phase: Phase) {
-        self.set_phase(phase);
-    }
-
-    pub(crate) fn subcompose<R>(
-        &self,
-        state: &mut SubcomposeState,
-        slot_id: SlotId,
-        content: impl FnOnce(&Composer) -> R,
-    ) -> (R, Vec<NodeId>) {
-        match self.phase() {
-            Phase::Measure | Phase::Layout => {}
-            current => panic!(
-                "subcompose() may only be called during measure or layout; current phase: {:?}",
-                current
-            ),
-        }
-
-        self.subcompose_stack().push(SubcomposeFrame::default());
-        struct StackGuard {
-            core: Rc<ComposerCore>,
-            leaked: bool,
-        }
-        impl Drop for StackGuard {
-            fn drop(&mut self) {
-                if !self.leaked {
-                    self.core.subcompose_stack.borrow_mut().pop();
-                }
-            }
-        }
-        let mut guard = StackGuard {
-            core: self.clone_core(),
-            leaked: false,
-        };
-
-        let slot_host = state.get_or_create_slots(slot_id);
-        {
-            let mut slots = slot_host.borrow_mut();
-            slots.reset();
-        }
-        let result = self.with_slot_override(slot_host.clone(), |composer| {
-            // Use with_group to create/reuse a group for this slot_id within the slot table.
-            composer.with_group(slot_id.raw(), |composer| content(composer))
-        });
-        {
-            let mut slots = slot_host.borrow_mut();
-            slots.finalize_current_group();
-            slots.flush();
-        }
-
-        let frame = {
-            let mut stack = guard.core.subcompose_stack.borrow_mut();
-            let frame = stack.pop().expect("subcompose stack underflow");
-            guard.leaked = true;
-            frame
-        };
-        let nodes = frame.nodes;
-        let scopes = frame.scopes;
-        state.register_active(slot_id, &nodes, &scopes);
-        (result, nodes)
-    }
-
-    pub fn subcompose_measurement<R>(
-        &self,
-        state: &mut SubcomposeState,
-        slot_id: SlotId,
-        content: impl FnOnce(&Composer) -> R,
-    ) -> (R, Vec<NodeId>) {
-        let (result, nodes) = self.subcompose(state, slot_id, content);
-
-        // Filter to include only root nodes (those without a parent).
-        // While record_node attempts to track only roots, checking the final
-        // parent status ensures we only return true roots to the layout system.
-        let roots = nodes
-            .into_iter()
-            .filter(|&id| self.node_has_no_parent(id))
-            .collect();
-
-        (result, roots)
-    }
-
-    pub fn subcompose_in<R>(
-        &self,
-        slots: &Rc<SlotsHost>,
-        root: Option<NodeId>,
-        f: impl FnOnce(&Composer) -> R,
-    ) -> Result<R, NodeError> {
-        let runtime_handle = self.runtime_handle();
-        slots.borrow_mut().reset();
-        let phase = self.phase();
-        let locals = self.current_local_stack();
-        let core = Rc::new(ComposerCore::new(
-            Rc::clone(slots),
-            Rc::clone(&self.core.applier),
-            runtime_handle.clone(),
-            self.observer(),
-            root,
-        ));
-        core.phase.set(phase);
-        *core.local_stack.borrow_mut() = locals;
-        let composer = Composer::from_core(core);
-        let (result, commands, side_effects) = composer.install(|composer| {
-            let output = f(composer);
-            let commands = composer.take_commands();
-            let side_effects = composer.take_side_effects();
-            (output, commands, side_effects)
-        });
-        {
-            let mut applier = self.borrow_applier();
-            commands.apply(&mut *applier)?;
-            for update in runtime_handle.take_updates() {
-                update.apply(&mut *applier)?;
-            }
-        }
-        runtime_handle.drain_ui();
-        for effect in side_effects {
-            effect();
-        }
-        runtime_handle.drain_ui();
-        {
-            let mut slots_mut = slots.borrow_mut();
-            slots_mut.finalize_current_group();
-            slots_mut.flush();
-        }
-        Ok(result)
-    }
-
-    /// Subcomposes content using an isolated SlotsHost without resetting it.
-    /// Unlike `subcompose_in`, this preserves existing slot state across calls,
-    /// allowing efficient reuse during measurement passes. This is critical for
-    /// lazy lists where items need stable slot positions.
-    pub fn subcompose_slot<R>(
-        &self,
-        slots: &Rc<SlotsHost>,
-        root: Option<NodeId>,
-        f: impl FnOnce(&Composer) -> R,
-    ) -> Result<(R, Vec<RecomposeScope>), NodeError> {
-        let runtime_handle = self.runtime_handle();
-        // Reset cursor to 0 but preserve slot data for reuse (like JC's setContentWithReuse)
-        // This allows remembered values to be found and reused
-        slots.borrow_mut().reset();
-        let phase = self.phase();
-        let locals = self.current_local_stack();
-        let core = Rc::new(ComposerCore::new(
-            Rc::clone(slots),
-            Rc::clone(&self.core.applier),
-            runtime_handle.clone(),
-            self.observer(),
-            root, // Root node for parent chain - enables dirty flag bubbling
-        ));
-        core.phase.set(phase);
-        *core.local_stack.borrow_mut() = locals;
-        let composer = Composer::from_core(core);
-        composer.subcompose_stack().push(SubcomposeFrame::default());
-        struct StackGuard {
-            core: Rc<ComposerCore>,
-            leaked: bool,
-        }
-        impl Drop for StackGuard {
-            fn drop(&mut self) {
-                if !self.leaked {
-                    self.core.subcompose_stack.borrow_mut().pop();
-                }
-            }
-        }
-        let mut guard = StackGuard {
-            core: composer.clone_core(),
-            leaked: false,
-        };
-        let root_group_key = location_key(file!(), line!(), column!());
-        let (result, commands, side_effects) = composer.install(|composer| {
-            let output = composer.with_group(root_group_key, |composer| f(composer));
-            // CRITICAL FIX: Pop the root parent frame to generate insert_child commands.
-            // Without this, the root frame's new_children list is populated but never
-            // processed, so children are never attached to the virtual node.
-            if root.is_some() {
-                composer.pop_parent();
-            }
-            let commands = composer.take_commands();
-            let side_effects = composer.take_side_effects();
-            (output, commands, side_effects)
-        });
-        let frame = {
-            let mut stack = guard.core.subcompose_stack.borrow_mut();
-            let frame = stack.pop().expect("subcompose stack underflow");
-            guard.leaked = true;
-            frame
-        };
-
-        {
-            let mut applier = self.borrow_applier();
-            commands.apply(&mut *applier)?;
-            for update in runtime_handle.take_updates() {
-                update.apply(&mut *applier)?;
-            }
-        }
-        runtime_handle.drain_ui();
-        for effect in side_effects {
-            effect();
-        }
-        runtime_handle.drain_ui();
-        {
-            let mut slots_mut = slots.borrow_mut();
-            let _ = slots_mut.finalize_current_group();
-            slots_mut.flush();
-        }
-        Ok((result, frame.scopes))
-    }
-
-    fn skipped_group_root_nodes(&self, nodes: &[NodeId]) -> Vec<NodeId> {
-        let node_set: std::collections::HashSet<NodeId> = nodes.iter().copied().collect();
-        let mut applier = self.borrow_applier();
-        nodes
-            .iter()
-            .copied()
-            .filter(|id| {
-                let parent = applier.get_mut(*id).ok().and_then(|node| node.parent());
-                parent.is_none_or(|parent_id| !node_set.contains(&parent_id))
-            })
-            .collect()
-    }
-
-    pub fn skip_current_group(&self) {
-        let nodes = self.with_slots(|slots| slots.nodes_in_current_group());
-        let root_nodes = self.skipped_group_root_nodes(&nodes);
-        self.with_slots_mut(|slots| slots.skip_current_group());
-        for id in root_nodes {
-            self.attach_to_parent_with_mode(id, true);
-        }
-    }
-
-    pub fn runtime_handle(&self) -> RuntimeHandle {
-        self.core.runtime.clone()
-    }
-
-    pub fn set_recranpose_callback<F>(&self, callback: F)
-    where
-        F: FnMut(&Composer) + 'static,
-    {
-        if let Some(scope) = self.current_recranpose_scope() {
-            let observer = self.observer();
-            let scope_weak = scope.downgrade();
-            let mut callback = callback;
-            scope.set_recompose(Box::new(move |composer: &Composer| {
-                if let Some(inner) = scope_weak.upgrade() {
-                    let scope_instance = RecomposeScope { inner };
-                    observer.observe_reads(
-                        scope_instance.clone(),
-                        move |scope_ref| scope_ref.invalidate(),
-                        || {
-                            callback(composer);
-                        },
-                    );
-                }
-            }));
-        }
-    }
-
-    pub fn set_recranpose_fn(&self, callback: fn(&Composer)) {
-        if let Some(scope) = self.current_recranpose_scope() {
-            scope.set_recompose_fn(callback);
-        }
-    }
-
-    pub fn with_composition_locals<R>(
-        &self,
-        provided: Vec<ProvidedValue>,
-        f: impl FnOnce(&Composer) -> R,
-    ) -> R {
-        if provided.is_empty() {
-            return f(self);
-        }
-        let mut context = LocalContext::default();
-        for value in provided {
-            let (key, entry) = value.into_entry(self);
-            context.values.insert(key, entry);
-        }
-        {
-            let mut stack = self.local_stack();
-            Rc::make_mut(&mut *stack).push(context);
-        }
-        let result = f(self);
-        {
-            let mut stack = self.local_stack();
-            Rc::make_mut(&mut *stack).pop();
-        }
-        result
-    }
-}
-
 fn build_child_positions(children: &[NodeId]) -> HashMap<NodeId, usize> {
     let mut positions = HashMap::default();
     positions.reserve(children.len());
@@ -4548,722 +3731,8 @@ fn move_child_in_diff_state(
     to_index
 }
 
-struct ParentFrame {
-    id: NodeId,
-    previous: ChildList,
-    new_children: ChildList,
-    attach_mode: ParentAttachMode,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ParentAttachMode {
-    ImmediateAppend,
-    DeferredSync,
-}
-
-#[derive(Default)]
-struct SubcomposeFrame {
-    nodes: Vec<NodeId>,
-    scopes: Vec<RecomposeScope>,
-}
-
-#[derive(Default, Clone)]
-struct LocalContext {
-    values: HashMap<LocalKey, Rc<dyn Any>>,
-}
-
-pub(crate) struct MutableStateInner<T: Clone + 'static> {
-    state: Arc<SnapshotMutableState<T>>,
-    watchers: RefCell<HashMap<ScopeId, Weak<RecomposeScopeInner>>>, // FUTURE(no_std): move to stack-allocated subscription list.
-    runtime: RuntimeHandle,
-    debug_state_id: Cell<Option<StateId>>,
-}
-
-fn shrink_watchers_if_sparse(watchers: &mut HashMap<ScopeId, Weak<RecomposeScopeInner>>) {
-    let len = watchers.len();
-    let capacity = watchers.capacity();
-    if capacity > len.saturating_mul(4).max(32) {
-        watchers.shrink_to_fit();
-    }
-}
-
-impl<T: Clone + 'static> MutableStateInner<T> {
-    fn new_with_policy(
-        value: T,
-        runtime: RuntimeHandle,
-        policy: Arc<dyn MutationPolicy<T>>,
-    ) -> Self {
-        Self {
-            state: SnapshotMutableState::new_in_arc(value, policy),
-            watchers: RefCell::new(HashMap::default()),
-            runtime,
-            debug_state_id: Cell::new(None),
-        }
-    }
-
-    fn install_snapshot_observer(&self, state_id: StateId) {
-        self.debug_state_id.set(Some(state_id));
-        let runtime_handle = self.runtime.clone();
-        self.state.add_apply_observer(Box::new(move || {
-            let runtime = runtime_handle.clone();
-            runtime_handle.enqueue_ui_task(Box::new(move || {
-                runtime.with_state_arena(|arena| {
-                    let _ = arena.with_typed_opt::<T, _>(state_id, |inner| {
-                        inner.invalidate_watchers();
-                    });
-                });
-            }));
-        }));
-    }
-
-    fn with_value<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        let value = self.state.get();
-        f(&value)
-    }
-
-    fn register_scope(&self, scope: &RecomposeScope) -> bool {
-        let mut watchers = self.watchers.borrow_mut();
-        match watchers.get(&scope.id()) {
-            Some(existing) if existing.upgrade().is_some() => false,
-            _ => {
-                watchers.insert(scope.id(), scope.downgrade());
-                true
-            }
-        }
-    }
-
-    pub(crate) fn prune_dead_watchers(&self) {
-        let mut watchers = self.watchers.borrow_mut();
-        watchers.retain(|_, weak| weak.upgrade().is_some());
-        shrink_watchers_if_sparse(&mut watchers);
-    }
-
-    fn invalidate_watchers(&self) {
-        let watchers: Vec<RecomposeScope> = {
-            let mut watchers = self.watchers.borrow_mut();
-            let mut live = Vec::with_capacity(watchers.len());
-            watchers.retain(|_, weak| {
-                if let Some(inner) = weak.upgrade() {
-                    live.push(RecomposeScope { inner });
-                    true
-                } else {
-                    false
-                }
-            });
-            shrink_watchers_if_sparse(&mut watchers);
-            live
-        };
-
-        for watcher in watchers {
-            debug_record_scope_invalidation::<T>(watcher.id(), self.debug_state_id.get());
-            watcher.invalidate();
-        }
-    }
-}
-
-fn register_current_state_scope<T: Clone + 'static>(inner: &MutableStateInner<T>) {
-    let Some(Some(scope)) =
-        with_current_composer_opt(|composer| composer.current_recranpose_scope())
-    else {
-        return;
-    };
-    inner.register_scope(&scope);
-}
-
-/// Cheap copyable read-only view of a state cell.
-pub struct State<T: Clone + 'static> {
-    id: StateId,
-    runtime_id: runtime::RuntimeId,
-    _marker: PhantomData<fn() -> T>,
-}
-
-/// Cheap copyable mutable view of a state cell.
-///
-/// Ownership lives elsewhere: a composition slot, an [`OwnedMutableState`], or
-/// the runtime for states created with [`mutableStateOf`] / [`MutableState::with_runtime`].
-pub struct MutableState<T: Clone + 'static> {
-    id: StateId,
-    runtime_id: runtime::RuntimeId,
-    _marker: PhantomData<fn() -> T>,
-}
-
-/// Owning state handle for reclaimable state cells.
-///
-/// Store this when the state lifetime should be tied to a Rust object rather
-/// than the runtime. Use [`OwnedMutableState::handle`] to expose a cheap copyable
-/// [`MutableState`] to call sites.
-#[derive(Clone)]
-pub struct OwnedMutableState<T: Clone + 'static> {
-    state: MutableState<T>,
-    _lease: Rc<runtime::StateHandleLease>,
-    _marker: PhantomData<fn() -> T>,
-}
-
-impl<T: Clone + 'static> PartialEq for State<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.state_id() == other.state_id() && self.runtime_id() == other.runtime_id()
-    }
-}
-
-impl<T: Clone + 'static> Eq for State<T> {}
-
-impl<T: Clone + 'static> PartialEq for MutableState<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.state_id() == other.state_id() && self.runtime_id() == other.runtime_id()
-    }
-}
-
-impl<T: Clone + 'static> Eq for MutableState<T> {}
-
-impl<T: Clone + 'static> Copy for State<T> {}
-
-impl<T: Clone + 'static> Clone for State<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T: Clone + 'static> Copy for MutableState<T> {}
-
-impl<T: Clone + 'static> Clone for MutableState<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T: Clone + 'static> State<T> {
-    fn state_id(&self) -> StateId {
-        self.id
-    }
-
-    fn runtime_id(&self) -> runtime::RuntimeId {
-        self.runtime_id
-    }
-
-    fn runtime_handle(&self) -> RuntimeHandle {
-        runtime::runtime_handle_by_id(self.runtime_id())
-            .unwrap_or_else(|| panic!("runtime {:?} dropped", self.runtime_id()))
-    }
-
-    fn with_inner<R>(&self, f: impl FnOnce(&MutableStateInner<T>) -> R) -> R {
-        self.runtime_handle()
-            .with_state_arena(|arena| arena.with_typed::<T, R>(self.state_id(), f))
-    }
-
-    fn subscribe_current_scope(&self) {
-        self.with_inner(register_current_state_scope::<T>);
-    }
-
-    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        self.subscribe_current_scope();
-        self.with_inner(|inner| inner.with_value(f))
-    }
-
-    pub fn value(&self) -> T {
-        self.subscribe_current_scope();
-        self.with_inner(|inner| inner.state.get())
-    }
-
-    pub fn get(&self) -> T {
-        self.value()
-    }
-}
-
-impl<T: Clone + 'static> MutableState<T> {
-    /// Creates a runtime-owned persistent state handle.
-    pub fn with_runtime(value: T, runtime: RuntimeHandle) -> Self {
-        runtime.alloc_persistent_state(value)
-    }
-
-    fn from_parts(id: StateId, runtime_id: runtime::RuntimeId) -> Self {
-        Self {
-            id,
-            runtime_id,
-            _marker: PhantomData,
-        }
-    }
-
-    pub(crate) fn from_lease(lease: &Rc<runtime::StateHandleLease>) -> Self {
-        Self::from_parts(lease.id(), lease.runtime().id())
-    }
-
-    fn state_id(&self) -> StateId {
-        self.id
-    }
-
-    fn runtime_id(&self) -> runtime::RuntimeId {
-        self.runtime_id
-    }
-
-    fn runtime_handle(&self) -> RuntimeHandle {
-        runtime::runtime_handle_by_id(self.runtime_id())
-            .unwrap_or_else(|| panic!("runtime {:?} dropped", self.runtime_id()))
-    }
-
-    fn with_inner<R>(&self, f: impl FnOnce(&MutableStateInner<T>) -> R) -> R {
-        self.runtime_handle()
-            .with_state_arena(|arena| arena.with_typed::<T, R>(self.state_id(), f))
-    }
-
-    fn try_with_inner<R>(&self, f: impl FnOnce(&MutableStateInner<T>) -> R) -> Option<R> {
-        self.runtime_handle()
-            .with_state_arena(|arena| arena.with_typed_opt::<T, R>(self.state_id(), f))
-    }
-
-    /// Returns `true` if the underlying state cell is still alive (not released).
-    pub fn is_alive(&self) -> bool {
-        self.try_with_inner(|_| ()).is_some()
-    }
-
-    /// Like `with`, but returns `None` if the state cell has been released.
-    ///
-    /// Use this in frame callbacks, fling animations, and other contexts where
-    /// the owning composition group may have been disposed (e.g., tab switch).
-    pub fn try_with<R>(&self, f: impl FnOnce(&T) -> R) -> Option<R> {
-        self.try_with_inner(|inner| inner.with_value(f))
-    }
-
-    /// Like `value`, but returns `None` if the state cell has been released.
-    pub fn try_value(&self) -> Option<T> {
-        self.try_with_inner(|inner| inner.state.get())
-    }
-
-    pub fn as_state(&self) -> State<T> {
-        State {
-            id: self.id,
-            runtime_id: self.runtime_id,
-            _marker: PhantomData,
-        }
-    }
-
-    /// Upgrades this handle into an owning state value if the cell is still alive.
-    pub fn try_retain(&self) -> Option<OwnedMutableState<T>> {
-        let lease = self.runtime_handle().retain_state_lease(self.state_id())?;
-        Some(OwnedMutableState {
-            state: *self,
-            _lease: lease,
-            _marker: PhantomData,
-        })
-    }
-
-    /// Upgrades this handle into an owning state value.
-    pub fn retain(&self) -> OwnedMutableState<T> {
-        self.try_retain()
-            .unwrap_or_else(|| panic!("state {:?} is no longer alive", self.state_id()))
-    }
-
-    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        self.subscribe_current_scope();
-        self.with_inner(|inner| inner.with_value(f))
-    }
-
-    pub fn update<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
-        let runtime = self.runtime_handle();
-        runtime.assert_ui_thread();
-        runtime.with_state_arena(|arena| {
-            arena.with_typed::<T, R>(self.state_id(), |inner| {
-                let mut value = inner.state.get();
-                let tracker = UpdateScope::new(inner.state.id());
-                let result = f(&mut value);
-                let wrote_elsewhere = tracker.finish();
-                if !wrote_elsewhere && inner.state.set(value) {
-                    inner.invalidate_watchers();
-                }
-                result
-            })
-        })
-    }
-
-    /// Sets a new value, silently skipping the write if the state cell was released.
-    ///
-    /// State cells can be released between when a `SideEffect` closure captures a
-    /// `MutableState` handle and when the side effect actually runs (command
-    /// application disposes composition groups, freeing their state slots, before
-    /// side effects execute). Using `with_typed_opt` instead of `with_typed`
-    /// avoids a panic on the stale handle.
-    pub fn replace(&self, value: T) {
-        let runtime = self.runtime_handle();
-        runtime.assert_ui_thread();
-        runtime.with_state_arena(|arena| {
-            if arena
-                .with_typed_opt::<T, ()>(self.state_id(), |inner| {
-                    if inner.state.set(value) {
-                        inner.invalidate_watchers();
-                    }
-                })
-                .is_none()
-            {
-                log::debug!(
-                    "MutableState::replace skipped: state cell released (slot={}, gen={})",
-                    self.state_id().slot(),
-                    self.state_id().generation(),
-                );
-            }
-        });
-    }
-
-    pub fn set_value(&self, value: T) {
-        self.replace(value);
-    }
-
-    pub fn set(&self, value: T) {
-        self.replace(value);
-    }
-
-    pub fn value(&self) -> T {
-        self.subscribe_current_scope();
-        self.with_inner(|inner| inner.state.get())
-    }
-
-    pub fn get(&self) -> T {
-        self.value()
-    }
-
-    /// Gets the current value WITHOUT subscribing to recomposition.
-    ///
-    /// Use this in layout/measure/draw phases to read state without causing
-    /// the current composition scope to recompose when the state changes.
-    ///
-    /// # When to use
-    /// - In modifier nodes (like ScrollNode) during measure()
-    /// - In any layout phase code that reads state but shouldn't trigger recomposition
-    ///
-    /// # When NOT to use
-    /// - In composable functions that should update when state changes
-    /// - When you want reactive UI updates
-    pub fn get_non_reactive(&self) -> T {
-        // Skip subscribe_current_scope() - just read the value directly
-        self.with_inner(|inner| inner.state.get())
-    }
-
-    fn subscribe_current_scope(&self) {
-        self.with_inner(register_current_state_scope::<T>);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn watcher_count(&self) -> usize {
-        self.with_inner(|inner| inner.watchers.borrow().len())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn watcher_capacity(&self) -> usize {
-        self.with_inner(|inner| inner.watchers.borrow().capacity())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn state_id_for_test(&self) -> StateId {
-        self.state_id()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn subscribe_scope_for_test(&self, scope: &RecomposeScope) {
-        self.as_state().subscribe_scope_for_test(scope);
-    }
-}
-
-impl<T: Clone + 'static> OwnedMutableState<T> {
-    /// Creates a reclaimable state owned by this Rust value.
-    pub fn with_runtime(value: T, runtime: RuntimeHandle) -> Self {
-        let lease = runtime.alloc_state(value);
-        Self {
-            state: MutableState::from_lease(&lease),
-            _lease: lease,
-            _marker: PhantomData,
-        }
-    }
-
-    pub(crate) fn with_runtime_and_policy(
-        value: T,
-        runtime: RuntimeHandle,
-        policy: Arc<dyn MutationPolicy<T>>,
-    ) -> Self {
-        let lease = runtime.alloc_state_with_policy(value, policy);
-        Self {
-            state: MutableState::from_lease(&lease),
-            _lease: lease,
-            _marker: PhantomData,
-        }
-    }
-
-    /// Returns a cheap copyable mutable handle to the owned state.
-    pub fn handle(&self) -> MutableState<T> {
-        self.state
-    }
-
-    /// Returns a cheap copyable read-only handle to the owned state.
-    pub fn as_state(&self) -> State<T> {
-        self.state.as_state()
-    }
-}
-
-impl<T: Clone + 'static> Deref for OwnedMutableState<T> {
-    type Target = MutableState<T>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.state
-    }
-}
-
-#[cfg(test)]
-impl<T: Clone + 'static> State<T> {
-    pub(crate) fn subscribe_scope_for_test(&self, scope: &RecomposeScope) {
-        self.with_inner(|inner| {
-            inner.register_scope(scope);
-        });
-    }
-}
-
-impl<T: fmt::Debug + Clone + 'static> fmt::Debug for MutableState<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.with_inner(|inner| {
-            inner.with_value(|value| {
-                f.debug_struct("MutableState")
-                    .field("value", value)
-                    .finish()
-            })
-        })
-    }
-}
-
-#[derive(Clone)]
-pub struct SnapshotStateList<T: Clone + 'static> {
-    state: OwnedMutableState<Vec<T>>,
-}
-
-impl<T: Clone + 'static> SnapshotStateList<T> {
-    pub fn with_runtime<I>(values: I, runtime: RuntimeHandle) -> Self
-    where
-        I: IntoIterator<Item = T>,
-    {
-        let initial: Vec<T> = values.into_iter().collect();
-        Self {
-            state: OwnedMutableState::with_runtime(initial, runtime),
-        }
-    }
-
-    pub fn as_state(&self) -> State<Vec<T>> {
-        self.state.as_state()
-    }
-
-    pub fn as_mutable_state(&self) -> MutableState<Vec<T>> {
-        self.state.handle()
-    }
-
-    pub fn len(&self) -> usize {
-        self.state.with(|values| values.len())
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    pub fn to_vec(&self) -> Vec<T> {
-        self.state.with(|values| values.clone())
-    }
-
-    pub fn iter(&self) -> Vec<T> {
-        self.to_vec()
-    }
-
-    pub fn get(&self, index: usize) -> T {
-        self.state.with(|values| values[index].clone())
-    }
-
-    pub fn get_opt(&self, index: usize) -> Option<T> {
-        self.state.with(|values| values.get(index).cloned())
-    }
-
-    pub fn first(&self) -> Option<T> {
-        self.get_opt(0)
-    }
-
-    pub fn last(&self) -> Option<T> {
-        self.state.with(|values| values.last().cloned())
-    }
-
-    pub fn push(&self, value: T) {
-        self.state.update(|values| values.push(value));
-    }
-
-    pub fn extend<I>(&self, iter: I)
-    where
-        I: IntoIterator<Item = T>,
-    {
-        self.state.update(|values| values.extend(iter));
-    }
-
-    pub fn insert(&self, index: usize, value: T) {
-        self.state.update(|values| values.insert(index, value));
-    }
-
-    pub fn set(&self, index: usize, value: T) -> T {
-        self.state
-            .update(|values| std::mem::replace(&mut values[index], value))
-    }
-
-    pub fn remove(&self, index: usize) -> T {
-        self.state.update(|values| values.remove(index))
-    }
-
-    pub fn pop(&self) -> Option<T> {
-        self.state.update(|values| values.pop())
-    }
-
-    pub fn clear(&self) {
-        self.state.replace(Vec::new());
-    }
-
-    pub fn retain<F>(&self, mut predicate: F)
-    where
-        F: FnMut(&T) -> bool,
-    {
-        self.state
-            .update(|values| values.retain(|value| predicate(value)));
-    }
-
-    pub fn replace_with<I>(&self, iter: I)
-    where
-        I: IntoIterator<Item = T>,
-    {
-        self.state.replace(iter.into_iter().collect());
-    }
-}
-
-impl<T: fmt::Debug + Clone + 'static> fmt::Debug for SnapshotStateList<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let contents = self.to_vec();
-        f.debug_struct("SnapshotStateList")
-            .field("values", &contents)
-            .finish()
-    }
-}
-
-#[derive(Clone)]
-pub struct SnapshotStateMap<K, V>
-where
-    K: Clone + Eq + Hash + 'static,
-    V: Clone + 'static,
-{
-    state: OwnedMutableState<HashMap<K, V>>,
-}
-
-impl<K, V> SnapshotStateMap<K, V>
-where
-    K: Clone + Eq + Hash + 'static,
-    V: Clone + 'static,
-{
-    pub fn with_runtime<I>(pairs: I, runtime: RuntimeHandle) -> Self
-    where
-        I: IntoIterator<Item = (K, V)>,
-    {
-        let map: HashMap<K, V> = pairs.into_iter().collect();
-        Self {
-            state: OwnedMutableState::with_runtime(map, runtime),
-        }
-    }
-
-    pub fn as_state(&self) -> State<HashMap<K, V>> {
-        self.state.as_state()
-    }
-
-    pub fn as_mutable_state(&self) -> MutableState<HashMap<K, V>> {
-        self.state.handle()
-    }
-
-    pub fn len(&self) -> usize {
-        self.state.with(|map| map.len())
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.state.with(|map| map.is_empty())
-    }
-
-    pub fn contains_key(&self, key: &K) -> bool {
-        self.state.with(|map| map.contains_key(key))
-    }
-
-    pub fn get(&self, key: &K) -> Option<V> {
-        self.state.with(|map| map.get(key).cloned())
-    }
-
-    pub fn to_hash_map(&self) -> HashMap<K, V> {
-        self.state.with(|map| map.clone())
-    }
-
-    pub fn insert(&self, key: K, value: V) -> Option<V> {
-        self.state.update(|map| map.insert(key, value))
-    }
-
-    pub fn extend<I>(&self, iter: I)
-    where
-        I: IntoIterator<Item = (K, V)>,
-    {
-        self.state.update(|map| map.extend(iter));
-        // extend returns (), but update requires returning something: we can just rely on ()
-    }
-
-    pub fn remove(&self, key: &K) -> Option<V> {
-        self.state.update(|map| map.remove(key))
-    }
-
-    pub fn clear(&self) {
-        self.state.replace(HashMap::default());
-    }
-
-    pub fn retain<F>(&self, mut predicate: F)
-    where
-        F: FnMut(&K, &mut V) -> bool,
-    {
-        self.state.update(|map| map.retain(|k, v| predicate(k, v)));
-    }
-}
-
-impl<K, V> fmt::Debug for SnapshotStateMap<K, V>
-where
-    K: Clone + Eq + Hash + fmt::Debug + 'static,
-    V: Clone + fmt::Debug + 'static,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let contents = self.to_hash_map();
-        f.debug_struct("SnapshotStateMap")
-            .field("entries", &contents)
-            .finish()
-    }
-}
-
-struct DerivedState<T: Clone + 'static> {
-    compute: Rc<dyn Fn() -> T>, // FUTURE(no_std): store compute closures in arena-managed cell.
-    state: OwnedMutableState<T>,
-}
-
-impl<T: Clone + 'static> DerivedState<T> {
-    fn new(runtime: RuntimeHandle, compute: Rc<dyn Fn() -> T>) -> Self {
-        // FUTURE(no_std): accept arena-managed compute handle.
-        let initial = compute();
-        Self {
-            compute,
-            state: OwnedMutableState::with_runtime(initial, runtime),
-        }
-    }
-
-    fn set_compute(&mut self, compute: Rc<dyn Fn() -> T>) {
-        // FUTURE(no_std): accept arena-managed compute handle.
-        self.compute = compute;
-    }
-
-    fn recompute(&self) {
-        let value = (self.compute)();
-        self.state.set_value(value);
-    }
-}
-
-impl<T: fmt::Debug + Clone + 'static> fmt::Debug for State<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.with_inner(|inner| {
-            inner.with_value(|value| f.debug_struct("State").field("value", value).finish())
-        })
-    }
-}
+pub(crate) use state::{DerivedState, MutableStateInner};
+pub use state::{MutableState, OwnedMutableState, SnapshotStateList, SnapshotStateMap, State};
 
 pub struct ParamState<T> {
     value: Option<T>,
@@ -5539,16 +4008,6 @@ mod callback_holder_tests {
     }
 }
 
-pub struct Composition<A: Applier + 'static> {
-    slots: Rc<SlotsHost>,
-    applier: Rc<ConcreteApplierHost<A>>,
-    runtime: Runtime,
-    observer: SnapshotStateObserver,
-    root: Option<NodeId>,
-    root_render_requested: bool,
-    last_pass_stats: CompositionPassDebugStats,
-}
-
 fn hash_key<K: Hash>(key: &K) -> Key {
     let mut hasher = hash::default::new();
     key.hash(&mut hasher);
@@ -5556,7 +4015,7 @@ fn hash_key<K: Hash>(key: &K) -> Key {
 }
 
 #[cfg(test)]
-#[path = "tests/lib_tests.rs"]
+#[path = "tests/mod.rs"]
 mod tests;
 
 #[cfg(test)]

@@ -1,4 +1,22 @@
-use super::*;
+use crate::{
+    collections::map::HashMap, remove_child_and_cleanup_now, runtime, snapshot_state_observer,
+    Applier, ApplierGuard, ApplierHost, CommandQueue, Composer, CompositionPassDebugStats,
+    ConcreteApplierHost, DefaultScheduler, Key, NodeError, NodeId, RecomposeScope, Runtime,
+    RuntimeHandle, ScopeId, SlotTable, SlotTableDebugStats, SlotValueTypeDebugStat, SlotsHost,
+    SnapshotStateObserver,
+};
+use std::rc::Rc;
+use std::sync::Arc;
+
+pub struct Composition<A: Applier + 'static> {
+    pub(crate) slots: Rc<SlotsHost>,
+    pub(crate) applier: Rc<ConcreteApplierHost<A>>,
+    pub(crate) runtime: Runtime,
+    pub(crate) observer: SnapshotStateObserver,
+    pub(crate) root: Option<NodeId>,
+    pub(crate) root_render_requested: bool,
+    pub(crate) last_pass_stats: CompositionPassDebugStats,
+}
 
 impl<A: Applier + 'static> Composition<A> {
     pub fn new(applier: A) -> Self {
@@ -175,7 +193,6 @@ impl<A: Applier + 'static> Composition<A> {
         runtime_handle.drain_ui();
         let _ = self.process_invalid_scopes()?;
         self.observer.prune_dead_scopes();
-        runtime_handle.prune_dead_state_watchers();
         if !self.runtime.has_updates()
             && !runtime_handle.has_invalid_scopes()
             && !runtime_handle.has_frame_callbacks()
@@ -347,7 +364,6 @@ impl<A: Applier + 'static> Composition<A> {
             }
         }
         self.observer.prune_dead_scopes();
-        runtime_handle.prune_dead_state_watchers();
         if !self.runtime.has_updates()
             && !runtime_handle.has_invalid_scopes()
             && !runtime_handle.has_frame_callbacks()

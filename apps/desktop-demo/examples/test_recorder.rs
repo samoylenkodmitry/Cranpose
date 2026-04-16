@@ -20,11 +20,15 @@ fn main() {
     println!("Interact with the app, then close it.");
     println!("The recording will be saved automatically.\n");
 
-    AppLauncher::new()
+    if let Err(error) = AppLauncher::new()
         .with_title("Recorder Test")
         .with_size(800, 600)
         .with_recording(&recording_path)
-        .run(|| {
+        .try_run(|| {
             app::combined_app();
-        });
+        })
+    {
+        eprintln!("Failed to launch recorder example: {error}");
+        std::process::exit(1);
+    }
 }

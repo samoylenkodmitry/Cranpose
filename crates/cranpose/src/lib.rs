@@ -16,6 +16,8 @@ compile_error!(
 compile_error!("cranpose requires either `renderer-pixels` or `renderer-wgpu` feature.");
 
 mod launcher;
+#[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+pub use launcher::LaunchError;
 pub use launcher::{AppLauncher, AppSettings};
 #[cfg(feature = "renderer-wgpu")]
 mod present_mode;

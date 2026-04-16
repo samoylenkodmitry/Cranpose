@@ -881,8 +881,6 @@ fn AutoLoadMore(
     load_more_trigger: cranpose_core::MutableState<u64>,
 ) {
     #[cfg(test)]
-    cranpose_core::debug_label_current_scope("AutoLoadMore");
-    #[cfg(test)]
     DebugScopeTag("AutoLoadMore");
     let visible_start = list_state.first_visible_item_index();
     let visible_count = list_state.stats().items_in_use;
@@ -917,8 +915,6 @@ fn AutoLoadMoreComments(
     auto_load_guard: cranpose_core::MutableState<usize>,
     load_more_trigger: cranpose_core::MutableState<u64>,
 ) {
-    #[cfg(test)]
-    cranpose_core::debug_label_current_scope("AutoLoadMoreComments");
     #[cfg(test)]
     DebugScopeTag("AutoLoadMoreComments");
     let visible_start = list_state.first_visible_item_index();
@@ -1318,8 +1314,6 @@ fn StoriesPane(
     #[cfg(test)]
     LAST_STORIES_LIST_STATE.with(|slot| *slot.borrow_mut() = Some(list_state));
     #[cfg(test)]
-    cranpose_core::debug_label_current_scope("StoriesPane");
-    #[cfg(test)]
     DebugScopeTag("StoriesPane");
     let status_label = match &news_state {
         NewsState::Idle => "Waiting for data".to_string(),
@@ -1699,8 +1693,6 @@ fn ThreadPane(
     #[cfg(test)]
     THREAD_PANE_CALLS.with(|count| count.set(count.get() + 1));
     #[cfg(test)]
-    cranpose_core::debug_label_current_scope("ThreadPane");
-    #[cfg(test)]
     DebugScopeTag("ThreadPane");
     Column(
         rounded_surface(modifier, palette.panel, 18.0).padding(14.0),
@@ -1903,12 +1895,11 @@ fn ThreadPane(
     );
 }
 
+#[allow(non_snake_case)]
 #[composable]
-pub fn hacker_news_tab() {
+pub fn HackerNewsTab() {
     #[cfg(test)]
-    cranpose_core::debug_label_current_scope("hacker_news_tab");
-    #[cfg(test)]
-    DebugScopeTag("hacker_news_tab");
+    DebugScopeTag("HackerNewsTab");
     let news_state = cranpose_core::useState(|| NewsState::Idle);
     let thread_state = cranpose_core::useState(|| ThreadState::Idle);
     let refresh_trigger = cranpose_core::useState(|| 0u64);
@@ -1967,8 +1958,6 @@ pub fn hacker_news_tab() {
             BoxWithConstraints(
                 Modifier::empty().fill_max_size().clip_to_bounds(),
                 move |scope| {
-                    #[cfg(test)]
-                    cranpose_core::debug_label_current_scope("hacker_news_tab_box_content");
                     #[cfg(test)]
                     DebugScopeTag("hacker_news_tab_box_content");
                     let is_two_pane = scope.max_width().0 >= TWO_PANE_BREAKPOINT;
@@ -2106,8 +2095,8 @@ pub fn hacker_news_tab() {
 #[cfg(test)]
 mod tests {
     use super::{
-        fetch_stories_page, hacker_news_tab, html_to_plain_text, load_comment_page,
-        load_initial_comment_page, story_comments_url, story_target_url, CommentThreadData, Story,
+        fetch_stories_page, html_to_plain_text, load_comment_page, load_initial_comment_page,
+        story_comments_url, story_target_url, CommentThreadData, HackerNewsTab, Story,
     };
     use cranpose_core::{run_in_mutable_snapshot, CompositionLocalProvider};
     use cranpose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEventKind};
@@ -2487,7 +2476,7 @@ mod tests {
                     .filter(|label| {
                         matches!(
                             *label,
-                            "hacker_news_tab"
+                            "HackerNewsTab"
                                 | "hacker_news_tab_box_content"
                                 | "hacker_news_tab_body"
                                 | "hacker_news_tab_stories_only"
@@ -3023,7 +3012,7 @@ mod tests {
             move || {
                 let local = cranpose_services::local_http_client();
                 CompositionLocalProvider(vec![local.provides(mock_client.clone())], move || {
-                    hacker_news_tab();
+                    HackerNewsTab();
                 });
             }
         });
@@ -3169,7 +3158,7 @@ mod tests {
             move || {
                 let local = cranpose_services::local_http_client();
                 CompositionLocalProvider(vec![local.provides(mock_client.clone())], move || {
-                    hacker_news_tab();
+                    HackerNewsTab();
                 });
             }
         });
@@ -3267,7 +3256,7 @@ mod tests {
             move || {
                 let local = cranpose_services::local_http_client();
                 CompositionLocalProvider(vec![local.provides(mock_client.clone())], move || {
-                    hacker_news_tab();
+                    HackerNewsTab();
                 });
             }
         });

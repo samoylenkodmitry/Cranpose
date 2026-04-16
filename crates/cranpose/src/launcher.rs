@@ -5,6 +5,8 @@
 
 #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
 use std::path::PathBuf;
+#[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+use thiserror::Error;
 
 /// Configuration for application settings.
 pub struct AppSettings {
@@ -57,6 +59,30 @@ impl Default for AppSettings {
             record_to: None,
         }
     }
+}
+
+/// Errors that can occur while launching a desktop application.
+#[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
+#[derive(Debug, Error)]
+pub enum LaunchError {
+    /// Creating the desktop event loop failed.
+    #[error("failed to create desktop event loop: {0}")]
+    EventLoopCreate(#[source] winit::error::EventLoopError),
+    /// Creating the desktop window failed.
+    #[error("failed to create desktop window: {0}")]
+    WindowCreate(#[source] winit::error::RequestError),
+    /// Creating the rendering surface failed.
+    #[error("failed to create desktop rendering surface: {0}")]
+    SurfaceCreate(#[source] wgpu::CreateSurfaceError),
+    /// No compatible GPU adapter was available for the surface.
+    #[error("no compatible GPU adapter was available: {0}")]
+    NoAdapter(#[source] wgpu::RequestAdapterError),
+    /// Creating the GPU device failed.
+    #[error("failed to create GPU device: {0}")]
+    DeviceCreate(#[source] wgpu::RequestDeviceError),
+    /// The desktop event loop terminated with an error.
+    #[error("desktop event loop terminated with error: {0}")]
+    EventLoopRun(#[source] winit::error::EventLoopError),
 }
 
 /// Platform-agnostic application launcher.
@@ -340,13 +366,27 @@ impl AppLauncher {
         feature = "renderer-wgpu",
         not(target_os = "android")
     ))]
-    pub fn run(self, content: impl FnMut() + 'static) -> ! {
+    pub fn try_run(self, content: impl FnMut() + 'static) -> Result<(), LaunchError> {
         let mut content = content;
-        crate::desktop::run(self.settings, move || {
+        crate::desktop::try_run(self.settings, move || {
             crate::ProvideUriHandler(|| {
                 content();
             });
         })
+    }
+
+    /// Run the application (Desktop platform).
+    ///
+    /// Use [`AppLauncher::try_run`] when the caller needs a typed launch failure.
+    #[cfg(all(
+        feature = "desktop",
+        feature = "renderer-wgpu",
+        not(target_os = "android")
+    ))]
+    pub fn run(self, content: impl FnMut() + 'static) -> ! {
+        self.try_run(content)
+            .unwrap_or_else(|error| panic!("desktop launch failed: {error}"));
+        std::process::exit(0)
     }
 
     /// Run the application (Android platform).

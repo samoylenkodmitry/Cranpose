@@ -6,6 +6,7 @@
 #![allow(non_snake_case)]
 #![allow(dead_code)] // Widget API is WIP
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::composable;
@@ -420,6 +421,31 @@ fn get_spacing(arrangement: LinearArrangement) -> f32 {
     }
 }
 
+fn bind_layout_invalidation_callback(state: LazyListState, list_state_id: usize, node_id: NodeId) {
+    let callback_owner =
+        cranpose_core::remember(|| Rc::new(RefCell::new(None::<u64>))).with(|cell| cell.clone());
+    let callback_id = state.try_register_layout_callback(
+        node_id,
+        Rc::new(move || {
+            crate::schedule_layout_repass(node_id);
+        }),
+    );
+
+    if let Some(previous_id) = callback_owner.replace(callback_id) {
+        if Some(previous_id) != callback_id {
+            state.remove_invalidate_callback(previous_id);
+        }
+    }
+
+    cranpose_core::DisposableEffect!((list_state_id, node_id, callback_id), move |scope| {
+        scope.on_dispose(move || {
+            if let Some(callback_id) = callback_id {
+                state.remove_invalidate_callback(callback_id);
+            }
+        })
+    });
+}
+
 #[derive(Clone)]
 struct LazyListContentHandle(Rc<LazyListIntervalContent>);
 
@@ -649,20 +675,7 @@ fn LazyColumnImpl(
         debug_assert!(false, "failed to update LazyColumn node: {err}");
     }
     cranpose_core::bubble_measure_dirty_in_composer(node_id);
-
-    cranpose_core::DisposableEffect!((list_state_id, node_id), move |scope| {
-        let callback_id = state.try_register_layout_callback(
-            node_id,
-            Rc::new(move || {
-                crate::schedule_layout_repass(node_id);
-            }),
-        );
-        scope.on_dispose(move || {
-            if let Some(callback_id) = callback_id {
-                state.remove_invalidate_callback(callback_id);
-            }
-        })
-    });
+    bind_layout_invalidation_callback(state, list_state_id, node_id);
 
     node_id
 }
@@ -747,20 +760,7 @@ fn LazyRowImpl(
         debug_assert!(false, "failed to update LazyRow node: {err}");
     }
     cranpose_core::bubble_measure_dirty_in_composer(node_id);
-
-    cranpose_core::DisposableEffect!((list_state_id, node_id), move |scope| {
-        let callback_id = state.try_register_layout_callback(
-            node_id,
-            Rc::new(move || {
-                crate::schedule_layout_repass(node_id);
-            }),
-        );
-        scope.on_dispose(move || {
-            if let Some(callback_id) = callback_id {
-                state.remove_invalidate_callback(callback_id);
-            }
-        })
-    });
+    bind_layout_invalidation_callback(state, list_state_id, node_id);
 
     node_id
 }

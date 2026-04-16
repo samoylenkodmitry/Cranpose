@@ -958,6 +958,7 @@ dependencies = [
  "pixels",
  "pollster 0.4.0",
  "raw-window-handle",
+ "thiserror 2.0.18",
  "wasm-bindgen",
  "web-sys",
  "wgpu 28.0.0",

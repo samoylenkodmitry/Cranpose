@@ -22,7 +22,10 @@ fn create_app() -> AppLauncher {
 pub fn entry_point() {
     #[cfg(feature = "logging")]
     let _ = env_logger::try_init();
-    create_app().run(app::combined_app);
+    if let Err(error) = create_app().try_run(app::combined_app) {
+        eprintln!("Failed to launch Cranpose Demo: {error}");
+        std::process::exit(1);
+    }
 }
 
 /// iOS entry point — called from Xcode project's main.m
