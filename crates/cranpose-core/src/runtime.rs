@@ -41,11 +41,6 @@ impl<T: Clone + 'static> ScopeWatchCell for TypedStateCell<T> {
     }
 }
 
-#[allow(dead_code)]
-struct RawStateCell<T: 'static> {
-    value: T,
-}
-
 struct StateArenaSlot {
     generation: u32,
     cell: Option<Rc<dyn Any>>,
@@ -141,45 +136,6 @@ impl StateArena {
         id
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn alloc_raw<T: 'static>(&self, value: T) -> StateId {
-        let (slot, generation) = {
-            let mut inner = self.inner.borrow_mut();
-            match inner.free.pop() {
-                Some(slot) => {
-                    let entry = inner
-                        .cells
-                        .get_mut(slot as usize)
-                        .expect("state slot missing");
-                    debug_assert!(entry.cell.is_none(), "reused state slot must be empty");
-                    entry.generation = entry.generation.wrapping_add(1);
-                    (slot, entry.generation)
-                }
-                None => {
-                    let slot = inner.cells.len() as u32;
-                    inner.cells.push(StateArenaSlot {
-                        generation: 0,
-                        cell: None,
-                        watcher_cell: None,
-                        lease: None,
-                    });
-                    (slot, 0)
-                }
-            }
-        };
-        let id = StateId::new(slot, generation);
-        let cell: Rc<dyn Any> = Rc::new(RawStateCell { value });
-        let mut arena = self.inner.borrow_mut();
-        let slot_entry = &mut arena.cells[slot as usize];
-        slot_entry.cell = Some(cell);
-        slot_entry.watcher_cell = None;
-        id
-    }
-
-    fn get_cell(&self, id: StateId) -> Rc<dyn Any> {
-        self.get_cell_opt(id).expect("state cell missing")
-    }
-
     fn get_cell_opt(&self, id: StateId) -> Option<Rc<dyn Any>> {
         self.inner
             .borrow()
@@ -229,13 +185,6 @@ impl StateArena {
     ) -> Option<R> {
         let cell = self.get_typed_opt::<T>(id)?;
         Some(f(&cell.inner))
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn with_raw<T: 'static, R>(&self, id: StateId, f: impl FnOnce(&T) -> R) -> R {
-        let cell = Rc::downcast::<RawStateCell<T>>(self.get_cell(id))
-            .expect("raw state cell type mismatch");
-        f(&cell.value)
     }
 
     pub(crate) fn release(&self, id: StateId) {
@@ -423,10 +372,10 @@ impl UiDispatcher {
 struct RuntimeInner {
     scheduler: Arc<dyn RuntimeScheduler>,
     needs_frame: RefCell<bool>,
-    node_updates: RefCell<Vec<Command>>, // FUTURE(no_std): replace Vec with ring buffer.
-    invalid_scopes: RefCell<HashSet<ScopeId>>, // FUTURE(no_std): replace HashSet with sparse bitset.
-    scope_queue: RefCell<Vec<(ScopeId, Weak<RecomposeScopeInner>)>>, // FUTURE(no_std): use smallvec-backed queue.
-    frame_callbacks: RefCell<VecDeque<FrameCallbackEntry>>, // FUTURE(no_std): migrate to ring buffer.
+    node_updates: RefCell<Vec<Command>>,
+    invalid_scopes: RefCell<HashSet<ScopeId>>,
+    scope_queue: RefCell<Vec<(ScopeId, Weak<RecomposeScopeInner>)>>,
+    frame_callbacks: RefCell<VecDeque<FrameCallbackEntry>>,
     next_frame_callback_id: Cell<u64>,
     ui_dispatcher: Arc<UiDispatcherInner>,
     ui_rx: RefCell<mpsc::Receiver<UiMessage>>,
@@ -434,7 +383,7 @@ struct RuntimeInner {
     ui_conts: RefCell<UiContinuationMap>,
     next_cont_id: Cell<u64>,
     ui_thread_id: ThreadId,
-    tasks: RefCell<Vec<TaskEntry>>, // FUTURE(no_std): migrate to smallvec-backed storage.
+    tasks: RefCell<Vec<TaskEntry>>,
     next_task_id: Cell<u64>,
     task_waker: RefCell<Option<Waker>>,
     state_arena: StateArena,
@@ -491,7 +440,6 @@ impl RuntimeInner {
     }
 
     fn take_updates(&self) -> Vec<Command> {
-        // FUTURE(no_std): return stack-allocated smallvec.
         let updates = self.node_updates.borrow_mut().drain(..).collect::<Vec<_>>();
         updates
     }
@@ -513,7 +461,6 @@ impl RuntimeInner {
     }
 
     fn take_invalidated_scopes(&self) -> Vec<(ScopeId, Weak<RecomposeScopeInner>)> {
-        // FUTURE(no_std): return iterator over small array storage.
         let mut queue = self.scope_queue.borrow_mut();
         if queue.is_empty() {
             return Vec::new();
@@ -794,7 +741,7 @@ impl RuntimeInner {
 
 #[derive(Clone)]
 pub struct Runtime {
-    inner: Rc<RuntimeInner>, // FUTURE(no_std): replace Rc with arena-managed runtime storage.
+    inner: Rc<RuntimeInner>,
 }
 
 impl Runtime {
@@ -988,16 +935,6 @@ impl RuntimeHandle {
             .unwrap_or_else(|| panic!("runtime dropped"))
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn alloc_value<T: 'static>(&self, value: T) -> StateId {
-        self.with_state_arena(|arena| arena.alloc_raw(value))
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn with_value<T: 'static, R>(&self, id: StateId, f: impl FnOnce(&T) -> R) -> R {
-        self.with_state_arena(|arena| arena.with_raw::<T, R>(id, f))
-    }
-
     fn release_state_immediate(&self, id: StateId) {
         if let Some(inner) = self.inner.upgrade() {
             inner.state_arena.release(id);
@@ -1134,7 +1071,6 @@ impl RuntimeHandle {
     }
 
     pub(crate) fn take_updates(&self) -> Vec<Command> {
-        // FUTURE(no_std): return iterator over static buffer.
         self.inner
             .upgrade()
             .map(|inner| inner.take_updates())
@@ -1161,7 +1097,6 @@ impl RuntimeHandle {
     }
 
     pub(crate) fn take_invalidated_scopes(&self) -> Vec<(ScopeId, Weak<RecomposeScopeInner>)> {
-        // FUTURE(no_std): expose draining iterator without Vec allocation.
         self.inner
             .upgrade()
             .map(|inner| inner.take_invalidated_scopes())
@@ -1247,7 +1182,7 @@ impl futures_task::ArcWake for RuntimeTaskWaker {
 }
 
 thread_local! {
-    static ACTIVE_RUNTIMES: RefCell<Vec<RuntimeHandle>> = const { RefCell::new(Vec::new()) }; // FUTURE(no_std): move to bounded stack storage.
+    static ACTIVE_RUNTIMES: RefCell<Vec<RuntimeHandle>> = const { RefCell::new(Vec::new()) };
     static LAST_RUNTIME: RefCell<Option<RuntimeHandle>> = const { RefCell::new(None) };
     static REGISTERED_RUNTIMES: RefCell<HashMap<RuntimeId, RuntimeHandle>> = RefCell::new(HashMap::default());
     static STATE_TEARDOWN_DEPTH: Cell<usize> = const { Cell::new(0) };

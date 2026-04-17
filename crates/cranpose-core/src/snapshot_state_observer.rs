@@ -126,6 +126,19 @@ impl SnapshotStateObserver {
 }
 
 struct SnapshotStateObserverInner {
+    // Borrowing invariants:
+    // - `observe_reads` may push/pop `active_read_targets`, but it must not hold that
+    //   RefCell borrow across the user-provided `block`; the scoped guard only keeps
+    //   ownership of the target handle, not an active borrow.
+    // - `read_dispatcher` borrows `active_read_targets` just long enough to clone the
+    //   current target, then mutates only the selected `ObservedIds`.
+    // - `handle_apply` snapshots `observed_to_scopes` and `indexed_scopes` into a
+    //   separate notification list before borrowing any `ScopeEntry`, so map borrows
+    //   are never held while callbacks may inspect or mutate entry state.
+    // - `replace_observed_ids`, `clear`, `clear_if`, and `prune_dead_scopes` may borrow
+    //   scope maps mutably, but they must release any `ScopeEntry` borrow before removing
+    //   the entry from `indexed_scopes`, `fast_scopes`, `owned_scopes`, or
+    //   `observed_to_scopes`.
     executor: Rc<Executor>,
     owned_scopes: RefCell<HashMap<OwnedScopeIndexKey, OwnedScopeBucket>>,
     fast_scopes: RefCell<HashMap<ScopeId, Rc<RefCell<ScopeEntry>>>>,

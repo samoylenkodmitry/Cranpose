@@ -20,21 +20,17 @@ const P2: f32 = 1.0 - END_TENSION * (1.0 - INFLECTION);
 const NB_SAMPLES: usize = 100;
 
 /// Precomputed spline data for fast lookups.
-#[allow(dead_code)]
 struct SplineData {
     positions: [f32; NB_SAMPLES + 1],
-    times: [f32; NB_SAMPLES + 1],
 }
 
 /// Lazily computed spline tables.
 static SPLINE_DATA: LazyLock<SplineData> = LazyLock::new(|| {
     let mut positions = [0.0f32; NB_SAMPLES + 1];
-    let mut times = [0.0f32; NB_SAMPLES + 1];
 
     let mut x_min = 0.0f32;
-    let mut y_min = 0.0f32;
 
-    for i in 0..NB_SAMPLES {
+    for (i, position) in positions.iter_mut().enumerate().take(NB_SAMPLES) {
         let alpha = i as f32 / NB_SAMPLES as f32;
 
         // Find x such that bezier(x) = alpha
@@ -56,34 +52,12 @@ static SPLINE_DATA: LazyLock<SplineData> = LazyLock::new(|| {
                 x_min = x_mid;
             }
         }
-        positions[i] = coef * ((1.0 - x) * START_TENSION + x) + x * x * x;
-
-        // Find y for time lookup
-        let mut y_max = 1.0f32;
-        let y;
-        let coef_y;
-        loop {
-            let y_mid = y_min + (y_max - y_min) / 2.0;
-            let c = 3.0 * y_mid * (1.0 - y_mid);
-            let dy = c * ((1.0 - y_mid) * START_TENSION + y_mid) + y_mid * y_mid * y_mid;
-            if (dy - alpha).abs() < 1e-5 {
-                y = y_mid;
-                coef_y = c;
-                break;
-            }
-            if dy > alpha {
-                y_max = y_mid;
-            } else {
-                y_min = y_mid;
-            }
-        }
-        times[i] = coef_y * ((1.0 - y) * P1 + y * P2) + y * y * y;
+        *position = coef * ((1.0 - x) * START_TENSION + x) + x * x * x;
     }
 
     positions[NB_SAMPLES] = 1.0;
-    times[NB_SAMPLES] = 1.0;
 
-    SplineData { positions, times }
+    SplineData { positions }
 });
 
 /// Result of sampling the fling spline.

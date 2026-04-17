@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn remember_state_roundtrip() {
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let mut text_seen = String::new();
 
     for _ in 0..2 {
@@ -29,7 +29,7 @@ fn remember_state_roundtrip() {
 
 #[test]
 fn state_update_schedules_render() {
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let mut stored = None;
     composition
         .render(location_key(file!(), line!(), column!()), || {
@@ -83,7 +83,7 @@ fn recranpose_does_not_use_stale_indices_when_prior_scope_changes_length() {
         });
     }
 
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let state_a = MutableState::with_runtime(0i32, runtime.clone());
     let state_b = MutableState::with_runtime(0i32, runtime.clone());
@@ -145,7 +145,7 @@ fn recranpose_handles_removed_scopes_gracefully() {
         }
     }
 
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let state_a = MutableState::with_runtime(0i32, runtime.clone());
     let toggle_group = MutableState::with_runtime(true, runtime.clone());
@@ -183,7 +183,7 @@ fn recranpose_handles_removed_scopes_gracefully() {
 
 #[test]
 fn side_effect_runs_after_composition() {
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     SIDE_EFFECT_LOG.with(|log| log.borrow_mut().clear());
     SIDE_EFFECT_STATE.with(|slot| *slot.borrow_mut() = None);
     let key = location_key(file!(), line!(), column!());
@@ -211,7 +211,7 @@ fn side_effect_runs_after_composition() {
 
 #[test]
 fn disposable_effect_reacts_to_key_changes() {
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     DISPOSABLE_EFFECT_LOG.with(|log| log.borrow_mut().clear());
     DISPOSABLE_STATE.with(|slot| *slot.borrow_mut() = None);
     let key = location_key(file!(), line!(), column!());
@@ -252,7 +252,7 @@ fn state_invalidation_skips_parent_scope() {
     CHILD_RECOMPOSITIONS.with(|calls| calls.set(0));
     CAPTURED_PARENT_STATE.with(|slot| *slot.borrow_mut() = None);
 
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let root_key = location_key(file!(), line!(), column!());
 
     composition
@@ -288,10 +288,9 @@ fn apply_child_diff(
     applier: &mut MemoryApplier,
     runtime: &Runtime,
     parent_id: NodeId,
-    previous: Vec<NodeId>, // FUTURE(no_std): accept fixed-capacity child buffers.
-    new_children: Vec<NodeId>, // FUTURE(no_std): accept fixed-capacity child buffers.
+    previous: Vec<NodeId>,
+    new_children: Vec<NodeId>,
 ) -> Vec<Operation> {
-    // FUTURE(no_std): return bounded operation log.
     let handle = runtime.handle();
     let (composer, slots_host, applier_host) =
         setup_composer(slots, applier, handle, Some(parent_id));
@@ -317,7 +316,7 @@ fn apply_child_diff(
 #[test]
 fn reorder_keyed_children_emits_moves() {
     let mut slots = SlotTable::default();
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
     let runtime = Runtime::new(Arc::new(TestScheduler));
     let parent_id = applier.create(Box::new(RecordingNode::default()));
 
@@ -382,7 +381,7 @@ fn reorder_keyed_children_emits_moves() {
 #[test]
 fn insert_and_remove_emit_expected_ops() {
     let mut slots = SlotTable::default();
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
     let runtime = Runtime::new(Arc::new(TestScheduler));
     let parent_id = applier.create(Box::new(RecordingNode::default()));
 
@@ -452,7 +451,7 @@ fn insert_and_remove_emit_expected_ops() {
 
 #[test]
 fn removing_subtree_unmounts_descendants() {
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
     let parent_id = applier.create(Box::new(RecordingNode::default()));
     let child_unmounts = Rc::new(Cell::new(0));
     let grandchild_unmounts = Rc::new(Cell::new(0));
@@ -482,7 +481,7 @@ fn removing_subtree_unmounts_descendants() {
 
 #[test]
 fn memory_applier_compact_packs_live_nodes_without_invalidating_stable_ids() {
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
     let root_id = applier.create(Box::new(TestDummyNode));
     assert_eq!(root_id, 0);
 
@@ -509,7 +508,7 @@ fn memory_applier_compact_packs_live_nodes_without_invalidating_stable_ids() {
 
 #[test]
 fn memory_applier_compact_skips_dense_tables_until_tombstones_dominate() {
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
     let ids: Vec<_> = (0..2_048)
         .map(|_| applier.create(Box::new(TestDummyNode)))
         .collect();
@@ -562,7 +561,7 @@ fn memory_applier_compact_skips_dense_tables_until_tombstones_dominate() {
 
 #[test]
 fn memory_applier_compact_rehouses_live_nodes_after_large_majority_drop() {
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
     let root_id = applier.create(Box::new(RehousingDummyNode { marker: 7 }));
     let removed_ids: Vec<_> = (0..2_048)
         .map(|_| applier.create(Box::new(TestDummyNode)))
@@ -604,7 +603,7 @@ fn memory_applier_compact_rehouses_live_nodes_after_large_majority_drop() {
 #[test]
 fn child_diff_handles_interleaved_remove_move_and_insert() {
     let mut slots = SlotTable::default();
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
     let runtime = Runtime::new(Arc::new(TestScheduler));
     let parent_id = applier.create(Box::new(RecordingNode::default()));
 
@@ -673,7 +672,7 @@ fn child_diff_handles_interleaved_remove_move_and_insert() {
 #[test]
 fn composable_skips_when_inputs_unchanged() {
     INVOCATIONS.with(|calls| calls.set(0));
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let key = location_key(file!(), line!(), column!());
 
     composition
@@ -710,7 +709,7 @@ fn unit_return_composable_skips_without_return_slot_storage() {
         UNIT_INVOCATIONS.with(|calls| calls.set(calls.get() + 1));
     }
 
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let key = location_key(file!(), line!(), column!());
 
     composition

@@ -106,7 +106,6 @@ pub struct RobotScreenshot {
 /// Robot command for controlling the application
 #[cfg(feature = "robot")]
 #[derive(Debug)]
-#[allow(dead_code)] // TouchDown, TouchMove, TouchUp reserved for future use
 enum RobotCommand {
     Click {
         x: f32,

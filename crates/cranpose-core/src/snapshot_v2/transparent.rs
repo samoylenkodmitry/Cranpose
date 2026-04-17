@@ -344,7 +344,6 @@ mod tests {
     #[should_panic(expected = "Cannot write to a read-only snapshot")]
     fn test_transparent_observer_snapshot_write_panics() {
         use crate::state::StateObject;
-        use std::cell::Cell;
         use std::rc::Rc;
 
         let _guard = reset_runtime();
@@ -353,10 +352,7 @@ mod tests {
             crate::state::StateRecord::new(crate::state::PREEXISTING_SNAPSHOT_ID, (), None)
         }
 
-        #[allow(dead_code)]
-        struct MockState {
-            value: Cell<i32>,
-        }
+        struct MockState;
 
         impl StateObject for MockState {
             fn object_id(&self) -> crate::state::ObjectId {
@@ -391,9 +387,7 @@ mod tests {
 
         let snapshot = TransparentObserverSnapshot::new(1, SnapshotIdSet::new(), None, None);
 
-        let mock_state = Arc::new(MockState {
-            value: Cell::new(42),
-        });
+        let mock_state = Arc::new(MockState);
         snapshot.record_write(mock_state);
     }
 

@@ -1,4 +1,4 @@
-mod hacker_news_robot_support;
+pub mod hacker_news_robot_support;
 
 use cranpose::AppLauncher;
 use cranpose_core::CompositionLocalProvider;

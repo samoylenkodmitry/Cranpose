@@ -89,7 +89,7 @@ fn run_subcompose_measure(
     let measurer = Box::new(|_child_id: NodeId, _constraints: Constraints| Size::default());
     let error = Rc::new(RefCell::new(None));
     node_handle
-        .measure(&composer, node_id, constraints, measurer, Rc::clone(&error))
+        .measure(&composer, node_id, constraints, measurer, &error)
         .expect("measure succeeds");
     assert!(
         error.borrow().is_none(),
@@ -181,7 +181,7 @@ fn capture_subcompose_child_constraints(
         Size::default()
     });
     node_handle
-        .measure(&composer, root, constraints, measurer, Rc::clone(&error))
+        .measure(&composer, root, constraints, measurer, &error)
         .expect("measure succeeds");
     assert!(
         error.borrow().is_none(),

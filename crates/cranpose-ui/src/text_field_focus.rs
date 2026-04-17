@@ -77,7 +77,6 @@ pub fn request_focus(is_focused: Rc<RefCell<bool>>, handler: Rc<dyn FocusedTextF
 }
 
 /// Clears focus from the currently focused text field.
-#[allow(dead_code)]
 pub fn clear_focus() {
     FOCUSED_FIELD.with(|current| {
         let mut current = current.borrow_mut();

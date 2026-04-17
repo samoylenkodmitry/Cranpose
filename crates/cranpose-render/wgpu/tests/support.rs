@@ -1,11 +1,34 @@
-use std::sync::Arc;
+use std::ops::{Deref, DerefMut};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use cranpose_render_wgpu::WgpuRenderer;
 
 pub static TEST_FONT: &[u8] =
     include_bytes!("../../../../apps/desktop-demo/assets/NotoSansMerged.ttf");
 
-pub fn headless_renderer() -> Result<WgpuRenderer, String> {
+static GPU_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+pub struct LockedRenderer {
+    _lock: MutexGuard<'static, ()>,
+    renderer: WgpuRenderer,
+}
+
+impl Deref for LockedRenderer {
+    type Target = WgpuRenderer;
+
+    fn deref(&self) -> &Self::Target {
+        &self.renderer
+    }
+}
+
+impl DerefMut for LockedRenderer {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.renderer
+    }
+}
+
+pub fn headless_renderer() -> Result<LockedRenderer, String> {
+    let lock = GPU_TEST_LOCK.lock().expect("GPU test lock poisoned");
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
         backends: wgpu::Backends::all(),
         ..Default::default()
@@ -33,5 +56,8 @@ pub fn headless_renderer() -> Result<WgpuRenderer, String> {
         wgpu::TextureFormat::Bgra8UnormSrgb,
         adapter.get_info().backend,
     );
-    Ok(renderer)
+    Ok(LockedRenderer {
+        _lock: lock,
+        renderer,
+    })
 }

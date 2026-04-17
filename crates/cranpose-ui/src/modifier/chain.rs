@@ -40,7 +40,6 @@ pub struct ModifierChainInspectorNode {
 /// phases through the reconciled chain.
 pub type ModifierLocalsHandle = Rc<RefCell<ModifierLocalManager>>;
 
-#[allow(dead_code)]
 pub struct ModifierChainHandle {
     chain: ModifierNodeChain,
     context: RefCell<BasicModifierNodeContext>,
@@ -69,7 +68,6 @@ impl Default for ModifierChainHandle {
     }
 }
 
-#[allow(dead_code)]
 impl ModifierChainHandle {
     pub fn new() -> Self {
         Self::default()
@@ -224,18 +222,6 @@ impl ModifierChainHandle {
     #[cfg(test)]
     pub fn refresh_inspector_snapshot(&mut self, modifier: &Modifier) {
         self.collect_inspector_snapshot(modifier);
-    }
-
-    /// Visits all LayoutModifierNodes in the chain with mutable access.
-    pub(crate) fn visit_layout_nodes_mut<F>(&mut self, mut f: F)
-    where
-        F: FnMut(&mut dyn cranpose_foundation::ModifierNode),
-    {
-        self.chain.visit_nodes_mut(|node, capabilities| {
-            if capabilities.contains(NodeCapabilities::LAYOUT) {
-                f(node);
-            }
-        });
     }
 
     fn compute_resolved(&self) -> ResolvedModifiers {

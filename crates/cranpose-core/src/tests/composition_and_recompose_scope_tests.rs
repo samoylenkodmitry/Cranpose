@@ -8,7 +8,7 @@ fn composition_local_provider_scopes_values() {
     }
 
     let local_counter = compositionLocalOf(|| 0);
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let provided_state = MutableState::with_runtime(1, runtime.clone());
 
@@ -49,7 +49,7 @@ fn composition_local_default_value_used_outside_provider() {
     }
 
     let local_counter = compositionLocalOf(|| 7);
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
 
     #[composable]
     fn reader(local_counter: CompositionLocal<i32>) {
@@ -73,7 +73,7 @@ fn composition_local_simple_subscription_test() {
     }
 
     let local_value = compositionLocalOf(|| 0);
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let trigger = MutableState::with_runtime(10, runtime.clone());
 
@@ -136,7 +136,7 @@ fn composition_local_unchanged_value_does_not_reinvalidate_reader() {
     }
 
     let local_value = compositionLocalOf(|| 7);
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let trigger = MutableState::with_runtime(0, runtime.clone());
 
@@ -194,7 +194,7 @@ fn composition_local_custom_policy_uses_equivalence_for_updates() {
         || Arc::new(0),
         |current: &Arc<i32>, next: &Arc<i32>| Arc::ptr_eq(current, next),
     );
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let shared = Arc::new(7);
     let provided_state = MutableState::with_runtime(shared.clone(), runtime.clone());
@@ -273,7 +273,7 @@ fn composition_local_tracks_reads_and_recomposes_selectively() {
     }
 
     let local_count = compositionLocalOf(|| 0);
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let trigger = MutableState::with_runtime(0, runtime.clone());
 
@@ -393,7 +393,7 @@ fn static_composition_local_provides_values() {
     }
 
     let local_counter = staticCompositionLocalOf(|| 0);
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
 
     #[composable]
     fn reader(local_counter: StaticCompositionLocal<i32>) {
@@ -420,7 +420,7 @@ fn static_composition_local_default_value_used_outside_provider() {
     }
 
     let local_counter = staticCompositionLocalOf(|| 7);
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
 
     #[composable]
     fn reader(local_counter: StaticCompositionLocal<i32>) {
@@ -441,7 +441,7 @@ fn cranpose_with_reuse_skips_then_recomposes() {
         static INVOCATIONS: Cell<usize> = const { Cell::new(0) };
     }
 
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let state = MutableState::with_runtime(0, runtime.clone());
     let root_key = location_key(file!(), line!(), column!());
@@ -492,7 +492,7 @@ fn cranpose_with_reuse_forces_recomposition_when_requested() {
         static INVOCATIONS: Cell<usize> = const { Cell::new(0) };
     }
 
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let state = MutableState::with_runtime(0, runtime.clone());
     let root_key = location_key(file!(), line!(), column!());
@@ -542,7 +542,7 @@ fn inactive_scopes_delay_invalidation_until_reactivated() {
         static INVOCATIONS: Cell<usize> = const { Cell::new(0) };
     }
 
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let state = MutableState::with_runtime(0, runtime.clone());
     let root_key = location_key(file!(), line!(), column!());
@@ -598,7 +598,7 @@ fn callbackless_scope_promotes_via_parent_scope_metadata() {
         static OBSERVED_VALUES: RefCell<Vec<i32>> = const { RefCell::new(Vec::new()) };
     }
 
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let state = MutableState::with_runtime(0, runtime.clone());
     let root_key = location_key(file!(), line!(), column!());
@@ -691,7 +691,7 @@ fn render_preserves_root_render_request_raised_during_internal_invalid_scope_pro
         static INVALIDATED_DURING_SIDE_EFFECT: Cell<bool> = const { Cell::new(false) };
     }
 
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let root_key = location_key(file!(), line!(), column!());
 
     ROOT_CALLBACKLESS_SCOPE.with(|slot| slot.borrow_mut().take());
@@ -751,7 +751,7 @@ fn process_invalid_scopes_preserves_later_fresh_subtree_when_earlier_scope_runs_
         static LATE_INVOCATIONS: Cell<usize> = const { Cell::new(0) };
     }
 
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let show_late = MutableState::with_runtime(false, runtime.clone());
     let root_key = location_key(file!(), line!(), column!());
@@ -851,7 +851,7 @@ fn gapped_scope_kept_alive_externally_stays_inactive_until_restored() {
         static INVOCATIONS: Cell<usize> = const { Cell::new(0) };
     }
 
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let show_branch = MutableState::with_runtime(true, runtime.clone());
     let observed = MutableState::with_runtime(0, runtime.clone());
@@ -973,7 +973,7 @@ fn skipped_group_reparents_root_nodes_when_moved_to_a_new_parent() {
         id
     }
 
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let show_child_inside = MutableState::with_runtime(true, runtime);
     let root_key = location_key(file!(), line!(), column!());

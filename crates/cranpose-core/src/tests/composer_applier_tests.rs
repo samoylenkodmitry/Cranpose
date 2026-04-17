@@ -7,7 +7,7 @@ use super::*;
 fn emit_node_rejects_reuse_when_parent_did_not_own_child() {
     let (handle, _runtime) = runtime_handle();
     let mut slots = SlotTable::default();
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
 
     // Create a parent and child node in the applier
     let parent_a = applier.create(Box::new(RecordingNode::default()));
@@ -50,7 +50,7 @@ fn emit_node_rejects_reuse_when_parent_did_not_own_child() {
 fn push_parent_uses_empty_previous_when_not_reused() {
     let (handle, _runtime) = runtime_handle();
     let mut slots = SlotTable::default();
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
 
     let parent_id = applier.create(Box::new(RecordingNode::default()));
 
@@ -80,7 +80,7 @@ fn push_parent_uses_empty_previous_when_not_reused() {
 fn new_parent_attaches_children_immediately_without_sync_children() {
     let (handle, _runtime) = runtime_handle();
     let mut slots = SlotTable::default();
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
 
     let parent_id = applier.create(Box::new(RecordingNode::default()));
 
@@ -107,7 +107,7 @@ fn new_parent_attaches_children_immediately_without_sync_children() {
 fn reused_parent_with_existing_children_still_defers_to_sync_children() {
     let (handle, _runtime) = runtime_handle();
     let mut slots = SlotTable::default();
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
 
     let parent_id = applier.create(Box::new(RecordingNode::default()));
     let child_id = applier.create(Box::new(RecordingNode::default()));
@@ -148,7 +148,7 @@ fn reused_parent_with_existing_children_still_defers_to_sync_children() {
 fn non_reused_parent_with_existing_children_still_defers_to_sync_children() {
     let (handle, _runtime) = runtime_handle();
     let mut slots = SlotTable::default();
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
 
     let parent_id = applier.create(Box::new(RecordingNode::default()));
     let stale_child_id = applier.create(Box::new(RecordingNode::default()));
@@ -197,7 +197,7 @@ fn non_reused_parent_with_existing_children_still_defers_to_sync_children() {
 
 #[test]
 fn sync_children_reorders_small_child_lists_without_regressing_behavior() {
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
 
     let parent_id = applier.create(Box::new(RecordingNode::default()));
     let child_a = applier.create(Box::new(RecordingNode::default()));
@@ -242,7 +242,7 @@ fn sync_children_reorders_small_child_lists_without_regressing_behavior() {
 
 #[test]
 fn queued_sync_children_preserves_child_reparented_later_in_same_apply() {
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
     let old_parent = applier.create(Box::new(RecordingNode::default()));
     let new_parent = applier.create(Box::new(RecordingNode::default()));
     let unmounts = Rc::new(Cell::new(0));
@@ -291,7 +291,7 @@ fn queued_sync_children_preserves_child_reparented_later_in_same_apply() {
 fn skipped_group_root_nodes_only_considers_direct_parent_membership() {
     let (handle, _runtime) = runtime_handle();
     let mut slots = SlotTable::default();
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
 
     let grandparent = applier.create(Box::new(RecordingNode::default()));
     let parent = applier.create(Box::new(RecordingNode::default()));
@@ -325,7 +325,7 @@ fn cold_recycled_nodes_are_not_reused_in_same_frame() {
         }
     }
 
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
     let stable_id = applier.create(Box::new(RecyclableTestNode));
 
     applier.remove(stable_id).expect("remove recyclable node");
@@ -358,7 +358,7 @@ fn fresh_recyclable_nodes_seed_same_frame_shell_reuse() {
         }
     }
 
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
     let key = std::any::TypeId::of::<SeedableNode>();
     let fresh = Box::new(SeedableNode);
 
@@ -384,7 +384,7 @@ fn recycled_nodes_reuse_stable_ids_without_growing_stable_id_arena() {
         }
     }
 
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
     let _keep_live = applier.create(Box::new(RecyclableTestNode));
     let stable_id = applier.create(Box::new(RecyclableTestNode));
     let next_stable_id_before_remove = applier.debug_stats().next_stable_id;
@@ -423,7 +423,7 @@ fn warm_recycled_nodes_can_be_reused_again_in_the_same_frame() {
         }
     }
 
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
     let _keep_live = applier.create(Box::new(RecyclableTestNode));
     let stable_id = applier.create(Box::new(RecyclableTestNode));
 
@@ -461,7 +461,7 @@ fn orphaned_cleanup_skips_recycled_nodes_with_new_generation() {
         }
     }
 
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let key = std::any::TypeId::of::<RecyclableTestNode>();
     let stable_id = composition
         .applier_mut()
@@ -526,7 +526,7 @@ fn recycled_node_pool_limit_discards_oldest_shells() {
         }
     }
 
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
     let _keep_first = applier.create(Box::new(LimitedRecycleNode));
     let _keep_second = applier.create(Box::new(LimitedRecycleNode));
     let first = applier.create(Box::new(LimitedRecycleNode));
@@ -581,7 +581,7 @@ fn clear_recycled_nodes_trims_warm_pool_without_fresh_demand() {
         }
     }
 
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
     let _keep_live = applier.create(Box::new(LimitedRecycleNode));
     let removed: Vec<_> = (0..4)
         .map(|_| applier.create(Box::new(LimitedRecycleNode)))
@@ -615,7 +615,7 @@ fn warm_recycled_nodes_survive_idle_frame_after_recent_demand() {
         }
     }
 
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
     let _keep_live = applier.create(Box::new(LimitedRecycleNode));
     let recycled_id = applier.create(Box::new(LimitedRecycleNode));
 
@@ -657,7 +657,7 @@ fn clear_recycled_nodes_rebuilds_warm_pool_from_compact_prototype() {
         }
     }
 
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
     let key = std::any::TypeId::of::<PrototypeRecycleNode>();
     let seed = PrototypeRecycleNode;
     let shell = seed
@@ -705,7 +705,7 @@ fn large_recycle_pools_converge_to_standing_reserve_on_first_demand() {
         }
     }
 
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
     let key = std::any::TypeId::of::<LargeReserveNode>();
     let shell = LargeReserveNode
         .rehouse_for_recycle()
@@ -749,7 +749,7 @@ fn clear_recycled_nodes_releases_excess_warm_id_capacity() {
         }
     }
 
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
     let key = std::any::TypeId::of::<LargeReserveNode>();
     let mut live_ids = Vec::with_capacity(4096);
 
@@ -797,7 +797,7 @@ fn compact_prunes_stable_generation_entries_for_removed_nodes() {
 
     impl Node for PlainNode {}
 
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
     let keep = applier.create(Box::new(PlainNode));
     let removed: Vec<_> = (0..4096)
         .map(|_| applier.create(Box::new(PlainNode)))
@@ -884,7 +884,7 @@ fn remove_balanced_tree_uses_depth_bounded_traversal_stack() {
         node_id
     }
 
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
     let tree_depth = 12usize;
     let root = build_balanced_binary_tree(&mut applier, tree_depth);
 
@@ -906,7 +906,7 @@ fn remove_balanced_tree_uses_depth_bounded_traversal_stack() {
 fn push_parent_inherits_previous_when_reused() {
     let (handle, _runtime) = runtime_handle();
     let mut slots = SlotTable::default();
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
 
     let parent_id = applier.create(Box::new(RecordingNode::default()));
     let child_id = applier.create(Box::new(RecordingNode::default()));
@@ -980,7 +980,7 @@ fn push_parent_inherits_previous_when_reused() {
 /// 4. Child should be created/reused successfully (functionality preserved)
 #[test]
 fn emit_node_creates_nodes_when_parent_restored_after_conditional_removal() {
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let toggle = MutableState::with_runtime(true, runtime.clone());
 
@@ -1089,7 +1089,7 @@ fn emit_node_creates_nodes_when_parent_restored_after_conditional_removal() {
 fn emit_node_works_with_new_parent_having_empty_previous() {
     let (handle, _runtime) = runtime_handle();
     let mut slots = SlotTable::default();
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
 
     let parent_id = applier.create(Box::new(RecordingNode::default()));
 

@@ -8,9 +8,9 @@ use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub(crate) const MOCK_STORY_COUNT: usize = 60;
-pub(crate) const MOCK_COMMENT_COUNT: usize = 40;
-pub(crate) type Bounds = (f32, f32, f32, f32);
+pub const MOCK_STORY_COUNT: usize = 60;
+pub const MOCK_COMMENT_COUNT: usize = 40;
+pub type Bounds = (f32, f32, f32, f32);
 const ROBOT_VIEWPORT_WIDTH: f32 = 390.0;
 
 struct MockHackerNewsClient {
@@ -147,7 +147,7 @@ fn find_mock_story_number(elem: &SemanticElement) -> Option<usize> {
     None
 }
 
-pub(crate) fn create_mock_client() -> HttpClientRef {
+pub fn create_mock_client() -> HttpClientRef {
     Arc::new(MockHackerNewsClient::new())
 }
 
@@ -180,7 +180,7 @@ fn drag_between(
     let _ = robot.mouse_up();
 }
 
-pub(crate) fn click_button(robot: &cranpose::Robot, name: &str) -> bool {
+pub fn click_button(robot: &cranpose::Robot, name: &str) -> bool {
     for _ in 0..60 {
         if let Ok(Some((x, y, w, h))) = robot.find_text_bounds(name) {
             let bounds = (x, y, w, h);
@@ -215,10 +215,7 @@ pub(crate) fn click_button(robot: &cranpose::Robot, name: &str) -> bool {
     false
 }
 
-pub(crate) fn click_first_visible_comments_button(
-    robot: &cranpose::Robot,
-    list_bounds: Bounds,
-) -> bool {
+pub fn click_first_visible_comments_button(robot: &cranpose::Robot, list_bounds: Bounds) -> bool {
     let Ok(elements) = robot.get_semantics() else {
         return false;
     };
@@ -263,7 +260,7 @@ pub(crate) fn click_first_visible_comments_button(
     false
 }
 
-pub(crate) fn wait_for_text(robot: &cranpose::Robot, text: &str) -> bool {
+pub fn wait_for_text(robot: &cranpose::Robot, text: &str) -> bool {
     for _ in 0..60 {
         if find_in_semantics(robot, |elem| find_text_exact(elem, text)).is_some() {
             return true;
@@ -273,7 +270,7 @@ pub(crate) fn wait_for_text(robot: &cranpose::Robot, text: &str) -> bool {
     false
 }
 
-pub(crate) fn wait_for_no_text(robot: &cranpose::Robot, text: &str) -> bool {
+pub fn wait_for_no_text(robot: &cranpose::Robot, text: &str) -> bool {
     for _ in 0..60 {
         if find_in_semantics(robot, |elem| find_text_exact(elem, text)).is_none() {
             return true;
@@ -283,7 +280,7 @@ pub(crate) fn wait_for_no_text(robot: &cranpose::Robot, text: &str) -> bool {
     false
 }
 
-pub(crate) fn semantics_bounds(robot: &cranpose::Robot, label: &str) -> Option<Bounds> {
+pub fn semantics_bounds(robot: &cranpose::Robot, label: &str) -> Option<Bounds> {
     let elements = robot.get_semantics().ok()?;
     find_element_by_text_exact(&elements, label).map(|elem| {
         (
@@ -295,10 +292,7 @@ pub(crate) fn semantics_bounds(robot: &cranpose::Robot, label: &str) -> Option<B
     })
 }
 
-pub(crate) fn visible_mock_story_numbers(
-    robot: &cranpose::Robot,
-    list_bounds: Bounds,
-) -> Vec<usize> {
+pub fn visible_mock_story_numbers(robot: &cranpose::Robot, list_bounds: Bounds) -> Vec<usize> {
     let Ok(elements) = robot.get_semantics() else {
         return Vec::new();
     };
@@ -332,7 +326,7 @@ pub(crate) fn visible_mock_story_numbers(
     numbers
 }
 
-pub(crate) fn settle_visible_mock_story_numbers(
+pub fn settle_visible_mock_story_numbers(
     robot: &cranpose::Robot,
     list_bounds: Bounds,
     max_attempts: usize,
@@ -358,7 +352,7 @@ pub(crate) fn settle_visible_mock_story_numbers(
     previous
 }
 
-pub(crate) fn raw_drag(
+pub fn raw_drag(
     robot: &cranpose::Robot,
     x: f32,
     start_y: f32,
@@ -369,7 +363,7 @@ pub(crate) fn raw_drag(
     drag_between(robot, x, start_y, x, end_y, steps, step_delay);
 }
 
-pub(crate) fn fail(robot: &cranpose::Robot, message: impl Into<String>) -> ! {
+pub fn fail(robot: &cranpose::Robot, message: impl Into<String>) -> ! {
     let message = message.into();
     println!("  ✗ FAIL: {message}");
     if let Ok(elements) = robot.get_semantics() {

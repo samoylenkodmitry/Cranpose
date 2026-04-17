@@ -2051,7 +2051,6 @@ impl LayoutModifierNode for OffsetNode {
         Some(Box::new(OffsetMeasurementProxy {
             x: self.x,
             y: self.y,
-            rtl_aware: self.rtl_aware,
         }))
     }
 }
@@ -2064,8 +2063,6 @@ impl LayoutModifierNode for OffsetNode {
 struct OffsetMeasurementProxy {
     x: f32,
     y: f32,
-    #[allow(dead_code)]
-    rtl_aware: bool,
 }
 
 impl MeasurementProxy for OffsetMeasurementProxy {

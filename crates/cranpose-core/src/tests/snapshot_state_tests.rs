@@ -122,7 +122,7 @@ fn stats_watchers_survive_conditional_toggle() {
         Ok(())
     }
 
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let toggle = MutableState::with_runtime(true, runtime.clone());
     let stats = MutableState::with_runtime(0i32, runtime.clone());

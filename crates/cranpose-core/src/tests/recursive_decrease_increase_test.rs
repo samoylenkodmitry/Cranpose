@@ -1,3 +1,4 @@
+use crate::tests::test_composition;
 use crate::{location_key, Composition, MemoryApplier, MutableState};
 use cranpose_macros::composable;
 
@@ -57,7 +58,7 @@ fn get_gap_keys(composition: &Composition<MemoryApplier>) -> Vec<u64> {
 
 #[test]
 fn recursive_decrease_increase_preserves_structure() {
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let depth_state = MutableState::with_runtime(3usize, runtime.clone());
 
@@ -168,7 +169,7 @@ fn recursive_decrease_increase_preserves_structure() {
 
 #[test]
 fn recursive_decrease_increase_multiple_cycles() {
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let depth_state = MutableState::with_runtime(3usize, runtime.clone());
 

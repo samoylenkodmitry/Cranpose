@@ -640,8 +640,6 @@ struct AnimatableInner<T: SpringScalar + 'static> {
     state: OwnedMutableState<T>,
     runtime: RuntimeHandle,
     current: T,
-    /// Velocity for spring animations (currently unused, reserved for future spring physics)
-    #[allow(dead_code)]
     velocity: f32,
     start: T,
     target: T,

@@ -2,18 +2,23 @@
 
 pub extern crate self as cranpose_core;
 
+mod callbacks;
 mod composer;
 pub mod composer_context;
 mod composition;
+mod composition_locals;
 mod debug_trace;
 mod emit;
 #[cfg(any(feature = "internal", test))]
 mod frame_clock;
+mod hooks;
 mod launched_effect;
 pub mod owned;
 pub mod platform;
 mod recompose;
 pub mod runtime;
+mod slot_storage;
+pub mod slot_table;
 pub mod snapshot_double_index_heap;
 pub mod snapshot_id_set;
 pub mod snapshot_pinning;
@@ -28,9 +33,15 @@ pub mod subcompose;
 pub mod internal {
     pub use crate::frame_clock::{FrameCallbackRegistration, FrameClock};
 }
+pub use callbacks::{CallbackHolder, CallbackHolder1, ParamSlot, ParamState, ReturnSlot};
 pub use composer::Composer;
 pub(crate) use composer::{ComposerCore, EmittedNode, ParentAttachMode, ParentFrame};
 pub use composition::{Composition, ROOT_RENDER_REPLAY_LIMIT};
+pub use composition_locals::{
+    compositionLocalOf, compositionLocalOfWithPolicy, staticCompositionLocalOf, CompositionLocal,
+    CompositionLocalProvider, ProvidedValue, StaticCompositionLocal,
+};
+pub(crate) use composition_locals::{LocalStateEntry, StaticLocalEntry};
 #[cfg(test)]
 pub(crate) use debug_trace::set_debug_scope_tracking_override_for_tests;
 #[doc(hidden)]
@@ -38,6 +49,14 @@ pub use debug_trace::{
     debug_label_current_scope, debug_live_recompose_scope_count,
     debug_recompose_scope_registry_stats, debug_scope_invalidation_sources, debug_scope_label,
 };
+pub use hooks::{
+    derivedStateOf, mutableStateList, mutableStateListOf, mutableStateMap, mutableStateMapOf,
+    mutableStateOf, ownedMutableStateOf, remember, rememberUpdatedState, try_mutableStateOf,
+    useState,
+};
+#[cfg(feature = "internal")]
+#[doc(hidden)]
+pub use hooks::{withFrameMillis, withFrameNanos};
 pub use launched_effect::{
     __launched_effect_async_impl, __launched_effect_impl, CancelToken, LaunchedEffectScope,
 };
@@ -48,6 +67,8 @@ pub use runtime::{
     current_runtime_handle, schedule_frame, schedule_node_update, DefaultScheduler, Runtime,
     RuntimeHandle, StateId, TaskHandle,
 };
+pub use slot_storage::{GroupId, StartGroup};
+pub use slot_table::{SlotTable, SlotTableDebugStats, SlotValueTypeDebugStat};
 #[doc(hidden)]
 pub use snapshot_state_observer::SnapshotStateObserver;
 
@@ -160,7 +181,6 @@ pub fn in_applied_snapshot() -> bool {
 pub use runtime::{TestRuntime, TestScheduler};
 
 use crate::collections::map::{HashMap, HashSet};
-use crate::state::MutationPolicy;
 use smallvec::SmallVec;
 use std::any::{Any, TypeId};
 use std::cell::{Cell, Ref, RefCell, RefMut};
@@ -168,9 +188,8 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::hash::{Hash, Hasher};
 use std::ops::{Deref, DerefMut};
-use std::rc::{Rc, Weak}; // FUTURE(no_std): replace Rc/Weak with arena-managed handles.
+use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 
 pub type Key = u64;
 pub type NodeId = usize;
@@ -590,444 +609,6 @@ pub fn withKey<K: Hash>(key: &K, content: impl FnOnce()) {
     with_key(key, content)
 }
 
-pub fn remember<T: 'static>(init: impl FnOnce() -> T) -> Owned<T> {
-    with_current_composer(|composer| composer.remember(init))
-}
-
-/// Returns a [`MutableState`] that always holds the latest value.
-///
-/// The state **reference** is stable across recompositions; only the **value** updates.
-/// This allows closures to capture a stable reference while reading fresh values.
-///
-/// # Use Case
-/// Use when a `remember`ed closure needs to read a value that changes each recomposition
-/// without recreating the closure itself.
-///
-/// # Example
-/// ```rust,ignore
-/// let config = build_config(); // Rebuilt each recomposition
-/// let config_state = rememberUpdatedState(config);
-///
-/// // This closure is created once, reads latest config via state
-/// let callback = remember(|| {
-///     let cfg = config_state;
-///     Rc::new(move || do_something(&cfg.value()))
-/// }).with(|c| c.clone());
-/// ```
-///
-/// # JC Equivalent
-/// ```kotlin
-/// @Composable
-/// fun <T> rememberUpdatedState(newValue: T): State<T> =
-///     remember { mutableStateOf(newValue) }.apply { value = newValue }
-/// ```
-#[allow(non_snake_case)]
-pub fn rememberUpdatedState<T: Clone + 'static>(value: T) -> MutableState<T> {
-    with_current_composer(|composer| {
-        let runtime = composer.runtime_handle();
-        let state = composer.remember(|| OwnedMutableState::with_runtime(value.clone(), runtime));
-        state.with(|s| {
-            s.set(value);
-            s.handle()
-        })
-    })
-}
-
-#[cfg(feature = "internal")]
-#[allow(non_snake_case)]
-pub fn withFrameNanos(callback: impl FnOnce(u64) + 'static) -> internal::FrameCallbackRegistration {
-    with_current_composer(|composer| {
-        composer
-            .runtime_handle()
-            .frame_clock()
-            .with_frame_nanos(callback)
-    })
-}
-
-#[cfg(feature = "internal")]
-#[allow(non_snake_case)]
-pub fn withFrameMillis(
-    callback: impl FnOnce(u64) + 'static,
-) -> internal::FrameCallbackRegistration {
-    with_current_composer(|composer| {
-        composer
-            .runtime_handle()
-            .frame_clock()
-            .with_frame_millis(callback)
-    })
-}
-
-/// Creates a new `MutableState` initialized with the given value.
-///
-/// `MutableState` is a cheap copyable observable handle. Reads are tracked by the
-/// current composer or snapshot, and writes trigger recomposition of scopes that
-/// read it.
-///
-/// # When to use
-/// Use `mutableStateOf` when:
-/// 1.  You are creating state properties inside a struct or class (not a composable function).
-/// 2.  You are implementing a custom state management solution.
-///
-/// **If you are inside a `#[composable]` function, use [`useState`] instead.**
-/// `useState` wraps `mutableStateOf` in `remember`, ensuring the state persists
-/// across recompositions. Using `mutableStateOf` directly in a composable will
-/// recreated the state on every frame, losing data.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// struct MyViewModel {
-///     name: MutableState<String>,
-/// }
-///
-/// impl MyViewModel {
-///     fn new() -> Self {
-///         Self {
-///             name: mutableStateOf("Alice".into()),
-///         }
-///     }
-/// }
-/// ```
-///
-/// This creates a runtime-owned persistent state. If you need the state lifetime
-/// tied to a Rust owner instead, store an [`OwnedMutableState`] or call
-/// [`MutableState::retain`] on a handle returned by [`useState`].
-#[allow(non_snake_case)]
-pub fn mutableStateOf<T: Clone + 'static>(initial: T) -> MutableState<T> {
-    // Get runtime handle from current composer if available, otherwise from global registry.
-    // IMPORTANT: We always use with_runtime() (not composer.mutable_state_of) because
-    // slot-based storage doesn't work for state objects that are cloned and shared
-    // across different composition contexts (like TextFieldState).
-    let runtime = with_current_composer_opt(|composer| composer.runtime_handle())
-        .or_else(runtime::current_runtime_handle)
-        .expect("mutableStateOf requires an active runtime. Create state inside a composition or after a Runtime is created.");
-    runtime.alloc_persistent_state(initial)
-}
-
-#[allow(non_snake_case)]
-pub fn ownedMutableStateOf<T: Clone + 'static>(initial: T) -> OwnedMutableState<T> {
-    let runtime = with_current_composer_opt(|composer| composer.runtime_handle())
-        .or_else(runtime::current_runtime_handle)
-        .expect("ownedMutableStateOf requires an active runtime. Create state inside a composition or after a Runtime is created.");
-    OwnedMutableState::with_runtime(initial, runtime)
-}
-
-/// Like [`mutableStateOf`] but returns `None` if no runtime is available.
-///
-/// Use this when you want to lazily initialize reactive state and gracefully
-/// handle the case where the runtime isn't yet available.
-#[allow(non_snake_case)]
-pub fn try_mutableStateOf<T: Clone + 'static>(initial: T) -> Option<MutableState<T>> {
-    let runtime = with_current_composer_opt(|composer| composer.runtime_handle())
-        .or_else(runtime::current_runtime_handle)?;
-    Some(runtime.alloc_persistent_state(initial))
-}
-
-#[allow(non_snake_case)]
-pub fn mutableStateListOf<T, I>(values: I) -> SnapshotStateList<T>
-where
-    T: Clone + 'static,
-    I: IntoIterator<Item = T>,
-{
-    with_current_composer(move |composer| composer.mutable_state_list_of(values))
-}
-
-#[allow(non_snake_case)]
-pub fn mutableStateList<T: Clone + 'static>() -> SnapshotStateList<T> {
-    mutableStateListOf(std::iter::empty::<T>())
-}
-
-#[allow(non_snake_case)]
-pub fn mutableStateMapOf<K, V, I>(pairs: I) -> SnapshotStateMap<K, V>
-where
-    K: Clone + Eq + Hash + 'static,
-    V: Clone + 'static,
-    I: IntoIterator<Item = (K, V)>,
-{
-    with_current_composer(move |composer| composer.mutable_state_map_of(pairs))
-}
-
-#[allow(non_snake_case)]
-pub fn mutableStateMap<K, V>() -> SnapshotStateMap<K, V>
-where
-    K: Clone + Eq + Hash + 'static,
-    V: Clone + 'static,
-{
-    mutableStateMapOf(std::iter::empty::<(K, V)>())
-}
-
-/// A composable hook that creates and remembers a `MutableState`.
-///
-/// This is the primary way to define local state in a composable function.
-/// It combines `remember` and `mutableStateOf`.
-///
-/// # Arguments
-///
-/// * `init` - A closure that provides the initial value. This is only called once
-///   when the composable enters the composition.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// #[composable]
-/// fn Counter() {
-///     // "count" persists across recompositions.
-///     // If we used mutableStateOf directly, it would reset to 0 every frame.
-///     let count = useState(|| 0);
-///
-///     Button(
-///         onClick = move || count.set(count.value() + 1),
-///         || Text(format!("Count: {}", count.value()))
-///     );
-/// }
-/// ```
-#[allow(non_snake_case)]
-pub fn useState<T: Clone + 'static>(init: impl FnOnce() -> T) -> MutableState<T> {
-    with_current_composer(|composer| {
-        let runtime = composer.runtime_handle();
-        composer
-            .remember(|| OwnedMutableState::with_runtime(init(), runtime))
-            .with(|state| state.handle())
-    })
-}
-
-#[allow(deprecated)]
-#[deprecated(
-    since = "0.1.0",
-    note = "use useState(|| value) instead of use_state(|| value)"
-)]
-pub fn use_state<T: Clone + 'static>(init: impl FnOnce() -> T) -> MutableState<T> {
-    useState(init)
-}
-
-#[allow(non_snake_case)]
-pub fn derivedStateOf<T: 'static + Clone>(compute: impl Fn() -> T + 'static) -> State<T> {
-    with_current_composer(|composer| {
-        let key = location_key(file!(), line!(), column!());
-        composer.with_group(key, |composer| {
-            let should_recompute = composer
-                .current_recranpose_scope()
-                .map(|scope| scope.should_recompose())
-                .unwrap_or(true);
-            let runtime = composer.runtime_handle();
-            let compute_rc: Rc<dyn Fn() -> T> = Rc::new(compute); // FUTURE(no_std): replace Rc with arena-managed callbacks.
-            let derived =
-                composer.remember(|| DerivedState::new(runtime.clone(), compute_rc.clone()));
-            derived.update(|derived| {
-                derived.set_compute(compute_rc.clone());
-                if should_recompute {
-                    derived.recompute();
-                }
-            });
-            derived.with(|derived| derived.state.as_state())
-        })
-    })
-}
-
-pub struct ProvidedValue {
-    key: LocalKey,
-    #[allow(clippy::type_complexity)] // Closure returns trait object for flexible local values
-    apply: Box<dyn Fn(&Composer) -> Rc<dyn Any>>, // FUTURE(no_std): return arena-backed local storage pointer.
-}
-
-impl ProvidedValue {
-    fn into_entry(self, composer: &Composer) -> (LocalKey, Rc<dyn Any>) {
-        // FUTURE(no_std): avoid Rc allocation per entry.
-        let ProvidedValue { key, apply } = self;
-        let entry = apply(composer);
-        (key, entry)
-    }
-}
-
-#[allow(non_snake_case)]
-pub fn CompositionLocalProvider(
-    values: impl IntoIterator<Item = ProvidedValue>,
-    content: impl FnOnce(),
-) {
-    with_current_composer(|composer| {
-        let provided: Vec<ProvidedValue> = values.into_iter().collect(); // FUTURE(no_std): replace Vec with stack-allocated small vec.
-        composer.with_composition_locals(provided, |_composer| content());
-    })
-}
-
-struct LocalStateEntry<T: Clone + 'static> {
-    state: OwnedMutableState<T>,
-}
-
-type LocalEquivalentFn<T> = dyn Fn(&T, &T) -> bool + Send + Sync + 'static;
-
-struct LocalValuePolicy<T: Clone + 'static> {
-    equivalent: Arc<LocalEquivalentFn<T>>,
-}
-
-impl<T: Clone + 'static> MutationPolicy<T> for LocalValuePolicy<T> {
-    fn equivalent(&self, a: &T, b: &T) -> bool {
-        (self.equivalent)(a, b)
-    }
-}
-
-impl<T: Clone + 'static> LocalStateEntry<T> {
-    fn new(initial: T, runtime: RuntimeHandle, equivalent: Arc<LocalEquivalentFn<T>>) -> Self {
-        Self {
-            state: OwnedMutableState::with_runtime_and_policy(
-                initial,
-                runtime,
-                Arc::new(LocalValuePolicy { equivalent }),
-            ),
-        }
-    }
-
-    fn set(&self, value: T) {
-        self.state.replace(value);
-    }
-
-    fn value(&self) -> T {
-        self.state.value()
-    }
-}
-
-struct StaticLocalEntry<T: Clone + 'static> {
-    value: RefCell<T>,
-}
-
-impl<T: Clone + 'static> StaticLocalEntry<T> {
-    fn new(value: T) -> Self {
-        Self {
-            value: RefCell::new(value),
-        }
-    }
-
-    fn set(&self, value: T) {
-        *self.value.borrow_mut() = value;
-    }
-
-    fn value(&self) -> T {
-        self.value.borrow().clone()
-    }
-}
-
-#[derive(Clone)]
-pub struct CompositionLocal<T: Clone + 'static> {
-    key: LocalKey,
-    default: Rc<dyn Fn() -> T>, // FUTURE(no_std): store default provider in arena-managed cell.
-    equivalent: Arc<LocalEquivalentFn<T>>,
-}
-
-impl<T: Clone + 'static> PartialEq for CompositionLocal<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.key == other.key
-    }
-}
-
-impl<T: Clone + 'static> Eq for CompositionLocal<T> {}
-
-impl<T: Clone + 'static> CompositionLocal<T> {
-    pub fn provides(&self, value: T) -> ProvidedValue {
-        let key = self.key;
-        let equivalent = Arc::clone(&self.equivalent);
-        ProvidedValue {
-            key,
-            apply: Box::new(move |composer: &Composer| {
-                let runtime = composer.runtime_handle();
-                let entry_ref = composer.remember(|| {
-                    Rc::new(LocalStateEntry::new(
-                        value.clone(),
-                        runtime.clone(),
-                        Arc::clone(&equivalent),
-                    ))
-                });
-                entry_ref.update(|entry| entry.set(value.clone()));
-                entry_ref.with(|entry| entry.clone() as Rc<dyn Any>) // FUTURE(no_std): expose erased handle without Rc boxing.
-            }),
-        }
-    }
-
-    pub fn current(&self) -> T {
-        with_current_composer(|composer| composer.read_composition_local(self))
-    }
-
-    pub fn default_value(&self) -> T {
-        (self.default)()
-    }
-}
-
-#[allow(non_snake_case)]
-pub fn compositionLocalOf<T: Clone + PartialEq + 'static>(
-    default: impl Fn() -> T + 'static,
-) -> CompositionLocal<T> {
-    compositionLocalOfWithPolicy(default, |current, next| current == next)
-}
-
-#[allow(non_snake_case)]
-pub fn compositionLocalOfWithPolicy<T: Clone + 'static>(
-    default: impl Fn() -> T + 'static,
-    equivalent: impl Fn(&T, &T) -> bool + Send + Sync + 'static,
-) -> CompositionLocal<T> {
-    CompositionLocal {
-        key: next_local_key(),
-        default: Rc::new(default), // FUTURE(no_std): allocate default provider in arena storage.
-        equivalent: Arc::new(equivalent),
-    }
-}
-
-/// A `StaticCompositionLocal` is a CompositionLocal that is optimized for values that are
-/// unlikely to change. Unlike `CompositionLocal`, reads of a `StaticCompositionLocal` are not
-/// tracked by the recomposition system, which means:
-/// - Reading `.current()` does NOT establish a subscription
-/// - Changing the provided value does NOT automatically invalidate readers
-/// - This makes it more efficient for truly static values
-///
-/// This matches the API of Jetpack Compose's `staticCompositionLocalOf` but with simplified
-/// semantics. Use this for values that are guaranteed to never change during the lifetime of
-/// the CompositionLocalProvider scope (e.g., application-wide constants, configuration)
-#[derive(Clone)]
-pub struct StaticCompositionLocal<T: Clone + 'static> {
-    key: LocalKey,
-    default: Rc<dyn Fn() -> T>, // FUTURE(no_std): store default provider in arena-managed cell.
-}
-
-impl<T: Clone + 'static> PartialEq for StaticCompositionLocal<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.key == other.key
-    }
-}
-
-impl<T: Clone + 'static> Eq for StaticCompositionLocal<T> {}
-
-impl<T: Clone + 'static> StaticCompositionLocal<T> {
-    pub fn provides(&self, value: T) -> ProvidedValue {
-        let key = self.key;
-        ProvidedValue {
-            key,
-            apply: Box::new(move |composer: &Composer| {
-                // For static locals, we don't use MutableState - just store the value directly
-                // This means reads won't be tracked, and changes will cause full subtree recomposition
-                let entry_ref = composer.remember(|| Rc::new(StaticLocalEntry::new(value.clone())));
-                entry_ref.update(|entry| entry.set(value.clone()));
-                entry_ref.with(|entry| entry.clone() as Rc<dyn Any>) // FUTURE(no_std): expose erased handle without Rc boxing.
-            }),
-        }
-    }
-
-    pub fn current(&self) -> T {
-        with_current_composer(|composer| composer.read_static_composition_local(self))
-    }
-
-    pub fn default_value(&self) -> T {
-        (self.default)()
-    }
-}
-
-#[allow(non_snake_case)]
-pub fn staticCompositionLocalOf<T: Clone + 'static>(
-    default: impl Fn() -> T + 'static,
-) -> StaticCompositionLocal<T> {
-    StaticCompositionLocal {
-        key: next_local_key(),
-        default: Rc::new(default), // FUTURE(no_std): allocate default provider in arena storage.
-    }
-}
-
 #[derive(Default)]
 struct DisposableEffectState {
     key: Option<Key>,
@@ -1166,16 +747,6 @@ pub fn pop_parent() {
 // ═══════════════════════════════════════════════════════════════════════════
 // Public slot storage helper types
 // ═══════════════════════════════════════════════════════════════════════════
-
-mod slot_storage;
-pub use slot_storage::{GroupId, StartGroup};
-
-// ═══════════════════════════════════════════════════════════════════════════
-// SlotTable: gap-buffer-based implementation
-// ═══════════════════════════════════════════════════════════════════════════
-
-pub mod slot_table;
-pub use slot_table::{SlotTable, SlotTableDebugStats, SlotValueTypeDebugStat};
 
 pub trait Node: Any {
     fn mount(&mut self) {}
@@ -3731,282 +3302,8 @@ fn move_child_in_diff_state(
     to_index
 }
 
-pub(crate) use state::{DerivedState, MutableStateInner};
+pub(crate) use state::MutableStateInner;
 pub use state::{MutableState, OwnedMutableState, SnapshotStateList, SnapshotStateMap, State};
-
-pub struct ParamState<T> {
-    value: Option<T>,
-}
-
-impl<T> ParamState<T> {
-    pub fn update(&mut self, new_value: &T) -> bool
-    where
-        T: PartialEq + Clone,
-    {
-        match self.value.as_mut() {
-            Some(old) if old == new_value => false,
-            Some(old) => {
-                old.clone_from(new_value);
-                true
-            }
-            None => {
-                self.value = Some(new_value.clone());
-                true
-            }
-        }
-    }
-
-    pub fn value(&self) -> Option<T>
-    where
-        T: Clone,
-    {
-        self.value.clone()
-    }
-}
-
-/// ParamSlot holds function/closure parameters by ownership (no PartialEq/Clone required).
-/// Used by the #[composable] macro to store Fn-like parameters in the slot table.
-pub struct ParamSlot<T> {
-    val: RefCell<Option<T>>,
-}
-
-impl<T> Default for ParamSlot<T> {
-    fn default() -> Self {
-        Self {
-            val: RefCell::new(None),
-        }
-    }
-}
-
-impl<T> ParamSlot<T> {
-    pub fn set(&self, v: T) {
-        *self.val.borrow_mut() = Some(v);
-    }
-
-    /// Takes the value out temporarily (for recomposition callback)
-    pub fn take(&self) -> T {
-        self.val
-            .borrow_mut()
-            .take()
-            .expect("ParamSlot take() called before set")
-    }
-}
-
-/// CallbackHolder keeps the latest callback closure alive across recompositions.
-/// It stores the callback in an Rc<RefCell<...>> so that the composer can hand out
-/// lightweight forwarder closures without cloning the underlying callback value.
-type CallbackCell = Rc<RefCell<Option<Box<dyn FnMut()>>>>;
-type CallbackScopeCell = Rc<RefCell<Option<RecomposeScope>>>;
-
-struct CallbackScopeGuard {
-    core: Rc<ComposerCore>,
-}
-
-impl CallbackScopeGuard {
-    fn push(composer: &Composer, scope: RecomposeScope) -> Self {
-        composer.core.scope_stack.borrow_mut().push(scope);
-        Self {
-            core: composer.clone_core(),
-        }
-    }
-}
-
-impl Drop for CallbackScopeGuard {
-    fn drop(&mut self) {
-        self.core.scope_stack.borrow_mut().pop();
-    }
-}
-
-fn with_callback_scope<R>(scope: &CallbackScopeCell, f: impl FnOnce() -> R) -> R {
-    let captured_scope = scope.borrow().clone();
-    let mut f = Some(f);
-    if let Some(saved_scope) = captured_scope {
-        if let Some(result) = with_current_composer_opt(|composer| {
-            let _scope_guard = CallbackScopeGuard::push(composer, saved_scope);
-            f.take().expect("callback closure already taken")()
-        }) {
-            return result;
-        }
-    }
-
-    f.take().expect("callback closure already taken")()
-}
-
-fn callback_owner_scope(composer: &Composer) -> Option<RecomposeScope> {
-    composer.core.scope_stack.borrow().last().cloned()
-}
-
-#[derive(Clone)]
-pub struct CallbackHolder {
-    rc: CallbackCell,
-    creator_scope: CallbackScopeCell,
-}
-
-impl CallbackHolder {
-    /// Create a new holder with a no-op callback so that callers can immediately invoke it.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Replace the stored callback with a new closure provided by the caller.
-    pub fn update<F>(&self, f: F)
-    where
-        F: FnMut() + 'static,
-    {
-        *self.rc.borrow_mut() = Some(Box::new(f));
-        *self.creator_scope.borrow_mut() =
-            with_current_composer_opt(callback_owner_scope).flatten();
-    }
-
-    /// Produce a forwarder closure that keeps the holder alive and forwards calls to it.
-    pub fn clone_rc(&self) -> impl Fn() + 'static {
-        let rc = self.rc.clone();
-        let creator_scope = self.creator_scope.clone();
-        move || {
-            with_callback_scope(&creator_scope, || {
-                if let Some(callback) = rc.borrow_mut().as_mut() {
-                    callback();
-                }
-            });
-        }
-    }
-}
-
-impl Default for CallbackHolder {
-    fn default() -> Self {
-        Self {
-            rc: Rc::new(RefCell::new(None)),
-            creator_scope: Rc::new(RefCell::new(None)),
-        }
-    }
-}
-
-/// CallbackHolder1 keeps the latest single-argument callback closure alive across recompositions.
-/// It mirrors [`CallbackHolder`] but supports callbacks that receive one argument.
-#[derive(Clone)]
-pub struct CallbackHolder1<A: 'static> {
-    #[allow(clippy::type_complexity)]
-    rc: Rc<RefCell<Option<Box<dyn FnMut(A)>>>>,
-    creator_scope: CallbackScopeCell,
-}
-
-impl<A: 'static> CallbackHolder1<A> {
-    /// Create a new holder with a no-op callback so callers can invoke it immediately.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Replace the stored callback with a new closure provided by the caller.
-    pub fn update<F>(&self, f: F)
-    where
-        F: FnMut(A) + 'static,
-    {
-        *self.rc.borrow_mut() = Some(Box::new(f));
-        *self.creator_scope.borrow_mut() =
-            with_current_composer_opt(callback_owner_scope).flatten();
-    }
-
-    /// Produce a forwarder closure that keeps the holder alive and forwards calls to it.
-    pub fn clone_rc(&self) -> impl Fn(A) + 'static {
-        let rc = self.rc.clone();
-        let creator_scope = self.creator_scope.clone();
-        move |arg| {
-            with_callback_scope(&creator_scope, || {
-                if let Some(callback) = rc.borrow_mut().as_mut() {
-                    callback(arg);
-                }
-            });
-        }
-    }
-}
-
-impl<A: 'static> Default for CallbackHolder1<A> {
-    fn default() -> Self {
-        Self {
-            rc: Rc::new(RefCell::new(None)),
-            creator_scope: Rc::new(RefCell::new(None)),
-        }
-    }
-}
-
-pub struct ReturnSlot<T> {
-    value: Option<T>,
-}
-
-impl<T: Clone> ReturnSlot<T> {
-    pub fn store(&mut self, value: T) {
-        self.value = Some(value);
-    }
-
-    pub fn get(&self) -> Option<T> {
-        self.value.clone()
-    }
-}
-
-impl<T> Default for ParamState<T> {
-    fn default() -> Self {
-        Self { value: None }
-    }
-}
-
-impl<T> Default for ReturnSlot<T> {
-    fn default() -> Self {
-        Self { value: None }
-    }
-}
-
-#[cfg(test)]
-mod callback_holder_tests {
-    use super::{CallbackHolder, CallbackHolder1};
-    use std::cell::Cell;
-    use std::rc::Rc;
-
-    #[test]
-    fn callback_holder_default_forwarder_is_noop() {
-        let forwarder = CallbackHolder::new().clone_rc();
-        forwarder();
-    }
-
-    #[test]
-    fn callback_holder_forwarder_uses_latest_callback() {
-        let holder = CallbackHolder::new();
-        let total = Rc::new(Cell::new(0));
-        let forwarder = holder.clone_rc();
-
-        let first_total = Rc::clone(&total);
-        holder.update(move || first_total.set(first_total.get() + 1));
-        forwarder();
-
-        let second_total = Rc::clone(&total);
-        holder.update(move || second_total.set(second_total.get() + 10));
-        forwarder();
-
-        assert_eq!(total.get(), 11);
-    }
-
-    #[test]
-    fn callback_holder1_default_forwarder_is_noop() {
-        let forwarder = CallbackHolder1::<i32>::new().clone_rc();
-        forwarder(7);
-    }
-
-    #[test]
-    fn callback_holder1_forwarder_uses_latest_callback() {
-        let holder = CallbackHolder1::<i32>::new();
-        let total = Rc::new(Cell::new(0));
-        let forwarder = holder.clone_rc();
-
-        let first_total = Rc::clone(&total);
-        holder.update(move |value| first_total.set(first_total.get() + value));
-        forwarder(2);
-
-        let second_total = Rc::clone(&total);
-        holder.update(move |value| second_total.set(second_total.get() + value * 5));
-        forwarder(3);
-
-        assert_eq!(total.get(), 17);
-    }
-}
 
 fn hash_key<K: Hash>(key: &K) -> Key {
     let mut hasher = hash::default::new();

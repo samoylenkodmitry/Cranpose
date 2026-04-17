@@ -6,7 +6,7 @@ use super::*;
 
 #[test]
 fn slot_table_marks_values_as_gaps() {
-    let mut slots = SlotTable::new();
+    let mut slots = test_slot_table();
 
     // Create initial composition with 3 value slots
     let _idx1 = slots.use_value_slot(|| 1i32);
@@ -23,7 +23,7 @@ fn slot_table_marks_values_as_gaps() {
 
 #[test]
 fn slot_table_reuses_gap_slots_for_values() {
-    let mut slots = SlotTable::new();
+    let mut slots = test_slot_table();
 
     // Create initial value
     let idx1 = slots.use_value_slot(|| 1i32);
@@ -44,7 +44,7 @@ fn slot_table_reuses_gap_slots_for_values() {
 
 #[test]
 fn slot_table_replaces_mismatched_value_types() {
-    let mut slots = SlotTable::new();
+    let mut slots = test_slot_table();
 
     // Create initial value of type i32
     let idx = slots.use_value_slot(|| 1i32);
@@ -61,7 +61,7 @@ fn slot_table_replaces_mismatched_value_types() {
 
 #[test]
 fn slot_table_handles_nested_group_gaps() {
-    let mut slots = SlotTable::new();
+    let mut slots = test_slot_table();
 
     // Create a parent group
     let parent_idx = slots.start(100);
@@ -86,7 +86,7 @@ fn slot_table_handles_nested_group_gaps() {
 
 #[test]
 fn slot_table_preserves_sibling_groups_when_marking_gaps() {
-    let mut slots = SlotTable::new();
+    let mut slots = test_slot_table();
 
     // Create first group with a value
     let g1 = slots.start(1);
@@ -124,7 +124,7 @@ fn slot_table_preserves_sibling_groups_when_marking_gaps() {
 
 #[test]
 fn slot_table_tab_switching_preserves_scopes() {
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let active_tab = MutableState::with_runtime(0i32, runtime.clone());
     let tab1_counter = MutableState::with_runtime(0i32, runtime.clone());
@@ -260,7 +260,7 @@ fn slot_table_tab_switching_preserves_scopes() {
 
 #[test]
 fn slot_table_conditional_rendering_preserves_sibling_scopes() {
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let show_middle = MutableState::with_runtime(true, runtime.clone());
     let top_counter = MutableState::with_runtime(0i32, runtime.clone());
@@ -410,7 +410,7 @@ fn slot_table_conditional_rendering_preserves_sibling_scopes() {
 
 #[test]
 fn slot_table_gaps_work_with_nested_conditionals() {
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let outer_visible = MutableState::with_runtime(true, runtime.clone());
     let inner_visible = MutableState::with_runtime(true, runtime.clone());
@@ -530,7 +530,7 @@ fn slot_table_gaps_work_with_nested_conditionals() {
 #[test]
 fn slot_table_multiple_rapid_tab_switches() {
     // Simulates rapid tab switching that could cause UI corruption
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let active_tab = MutableState::with_runtime(0i32, runtime.clone());
 
@@ -620,7 +620,7 @@ fn slot_table_multiple_rapid_tab_switches() {
 #[test]
 fn tab_switching_with_keyed_children() {
     // Test tab switching where children use keys for identity
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let active_tab = MutableState::with_runtime(0i32, runtime.clone());
     let counter = MutableState::with_runtime(0i32, runtime.clone());
@@ -700,7 +700,7 @@ fn tab_switching_with_keyed_children() {
 
 #[test]
 fn stable_outer_parent_node_survives_keyed_inner_switch() {
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let active_tab = MutableState::with_runtime(0i32, runtime.clone());
 
@@ -794,7 +794,7 @@ fn stable_outer_parent_node_survives_keyed_inner_switch() {
 #[test]
 fn tab_switching_with_different_node_types() {
     // Test switching between tabs that create different node types
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let active_tab = MutableState::with_runtime(0i32, runtime.clone());
 
@@ -859,7 +859,7 @@ fn tab_switching_with_different_node_types() {
 #[test]
 fn tab_switching_with_dynamic_lists() {
     // Test tab switching with tabs containing dynamic lists of varying sizes
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let active_tab = MutableState::with_runtime(0i32, runtime.clone());
     let list_size = MutableState::with_runtime(3usize, runtime.clone());
@@ -956,7 +956,7 @@ fn tab_switching_with_dynamic_lists() {
 #[test]
 fn tab_switching_with_nested_components() {
     // Test tab switching with nested component hierarchies
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let active_tab = MutableState::with_runtime(0i32, runtime.clone());
     let outer_counter = MutableState::with_runtime(0i32, runtime.clone());
@@ -1093,7 +1093,7 @@ fn tab_switching_with_nested_components() {
 
 #[test]
 fn restored_keyed_branch_forces_deep_regular_param_recompose() {
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let active_tab = MutableState::with_runtime(0i32, runtime.clone());
     let version_state = MutableState::with_runtime(0i32, runtime);
@@ -1199,7 +1199,7 @@ fn restored_keyed_branch_forces_deep_regular_param_recompose() {
 
 #[test]
 fn restored_branch_refreshes_deep_callback_after_recompose_via_content_lambda() {
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let active_tab = MutableState::with_runtime(0i32, runtime.clone());
     let hover_state = MutableState::with_runtime(0i32, runtime);
@@ -1313,7 +1313,7 @@ fn restored_branch_refreshes_deep_callback_after_recompose_via_content_lambda() 
 
 #[test]
 fn restored_keyed_first_sibling_keeps_later_live_subtree_and_descendant_scope_identity() {
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let active_tab = MutableState::with_runtime(0i32, runtime);
     let key = location_key(file!(), line!(), column!());
@@ -1599,7 +1599,7 @@ fn restored_keyed_first_sibling_keeps_later_live_subtree_and_descendant_scope_id
 #[test]
 fn debug_nested_component_slot_table_state() {
     // Debug test to understand slot table state during nested component recomposition
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let active_tab = MutableState::with_runtime(0i32, runtime.clone());
     let outer_counter = MutableState::with_runtime(0i32, runtime.clone());
@@ -1712,7 +1712,7 @@ fn composable_macro_injects_scope_label() {
         });
     }
 
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     composition
         .render(location_key(file!(), line!(), column!()), &mut || {
             auto_labeled_leaf()
@@ -1733,7 +1733,7 @@ fn composable_macro_injects_scope_label() {
 #[test]
 fn tab_switching_memory_slot_reuse() {
     // Verify that slots are properly reused and not leaked during tab switches
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let active_tab = MutableState::with_runtime(0i32, runtime.clone());
 
@@ -1784,7 +1784,7 @@ fn tab_switching_memory_slot_reuse() {
 #[test]
 fn tab_switching_with_state_during_switch() {
     // Test updating state while switching tabs - edge case for race conditions
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let active_tab = MutableState::with_runtime(0i32, runtime.clone());
     let shared_counter = MutableState::with_runtime(0i32, runtime.clone());
@@ -1857,7 +1857,7 @@ fn tab_switching_with_state_during_switch() {
 #[test]
 fn tab_switching_with_empty_tab() {
     // Test switching to/from an empty tab (no nodes created)
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let active_tab = MutableState::with_runtime(0i32, runtime.clone());
     let counter = MutableState::with_runtime(0i32, runtime.clone());
@@ -1930,7 +1930,7 @@ fn tab_switching_with_empty_tab() {
 #[test]
 fn tab_switching_preserves_node_order() {
     // Verify that node order is preserved correctly across tab switches
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let active_tab = MutableState::with_runtime(0i32, runtime.clone());
 
@@ -1995,7 +1995,7 @@ fn tab_switching_preserves_node_order() {
 
 #[test]
 fn composition_works_with_slot_table() {
-    test_composition();
+    exercise_basic_slot_table_composition();
 }
 
 fn composable_params_are_preserved_during_recomposition() {
@@ -2015,7 +2015,7 @@ fn composable_params_are_preserved_during_recomposition() {
 
     let runtime = Runtime::new(Arc::new(TestScheduler));
     let value_state = MutableState::with_runtime(1usize, runtime.handle());
-    let mut composition = Composition::with_runtime(MemoryApplier::new(), runtime);
+    let mut composition = test_composition_with_runtime(runtime);
     let key = location_key(file!(), line!(), column!());
 
     PARAM_VALUES.with(|values| values.borrow_mut().clear());
@@ -2043,9 +2043,9 @@ fn slot_table_preserves_composable_params_during_recomposition() {
     composable_params_are_preserved_during_recomposition();
 }
 
-fn test_composition() {
+fn exercise_basic_slot_table_composition() {
     let key = 12345u64;
-    let applier = MemoryApplier::new();
+    let applier = test_applier();
     let runtime = Runtime::new(Arc::new(TestScheduler));
     let mut composition = Composition::with_runtime(applier, runtime.clone());
 

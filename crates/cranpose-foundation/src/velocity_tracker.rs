@@ -58,16 +58,6 @@ impl VelocityTracker1D {
         }
     }
 
-    /// Creates a new velocity tracker for differential (delta) data.
-    #[allow(dead_code)]
-    pub fn differential() -> Self {
-        Self {
-            samples: [None; HISTORY_SIZE],
-            index: 0,
-            is_differential: true,
-        }
-    }
-
     /// Adds a data point at the given time (milliseconds).
     ///
     /// For absolute tracking, `data_point` is the position.

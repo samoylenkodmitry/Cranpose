@@ -22,7 +22,7 @@
 // This is safe because snapshots are thread-local and never cross thread boundaries.
 #![allow(clippy::arc_with_non_send_sync)]
 
-use crate::collections::map::HashMap; // FUTURE(no_std): replace HashMap/HashSet with arena-backed maps.
+use crate::collections::map::HashMap;
 use crate::collections::map::HashSet;
 use crate::snapshot_id_set::{SnapshotId, SnapshotIdSet};
 use crate::snapshot_pinning::{self, PinHandle};
@@ -597,12 +597,6 @@ pub(crate) fn notify_apply_observers(modified: &[Arc<dyn StateObject>], snapshot
     });
 }
 
-/// Get the last successful writer snapshot id for a given object id.
-#[allow(dead_code)]
-pub(crate) fn get_last_write(id: StateObjectId) -> Option<SnapshotId> {
-    LAST_WRITES.with(|cell| cell.borrow().get(&id).copied())
-}
-
 /// Record the last successful writer snapshot id for a given object id.
 pub(crate) fn set_last_write(id: StateObjectId, snapshot_id: SnapshotId) {
     LAST_WRITES.with(|cell| {
@@ -652,21 +646,6 @@ pub(crate) fn maybe_check_and_overwrite_unused_records_locked(current_snapshot_i
     if should_run {
         LAST_UNUSED_RECORD_CLEANUP.with(|cell| cell.set(current_snapshot_id));
         check_and_overwrite_unused_records_locked();
-    }
-}
-
-/// Process a state object for unused record cleanup, tracking it if needed.
-///
-/// Mirrors Kotlin's `processForUnusedRecordsLocked()`. After a state is modified:
-/// 1. Calls `overwrite_unused_records()` to clean up old records
-/// 2. If the state has multiple records, adds it to `EXTRA_STATE_OBJECTS` for future cleanup
-#[allow(dead_code)]
-pub(crate) fn process_for_unused_records_locked(state: &Arc<dyn crate::state::StateObject>) {
-    if state.overwrite_unused_records() {
-        // State has multiple records - track it for future cleanup
-        EXTRA_STATE_OBJECTS.with(|cell| {
-            cell.borrow_mut().add_trait_object(state);
-        });
     }
 }
 
@@ -1348,13 +1327,9 @@ mod tests {
     #[test]
     fn test_state_object_storage_in_modified_set() {
         use crate::state::StateObject;
-        use std::cell::Cell;
 
         // Mock StateObject for testing
-        #[allow(dead_code)]
-        struct TestState {
-            value: Cell<i32>,
-        }
+        struct TestState;
 
         impl StateObject for TestState {
             fn object_id(&self) -> crate::state::ObjectId {
@@ -1389,9 +1364,7 @@ mod tests {
         let state = SnapshotState::new(1, SnapshotIdSet::new(), None, None, false);
 
         // Create Arc to state object
-        let state_obj = Arc::new(TestState {
-            value: Cell::new(42),
-        }) as Arc<dyn StateObject>;
+        let state_obj = Arc::new(TestState) as Arc<dyn StateObject>;
 
         // Record write should store the Arc
         state.record_write(state_obj.clone(), 1);
@@ -1410,12 +1383,8 @@ mod tests {
     #[test]
     fn test_multiple_writes_to_same_state_object() {
         use crate::state::StateObject;
-        use std::cell::Cell;
 
-        #[allow(dead_code)]
-        struct TestState {
-            value: Cell<i32>,
-        }
+        struct TestState;
 
         impl StateObject for TestState {
             fn object_id(&self) -> crate::state::ObjectId {
@@ -1448,9 +1417,7 @@ mod tests {
         }
 
         let state = SnapshotState::new(1, SnapshotIdSet::new(), None, None, false);
-        let state_obj = Arc::new(TestState {
-            value: Cell::new(100),
-        }) as Arc<dyn StateObject>;
+        let state_obj = Arc::new(TestState) as Arc<dyn StateObject>;
 
         // First write
         state.record_write(state_obj.clone(), 1);

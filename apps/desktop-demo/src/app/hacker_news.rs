@@ -2783,17 +2783,20 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    struct ProgrammaticStoryScrollTrace {
+        list_host_ids: Vec<usize>,
+        stories_pane_ids: Vec<usize>,
+        list_parent_ids: Vec<usize>,
+        invalid_scope_tags_per_step: Vec<Vec<(usize, Option<&'static str>)>>,
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn programmatic_story_scroll_node_ids(
         robot: &mut RobotTestRule<TestRenderer>,
         delta: f32,
         steps: usize,
         _phase: &str,
-    ) -> (
-        Vec<usize>,
-        Vec<usize>,
-        Vec<usize>,
-        Vec<Vec<(usize, Option<&'static str>)>>,
-    ) {
+    ) -> ProgrammaticStoryScrollTrace {
         let list_state = stories_list_state();
         let mut list_host_ids = Vec::new();
         let mut stories_pane_ids = Vec::new();
@@ -2827,12 +2830,12 @@ mod tests {
             list_parent_ids
                 .push(stories_list_parent_node_id(robot).expect("list parent should exist"));
         }
-        (
+        ProgrammaticStoryScrollTrace {
             list_host_ids,
             stories_pane_ids,
             list_parent_ids,
             invalid_scope_tags_per_step,
-        )
+        }
     }
 
     #[test]
@@ -3276,12 +3279,7 @@ mod tests {
         let fresh_list_node_id =
             hacker_news_list_node_id(&mut robot).expect("fresh HackerNewsList should exist");
         let fresh_before = visible_regression_story_numbers(&mut robot);
-        let (
-            fresh_seen_node_ids,
-            fresh_seen_stories_pane_ids,
-            fresh_seen_parent_ids,
-            _fresh_invalid_scope_tags,
-        ) = programmatic_story_scroll_node_ids(&mut robot, -120.0, 6, "fresh");
+        let fresh_scroll_trace = programmatic_story_scroll_node_ids(&mut robot, -120.0, 6, "fresh");
         let fresh_after = visible_regression_story_numbers(&mut robot);
         assert!(
             fresh_after
@@ -3293,10 +3291,15 @@ mod tests {
                 >= 2,
             "fresh programmatic scroll should move the list; before={fresh_before:?} after={fresh_after:?}",
         );
+        let expected_fresh_list_host_ids =
+            vec![fresh_list_node_id; fresh_scroll_trace.list_host_ids.len()];
         assert_eq!(
-            fresh_seen_node_ids,
-            vec![fresh_list_node_id; fresh_seen_node_ids.len()],
-            "fresh programmatic scroll changed the list host; node_ids={fresh_seen_node_ids:?} stories_pane_ids={fresh_seen_stories_pane_ids:?} list_parent_ids={fresh_seen_parent_ids:?}",
+            fresh_scroll_trace.list_host_ids,
+            expected_fresh_list_host_ids,
+            "fresh programmatic scroll changed the list host; node_ids={:?} stories_pane_ids={:?} list_parent_ids={:?}",
+            fresh_scroll_trace.list_host_ids,
+            fresh_scroll_trace.stories_pane_ids,
+            fresh_scroll_trace.list_parent_ids,
         );
 
         let comments_node_id = {
@@ -3376,12 +3379,8 @@ mod tests {
                     .expect("stories pane should exist before scroll");
             layout_subtree_summary(stories_pane)
         };
-        let (
-            restored_seen_node_ids,
-            restored_seen_stories_pane_ids,
-            restored_seen_parent_ids,
-            restored_invalid_scope_tags,
-        ) = programmatic_story_scroll_node_ids(&mut robot, -120.0, 6, "restored");
+        let restored_scroll_trace =
+            programmatic_story_scroll_node_ids(&mut robot, -120.0, 6, "restored");
         let restored_after = visible_regression_story_numbers(&mut robot);
         let slot_groups_after = interesting_slot_groups(&mut robot);
         let slot_window_after = slot_window_around_node(&mut robot, restored_list_node_id, 12);
@@ -3391,7 +3390,8 @@ mod tests {
             &mut robot,
             box_slot_node_id,
             0,
-            restored_seen_node_ids
+            restored_scroll_trace
+                .list_host_ids
                 .last()
                 .copied()
                 .unwrap_or(restored_list_node_id),
@@ -3417,10 +3417,16 @@ mod tests {
                 >= 2,
             "restored programmatic scroll should move the list; before={restored_before:?} after={restored_after:?}",
         );
+        let expected_restored_list_host_ids =
+            vec![restored_list_node_id; restored_scroll_trace.list_host_ids.len()];
         assert_eq!(
-            restored_seen_node_ids,
-            vec![restored_list_node_id; restored_seen_node_ids.len()],
-            "restored programmatic scroll changed the list host; node_ids={restored_seen_node_ids:?} list_parent_id={restored_list_parent_node_id} list_parent_ids_after={restored_seen_parent_ids:?} stories_pane_id={restored_stories_pane_node_id} stories_pane_ids_after={restored_seen_stories_pane_ids:?} restored_invalid_scope_tags={restored_invalid_scope_tags:?} box_slot_node_id={box_slot_node_id} fresh_before={fresh_before:?} fresh_after={fresh_after:?} restored_before={restored_before:?} restored_after={restored_after:?} slot_groups_before={slot_groups_before:?} slot_groups_after={slot_groups_after:?} slot_window_before={slot_window_before:?} slot_window_after={slot_window_after:?} box_group_labels_before={box_group_labels_before:?} box_group_labels_after={box_group_labels_after:?} box_list_window_before={box_list_window_before:?} box_list_window_after={box_list_window_after:?} box_slot_window_before={box_slot_window_before:?} box_slot_window_after={box_slot_window_after:?} stories_pane_layout_before={stories_pane_layout_before:?} stories_pane_layout_after={stories_pane_layout_after:?}",
+            restored_scroll_trace.list_host_ids,
+            expected_restored_list_host_ids,
+            "restored programmatic scroll changed the list host; node_ids={:?} list_parent_id={restored_list_parent_node_id} list_parent_ids_after={:?} stories_pane_id={restored_stories_pane_node_id} stories_pane_ids_after={:?} restored_invalid_scope_tags={:?} box_slot_node_id={box_slot_node_id} fresh_before={fresh_before:?} fresh_after={fresh_after:?} restored_before={restored_before:?} restored_after={restored_after:?} slot_groups_before={slot_groups_before:?} slot_groups_after={slot_groups_after:?} slot_window_before={slot_window_before:?} slot_window_after={slot_window_after:?} box_group_labels_before={box_group_labels_before:?} box_group_labels_after={box_group_labels_after:?} box_list_window_before={box_list_window_before:?} box_list_window_after={box_list_window_after:?} box_slot_window_before={box_slot_window_before:?} box_slot_window_after={box_slot_window_after:?} stories_pane_layout_before={stories_pane_layout_before:?} stories_pane_layout_after={stories_pane_layout_after:?}",
+            restored_scroll_trace.list_host_ids,
+            restored_scroll_trace.list_parent_ids,
+            restored_scroll_trace.stories_pane_ids,
+            restored_scroll_trace.invalid_scope_tags_per_step,
         );
     }
 }

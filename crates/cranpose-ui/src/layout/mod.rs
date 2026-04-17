@@ -915,10 +915,9 @@ impl LayoutBuilderState {
         composer.enter_phase(Phase::Measure);
 
         let state_rc_clone = Rc::clone(&state_rc);
-        let measure_error: Rc<RefCell<Option<NodeError>>> = Rc::new(RefCell::new(None));
-        let error_for_measurer = Rc::clone(&measure_error);
+        let measure_error = RefCell::new(None);
         let state_rc_for_subcompose = Rc::clone(&state_rc_clone);
-        let error_for_subcompose = Rc::clone(&error_for_measurer);
+        let error_for_subcompose = &measure_error;
         let measured_children = Rc::new(RefCell::new(HashMap::default()));
         let measured_children_for_subcompose = Rc::clone(&measured_children);
 
@@ -949,7 +948,7 @@ impl LayoutBuilderState {
                     }
                 },
             ),
-            Rc::clone(&measure_error),
+            &measure_error,
         )?;
         slots_guard.restore(slots_host.take());
 

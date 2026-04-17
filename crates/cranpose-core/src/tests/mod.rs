@@ -60,6 +60,22 @@ fn runtime_handle() -> (RuntimeHandle, Runtime) {
     (runtime.handle(), runtime)
 }
 
+pub(crate) fn test_applier() -> MemoryApplier {
+    MemoryApplier::new()
+}
+
+pub(crate) fn test_composition() -> Composition<MemoryApplier> {
+    Composition::new(test_applier())
+}
+
+pub(crate) fn test_composition_with_runtime(runtime: Runtime) -> Composition<MemoryApplier> {
+    Composition::with_runtime(test_applier(), runtime)
+}
+
+pub(crate) fn test_slot_table() -> SlotTable {
+    SlotTable::new()
+}
+
 thread_local! {
     static INVOCATIONS: Cell<usize> = const { Cell::new(0) };
 }
@@ -69,8 +85,8 @@ thread_local! {
     static CHILD_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
     static CAPTURED_PARENT_STATE: RefCell<Option<cranpose_core::MutableState<i32>>> =
         const { RefCell::new(None) };
-    static SIDE_EFFECT_LOG: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) }; // FUTURE(no_std): replace Vec with ring buffer for testing.
-    static DISPOSABLE_EFFECT_LOG: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) }; // FUTURE(no_std): replace Vec with ring buffer for testing.
+    static SIDE_EFFECT_LOG: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+    static DISPOSABLE_EFFECT_LOG: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
     static DISPOSABLE_STATE: RefCell<Option<cranpose_core::MutableState<i32>>> =
         const { RefCell::new(None) };
     static SIDE_EFFECT_STATE: RefCell<Option<cranpose_core::MutableState<i32>>> =

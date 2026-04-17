@@ -9,13 +9,18 @@
 // Complex slot state machine logic benefits from explicit nested pattern matching for clarity
 #![allow(clippy::collapsible_match)]
 
+mod anchor_registry;
+mod pending;
+
 use crate::{
     collections::map::HashMap,
     slot_storage::{GroupId, StartGroup},
     AnchorId, Key, NodeId, Owned, RecomposeScope, ScopeId,
 };
+use anchor_registry::{AnchorRegistry, GapMetadata};
+pub use pending::OrphanedNode;
+use pending::{OrphanedNodeIds, PendingSlotDrops};
 use std::any::{Any, TypeId};
-use std::cell::Cell;
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 struct PackedScopeId(u64);
@@ -43,19 +48,11 @@ fn unpack_slot_len(len: u32) -> usize {
 }
 
 pub struct SlotTable {
-    slots: Vec<Slot>, // FUTURE(no_std): replace Vec with arena-backed slot storage.
+    slots: Vec<Slot>,
     pending_slot_drops: PendingSlotDrops,
     cursor: usize,
-    group_stack: Vec<GroupFrame>, // FUTURE(no_std): switch to small stack buffer.
-    /// Maps anchor IDs to their current physical positions in the slots array.
-    /// This indirection layer provides positional stability during slot reorganization.
-    anchors: HashMap<usize, usize>, // key = anchor_id.0, value = physical slot position
-    gap_metadata: HashMap<usize, GapMetadata>,
-    anchors_dirty: bool,
-    /// Counter for allocating unique anchor IDs.
-    next_anchor_id: Cell<usize>,
-    /// Freed anchor IDs available for reuse, preventing unbounded anchors Vec growth.
-    free_anchor_ids: Vec<usize>,
+    group_stack: Vec<GroupFrame>,
+    anchor_registry: AnchorRegistry,
     /// Tracks whether the most recent start() reused a gap slot.
     last_start_was_gap: bool,
     /// Node IDs orphaned when their slots were converted to gaps.
@@ -73,6 +70,8 @@ pub struct SlotTableDebugStats {
     pub pending_slot_drops_cap: usize,
     pub anchors_len: usize,
     pub anchors_cap: usize,
+    pub gap_metadata_len: usize,
+    pub gap_metadata_cap: usize,
     pub free_anchor_ids_len: usize,
     pub free_anchor_ids_cap: usize,
     pub group_stack_len: usize,
@@ -86,15 +85,6 @@ pub struct SlotValueTypeDebugStat {
     pub type_name: &'static str,
     pub count: usize,
     pub inline_payload_bytes: usize,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct GapMetadata {
-    group_key: Option<Key>,
-    boundary_key: Option<Key>,
-    group_scope: PackedScopeId,
-    group_len: u32,
-    preserved_node: Option<(NodeId, u32)>,
 }
 
 enum Slot {
@@ -198,161 +188,11 @@ impl<T: Any> SlotValue for TypedSlotValue<T> {
     }
 }
 
-const INVALID_ANCHOR_POS: usize = usize::MAX;
-
-#[derive(Default)]
-struct ChunkedPending<T> {
-    sealed: Vec<Vec<T>>,
-    active: Vec<T>,
-    len: usize,
-}
-
-impl<T> ChunkedPending<T> {
-    fn len(&self) -> usize {
-        self.len
-    }
-
-    fn capacity(&self) -> usize {
-        self.active.capacity() + self.sealed.iter().map(Vec::capacity).sum::<usize>()
-    }
-
-    fn push(&mut self, value: T, initial_capacity: usize, chunk_capacity: usize) {
-        if self.active.capacity() == 0 {
-            self.active = Vec::with_capacity(initial_capacity);
-        } else if self.active.len() == self.active.capacity() {
-            let next_capacity = chunk_capacity.max(initial_capacity);
-            let full_chunk = std::mem::replace(&mut self.active, Vec::with_capacity(next_capacity));
-            self.sealed.push(full_chunk);
-        }
-
-        self.active.push(value);
-        self.len += 1;
-    }
-
-    fn clear_and_drop_reverse(&mut self) {
-        while let Some(value) = self.active.pop() {
-            drop(value);
-        }
-
-        while let Some(mut chunk) = self.sealed.pop() {
-            while let Some(value) = chunk.pop() {
-                drop(value);
-            }
-        }
-
-        self.len = 0;
-    }
-
-    fn drain_forward(&mut self, mut visitor: impl FnMut(T)) {
-        let sealed = std::mem::take(&mut self.sealed);
-        for chunk in sealed {
-            for value in chunk {
-                visitor(value);
-            }
-        }
-        let active = std::mem::take(&mut self.active);
-        for value in active {
-            visitor(value);
-        }
-        self.len = 0;
-    }
-
-    fn trim_retained_capacity(&mut self, retained: usize, initial_capacity: usize) {
-        self.sealed = Vec::new();
-        if self.active.capacity() > retained.saturating_mul(4) {
-            self.active = Vec::with_capacity(retained.max(initial_capacity));
-        }
-    }
-}
-
-#[derive(Default)]
-struct PendingSlotDrops {
-    inner: ChunkedPending<Slot>,
-}
-
-impl PendingSlotDrops {
-    const CHUNK_CAPACITY: usize = 1024;
-    const INITIAL_CAPACITY: usize = 4;
-
-    fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    fn capacity(&self) -> usize {
-        self.inner.capacity()
-    }
-
-    fn push(&mut self, slot: Slot) {
-        self.inner
-            .push(slot, Self::INITIAL_CAPACITY, Self::CHUNK_CAPACITY);
-    }
-
-    fn clear_and_drop_reverse(&mut self) {
-        let _teardown = crate::runtime::enter_state_teardown_scope();
-        self.inner.clear_and_drop_reverse();
-    }
-
-    fn trim_retained_capacity(&mut self, retained: usize) {
-        self.inner
-            .trim_retained_capacity(retained, Self::INITIAL_CAPACITY);
-    }
-}
-
-#[derive(Default)]
-struct OrphanedNodeIds {
-    inner: ChunkedPending<OrphanedNode>,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct OrphanedNode {
-    pub id: NodeId,
-    pub generation: u32,
-    anchor: AnchorId,
-}
-
-impl OrphanedNode {
-    fn new(id: NodeId, generation: u32, anchor: AnchorId) -> Self {
-        Self {
-            id,
-            generation,
-            anchor,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NodeSlotState {
     Active,
     PreservedGap,
     Missing,
-}
-
-impl OrphanedNodeIds {
-    const CHUNK_CAPACITY: usize = 1024;
-    const INITIAL_CAPACITY: usize = 32;
-
-    fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    fn capacity(&self) -> usize {
-        self.inner.capacity()
-    }
-
-    fn push(&mut self, orphaned: OrphanedNode) {
-        self.inner
-            .push(orphaned, Self::INITIAL_CAPACITY, Self::CHUNK_CAPACITY);
-    }
-
-    fn drain_forward(&mut self, visitor: impl FnMut(OrphanedNode)) {
-        self.inner.drain_forward(visitor);
-        self.trim_retained_capacity(Self::INITIAL_CAPACITY);
-    }
-
-    fn trim_retained_capacity(&mut self, retained: usize) {
-        self.inner
-            .trim_retained_capacity(retained, Self::INITIAL_CAPACITY);
-    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -482,11 +322,7 @@ impl SlotTable {
             pending_slot_drops: PendingSlotDrops::default(),
             cursor: 0,
             group_stack: Vec::new(),
-            anchors: HashMap::default(),
-            gap_metadata: HashMap::default(),
-            anchors_dirty: false,
-            next_anchor_id: Cell::new(1), // Start at 1 (0 is INVALID)
-            free_anchor_ids: Vec::new(),
+            anchor_registry: AnchorRegistry::default(),
             last_start_was_gap: false,
             orphaned_node_ids: OrphanedNodeIds::default(),
             needs_compact: false,
@@ -512,37 +348,35 @@ impl SlotTable {
         let slot_size = std::mem::size_of::<Slot>();
         let slots_bytes = self.slots.capacity() * slot_size;
         let pending_bytes = self.pending_slot_drops.capacity() * slot_size;
-        let anchors_bytes = self.anchors.capacity() * std::mem::size_of::<(usize, usize)>();
-        let gap_metadata_bytes =
-            self.gap_metadata.capacity() * std::mem::size_of::<(usize, GapMetadata)>();
-        let free_anchors_bytes = self.free_anchor_ids.capacity() * std::mem::size_of::<usize>();
         let group_stack_bytes = self.group_stack.capacity() * std::mem::size_of::<GroupFrame>();
         let orphaned_node_ids_bytes =
             self.orphaned_node_ids.capacity() * std::mem::size_of::<OrphanedNode>();
         slots_bytes
             + pending_bytes
-            + anchors_bytes
-            + gap_metadata_bytes
-            + free_anchors_bytes
+            + self.anchor_registry.debug_heap_bytes()
             + group_stack_bytes
             + orphaned_node_ids_bytes
     }
 
     pub fn debug_stats(&self) -> SlotTableDebugStats {
-        SlotTableDebugStats {
+        let mut stats = SlotTableDebugStats {
             slots_len: self.slots.len(),
             slots_cap: self.slots.capacity(),
             pending_slot_drops_len: self.pending_slot_drops.len(),
             pending_slot_drops_cap: self.pending_slot_drops.capacity(),
-            anchors_len: self.anchors.len(),
-            anchors_cap: self.anchors.capacity(),
-            free_anchor_ids_len: self.free_anchor_ids.len(),
-            free_anchor_ids_cap: self.free_anchor_ids.capacity(),
+            anchors_len: 0,
+            anchors_cap: 0,
+            gap_metadata_len: 0,
+            gap_metadata_cap: 0,
+            free_anchor_ids_len: 0,
+            free_anchor_ids_cap: 0,
             group_stack_len: self.group_stack.len(),
             group_stack_cap: self.group_stack.capacity(),
             orphaned_node_ids_len: self.orphaned_node_ids.len(),
             orphaned_node_ids_cap: self.orphaned_node_ids.capacity(),
-        }
+        };
+        self.anchor_registry.fill_debug_stats(&mut stats);
+        stats
     }
 
     pub fn current_group(&self) -> usize {
@@ -550,71 +384,36 @@ impl SlotTable {
     }
 
     fn clear_gap_metadata_for_replacement(&mut self, index: usize, new_slot: &Slot) {
-        if matches!(new_slot, Slot::Gap { .. }) {
-            return;
-        }
-        let old_anchor = match self.slots.get(index) {
-            Some(Slot::Gap { anchor }) => Some(*anchor),
-            _ => None,
-        };
-        if let Some(anchor) = old_anchor {
-            self.clear_gap_metadata(anchor);
-        }
-    }
-
-    fn gap_metadata_for_anchor(&self, anchor: AnchorId) -> Option<GapMetadata> {
-        anchor
-            .is_valid()
-            .then(|| self.gap_metadata.get(&anchor.0).copied())
-            .flatten()
+        self.anchor_registry
+            .clear_gap_metadata_for_replacement(&self.slots, index, new_slot);
     }
 
     fn set_gap_metadata(&mut self, anchor: AnchorId, metadata: GapMetadata) {
-        if !anchor.is_valid() {
-            return;
-        }
-        if metadata == GapMetadata::default() {
-            self.gap_metadata.remove(&anchor.0);
-        } else {
-            self.gap_metadata.insert(anchor.0, metadata);
-        }
-    }
-
-    fn clear_gap_metadata(&mut self, anchor: AnchorId) {
-        if anchor.is_valid() {
-            self.gap_metadata.remove(&anchor.0);
-        }
+        self.anchor_registry.set_gap_metadata(anchor, metadata);
     }
 
     fn gap_group_key(&self, anchor: AnchorId) -> Option<Key> {
-        self.gap_metadata_for_anchor(anchor)
-            .and_then(|metadata| metadata.group_key)
+        self.anchor_registry.gap_group_key(anchor)
     }
 
     fn gap_boundary_key(&self, anchor: AnchorId) -> Option<Key> {
-        self.gap_metadata_for_anchor(anchor)
-            .and_then(|metadata| metadata.boundary_key)
+        self.anchor_registry.gap_boundary_key(anchor)
     }
 
     fn gap_group_scope(&self, anchor: AnchorId) -> PackedScopeId {
-        self.gap_metadata_for_anchor(anchor)
-            .map(|metadata| metadata.group_scope)
-            .unwrap_or_default()
+        self.anchor_registry.gap_group_scope(anchor)
     }
 
     fn gap_group_len(&self, anchor: AnchorId) -> u32 {
-        self.gap_metadata_for_anchor(anchor)
-            .map(|metadata| metadata.group_len)
-            .unwrap_or(0)
+        self.anchor_registry.gap_group_len(anchor)
     }
 
     fn gap_preserved_node(&self, anchor: AnchorId) -> Option<(NodeId, u32)> {
-        self.gap_metadata_for_anchor(anchor)
-            .and_then(|metadata| metadata.preserved_node)
+        self.anchor_registry.gap_preserved_node(anchor)
     }
 
     fn gap_extent_for_anchor(&self, anchor: AnchorId) -> usize {
-        unpack_slot_len(self.gap_group_len(anchor)).max(1)
+        self.anchor_registry.gap_extent_for_anchor(anchor)
     }
 
     fn current_disallow_live_slot_reuse(&self) -> bool {
@@ -811,7 +610,7 @@ impl SlotTable {
                 },
             ));
         }
-        self.anchors_dirty = true;
+        self.anchor_registry.mark_dirty();
 
         loop {
             let (run_start, run_len) = self.find_tail_gap_run().unwrap_or((self.slots.len(), 0));
@@ -867,16 +666,11 @@ impl SlotTable {
 
     /// Allocate a new unique anchor ID.
     fn allocate_anchor(&mut self) -> AnchorId {
-        let id = self.next_anchor_id.get();
-        self.next_anchor_id.set(id + 1);
-        AnchorId(id)
+        self.anchor_registry.allocate_anchor()
     }
 
     fn free_anchor(&mut self, anchor: AnchorId) {
-        if anchor.is_valid() && anchor.0 != 0 {
-            self.anchors.remove(&anchor.0);
-            self.gap_metadata.remove(&anchor.0);
-        }
+        self.anchor_registry.free_anchor(anchor);
     }
 
     fn replace_slot_deferred(&mut self, index: usize, slot: Slot) {
@@ -935,12 +729,7 @@ impl SlotTable {
 
     /// Register an anchor at a specific position in the slots array.
     fn register_anchor(&mut self, anchor: AnchorId, position: usize) {
-        debug_assert!(anchor.is_valid(), "attempted to register invalid anchor");
-        let idx = anchor.0;
-        if idx == 0 {
-            return;
-        }
-        self.anchors.insert(idx, position);
+        self.anchor_registry.register_anchor(anchor, position);
     }
 
     /// Returns whether the most recent `start` invocation reused a gap slot.
@@ -953,11 +742,7 @@ impl SlotTable {
 
     /// Resolve an anchor to its current position in the slots array.
     fn resolve_anchor(&self, anchor: AnchorId) -> Option<usize> {
-        let idx = anchor.0;
-        if idx == 0 {
-            return None;
-        }
-        self.anchors.get(&idx).copied()
+        self.anchor_registry.resolve_anchor(anchor)
     }
 
     /// Mark a range of slots as gaps instead of truncating.
@@ -1283,28 +1068,7 @@ impl SlotTable {
     /// Update all anchor positions to match their current physical positions in the slots array.
     /// This should be called after any operation that modifies slot positions (insert, remove, etc.)
     fn rebuild_all_anchor_positions(&mut self) {
-        let live_anchor_count = self
-            .slots
-            .iter()
-            .filter(|slot| slot.anchor_id().is_valid())
-            .count();
-        let mut anchors = HashMap::default();
-        anchors.reserve(live_anchor_count);
-        for slot in &self.slots {
-            let idx = slot.anchor_id().0;
-            if idx != 0 {
-                anchors.insert(idx, INVALID_ANCHOR_POS);
-            }
-        }
-
-        for (position, slot) in self.slots.iter().enumerate() {
-            let idx = slot.anchor_id().0;
-            if idx == 0 {
-                continue;
-            }
-            anchors.insert(idx, position);
-        }
-        self.anchors = anchors;
+        self.anchor_registry.rebuild_all_positions(&self.slots);
     }
 
     fn shift_group_frames(&mut self, index: usize, delta: isize) {
@@ -1529,7 +1293,7 @@ impl SlotTable {
                                 .collect();
                             self.shift_group_frames(cursor, moved.len() as isize);
                             self.slots.splice(cursor..cursor, moved);
-                            self.anchors_dirty = true;
+                            self.anchor_registry.mark_dirty();
                             let gap_boundary_key = boundary_key
                                 .unwrap_or_else(|| self.next_gap_boundary_key(key, parent_reuse));
                             let frame = GroupFrame {
@@ -1700,7 +1464,7 @@ impl SlotTable {
                     .collect();
                 self.shift_group_frames(cursor, moved.len() as isize);
                 self.slots.splice(cursor..cursor, moved);
-                self.anchors_dirty = true;
+                self.anchor_registry.mark_dirty();
                 let child_reuse = if restored_from_preserved {
                     restored_child_reuse(parent_reuse)
                 } else {
@@ -1783,15 +1547,10 @@ impl SlotTable {
         cursor
     }
     fn shift_anchor_positions_from(&mut self, start_slot: usize, delta: isize) {
-        for pos in self.anchors.values_mut() {
-            if *pos >= start_slot {
-                *pos = (*pos as isize + delta) as usize;
-            }
-        }
+        self.anchor_registry.shift_positions_from(start_slot, delta);
     }
     fn flush_anchors_if_dirty(&mut self) {
-        if self.anchors_dirty {
-            self.anchors_dirty = false;
+        if self.anchor_registry.take_dirty() {
             self.rebuild_all_anchor_positions();
         }
     }
@@ -2346,7 +2105,7 @@ impl SlotTable {
     #[cfg(test)]
     fn gap_metadata_at(&self, index: usize) -> Option<GapMetadata> {
         match self.slots.get(index) {
-            Some(Slot::Gap { anchor }) => self.gap_metadata_for_anchor(*anchor),
+            Some(Slot::Gap { anchor }) => self.anchor_registry.gap_metadata_for_anchor(*anchor),
             _ => None,
         }
     }
@@ -2480,7 +2239,7 @@ impl SlotTable {
                 for j in i..i + extent {
                     let anchor = self.slots[j].anchor_id();
                     if anchor.is_valid() {
-                        self.anchors.remove(&anchor.0);
+                        self.anchor_registry.remove_position(anchor);
                     }
                 }
                 i = i.saturating_add(extent);
@@ -2516,7 +2275,7 @@ impl SlotTable {
         debug_assert_eq!(removed.len(), gap_count);
         self.slots = compacted;
         drop_slots_in_reverse(&mut removed);
-        self.gap_metadata.clear();
+        self.anchor_registry.clear_all_gap_metadata();
         self.rehouse_live_value_payloads();
 
         // ── Phase 4: rebuild all derived structures ──────────────────
@@ -2539,31 +2298,7 @@ impl SlotTable {
     }
 
     fn rebuild_anchor_positions(&mut self) {
-        let live_anchor_count = self
-            .slots
-            .iter()
-            .filter(|slot| slot.anchor_id().is_valid())
-            .count();
-        let mut anchors = HashMap::default();
-        anchors.reserve(live_anchor_count);
-        for (position, slot) in self.slots.iter().enumerate() {
-            let anchor = slot.anchor_id();
-            if anchor.is_valid() {
-                anchors.insert(anchor.0, position);
-            }
-        }
-        self.anchors = anchors;
-        self.free_anchor_ids = Vec::new();
-        self.next_anchor_id.set(
-            self.next_anchor_id.get().max(
-                self.anchors
-                    .keys()
-                    .copied()
-                    .max()
-                    .unwrap_or(0)
-                    .saturating_add(1),
-            ),
-        );
+        self.anchor_registry.rebuild_positions(&self.slots);
     }
 }
 

@@ -1,60 +1,20 @@
+pub mod tab_switch_regression_support;
+
 use cranpose_core::{
     debug_recompose_scope_registry_stats, snapshot_pinning::debug_snapshot_pinning_stats,
-    snapshot_v2::debug_snapshot_v2_stats, MutableState,
+    snapshot_v2::debug_snapshot_v2_stats,
 };
 use cranpose_testing::ComposeTestRule;
 use desktop_app::app::{
     combined_app, DemoTab, TEST_ACTIVE_TAB_STATE, TEST_RECURSIVE_LAYOUT_DEPTH_STATE,
 };
-
-fn with_active_tab<F>(f: F)
-where
-    F: FnOnce(&MutableState<DemoTab>),
-{
-    TEST_ACTIVE_TAB_STATE.with(|cell| {
-        let state = *cell.borrow().as_ref().expect("active tab state registered");
-        f(&state);
-    });
-}
-
-fn with_recursive_depth<F>(f: F)
-where
-    F: FnOnce(&MutableState<usize>),
-{
-    TEST_RECURSIVE_LAYOUT_DEPTH_STATE.with(|cell| {
-        let state = *cell
-            .borrow()
-            .as_ref()
-            .expect("recursive layout depth state registered");
-        f(&state);
-    });
-}
-
-fn set_active_tab(tab: DemoTab) {
-    with_active_tab(|state| state.set(tab));
-}
-
-fn set_recursive_depth(depth: usize) {
-    with_recursive_depth(|state| state.set(depth));
-}
-
-fn wait_for_recursive_depth_registration(rule: &mut ComposeTestRule) {
-    for _ in 0..20 {
-        let registered = TEST_RECURSIVE_LAYOUT_DEPTH_STATE.with(|cell| cell.borrow().is_some());
-        if registered {
-            return;
-        }
-        rule.pump_until_idle()
-            .expect("pump while waiting for recursive layout depth state registration");
-    }
-    panic!(
-        "recursive layout depth state not registered. tree:\n{}",
-        rule.dump_tree(),
-    );
-}
+use tab_switch_regression_support::{
+    set_active_tab, set_recursive_depth, wait_for_recursive_depth_registration,
+};
 
 #[derive(Clone, Copy, Debug)]
 struct RuntimeLeakDebugStats {
+    slot_table_heap_bytes: usize,
     pass_stats: cranpose_core::CompositionPassDebugStats,
     slot_stats: cranpose_core::slot_table::SlotTableDebugStats,
     observer_stats: cranpose_core::snapshot_state_observer::SnapshotStateObserverDebugStats,
@@ -68,6 +28,7 @@ struct RuntimeLeakDebugStats {
 fn capture_runtime_debug_stats(rule: &mut ComposeTestRule) -> RuntimeLeakDebugStats {
     let runtime = rule.composition().runtime_handle();
     RuntimeLeakDebugStats {
+        slot_table_heap_bytes: rule.composition().slot_table_heap_bytes(),
         pass_stats: rule.composition().debug_last_pass_stats(),
         slot_stats: rule.composition().debug_slot_table_stats(),
         observer_stats: rule.composition().debug_observer_stats(),
@@ -81,6 +42,7 @@ fn capture_runtime_debug_stats(rule: &mut ComposeTestRule) -> RuntimeLeakDebugSt
 
 fn touch_runtime_debug_stats(stats: RuntimeLeakDebugStats) {
     let RuntimeLeakDebugStats {
+        slot_table_heap_bytes,
         pass_stats,
         slot_stats,
         observer_stats,
@@ -91,6 +53,7 @@ fn touch_runtime_debug_stats(stats: RuntimeLeakDebugStats) {
         snapshot_pinning_stats,
     } = stats;
     let _ = (
+        slot_table_heap_bytes,
         pass_stats,
         slot_stats,
         observer_stats,
@@ -118,6 +81,7 @@ fn switching_away_from_deep_recursive_layout_releases_actual_app_tree() {
     let baseline_recycled_nodes = rule.applier_mut().debug_recycled_node_count();
     let baseline_recycled_heap = rule.applier_mut().debug_recycled_node_heap_bytes();
     let baseline_runtime = capture_runtime_debug_stats(&mut rule);
+    let baseline_slot_table_heap = baseline_runtime.slot_table_heap_bytes;
 
     set_active_tab(DemoTab::Layout);
     rule.pump_until_idle()
@@ -154,6 +118,7 @@ fn switching_away_from_deep_recursive_layout_releases_actual_app_tree() {
     let after_recycled_nodes = rule.applier_mut().debug_recycled_node_count();
     let after_recycled_heap = rule.applier_mut().debug_recycled_node_heap_bytes();
     let after_runtime = capture_runtime_debug_stats(&mut rule);
+    let after_slot_table_heap = after_runtime.slot_table_heap_bytes;
     let after_slot_value_types = rule.composition().debug_slot_value_type_counts(12);
 
     touch_runtime_debug_stats(baseline_runtime);
@@ -186,5 +151,21 @@ fn switching_away_from_deep_recursive_layout_releases_actual_app_tree() {
     assert!(
         after_slots <= baseline_slots + 512,
         "tab switch leaked slot groups: baseline={baseline_slots} after={after_slots}",
+    );
+    assert!(
+        after_slot_table_heap <= baseline_slot_table_heap + 2 * 1024 * 1024,
+        "tab switch retained slot table heap: baseline={} after={} gap_metadata_cap={}",
+        baseline_slot_table_heap,
+        after_slot_table_heap,
+        after_runtime.slot_stats.gap_metadata_cap,
+    );
+    assert_eq!(
+        after_runtime.slot_stats.gap_metadata_len, 0,
+        "tab switch left gap metadata live after compaction",
+    );
+    assert!(
+        after_runtime.slot_stats.gap_metadata_cap <= 64,
+        "tab switch retained gap metadata capacity: {}",
+        after_runtime.slot_stats.gap_metadata_cap,
     );
 }

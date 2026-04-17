@@ -565,7 +565,6 @@ mod tests {
     use super::*;
     use crate::snapshot_v2::runtime::TestRuntimeGuard;
     use crate::state::{NeverEqual, SnapshotMutableState, StateObject};
-    use std::cell::Cell;
     use std::sync::Arc;
 
     fn reset_runtime() -> TestRuntimeGuard {
@@ -577,10 +576,7 @@ mod tests {
     }
 
     // Mock StateObject for testing
-    #[allow(dead_code)]
-    struct MockStateObject {
-        value: Cell<i32>,
-    }
+    struct MockStateObject;
 
     fn mock_state_record() -> Rc<crate::state::StateRecord> {
         crate::state::StateRecord::new(crate::state::PREEXISTING_SNAPSHOT_ID, (), None)
@@ -664,9 +660,7 @@ mod tests {
         });
 
         let snapshot = MutableSnapshot::new(1, SnapshotIdSet::new(), Some(observer), None, 0);
-        let mock_state = MockStateObject {
-            value: Cell::new(42),
-        };
+        let mock_state = MockStateObject;
 
         snapshot.record_read(&mock_state);
         snapshot.record_read(&mock_state);
@@ -687,9 +681,7 @@ mod tests {
         });
 
         let snapshot = MutableSnapshot::new(1, SnapshotIdSet::new(), None, Some(observer), 0);
-        let mock_state = Arc::new(MockStateObject {
-            value: Cell::new(42),
-        });
+        let mock_state = Arc::new(MockStateObject);
 
         snapshot.record_write(mock_state.clone());
         snapshot.record_write(mock_state.clone()); // Second write should not call observer
@@ -774,9 +766,7 @@ mod tests {
         let snapshot = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
         snapshot.apply().check();
 
-        let mock_state = Arc::new(MockStateObject {
-            value: Cell::new(42),
-        });
+        let mock_state = Arc::new(MockStateObject);
         snapshot.record_write(mock_state);
     }
 
@@ -787,9 +777,7 @@ mod tests {
         let snapshot = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
         snapshot.dispose();
 
-        let mock_state = Arc::new(MockStateObject {
-            value: Cell::new(42),
-        });
+        let mock_state = Arc::new(MockStateObject);
         snapshot.record_write(mock_state);
     }
 

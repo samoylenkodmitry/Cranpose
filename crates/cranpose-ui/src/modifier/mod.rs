@@ -120,23 +120,6 @@ impl InspectorInfo {
     {
         self.add_property(name, format!("{alignment:?}"));
     }
-
-    #[allow(dead_code)] // use for debugging
-    pub fn debug_properties(&self) -> Vec<(&'static str, String)> {
-        self.properties
-            .iter()
-            .map(|property| (property.name, property.value.clone()))
-            .collect()
-    }
-
-    #[allow(dead_code)] // use for debugging
-    pub fn describe(&self) -> String {
-        self.properties
-            .iter()
-            .map(|property| format!("{}={}", property.name, property.value))
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
 }
 
 /// Single inspector entry recording a property exposed by a modifier.

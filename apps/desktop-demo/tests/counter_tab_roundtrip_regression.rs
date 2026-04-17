@@ -1,3 +1,5 @@
+pub mod tab_switch_regression_support;
+
 use cranpose_app_shell::AppShell;
 use cranpose_core::{location_key, MutableState};
 use cranpose_foundation::PointerEvent;
@@ -11,6 +13,7 @@ use desktop_app::app::{
     combined_app, DemoTab, TEST_ACTIVE_TAB_STATE, TEST_COUNTER_APP_COUNTER_STATE,
 };
 use std::rc::Rc;
+use tab_switch_regression_support::{active_tab_state, pump_shell_until_stable};
 
 #[derive(Default)]
 struct HitGraphRenderer {
@@ -188,27 +191,9 @@ fn counter_state() -> MutableState<i32> {
     })
 }
 
-fn active_tab_state() -> MutableState<DemoTab> {
-    TEST_ACTIVE_TAB_STATE.with(|cell| {
-        *cell
-            .borrow()
-            .as_ref()
-            .expect("active tab state should be registered")
-    })
-}
-
-fn pump_until_stable(shell: &mut AppShell<HitGraphRenderer>) {
-    for _ in 0..80 {
-        if !(shell.needs_redraw() || shell.has_active_animations()) {
-            break;
-        }
-        shell.update();
-    }
-}
-
 fn robot_move(shell: &mut AppShell<HitGraphRenderer>, x: f32, y: f32) {
     let _ = shell.set_cursor(x, y);
-    pump_until_stable(shell);
+    pump_shell_until_stable(shell);
 }
 
 fn robot_click(shell: &mut AppShell<HitGraphRenderer>, x: f32, y: f32) {
@@ -217,12 +202,12 @@ fn robot_click(shell: &mut AppShell<HitGraphRenderer>, x: f32, y: f32) {
         shell.pointer_pressed(),
         "pointer down should hit a target at ({x}, {y})"
     );
-    pump_until_stable(shell);
+    pump_shell_until_stable(shell);
     assert!(
         shell.pointer_released(),
         "pointer up should hit a target at ({x}, {y})"
     );
-    pump_until_stable(shell);
+    pump_shell_until_stable(shell);
 }
 
 fn click_button_by_text(shell: &mut AppShell<HitGraphRenderer>, text: &str) {
@@ -245,7 +230,7 @@ fn counter_increment_survives_combined_app_tab_roundtrip_robot_path() {
     shell.set_buffer_size(800, 600);
     shell.set_viewport(800.0, 600.0);
     shell.set_semantics_enabled(true);
-    pump_until_stable(&mut shell);
+    pump_shell_until_stable(&mut shell);
 
     assert_eq!(active_tab_state().get(), DemoTab::Counter);
     assert_eq!(counter_state().get(), 0);

@@ -5,7 +5,7 @@ use super::*;
 fn subcompose_panics_outside_measure_or_layout() {
     let (handle, _runtime) = runtime_handle();
     let mut slots = SlotTable::default();
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
     let (composer, slots_host, applier_host) =
         setup_composer(&mut slots, &mut applier, handle, None);
     let mut state = SubcomposeState::default();
@@ -18,7 +18,7 @@ fn subcompose_panics_outside_measure_or_layout() {
 fn subcompose_reuses_nodes_across_calls() {
     let (handle, _runtime) = runtime_handle();
     let mut slots = SlotTable::default();
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
     let mut state = SubcomposeState::default();
     let first_id;
 
@@ -55,7 +55,7 @@ fn subcompose_reuses_nodes_across_calls() {
 fn apply_pending_commands_makes_subcomposed_nodes_available() {
     let (handle, _runtime) = runtime_handle();
     let mut slots = SlotTable::default();
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
     let mut state = SubcomposeState::default();
     let mounted = Rc::new(Cell::new(0));
 
@@ -84,7 +84,7 @@ fn apply_pending_commands_makes_subcomposed_nodes_available() {
 fn with_slot_value_reads_and_updates() {
     let (handle, _runtime) = runtime_handle();
     let mut slots = SlotTable::default();
-    let mut applier = MemoryApplier::new();
+    let mut applier = test_applier();
     let (composer, slots_host, applier_host) =
         setup_composer(&mut slots, &mut applier, handle, None);
     let key = location_key(file!(), line!(), column!());
@@ -357,7 +357,7 @@ fn runtime_registry_stays_alive_until_last_runtime_clone_drops() {
 
 #[test]
 fn disposable_effect_cleanup_can_update_use_state_during_group_removal() {
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let show = MutableState::with_runtime(true, runtime);
     let cleanup_calls = Rc::new(Cell::new(0usize));
@@ -393,7 +393,7 @@ fn disposable_effect_cleanup_can_update_use_state_during_group_removal() {
 
 #[test]
 fn launched_effect_runs_and_cancels() {
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let state = MutableState::with_runtime(0i32, runtime.clone());
     let runs = Arc::new(AtomicUsize::new(0));
@@ -443,7 +443,7 @@ fn launched_effect_runs_and_cancels() {
 
 #[test]
 fn launched_effect_runs_side_effect_body() {
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let state = MutableState::with_runtime(0i32, runtime);
     let (tx, rx) = std::sync::mpsc::channel();
@@ -480,7 +480,7 @@ fn launched_effect_runs_side_effect_body() {
 
 #[test]
 fn launched_effect_background_updates_ui() {
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let state = MutableState::with_runtime(0i32, runtime.clone());
     let (tx, rx) = std::sync::mpsc::channel::<i32>();
@@ -518,7 +518,7 @@ fn launched_effect_background_updates_ui() {
 
 #[test]
 fn launched_effect_background_async_updates_ui() {
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let state = MutableState::with_runtime(0i32, runtime.clone());
     let (tx, rx) = std::sync::mpsc::channel::<i32>();
@@ -556,7 +556,7 @@ fn launched_effect_background_async_updates_ui() {
 
 #[test]
 fn launched_effect_background_ignores_late_result_after_cancel() {
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let key_state = MutableState::with_runtime(0i32, runtime.clone());
     let result_state = MutableState::with_runtime(0i32, runtime.clone());
@@ -619,7 +619,7 @@ fn launched_effect_background_ignores_late_result_after_cancel() {
 fn launched_effect_relaunches_on_branch_change() {
     // Test that LaunchedEffect with same key relaunches when switching if/else branches
     // This matches Jetpack Compose behavior
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let _state = MutableState::with_runtime(false, runtime.clone());
     let runs = Arc::new(AtomicUsize::new(0));
@@ -691,7 +691,7 @@ fn launched_effect_relaunches_on_branch_change() {
 
 #[test]
 fn anchor_survives_conditional_removal() {
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let toggle = MutableState::with_runtime(true, runtime.clone());
     let runs = Arc::new(AtomicUsize::new(0));
@@ -783,7 +783,7 @@ fn anchor_survives_conditional_removal() {
 
 #[test]
 fn launched_effect_async_survives_conditional_cycle() {
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime_handle = composition.runtime_handle();
     let gate = MutableState::with_runtime(true, runtime_handle.clone());
     let log: Rc<RefCell<Vec<u32>>> = Rc::new(RefCell::new(Vec::new()));
@@ -925,7 +925,7 @@ fn launched_effect_async_keeps_frames_after_backward_forward_flip() {
         }
     }
 
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let animation = MutableState::with_runtime(TestAnimation::default(), runtime.clone());
     let stats = MutableState::with_runtime(TestFrameStats::default(), runtime.clone());
@@ -1049,7 +1049,7 @@ fn stats_scope_survives_conditional_gap() {
         frames: u32,
     }
 
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let animation = MutableState::with_runtime(0.0f32, runtime.clone());
     let stats = MutableState::with_runtime(SimpleStats::default(), runtime.clone());
@@ -1161,7 +1161,7 @@ fn stats_scope_survives_conditional_gap() {
 
 #[test]
 fn slot_table_remember_replaces_mismatched_type() {
-    let mut slots = SlotTable::new();
+    let mut slots = test_slot_table();
 
     {
         let value = slots.remember(|| 42i32);
@@ -1265,7 +1265,7 @@ fn cancelling_frame_callback_prevents_execution() {
 
 #[test]
 fn launched_effect_async_restarts_on_key_change() {
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime_handle = composition.runtime_handle();
     let key_state = MutableState::with_runtime(0i32, runtime_handle.clone());
     let log: Rc<RefCell<Vec<i32>>> = Rc::new(RefCell::new(Vec::new()));
@@ -1360,7 +1360,7 @@ fn frame_callback_node(events: Rc<RefCell<Vec<&'static str>>>) -> NodeId {
 
 #[test]
 fn disposing_scope_cancels_pending_frame_callback() {
-    let mut composition = Composition::new(MemoryApplier::new());
+    let mut composition = test_composition();
     let runtime_handle = composition.runtime_handle();
     let events: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
     let active = cranpose_core::MutableState::with_runtime(true, runtime_handle.clone());

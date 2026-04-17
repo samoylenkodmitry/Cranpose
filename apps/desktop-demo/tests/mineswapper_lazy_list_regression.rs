@@ -1,4 +1,6 @@
-use cranpose_core::{location_key, Composition, MemoryApplier, MutableState, NodeError};
+pub mod tab_switch_regression_support;
+
+use cranpose_core::{location_key, Composition, MemoryApplier, NodeError};
 use cranpose_testing::robot::{create_headless_robot_test, RobotTestRule, TestRenderer};
 use cranpose_ui::{
     measure_layout_with_options, Brush, Color, HeadlessRenderer, LayoutBox, MeasureLayoutOptions,
@@ -8,40 +10,9 @@ use cranpose_ui_graphics::DrawPrimitive;
 use desktop_app::app::{
     combined_app, DemoTab, TEST_ACTIVE_TAB_STATE, TEST_COMPOSITION_LOCAL_COUNTER,
 };
-
-fn with_active_tab<F>(f: F)
-where
-    F: FnOnce(&MutableState<DemoTab>),
-{
-    TEST_ACTIVE_TAB_STATE.with(|cell| {
-        let state = *cell.borrow().as_ref().expect("active tab state registered");
-        f(&state);
-    });
-}
-
-fn set_active_tab(tab: DemoTab) {
-    with_active_tab(|state| state.set(tab));
-}
-
-fn wait_for_active_tab_registration(robot: &mut RobotTestRule<TestRenderer>) {
-    for _ in 0..20 {
-        robot.wait_for_idle();
-        let registered = TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow().is_some());
-        if registered {
-            return;
-        }
-    }
-    panic!("active tab state was not registered");
-}
-
-fn pump_robot_until_stable(robot: &mut RobotTestRule<TestRenderer>, max_steps: usize) {
-    for _ in 0..max_steps {
-        robot.shell_mut().update();
-        if !robot.shell_mut().needs_redraw() {
-            break;
-        }
-    }
-}
+use tab_switch_regression_support::{
+    pump_robot_until_stable, set_active_tab, wait_for_active_tab_registration_robot,
+};
 
 fn drain_all(composition: &mut Composition<MemoryApplier>) -> Result<(), NodeError> {
     loop {
@@ -324,7 +295,7 @@ fn lazy_list_initial_keeps_full_lazy_viewport() {
         combined_app();
     });
     robot.shell_mut().set_semantics_enabled(true);
-    wait_for_active_tab_registration(&mut robot);
+    wait_for_active_tab_registration_robot(&mut robot);
     set_active_tab(DemoTab::LazyList);
     robot.wait_for_idle();
 
@@ -339,7 +310,7 @@ fn mineswapper_to_lazy_list_keeps_full_lazy_viewport() {
         combined_app();
     });
     robot.shell_mut().set_semantics_enabled(true);
-    wait_for_active_tab_registration(&mut robot);
+    wait_for_active_tab_registration_robot(&mut robot);
 
     let registered = TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow().is_some());
     assert!(registered, "active tab state was not registered");
@@ -360,7 +331,7 @@ fn animations_to_lazy_list_keeps_full_lazy_viewport() {
         combined_app();
     });
     robot.shell_mut().set_semantics_enabled(true);
-    wait_for_active_tab_registration(&mut robot);
+    wait_for_active_tab_registration_robot(&mut robot);
 
     let registered = TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow().is_some());
     assert!(registered, "active tab state was not registered");
@@ -381,7 +352,7 @@ fn animations_tab_renders_showcase_content() {
         combined_app();
     });
     robot.shell_mut().set_semantics_enabled(true);
-    wait_for_active_tab_registration(&mut robot);
+    wait_for_active_tab_registration_robot(&mut robot);
 
     let registered = TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow().is_some());
     assert!(registered, "active tab state was not registered");
@@ -403,7 +374,7 @@ fn animations_to_composition_local_survives_local_recompose() {
         combined_app();
     });
     robot.shell_mut().set_semantics_enabled(true);
-    wait_for_active_tab_registration(&mut robot);
+    wait_for_active_tab_registration_robot(&mut robot);
 
     let registered = TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow().is_some());
     assert!(registered, "active tab state was not registered");
@@ -461,7 +432,7 @@ fn animations_to_other_tabs_preserve_tab_content_markers() {
         combined_app();
     });
     robot.shell_mut().set_semantics_enabled(true);
-    wait_for_active_tab_registration(&mut robot);
+    wait_for_active_tab_registration_robot(&mut robot);
 
     set_active_tab(DemoTab::Animations);
     pump_robot_until_stable(&mut robot, 40);

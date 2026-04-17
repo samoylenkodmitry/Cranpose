@@ -122,7 +122,7 @@ pub struct SubcomposeMeasureScopeImpl<'a> {
     state: &'a mut SubcomposeState,
     constraints: Constraints,
     measurer: Box<dyn FnMut(NodeId, Constraints) -> Size + 'a>,
-    error: Rc<RefCell<Option<NodeError>>>,
+    error: &'a RefCell<Option<NodeError>>,
     parent_handle: SubcomposeLayoutNodeHandle,
     root_id: NodeId,
 }
@@ -133,7 +133,7 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
         state: &'a mut SubcomposeState,
         constraints: Constraints,
         measurer: Box<dyn FnMut(NodeId, Constraints) -> Size + 'a>,
-        error: Rc<RefCell<Option<NodeError>>>,
+        error: &'a RefCell<Option<NodeError>>,
 
         parent_handle: SubcomposeLayoutNodeHandle,
         root_id: NodeId,
@@ -370,7 +370,7 @@ pub struct SubcomposeLayoutNode {
     needs_focus_sync: Cell<bool>,
     virtual_children_count: Cell<usize>,
     /// Retained layout state (size, position) for rendering.
-    layout_state: Rc<RefCell<LayoutState>>,
+    layout_state: RefCell<LayoutState>,
     // Caching for modifier slices to avoid repeated allocation
     modifier_slices_buffer: RefCell<ModifierNodeSlices>,
     modifier_slices_snapshot: RefCell<Rc<ModifierNodeSlices>>,
@@ -391,7 +391,7 @@ impl SubcomposeLayoutNode {
             needs_pointer_pass: Cell::new(false),
             needs_focus_sync: Cell::new(false),
             virtual_children_count: Cell::new(0),
-            layout_state: Rc::new(RefCell::new(LayoutState::default())),
+            layout_state: RefCell::new(LayoutState::default()),
             modifier_slices_buffer: RefCell::new(ModifierNodeSlices::default()),
             modifier_slices_snapshot: RefCell::new(Rc::default()),
             modifier_slices_dirty: Cell::new(true),
@@ -426,7 +426,7 @@ impl SubcomposeLayoutNode {
             needs_pointer_pass: Cell::new(false),
             needs_focus_sync: Cell::new(false),
             virtual_children_count: Cell::new(0),
-            layout_state: Rc::new(RefCell::new(LayoutState::default())),
+            layout_state: RefCell::new(LayoutState::default()),
             modifier_slices_buffer: RefCell::new(ModifierNodeSlices::default()),
             modifier_slices_snapshot: RefCell::new(Rc::default()),
             modifier_slices_dirty: Cell::new(true),
@@ -934,7 +934,7 @@ impl SubcomposeLayoutNodeHandle {
         node_id: NodeId,
         constraints: Constraints,
         measurer: Box<dyn FnMut(NodeId, Constraints) -> Size + 'a>,
-        error: Rc<RefCell<Option<NodeError>>>,
+        error: &'a RefCell<Option<NodeError>>,
     ) -> Result<MeasureResult, NodeError> {
         let (policy, mut state, slots_host) = {
             let mut inner = self.inner.borrow_mut();
@@ -966,7 +966,7 @@ impl SubcomposeLayoutNodeHandle {
                     &mut state,
                     constraints_copy,
                     measurer,
-                    Rc::clone(&error),
+                    error,
                     self.clone(), // Pass handle
                     node_id,      // Pass root_id
                 );

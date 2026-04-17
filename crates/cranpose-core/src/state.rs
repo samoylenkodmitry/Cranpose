@@ -118,7 +118,7 @@ impl StateRecord {
 
     /// Clears the value from this record to free memory.
     /// Used when marking records as reusable - clears the value to reduce memory usage.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn clear_for_reuse(&self) {
         self.clear_value();
     }
@@ -158,6 +158,38 @@ impl Drop for StateRecord {
                 }
             }
         }
+    }
+}
+
+/// Owns the mutable head pointer for a state's record chain.
+///
+/// Snapshot code clones the current head, prepends new records, and swaps in
+/// replacement heads frequently. Centralizing those operations keeps the
+/// `RefCell<Rc<StateRecord>>` borrow protocol out of the higher-level state
+/// logic.
+struct CurrentRecord {
+    head: RefCell<Rc<StateRecord>>,
+}
+
+impl CurrentRecord {
+    fn new(head: Rc<StateRecord>) -> Self {
+        Self {
+            head: RefCell::new(head),
+        }
+    }
+
+    fn clone_head(&self) -> Rc<StateRecord> {
+        self.head.borrow().clone()
+    }
+
+    fn replace(&self, new_head: Rc<StateRecord>) {
+        *self.head.borrow_mut() = new_head;
+    }
+
+    fn prepend(&self, record: Rc<StateRecord>) {
+        let current_head = self.clone_head();
+        record.set_next(Some(current_head));
+        self.replace(record);
     }
 }
 
@@ -509,7 +541,7 @@ pub trait StateObject: Any {
 }
 
 pub(crate) struct SnapshotMutableState<T> {
-    head: RefCell<Rc<StateRecord>>,
+    head: CurrentRecord,
     policy: Arc<dyn MutationPolicy<T>>,
     id: ObjectId,
     weak_self: Mutex<Option<Weak<Self>>>,
@@ -521,7 +553,7 @@ impl<T> SnapshotMutableState<T> {
         if !should_check_chain_integrity() {
             return;
         }
-        let head = self.head.borrow().clone();
+        let head = self.head.clone_head();
         let mut cursor = Some(head);
         let mut seen: HashSet<usize> = HashSet::default();
         let mut ids = Vec::new();
@@ -579,8 +611,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         let readable = match self.readable_for(snapshot_id, invalid) {
             Some(record) => record,
             None => {
-                let mut head_guard = self.head.borrow_mut();
-                let current_head = head_guard.clone();
+                let current_head = self.head.clone_head();
                 let refreshed = readable_record_for(&current_head, snapshot_id, invalid);
                 let source = refreshed.unwrap_or_else(|| current_head.clone());
 
@@ -589,9 +620,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
                 // Reuse happens during cleanup (overwrite_unused_records_locked)
                 let cloned_value = source.with_value(|value: &T| value.clone());
                 let new_head = StateRecord::new(snapshot_id, cloned_value, Some(current_head));
-
-                *head_guard = new_head.clone();
-                drop(head_guard);
+                self.head.replace(new_head.clone());
                 self.assert_chain_integrity("writable_record(recover)", Some(snapshot_id));
                 return new_head;
             }
@@ -602,8 +631,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         }
 
         let refreshed = {
-            let head_guard = self.head.borrow();
-            let current_head = head_guard.clone();
+            let current_head = self.head.clone_head();
             let refreshed = readable_record_for(&current_head, snapshot_id, invalid).unwrap_or_else(
                 || {
                     panic!(
@@ -638,7 +666,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         let head = StateRecord::new(snapshot_id, initial, Some(tail));
 
         let mut state = Arc::new(Self {
-            head: RefCell::new(head),
+            head: CurrentRecord::new(head),
             policy,
             id: ObjectId::default(),
             weak_self: Mutex::new(None),
@@ -937,7 +965,7 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
     }
 
     fn first_record(&self) -> Rc<StateRecord> {
-        self.head.borrow().clone()
+        self.head.clone_head()
     }
 
     fn readable_record(&self, snapshot_id: SnapshotId, invalid: &SnapshotIdSet) -> Rc<StateRecord> {
@@ -951,10 +979,7 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
     }
 
     fn prepend_state_record(&self, record: Rc<StateRecord>) {
-        let mut head_guard = self.head.borrow_mut();
-        let current_head = head_guard.clone();
-        record.set_next(Some(current_head));
-        *head_guard = record;
+        self.head.prepend(record);
     }
 
     fn merge_records(
@@ -988,11 +1013,9 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
             if record.snapshot_id() == child_id {
                 let cloned = record.with_value(|value: &T| value.clone());
                 let new_id = allocate_record_id();
-                let mut head_guard = self.head.borrow_mut();
-                let current_head = head_guard.clone();
+                let current_head = self.head.clone_head();
                 let new_head = StateRecord::new(new_id, cloned, Some(current_head));
-                *head_guard = new_head;
-                drop(head_guard);
+                self.head.replace(new_head);
                 advance_global_snapshot(new_id);
                 self.notify_applied();
                 self.assert_chain_integrity("promote_record", Some(child_id));
@@ -1009,11 +1032,9 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
     fn commit_merged_record(&self, merged: Rc<StateRecord>) -> Result<SnapshotId, &'static str> {
         let value = merged.with_value(|value: &T| value.clone());
         let new_id = allocate_record_id();
-        let mut head_guard = self.head.borrow_mut();
-        let current_head = head_guard.clone();
+        let current_head = self.head.clone_head();
         let new_head = StateRecord::new(new_id, value, Some(current_head));
-        *head_guard = new_head;
-        drop(head_guard);
+        self.head.replace(new_head);
         advance_global_snapshot(new_id);
         self.notify_applied();
         self.assert_chain_integrity("commit_merged_record", Some(new_id));

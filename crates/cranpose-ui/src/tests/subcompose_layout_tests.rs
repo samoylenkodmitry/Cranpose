@@ -83,7 +83,7 @@ fn measure_once(
         Box::new(|_child_id: cranpose_core::NodeId, _constraints: Constraints| Size::default());
     let error = Rc::new(RefCell::new(None));
     let result = node_handle
-        .measure(&composer, node_id, constraints, measurer, Rc::clone(&error))
+        .measure(&composer, node_id, constraints, measurer, &error)
         .expect("measure result");
     assert!(
         error.borrow().is_none(),
