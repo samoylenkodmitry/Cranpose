@@ -19,7 +19,7 @@ use web_time::Instant;
 
 use cranpose_core::{
     enter_event_handler, exit_event_handler, location_key, run_in_mutable_snapshot, Applier,
-    Composition, Key, MemoryApplier, NodeError, NodeId, ROOT_RENDER_REPLAY_LIMIT,
+    Composition, Key, MemoryApplier, NodeError, NodeId,
 };
 use cranpose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEventKind};
 use cranpose_render_common::{HitTestTarget, RenderScene, Renderer};
@@ -133,42 +133,6 @@ where
     R: Renderer,
     R::Error: Debug,
 {
-    fn drain_root_render_requests(&mut self) {
-        // Root render requests chain when a recompose pass inside `render()`
-        // promotes a scope callback to the root (recompose.rs:67). Each
-        // promotion walks up one parent, so convergence is bounded by the
-        // composition depth. `ROOT_RENDER_REPLAY_LIMIT` is a safety net that
-        // catches reentrant-render bugs loudly in debug builds.
-        let Some(root_key) = self.composition.root_key() else {
-            return;
-        };
-        let mut iterations = 0;
-        while self.composition.take_root_render_request() {
-            match self.composition.render(root_key, &mut *self.content) {
-                Ok(()) => {
-                    fps_monitor::record_recomposition();
-                    self.request_layout_pass();
-                    request_render_invalidation();
-                }
-                Err(err) => {
-                    log::error!("root render fallback failed: {err}");
-                    return;
-                }
-            }
-            iterations += 1;
-            if iterations >= ROOT_RENDER_REPLAY_LIMIT {
-                debug_assert!(
-                    false,
-                    "root render replay exceeded {ROOT_RENDER_REPLAY_LIMIT} iterations — reentrant render bug"
-                );
-                log::error!(
-                    "root render fallback looped past {ROOT_RENDER_REPLAY_LIMIT} iterations; breaking to keep UI responsive"
-                );
-                return;
-            }
-        }
-    }
-
     pub fn new(mut renderer: R, root_key: Key, content: impl FnMut() + 'static) -> Self {
         // Initialize FPS tracking
         fps_monitor::init_fps_tracker();
@@ -176,7 +140,7 @@ where
         let runtime = StdRuntime::new();
         let mut composition = Composition::with_runtime(MemoryApplier::new(), runtime.runtime());
         let mut build: Box<dyn FnMut()> = Box::new(content);
-        if let Err(err) = composition.render(root_key, &mut *build) {
+        if let Err(err) = composition.render_stable(root_key, &mut *build) {
             log::error!("initial render failed: {err}");
         }
         renderer.scene_mut().clear();
@@ -207,7 +171,6 @@ where
             clipboard: arboard::Clipboard::new().ok(),
             dev_options: DevOptions::default(),
         };
-        shell.drain_root_render_requests();
         shell.process_frame();
         shell
     }
@@ -342,11 +305,16 @@ where
                 );
             }
             if should_render {
-                match self.composition.process_invalid_scopes() {
+                let Some(root_key) = self.composition.root_key() else {
+                    self.process_frame();
+                    self.is_dirty = false;
+                    return;
+                };
+                match self.composition.reconcile(root_key, &mut *self.content) {
                     Ok(changed) => {
                         log::trace!(
                             target: "cranpose::input",
-                            "process_invalid_scopes changed={changed}"
+                            "reconcile changed={changed}"
                         );
                         if changed {
                             fps_monitor::record_recomposition();
@@ -368,7 +336,6 @@ where
                     }
                 }
             }
-            self.drain_root_render_requests();
             self.process_frame();
             // Clear dirty flag after update (frame has been processed)
             self.is_dirty = false;

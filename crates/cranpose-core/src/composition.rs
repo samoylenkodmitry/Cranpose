@@ -1,9 +1,9 @@
 use crate::{
-    collections::map::HashMap, remove_child_and_cleanup_now, runtime, snapshot_state_observer,
-    Applier, ApplierGuard, ApplierHost, CommandQueue, Composer, CompositionPassDebugStats,
-    ConcreteApplierHost, DefaultScheduler, Key, NodeError, NodeId, RecomposeScope, Runtime,
-    RuntimeHandle, ScopeId, SlotTable, SlotTableDebugStats, SlotValueTypeDebugStat, SlotsHost,
-    SnapshotStateObserver,
+    collections::map::{HashMap, HashSet},
+    remove_child_and_cleanup_now, runtime, snapshot_state_observer, Applier, ApplierGuard,
+    ApplierHost, CommandQueue, Composer, CompositionPassDebugStats, ConcreteApplierHost,
+    DefaultScheduler, Key, NodeError, NodeId, RecomposeScope, Runtime, RuntimeHandle, ScopeId,
+    SlotTable, SlotTableDebugStats, SlotValueTypeDebugStat, SlotsHost, SnapshotStateObserver,
 };
 use std::rc::Rc;
 use std::sync::Arc;
@@ -125,6 +125,18 @@ impl<A: Applier + 'static> Composition<A> {
             .max(side_effects.capacity());
     }
 
+    fn finalize_runtime_state(&mut self) {
+        let runtime_handle = self.runtime_handle();
+        self.observer.prune_dead_scopes();
+        if !self.runtime.has_updates()
+            && !runtime_handle.has_invalid_scopes()
+            && !runtime_handle.has_frame_callbacks()
+            && !runtime_handle.has_pending_ui()
+        {
+            self.runtime.set_needs_frame(false);
+        }
+    }
+
     pub(crate) fn finalize_compaction(&mut self) -> Result<bool, NodeError> {
         let mut removed_orphaned = false;
         let mut orphaned_node_count = 0usize;
@@ -170,10 +182,29 @@ impl<A: Applier + 'static> Composition<A> {
         Ok(removed_orphaned)
     }
 
-    pub fn render(&mut self, key: Key, mut content: impl FnMut()) -> Result<(), NodeError> {
-        self.reset_last_pass_stats();
+    fn clear_pending_invalid_scopes(&mut self) -> HashSet<ScopeId> {
+        let runtime_handle = self.runtime_handle();
+        let mut cleared = HashSet::default();
+        for (id, _) in runtime_handle.take_invalidated_scopes() {
+            runtime_handle.mark_scope_recomposed(id);
+            cleared.insert(id);
+        }
+        cleared
+    }
+
+    fn render_root_pass(
+        &mut self,
+        key: Key,
+        content: &mut dyn FnMut(),
+        clear_pending_invalid_scopes: bool,
+    ) -> Result<HashSet<ScopeId>, NodeError> {
         self.root_key = Some(key);
         self.root_render_requested = false;
+        let cleared_invalid_scopes = if clear_pending_invalid_scopes {
+            self.clear_pending_invalid_scopes()
+        } else {
+            HashSet::default()
+        };
         self.slots.borrow_mut().reset();
         let runtime_handle = self.runtime_handle();
         runtime_handle.drain_ui();
@@ -217,16 +248,62 @@ impl<A: Applier + 'static> Composition<A> {
             effect();
         }
         runtime_handle.drain_ui();
-        let _ = self.process_invalid_scopes()?;
-        self.observer.prune_dead_scopes();
-        if !self.runtime.has_updates()
-            && !runtime_handle.has_invalid_scopes()
-            && !runtime_handle.has_frame_callbacks()
-            && !runtime_handle.has_pending_ui()
-        {
-            self.runtime.set_needs_frame(false);
+        Ok(cleared_invalid_scopes)
+    }
+
+    fn reconcile_with_content(
+        &mut self,
+        key: Key,
+        content: &mut dyn FnMut(),
+        mut suppressed_invalid_scopes: Option<HashSet<ScopeId>>,
+    ) -> Result<bool, NodeError> {
+        self.root_key = Some(key);
+        let mut did_work = false;
+        let mut root_render_replays = 0usize;
+        loop {
+            did_work |=
+                self.process_invalid_scopes_filtered(suppressed_invalid_scopes.take().as_ref())?;
+            if !self.take_root_render_request() {
+                return Ok(did_work);
+            }
+
+            root_render_replays += 1;
+            if root_render_replays > ROOT_RENDER_REPLAY_LIMIT {
+                debug_assert!(
+                    false,
+                    "root render replay exceeded {ROOT_RENDER_REPLAY_LIMIT} iterations — reentrant render bug"
+                );
+                log::error!(
+                    "root render replay looped past {ROOT_RENDER_REPLAY_LIMIT} iterations; breaking to keep UI responsive"
+                );
+                return Ok(true);
+            }
+
+            suppressed_invalid_scopes = Some(self.render_root_pass(key, content, true)?);
+            did_work = true;
         }
+    }
+
+    pub fn render(&mut self, key: Key, mut content: impl FnMut()) -> Result<(), NodeError> {
+        self.reset_last_pass_stats();
+        let _ = self.render_root_pass(key, &mut content, false)?;
+        let _ = self.process_invalid_scopes()?;
         Ok(())
+    }
+
+    /// Perform a root render and continue replaying any resulting root-render
+    /// requests until the composition reaches a stable fixpoint.
+    pub fn render_stable(&mut self, key: Key, mut content: impl FnMut()) -> Result<(), NodeError> {
+        self.reset_last_pass_stats();
+        let suppressed_invalid_scopes = self.render_root_pass(key, &mut content, true)?;
+        let _ = self.reconcile_with_content(key, &mut content, Some(suppressed_invalid_scopes))?;
+        Ok(())
+    }
+
+    /// Process invalid scopes and any resulting root-render requests until the
+    /// composition reaches a stable fixpoint for the supplied root content.
+    pub fn reconcile(&mut self, key: Key, mut content: impl FnMut()) -> Result<bool, NodeError> {
+        self.reconcile_with_content(key, &mut content, None)
     }
 
     /// Returns true if composition needs to process invalid scopes (recompose).
@@ -281,7 +358,10 @@ impl<A: Applier + 'static> Composition<A> {
         self.last_pass_stats
     }
 
-    pub fn process_invalid_scopes(&mut self) -> Result<bool, NodeError> {
+    fn process_invalid_scopes_filtered(
+        &mut self,
+        suppressed_invalid_scopes: Option<&HashSet<ScopeId>>,
+    ) -> Result<bool, NodeError> {
         let runtime_handle = self.runtime_handle();
         let mut did_recompose = false;
         let mut loop_count = 0;
@@ -304,6 +384,10 @@ impl<A: Applier + 'static> Composition<A> {
             }
             let mut scopes = Vec::new();
             for (id, weak) in pending {
+                if suppressed_invalid_scopes.is_some_and(|suppressed| suppressed.contains(&id)) {
+                    runtime_handle.mark_scope_recomposed(id);
+                    continue;
+                }
                 if let Some(inner) = weak.upgrade() {
                     scopes.push(RecomposeScope { inner });
                 } else {
@@ -393,15 +477,12 @@ impl<A: Applier + 'static> Composition<A> {
                 break;
             }
         }
-        self.observer.prune_dead_scopes();
-        if !self.runtime.has_updates()
-            && !runtime_handle.has_invalid_scopes()
-            && !runtime_handle.has_frame_callbacks()
-            && !runtime_handle.has_pending_ui()
-        {
-            self.runtime.set_needs_frame(false);
-        }
+        self.finalize_runtime_state();
         Ok(did_recompose)
+    }
+
+    pub fn process_invalid_scopes(&mut self) -> Result<bool, NodeError> {
+        self.process_invalid_scopes_filtered(None)
     }
 
     pub fn flush_pending_node_updates(&mut self) -> Result<(), NodeError> {

@@ -685,10 +685,11 @@ fn callbackless_scope_promotes_via_parent_scope_metadata() {
 }
 
 #[test]
-fn render_preserves_root_render_request_raised_during_internal_invalid_scope_processing() {
+fn render_stable_reaches_fixpoint_when_internal_invalid_scope_processing_requests_root_render() {
     thread_local! {
         static ROOT_CALLBACKLESS_SCOPE: RefCell<Option<RecomposeScope>> = const { RefCell::new(None) };
         static INVALIDATED_DURING_SIDE_EFFECT: Cell<bool> = const { Cell::new(false) };
+        static RENDER_COUNT: Cell<usize> = const { Cell::new(0) };
     }
 
     let mut composition = test_composition();
@@ -696,8 +697,10 @@ fn render_preserves_root_render_request_raised_during_internal_invalid_scope_pro
 
     ROOT_CALLBACKLESS_SCOPE.with(|slot| slot.borrow_mut().take());
     INVALIDATED_DURING_SIDE_EFFECT.with(|flag| flag.set(false));
+    RENDER_COUNT.with(|count| count.set(0));
 
     let mut render = || {
+        RENDER_COUNT.with(|count| count.set(count.get() + 1));
         cranpose_core::with_key(&"root-callbackless", || {
             with_current_composer(|composer| {
                 let scope = composer
@@ -733,12 +736,17 @@ fn render_preserves_root_render_request_raised_during_internal_invalid_scope_pro
     };
 
     composition
-        .render(root_key, &mut render)
+        .render_stable(root_key, &mut render)
         .expect("initial render with side effect invalidation");
 
     assert!(
-        composition.take_root_render_request(),
-        "render() must preserve root render requests raised during its internal invalid-scope pass",
+        !composition.take_root_render_request(),
+        "render_stable() must drain root render requests raised during its internal invalid-scope pass",
+    );
+    assert_eq!(
+        RENDER_COUNT.with(|count| count.get()),
+        2,
+        "render_stable() must replay the root content until the composition reaches a stable fixpoint",
     );
 }
 
