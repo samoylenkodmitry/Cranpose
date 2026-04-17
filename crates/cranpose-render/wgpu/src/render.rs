@@ -45,6 +45,7 @@ use crate::surface_plan::{
 #[cfg(test)]
 use crate::surface_requirements::SurfaceRequirement;
 use crate::surface_requirements::SurfaceRequirementSet;
+use crate::DebugCpuAllocationStats;
 use crate::{EnsureTextBufferParams, TextCacheKey, TextSystemState};
 use bytemuck::{Pod, Zeroable};
 use cranpose_core::NodeId;
@@ -67,7 +68,7 @@ use glyphon::{
 };
 use lru::LruCache;
 use rustc_hash::FxHasher;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::ops::Range;
@@ -81,9 +82,11 @@ use crate::gpu_stats::gpu_stats_enabled;
 use crate::pipeline::push_layer_shadow;
 
 // Chunked rendering constants for robustness with large scenes
-// Note: Limited to 256 for WebGL compatibility (uniform buffer size limit)
-// WebGL guarantees 16KB uniform buffers, ShapeData is 64 bytes = 256 max shapes
-const HARD_MAX_BUFFER_MB: usize = 64; // Maximum 64MB per buffer
+// Shader declares: var<uniform> shape_data: array<ShapeData, 200>
+// ShapeData is 80 bytes (with clip_rect), 16KB/80 = 200 shapes (WebGL minimum).
+const MAX_SHAPES_PER_BATCH: usize = 200;
+const MAX_GRADIENT_STOPS: usize = 256;
+const HARD_MAX_BUFFER_MB: usize = 64; // Maximum 64MB per buffer (vertex/index only)
 const MAX_LAYER_SURFACE_CACHE_ITEMS: usize = 256;
 pub(crate) const MAX_LAYER_SURFACE_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 pub(crate) const CLEAR_COLOR: wgpu::Color = wgpu::Color {
@@ -95,6 +98,16 @@ pub(crate) const CLEAR_COLOR: wgpu::Color = wgpu::Color {
 #[cfg(not(target_arch = "wasm32"))]
 const INITIAL_UPLOAD_BUFFER_BYTES: u64 = 4 * 1024;
 const MAX_TEXTURE_CACHE_ITEMS: usize = 256;
+const RETAINED_STAGED_UPLOAD_BYTES: usize = 256 * 1024;
+const RETAINED_STAGED_UPLOAD_COPIES: usize = 128;
+const RETAINED_LAYER_REQUIREMENTS_CAPACITY: usize = 512;
+const RETAINED_LAYER_SEEN_THIS_FRAME_CAPACITY: usize = 256;
+const RETAINED_TEXT_CACHE_SEEN_THIS_FRAME_CAPACITY: usize = 512;
+// Reclaim oversized text scratch allocations only after a meaningful 4x collapse
+// from a previously large frame; smaller swings are left alone to avoid churn.
+const TEXT_RENDERER_SHRINK_PREVIOUS_CHARS_THRESHOLD: usize = 2_048;
+const TEXT_RENDERER_SHRINK_PREVIOUS_ITEMS_THRESHOLD: usize = 128;
+const TEXT_RENDERER_SHRINK_RATIO: usize = 4;
 static REPORTED_UNSUPPORTED_WGPU_BLEND_MODES: AtomicBool = AtomicBool::new(false);
 static REPORTED_UNSUPPORTED_WGPU_EFFECTS: AtomicBool = AtomicBool::new(false);
 static TEXT_RENDER_TELEMETRY_ENABLED: OnceLock<bool> = OnceLock::new();
@@ -427,6 +440,19 @@ impl StagedBufferUploads {
         self.copies.clear();
     }
 
+    fn shrink_retained_capacity(&mut self, max_bytes: usize, max_copies: usize) -> bool {
+        let mut shrunk = false;
+        if self.bytes.len() <= max_bytes && self.bytes.capacity() > max_bytes {
+            self.bytes.shrink_to(max_bytes);
+            shrunk = true;
+        }
+        if self.copies.len() <= max_copies && self.copies.capacity() > max_copies {
+            self.copies.shrink_to(max_copies);
+            shrunk = true;
+        }
+        shrunk
+    }
+
     fn is_empty(&self) -> bool {
         self.copies.is_empty()
     }
@@ -466,16 +492,10 @@ impl StagedBufferUploads {
 
 impl ShapeBatchBuffers {
     fn new(device: &wgpu::Device, bind_group_layout: &wgpu::BindGroupLayout) -> Self {
-        // For WebGL uniform buffers, size MUST match shader declaration (200 shapes)
-        // Shader declares: var<uniform> shape_data: array<ShapeData, 200>
-        // ShapeData is 80 bytes (with clip_rect), 16KB/80 = 200 shapes
-        const WEBGL_UNIFORM_SHAPE_COUNT: usize = 200;
-        const WEBGL_UNIFORM_GRADIENT_COUNT: usize = 256;
-
-        let initial_vertex_cap = WEBGL_UNIFORM_SHAPE_COUNT * 4; // 4 vertices per shape
-        let initial_index_cap = WEBGL_UNIFORM_SHAPE_COUNT * 6; // 6 indices per shape
-        let initial_shape_cap = WEBGL_UNIFORM_SHAPE_COUNT;
-        let initial_gradient_cap = WEBGL_UNIFORM_GRADIENT_COUNT;
+        let initial_vertex_cap = MAX_SHAPES_PER_BATCH * 4; // 4 vertices per shape
+        let initial_index_cap = MAX_SHAPES_PER_BATCH * 6; // 6 indices per shape
+        let initial_shape_cap = MAX_SHAPES_PER_BATCH;
+        let initial_gradient_cap = MAX_GRADIENT_STOPS;
 
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Shape Vertex Buffer"),
@@ -574,10 +594,10 @@ impl ShapeBatchBuffers {
             self.index_capacity = new_cap;
         }
 
-        if shapes_needed > self.shape_capacity {
-            let desired = shapes_needed.next_power_of_two();
-            let max_count = hard_max_bytes / std::mem::size_of::<ShapeData>();
-            let new_cap = desired.min(max_count);
+        // Shape and gradient buffers are uniform buffers whose size must match
+        // the shader's fixed-size array declarations. Never grow beyond those.
+        if shapes_needed > self.shape_capacity && self.shape_capacity < MAX_SHAPES_PER_BATCH {
+            let new_cap = shapes_needed.next_power_of_two().min(MAX_SHAPES_PER_BATCH);
             self.shape_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Shape Data Buffer"),
                 size: (std::mem::size_of::<ShapeData>() * new_cap) as u64,
@@ -588,10 +608,12 @@ impl ShapeBatchBuffers {
             need_bind_group_update = true;
         }
 
-        if gradients_needed > self.gradient_capacity {
-            let desired = gradients_needed.max(1).next_power_of_two();
-            let max_count = hard_max_bytes / std::mem::size_of::<GradientStop>();
-            let new_cap = desired.min(max_count);
+        if gradients_needed > self.gradient_capacity && self.gradient_capacity < MAX_GRADIENT_STOPS
+        {
+            let new_cap = gradients_needed
+                .max(1)
+                .next_power_of_two()
+                .min(MAX_GRADIENT_STOPS);
             self.gradient_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Gradient Buffer"),
                 size: (std::mem::size_of::<GradientStop>() * new_cap) as u64,
@@ -667,10 +689,15 @@ pub struct GpuRenderer {
     layer_surface_rect_cache: HashMap<usize, Rect>,
     layer_surface_requirements_cache: HashMap<usize, LayerSurfaceRequirements>,
     layer_surface_cache_bytes: u64,
+    /// Stable IDs of layers referenced this frame, used to evict stale entries.
+    layer_cache_seen_this_frame: HashSet<usize>,
+    text_cache_seen_this_frame: HashSet<TextCacheKey>,
     frame_stats: gpu_stats::FrameStats,
     last_frame_stats: Option<gpu_stats::FrameStatsSnapshot>,
     frame_count: u64,
     gpu_stats_enabled: bool,
+    text_items_this_frame: usize,
+    text_chars_this_frame: usize,
 }
 
 fn snap_delta_for_anchor(anchor: SnapAnchor, root_scale: f32) -> Point {
@@ -736,6 +763,21 @@ fn layer_raster_cache_candidate(
 }
 
 impl GpuRenderer {
+    fn new_text_renderer_slot(&mut self) -> TextRendererSlot {
+        TextRendererSlot {
+            renderer: TextRenderer::new(
+                &mut self.text_atlas,
+                &self.device,
+                wgpu::MultisampleState::default(),
+                None,
+            ),
+            last_signature: None,
+            last_item_count: 0,
+            last_total_chars: 0,
+            cached_text_keys: Vec::new(),
+        }
+    }
+
     pub fn new(
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
@@ -856,6 +898,9 @@ impl GpuRenderer {
                 None,
             ),
             last_signature: None,
+            last_item_count: 0,
+            last_total_chars: 0,
+            cached_text_keys: Vec::new(),
         };
         let text_viewport = Viewport::new(&device, &glyphon_cache);
 
@@ -972,10 +1017,14 @@ impl GpuRenderer {
             layer_surface_rect_cache: HashMap::new(),
             layer_surface_requirements_cache: HashMap::new(),
             layer_surface_cache_bytes: 0,
+            layer_cache_seen_this_frame: HashSet::new(),
+            text_cache_seen_this_frame: HashSet::new(),
             frame_stats: gpu_stats::FrameStats::default(),
             last_frame_stats: None,
             frame_count: 0,
             gpu_stats_enabled: gpu_stats_enabled(),
+            text_items_this_frame: 0,
+            text_chars_this_frame: 0,
         }
     }
 
@@ -1086,6 +1135,9 @@ impl GpuRenderer {
         &mut self,
         key: &LayerRasterCacheKey,
     ) -> Option<(Rc<OffscreenTarget>, Rect)> {
+        if let Some(stable_id) = key.stable_id() {
+            self.layer_cache_seen_this_frame.insert(stable_id);
+        }
         let cached = self.layer_surface_cache.get(key)?;
         let (width, height) = key.pixel_size();
         self.frame_stats.record_layer_cache_hit(width, height);
@@ -1114,6 +1166,7 @@ impl GpuRenderer {
     ) -> Rc<OffscreenTarget> {
         let byte_size = offscreen_byte_size(target.width, target.height);
         if let Some(stable_id) = key.stable_id() {
+            self.layer_cache_seen_this_frame.insert(stable_id);
             if let Some(previous_key) = self.layer_surface_cache_identity.insert(stable_id, key) {
                 if previous_key != key {
                     self.remove_cached_layer_surface(&previous_key);
@@ -1175,6 +1228,13 @@ impl GpuRenderer {
             return None;
         }
         if layer_uses_external_backdrop_input(layer, has_backdrop_underlay) {
+            return None;
+        }
+        // RuntimeShader effects produce different output every frame (animated
+        // uniforms like time). Caching their layer surfaces is
+        // counterproductive: every frame generates a new unique cache key that
+        // fills the LRU with stale textures.
+        if layer.effect().is_some_and(|e| e.contains_runtime_shader()) {
             return None;
         }
 
@@ -1573,6 +1633,8 @@ impl GpuRenderer {
         log::trace!("🎨 Rendering graph to {}x{}", width, height);
 
         self.text_batch_cursor = 0;
+        self.text_items_this_frame = 0;
+        self.text_chars_this_frame = 0;
 
         let result = self.render_graph(text_state, view, graph, width, height, root_scale);
 
@@ -1583,6 +1645,38 @@ impl GpuRenderer {
         if self.text_renderer_pool.len() > target_pool_size {
             self.text_renderer_pool.truncate(target_pool_size);
         }
+
+        // Shared text buffers already live inside a bounded LRU. Keep them across
+        // frames so temporarily hidden content does not thrash shaping caches.
+        self.text_cache_seen_this_frame.clear();
+        if self.text_cache_seen_this_frame.capacity() > RETAINED_TEXT_CACHE_SEEN_THIS_FRAME_CAPACITY
+        {
+            self.text_cache_seen_this_frame
+                .shrink_to(RETAINED_TEXT_CACHE_SEEN_THIS_FRAME_CAPACITY);
+        }
+
+        self.layer_surface_rect_cache.clear();
+        self.layer_surface_requirements_cache.clear();
+        if self.layer_surface_requirements_cache.capacity() > RETAINED_LAYER_REQUIREMENTS_CAPACITY {
+            self.layer_surface_requirements_cache
+                .shrink_to(RETAINED_LAYER_REQUIREMENTS_CAPACITY);
+        }
+        self.staged_uploads
+            .shrink_retained_capacity(RETAINED_STAGED_UPLOAD_BYTES, RETAINED_STAGED_UPLOAD_COPIES);
+
+        // Layer surfaces are already bounded by an item-count LRU plus a byte cap.
+        // Keep entries across brief visibility gaps so scrolling and tab switches
+        // can reuse GPU work instead of churning allocations every frame.
+        self.layer_cache_seen_this_frame.clear();
+        if self.layer_cache_seen_this_frame.capacity() > RETAINED_LAYER_SEEN_THIS_FRAME_CAPACITY {
+            self.layer_cache_seen_this_frame
+                .shrink_to(RETAINED_LAYER_SEEN_THIS_FRAME_CAPACITY);
+        }
+
+        // Purge orphaned `layer_surface_cache_identity` entries whose
+        // stable_id no longer appears in the layer_surface_cache LRU.
+        self.layer_surface_cache_identity
+            .retain(|_, key| self.layer_surface_cache.contains(key));
 
         self.frame_stats
             .offscreen_pool_size
@@ -1620,6 +1714,47 @@ impl GpuRenderer {
 
     pub fn last_frame_stats(&self) -> Option<gpu_stats::FrameStatsSnapshot> {
         self.last_frame_stats
+    }
+
+    pub fn debug_cpu_allocation_stats(&self) -> DebugCpuAllocationStats {
+        DebugCpuAllocationStats {
+            scene_graph_node_count: 0,
+            scene_graph_heap_bytes: 0,
+            scene_hits_len: 0,
+            scene_hits_cap: 0,
+            scene_node_index_len: 0,
+            scene_node_index_cap: 0,
+            text_renderer_pool_len: self.text_renderer_pool.len(),
+            text_renderer_pool_cap: self.text_renderer_pool.capacity(),
+            swash_image_cache_len: self.swash_cache.image_cache.len(),
+            swash_image_cache_cap: self.swash_cache.image_cache.capacity(),
+            swash_outline_cache_len: self.swash_cache.outline_command_cache.len(),
+            swash_outline_cache_cap: self.swash_cache.outline_command_cache.capacity(),
+            image_texture_cache_len: self.image_texture_cache.len(),
+            image_texture_cache_cap: self.image_texture_cache.cap().get(),
+            scratch_shape_data_cap: self.scratch_shape_data.capacity(),
+            scratch_gradients_cap: self.scratch_gradients.capacity(),
+            scratch_vertices_cap: self.scratch_vertices.capacity(),
+            scratch_indices_cap: self.scratch_indices.capacity(),
+            scratch_image_vertices_cap: self.scratch_image_vertices.capacity(),
+            scratch_image_indices_cap: self.scratch_image_indices.capacity(),
+            scratch_image_cmds_cap: self.scratch_image_cmds.capacity(),
+            scratch_segment_items_cap: self.scratch_segment_items.capacity(),
+            scratch_effect_ranges_cap: self.scratch_effect_ranges.capacity(),
+            scratch_layer_events_cap: self.scratch_layer_events.capacity(),
+            staged_upload_bytes_cap: self.staged_uploads.bytes.capacity(),
+            staged_upload_copies_cap: self.staged_uploads.copies.capacity(),
+            layer_surface_cache_len: self.layer_surface_cache.len(),
+            layer_surface_cache_cap: self.layer_surface_cache.cap().get(),
+            layer_surface_cache_identity_len: self.layer_surface_cache_identity.len(),
+            layer_surface_cache_identity_cap: self.layer_surface_cache_identity.capacity(),
+            layer_surface_rect_cache_len: self.layer_surface_rect_cache.len(),
+            layer_surface_rect_cache_cap: self.layer_surface_rect_cache.capacity(),
+            layer_surface_requirements_cache_len: self.layer_surface_requirements_cache.len(),
+            layer_surface_requirements_cache_cap: self.layer_surface_requirements_cache.capacity(),
+            layer_cache_seen_this_frame_len: self.layer_cache_seen_this_frame.len(),
+            layer_cache_seen_this_frame_cap: self.layer_cache_seen_this_frame.capacity(),
+        }
     }
 
     #[allow(clippy::too_many_arguments)] // Mirrors render() call site and scene inputs.
@@ -2227,8 +2362,7 @@ impl GpuRenderer {
         root_scale: f32,
         load_op: wgpu::LoadOp<wgpu::Color>,
     ) -> Result<bool, String> {
-        let mut prepared_batches: [Option<PreparedSegmentBatch>; 3] = [None, None, None];
-        let mut prepared_len = 0usize;
+        let mut prepared_batches: Vec<PreparedSegmentBatch> = Vec::new();
         let mut staged_uploads = std::mem::take(&mut self.staged_uploads);
         staged_uploads.clear();
         let result = (|| {
@@ -2243,23 +2377,27 @@ impl GpuRenderer {
                         end,
                         blend_mode,
                     } => {
-                        let Some(prepared) = self.prepare_shapes_batch(
-                            ordered_items[start..end]
-                                .iter()
-                                .map(|(_, item)| match item {
+                        // Split large shape batches into chunks that fit
+                        // the shader's fixed-size uniform array.
+                        let slice = &ordered_items[start..end];
+                        for chunk_items in slice.chunks(MAX_SHAPES_PER_BATCH) {
+                            let Some(prepared) = self.prepare_shapes_batch(
+                                chunk_items.iter().map(|(_, item)| match item {
                                     SegmentDrawItem::Shape(shape_index) => &shapes[*shape_index],
-                                    _ => unreachable!("shape batch contains only shape items"),
+                                    _ => {
+                                        unreachable!("shape batch contains only shape items")
+                                    }
                                 }),
-                            root_scale,
-                            &mut staged_uploads,
-                        ) else {
-                            continue;
-                        };
-                        prepared_batches[prepared_len] = Some(PreparedSegmentBatch::Shape {
-                            blend_mode,
-                            batch: prepared,
-                        });
-                        prepared_len += 1;
+                                root_scale,
+                                &mut staged_uploads,
+                            ) else {
+                                continue;
+                            };
+                            prepared_batches.push(PreparedSegmentBatch::Shape {
+                                blend_mode,
+                                batch: prepared,
+                            });
+                        }
                     }
                     SegmentBatchPlan::Image {
                         start,
@@ -2282,11 +2420,10 @@ impl GpuRenderer {
                             self.scratch_image_cmds = image_cmds;
                             continue;
                         }
-                        prepared_batches[prepared_len] = Some(PreparedSegmentBatch::Image {
+                        prepared_batches.push(PreparedSegmentBatch::Image {
                             blend_mode,
                             image_cmds,
                         });
-                        prepared_len += 1;
                     }
                     SegmentBatchPlan::Text { start, end } => {
                         let slot = self.prepare_text_for_render(
@@ -2301,14 +2438,12 @@ impl GpuRenderer {
                             height,
                             root_scale,
                         )?;
-                        prepared_batches[prepared_len] =
-                            Some(PreparedSegmentBatch::Text { slot_index: slot });
-                        prepared_len += 1;
+                        prepared_batches.push(PreparedSegmentBatch::Text { slot_index: slot });
                     }
                 }
             }
 
-            if prepared_len == 0 {
+            if prepared_batches.is_empty() {
                 return Ok(false);
             }
 
@@ -2332,7 +2467,7 @@ impl GpuRenderer {
                 });
 
                 let mut result = Ok(());
-                for batch in prepared_batches.iter_mut().filter_map(Option::as_mut) {
+                for batch in prepared_batches.iter_mut() {
                     let draw_result = match batch {
                         PreparedSegmentBatch::Shape { blend_mode, batch } => {
                             self.draw_prepared_shapes(&mut render_pass, *blend_mode, *batch);
@@ -2354,7 +2489,7 @@ impl GpuRenderer {
                 result
             };
 
-            for batch in prepared_batches.into_iter().flatten() {
+            for batch in prepared_batches.into_iter() {
                 if let PreparedSegmentBatch::Image { image_cmds, .. } = batch {
                     self.scratch_image_cmds = image_cmds;
                 }
@@ -2884,7 +3019,7 @@ impl GpuRenderer {
         self.scratch_vertices.clear();
         self.scratch_indices.clear();
 
-        for (idx, shape) in layer_shapes.enumerate() {
+        for (idx, shape) in layer_shapes.take(MAX_SHAPES_PER_BATCH).enumerate() {
             let snap_delta = shape
                 .snap_anchor
                 .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
@@ -3425,15 +3560,8 @@ impl GpuRenderer {
 
         // Grow pool on demand.
         while self.text_renderer_pool.len() <= slot_index {
-            self.text_renderer_pool.push(TextRendererSlot {
-                renderer: TextRenderer::new(
-                    &mut self.text_atlas,
-                    &self.device,
-                    wgpu::MultisampleState::default(),
-                    None,
-                ),
-                last_signature: None,
-            });
+            let slot = self.new_text_renderer_slot();
+            self.text_renderer_pool.push(slot);
         }
 
         let telemetry_enabled = text_render_telemetry_enabled();
@@ -3443,14 +3571,19 @@ impl GpuRenderer {
             0
         };
 
-        // Skip prepare() when the batch signature matches — the slot's cached vertex
-        // buffers are still valid. We defer text_atlas.trim() whenever any slot skips
-        // so that unreferenced-but-still-needed glyphs aren't evicted.
+        // Skip prepare() when the batch signature matches — the slot's cached
+        // vertex buffers remain valid until an atlas-full recovery invalidates them.
         let batch_signature =
             prepared_text_batch_signature(layer_texts.clone(), width, height, root_scale);
         if batch_signature.is_some()
             && self.text_renderer_pool[slot_index].last_signature == batch_signature
         {
+            self.text_cache_seen_this_frame.extend(
+                self.text_renderer_pool[slot_index]
+                    .cached_text_keys
+                    .iter()
+                    .cloned(),
+            );
             // Viewport must be updated even on skip: encode_text_pass uses it for
             // projection. Shadow draws pass offscreen dimensions (bounds_w × bounds_h)
             // which differ from full-screen resolution used by normal text batches.
@@ -3535,7 +3668,20 @@ impl GpuRenderer {
             }
 
             text_keys.push(key);
+            self.text_cache_seen_this_frame
+                .insert(text_keys.last().unwrap().clone());
         }
+
+        if should_recreate_text_renderer_slot(
+            self.text_renderer_pool[slot_index].last_item_count,
+            self.text_renderer_pool[slot_index].last_total_chars,
+            valid_items,
+            total_chars,
+        ) {
+            self.text_renderer_pool[slot_index] = self.new_text_renderer_slot();
+        }
+        self.text_items_this_frame += valid_items;
+        self.text_chars_this_frame += total_chars;
 
         // Build text areas
         let mut text_areas = Vec::with_capacity(text_keys.len());
@@ -3629,6 +3775,9 @@ impl GpuRenderer {
         }
 
         self.text_renderer_pool[slot_index].last_signature = batch_signature;
+        self.text_renderer_pool[slot_index].last_item_count = valid_items;
+        self.text_renderer_pool[slot_index].last_total_chars = total_chars;
+        self.text_renderer_pool[slot_index].cached_text_keys = text_keys;
         if telemetry_enabled && call_sequence.is_multiple_of(20) {
             let skips = TEXT_RENDER_SKIPS.load(Ordering::Relaxed);
             let elapsed_ms = prepare_started
@@ -3903,6 +4052,24 @@ enum PreparedSegmentBatch {
 struct TextRendererSlot {
     renderer: TextRenderer,
     last_signature: Option<PreparedTextBatchSignature>,
+    last_item_count: usize,
+    last_total_chars: usize,
+    cached_text_keys: Vec<TextCacheKey>,
+}
+
+fn should_recreate_text_renderer_slot(
+    previous_item_count: usize,
+    previous_total_chars: usize,
+    current_item_count: usize,
+    current_total_chars: usize,
+) -> bool {
+    // Char count catches a few very long paragraphs; item count catches many
+    // short labels. Either can inflate glyph scratch capacity enough that a
+    // later 4x collapse should rebuild the slot instead of retaining the spike.
+    (previous_total_chars >= TEXT_RENDERER_SHRINK_PREVIOUS_CHARS_THRESHOLD
+        && current_total_chars.saturating_mul(TEXT_RENDERER_SHRINK_RATIO) < previous_total_chars)
+        || (previous_item_count >= TEXT_RENDERER_SHRINK_PREVIOUS_ITEMS_THRESHOLD
+            && current_item_count.saturating_mul(TEXT_RENDERER_SHRINK_RATIO) < previous_item_count)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -5297,6 +5464,124 @@ mod tests {
                 y: 7.0,
                 width: 10.0,
                 height: 6.0,
+            }
+        );
+    }
+
+    #[test]
+    fn estimate_layer_surface_rect_clips_translated_clip_layers_without_hidden_leading_content() {
+        let mut layer = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 72.0,
+            },
+            vec![RenderNode::Primitive(PrimitiveEntry {
+                phase: PrimitivePhase::BeforeChildren,
+                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                    primitive: cranpose_ui_graphics::DrawPrimitive::Rect {
+                        rect: Rect {
+                            x: 24.0,
+                            y: 0.0,
+                            width: 200.0,
+                            height: 480.0,
+                        },
+                        brush: Brush::solid(Color::WHITE),
+                    },
+                    clip: None,
+                }),
+            })],
+        );
+        layer.translated_content_context = true;
+        layer.clip_to_bounds = true;
+
+        assert_eq!(
+            estimate_layer_surface_rect(&layer),
+            Rect {
+                x: 24.0,
+                y: 0.0,
+                width: 96.0,
+                height: 72.0,
+            }
+        );
+    }
+
+    #[test]
+    fn estimate_layer_surface_rect_keeps_hidden_leading_horizontal_scroll_content_for_motion_stable_capture(
+    ) {
+        let mut layer = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 72.0,
+            },
+            vec![RenderNode::Primitive(PrimitiveEntry {
+                phase: PrimitivePhase::BeforeChildren,
+                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                    primitive: cranpose_ui_graphics::DrawPrimitive::Rect {
+                        rect: Rect {
+                            x: -24.0,
+                            y: 0.0,
+                            width: 200.0,
+                            height: 480.0,
+                        },
+                        brush: Brush::solid(Color::WHITE),
+                    },
+                    clip: None,
+                }),
+            })],
+        );
+        layer.translated_content_context = true;
+        layer.clip_to_bounds = true;
+
+        assert_eq!(
+            estimate_layer_surface_rect(&layer),
+            Rect {
+                x: -24.0,
+                y: 0.0,
+                width: 200.0,
+                height: 480.0,
+            }
+        );
+    }
+
+    #[test]
+    fn estimate_layer_surface_rect_keeps_hidden_leading_scroll_content_for_motion_stable_capture() {
+        let mut layer = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 72.0,
+            },
+            vec![RenderNode::Primitive(PrimitiveEntry {
+                phase: PrimitivePhase::BeforeChildren,
+                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                    primitive: cranpose_ui_graphics::DrawPrimitive::Rect {
+                        rect: Rect {
+                            x: 0.0,
+                            y: -24.0,
+                            width: 120.0,
+                            height: 200.0,
+                        },
+                        brush: Brush::solid(Color::WHITE),
+                    },
+                    clip: None,
+                }),
+            })],
+        );
+        layer.translated_content_context = true;
+        layer.clip_to_bounds = true;
+
+        assert_eq!(
+            estimate_layer_surface_rect(&layer),
+            Rect {
+                x: 0.0,
+                y: -24.0,
+                width: 120.0,
+                height: 200.0,
             }
         );
     }
@@ -7054,5 +7339,15 @@ mod tests {
             max_shadow_z,
             min_content_z
         );
+    }
+
+    #[test]
+    fn text_renderer_slot_recreate_triggers_after_large_batch_collapse() {
+        assert!(should_recreate_text_renderer_slot(256, 8_192, 24, 512));
+    }
+
+    #[test]
+    fn text_renderer_slot_recreate_skips_for_similar_batch_sizes() {
+        assert!(!should_recreate_text_renderer_slot(48, 1_024, 40, 896));
     }
 }

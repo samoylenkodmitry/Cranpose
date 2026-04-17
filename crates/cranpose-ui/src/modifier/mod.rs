@@ -120,23 +120,6 @@ impl InspectorInfo {
     {
         self.add_property(name, format!("{alignment:?}"));
     }
-
-    #[allow(dead_code)] // use for debugging
-    pub fn debug_properties(&self) -> Vec<(&'static str, String)> {
-        self.properties
-            .iter()
-            .map(|property| (property.name, property.value.clone()))
-            .collect()
-    }
-
-    #[allow(dead_code)] // use for debugging
-    pub fn describe(&self) -> String {
-        self.properties
-            .iter()
-            .map(|property| format!("{}={}", property.name, property.value))
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
 }
 
 /// Single inspector entry recording a property exposed by a modifier.
@@ -216,7 +199,7 @@ pub(crate) fn modifier_debug_enabled() -> bool {
 }
 
 fn inspector_metadata_enabled() -> bool {
-    cfg!(debug_assertions) || cfg!(test) || modifier_debug_enabled()
+    cfg!(test) || modifier_debug_enabled()
 }
 
 /// Internal representation of modifier composition structure.
@@ -712,6 +695,24 @@ impl Modifier {
         match &self.kind {
             ModifierKind::Empty => Vec::new(),
             ModifierKind::Single { inspector, .. } => inspector.as_ref().clone(),
+        }
+    }
+
+    pub(crate) fn rehouse_for_live_compaction(&self) -> Self {
+        match &self.kind {
+            ModifierKind::Empty => Self::default(),
+            ModifierKind::Single {
+                elements,
+                inspector,
+            } => Self {
+                kind: ModifierKind::Single {
+                    elements: Rc::new(elements.iter().cloned().collect()),
+                    inspector: Rc::new(inspector.as_ref().clone()),
+                },
+                strict_fingerprint: self.strict_fingerprint,
+                structural_fingerprint: self.structural_fingerprint,
+                element_count: self.element_count,
+            },
         }
     }
 

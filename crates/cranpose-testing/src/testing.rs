@@ -1,7 +1,8 @@
 use cranpose_core::{
     location_key, ApplierGuard, Composition, Key, MemoryApplier, NodeError, NodeId, RuntimeHandle,
+    ROOT_RENDER_REPLAY_LIMIT,
 };
-use cranpose_ui::request_render_invalidation;
+use cranpose_ui::{request_render_invalidation, reset_render_state_for_tests};
 
 #[cfg(test)]
 use cranpose_core::{
@@ -21,17 +22,22 @@ use std::rc::Rc;
 pub struct ComposeTestRule {
     composition: Composition<MemoryApplier>,
     content: Option<Box<dyn FnMut()>>, // Stored user content for reuse across recompositions.
-    root_key: Key,
+    initial_root_key: Key,
 }
 
 impl ComposeTestRule {
     /// Create a new test rule backed by the default in-memory applier.
     pub fn new() -> Self {
+        reset_render_state_for_tests();
         Self {
             composition: Composition::new(MemoryApplier::new()),
             content: None,
-            root_key: location_key(file!(), line!(), column!()),
+            initial_root_key: location_key(file!(), line!(), column!()),
         }
+    }
+
+    fn root_key(&self) -> Key {
+        self.composition.root_key().unwrap_or(self.initial_root_key)
     }
 
     /// Install the provided content into the composition and perform an
@@ -61,30 +67,31 @@ impl ComposeTestRule {
         loop {
             let mut progressed = false;
             i += 1;
-            if i > 100 {
-                panic!("pump_until_idle looped too many times!");
+            if i > ROOT_RENDER_REPLAY_LIMIT {
+                panic!(
+                    "pump_until_idle exceeded {ROOT_RENDER_REPLAY_LIMIT} iterations — reentrant render or recomposition bug"
+                );
             }
 
             if self.composition.should_render() {
-                eprintln!("pump_until_idle: should_render() is true");
                 self.render()?;
                 progressed = true;
             }
 
             let handle = self.composition.runtime_handle();
             if handle.has_updates() {
-                eprintln!("pump_until_idle: has_updates() is true");
                 self.composition.flush_pending_node_updates()?;
                 progressed = true;
             }
 
             if handle.has_invalid_scopes() {
-                eprintln!("pump_until_idle: has_invalid_scopes() is true");
                 let changed = self.composition.process_invalid_scopes()?;
                 if changed {
-                    eprintln!("pump_until_idle: process_invalid_scopes returned true");
                     // Request render invalidation so tests can detect composition changes
                     request_render_invalidation();
+                }
+                if self.composition.take_root_render_request() {
+                    self.render()?;
                 }
                 progressed = true;
             }
@@ -131,13 +138,34 @@ impl ComposeTestRule {
     }
 
     fn render(&mut self) -> Result<(), NodeError> {
+        let key = self.root_key();
         if let Some(content) = self.content.as_mut() {
-            self.composition.render(self.root_key, &mut **content)?;
+            self.composition.render(key, &mut **content)?;
+            self.drain_root_render_requests()?;
             // After composition runs, request render invalidation
             // so that tests can detect when content has changed
             request_render_invalidation();
         }
         Ok(())
+    }
+
+    fn drain_root_render_requests(&mut self) -> Result<(), NodeError> {
+        let key = self.root_key();
+        for _ in 0..ROOT_RENDER_REPLAY_LIMIT {
+            if !self.composition.take_root_render_request() {
+                return Ok(());
+            }
+            let content = self
+                .content
+                .as_mut()
+                .expect("root render replay requires installed content");
+            self.composition.render(key, &mut **content)?;
+            request_render_invalidation();
+        }
+
+        panic!(
+            "root render replay exceeded {ROOT_RENDER_REPLAY_LIMIT} iterations — reentrant render bug"
+        );
     }
 }
 

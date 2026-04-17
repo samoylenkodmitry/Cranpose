@@ -55,8 +55,13 @@ ensure_local_temp_root() {
     local temp_root
 
     temp_root="$(local_temp_root)"
-    mkdir -p "$temp_root"
-    printf '%s\n' "$temp_root"
+    if mkdir -p "$temp_root" >/dev/null 2>&1; then
+        printf '%s\n' "$temp_root"
+        return 0
+    fi
+
+    mkdir -p /tmp/cranpose >/dev/null 2>&1 || return 1
+    printf '%s\n' "/tmp/cranpose"
 }
 
 enable_local_tmpdir() {
@@ -82,7 +87,16 @@ create_local_temp_dir() {
 
     enable_local_tmpdir
     temp_root="${TMPDIR:-$(ensure_local_temp_root)}"
-    mktemp -d "$temp_root/${prefix}.XXXXXX"
+    if [ -n "$temp_root" ]; then
+        local temp_dir
+        temp_dir="$(mktemp -d "$temp_root/${prefix}.XXXXXX" 2>/dev/null || true)"
+        if [ -n "$temp_dir" ]; then
+            printf '%s\n' "$temp_dir"
+            return 0
+        fi
+    fi
+
+    mktemp -d "/tmp/${prefix}.XXXXXX"
 }
 
 local_cargo_build_jobs_default() {

@@ -40,7 +40,7 @@ impl PartialEq for DynamicTextSource {
 }
 
 #[derive(Clone, PartialEq)]
-enum TextSource {
+pub enum TextSource {
     Static(Rc<crate::text::AnnotatedString>),
     Dynamic(DynamicTextSource),
 }
@@ -54,7 +54,8 @@ impl TextSource {
     }
 }
 
-trait IntoTextSource {
+#[doc(hidden)]
+pub trait IntoTextSource {
     fn into_text_source(self) -> TextSource;
 }
 
@@ -144,20 +145,16 @@ impl IntoTextSource for DynamicTextSource {
 /// ```rust,ignore
 /// Text("Hello World", Modifier::padding(16.0), TextStyle::default());
 /// ```
-#[composable]
-pub fn BasicText<S>(
-    text: S,
+fn compose_basic_text_group(
+    text: TextSource,
     modifier: Modifier,
     style: TextStyle,
     overflow: TextOverflow,
     soft_wrap: bool,
     max_lines: usize,
     min_lines: usize,
-) -> NodeId
-where
-    S: IntoTextSource + Clone + PartialEq + 'static,
-{
-    let current = text.into_text_source().resolve();
+) -> NodeId {
+    let current = text.resolve();
 
     let options = TextLayoutOptions {
         overflow,
@@ -182,6 +179,30 @@ where
 }
 
 #[composable]
+pub fn BasicText<S>(
+    text: S,
+    modifier: Modifier,
+    style: TextStyle,
+    overflow: TextOverflow,
+    soft_wrap: bool,
+    max_lines: usize,
+    min_lines: usize,
+) -> NodeId
+where
+    S: IntoTextSource + Clone + PartialEq + 'static,
+{
+    compose_basic_text_group(
+        text.into_text_source(),
+        modifier,
+        style,
+        overflow,
+        soft_wrap,
+        max_lines,
+        min_lines,
+    )
+}
+
+#[composable]
 pub fn Text<S>(value: S, modifier: Modifier, style: TextStyle) -> NodeId
 where
     S: IntoTextSource + Clone + PartialEq + 'static,
@@ -201,6 +222,9 @@ where
 mod tests {
     use super::*;
     use crate::run_test_composition;
+    use cranpose_core::{location_key, Composition, MemoryApplier};
+    use std::cell::Cell;
+    use std::rc::Rc;
 
     #[test]
     fn basic_text_creates_node() {
@@ -217,5 +241,45 @@ mod tests {
         });
 
         assert!(composition.root().is_some());
+    }
+
+    #[test]
+    fn basic_text_recomposes_when_dynamic_source_changes() {
+        let mut composition = Composition::new(MemoryApplier::new());
+        let runtime = composition.runtime_handle();
+        let state = MutableState::with_runtime("Hello".to_string(), runtime);
+        let resolutions = Rc::new(Cell::new(0));
+
+        composition
+            .render(location_key(file!(), line!(), column!()), {
+                let text_state = state;
+                let resolutions = Rc::clone(&resolutions);
+                move || {
+                    let text_state = text_state;
+                    let resolutions = Rc::clone(&resolutions);
+                    BasicText(
+                        DynamicTextSource::new(move || {
+                            resolutions.set(resolutions.get() + 1);
+                            Rc::new(crate::text::AnnotatedString::from(text_state.value()))
+                        }),
+                        Modifier::empty(),
+                        TextStyle::default(),
+                        TextOverflow::Clip,
+                        true,
+                        usize::MAX,
+                        1,
+                    );
+                }
+            })
+            .expect("initial text render");
+
+        assert_eq!(resolutions.get(), 1);
+
+        state.set_value("World".to_string());
+        composition
+            .process_invalid_scopes()
+            .expect("dynamic text recomposition");
+
+        assert_eq!(resolutions.get(), 2);
     }
 }

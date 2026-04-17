@@ -3,8 +3,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use cranpose_core::{
-    self, Applier, ConcreteApplierHost, MutableState, SlotBackend, SlotStorage, SlotsHost,
-    SnapshotStateObserver,
+    self, Applier, ConcreteApplierHost, MutableState, SlotTable, SlotsHost, SnapshotStateObserver,
 };
 
 #[derive(Default)]
@@ -22,7 +21,7 @@ fn runtime_handle() -> (
 }
 
 fn setup_composer(
-    slots: &mut SlotBackend,
+    slots: &mut SlotTable,
     applier: &mut cranpose_core::MemoryApplier,
     handle: cranpose_core::RuntimeHandle,
     root: Option<cranpose_core::NodeId>,
@@ -48,7 +47,7 @@ fn setup_composer(
 }
 
 fn teardown_composer(
-    slots: &mut SlotBackend,
+    slots: &mut SlotTable,
     applier: &mut cranpose_core::MemoryApplier,
     slots_host: Rc<SlotsHost>,
     applier_host: Rc<ConcreteApplierHost<cranpose_core::MemoryApplier>>,
@@ -62,7 +61,7 @@ fn teardown_composer(
 }
 
 fn measure_once(
-    slots: &mut SlotBackend,
+    slots: &mut SlotTable,
     applier: &mut cranpose_core::MemoryApplier,
     handle: &cranpose_core::RuntimeHandle,
     node_id: cranpose_core::NodeId,
@@ -84,7 +83,7 @@ fn measure_once(
         Box::new(|_child_id: cranpose_core::NodeId, _constraints: Constraints| Size::default());
     let error = Rc::new(RefCell::new(None));
     let result = node_handle
-        .measure(&composer, node_id, constraints, measurer, Rc::clone(&error))
+        .measure(&composer, node_id, constraints, measurer, &error)
         .expect("measure result");
     assert!(
         error.borrow().is_none(),
@@ -98,7 +97,7 @@ fn measure_once(
 #[test]
 fn measure_subcomposes_content() {
     let (handle, _composition) = runtime_handle();
-    let mut slots = SlotBackend::default();
+    let mut slots = SlotTable::default();
     let mut applier = cranpose_core::MemoryApplier::new();
     let recorded = Rc::new(RefCell::new(Vec::new()));
     let recorded_capture = Rc::clone(&recorded);
@@ -140,7 +139,7 @@ fn measure_subcomposes_content() {
 #[test]
 fn subcompose_reuses_nodes_across_measures() {
     let (handle, _composition) = runtime_handle();
-    let mut slots = SlotBackend::default();
+    let mut slots = SlotTable::default();
     let mut applier = cranpose_core::MemoryApplier::new();
     let recorded = Rc::new(RefCell::new(Vec::new()));
     let recorded_capture = Rc::clone(&recorded);
@@ -210,7 +209,7 @@ fn handle_reports_modifier_capabilities() {
 #[test]
 fn inactive_slots_move_to_reusable_pool() {
     let (handle, _composition) = runtime_handle();
-    let mut slots = SlotBackend::default();
+    let mut slots = SlotTable::default();
     let mut applier = cranpose_core::MemoryApplier::new();
     let toggle = MutableState::with_runtime(true, handle.clone());
     let toggle_capture = toggle;
@@ -255,4 +254,20 @@ fn inactive_slots_move_to_reusable_pool() {
             .expect("subcompose layout node");
         assert!(!typed.state().reusable().is_empty());
     }
+}
+
+#[test]
+fn active_children_follow_last_rendered_placements() {
+    let policy: Rc<MeasurePolicy> =
+        Rc::new(|scope, _constraints| scope.layout(0.0, 0.0, Vec::new()));
+    let node = SubcomposeLayoutNode::new(crate::modifier::Modifier::empty(), Rc::clone(&policy));
+
+    {
+        let mut inner = node.inner.borrow_mut();
+        inner.children = vec![11, 22];
+        inner.last_placements = vec![33, 44];
+    }
+
+    assert_eq!(node.active_children(), vec![33, 44]);
+    assert_eq!(cranpose_core::Node::children(&node), vec![33, 44]);
 }

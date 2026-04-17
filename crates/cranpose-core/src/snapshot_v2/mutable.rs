@@ -565,7 +565,6 @@ mod tests {
     use super::*;
     use crate::snapshot_v2::runtime::TestRuntimeGuard;
     use crate::state::{NeverEqual, SnapshotMutableState, StateObject};
-    use std::cell::Cell;
     use std::sync::Arc;
 
     fn reset_runtime() -> TestRuntimeGuard {
@@ -577,9 +576,10 @@ mod tests {
     }
 
     // Mock StateObject for testing
-    #[allow(dead_code)]
-    struct MockStateObject {
-        value: Cell<i32>,
+    struct MockStateObject;
+
+    fn mock_state_record() -> Rc<crate::state::StateRecord> {
+        crate::state::StateRecord::new(crate::state::PREEXISTING_SNAPSHOT_ID, (), None)
     }
 
     impl StateObject for MockStateObject {
@@ -588,7 +588,7 @@ mod tests {
         }
 
         fn first_record(&self) -> Rc<crate::state::StateRecord> {
-            unimplemented!("Not needed for tests")
+            mock_state_record()
         }
 
         fn readable_record(
@@ -596,18 +596,16 @@ mod tests {
             _snapshot_id: crate::snapshot_id_set::SnapshotId,
             _invalid: &SnapshotIdSet,
         ) -> Rc<crate::state::StateRecord> {
-            unimplemented!("Not needed for tests")
+            mock_state_record()
         }
 
-        fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {
-            unimplemented!("Not needed for tests")
-        }
+        fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {}
 
         fn promote_record(
             &self,
             _child_id: crate::snapshot_id_set::SnapshotId,
         ) -> Result<(), &'static str> {
-            unimplemented!("Not needed for tests")
+            Ok(())
         }
 
         fn as_any(&self) -> &dyn std::any::Any {
@@ -662,9 +660,7 @@ mod tests {
         });
 
         let snapshot = MutableSnapshot::new(1, SnapshotIdSet::new(), Some(observer), None, 0);
-        let mock_state = MockStateObject {
-            value: Cell::new(42),
-        };
+        let mock_state = MockStateObject;
 
         snapshot.record_read(&mock_state);
         snapshot.record_read(&mock_state);
@@ -685,9 +681,7 @@ mod tests {
         });
 
         let snapshot = MutableSnapshot::new(1, SnapshotIdSet::new(), None, Some(observer), 0);
-        let mock_state = Arc::new(MockStateObject {
-            value: Cell::new(42),
-        });
+        let mock_state = Arc::new(MockStateObject);
 
         snapshot.record_write(mock_state.clone());
         snapshot.record_write(mock_state.clone()); // Second write should not call observer
@@ -772,9 +766,7 @@ mod tests {
         let snapshot = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
         snapshot.apply().check();
 
-        let mock_state = Arc::new(MockStateObject {
-            value: Cell::new(42),
-        });
+        let mock_state = Arc::new(MockStateObject);
         snapshot.record_write(mock_state);
     }
 
@@ -785,9 +777,7 @@ mod tests {
         let snapshot = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
         snapshot.dispose();
 
-        let mock_state = Arc::new(MockStateObject {
-            value: Cell::new(42),
-        });
+        let mock_state = Arc::new(MockStateObject);
         snapshot.record_write(mock_state);
     }
 
@@ -809,7 +799,7 @@ mod tests {
         let applied_count = StdArc::new(Mutex::new(0));
         let applied_count_clone = applied_count.clone();
 
-        let observer = Arc::new(
+        let observer = Rc::new(
             move |_modified: &[Arc<dyn StateObject>], _snapshot_id: SnapshotId| {
                 *applied_count_clone.lock().unwrap() += 1;
             },

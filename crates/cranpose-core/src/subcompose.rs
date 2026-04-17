@@ -6,13 +6,15 @@
 //! exact match exists, the [`SlotReusePolicy`] is consulted to determine whether
 //! a node produced for another slot is compatible with the requested slot.
 
-use crate::collections::map::HashMap; // FUTURE(no_std): replace HashMap/HashSet with arena-backed maps.
+use crate::collections::map::HashMap;
 use crate::collections::map::HashSet;
 use std::collections::VecDeque;
 use std::fmt;
 use std::rc::Rc;
 
 use crate::{CallbackHolder, NodeId, RecomposeScope, SlotTable, SlotsHost};
+
+pub type DebugSlotGroup = (usize, crate::Key, Option<usize>, usize);
 
 /// Identifier for a subcomposed slot.
 ///
@@ -210,9 +212,9 @@ impl SlotReusePolicy for ContentTypeReusePolicy {
 #[derive(Default, Clone)]
 
 struct NodeSlotMapping {
-    slot_to_nodes: HashMap<SlotId, Vec<NodeId>>, // FUTURE(no_std): replace HashMap/Vec with arena-managed storage.
-    node_to_slot: HashMap<NodeId, SlotId>,       // FUTURE(no_std): migrate to slab-backed map.
-    slot_to_scopes: HashMap<SlotId, Vec<RecomposeScope>>, // FUTURE(no_std): use arena-backed scope lists.
+    slot_to_nodes: HashMap<SlotId, Vec<NodeId>>,
+    node_to_slot: HashMap<NodeId, SlotId>,
+    slot_to_scopes: HashMap<SlotId, Vec<RecomposeScope>>,
 }
 
 impl fmt::Debug for NodeSlotMapping {
@@ -305,7 +307,7 @@ impl NodeSlotMapping {
 /// measurement passes.
 pub struct SubcomposeState {
     mapping: NodeSlotMapping,
-    active_order: Vec<SlotId>, // FUTURE(no_std): replace Vec with bounded ordering buffer.
+    active_order: Vec<SlotId>,
     /// Per-content-type reusable node pools for O(1) compatible node lookup.
     /// Key is content type, value is a deque of (SlotId, NodeId) pairs.
     /// Nodes without content type go to `reusable_nodes_untyped`.
@@ -314,7 +316,7 @@ pub struct SubcomposeState {
     reusable_nodes_untyped: VecDeque<(SlotId, NodeId)>,
     /// Maps slot to its content type for efficient lookup during reuse.
     slot_content_types: HashMap<SlotId, u64>,
-    precomposed_nodes: HashMap<SlotId, Vec<NodeId>>, // FUTURE(no_std): use arena-backed precomposition lists.
+    precomposed_nodes: HashMap<SlotId, Vec<NodeId>>,
     policy: Box<dyn SlotReusePolicy>,
     pub(crate) current_index: usize,
     pub(crate) reusable_count: usize,
@@ -374,7 +376,7 @@ impl SubcomposeState {
             reusable_by_type: HashMap::default(),
             reusable_nodes_untyped: VecDeque::new(),
             slot_content_types: HashMap::default(),
-            precomposed_nodes: HashMap::default(), // FUTURE(no_std): initialize arena-backed precomposition map.
+            precomposed_nodes: HashMap::default(),
             policy,
             current_index: 0,
             reusable_count: 0,
@@ -442,11 +444,11 @@ impl SubcomposeState {
     /// Each slot gets its own isolated slot table, avoiding cursor-based conflicts when
     /// items are subcomposed in different orders.
     pub fn get_or_create_slots(&mut self, slot_id: SlotId) -> Rc<SlotsHost> {
-        Rc::clone(self.slot_compositions.entry(slot_id).or_insert_with(|| {
-            Rc::new(SlotsHost::new(crate::slot_backend::SlotBackend::Baseline(
-                SlotTable::new(),
-            )))
-        }))
+        Rc::clone(
+            self.slot_compositions
+                .entry(slot_id)
+                .or_insert_with(|| Rc::new(SlotsHost::new(SlotTable::new()))),
+        )
     }
 
     /// Returns the latest callback holder for the given slot, creating one if needed.
@@ -617,7 +619,6 @@ impl SubcomposeState {
     /// Returns the list of node ids that were DISPOSED (not just moved to reusable).
     /// Nodes that exceed max_reusable_per_type are disposed instead of cached.
     pub fn dispose_or_reuse_starting_from_index(&mut self, start_index: usize) -> Vec<NodeId> {
-        // FUTURE(no_std): return iterator over bounded node buffer.
         if start_index >= self.active_order.len() {
             return Vec::new();
         }
@@ -784,16 +785,35 @@ impl SubcomposeState {
         self.last_slot_reused
     }
 
+    #[doc(hidden)]
+    pub fn debug_scope_ids_by_slot(&self) -> Vec<(u64, Vec<usize>)> {
+        self.mapping
+            .slot_to_scopes
+            .iter()
+            .map(|(slot, scopes)| (slot.raw(), scopes.iter().map(RecomposeScope::id).collect()))
+            .collect()
+    }
+
+    #[doc(hidden)]
+    pub fn debug_slot_table_for_slot(&self, slot_id: SlotId) -> Option<Vec<(usize, String)>> {
+        let slots = self.slot_compositions.get(&slot_id)?;
+        Some(slots.borrow().debug_dump_all_slots())
+    }
+
+    #[doc(hidden)]
+    pub fn debug_slot_table_groups_for_slot(&self, slot_id: SlotId) -> Option<Vec<DebugSlotGroup>> {
+        let slots = self.slot_compositions.get(&slot_id)?;
+        Some(slots.borrow().debug_dump_groups())
+    }
+
     /// Returns a snapshot of precomposed nodes.
     pub fn precomposed(&self) -> &HashMap<SlotId, Vec<NodeId>> {
-        // FUTURE(no_std): expose arena-backed view without HashMap.
         &self.precomposed_nodes
     }
 
     /// Removes any precomposed nodes whose slots were not activated during the
     /// current pass and returns their identifiers for disposal.
     pub fn drain_inactive_precomposed(&mut self) -> Vec<NodeId> {
-        // FUTURE(no_std): drain into smallvec buffer.
         let active: HashSet<SlotId> = self.active_order.iter().copied().collect();
         let mut disposed = Vec::new();
         let mut empty_slots = Vec::new();

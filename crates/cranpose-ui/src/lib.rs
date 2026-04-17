@@ -47,20 +47,23 @@ pub use focus_dispatch::{
 // Re-export FocusManager from cranpose-foundation to avoid duplication
 pub use cranpose_foundation::nodes::input::focus::FocusManager;
 pub use layout::{
+    build_semantics_tree_from_layout_tree,
     core::{
         Alignment, Arrangement, HorizontalAlignment, LinearArrangement, Measurable, Placeable,
         VerticalAlignment,
     },
-    measure_layout, measure_layout_with_options, tree_needs_layout, LayoutBox, LayoutEngine,
-    LayoutMeasurements, LayoutNodeData, LayoutNodeKind, LayoutTree, MeasureLayoutOptions,
-    SemanticsAction, SemanticsCallback, SemanticsNode, SemanticsRole, SemanticsTree,
+    measure_layout, measure_layout_with_options, tree_needs_layout, tree_needs_semantics,
+    LayoutBox, LayoutEngine, LayoutMeasurements, LayoutNodeData, LayoutNodeKind, LayoutTree,
+    MeasureLayoutOptions, SemanticsAction, SemanticsCallback, SemanticsNode, SemanticsRole,
+    SemanticsTree,
 };
 pub use modifier::{
-    collect_modifier_slices, collect_slices_from_modifier, BlendMode, Brush, Color,
-    CompositingStrategy, CornerRadii, DpOffset, EdgeInsets, GraphicsLayer, LayerShape, Modifier,
-    ModifierNodeSlices, Point, PointerEvent, PointerEventKind, PointerInputScope, Rect,
-    RenderEffect, ResolvedBackground, ResolvedModifiers, RoundedCornerShape, RuntimeShader, Shadow,
-    ShadowScope, Size, TransformOrigin,
+    collect_modifier_slices, collect_semantics_from_modifier, collect_slices_from_modifier,
+    BlendMode, Brush, Color, CompositingStrategy, CornerRadii, DpOffset, EdgeInsets,
+    FocusDirection, FocusRequester, GraphicsLayer, LayerShape, Modifier, ModifierNodeSlices, Point,
+    PointerEvent, PointerEventKind, PointerInputScope, Rect, RenderEffect, ResolvedBackground,
+    ResolvedModifiers, RoundedCornerShape, RuntimeShader, Shadow, ShadowScope, Size,
+    TransformOrigin,
 };
 pub use modifier_nodes::{
     AlphaElement, AlphaNode, BackgroundElement, BackgroundNode, ClickableElement, ClickableNode,
@@ -80,6 +83,9 @@ pub use primitives::{
 // Lazy list exports - single source from cranpose-foundation
 pub use cranpose_foundation::lazy::{LazyListItemInfo, LazyListLayoutInfo, LazyListState};
 pub use key_event::{KeyCode, KeyEvent, KeyEventType, Modifiers};
+#[cfg(any(test, feature = "test-helpers"))]
+#[doc(hidden)]
+pub use render_state::reset_render_state_for_tests;
 pub use render_state::{
     current_density, has_pending_draw_repasses, has_pending_layout_repasses,
     peek_focus_invalidation, peek_layout_invalidation, peek_pointer_invalidation,
@@ -114,9 +120,9 @@ pub use widgets::linked_text::LinkedText;
 
 // Debug utilities
 pub use debug::{
-    format_layout_tree, format_modifier_chain, format_render_scene, install_modifier_chain_trace,
-    log_layout_tree, log_modifier_chain, log_render_scene, log_screen_summary,
-    ModifierChainTraceGuard,
+    format_layout_tree, format_modifier_chain, format_render_scene, format_screen_summary,
+    install_modifier_chain_trace, log_layout_tree, log_modifier_chain, log_render_scene,
+    log_screen_summary, ModifierChainTraceGuard,
 };
 
 /// Convenience alias used in examples and tests.
@@ -124,6 +130,8 @@ pub type TestComposition = Composition<MemoryApplier>;
 
 /// Build a composition with a simple in-memory applier and run the provided closure once.
 pub fn run_test_composition(build: impl FnMut()) -> TestComposition {
+    #[cfg(test)]
+    reset_render_state_for_tests();
     let mut composition = Composition::new(MemoryApplier::new());
     composition
         .render(location_key(file!(), line!(), column!()), build)

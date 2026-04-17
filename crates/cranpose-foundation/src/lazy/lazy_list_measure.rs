@@ -387,6 +387,13 @@ mod tests {
         LazyListMeasuredItem::new(index, index as u64, None, size, 100.0)
     }
 
+    #[test]
+    fn lazy_list_measure_config_defaults_to_two_beyond_bounds_items() {
+        let config = LazyListMeasureConfig::default();
+
+        assert_eq!(config.beyond_bounds_item_count, 2);
+    }
+
     fn exact_scroll_position(
         item_sizes: &[f32],
         spacing: f32,

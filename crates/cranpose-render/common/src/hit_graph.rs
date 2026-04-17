@@ -14,6 +14,7 @@ pub trait HitGraphSink {
     fn push_hit(
         &mut self,
         node_id: NodeId,
+        capture_path: &[NodeId],
         geometry: HitGeometry,
         shape: Option<RoundedCornerShape>,
         click_actions: &[Rc<dyn Fn(Point)>],
@@ -31,12 +32,14 @@ pub fn collect_hits_from_graph<S: HitGraphSink>(
         return;
     }
     let mut hit_clips = Vec::new();
+    let mut pointer_input_ancestors = Vec::new();
     collect_hits_from_graph_inner(
         layer,
         parent_transform,
         sink,
         parent_hit_clip,
         &mut hit_clips,
+        &mut pointer_input_ancestors,
     );
 }
 
@@ -46,6 +49,7 @@ fn collect_hits_from_graph_inner<S: HitGraphSink>(
     sink: &mut S,
     parent_hit_clip: Option<Rect>,
     hit_clips: &mut Vec<HitClip>,
+    pointer_input_ancestors: &mut Vec<NodeId>,
 ) {
     if !layer.has_hit_targets {
         return;
@@ -79,8 +83,12 @@ fn collect_hits_from_graph_inner<S: HitGraphSink>(
     }
 
     if let (Some(node_id), Some(hit)) = (layer.node_id, &layer.hit_test) {
+        let mut capture_path = Vec::with_capacity(1 + pointer_input_ancestors.len());
+        capture_path.push(node_id);
+        capture_path.extend(pointer_input_ancestors.iter().rev().copied());
         sink.push_hit(
             node_id,
+            &capture_path,
             HitGeometry {
                 rect: transformed_rect,
                 quad: transformed_quad,
@@ -95,10 +103,30 @@ fn collect_hits_from_graph_inner<S: HitGraphSink>(
         );
     }
 
+    let pushes_pointer_input_ancestor = layer
+        .hit_test
+        .as_ref()
+        .is_some_and(|hit| !hit.pointer_inputs.is_empty())
+        && layer.node_id.is_some();
+    if pushes_pointer_input_ancestor {
+        pointer_input_ancestors.push(layer.node_id.expect("checked above"));
+    }
+
     for child in &layer.children {
         if let RenderNode::Layer(child_layer) = child {
-            collect_hits_from_graph_inner(child_layer, transform, sink, hit_clip_bounds, hit_clips);
+            collect_hits_from_graph_inner(
+                child_layer,
+                transform,
+                sink,
+                hit_clip_bounds,
+                hit_clips,
+                pointer_input_ancestors,
+            );
         }
+    }
+
+    if pushes_pointer_input_ancestor {
+        let _ = pointer_input_ancestors.pop();
     }
 
     if pushed_clip {
@@ -112,15 +140,25 @@ mod tests {
     use crate::graph::{CachePolicy, HitTestNode, IsolationReasons};
     use crate::raster_cache::LayerRasterCacheHashes;
 
+    type RecordedHit = (
+        NodeId,
+        Vec<NodeId>,
+        Rect,
+        [[f32; 2]; 4],
+        Option<Rect>,
+        usize,
+    );
+
     #[derive(Default)]
     struct TestSink {
-        hits: Vec<(NodeId, Rect, [[f32; 2]; 4], Option<Rect>, usize)>,
+        hits: Vec<RecordedHit>,
     }
 
     impl HitGraphSink for TestSink {
         fn push_hit(
             &mut self,
             node_id: NodeId,
+            capture_path: &[NodeId],
             geometry: HitGeometry,
             _shape: Option<RoundedCornerShape>,
             _click_actions: &[Rc<dyn Fn(Point)>],
@@ -128,6 +166,7 @@ mod tests {
         ) {
             self.hits.push((
                 node_id,
+                capture_path.to_vec(),
                 geometry.rect,
                 geometry.quad,
                 geometry.hit_clip_bounds,
@@ -174,10 +213,11 @@ mod tests {
         collect_hits_from_graph(&layer, ProjectiveTransform::identity(), &mut sink, None);
 
         assert_eq!(sink.hits.len(), 1);
-        let (node_id, rect, quad, clip, clip_count) = sink.hits[0];
-        assert_eq!(node_id, 7);
+        let (node_id, capture_path, rect, quad, clip, clip_count) = &sink.hits[0];
+        assert_eq!(*node_id, 7);
+        assert_eq!(capture_path, &vec![7]);
         assert_eq!(
-            rect,
+            *rect,
             Rect {
                 x: 12.0,
                 y: 9.0,
@@ -185,24 +225,30 @@ mod tests {
                 height: 18.0,
             }
         );
-        assert_eq!(quad, [[12.0, 9.0], [42.0, 9.0], [12.0, 27.0], [42.0, 27.0]]);
-        assert_eq!(clip, Some(rect));
-        assert_eq!(clip_count, 1);
+        assert_eq!(
+            *quad,
+            [[12.0, 9.0], [42.0, 9.0], [12.0, 27.0], [42.0, 27.0]]
+        );
+        assert_eq!(*clip, Some(*rect));
+        assert_eq!(*clip_count, 1);
     }
 
     #[test]
     fn collect_hits_composes_nested_graph_transforms() {
         let child = test_layer(9, ProjectiveTransform::translation(4.0, 3.0));
         let mut parent = test_layer(7, ProjectiveTransform::translation(10.0, 6.0));
+        parent.hit_test.as_mut().expect("hit test").pointer_inputs = vec![Rc::new(|_event| {})];
         parent.children.push(RenderNode::Layer(Box::new(child)));
         let mut sink = TestSink::default();
 
         collect_hits_from_graph(&parent, ProjectiveTransform::identity(), &mut sink, None);
 
         assert_eq!(sink.hits.len(), 2);
-        let (_, child_rect, child_quad, child_clip, child_clip_count) = sink.hits[1];
+        let (_, child_capture_path, child_rect, child_quad, child_clip, child_clip_count) =
+            &sink.hits[1];
+        assert_eq!(child_capture_path, &vec![9, 7]);
         assert_eq!(
-            child_rect,
+            *child_rect,
             Rect {
                 x: 14.0,
                 y: 9.0,
@@ -211,11 +257,11 @@ mod tests {
             }
         );
         assert_eq!(
-            child_quad,
+            *child_quad,
             [[14.0, 9.0], [44.0, 9.0], [14.0, 27.0], [44.0, 27.0]]
         );
         assert_eq!(
-            child_clip,
+            *child_clip,
             Some(Rect {
                 x: 14.0,
                 y: 9.0,
@@ -223,7 +269,7 @@ mod tests {
                 height: 15.0,
             })
         );
-        assert_eq!(child_clip_count, 2);
+        assert_eq!(*child_clip_count, 2);
     }
 
     #[test]
@@ -247,7 +293,7 @@ mod tests {
         let mut sink = TestSink::default();
         collect_hits_from_graph(&parent, ProjectiveTransform::identity(), &mut sink, None);
 
-        let (_, _, _, _, child_clip_count) = sink.hits[1];
+        let (_, _, _, _, _, child_clip_count) = sink.hits[1];
         assert_eq!(child_clip_count, 2);
     }
 }

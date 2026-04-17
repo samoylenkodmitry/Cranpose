@@ -60,15 +60,9 @@ impl CursorAnimationState {
     }
 
     /// Returns whether blinking is active.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn is_active(&self) -> bool {
         self.next_blink_time.get().is_some()
-    }
-
-    /// Returns the current cursor alpha (0.0 or 1.0).
-    #[allow(dead_code)]
-    pub fn alpha(&self) -> f32 {
-        self.cursor_alpha.get()
     }
 
     /// Returns whether the cursor is currently visible.

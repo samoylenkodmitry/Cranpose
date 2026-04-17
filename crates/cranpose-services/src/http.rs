@@ -1,4 +1,4 @@
-use cranpose_core::{compositionLocalOf, CompositionLocal};
+use cranpose_core::{compositionLocalOfWithPolicy, CompositionLocal};
 #[cfg(target_arch = "wasm32")]
 use futures_util::{stream, StreamExt};
 use std::future::Future;
@@ -364,7 +364,10 @@ pub fn local_http_client() -> CompositionLocal<HttpClientRef> {
     LOCAL_HTTP_CLIENT.with(|cell| {
         let mut local = cell.borrow_mut();
         if local.is_none() {
-            *local = Some(compositionLocalOf(default_http_client));
+            *local = Some(compositionLocalOfWithPolicy(
+                default_http_client,
+                Arc::ptr_eq,
+            ));
         }
         local
             .as_ref()
@@ -473,7 +476,14 @@ mod tests {
         use std::io::{Read, Write};
         use std::net::TcpListener;
 
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind local test server");
+        let listener = match TcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                eprintln!("skipping local HTTP server bind in restricted test environment: {err}");
+                return;
+            }
+            Err(err) => panic!("bind local test server: {err}"),
+        };
         let address = listener
             .local_addr()
             .expect("read local test server address");

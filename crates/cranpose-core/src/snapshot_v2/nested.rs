@@ -342,6 +342,10 @@ mod tests {
         reset_runtime_for_tests()
     }
 
+    fn mock_state_record() -> Rc<crate::state::StateRecord> {
+        crate::state::StateRecord::new(crate::state::PREEXISTING_SNAPSHOT_ID, (), None)
+    }
+
     #[test]
     fn test_nested_readonly_snapshot() {
         let _guard = reset_runtime();
@@ -419,23 +423,21 @@ mod tests {
                 self.id
             }
             fn first_record(&self) -> Rc<crate::state::StateRecord> {
-                unimplemented!("not used in v2 tests")
+                mock_state_record()
             }
             fn readable_record(
                 &self,
                 _snapshot_id: crate::snapshot_id_set::SnapshotId,
                 _invalid: &SnapshotIdSet,
             ) -> Rc<crate::state::StateRecord> {
-                unimplemented!("not used in v2 tests")
+                mock_state_record()
             }
-            fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {
-                unimplemented!("not used in v2 tests")
-            }
+            fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {}
             fn promote_record(
                 &self,
                 _child_id: crate::snapshot_id_set::SnapshotId,
             ) -> Result<(), &'static str> {
-                unimplemented!("not used in v2 tests")
+                Ok(())
             }
 
             fn as_any(&self) -> &dyn std::any::Any {
@@ -467,23 +469,21 @@ mod tests {
                 self.id
             }
             fn first_record(&self) -> Rc<crate::state::StateRecord> {
-                unimplemented!("not used in v2 tests")
+                mock_state_record()
             }
             fn readable_record(
                 &self,
                 _snapshot_id: crate::snapshot_id_set::SnapshotId,
                 _invalid: &SnapshotIdSet,
             ) -> Rc<crate::state::StateRecord> {
-                unimplemented!("not used in v2 tests")
+                mock_state_record()
             }
-            fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {
-                unimplemented!("not used in v2 tests")
-            }
+            fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {}
             fn promote_record(
                 &self,
                 _child_id: crate::snapshot_id_set::SnapshotId,
             ) -> Result<(), &'static str> {
-                unimplemented!("not used in v2 tests")
+                Ok(())
             }
 
             fn as_any(&self) -> &dyn std::any::Any {

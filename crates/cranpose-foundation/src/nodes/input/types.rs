@@ -154,3 +154,39 @@ impl PointerEvent {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn point(x: f32, y: f32) -> Point {
+        Point { x, y }
+    }
+
+    #[test]
+    fn pointer_event_clones_share_consumed_state() {
+        let event = PointerEvent::new(PointerEventKind::Move, point(1.0, 2.0), point(3.0, 4.0));
+        let cloned = event.clone();
+        assert!(!event.is_consumed());
+        assert!(!cloned.is_consumed());
+
+        cloned.consume();
+
+        assert!(event.is_consumed());
+        assert!(cloned.is_consumed());
+    }
+
+    #[test]
+    fn pointer_event_copy_with_local_position_preserves_consumption_state() {
+        let event = PointerEvent::new(PointerEventKind::Down, point(4.0, 5.0), point(4.0, 5.0));
+        let local = event.copy_with_local_position(point(1.0, 1.0));
+
+        assert_eq!(local.position, point(1.0, 1.0));
+        assert_eq!(local.global_position, event.global_position);
+        assert!(!local.is_consumed());
+
+        event.consume();
+
+        assert!(local.is_consumed());
+    }
+}

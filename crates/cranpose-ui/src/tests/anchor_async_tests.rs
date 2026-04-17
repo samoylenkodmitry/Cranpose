@@ -255,6 +255,27 @@ fn progress_demo(animation: MutableState<AnimationState>, stats: MutableState<Fr
     });
 }
 
+#[composable]
+fn keyed_progress_demo(progress: MutableState<f32>) {
+    Column(Modifier::empty().padding(12.0), ColumnSpec::default(), {
+        move || {
+            let value = progress.value();
+
+            cranpose_core::with_key(&(value > 0.0), move || {
+                if value > 0.0 {
+                    Row(
+                        Modifier::empty()
+                            .width(200.0 * value)
+                            .then(Modifier::empty().height(12.0)),
+                        RowSpec::default(),
+                        || {},
+                    );
+                }
+            });
+        }
+    });
+}
+
 #[test]
 fn stats_state_invalidates_after_direction_flip() {
     let mut composition = Composition::new(MemoryApplier::new());
@@ -299,4 +320,34 @@ fn stats_state_invalidates_after_direction_flip() {
         composition.should_render(),
         "stats update should still schedule render without manual with_key workaround"
     );
+}
+
+#[test]
+fn keyed_progress_branch_does_not_grow_slots_across_toggle_cycles() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let progress = MutableState::with_runtime(0.8f32, runtime);
+    let key = location_key(file!(), line!(), column!());
+
+    composition
+        .render(key, &mut || keyed_progress_demo(progress))
+        .expect("initial render");
+    drain_all(&mut composition).expect("initial drain");
+
+    let baseline_slots = composition.debug_dump_all_slots().len();
+    for cycle in 0..12 {
+        progress.set_value(0.0);
+        drain_all(&mut composition).expect("drain after collapse");
+
+        progress.set_value(0.8);
+        drain_all(&mut composition).expect("drain after restore");
+
+        let current_slots = composition.debug_dump_all_slots();
+        assert!(
+            current_slots.len() <= baseline_slots + 8,
+            "keyed progress branch leaked slots on cycle {cycle}: baseline={} current={} slots={current_slots:#?}",
+            baseline_slots,
+            current_slots.len(),
+        );
+    }
 }

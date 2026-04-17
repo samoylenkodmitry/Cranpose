@@ -612,12 +612,8 @@ The slot table manages the composition tree structure using a **gap-buffer** des
 
 ```
 crates/cranpose-core/src/
-├── slot_table.rs                  - Main gap-buffer implementation (1666 lines)
-├── slot_storage.rs                - Abstract storage trait
-├── slot_backend.rs                - Backend selection and unified interface
-├── chunked_slot_storage.rs        - Chunked storage backend
-├── hierarchical_slot_storage.rs   - Hierarchical storage backend
-└── split_slot_storage.rs          - Split layout/payload backend
+├── slot_table.rs                  - Main gap-buffer implementation
+└── slot_storage.rs                - Slot table contract and shared identifiers
 
 docs/
 └── slot_doc.md                    - Documentation

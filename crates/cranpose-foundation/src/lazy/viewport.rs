@@ -13,7 +13,6 @@ pub struct ViewportHandler {
     /// The effective viewport size to use for measurement.
     effective_size: f32,
     /// Whether the viewport was detected as infinite.
-    #[allow(dead_code)] // Useful for debugging and future use
     is_infinite: bool,
 }
 
@@ -63,7 +62,6 @@ impl ViewportHandler {
 
     /// Returns whether the viewport was detected as infinite.
     #[inline]
-    #[allow(dead_code)] // Used in tests and kept for debugging/future use
     pub fn is_infinite(&self) -> bool {
         self.is_infinite
     }

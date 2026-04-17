@@ -1,11 +1,17 @@
-use crate::{layout::LayoutEngine, Column, ColumnSpec, Modifier, Row, RowSpec, Text, TextStyle};
+use crate::{
+    layout::{LayoutEngine, MeasureLayoutOptions},
+    measure_layout_with_options, Box, BoxSpec, Column, ColumnSpec, Modifier, Row, RowSpec,
+    ScrollState, Size, Text, TextStyle,
+};
 use cranpose_core::{location_key, Composition, MemoryApplier, MutableState, NodeId};
 use cranpose_macros::composable;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 thread_local! {
     static PROGRESS_TAB_RENDERS: Cell<usize> = const { Cell::new(0) };
     static PROGRESS_BAR_BRANCH_CALLS: Cell<usize> = const { Cell::new(0) };
+    static RESTORED_COUNTER_STATE: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
+    static RESTORED_POINTER_STATE: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
 }
 
 fn expected_layout_counts(depth: usize, horizontal: bool) -> (usize, usize) {
@@ -37,6 +43,43 @@ fn expected_layout_counts(depth: usize, horizontal: bool) -> (usize, usize) {
 fn reset_progress_counters() {
     PROGRESS_TAB_RENDERS.with(|c| c.set(0));
     PROGRESS_BAR_BRANCH_CALLS.with(|c| c.set(0));
+}
+
+fn composition_layout_texts(composition: &mut Composition<MemoryApplier>) -> Vec<String> {
+    fn collect(node: &crate::LayoutBox, out: &mut Vec<String>) {
+        if let Some(text) = node.node_data.modifier_slices().text_content() {
+            out.push(text.to_string());
+        }
+        for child in &node.children {
+            collect(child, out);
+        }
+    }
+
+    let root = composition.root().expect("composition root");
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    let measurements = measure_layout_with_options(
+        &mut applier,
+        root,
+        Size::new(1200.0, 800.0),
+        MeasureLayoutOptions {
+            collect_semantics: false,
+            build_layout_tree: true,
+        },
+    )
+    .expect("measure layout for tab switching test");
+    applier.clear_runtime_handle();
+    let mut texts = Vec::new();
+    collect(measurements.layout_tree().root(), &mut texts);
+    texts
+}
+
+fn drain_all(composition: &mut Composition<MemoryApplier>) {
+    while composition
+        .process_invalid_scopes()
+        .expect("drain invalid scopes")
+    {}
 }
 
 #[composable]
@@ -100,6 +143,140 @@ fn make_tab_renderer(active_tab: MutableState<i32>, progress: MutableState<f32>)
     }
 }
 
+#[composable]
+fn scrollable_test_tab(label: &'static str) {
+    let scroll_state =
+        cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone());
+    Column(
+        Modifier::empty()
+            .fill_max_size()
+            .vertical_scroll(scroll_state, false),
+        ColumnSpec::default(),
+        move || {
+            Text(label, Modifier::empty().padding(8.0), TextStyle::default());
+            Text(
+                "Scrollable content",
+                Modifier::empty().padding(8.0),
+                TextStyle::default(),
+            );
+        },
+    );
+}
+
+#[composable]
+fn wrapped_stateful_counter_tab() {
+    let scroll_state =
+        cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone());
+    let counter = cranpose_core::useState(|| 0i32);
+    let pointer = cranpose_core::useState(|| 0i32);
+    let is_even = counter.value() % 2 == 0;
+    RESTORED_COUNTER_STATE.with(|slot| {
+        *slot.borrow_mut() = Some(counter);
+    });
+    RESTORED_POINTER_STATE.with(|slot| {
+        *slot.borrow_mut() = Some(pointer);
+    });
+
+    Column(
+        Modifier::empty()
+            .fill_max_size()
+            .vertical_scroll(scroll_state, false),
+        ColumnSpec::default(),
+        move || {
+            cranpose_core::with_key(&is_even, || {
+                Text(
+                    if is_even { "even" } else { "odd" },
+                    Modifier::empty().padding(8.0),
+                    TextStyle::default(),
+                );
+            });
+            Text(
+                format!("Pointer value {}", pointer.value()),
+                Modifier::empty().padding(8.0),
+                TextStyle::default(),
+            );
+            Text(
+                format!("Counter value {}", counter.value()),
+                Modifier::empty().padding(8.0),
+                TextStyle::default(),
+            );
+        },
+    );
+}
+
+#[composable]
+fn counter_test_tab(counter: MutableState<i32>) {
+    Column(Modifier::empty(), ColumnSpec::default(), move || {
+        Text(
+            "Counter Tab",
+            Modifier::empty().padding(8.0),
+            TextStyle::default(),
+        );
+        Text(
+            format!("Counter value {}", counter.value()),
+            Modifier::empty().padding(8.0),
+            TextStyle::default(),
+        );
+    });
+}
+
+#[composable]
+fn mixed_scrollable_tab_host(active_tab: MutableState<i32>, counter: MutableState<i32>) {
+    Column(
+        Modifier::empty().fill_max_size(),
+        ColumnSpec::default(),
+        move || {
+            Row(Modifier::empty(), RowSpec::default(), || {
+                Text("Tab A", Modifier::empty(), TextStyle::default());
+                Text("Tab B", Modifier::empty(), TextStyle::default());
+                Text("Tab C", Modifier::empty(), TextStyle::default());
+            });
+
+            Box(
+                Modifier::empty().fill_max_width().weight(1.0),
+                BoxSpec::default(),
+                move || {
+                    let active = active_tab.value();
+                    cranpose_core::with_key(&active, || match active {
+                        0 => counter_test_tab(counter),
+                        1 => scrollable_test_tab("Composition Local Marker"),
+                        2 => scrollable_test_tab("Web Fetch Marker"),
+                        _ => scrollable_test_tab("Async Marker"),
+                    });
+                },
+            );
+        },
+    );
+}
+
+#[composable]
+fn wrapped_tab_switching_host(active_tab: MutableState<i32>) {
+    Column(
+        Modifier::empty().fill_max_size(),
+        ColumnSpec::default(),
+        move || {
+            Row(Modifier::empty(), RowSpec::default(), || {
+                Text("Tab A", Modifier::empty(), TextStyle::default());
+                Text("Tab B", Modifier::empty(), TextStyle::default());
+                Text("Tab C", Modifier::empty(), TextStyle::default());
+            });
+
+            Box(
+                Modifier::empty().fill_max_width().weight(1.0),
+                BoxSpec::default(),
+                move || {
+                    let active = active_tab.value();
+                    cranpose_core::with_key(&active, || match active {
+                        0 => wrapped_stateful_counter_tab(),
+                        1 => scrollable_test_tab("Composition Local Marker"),
+                        _ => scrollable_test_tab("Web Fetch Marker"),
+                    });
+                },
+            );
+        },
+    );
+}
+
 #[test]
 fn tab_switching_restores_conditional_layout_nodes() {
     let mut composition = Composition::new(MemoryApplier::new());
@@ -150,6 +327,119 @@ fn tab_switching_restores_conditional_layout_nodes() {
     assert!(
         PROGRESS_BAR_BRANCH_CALLS.with(|c| c.get()) > 0,
         "conditional progress bar should rebuild after switching back"
+    );
+}
+
+#[test]
+fn scrollable_tab_host_preserves_content_across_mixed_switches() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let active_tab = MutableState::with_runtime(3i32, runtime.clone());
+    let counter = MutableState::with_runtime(0i32, runtime);
+    let key = location_key(file!(), line!(), column!());
+
+    composition
+        .render(key, || mixed_scrollable_tab_host(active_tab, counter))
+        .expect("initial render");
+    drain_all(&mut composition);
+
+    active_tab.set_value(0);
+    drain_all(&mut composition);
+    let counter_texts = composition_layout_texts(&mut composition);
+    assert!(
+        counter_texts
+            .iter()
+            .any(|text| text.contains("Counter value 0")),
+        "counter tab content missing after first switch: {counter_texts:?}",
+    );
+
+    active_tab.set_value(1);
+    drain_all(&mut composition);
+    let first_scrollable = composition_layout_texts(&mut composition);
+    assert!(
+        first_scrollable
+            .iter()
+            .any(|text| text.contains("Composition Local Marker")),
+        "first scrollable tab content missing: {first_scrollable:?}",
+    );
+
+    active_tab.set_value(2);
+    drain_all(&mut composition);
+    let second_scrollable = composition_layout_texts(&mut composition);
+    assert!(
+        second_scrollable
+            .iter()
+            .any(|text| text.contains("Web Fetch Marker")),
+        "second scrollable tab content missing after mixed switches: {second_scrollable:?}",
+    );
+}
+
+#[test]
+fn restored_wrapped_counter_tab_updates_after_mixed_tab_walk() {
+    RESTORED_COUNTER_STATE.with(|slot| slot.borrow_mut().take());
+    RESTORED_POINTER_STATE.with(|slot| slot.borrow_mut().take());
+
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let active_tab = MutableState::with_runtime(0i32, runtime);
+    let key = location_key(file!(), line!(), column!());
+
+    composition
+        .render(key, || wrapped_tab_switching_host(active_tab))
+        .expect("initial render");
+    drain_all(&mut composition);
+
+    let initial = composition_layout_texts(&mut composition);
+    assert!(
+        initial.iter().any(|text| text.contains("Counter value 0")),
+        "wrapped counter tab missing initial content: {initial:?}",
+    );
+    assert!(
+        initial.iter().any(|text| text == "even"),
+        "wrapped counter tab missing initial even branch: {initial:?}",
+    );
+
+    for (tab, marker) in [
+        (1, "Composition Local Marker"),
+        (2, "Web Fetch Marker"),
+        (1, "Composition Local Marker"),
+        (2, "Web Fetch Marker"),
+    ] {
+        active_tab.set_value(tab);
+        drain_all(&mut composition);
+        let texts = composition_layout_texts(&mut composition);
+        assert!(
+            texts.iter().any(|text| text.contains(marker)),
+            "tab {tab} content missing after mixed walk: {texts:?}",
+        );
+    }
+
+    active_tab.set_value(0);
+    drain_all(&mut composition);
+    let restored_counter = RESTORED_COUNTER_STATE
+        .with(|slot| slot.borrow().as_ref().copied())
+        .expect("restored counter state registered");
+    let restored_pointer = RESTORED_POINTER_STATE
+        .with(|slot| slot.borrow().as_ref().copied())
+        .expect("restored pointer state registered");
+
+    restored_pointer.set_value(1);
+    drain_all(&mut composition);
+    restored_counter.set_value(1);
+    drain_all(&mut composition);
+
+    let updated = composition_layout_texts(&mut composition);
+    assert!(
+        updated.iter().any(|text| text.contains("Pointer value 1")),
+        "wrapped counter pointer state did not update after restore: {updated:?}",
+    );
+    assert!(
+        updated.iter().any(|text| text == "odd"),
+        "wrapped counter branch did not update after mixed tab walk: {updated:?}",
+    );
+    assert!(
+        updated.iter().any(|text| text.contains("Counter value 1")),
+        "wrapped counter state did not update after mixed tab walk: {updated:?}",
     );
 }
 
@@ -601,5 +891,125 @@ fn recursive_layout_depth_decrease_then_increase_restores_branches() {
     assert_eq!(
         restored_two, expected_two_depth3,
         "layout tree mismatch after re-increasing depth"
+    );
+}
+
+#[test]
+fn tab_switching_node_vec_does_not_grow_unboundedly() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let active_tab = MutableState::with_runtime(0i32, runtime.clone());
+    let progress = MutableState::with_runtime(0.5f32, runtime);
+
+    let key = location_key(file!(), line!(), column!());
+    let mut render = make_tab_renderer(active_tab, progress);
+
+    // Initial render + warmup cycle
+    composition.render(key, &mut render).expect("initial");
+    active_tab.set_value(1);
+    while composition.process_invalid_scopes().expect("switch") {}
+    active_tab.set_value(0);
+    while composition.process_invalid_scopes().expect("switch back") {}
+
+    let baseline_active = composition.applier_mut().len();
+    let baseline_capacity = composition.applier_mut().capacity();
+    let baseline_slots = composition.debug_dump_all_slots().len();
+
+    // Run many cycles
+    for _ in 0..50 {
+        active_tab.set_value(1);
+        while composition.process_invalid_scopes().expect("to tab 1") {}
+        active_tab.set_value(0);
+        while composition.process_invalid_scopes().expect("to tab 0") {}
+    }
+
+    let final_active = composition.applier_mut().len();
+    let final_capacity = composition.applier_mut().capacity();
+    let final_slots = composition.debug_dump_all_slots().len();
+
+    assert_eq!(
+        baseline_active, final_active,
+        "active node count should be stable across tab cycles"
+    );
+    // Node capacity should not grow more than 2x from baseline
+    assert!(
+        final_capacity <= baseline_capacity * 2,
+        "node vec capacity grew from {} to {} ({:.1}x) over 50 cycles - indicates unbounded growth",
+        baseline_capacity,
+        final_capacity,
+        final_capacity as f64 / baseline_capacity as f64,
+    );
+    // Slot count should not grow significantly
+    assert!(
+        final_slots <= baseline_slots + 10,
+        "slot count grew from {} to {} over 50 cycles - indicates unbounded slot growth",
+        baseline_slots,
+        final_slots,
+    );
+}
+
+#[test]
+fn depth_cycling_node_vec_does_not_grow_unboundedly() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let depth_state = MutableState::with_runtime(3usize, runtime);
+    let key = location_key(file!(), line!(), column!());
+
+    composition
+        .render(key, &mut || recursive_layout_root(depth_state))
+        .expect("initial render");
+
+    // Warmup: cycle depth 3→10→3 once
+    for d in 4..=10 {
+        depth_state.set_value(d);
+        while composition.process_invalid_scopes().expect("depth up") {}
+    }
+    for d in (3..10).rev() {
+        depth_state.set_value(d);
+        while composition.process_invalid_scopes().expect("depth down") {}
+    }
+
+    let baseline_active = composition.applier_mut().len();
+    let baseline_capacity = composition.applier_mut().capacity();
+    let baseline_tombstones = composition.applier_mut().tombstone_count();
+    eprintln!(
+        "After warmup: active={}, capacity={}, tombstones={}",
+        baseline_active, baseline_capacity, baseline_tombstones
+    );
+
+    // Run 10 depth cycles
+    for cycle in 0..10 {
+        for d in 4..=10 {
+            depth_state.set_value(d);
+            while composition.process_invalid_scopes().expect("depth up") {}
+        }
+        for d in (3..10).rev() {
+            depth_state.set_value(d);
+            while composition.process_invalid_scopes().expect("depth down") {}
+        }
+        let active = composition.applier_mut().len();
+        let capacity = composition.applier_mut().capacity();
+        let tombstones = composition.applier_mut().tombstone_count();
+        eprintln!(
+            "Cycle {}: active={}, capacity={}, tombstones={}",
+            cycle, active, capacity, tombstones
+        );
+    }
+
+    let final_active = composition.applier_mut().len();
+    let final_capacity = composition.applier_mut().capacity();
+    let final_tombstones = composition.applier_mut().tombstone_count();
+
+    assert_eq!(
+        baseline_active, final_active,
+        "active node count should be stable across depth cycles"
+    );
+    assert!(
+        final_capacity <= baseline_capacity + 100,
+        "node vec capacity grew from {} to {} over 10 depth cycles ({} new tombstones) - \
+         indicates MemoryApplier does not reuse freed indices",
+        baseline_capacity,
+        final_capacity,
+        final_tombstones - baseline_tombstones,
     );
 }

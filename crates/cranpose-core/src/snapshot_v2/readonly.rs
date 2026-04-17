@@ -98,15 +98,15 @@ impl ReadonlySnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::StateObject;
-    use std::cell::Cell;
+    use crate::state::{StateObject, PREEXISTING_SNAPSHOT_ID};
     use std::rc::Rc;
 
-    // Mock StateObject for testing
-    #[allow(dead_code)]
-    struct MockStateObject {
-        value: Cell<i32>,
+    fn mock_state_record() -> Rc<crate::state::StateRecord> {
+        crate::state::StateRecord::new(PREEXISTING_SNAPSHOT_ID, (), None)
     }
+
+    // Mock StateObject for testing
+    struct MockStateObject;
 
     impl StateObject for MockStateObject {
         fn object_id(&self) -> crate::state::ObjectId {
@@ -114,7 +114,7 @@ mod tests {
         }
 
         fn first_record(&self) -> Rc<crate::state::StateRecord> {
-            unimplemented!("Not needed for tests")
+            mock_state_record()
         }
 
         fn readable_record(
@@ -122,18 +122,16 @@ mod tests {
             _snapshot_id: crate::snapshot_id_set::SnapshotId,
             _invalid: &SnapshotIdSet,
         ) -> Rc<crate::state::StateRecord> {
-            unimplemented!("Not needed for tests")
+            mock_state_record()
         }
 
-        fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {
-            unimplemented!("Not needed for tests")
-        }
+        fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {}
 
         fn promote_record(
             &self,
             _child_id: crate::snapshot_id_set::SnapshotId,
         ) -> Result<(), &'static str> {
-            unimplemented!("Not needed for tests")
+            Ok(())
         }
 
         fn as_any(&self) -> &dyn std::any::Any {
@@ -218,9 +216,7 @@ mod tests {
         });
 
         let snapshot = ReadonlySnapshot::new(1, SnapshotIdSet::new(), Some(observer));
-        let mock_state = MockStateObject {
-            value: Cell::new(42),
-        };
+        let mock_state = MockStateObject;
 
         snapshot.record_read(&mock_state);
         snapshot.record_read(&mock_state);
@@ -247,9 +243,7 @@ mod tests {
         let parent = ReadonlySnapshot::new(1, SnapshotIdSet::new(), Some(parent_observer));
         let nested = parent.take_nested_snapshot(Some(nested_observer));
 
-        let mock_state = MockStateObject {
-            value: Cell::new(42),
-        };
+        let mock_state = MockStateObject;
 
         // Reading in nested snapshot should call both observers
         nested.record_read(&mock_state);
@@ -262,9 +256,7 @@ mod tests {
     #[should_panic(expected = "Cannot write to a read-only snapshot")]
     fn test_readonly_snapshot_write_panics() {
         let snapshot = ReadonlySnapshot::new(1, SnapshotIdSet::new(), None);
-        let mock_state = Arc::new(MockStateObject {
-            value: Cell::new(42),
-        });
+        let mock_state = Arc::new(MockStateObject);
         snapshot.record_write(mock_state);
     }
 

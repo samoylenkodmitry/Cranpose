@@ -11,6 +11,15 @@ use crate::snapshot_id_set::SnapshotId;
 
 const INITIAL_CAPACITY: usize = 16;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SnapshotDoubleIndexHeapDebugStats {
+    pub len: usize,
+    pub values_cap: usize,
+    pub index_cap: usize,
+    pub handles_len: usize,
+    pub handles_cap: usize,
+}
+
 /// A min-heap that maintains snapshot IDs and allows O(1) access to the minimum value.
 ///
 /// Uses handle-based removal so callers don't need to track array indices.
@@ -125,6 +134,16 @@ impl SnapshotDoubleIndexHeap {
 
         // Return handle to free list
         self.free_handle(handle);
+    }
+
+    pub fn debug_stats(&self) -> SnapshotDoubleIndexHeapDebugStats {
+        SnapshotDoubleIndexHeapDebugStats {
+            len: self.size,
+            values_cap: self.values.capacity(),
+            index_cap: self.index.capacity(),
+            handles_len: self.handles.len(),
+            handles_cap: self.handles.capacity(),
+        }
     }
 
     /// Ensures the heap has capacity for at least `capacity` elements

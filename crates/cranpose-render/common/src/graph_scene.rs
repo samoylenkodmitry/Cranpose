@@ -2,13 +2,17 @@ use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use cranpose_core::NodeId;
+use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_foundation::{PointerEvent, PointerEventKind};
+use cranpose_ui::{LayoutNode, ModifierNodeSlices, SubcomposeLayoutNode};
 use cranpose_ui_graphics::{Point, Rect, RoundedCornerShape};
 
 use crate::graph::{ProjectiveTransform, RenderGraph};
 use crate::{HitTestTarget, RenderScene};
+
+static LIVE_MODIFIER_SLICE_LOOKUP_MISS_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone)]
 pub enum ClickAction {
@@ -44,6 +48,7 @@ pub struct HitGeometry {
 #[derive(Clone)]
 pub struct HitRegion {
     pub node_id: NodeId,
+    pub capture_path: Vec<NodeId>,
     pub rect: Rect,
     pub quad: [[f32; 2]; 4],
     pub local_bounds: Rect,
@@ -57,6 +62,10 @@ pub struct HitRegion {
 }
 
 impl HitRegion {
+    pub fn live_modifier_slice_lookup_miss_count() -> usize {
+        LIVE_MODIFIER_SLICE_LOOKUP_MISS_COUNT.load(Ordering::Relaxed)
+    }
+
     fn contains(&self, x: f32, y: f32) -> bool {
         if !self.rect.contains(x, y) {
             return false;
@@ -86,6 +95,78 @@ impl HitRegion {
             self.local_bounds.contains(local_point.x, local_point.y)
         }
     }
+
+    fn localize_event(&self, event: &PointerEvent) -> (PointerEvent, Point) {
+        let local = self.world_to_local.map_point(event.global_position);
+        let local_position = Point {
+            x: local.x - self.local_bounds.x,
+            y: local.y - self.local_bounds.y,
+        };
+        (
+            event.copy_with_local_position(local_position),
+            local_position,
+        )
+    }
+
+    fn dispatch_pointer_inputs(
+        pointer_inputs: &[Rc<dyn Fn(PointerEvent)>],
+        local_event: &PointerEvent,
+    ) {
+        for handler in pointer_inputs {
+            if local_event.is_consumed() {
+                break;
+            }
+            handler(local_event.clone());
+        }
+    }
+
+    fn dispatch_click_actions(&self, local_position: Point) {
+        for action in &self.click_actions {
+            action.invoke(local_position);
+        }
+    }
+
+    fn dispatch_modifier_slices(&self, modifier_slices: &ModifierNodeSlices, event: PointerEvent) {
+        if event.is_consumed() {
+            return;
+        }
+
+        let (local_event, local_position) = self.localize_event(&event);
+        Self::dispatch_pointer_inputs(modifier_slices.pointer_inputs(), &local_event);
+
+        if event.kind == PointerEventKind::Down && !local_event.is_consumed() {
+            for handler in modifier_slices.click_handlers() {
+                handler(local_position);
+            }
+        }
+    }
+
+    fn dispatch_cached_handlers(&self, event: PointerEvent) {
+        if event.is_consumed() {
+            return;
+        }
+
+        let (local_event, local_position) = self.localize_event(&event);
+        Self::dispatch_pointer_inputs(&self.pointer_inputs, &local_event);
+
+        if event.kind == PointerEventKind::Down && !local_event.is_consumed() {
+            self.dispatch_click_actions(local_position);
+        }
+    }
+
+    fn live_modifier_slices(&self, applier: &mut MemoryApplier) -> Option<Rc<ModifierNodeSlices>> {
+        if let Ok(modifier_slices) =
+            applier.with_node::<LayoutNode, _>(self.node_id, |node| node.modifier_slices_snapshot())
+        {
+            return Some(modifier_slices);
+        }
+
+        applier
+            .with_node::<SubcomposeLayoutNode, _>(self.node_id, |node| {
+                node.modifier_slices_snapshot()
+            })
+            .ok()
+    }
 }
 
 impl HitTestTarget for HitRegion {
@@ -93,32 +174,22 @@ impl HitTestTarget for HitRegion {
         self.node_id
     }
 
+    fn capture_path(&self) -> Vec<NodeId> {
+        self.capture_path.clone()
+    }
+
     fn dispatch(&self, event: PointerEvent) {
-        if event.is_consumed() {
+        self.dispatch_cached_handlers(event);
+    }
+
+    fn dispatch_with_applier(&self, applier: &mut MemoryApplier, event: PointerEvent) {
+        if let Some(modifier_slices) = self.live_modifier_slices(applier) {
+            self.dispatch_modifier_slices(modifier_slices.as_ref(), event);
             return;
         }
 
-        let x = event.global_position.x;
-        let y = event.global_position.y;
-        let kind = event.kind;
-        let local = self.world_to_local.map_point(Point { x, y });
-        let local_position = Point {
-            x: local.x - self.local_bounds.x,
-            y: local.y - self.local_bounds.y,
-        };
-        let local_event = event.copy_with_local_position(local_position);
-        for handler in &self.pointer_inputs {
-            if local_event.is_consumed() {
-                break;
-            }
-            handler(local_event.clone());
-        }
-
-        if kind == PointerEventKind::Down && !local_event.is_consumed() {
-            for action in &self.click_actions {
-                action.invoke(local_position);
-            }
-        }
+        LIVE_MODIFIER_SLICE_LOOKUP_MISS_COUNT.fetch_add(1, Ordering::Relaxed);
+        self.dispatch_cached_handlers(event);
     }
 }
 
@@ -142,6 +213,7 @@ impl Scene {
     pub fn push_hit(
         &mut self,
         node_id: NodeId,
+        capture_path: Vec<NodeId>,
         geometry: HitGeometry,
         shape: Option<RoundedCornerShape>,
         click_actions: Vec<ClickAction>,
@@ -164,6 +236,7 @@ impl Scene {
         } = geometry;
         self.hits.push(HitRegion {
             node_id,
+            capture_path,
             rect,
             quad,
             local_bounds,
@@ -176,6 +249,10 @@ impl Scene {
             hit_clips,
         });
         self.node_index.insert(node_id, hit_index);
+    }
+
+    pub fn replace_graph(&mut self, graph: RenderGraph) {
+        self.graph = Some(graph);
     }
 }
 
@@ -340,6 +417,7 @@ mod tests {
         };
         scene.push_hit(
             1,
+            vec![1],
             HitGeometry {
                 hit_clip_bounds: Some(clip),
                 hit_clips: vec![HitClip {
@@ -369,6 +447,7 @@ mod tests {
 
         scene.push_hit(
             1,
+            vec![1],
             hit_geometry_for_rect(rect),
             None,
             Vec::new(),
@@ -376,6 +455,7 @@ mod tests {
         );
         scene.push_hit(
             2,
+            vec![2],
             hit_geometry_for_rect(rect),
             None,
             Vec::new(),
@@ -405,6 +485,7 @@ mod tests {
         };
         scene.push_hit(
             1,
+            vec![1],
             hit_geometry_for_rect(rect),
             Some(RoundedCornerShape::uniform(20.0)),
             Vec::new(),
@@ -422,6 +503,7 @@ mod tests {
 
         let hit = HitRegion {
             node_id: 1,
+            capture_path: vec![1],
             rect: Rect {
                 x: 0.0,
                 y: 0.0,
@@ -473,6 +555,7 @@ mod tests {
 
         let hit = HitRegion {
             node_id: 1,
+            capture_path: vec![1],
             rect: Rect {
                 x: 0.0,
                 y: 0.0,
@@ -524,6 +607,7 @@ mod tests {
 
         let hit = HitRegion {
             node_id: 1,
+            capture_path: vec![1],
             rect: Rect {
                 x: 10.0,
                 y: 12.0,
@@ -570,6 +654,7 @@ mod tests {
 
         let hit = HitRegion {
             node_id: 1,
+            capture_path: vec![1],
             rect: Rect {
                 x: 0.0,
                 y: 0.0,
@@ -621,6 +706,7 @@ mod tests {
             .expect("transformed hit region should be invertible");
         scene.push_hit(
             1,
+            vec![1],
             HitGeometry {
                 rect: Rect {
                     x: 10.0,
@@ -665,6 +751,7 @@ mod tests {
             .expect("translated quad should be invertible");
         let hit = HitRegion {
             node_id: 1,
+            capture_path: vec![1],
             rect: Rect {
                 x: 20.0,
                 y: 10.0,
@@ -689,5 +776,59 @@ mod tests {
         ));
 
         assert_eq!(*local_positions.borrow(), vec![Point { x: 2.5, y: 3.5 }]);
+    }
+
+    #[test]
+    fn dispatch_with_applier_counts_live_modifier_slice_lookup_misses() {
+        let handler_calls = Rc::new(Cell::new(0));
+        let handler_calls_for_handler = Rc::clone(&handler_calls);
+        let hit = HitRegion {
+            node_id: 42,
+            capture_path: vec![42],
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 50.0,
+                height: 50.0,
+            },
+            quad: rect_to_quad(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 50.0,
+                height: 50.0,
+            }),
+            local_bounds: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 50.0,
+                height: 50.0,
+            },
+            world_to_local: ProjectiveTransform::identity(),
+            shape: None,
+            click_actions: Vec::new(),
+            pointer_inputs: vec![Rc::new(move |_event: PointerEvent| {
+                handler_calls_for_handler.set(handler_calls_for_handler.get() + 1);
+            })],
+            z_index: 0,
+            hit_clip_bounds: None,
+            hit_clips: Vec::new(),
+        };
+        let misses_before = HitRegion::live_modifier_slice_lookup_miss_count();
+        let mut applier = MemoryApplier::new();
+
+        hit.dispatch_with_applier(
+            &mut applier,
+            PointerEvent::new(
+                PointerEventKind::Down,
+                Point { x: 10.0, y: 10.0 },
+                Point { x: 10.0, y: 10.0 },
+            ),
+        );
+
+        assert_eq!(handler_calls.get(), 1);
+        assert_eq!(
+            HitRegion::live_modifier_slice_lookup_miss_count(),
+            misses_before + 1
+        );
     }
 }

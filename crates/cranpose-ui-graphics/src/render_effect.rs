@@ -241,6 +241,19 @@ impl RenderEffect {
             second: Box::new(other),
         }
     }
+
+    /// Returns `true` if this effect or any chained sub-effect is a
+    /// `RuntimeShader`. Animated shaders produce different output every frame,
+    /// so layer surface caching is counterproductive for them.
+    pub fn contains_runtime_shader(&self) -> bool {
+        match self {
+            RenderEffect::Shader { .. } => true,
+            RenderEffect::Chain { first, second } => {
+                first.contains_runtime_shader() || second.contains_runtime_shader()
+            }
+            _ => false,
+        }
+    }
 }
 
 #[cfg(test)]

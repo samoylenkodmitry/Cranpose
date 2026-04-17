@@ -1,10 +1,15 @@
 // StateRecord uses Rc with Cell for single-threaded shared ownership in the snapshot system.
 #![allow(clippy::arc_with_non_send_sync)]
 
-use crate::collections::map::HashSet;
+use crate::collections::map::{HashMap, HashSet};
+use crate::debug_trace::debug_record_scope_invalidation;
 use std::any::Any;
 use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+use std::fmt;
+use std::hash::Hash;
+use std::marker::PhantomData;
+use std::ops::Deref;
+use std::rc::{Rc, Weak as RcWeak};
 use std::sync::{Arc, Mutex, Weak};
 
 use crate::snapshot_id_set::{SnapshotId, SnapshotIdSet};
@@ -12,6 +17,7 @@ use crate::snapshot_pinning::lowest_pinned_snapshot;
 use crate::snapshot_v2::{
     advance_global_snapshot, allocate_record_id, current_snapshot, AnySnapshot, GlobalSnapshot,
 };
+use crate::{runtime, with_current_composer_opt, RecomposeScope, RuntimeHandle, ScopeId, StateId};
 
 pub(crate) const PREEXISTING_SNAPSHOT_ID: SnapshotId = 1;
 
@@ -112,7 +118,7 @@ impl StateRecord {
 
     /// Clears the value from this record to free memory.
     /// Used when marking records as reusable - clears the value to reduce memory usage.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn clear_for_reuse(&self) {
         self.clear_value();
     }
@@ -152,6 +158,38 @@ impl Drop for StateRecord {
                 }
             }
         }
+    }
+}
+
+/// Owns the mutable head pointer for a state's record chain.
+///
+/// Snapshot code clones the current head, prepends new records, and swaps in
+/// replacement heads frequently. Centralizing those operations keeps the
+/// `RefCell<Rc<StateRecord>>` borrow protocol out of the higher-level state
+/// logic.
+struct CurrentRecord {
+    head: RefCell<Rc<StateRecord>>,
+}
+
+impl CurrentRecord {
+    fn new(head: Rc<StateRecord>) -> Self {
+        Self {
+            head: RefCell::new(head),
+        }
+    }
+
+    fn clone_head(&self) -> Rc<StateRecord> {
+        self.head.borrow().clone()
+    }
+
+    fn replace(&self, new_head: Rc<StateRecord>) {
+        *self.head.borrow_mut() = new_head;
+    }
+
+    fn prepend(&self, record: Rc<StateRecord>) {
+        let current_head = self.clone_head();
+        record.set_next(Some(current_head));
+        self.replace(record);
     }
 }
 
@@ -503,7 +541,7 @@ pub trait StateObject: Any {
 }
 
 pub(crate) struct SnapshotMutableState<T> {
-    head: RefCell<Rc<StateRecord>>,
+    head: CurrentRecord,
     policy: Arc<dyn MutationPolicy<T>>,
     id: ObjectId,
     weak_self: Mutex<Option<Weak<Self>>>,
@@ -515,7 +553,7 @@ impl<T> SnapshotMutableState<T> {
         if !should_check_chain_integrity() {
             return;
         }
-        let head = self.head.borrow().clone();
+        let head = self.head.clone_head();
         let mut cursor = Some(head);
         let mut seen: HashSet<usize> = HashSet::default();
         let mut ids = Vec::new();
@@ -573,8 +611,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         let readable = match self.readable_for(snapshot_id, invalid) {
             Some(record) => record,
             None => {
-                let mut head_guard = self.head.borrow_mut();
-                let current_head = head_guard.clone();
+                let current_head = self.head.clone_head();
                 let refreshed = readable_record_for(&current_head, snapshot_id, invalid);
                 let source = refreshed.unwrap_or_else(|| current_head.clone());
 
@@ -583,9 +620,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
                 // Reuse happens during cleanup (overwrite_unused_records_locked)
                 let cloned_value = source.with_value(|value: &T| value.clone());
                 let new_head = StateRecord::new(snapshot_id, cloned_value, Some(current_head));
-
-                *head_guard = new_head.clone();
-                drop(head_guard);
+                self.head.replace(new_head.clone());
                 self.assert_chain_integrity("writable_record(recover)", Some(snapshot_id));
                 return new_head;
             }
@@ -596,8 +631,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         }
 
         let refreshed = {
-            let head_guard = self.head.borrow();
-            let current_head = head_guard.clone();
+            let current_head = self.head.clone_head();
             let refreshed = readable_record_for(&current_head, snapshot_id, invalid).unwrap_or_else(
                 || {
                     panic!(
@@ -632,7 +666,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         let head = StateRecord::new(snapshot_id, initial, Some(tail));
 
         let mut state = Arc::new(Self {
-            head: RefCell::new(head),
+            head: CurrentRecord::new(head),
             policy,
             id: ObjectId::default(),
             weak_self: Mutex::new(None),
@@ -729,42 +763,39 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         );
     }
 
-    pub(crate) fn set(&self, new_value: T) {
+    pub(crate) fn set(&self, new_value: T) -> bool {
         // Debug-only check: warn if modifying state in event handler without proper snapshot
         #[cfg(debug_assertions)]
         {
             let in_handler = crate::in_event_handler();
             let in_snapshot = crate::in_applied_snapshot();
             if in_handler && !in_snapshot {
-                eprintln!(
-                    "⚠️  WARNING: State modified in event handler without run_in_mutable_snapshot!\n\
-                     This can cause state updates to be invisible to other contexts.\n\
-                     Wrap your handler in run_in_mutable_snapshot() or dispatch_ui_event().\n\
-                     State: {:?}",
+                log::warn!(
+                    target: "cranpose::state",
+                    "State modified in event handler without run_in_mutable_snapshot; \
+                     this can make updates invisible to other contexts. Wrap the handler \
+                     in run_in_mutable_snapshot() or dispatch_ui_event(). State: {:?}",
                     self.id
                 );
             }
         }
 
         let snapshot = active_snapshot();
-        let mut written_state: Option<Arc<dyn StateObject>> = None;
-        if let Some(state) = self
-            .weak_self
-            .lock()
-            .expect("Weak self lock poisoned")
-            .as_ref()
-            .and_then(|weak| weak.upgrade())
-        {
-            let trait_object: Arc<dyn StateObject> = state.clone();
-            snapshot.record_write(trait_object.clone());
-            written_state = Some(trait_object);
-        }
-        mark_update_write(self.id);
-
         let snapshot_id = snapshot.snapshot_id();
 
         match &snapshot {
             AnySnapshot::Global(global) => {
+                let invalid = snapshot.invalid();
+                let equivalent = self
+                    .readable_for(snapshot_id, &invalid)
+                    .map(|record| {
+                        record.with_value(|current: &T| self.policy.equivalent(current, &new_value))
+                    })
+                    .unwrap_or(false);
+                if equivalent {
+                    return false;
+                }
+
                 if global.has_pending_children() {
                     panic!(
                         "SnapshotMutableState::set attempted global write while pending children {:?} exist (state {:?}, snapshot_id={})",
@@ -773,6 +804,20 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
                         snapshot_id
                     );
                 }
+
+                let mut written_state: Option<Arc<dyn StateObject>> = None;
+                if let Some(state) = self
+                    .weak_self
+                    .lock()
+                    .expect("Weak self lock poisoned")
+                    .as_ref()
+                    .and_then(|weak| weak.upgrade())
+                {
+                    let trait_object: Arc<dyn StateObject> = state.clone();
+                    snapshot.record_write(trait_object.clone());
+                    written_state = Some(trait_object);
+                }
+                mark_update_write(self.id);
 
                 let new_id = allocate_record_id();
                 let record = new_overwritable_record_as_head_locked(self);
@@ -805,12 +850,30 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
             | AnySnapshot::NestedMutable(_)
             | AnySnapshot::TransparentMutable(_) => {
                 let invalid = snapshot.invalid();
-                let record = self.writable_record(snapshot_id, &invalid);
-                let equivalent =
-                    record.with_value(|current: &T| self.policy.equivalent(current, &new_value));
-                if !equivalent {
-                    record.replace_value(new_value);
+                let equivalent = self
+                    .readable_for(snapshot_id, &invalid)
+                    .map(|record| {
+                        record.with_value(|current: &T| self.policy.equivalent(current, &new_value))
+                    })
+                    .unwrap_or(false);
+                if equivalent {
+                    return false;
                 }
+
+                if let Some(state) = self
+                    .weak_self
+                    .lock()
+                    .expect("Weak self lock poisoned")
+                    .as_ref()
+                    .and_then(|weak| weak.upgrade())
+                {
+                    let trait_object: Arc<dyn StateObject> = state.clone();
+                    snapshot.record_write(trait_object);
+                }
+                mark_update_write(self.id);
+
+                let record = self.writable_record(snapshot_id, &invalid);
+                record.replace_value(new_value);
                 self.assert_chain_integrity("set(child-writable)", Some(snapshot_id));
             }
             AnySnapshot::Readonly(_)
@@ -824,6 +887,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         // Compose proper prunes when it can prove no readers exist; for now we keep
         // the historical chain with tombstoned values to avoid use-after-free crashes
         // under heavy UI load.
+        true
     }
 }
 
@@ -901,7 +965,7 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
     }
 
     fn first_record(&self) -> Rc<StateRecord> {
-        self.head.borrow().clone()
+        self.head.clone_head()
     }
 
     fn readable_record(&self, snapshot_id: SnapshotId, invalid: &SnapshotIdSet) -> Rc<StateRecord> {
@@ -915,10 +979,7 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
     }
 
     fn prepend_state_record(&self, record: Rc<StateRecord>) {
-        let mut head_guard = self.head.borrow_mut();
-        let current_head = head_guard.clone();
-        record.set_next(Some(current_head));
-        *head_guard = record;
+        self.head.prepend(record);
     }
 
     fn merge_records(
@@ -952,11 +1013,9 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
             if record.snapshot_id() == child_id {
                 let cloned = record.with_value(|value: &T| value.clone());
                 let new_id = allocate_record_id();
-                let mut head_guard = self.head.borrow_mut();
-                let current_head = head_guard.clone();
+                let current_head = self.head.clone_head();
                 let new_head = StateRecord::new(new_id, cloned, Some(current_head));
-                *head_guard = new_head;
-                drop(head_guard);
+                self.head.replace(new_head);
                 advance_global_snapshot(new_id);
                 self.notify_applied();
                 self.assert_chain_integrity("promote_record", Some(child_id));
@@ -973,11 +1032,9 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
     fn commit_merged_record(&self, merged: Rc<StateRecord>) -> Result<SnapshotId, &'static str> {
         let value = merged.with_value(|value: &T| value.clone());
         let new_id = allocate_record_id();
-        let mut head_guard = self.head.borrow_mut();
-        let current_head = head_guard.clone();
+        let current_head = self.head.clone_head();
         let new_head = StateRecord::new(new_id, value, Some(current_head));
-        *head_guard = new_head;
-        drop(head_guard);
+        self.head.replace(new_head);
         advance_global_snapshot(new_id);
         self.notify_applied();
         self.assert_chain_integrity("commit_merged_record", Some(new_id));
@@ -990,6 +1047,673 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
 
     fn as_any(&self) -> &dyn Any {
         self
+    }
+}
+
+pub(crate) struct MutableStateInner<T: Clone + 'static> {
+    pub(crate) state: Arc<SnapshotMutableState<T>>,
+    pub(crate) watchers: RefCell<HashMap<ScopeId, RcWeak<crate::RecomposeScopeInner>>>,
+    runtime: RuntimeHandle,
+    state_id: Cell<Option<StateId>>,
+}
+
+fn shrink_watchers_if_sparse(watchers: &mut HashMap<ScopeId, RcWeak<crate::RecomposeScopeInner>>) {
+    let len = watchers.len();
+    let capacity = watchers.capacity();
+    if capacity > len.saturating_mul(4).max(32) {
+        watchers.shrink_to_fit();
+    }
+}
+
+impl<T: Clone + 'static> MutableStateInner<T> {
+    pub(crate) fn new_with_policy(
+        value: T,
+        runtime: RuntimeHandle,
+        policy: Arc<dyn MutationPolicy<T>>,
+    ) -> Self {
+        Self {
+            state: SnapshotMutableState::new_in_arc(value, policy),
+            watchers: RefCell::new(HashMap::default()),
+            runtime,
+            state_id: Cell::new(None),
+        }
+    }
+
+    pub(crate) fn install_snapshot_observer(&self, state_id: StateId) {
+        self.state_id.set(Some(state_id));
+        let runtime_handle = self.runtime.clone();
+        self.state.add_apply_observer(Box::new(move || {
+            let runtime = runtime_handle.clone();
+            runtime_handle.enqueue_ui_task(Box::new(move || {
+                runtime.with_state_arena(|arena| {
+                    let _ = arena.with_typed_opt::<T, _>(state_id, |inner| {
+                        inner.invalidate_watchers();
+                    });
+                });
+            }));
+        }));
+    }
+
+    fn with_value<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        let value = self.state.get();
+        f(&value)
+    }
+
+    fn register_scope(&self, scope: &RecomposeScope) -> bool {
+        let mut watchers = self.watchers.borrow_mut();
+        match watchers.get(&scope.id()) {
+            Some(existing) if existing.upgrade().is_some() => false,
+            _ => {
+                watchers.insert(scope.id(), scope.downgrade());
+                true
+            }
+        }
+    }
+
+    pub(crate) fn unregister_scope(&self, scope_id: ScopeId) {
+        let mut watchers = self.watchers.borrow_mut();
+        watchers.remove(&scope_id);
+        shrink_watchers_if_sparse(&mut watchers);
+    }
+
+    fn state_id(&self) -> Option<StateId> {
+        self.state_id.get()
+    }
+
+    fn invalidate_watchers(&self) {
+        let watchers: Vec<RecomposeScope> = {
+            let mut watchers = self.watchers.borrow_mut();
+            let mut live = Vec::with_capacity(watchers.len());
+            watchers.retain(|_, weak| {
+                if let Some(inner) = weak.upgrade() {
+                    live.push(RecomposeScope { inner });
+                    true
+                } else {
+                    false
+                }
+            });
+            shrink_watchers_if_sparse(&mut watchers);
+            live
+        };
+
+        for watcher in watchers {
+            debug_record_scope_invalidation::<T>(watcher.id(), self.state_id.get());
+            watcher.invalidate();
+        }
+    }
+}
+
+fn register_current_state_scope<T: Clone + 'static>(inner: &MutableStateInner<T>) {
+    let Some(Some(scope)) =
+        with_current_composer_opt(|composer| composer.current_recranpose_scope())
+    else {
+        return;
+    };
+    if inner.register_scope(&scope) {
+        if let Some(state_id) = inner.state_id() {
+            scope.record_state_subscription(state_id);
+        }
+    }
+}
+
+/// Cheap copyable read-only view of a state cell.
+pub struct State<T: Clone + 'static> {
+    id: StateId,
+    runtime_id: runtime::RuntimeId,
+    _marker: PhantomData<fn() -> T>,
+}
+
+/// Cheap copyable mutable view of a state cell.
+///
+/// Ownership lives elsewhere: a composition slot, an [`OwnedMutableState`], or
+/// the runtime for states created with [`crate::mutableStateOf`] /
+/// [`MutableState::with_runtime`].
+pub struct MutableState<T: Clone + 'static> {
+    id: StateId,
+    runtime_id: runtime::RuntimeId,
+    _marker: PhantomData<fn() -> T>,
+}
+
+/// Owning state handle for reclaimable state cells.
+#[derive(Clone)]
+pub struct OwnedMutableState<T: Clone + 'static> {
+    state: MutableState<T>,
+    _lease: Rc<runtime::StateHandleLease>,
+    _marker: PhantomData<fn() -> T>,
+}
+
+impl<T: Clone + 'static> PartialEq for State<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.state_id() == other.state_id() && self.runtime_id() == other.runtime_id()
+    }
+}
+
+impl<T: Clone + 'static> Eq for State<T> {}
+
+impl<T: Clone + 'static> PartialEq for MutableState<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.state_id() == other.state_id() && self.runtime_id() == other.runtime_id()
+    }
+}
+
+impl<T: Clone + 'static> Eq for MutableState<T> {}
+
+impl<T: Clone + 'static> Copy for State<T> {}
+
+impl<T: Clone + 'static> Clone for State<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: Clone + 'static> Copy for MutableState<T> {}
+
+impl<T: Clone + 'static> Clone for MutableState<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: Clone + 'static> State<T> {
+    fn state_id(&self) -> StateId {
+        self.id
+    }
+
+    fn runtime_id(&self) -> runtime::RuntimeId {
+        self.runtime_id
+    }
+
+    fn runtime_handle(&self) -> RuntimeHandle {
+        runtime::runtime_handle_by_id(self.runtime_id())
+            .unwrap_or_else(|| panic!("runtime {:?} dropped", self.runtime_id()))
+    }
+
+    fn with_inner<R>(&self, f: impl FnOnce(&MutableStateInner<T>) -> R) -> R {
+        self.runtime_handle()
+            .with_state_arena(|arena| arena.with_typed::<T, R>(self.state_id(), f))
+    }
+
+    fn subscribe_current_scope(&self) {
+        self.with_inner(register_current_state_scope::<T>);
+    }
+
+    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        self.subscribe_current_scope();
+        self.with_inner(|inner| inner.with_value(f))
+    }
+
+    pub fn value(&self) -> T {
+        self.subscribe_current_scope();
+        self.with_inner(|inner| inner.state.get())
+    }
+
+    pub fn get(&self) -> T {
+        self.value()
+    }
+}
+
+impl<T: Clone + 'static> MutableState<T> {
+    pub fn with_runtime(value: T, runtime: RuntimeHandle) -> Self {
+        runtime.alloc_persistent_state(value)
+    }
+
+    fn from_parts(id: StateId, runtime_id: runtime::RuntimeId) -> Self {
+        Self {
+            id,
+            runtime_id,
+            _marker: PhantomData,
+        }
+    }
+
+    pub(crate) fn from_lease(lease: &Rc<runtime::StateHandleLease>) -> Self {
+        Self::from_parts(lease.id(), lease.runtime().id())
+    }
+
+    fn state_id(&self) -> StateId {
+        self.id
+    }
+
+    fn runtime_id(&self) -> runtime::RuntimeId {
+        self.runtime_id
+    }
+
+    fn runtime_handle(&self) -> RuntimeHandle {
+        runtime::runtime_handle_by_id(self.runtime_id())
+            .unwrap_or_else(|| panic!("runtime {:?} dropped", self.runtime_id()))
+    }
+
+    fn with_inner<R>(&self, f: impl FnOnce(&MutableStateInner<T>) -> R) -> R {
+        self.runtime_handle()
+            .with_state_arena(|arena| arena.with_typed::<T, R>(self.state_id(), f))
+    }
+
+    fn try_with_inner<R>(&self, f: impl FnOnce(&MutableStateInner<T>) -> R) -> Option<R> {
+        self.runtime_handle()
+            .with_state_arena(|arena| arena.with_typed_opt::<T, R>(self.state_id(), f))
+    }
+
+    pub fn is_alive(&self) -> bool {
+        self.try_with_inner(|_| ()).is_some()
+    }
+
+    pub fn try_with<R>(&self, f: impl FnOnce(&T) -> R) -> Option<R> {
+        self.try_with_inner(|inner| inner.with_value(f))
+    }
+
+    pub fn try_value(&self) -> Option<T> {
+        self.try_with_inner(|inner| inner.state.get())
+    }
+
+    pub fn as_state(&self) -> State<T> {
+        State {
+            id: self.id,
+            runtime_id: self.runtime_id,
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn try_retain(&self) -> Option<OwnedMutableState<T>> {
+        let lease = self.runtime_handle().retain_state_lease(self.state_id())?;
+        Some(OwnedMutableState {
+            state: *self,
+            _lease: lease,
+            _marker: PhantomData,
+        })
+    }
+
+    pub fn retain(&self) -> OwnedMutableState<T> {
+        self.try_retain()
+            .unwrap_or_else(|| panic!("state {:?} is no longer alive", self.state_id()))
+    }
+
+    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        self.subscribe_current_scope();
+        self.with_inner(|inner| inner.with_value(f))
+    }
+
+    pub fn update<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        let runtime = self.runtime_handle();
+        runtime.assert_ui_thread();
+        runtime.with_state_arena(|arena| {
+            arena.with_typed::<T, R>(self.state_id(), |inner| {
+                let mut value = inner.state.get();
+                let tracker = UpdateScope::new(inner.state.id());
+                let result = f(&mut value);
+                let wrote_elsewhere = tracker.finish();
+                if !wrote_elsewhere && inner.state.set(value) {
+                    inner.invalidate_watchers();
+                }
+                result
+            })
+        })
+    }
+
+    pub fn replace(&self, value: T) {
+        let runtime = self.runtime_handle();
+        runtime.assert_ui_thread();
+        runtime.with_state_arena(|arena| {
+            if arena
+                .with_typed_opt::<T, ()>(self.state_id(), |inner| {
+                    if inner.state.set(value) {
+                        inner.invalidate_watchers();
+                    }
+                })
+                .is_none()
+            {
+                log::debug!(
+                    "MutableState::replace skipped: state cell released (slot={}, gen={})",
+                    self.state_id().slot(),
+                    self.state_id().generation(),
+                );
+            }
+        });
+    }
+
+    pub fn set_value(&self, value: T) {
+        self.replace(value);
+    }
+
+    pub fn set(&self, value: T) {
+        self.replace(value);
+    }
+
+    pub fn value(&self) -> T {
+        self.subscribe_current_scope();
+        self.with_inner(|inner| inner.state.get())
+    }
+
+    pub fn get(&self) -> T {
+        self.value()
+    }
+
+    pub fn get_non_reactive(&self) -> T {
+        self.with_inner(|inner| inner.state.get())
+    }
+
+    fn subscribe_current_scope(&self) {
+        self.with_inner(register_current_state_scope::<T>);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn watcher_count(&self) -> usize {
+        self.with_inner(|inner| inner.watchers.borrow().len())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn watcher_capacity(&self) -> usize {
+        self.with_inner(|inner| inner.watchers.borrow().capacity())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn state_id_for_test(&self) -> StateId {
+        self.state_id()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn subscribe_scope_for_test(&self, scope: &RecomposeScope) {
+        self.as_state().subscribe_scope_for_test(scope);
+    }
+}
+
+impl<T: Clone + 'static> OwnedMutableState<T> {
+    pub fn with_runtime(value: T, runtime: RuntimeHandle) -> Self {
+        let lease = runtime.alloc_state(value);
+        Self {
+            state: MutableState::from_lease(&lease),
+            _lease: lease,
+            _marker: PhantomData,
+        }
+    }
+
+    pub(crate) fn with_runtime_and_policy(
+        value: T,
+        runtime: RuntimeHandle,
+        policy: Arc<dyn MutationPolicy<T>>,
+    ) -> Self {
+        let lease = runtime.alloc_state_with_policy(value, policy);
+        Self {
+            state: MutableState::from_lease(&lease),
+            _lease: lease,
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn handle(&self) -> MutableState<T> {
+        self.state
+    }
+
+    pub fn as_state(&self) -> State<T> {
+        self.state.as_state()
+    }
+}
+
+impl<T: Clone + 'static> Deref for OwnedMutableState<T> {
+    type Target = MutableState<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
+#[cfg(test)]
+impl<T: Clone + 'static> State<T> {
+    pub(crate) fn subscribe_scope_for_test(&self, scope: &RecomposeScope) {
+        self.with_inner(|inner| {
+            if inner.register_scope(scope) {
+                if let Some(state_id) = inner.state_id() {
+                    scope.record_state_subscription(state_id);
+                }
+            }
+        });
+    }
+}
+
+impl<T: fmt::Debug + Clone + 'static> fmt::Debug for MutableState<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.with_inner(|inner| {
+            inner.with_value(|value| {
+                f.debug_struct("MutableState")
+                    .field("value", value)
+                    .finish()
+            })
+        })
+    }
+}
+
+#[derive(Clone)]
+pub struct SnapshotStateList<T: Clone + 'static> {
+    state: OwnedMutableState<Vec<T>>,
+}
+
+impl<T: Clone + 'static> SnapshotStateList<T> {
+    pub fn with_runtime<I>(values: I, runtime: RuntimeHandle) -> Self
+    where
+        I: IntoIterator<Item = T>,
+    {
+        let initial: Vec<T> = values.into_iter().collect();
+        Self {
+            state: OwnedMutableState::with_runtime(initial, runtime),
+        }
+    }
+
+    pub fn as_state(&self) -> State<Vec<T>> {
+        self.state.as_state()
+    }
+
+    pub fn as_mutable_state(&self) -> MutableState<Vec<T>> {
+        self.state.handle()
+    }
+
+    pub fn len(&self) -> usize {
+        self.state.with(|values| values.len())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn to_vec(&self) -> Vec<T> {
+        self.state.with(|values| values.clone())
+    }
+
+    pub fn iter(&self) -> Vec<T> {
+        self.to_vec()
+    }
+
+    pub fn get(&self, index: usize) -> T {
+        self.state.with(|values| values[index].clone())
+    }
+
+    pub fn get_opt(&self, index: usize) -> Option<T> {
+        self.state.with(|values| values.get(index).cloned())
+    }
+
+    pub fn first(&self) -> Option<T> {
+        self.get_opt(0)
+    }
+
+    pub fn last(&self) -> Option<T> {
+        self.state.with(|values| values.last().cloned())
+    }
+
+    pub fn push(&self, value: T) {
+        self.state.update(|values| values.push(value));
+    }
+
+    pub fn extend<I>(&self, iter: I)
+    where
+        I: IntoIterator<Item = T>,
+    {
+        self.state.update(|values| values.extend(iter));
+    }
+
+    pub fn insert(&self, index: usize, value: T) {
+        self.state.update(|values| values.insert(index, value));
+    }
+
+    pub fn set(&self, index: usize, value: T) -> T {
+        self.state
+            .update(|values| std::mem::replace(&mut values[index], value))
+    }
+
+    pub fn remove(&self, index: usize) -> T {
+        self.state.update(|values| values.remove(index))
+    }
+
+    pub fn pop(&self) -> Option<T> {
+        self.state.update(|values| values.pop())
+    }
+
+    pub fn clear(&self) {
+        self.state.replace(Vec::new());
+    }
+
+    pub fn retain<F>(&self, mut predicate: F)
+    where
+        F: FnMut(&T) -> bool,
+    {
+        self.state
+            .update(|values| values.retain(|value| predicate(value)));
+    }
+
+    pub fn replace_with<I>(&self, iter: I)
+    where
+        I: IntoIterator<Item = T>,
+    {
+        self.state.replace(iter.into_iter().collect());
+    }
+}
+
+impl<T: fmt::Debug + Clone + 'static> fmt::Debug for SnapshotStateList<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let contents = self.to_vec();
+        f.debug_struct("SnapshotStateList")
+            .field("values", &contents)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+pub struct SnapshotStateMap<K, V>
+where
+    K: Clone + Eq + Hash + 'static,
+    V: Clone + 'static,
+{
+    state: OwnedMutableState<HashMap<K, V>>,
+}
+
+impl<K, V> SnapshotStateMap<K, V>
+where
+    K: Clone + Eq + Hash + 'static,
+    V: Clone + 'static,
+{
+    pub fn with_runtime<I>(pairs: I, runtime: RuntimeHandle) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+    {
+        let map: HashMap<K, V> = pairs.into_iter().collect();
+        Self {
+            state: OwnedMutableState::with_runtime(map, runtime),
+        }
+    }
+
+    pub fn as_state(&self) -> State<HashMap<K, V>> {
+        self.state.as_state()
+    }
+
+    pub fn as_mutable_state(&self) -> MutableState<HashMap<K, V>> {
+        self.state.handle()
+    }
+
+    pub fn len(&self) -> usize {
+        self.state.with(|map| map.len())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.state.with(|map| map.is_empty())
+    }
+
+    pub fn contains_key(&self, key: &K) -> bool {
+        self.state.with(|map| map.contains_key(key))
+    }
+
+    pub fn get(&self, key: &K) -> Option<V> {
+        self.state.with(|map| map.get(key).cloned())
+    }
+
+    pub fn to_hash_map(&self) -> HashMap<K, V> {
+        self.state.with(|map| map.clone())
+    }
+
+    pub fn insert(&self, key: K, value: V) -> Option<V> {
+        self.state.update(|map| map.insert(key, value))
+    }
+
+    pub fn extend<I>(&self, iter: I)
+    where
+        I: IntoIterator<Item = (K, V)>,
+    {
+        self.state.update(|map| map.extend(iter));
+    }
+
+    pub fn remove(&self, key: &K) -> Option<V> {
+        self.state.update(|map| map.remove(key))
+    }
+
+    pub fn clear(&self) {
+        self.state.replace(HashMap::default());
+    }
+
+    pub fn retain<F>(&self, mut predicate: F)
+    where
+        F: FnMut(&K, &mut V) -> bool,
+    {
+        self.state.update(|map| map.retain(|k, v| predicate(k, v)));
+    }
+}
+
+impl<K, V> fmt::Debug for SnapshotStateMap<K, V>
+where
+    K: Clone + Eq + Hash + fmt::Debug + 'static,
+    V: Clone + fmt::Debug + 'static,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let contents = self.to_hash_map();
+        f.debug_struct("SnapshotStateMap")
+            .field("entries", &contents)
+            .finish()
+    }
+}
+
+pub(crate) struct DerivedState<T: Clone + 'static> {
+    compute: Rc<dyn Fn() -> T>,
+    pub(crate) state: OwnedMutableState<T>,
+}
+
+impl<T: Clone + 'static> DerivedState<T> {
+    pub(crate) fn new(runtime: RuntimeHandle, compute: Rc<dyn Fn() -> T>) -> Self {
+        let initial = compute();
+        Self {
+            compute,
+            state: OwnedMutableState::with_runtime(initial, runtime),
+        }
+    }
+
+    pub(crate) fn set_compute(&mut self, compute: Rc<dyn Fn() -> T>) {
+        self.compute = compute;
+    }
+
+    pub(crate) fn recompute(&self) {
+        let value = (self.compute)();
+        self.state.set_value(value);
+    }
+}
+
+impl<T: fmt::Debug + Clone + 'static> fmt::Debug for State<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.with_inner(|inner| {
+            inner.with_value(|value| f.debug_struct("State").field("value", value).finish())
+        })
     }
 }
 

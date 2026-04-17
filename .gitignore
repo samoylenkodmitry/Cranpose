@@ -30,3 +30,7 @@ docs/screenshots/text_scroll_exact_external_old_*/
 # Misc
 *.swp
 *.swo
+
+# Local tooling scratch files
+.codex
+review.md

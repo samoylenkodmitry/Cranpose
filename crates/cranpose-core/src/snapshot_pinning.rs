@@ -7,6 +7,7 @@
 /// Uses SnapshotDoubleIndexHeap for O(log N) pin/unpin and O(1) lowest queries.
 /// Based on Jetpack Compose's pinning mechanism (Snapshot.kt:714-722, 1954).
 use crate::snapshot_double_index_heap::SnapshotDoubleIndexHeap;
+use crate::snapshot_double_index_heap::SnapshotDoubleIndexHeapDebugStats;
 use crate::snapshot_id_set::{SnapshotId, SnapshotIdSet};
 use std::cell::RefCell;
 
@@ -85,11 +86,26 @@ impl PinningTable {
     fn pin_count(&self) -> usize {
         self.heap.len()
     }
+
+    fn debug_stats(&self) -> SnapshotPinningDebugStats {
+        SnapshotPinningDebugStats {
+            pin_count: self.pin_count(),
+            lowest_pinned_snapshot: self.lowest_pinned(),
+            heap: self.heap.debug_stats(),
+        }
+    }
 }
 
 thread_local! {
     // Global pinning table protected by a mutex.
     static PINNING_TABLE: RefCell<PinningTable> = RefCell::new(PinningTable::new());
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SnapshotPinningDebugStats {
+    pub pin_count: usize,
+    pub lowest_pinned_snapshot: Option<SnapshotId>,
+    pub heap: SnapshotDoubleIndexHeapDebugStats,
 }
 
 /// Pin a snapshot and its invalid set, returning a handle.
@@ -147,6 +163,10 @@ pub fn lowest_pinned_snapshot() -> Option<SnapshotId> {
 /// Get the current count of pinned snapshots (for testing/debugging).
 pub fn pin_count() -> usize {
     PINNING_TABLE.with(|cell| cell.borrow().pin_count())
+}
+
+pub fn debug_snapshot_pinning_stats() -> SnapshotPinningDebugStats {
+    PINNING_TABLE.with(|cell| cell.borrow().debug_stats())
 }
 
 /// Reset the pinning table (for testing).

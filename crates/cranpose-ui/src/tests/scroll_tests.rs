@@ -12,17 +12,20 @@ fn with_test_runtime<T>(f: impl FnOnce() -> T) -> T {
     f()
 }
 
-fn pointer_handler_for(modifier: Modifier) -> Rc<dyn Fn(PointerEvent)> {
+/// Returns (handler, chain). The chain must be kept alive while the handler
+/// is used — dropping it cancels the underlying pointer input task.
+fn pointer_handler_for(modifier: Modifier) -> (Rc<dyn Fn(PointerEvent)>, ModifierNodeChain) {
     let elements = modifier.elements();
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
     chain.update_from_slice(&elements, &mut context);
     let slices = collect_modifier_slices(&chain);
-    slices
+    let handler = slices
         .pointer_inputs()
         .first()
         .cloned()
-        .expect("scroll modifier should provide pointer input handler")
+        .expect("scroll modifier should provide pointer input handler");
+    (handler, chain)
 }
 
 #[test]
@@ -46,7 +49,7 @@ fn wheel_scroll_updates_vertical_scroll_state() {
     with_test_runtime(|| {
         let scroll_state = ScrollState::new(100.0);
         scroll_state.set_max_value(400.0);
-        let handler =
+        let (handler, _chain) =
             pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state.clone(), false));
 
         let event = PointerEvent::new(
@@ -74,7 +77,7 @@ fn wheel_scroll_uses_horizontal_delta_for_horizontal_scroll() {
     with_test_runtime(|| {
         let scroll_state = ScrollState::new(100.0);
         scroll_state.set_max_value(400.0);
-        let handler =
+        let (handler, _chain) =
             pointer_handler_for(Modifier::empty().horizontal_scroll(scroll_state.clone(), false));
 
         let event = PointerEvent::new(

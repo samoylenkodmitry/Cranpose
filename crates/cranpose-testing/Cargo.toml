@@ -14,7 +14,7 @@ description = "Testing utilities and harness for Cranpose"
 [dependencies]
 cranpose-core = { workspace = true }
 cranpose-foundation = { workspace = true }
-cranpose-ui = { workspace = true }
+cranpose-ui = { workspace = true, features = ["test-helpers"] }
 cranpose-app-shell = { workspace = true }
 cranpose-render-common = { workspace = true }
 cranpose-ui-graphics = { workspace = true }

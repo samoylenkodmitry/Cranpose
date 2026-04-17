@@ -22,7 +22,7 @@ android =["cranpose-platform-android", "dep:android-activity", "dep:android_logg
 web = ["cranpose-platform-web", "dep:wasm-bindgen", "dep:web-sys"]
 renderer-pixels = ["cranpose-render-pixels", "dep:pixels"]
 renderer-wgpu = ["cranpose-render-wgpu", "dep:wgpu", "dep:pollster"]
-robot = [] # Enable robot testing support (cranpose-ui now always included)
+robot = ["cranpose-app-shell/test-support"] # Enable robot testing support (cranpose-ui now always included)
 
 [dependencies]
 cranpose-app-shell = { workspace = true }
@@ -66,6 +66,7 @@ web-sys = { version = "0.3", optional = true, features = [
 ] }
 log = "0.4"
 cranpose-services = { workspace = true }
+thiserror = "2.0.18"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"

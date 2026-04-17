@@ -214,11 +214,12 @@ fn hash_color_filter<H: Hasher>(filter: ColorFilter, state: &mut H) {
 }
 
 fn hash_runtime_shader<H: Hasher>(shader: &RuntimeShader, state: &mut H) {
+    // Only hash the source, not the uniforms. Uniforms change every frame for
+    // animated shaders (time, position, etc.) and including them would produce
+    // a new effect_hash every frame, filling the layer surface cache with
+    // stale entries. The pipeline cache already deduplicates by source hash,
+    // and stable_id in the cache key distinguishes different nodes.
     shader.source().hash(state);
-    shader.uniforms().len().hash(state);
-    for value in shader.uniforms() {
-        hash_f32_bits(*value, state);
-    }
 }
 
 fn hash_render_effect<H: Hasher>(effect: &RenderEffect, state: &mut H) {
@@ -432,12 +433,25 @@ mod tests {
     }
 
     #[test]
-    fn runtime_shader_render_hash_tracks_uniforms() {
+    fn runtime_shader_render_hash_ignores_uniforms() {
         let mut base = RuntimeShader::new("// hash");
         base.set_float(0, 1.0);
         let mut changed = base.clone();
         changed.set_float(0, 2.0);
-        assert_ne!(base.render_hash(), changed.render_hash());
+        assert_eq!(
+            base.render_hash(),
+            changed.render_hash(),
+            "render_hash must depend only on source, not uniforms — \
+             animated uniforms (time, position) would otherwise produce a \
+             new effect_hash every frame, filling the layer cache with stale textures"
+        );
+    }
+
+    #[test]
+    fn runtime_shader_render_hash_tracks_source() {
+        let a = RuntimeShader::new("// shader A");
+        let b = RuntimeShader::new("// shader B");
+        assert_ne!(a.render_hash(), b.render_hash());
     }
 
     #[test]

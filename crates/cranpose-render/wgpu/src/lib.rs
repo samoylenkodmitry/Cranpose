@@ -210,6 +210,47 @@ pub struct CapturedFrame {
     pub pixels: Vec<u8>,
 }
 
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DebugCpuAllocationStats {
+    pub scene_graph_node_count: usize,
+    pub scene_graph_heap_bytes: usize,
+    pub scene_hits_len: usize,
+    pub scene_hits_cap: usize,
+    pub scene_node_index_len: usize,
+    pub scene_node_index_cap: usize,
+    pub text_renderer_pool_len: usize,
+    pub text_renderer_pool_cap: usize,
+    pub swash_image_cache_len: usize,
+    pub swash_image_cache_cap: usize,
+    pub swash_outline_cache_len: usize,
+    pub swash_outline_cache_cap: usize,
+    pub image_texture_cache_len: usize,
+    pub image_texture_cache_cap: usize,
+    pub scratch_shape_data_cap: usize,
+    pub scratch_gradients_cap: usize,
+    pub scratch_vertices_cap: usize,
+    pub scratch_indices_cap: usize,
+    pub scratch_image_vertices_cap: usize,
+    pub scratch_image_indices_cap: usize,
+    pub scratch_image_cmds_cap: usize,
+    pub scratch_segment_items_cap: usize,
+    pub scratch_effect_ranges_cap: usize,
+    pub scratch_layer_events_cap: usize,
+    pub staged_upload_bytes_cap: usize,
+    pub staged_upload_copies_cap: usize,
+    pub layer_surface_cache_len: usize,
+    pub layer_surface_cache_cap: usize,
+    pub layer_surface_cache_identity_len: usize,
+    pub layer_surface_cache_identity_cap: usize,
+    pub layer_surface_rect_cache_len: usize,
+    pub layer_surface_rect_cache_cap: usize,
+    pub layer_surface_requirements_cache_len: usize,
+    pub layer_surface_requirements_cache_cap: usize,
+    pub layer_cache_seen_this_frame_len: usize,
+    pub layer_cache_seen_this_frame_cap: usize,
+}
+
 /// Unified hash key for text caching - shared between measurement and rendering.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) enum TextKey {
@@ -1058,6 +1099,31 @@ impl WgpuRenderer {
         self.gpu_renderer
             .as_ref()
             .and_then(GpuRenderer::last_frame_stats)
+    }
+
+    pub fn debug_cpu_allocation_stats(&self) -> DebugCpuAllocationStats {
+        let mut stats = self
+            .gpu_renderer
+            .as_ref()
+            .map(GpuRenderer::debug_cpu_allocation_stats)
+            .unwrap_or_default();
+        stats.scene_graph_node_count = self
+            .scene
+            .graph
+            .as_ref()
+            .map(RenderGraph::node_count)
+            .unwrap_or(0);
+        stats.scene_graph_heap_bytes = self
+            .scene
+            .graph
+            .as_ref()
+            .map(RenderGraph::heap_bytes)
+            .unwrap_or(0);
+        stats.scene_hits_len = self.scene.hits.len();
+        stats.scene_hits_cap = self.scene.hits.capacity();
+        stats.scene_node_index_len = self.scene.node_index.len();
+        stats.scene_node_index_cap = self.scene.node_index.capacity();
+        stats
     }
 
     /// Get access to the WGPU device (for surface configuration).

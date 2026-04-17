@@ -4,18 +4,17 @@ pub mod coordinator;
 pub mod core;
 pub mod policies;
 
-use cranpose_core::collections::map::Entry;
 use cranpose_core::collections::map::HashMap;
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     fmt,
     rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use cranpose_core::{
-    Applier, ApplierHost, Composer, ConcreteApplierHost, MemoryApplier, NodeError, NodeId, Phase,
-    RuntimeHandle, SlotBackend, SlotsHost, SnapshotStateObserver,
+    Applier, ApplierHost, Composer, ConcreteApplierHost, MemoryApplier, Node, NodeError, NodeId,
+    Phase, RuntimeHandle, SlotTable, SlotsHost, SnapshotStateObserver,
 };
 
 use self::coordinator::NodeCoordinator;
@@ -30,9 +29,9 @@ use crate::modifier::{
 
 use crate::subcompose_layout::SubcomposeLayoutNode;
 use crate::widgets::nodes::{IntrinsicKind, LayoutNode, LayoutNodeCacheHandles};
-use cranpose_foundation::InvalidationKind;
-use cranpose_foundation::ModifierNodeContext;
-use cranpose_foundation::{NodeCapabilities, SemanticsConfiguration};
+use cranpose_foundation::{
+    InvalidationKind, ModifierNodeContext, NodeCapabilities, SemanticsConfiguration,
+};
 use cranpose_ui_layout::{Constraints, MeasurePolicy, MeasureResult};
 
 /// Runtime context for modifier nodes during measurement.
@@ -107,13 +106,13 @@ pub fn invalidate_all_layout_caches() {
 
 /// RAII guard that:
 /// - moves the current MemoryApplier into a ConcreteApplierHost
-/// - holds a shared handle to the SlotBackend used by LayoutBuilder
+/// - holds a shared handle to the `SlotTable` used by `LayoutBuilder`
 /// - on Drop, always:
 ///   * restores slots into the host from the shared handle
 ///   * moves the original MemoryApplier back into the Composition
 ///
 /// This makes `measure_layout` panic/Err-safe wrt both the applier and slots.
-/// The key invariant: guard and builder share the same `Rc<RefCell<SlotBackend>>`,
+/// The key invariant: guard and builder share the same `Rc<RefCell<SlotTable>>`,
 /// so the guard never loses access to the authoritative slots even on panic.
 struct ApplierSlotGuard<'a> {
     /// The `MemoryApplier` inside the Composition::applier that we must restore into.
@@ -122,7 +121,7 @@ struct ApplierSlotGuard<'a> {
     host: Rc<ConcreteApplierHost<MemoryApplier>>,
     /// Shared handle to the slot table. Both the guard and the builder hold a clone.
     /// On Drop, we write whatever is in this handle back into the applier.
-    slots: Rc<RefCell<SlotBackend>>,
+    slots: Rc<RefCell<SlotTable>>,
 }
 
 impl<'a> ApplierSlotGuard<'a> {
@@ -155,7 +154,7 @@ impl<'a> ApplierSlotGuard<'a> {
 
     /// Returns the shared handle to slots for the builder to use.
     /// The builder clones this Rc, so both guard and builder share the same slots.
-    fn slots_handle(&self) -> Rc<RefCell<SlotBackend>> {
+    fn slots_handle(&self) -> Rc<RefCell<SlotTable>> {
         Rc::clone(&self.slots)
     }
 }
@@ -263,7 +262,7 @@ pub enum SemanticsRole {
 }
 
 /// A single node within the semantics tree.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SemanticsNode {
     pub node_id: NodeId,
     pub role: SemanticsRole,
@@ -291,7 +290,7 @@ impl SemanticsNode {
 }
 
 /// Rooted semantics tree extracted after layout.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SemanticsTree {
     root: SemanticsNode,
 }
@@ -303,40 +302,6 @@ impl SemanticsTree {
 
     pub fn root(&self) -> &SemanticsNode {
         &self.root
-    }
-}
-
-/// Caches semantics configurations for layout nodes, similar to Jetpack Compose's SemanticsOwner.
-/// This enables lazy semantics tree construction and efficient invalidation.
-#[derive(Default)]
-pub struct SemanticsOwner {
-    configurations: RefCell<HashMap<NodeId, Option<SemanticsConfiguration>>>,
-}
-
-impl SemanticsOwner {
-    pub fn new() -> Self {
-        Self {
-            configurations: RefCell::new(HashMap::default()),
-        }
-    }
-
-    /// Returns the cached configuration for the given node, computing it if necessary.
-    pub fn get_or_compute(
-        &self,
-        node_id: NodeId,
-        applier: &mut MemoryApplier,
-    ) -> Option<SemanticsConfiguration> {
-        // Check cache first
-        if let Some(cached) = self.configurations.borrow().get(&node_id) {
-            return cached.clone();
-        }
-
-        // Compute and cache
-        let config = compute_semantics_for_node(applier, node_id);
-        self.configurations
-            .borrow_mut()
-            .insert(node_id, config.clone());
-        config
     }
 }
 
@@ -470,14 +435,14 @@ impl LayoutEngine for MemoryApplier {
 pub struct LayoutMeasurements {
     root: Rc<MeasuredNode>,
     semantics: Option<SemanticsTree>,
-    layout_tree: LayoutTree,
+    layout_tree: Option<LayoutTree>,
 }
 
 impl LayoutMeasurements {
     fn new(
         root: Rc<MeasuredNode>,
         semantics: Option<SemanticsTree>,
-        layout_tree: LayoutTree,
+        layout_tree: Option<LayoutTree>,
     ) -> Self {
         Self {
             root,
@@ -498,23 +463,36 @@ impl LayoutMeasurements {
     /// Consumes the measurements and produces a [`LayoutTree`].
     pub fn into_layout_tree(self) -> LayoutTree {
         self.layout_tree
+            .expect("layout tree was not built for these measurements")
     }
 
     /// Returns a borrowed [`LayoutTree`] for rendering.
     pub fn layout_tree(&self) -> LayoutTree {
-        self.layout_tree.clone()
+        self.layout_tree
+            .clone()
+            .expect("layout tree was not built for these measurements")
     }
+}
+
+/// Builds a semantics tree from an existing [`LayoutTree`].
+///
+/// This is useful for consumers that need semantics on demand without forcing
+/// every layout pass to eagerly allocate a full [`SemanticsTree`].
+pub fn build_semantics_tree_from_layout_tree(layout_tree: &LayoutTree) -> SemanticsTree {
+    SemanticsTree::new(build_semantics_node_from_layout_box(layout_tree.root()))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MeasureLayoutOptions {
     pub collect_semantics: bool,
+    pub build_layout_tree: bool,
 }
 
 impl Default for MeasureLayoutOptions {
     fn default() -> Self {
         Self {
             collect_semantics: true,
+            build_layout_tree: true,
         }
     }
 }
@@ -527,16 +505,16 @@ impl Default for MeasureLayoutOptions {
 ///
 /// Returns Result to force caller to handle errors explicitly. No more unwrap_or(true) safety net.
 pub fn tree_needs_layout(applier: &mut dyn Applier, root: NodeId) -> Result<bool, NodeError> {
-    // Just check root - bubbling ensures it's dirty if any descendant is dirty
-    let node = applier.get_mut(root)?;
-    let layout_node =
-        node.as_any_mut()
-            .downcast_mut::<LayoutNode>()
-            .ok_or(NodeError::TypeMismatch {
-                id: root,
-                expected: std::any::type_name::<LayoutNode>(),
-            })?;
-    Ok(layout_node.needs_layout())
+    Ok(applier.get_mut(root)?.needs_layout())
+}
+
+/// Check if the root semantics snapshot is dirty.
+///
+/// Semantics invalidations bubble to the root the same way layout invalidations do,
+/// so a root check is sufficient to determine whether the next layout pass needs to
+/// rebuild semantic data even when geometry is otherwise unchanged.
+pub fn tree_needs_semantics(applier: &mut dyn Applier, root: NodeId) -> Result<bool, NodeError> {
+    Ok(applier.get_mut(root)?.needs_semantics())
 }
 
 /// Test helper: bubbles layout dirty flag to root.
@@ -560,6 +538,8 @@ pub fn measure_layout_with_options(
     max_size: Size,
     options: MeasureLayoutOptions,
 ) -> Result<LayoutMeasurements, NodeError> {
+    process_pending_layout_repasses(applier, root)?;
+
     let constraints = Constraints {
         min_width: 0.0,
         max_width: max_size.width,
@@ -588,8 +568,10 @@ pub fn measure_layout_with_options(
         Ok(tuple) => tuple,
         Err(NodeError::TypeMismatch { .. }) => {
             let node = applier.get_mut(root)?;
-            // For non-LayoutNode roots, check needs_layout as fallback
-            let measure_dirty = node.needs_layout();
+            // Non-LayoutNode roots still expose Node dirty flags.
+            // Use needs_measure here so layout-only subtree repasses can reuse
+            // the existing cache epoch instead of invalidating the whole tree.
+            let measure_dirty = node.needs_measure();
             let semantics_dirty = node.needs_semantics();
             (measure_dirty, semantics_dirty, 0)
         }
@@ -608,7 +590,7 @@ pub fn measure_layout_with_options(
     // Move the current applier into a host and set up a guard that will
     // ALWAYS restore:
     // - the MemoryApplier back into `applier`
-    // - the SlotBackend back into that MemoryApplier
+    // - the SlotTable back into that MemoryApplier
     //
     // IMPORTANT: Declare the guard *before* the builder so the builder
     // is dropped first (both on Ok and on unwind).
@@ -617,7 +599,7 @@ pub fn measure_layout_with_options(
     let slots_handle = guard.slots_handle();
 
     // Give the builder the shared slots handle - both guard and builder
-    // now share access to the same SlotBackend via Rc<RefCell<_>>.
+    // now share access to the same SlotTable via Rc<RefCell<_>>.
     let mut builder =
         LayoutBuilder::new_with_epoch(Rc::clone(&applier_host), epoch, Rc::clone(&slots_handle));
 
@@ -643,25 +625,25 @@ pub fn measure_layout_with_options(
         }
     }
 
-    // ---- Metadata ----------------------------------------------------------
-    let metadata = {
+    let (layout_tree, semantics) = {
         let mut applier_ref = applier_host.borrow_typed();
-        collect_runtime_metadata(&mut applier_ref, &measured)?
-    };
-
-    let semantics = if options.collect_semantics {
-        let semantics_snapshot = {
-            let mut applier_ref = applier_host.borrow_typed();
-            collect_semantics_snapshot(&mut applier_ref, &measured)?
+        let layout_tree = if options.build_layout_tree {
+            Some(build_layout_tree(&mut applier_ref, &measured)?)
+        } else {
+            None
         };
-
-        Some(SemanticsTree::new(build_semantics_node(
-            &measured,
-            &metadata,
-            &semantics_snapshot,
-        )))
-    } else {
-        None
+        let semantics = if options.collect_semantics {
+            let semantics_tree = if let Some(layout_tree) = layout_tree.as_ref() {
+                clear_semantics_dirty_flags(&mut applier_ref, &measured)?;
+                build_semantics_tree_from_layout_tree(layout_tree)
+            } else {
+                build_semantics_tree_from_live_nodes(&mut applier_ref, &measured)?
+            };
+            Some(semantics_tree)
+        } else {
+            None
+        };
+        (layout_tree, semantics)
     };
 
     // Drop builder before guard - slots are already in the shared handle.
@@ -671,9 +653,22 @@ pub fn measure_layout_with_options(
     // DO NOT manually unwrap `applier_host` or replace `applier` here.
     // `ApplierSlotGuard::drop` will restore everything when this function returns.
 
-    let layout_tree = build_layout_tree_from_metadata(&measured, &metadata);
-
     Ok(LayoutMeasurements::new(measured, semantics, layout_tree))
+}
+
+fn process_pending_layout_repasses(
+    applier: &mut MemoryApplier,
+    root: NodeId,
+) -> Result<(), NodeError> {
+    let repass_nodes = crate::take_layout_repass_nodes();
+    if repass_nodes.is_empty() {
+        return Ok(());
+    }
+    for node_id in repass_nodes {
+        cranpose_core::bubble_layout_dirty(applier as &mut dyn Applier, node_id);
+    }
+    applier.get_mut(root)?.mark_needs_layout();
+    Ok(())
 }
 
 struct LayoutBuilder {
@@ -684,7 +679,7 @@ impl LayoutBuilder {
     fn new_with_epoch(
         applier: Rc<ConcreteApplierHost<MemoryApplier>>,
         epoch: u64,
-        slots: Rc<RefCell<SlotBackend>>,
+        slots: Rc<RefCell<SlotTable>>,
     ) -> Self {
         Self {
             state: Rc::new(RefCell::new(LayoutBuilderState::new_with_epoch(
@@ -711,7 +706,7 @@ struct LayoutBuilderState {
     runtime_handle: Option<RuntimeHandle>,
     /// Shared handle to the slot table. This is shared with ApplierSlotGuard
     /// to ensure panic-safety: even if we panic, the guard can restore slots.
-    slots: Rc<RefCell<SlotBackend>>,
+    slots: Rc<RefCell<SlotTable>>,
     cache_epoch: u64,
     tmp_measurables: ScratchVecPool<Box<dyn Measurable>>,
     tmp_records: ScratchVecPool<(NodeId, ChildRecord)>,
@@ -723,7 +718,7 @@ impl LayoutBuilderState {
     fn new_with_epoch(
         applier: Rc<ConcreteApplierHost<MemoryApplier>>,
         epoch: u64,
-        slots: Rc<RefCell<SlotBackend>>,
+        slots: Rc<RefCell<SlotTable>>,
     ) -> Self {
         let runtime_handle = applier.borrow_typed().runtime_handle();
 
@@ -920,10 +915,9 @@ impl LayoutBuilderState {
         composer.enter_phase(Phase::Measure);
 
         let state_rc_clone = Rc::clone(&state_rc);
-        let measure_error: Rc<RefCell<Option<NodeError>>> = Rc::new(RefCell::new(None));
-        let error_for_measurer = Rc::clone(&measure_error);
+        let measure_error = RefCell::new(None);
         let state_rc_for_subcompose = Rc::clone(&state_rc_clone);
-        let error_for_subcompose = Rc::clone(&error_for_measurer);
+        let error_for_subcompose = &measure_error;
         let measured_children = Rc::new(RefCell::new(HashMap::default()));
         let measured_children_for_subcompose = Rc::clone(&measured_children);
 
@@ -954,9 +948,8 @@ impl LayoutBuilderState {
                     }
                 },
             ),
-            Rc::clone(&measure_error),
+            &measure_error,
         )?;
-
         slots_guard.restore(slots_host.take());
 
         if let Some(err) = measure_error.borrow_mut().take() {
@@ -993,6 +986,8 @@ impl LayoutBuilderState {
         if let Ok(mut applier) = applier_host.try_borrow_typed() {
             let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |parent_node| {
                 parent_node.set_measured_size(Size { width, height });
+                parent_node.clear_needs_measure();
+                parent_node.clear_needs_layout();
             });
         }
 
@@ -1213,6 +1208,7 @@ impl LayoutBuilderState {
         let LayoutNodeSnapshot {
             measure_policy,
             cache,
+            needs_layout,
             needs_measure,
         } = snapshot;
         cache.activate(cache_epoch);
@@ -1221,10 +1217,10 @@ impl LayoutBuilderState {
             // Node has needs_measure=true
         }
 
-        // Only check cache if not marked as needing measure.
-        // When needs_measure=true, we MUST re-run measure() even if constraints match,
-        // because something else changed (e.g., scroll offset, modifier state).
-        if !needs_measure {
+        // Only check cache when the node is fully clean.
+        // needs_layout=true means either the node itself or one of its descendants
+        // must be revisited even if the node's own measured size can stay cached.
+        if !needs_measure && !needs_layout {
             // Check cache for current constraints
             if let Some(cached) = cache.get_measurement(constraints) {
                 // Clear dirty flag after successful cache hit
@@ -1262,18 +1258,37 @@ impl LayoutBuilderState {
             let data = {
                 let mut applier = applier_host.borrow_typed();
                 match applier.with_node::<LayoutNode, _>(child_id, |n| {
-                    (n.cache_handles(), n.layout_state_handle())
+                    (
+                        n.cache_handles(),
+                        n.layout_state_handle(),
+                        n.needs_layout(),
+                        n.needs_measure(),
+                    )
                 }) {
-                    Ok((cache, state)) => Some((cache, Some(state))),
+                    Ok((cache, state, needs_layout, needs_measure)) => {
+                        Some((cache, Some(state), needs_layout, needs_measure))
+                    }
                     Err(NodeError::TypeMismatch { .. }) => {
-                        Some((LayoutNodeCacheHandles::default(), None))
+                        match applier.with_node::<SubcomposeLayoutNode, _>(child_id, |n| {
+                            (n.needs_layout(), n.needs_measure())
+                        }) {
+                            Ok((needs_layout, needs_measure)) => Some((
+                                LayoutNodeCacheHandles::default(),
+                                None,
+                                needs_layout,
+                                needs_measure,
+                            )),
+                            Err(NodeError::TypeMismatch { .. }) => None,
+                            Err(NodeError::Missing { .. }) => None,
+                            Err(err) => return Err(err),
+                        }
                     }
                     Err(NodeError::Missing { .. }) => None,
                     Err(err) => return Err(err),
                 }
             };
 
-            let Some((cache_handles, layout_state)) = data else {
+            let Some((cache_handles, layout_state, needs_layout, needs_measure)) = data else {
                 continue;
             };
 
@@ -1295,6 +1310,7 @@ impl LayoutBuilderState {
                 runtime_handle.clone(),
                 cache_handles,
                 cache_epoch,
+                needs_layout || needs_measure,
                 Some(measure_handle.clone()),
                 layout_state,
             )));
@@ -1388,6 +1404,7 @@ impl LayoutBuilderState {
 struct LayoutNodeSnapshot {
     measure_policy: Rc<dyn MeasurePolicy>,
     cache: LayoutNodeCacheHandles,
+    needs_layout: bool,
     /// Whether this specific node needs to be measured (vs using cached measurement)
     needs_measure: bool,
 }
@@ -1397,6 +1414,7 @@ impl LayoutNodeSnapshot {
         Self {
             measure_policy: Rc::clone(&node.measure_policy),
             cache: node.cache_handles(),
+            needs_layout: node.needs_layout(),
             needs_measure: node.needs_measure(),
         }
     }
@@ -1474,7 +1492,7 @@ impl Drop for VecPools {
 
 struct SlotsGuard {
     state: Rc<RefCell<LayoutBuilderState>>,
-    slots: Option<SlotBackend>,
+    slots: Option<SlotTable>,
 }
 
 impl SlotsGuard {
@@ -1495,7 +1513,7 @@ impl SlotsGuard {
         Rc::new(SlotsHost::new(slots))
     }
 
-    fn restore(&mut self, slots: SlotBackend) {
+    fn restore(&mut self, slots: SlotTable) {
         debug_assert!(self.slots.is_none());
         self.slots = Some(slots);
     }
@@ -1578,6 +1596,7 @@ struct LayoutChildMeasurable {
     runtime_handle: Option<RuntimeHandle>,
     cache: LayoutNodeCacheHandles,
     cache_epoch: u64,
+    force_remeasure: Cell<bool>,
     measure_handle: Option<LayoutMeasureHandle>,
     layout_state: Option<Rc<RefCell<crate::widgets::nodes::layout_node::LayoutState>>>,
 }
@@ -1593,6 +1612,7 @@ impl LayoutChildMeasurable {
         runtime_handle: Option<RuntimeHandle>,
         cache: LayoutNodeCacheHandles,
         cache_epoch: u64,
+        force_remeasure: bool,
         measure_handle: Option<LayoutMeasureHandle>,
         layout_state: Option<Rc<RefCell<crate::widgets::nodes::layout_node::LayoutState>>>,
     ) -> Self {
@@ -1606,6 +1626,7 @@ impl LayoutChildMeasurable {
             runtime_handle,
             cache,
             cache_epoch,
+            force_remeasure: Cell::new(force_remeasure),
             measure_handle,
             layout_state,
         }
@@ -1634,12 +1655,15 @@ impl LayoutChildMeasurable {
 
     fn intrinsic_measure(&self, constraints: Constraints) -> Option<Rc<MeasuredNode>> {
         self.cache.activate(self.cache_epoch);
-        if let Some(cached) = self.cache.get_measurement(constraints) {
-            return Some(cached);
+        if !self.force_remeasure.get() {
+            if let Some(cached) = self.cache.get_measurement(constraints) {
+                return Some(cached);
+            }
         }
 
         match self.perform_measure(constraints) {
             Ok(measured) => {
+                self.force_remeasure.set(false);
                 self.cache
                     .store_measurement(constraints, Rc::clone(&measured));
                 Some(measured)
@@ -1656,12 +1680,33 @@ impl Measurable for LayoutChildMeasurable {
     fn measure(&self, constraints: Constraints) -> Placeable {
         self.cache.activate(self.cache_epoch);
         let measured_size;
-        if let Some(cached) = self.cache.get_measurement(constraints) {
-            measured_size = cached.size;
-            *self.measured.borrow_mut() = Some(Rc::clone(&cached));
+        if !self.force_remeasure.get() {
+            if let Some(cached) = self.cache.get_measurement(constraints) {
+                measured_size = cached.size;
+                *self.measured.borrow_mut() = Some(Rc::clone(&cached));
+            } else {
+                match self.perform_measure(constraints) {
+                    Ok(measured) => {
+                        self.force_remeasure.set(false);
+                        measured_size = measured.size;
+                        self.cache
+                            .store_measurement(constraints, Rc::clone(&measured));
+                        *self.measured.borrow_mut() = Some(measured);
+                    }
+                    Err(err) => {
+                        self.record_error(err);
+                        self.measured.borrow_mut().take();
+                        measured_size = Size {
+                            width: 0.0,
+                            height: 0.0,
+                        };
+                    }
+                }
+            }
         } else {
             match self.perform_measure(constraints) {
                 Ok(measured) => {
+                    self.force_remeasure.set(false);
                     measured_size = measured.size;
                     self.cache
                         .store_measurement(constraints, Rc::clone(&measured));
@@ -1742,8 +1787,10 @@ impl Measurable for LayoutChildMeasurable {
     fn min_intrinsic_width(&self, height: f32) -> f32 {
         let kind = IntrinsicKind::MinWidth(height);
         self.cache.activate(self.cache_epoch);
-        if let Some(value) = self.cache.get_intrinsic(&kind) {
-            return value;
+        if !self.force_remeasure.get() {
+            if let Some(value) = self.cache.get_intrinsic(&kind) {
+                return value;
+            }
         }
         let constraints = Constraints {
             min_width: 0.0,
@@ -1763,8 +1810,10 @@ impl Measurable for LayoutChildMeasurable {
     fn max_intrinsic_width(&self, height: f32) -> f32 {
         let kind = IntrinsicKind::MaxWidth(height);
         self.cache.activate(self.cache_epoch);
-        if let Some(value) = self.cache.get_intrinsic(&kind) {
-            return value;
+        if !self.force_remeasure.get() {
+            if let Some(value) = self.cache.get_intrinsic(&kind) {
+                return value;
+            }
         }
         let constraints = Constraints {
             min_width: 0.0,
@@ -1784,8 +1833,10 @@ impl Measurable for LayoutChildMeasurable {
     fn min_intrinsic_height(&self, width: f32) -> f32 {
         let kind = IntrinsicKind::MinHeight(width);
         self.cache.activate(self.cache_epoch);
-        if let Some(value) = self.cache.get_intrinsic(&kind) {
-            return value;
+        if !self.force_remeasure.get() {
+            if let Some(value) = self.cache.get_intrinsic(&kind) {
+                return value;
+            }
         }
         let constraints = Constraints {
             min_width: width,
@@ -1805,8 +1856,10 @@ impl Measurable for LayoutChildMeasurable {
     fn max_intrinsic_height(&self, width: f32) -> f32 {
         let kind = IntrinsicKind::MaxHeight(width);
         self.cache.activate(self.cache_epoch);
-        if let Some(value) = self.cache.get_intrinsic(&kind) {
-            return value;
+        if !self.force_remeasure.get() {
+            if let Some(value) = self.cache.get_intrinsic(&kind) {
+                return value;
+            }
         }
         let constraints = Constraints {
             min_width: 0.0,
@@ -1853,11 +1906,8 @@ fn measure_node_with_host(
         Some(handle) => Some(handle),
         None => applier.borrow_typed().runtime_handle(),
     };
-    let mut builder = LayoutBuilder::new_with_epoch(
-        applier,
-        epoch,
-        Rc::new(RefCell::new(SlotBackend::default())),
-    );
+    let mut builder =
+        LayoutBuilder::new_with_epoch(applier, epoch, Rc::new(RefCell::new(SlotTable::default())));
     builder.set_runtime_handle(runtime_handle);
     builder.measure_node(node_id, constraints)
 }
@@ -1881,72 +1931,6 @@ impl Default for RuntimeNodeMetadata {
             button_handler: None,
         }
     }
-}
-
-fn collect_runtime_metadata(
-    applier: &mut MemoryApplier,
-    node: &MeasuredNode,
-) -> Result<HashMap<NodeId, RuntimeNodeMetadata>, NodeError> {
-    let mut map = HashMap::default();
-    collect_runtime_metadata_inner(applier, node, &mut map)?;
-    Ok(map)
-}
-
-/// Collects semantics configurations for all nodes in the measured tree using the SemanticsOwner cache.
-fn collect_semantics_with_owner(
-    applier: &mut MemoryApplier,
-    node: &MeasuredNode,
-    owner: &SemanticsOwner,
-) -> Result<(), NodeError> {
-    // Compute and cache configuration for this node
-    owner.get_or_compute(node.node_id, applier);
-
-    // Recurse to children
-    for child in &node.children {
-        collect_semantics_with_owner(applier, &child.node, owner)?;
-    }
-    Ok(())
-}
-
-fn collect_semantics_snapshot(
-    applier: &mut MemoryApplier,
-    node: &MeasuredNode,
-) -> Result<HashMap<NodeId, Option<SemanticsConfiguration>>, NodeError> {
-    let owner = SemanticsOwner::new();
-    collect_semantics_with_owner(applier, node, &owner)?;
-
-    // Extract all cached configurations into a map
-    let mut map = HashMap::default();
-    extract_configurations_recursive(node, &owner, &mut map);
-    Ok(map)
-}
-
-fn extract_configurations_recursive(
-    node: &MeasuredNode,
-    owner: &SemanticsOwner,
-    map: &mut HashMap<NodeId, Option<SemanticsConfiguration>>,
-) {
-    if let Some(config) = owner.configurations.borrow().get(&node.node_id) {
-        map.insert(node.node_id, config.clone());
-    }
-    for child in &node.children {
-        extract_configurations_recursive(&child.node, owner, map);
-    }
-}
-
-fn collect_runtime_metadata_inner(
-    applier: &mut MemoryApplier,
-    node: &MeasuredNode,
-    map: &mut HashMap<NodeId, RuntimeNodeMetadata>,
-) -> Result<(), NodeError> {
-    if let Entry::Vacant(entry) = map.entry(node.node_id) {
-        let meta = runtime_metadata_for(applier, node.node_id)?;
-        entry.insert(meta);
-    }
-    for child in &node.children {
-        collect_runtime_metadata_inner(applier, &child.node, map)?;
-    }
-    Ok(())
 }
 
 fn role_from_modifier_slices(modifier_slices: &ModifierNodeSlices) -> SemanticsRole {
@@ -2004,87 +1988,109 @@ fn runtime_metadata_for(
     Ok(RuntimeNodeMetadata::default())
 }
 
-/// Computes semantics configuration for a node by reading from its modifier chain.
-/// This is the primary entry point for extracting semantics from nodes, replacing
-/// the widget-specific fallbacks with pure modifier-node traversal.
-fn compute_semantics_for_node(
+fn clear_semantics_dirty_flags(
     applier: &mut MemoryApplier,
-    node_id: NodeId,
-) -> Option<SemanticsConfiguration> {
-    // Try LayoutNode (the primary modern path)
-    match applier.with_node::<LayoutNode, _>(node_id, |layout| {
-        let config = layout.semantics_configuration();
+    node: &MeasuredNode,
+) -> Result<(), NodeError> {
+    if let Err(err) = applier.with_node::<LayoutNode, _>(node.node_id, |layout| {
         layout.clear_needs_semantics();
-        config
     }) {
-        Ok(config) => return config,
-        Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => {}
-        Err(_) => return None,
+        match err {
+            NodeError::Missing { .. } | NodeError::TypeMismatch { .. } => {}
+            _ => return Err(err),
+        }
     }
 
-    // Try SubcomposeLayoutNode
-    if let Ok(modifier) =
-        applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| node.modifier())
-    {
-        return collect_semantics_from_modifier(&modifier);
+    for child in &node.children {
+        clear_semantics_dirty_flags(applier, &child.node)?;
     }
 
-    None
+    Ok(())
 }
 
-/// Builds a semantics node from measured tree data and semantics configurations.
-/// Roles and actions are now derived entirely from SemanticsConfiguration, with
-/// metadata consulted only for prior widget type information.
-fn build_semantics_node(
+fn build_semantics_tree_from_live_nodes(
+    applier: &mut MemoryApplier,
     node: &MeasuredNode,
-    metadata: &HashMap<NodeId, RuntimeNodeMetadata>,
-    semantics: &HashMap<NodeId, Option<SemanticsConfiguration>>,
-) -> SemanticsNode {
-    let info = metadata.get(&node.node_id).cloned().unwrap_or_default();
+) -> Result<SemanticsTree, NodeError> {
+    Ok(SemanticsTree::new(build_semantics_node_from_live_nodes(
+        applier, node,
+    )?))
+}
 
-    // Start with the widget-derived role as a fallback
-    let mut role = info.role.clone();
+fn semantics_node_from_parts(
+    node_id: NodeId,
+    mut role: SemanticsRole,
+    config: Option<SemanticsConfiguration>,
+    children: Vec<SemanticsNode>,
+) -> SemanticsNode {
     let mut actions = Vec::new();
     let mut description = None;
 
-    // Override with semantics configuration if present
-    if let Some(config) = semantics.get(&node.node_id).cloned().flatten() {
-        // Role synthesis: prefer semantics flags over widget type
+    if let Some(config) = config {
         if config.is_button {
             role = SemanticsRole::Button;
         }
-
-        // Action synthesis: create click action if node is clickable
         if config.is_clickable {
             actions.push(SemanticsAction::Click {
-                handler: SemanticsCallback::new(node.node_id),
+                handler: SemanticsCallback::new(node_id),
             });
         }
-
-        // Description from configuration
-        if let Some(desc) = config.content_description {
-            description = Some(desc);
-        }
+        description = config.content_description;
     }
 
-    let children = node
-        .children
-        .iter()
-        .map(|child| build_semantics_node(&child.node, metadata, semantics))
-        .collect();
-
-    SemanticsNode::new(node.node_id, role, actions, children, description)
+    SemanticsNode::new(node_id, role, actions, children, description)
 }
 
-fn build_layout_tree_from_metadata(
+fn build_semantics_node_from_live_nodes(
+    applier: &mut MemoryApplier,
     node: &MeasuredNode,
-    metadata: &HashMap<NodeId, RuntimeNodeMetadata>,
-) -> LayoutTree {
+) -> Result<SemanticsNode, NodeError> {
+    let (role, config) = match applier.with_node::<LayoutNode, _>(node.node_id, |layout| {
+        let role = role_from_modifier_slices(&layout.modifier_slices_snapshot());
+        let config = layout.semantics_configuration();
+        layout.clear_needs_semantics();
+        (role, config)
+    }) {
+        Ok(data) => data,
+        Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => {
+            match applier.with_node::<SubcomposeLayoutNode, _>(node.node_id, |subcompose| {
+                (
+                    SemanticsRole::Subcompose,
+                    collect_semantics_from_modifier(&subcompose.modifier()),
+                )
+            }) {
+                Ok(data) => data,
+                Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => {
+                    (SemanticsRole::Unknown, None)
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        Err(err) => return Err(err),
+    };
+
+    let mut children = Vec::with_capacity(node.children.len());
+    for child in &node.children {
+        children.push(build_semantics_node_from_live_nodes(applier, &child.node)?);
+    }
+
+    Ok(semantics_node_from_parts(
+        node.node_id,
+        role,
+        config,
+        children,
+    ))
+}
+
+fn build_layout_tree(
+    applier: &mut MemoryApplier,
+    node: &MeasuredNode,
+) -> Result<LayoutTree, NodeError> {
     fn place(
+        applier: &mut MemoryApplier,
         node: &MeasuredNode,
         origin: Point,
-        metadata: &HashMap<NodeId, RuntimeNodeMetadata>,
-    ) -> LayoutBox {
+    ) -> Result<LayoutBox, NodeError> {
         // Include the node's own offset (from OffsetNode) in its position
         let top_left = Point {
             x: origin.x + node.offset.x,
@@ -2096,29 +2102,69 @@ fn build_layout_tree_from_metadata(
             width: node.size.width,
             height: node.size.height,
         };
-        let info = metadata.get(&node.node_id).cloned().unwrap_or_default();
+        let info = runtime_metadata_for(applier, node.node_id)?;
         let kind = layout_kind_from_metadata(node.node_id, &info);
-        let data = LayoutNodeData::new(
-            info.modifier.clone(),
-            info.resolved_modifiers,
-            info.modifier_slices.clone(),
-            kind,
-        );
-        let children = node
-            .children
-            .iter()
-            .map(|child| {
-                let child_origin = Point {
-                    x: top_left.x + child.offset.x,
-                    y: top_left.y + child.offset.y,
-                };
-                place(&child.node, child_origin, metadata)
-            })
-            .collect();
-        LayoutBox::new(node.node_id, rect, node.content_offset, data, children)
+        let RuntimeNodeMetadata {
+            modifier,
+            resolved_modifiers,
+            modifier_slices,
+            ..
+        } = info;
+        let data = LayoutNodeData::new(modifier, resolved_modifiers, modifier_slices, kind);
+        let mut children = Vec::with_capacity(node.children.len());
+        for child in &node.children {
+            let child_origin = Point {
+                x: top_left.x + child.offset.x,
+                y: top_left.y + child.offset.y,
+            };
+            children.push(place(applier, &child.node, child_origin)?);
+        }
+        Ok(LayoutBox::new(
+            node.node_id,
+            rect,
+            node.content_offset,
+            data,
+            children,
+        ))
     }
 
-    LayoutTree::new(place(node, Point { x: 0.0, y: 0.0 }, metadata))
+    Ok(LayoutTree::new(place(
+        applier,
+        node,
+        Point { x: 0.0, y: 0.0 },
+    )?))
+}
+
+fn semantics_role_from_layout_box(layout_box: &LayoutBox) -> SemanticsRole {
+    match &layout_box.node_data.kind {
+        LayoutNodeKind::Subcompose => SemanticsRole::Subcompose,
+        LayoutNodeKind::Spacer => SemanticsRole::Spacer,
+        LayoutNodeKind::Unknown => SemanticsRole::Unknown,
+        LayoutNodeKind::Button { .. } => SemanticsRole::Button,
+        LayoutNodeKind::Layout => layout_box
+            .node_data
+            .modifier_slices()
+            .text_content()
+            .map(|text| SemanticsRole::Text {
+                value: text.to_string(),
+            })
+            .unwrap_or(SemanticsRole::Layout),
+    }
+}
+
+fn build_semantics_node_from_layout_box(layout_box: &LayoutBox) -> SemanticsNode {
+    let children = layout_box
+        .children
+        .iter()
+        .map(build_semantics_node_from_layout_box)
+        .collect();
+
+    semantics_node_from_parts(
+        layout_box.node_id,
+        semantics_role_from_layout_box(layout_box),
+        collect_semantics_from_modifier(&layout_box.node_data.modifier),
+        children,
+    )
 }
 
 fn layout_kind_from_metadata(_node_id: NodeId, info: &RuntimeNodeMetadata) -> LayoutNodeKind {

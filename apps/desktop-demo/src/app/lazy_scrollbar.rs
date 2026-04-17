@@ -2,6 +2,7 @@ use cranpose_foundation::SemanticsConfiguration;
 use cranpose_ui::{
     composable, Box as UiBox, BoxSpec, Brush, Color, LinearArrangement, Modifier, Row, RowSpec,
 };
+use std::cell::RefCell;
 use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -171,45 +172,12 @@ fn read_interaction_scrollbar_model(
 
 #[allow(non_snake_case)]
 #[composable]
-fn LazyScrollbarModelObserver(
-    list_state: cranpose_foundation::lazy::LazyListState,
-    model_state: cranpose_core::MutableState<LazyScrollbarModel>,
-) {
-    let first_visible_index = list_state.first_visible_item_index();
-    let first_visible_offset = list_state.first_visible_item_scroll_offset();
-    let layout_info = list_state.layout_info();
-    let can_scroll_forward = list_state.can_scroll_forward();
-    let can_scroll_backward = list_state.can_scroll_backward();
-    let avg_item_size = average_visible_item_size(&layout_info, list_state.average_item_size());
-    let next_model = compute_scrollbar_model(
-        layout_info.total_items_count,
-        layout_info.viewport_size,
-        avg_item_size,
-        first_visible_index,
-        first_visible_offset,
-    );
-    let next_model = stabilize_scrollbar_model_for_scrollable_content(
-        next_model,
-        can_scroll_forward,
-        can_scroll_backward,
-    );
-
-    if model_state.get_non_reactive() != next_model {
-        cranpose_core::SideEffect(move || {
-            model_state.set(next_model);
-        });
-    }
-}
-
-#[allow(non_snake_case)]
-#[composable]
 pub(crate) fn LazyScrollbarRail(
     list_state: cranpose_foundation::lazy::LazyListState,
-    model_state: cranpose_core::MutableState<LazyScrollbarModel>,
     semantics_tag: &'static str,
     style: LazyScrollbarStyle,
 ) {
-    let model = model_state.get();
+    let (model, _) = read_interaction_scrollbar_model(list_state);
     let thumb_fraction = model.thumb_fraction;
     let scroll_fraction = model.scroll_fraction;
 
@@ -373,14 +341,15 @@ pub(crate) fn LazyListWithScrollbar<F>(
 ) where
     F: Fn() + 'static,
 {
-    let model_state = cranpose_core::useState(LazyScrollbarModel::default);
-    let content_ref: Rc<dyn Fn()> = Rc::new(content);
+    let content_cell = cranpose_core::remember(|| Rc::new(RefCell::new(None::<Rc<dyn Fn()>>)))
+        .with(|cell| cell.clone());
+    *content_cell.borrow_mut() = Some(Rc::new(content));
 
     Row(
         modifier.clip_to_bounds(),
         RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
         move || {
-            let content_ref_handle = Rc::clone(&content_ref);
+            let content_cell_handle = Rc::clone(&content_cell);
             UiBox(
                 Modifier::empty()
                     .weight(1.0)
@@ -388,11 +357,12 @@ pub(crate) fn LazyListWithScrollbar<F>(
                     .clip_to_bounds(),
                 BoxSpec::default(),
                 move || {
-                    (content_ref_handle)();
+                    if let Some(content) = content_cell_handle.borrow().as_ref() {
+                        (content)();
+                    }
                 },
             );
-            LazyScrollbarModelObserver(list_state, model_state);
-            LazyScrollbarRail(list_state, model_state, rail_tag, style);
+            LazyScrollbarRail(list_state, rail_tag, style);
         },
     );
 }
@@ -400,6 +370,130 @@ pub(crate) fn LazyListWithScrollbar<F>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cranpose_core::{location_key, Applier, Composition, MemoryApplier, MutableState, NodeId};
+    use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
+    use cranpose_ui::{
+        BoxWithConstraints, Column, ColumnSpec, HeadlessRenderer, LayoutEngine, LazyColumn,
+        LazyColumnSpec, Modifier, RenderOp, Size, Text, TextStyle,
+    };
+    use std::cell::RefCell;
+
+    thread_local! {
+        static CAPTURED_SCROLLBAR_LIST_STATE: RefCell<Option<cranpose_foundation::lazy::LazyListState>> = const { RefCell::new(None) };
+        static CAPTURED_SCROLLBAR_LIST_NODE_ID: RefCell<Option<NodeId>> = const { RefCell::new(None) };
+    }
+
+    fn test_style() -> LazyScrollbarStyle {
+        LazyScrollbarStyle {
+            rail_width: 8.0,
+            thumb_width: 6.0,
+            min_thumb_height: 16.0,
+            rail_color: Color(0.2, 0.2, 0.2, 1.0),
+            thumb_color: Color(0.8, 0.8, 0.8, 1.0),
+        }
+    }
+
+    fn render_texts(composition: &mut Composition<MemoryApplier>, root: NodeId) -> Vec<String> {
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        let layout = applier
+            .compute_layout(
+                root,
+                Size {
+                    width: 200.0,
+                    height: 200.0,
+                },
+            )
+            .expect("layout");
+        applier.clear_runtime_handle();
+        let renderer = HeadlessRenderer::new();
+        let scene = renderer.render(&layout);
+        scene
+            .operations()
+            .iter()
+            .filter_map(|op| match op {
+                RenderOp::Text { value, .. } => Some(value.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn measure_root(composition: &mut Composition<MemoryApplier>, root: NodeId, size: Size) {
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        let _ = applier.compute_layout(root, size).expect("layout");
+        applier.clear_runtime_handle();
+    }
+
+    fn node_generation(composition: &mut Composition<MemoryApplier>, node_id: NodeId) -> u32 {
+        composition.applier_mut().node_generation(node_id)
+    }
+
+    fn settle_recomposition(
+        composition: &mut Composition<MemoryApplier>,
+        root: NodeId,
+        size: Size,
+    ) {
+        measure_root(composition, root, size);
+        while composition
+            .process_invalid_scopes()
+            .expect("recomposition should succeed")
+        {
+            measure_root(composition, root, size);
+        }
+        measure_root(composition, root, size);
+    }
+
+    #[composable]
+    fn dynamic_stories_pane(
+        modifier: Modifier,
+        list_state: cranpose_foundation::lazy::LazyListState,
+        loaded_count: MutableState<usize>,
+    ) {
+        Column(modifier, ColumnSpec::default(), move || {
+            Text("Top stories", Modifier::empty(), TextStyle::default());
+            Text(
+                format!("{} loaded of 60", loaded_count.value()),
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+            LazyListWithScrollbar(
+                Modifier::empty().fill_max_width().weight(1.0),
+                list_state,
+                "StoriesRail",
+                test_style(),
+                move || {
+                    let node_id = LazyColumn(
+                        Modifier::empty().fill_max_size(),
+                        list_state,
+                        LazyColumnSpec::default(),
+                        |scope| {
+                            scope.items(
+                                40,
+                                None::<fn(usize) -> u64>,
+                                None::<fn(usize) -> u64>,
+                                |index| {
+                                    Text(
+                                        format!("Item {}", index),
+                                        Modifier::empty(),
+                                        TextStyle::default(),
+                                    );
+                                },
+                            );
+                        },
+                    );
+                    CAPTURED_SCROLLBAR_LIST_STATE.with(|slot| {
+                        *slot.borrow_mut() = Some(list_state);
+                    });
+                    CAPTURED_SCROLLBAR_LIST_NODE_ID.with(|slot| {
+                        *slot.borrow_mut() = Some(node_id);
+                    });
+                },
+            );
+        });
+    }
 
     #[test]
     fn scrollbar_metrics_handle_small_rail_height() {
@@ -498,5 +592,409 @@ mod tests {
         let (idx, off) = scroll_target_for_fraction(model, 1.0);
         assert_eq!(idx, 0);
         assert_eq!(off, 0.0);
+    }
+
+    #[test]
+    fn lazy_list_with_scrollbar_restores_hidden_branch() {
+        let mut composition = Composition::new(MemoryApplier::new());
+        let runtime = composition.runtime_handle();
+        let show_thread = MutableState::with_runtime(false, runtime.clone());
+
+        composition
+            .render(location_key(file!(), line!(), column!()), || {
+                let list_state = remember_lazy_list_state();
+                BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
+                    Column(
+                        Modifier::empty().fill_max_size(),
+                        ColumnSpec::default(),
+                        move || {
+                            Text("Header", Modifier::empty(), TextStyle::default());
+                            if show_thread.value() {
+                                Text("Thread", Modifier::empty(), TextStyle::default());
+                            } else {
+                                LazyListWithScrollbar(
+                                    Modifier::empty().fill_max_width().weight(1.0),
+                                    list_state,
+                                    "TestRail",
+                                    test_style(),
+                                    move || {
+                                        LazyColumn(
+                                            Modifier::empty().fill_max_size(),
+                                            list_state,
+                                            LazyColumnSpec::default(),
+                                            |scope| {
+                                                scope.item(Some(0), None, || {
+                                                    Text(
+                                                        "Stories",
+                                                        Modifier::empty(),
+                                                        TextStyle::default(),
+                                                    );
+                                                });
+                                            },
+                                        );
+                                    },
+                                );
+                            }
+                        },
+                    );
+                });
+            })
+            .expect("initial render");
+
+        let root = composition.root().expect("root");
+        let texts = render_texts(&mut composition, root);
+        assert!(texts.iter().any(|text| text == "Stories"));
+
+        show_thread.set_value(true);
+        composition
+            .process_invalid_scopes()
+            .expect("switch to thread branch");
+        let texts = render_texts(&mut composition, root);
+        assert!(texts.iter().any(|text| text == "Thread"));
+        assert!(!texts.iter().any(|text| text == "Stories"));
+
+        show_thread.set_value(false);
+        composition
+            .process_invalid_scopes()
+            .expect("restore stories branch");
+        let texts = render_texts(&mut composition, root);
+        assert!(
+            texts.iter().any(|text| text == "Stories"),
+            "restored scrollbar branch should render again, got {texts:?}",
+        );
+        assert!(!texts.iter().any(|text| text == "Thread"));
+    }
+
+    #[test]
+    fn lazy_list_with_scrollbar_restores_keyed_items_branch() {
+        let mut composition = Composition::new(MemoryApplier::new());
+        let runtime = composition.runtime_handle();
+        let show_thread = MutableState::with_runtime(false, runtime.clone());
+
+        composition
+            .render(location_key(file!(), line!(), column!()), || {
+                let list_state = remember_lazy_list_state();
+                BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
+                    Column(
+                        Modifier::empty().fill_max_size(),
+                        ColumnSpec::default(),
+                        move || {
+                            Text("Header", Modifier::empty(), TextStyle::default());
+                            if show_thread.value() {
+                                Text("Thread", Modifier::empty(), TextStyle::default());
+                            } else {
+                                LazyListWithScrollbar(
+                                    Modifier::empty().fill_max_width().weight(1.0),
+                                    list_state,
+                                    "TestRail",
+                                    test_style(),
+                                    move || {
+                                        let stories = Rc::new(vec![
+                                            "Story 1".to_string(),
+                                            "Story 2".to_string(),
+                                            "Story 3".to_string(),
+                                        ]);
+                                        LazyColumn(
+                                            Modifier::empty().fill_max_size(),
+                                            list_state,
+                                            LazyColumnSpec::default(),
+                                            {
+                                                let stories = Rc::clone(&stories);
+                                                move |scope| {
+                                                    scope.items(
+                                                        stories.len(),
+                                                        Some(|index| index as u64),
+                                                        None::<fn(usize) -> u64>,
+                                                        {
+                                                            let stories = Rc::clone(&stories);
+                                                            move |index| {
+                                                                Text(
+                                                                    stories[index].clone(),
+                                                                    Modifier::empty(),
+                                                                    TextStyle::default(),
+                                                                );
+                                                            }
+                                                        },
+                                                    );
+                                                    scope.item(Some(9999), None, || {
+                                                        Text(
+                                                            "Footer",
+                                                            Modifier::empty(),
+                                                            TextStyle::default(),
+                                                        );
+                                                    });
+                                                }
+                                            },
+                                        );
+                                    },
+                                );
+                            }
+                        },
+                    );
+                });
+            })
+            .expect("initial render");
+
+        let root = composition.root().expect("root");
+        let texts = render_texts(&mut composition, root);
+        assert!(texts.iter().any(|text| text == "Story 1"));
+
+        show_thread.set_value(true);
+        composition
+            .process_invalid_scopes()
+            .expect("switch to thread branch");
+        let texts = render_texts(&mut composition, root);
+        assert!(texts.iter().any(|text| text == "Thread"));
+
+        show_thread.set_value(false);
+        composition
+            .process_invalid_scopes()
+            .expect("restore stories branch");
+        let texts = render_texts(&mut composition, root);
+        assert!(
+            texts.iter().any(|text| text == "Story 1"),
+            "restored keyed scrollbar branch should render again, got {texts:?}",
+        );
+        assert!(texts.iter().any(|text| text == "Footer"));
+    }
+
+    #[test]
+    fn lazy_list_with_scrollbar_restores_after_keyed_branch_cycle() {
+        let mut composition = Composition::new(MemoryApplier::new());
+        let runtime = composition.runtime_handle();
+        let show_thread = MutableState::with_runtime(false, runtime.clone());
+
+        composition
+            .render(location_key(file!(), line!(), column!()), || {
+                let stories_list_state = remember_lazy_list_state();
+                BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
+                    Column(
+                        Modifier::empty().fill_max_size(),
+                        ColumnSpec::default(),
+                        move || {
+                            Text("Header", Modifier::empty(), TextStyle::default());
+                            if show_thread.value() {
+                                cranpose_core::with_key(&1u64, move || {
+                                    let comments_list_state = remember_lazy_list_state();
+                                    LazyListWithScrollbar(
+                                        Modifier::empty().fill_max_size(),
+                                        comments_list_state,
+                                        "CommentsRail",
+                                        test_style(),
+                                        move || {
+                                            LazyColumn(
+                                                Modifier::empty().fill_max_size(),
+                                                comments_list_state,
+                                                LazyColumnSpec::default(),
+                                                |scope| {
+                                                    scope.item(Some(0), None, || {
+                                                        Text(
+                                                            "Thread",
+                                                            Modifier::empty(),
+                                                            TextStyle::default(),
+                                                        );
+                                                    });
+                                                },
+                                            );
+                                        },
+                                    );
+                                });
+                            } else {
+                                LazyListWithScrollbar(
+                                    Modifier::empty().fill_max_width().weight(1.0),
+                                    stories_list_state,
+                                    "StoriesRail",
+                                    test_style(),
+                                    move || {
+                                        LazyColumn(
+                                            Modifier::empty().fill_max_size(),
+                                            stories_list_state,
+                                            LazyColumnSpec::default(),
+                                            |scope| {
+                                                scope.item(Some(0), None, || {
+                                                    Text(
+                                                        "Stories",
+                                                        Modifier::empty(),
+                                                        TextStyle::default(),
+                                                    );
+                                                });
+                                            },
+                                        );
+                                    },
+                                );
+                            }
+                        },
+                    );
+                });
+            })
+            .expect("initial render");
+
+        let root = composition.root().expect("root");
+        let texts = render_texts(&mut composition, root);
+        assert!(texts.iter().any(|text| text == "Stories"));
+
+        show_thread.set_value(true);
+        composition
+            .process_invalid_scopes()
+            .expect("switch to keyed thread branch");
+        let texts = render_texts(&mut composition, root);
+        assert!(texts.iter().any(|text| text == "Thread"));
+        assert!(!texts.iter().any(|text| text == "Stories"));
+
+        show_thread.set_value(false);
+        composition
+            .process_invalid_scopes()
+            .expect("restore stories branch after keyed thread");
+        let texts = render_texts(&mut composition, root);
+        assert!(
+            texts.iter().any(|text| text == "Stories"),
+            "stories branch should restore after keyed thread cycle, got {texts:?}",
+        );
+        assert!(!texts.iter().any(|text| text == "Thread"));
+    }
+
+    #[test]
+    fn lazy_list_with_scrollbar_restored_branch_keeps_host_during_scroll_and_status_recompose() {
+        let mut composition = Composition::new(MemoryApplier::new());
+        let runtime = composition.runtime_handle();
+        let show_thread = MutableState::with_runtime(false, runtime.clone());
+        let loaded_count = MutableState::with_runtime(20usize, runtime.clone());
+
+        CAPTURED_SCROLLBAR_LIST_STATE.with(|slot| *slot.borrow_mut() = None);
+        CAPTURED_SCROLLBAR_LIST_NODE_ID.with(|slot| *slot.borrow_mut() = None);
+
+        composition
+            .render(location_key(file!(), line!(), column!()), || {
+                let list_state = remember_lazy_list_state();
+                BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
+                    Column(
+                        Modifier::empty().fill_max_size(),
+                        ColumnSpec::default(),
+                        move || {
+                            Text("Header", Modifier::empty(), TextStyle::default());
+                            let branch_key = show_thread.value();
+                            cranpose_core::with_key(&branch_key, move || {
+                                if branch_key {
+                                    Text("Thread", Modifier::empty(), TextStyle::default());
+                                } else {
+                                    dynamic_stories_pane(
+                                        Modifier::empty().fill_max_width().weight(1.0),
+                                        list_state,
+                                        loaded_count,
+                                    );
+                                }
+                            });
+                        },
+                    );
+                });
+            })
+            .expect("initial render");
+
+        let root = composition.root().expect("root");
+        let size = Size {
+            width: 260.0,
+            height: 360.0,
+        };
+        settle_recomposition(&mut composition, root, size);
+
+        show_thread.set_value(true);
+        settle_recomposition(&mut composition, root, size);
+
+        show_thread.set_value(false);
+        settle_recomposition(&mut composition, root, size);
+
+        let restored_node_id = CAPTURED_SCROLLBAR_LIST_NODE_ID
+            .with(|slot| (*slot.borrow()).expect("restored list node should exist"));
+        let restored_generation = node_generation(&mut composition, restored_node_id);
+        let list_state = CAPTURED_SCROLLBAR_LIST_STATE
+            .with(|slot| (*slot.borrow()).expect("restored list state should exist"));
+
+        list_state.dispatch_scroll_delta(-120.0);
+        loaded_count.set_value(40);
+        settle_recomposition(&mut composition, root, size);
+
+        let after_node_id = CAPTURED_SCROLLBAR_LIST_NODE_ID
+            .with(|slot| (*slot.borrow()).expect("list node should exist after scroll"));
+        let after_generation = node_generation(&mut composition, after_node_id);
+
+        assert_eq!(
+            (after_node_id, after_generation),
+            (restored_node_id, restored_generation),
+            "restored scrollbar lazy-list host changed after scroll + status recomposition; restored=({restored_node_id}, {restored_generation}) after=({after_node_id}, {after_generation})",
+        );
+    }
+
+    #[test]
+    fn lazy_list_with_scrollbar_restored_branch_keeps_host_during_repeated_scrolls() {
+        let mut composition = Composition::new(MemoryApplier::new());
+        let runtime = composition.runtime_handle();
+        let show_thread = MutableState::with_runtime(false, runtime.clone());
+        let loaded_count = MutableState::with_runtime(20usize, runtime.clone());
+
+        CAPTURED_SCROLLBAR_LIST_STATE.with(|slot| *slot.borrow_mut() = None);
+        CAPTURED_SCROLLBAR_LIST_NODE_ID.with(|slot| *slot.borrow_mut() = None);
+
+        composition
+            .render(location_key(file!(), line!(), column!()), || {
+                let list_state = remember_lazy_list_state();
+                BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
+                    Column(
+                        Modifier::empty().fill_max_size(),
+                        ColumnSpec::default(),
+                        move || {
+                            Text("Header", Modifier::empty(), TextStyle::default());
+                            let branch_key = show_thread.value();
+                            cranpose_core::with_key(&branch_key, move || {
+                                if branch_key {
+                                    Text("Thread", Modifier::empty(), TextStyle::default());
+                                } else {
+                                    dynamic_stories_pane(
+                                        Modifier::empty().fill_max_width().weight(1.0),
+                                        list_state,
+                                        loaded_count,
+                                    );
+                                }
+                            });
+                        },
+                    );
+                });
+            })
+            .expect("initial render");
+
+        let root = composition.root().expect("root");
+        let size = Size {
+            width: 260.0,
+            height: 360.0,
+        };
+        settle_recomposition(&mut composition, root, size);
+
+        show_thread.set_value(true);
+        settle_recomposition(&mut composition, root, size);
+
+        show_thread.set_value(false);
+        settle_recomposition(&mut composition, root, size);
+
+        let restored_node_id = CAPTURED_SCROLLBAR_LIST_NODE_ID
+            .with(|slot| (*slot.borrow()).expect("restored list node should exist"));
+        let restored_generation = node_generation(&mut composition, restored_node_id);
+        let list_state = CAPTURED_SCROLLBAR_LIST_STATE
+            .with(|slot| (*slot.borrow()).expect("restored list state should exist"));
+
+        let mut seen = Vec::new();
+        for _ in 0..6 {
+            list_state.dispatch_scroll_delta(-120.0);
+            settle_recomposition(&mut composition, root, size);
+
+            let node_id = CAPTURED_SCROLLBAR_LIST_NODE_ID
+                .with(|slot| (*slot.borrow()).expect("list node should exist after scroll"));
+            let generation = node_generation(&mut composition, node_id);
+            seen.push((node_id, generation));
+        }
+
+        assert_eq!(
+            seen,
+            vec![(restored_node_id, restored_generation); seen.len()],
+            "restored scrollbar lazy-list host changed across repeated scrolls; restored=({restored_node_id}, {restored_generation}) seen={seen:?}",
+        );
     }
 }

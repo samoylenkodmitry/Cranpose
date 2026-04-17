@@ -144,8 +144,13 @@ where
 /// Fetches the current semantics tree from the robot and searches for text.
 /// Returns bounds (x, y, width, height).
 pub fn find_text_in_semantics(robot: &cranpose::Robot, text: &str) -> Option<(f32, f32, f32, f32)> {
-    let text = text.to_string();
-    find_in_semantics(robot, |elem| find_text(elem, &text))
+    match robot.find_text_bounds(text) {
+        Ok(bounds) => bounds,
+        Err(e) => {
+            eprintln!("  ✗ Failed to query text semantics: {}", e);
+            None
+        }
+    }
 }
 
 /// Find an element whose text starts with the given prefix.
@@ -180,18 +185,10 @@ pub fn find_text_by_prefix_in_semantics(
     robot: &cranpose::Robot,
     prefix: &str,
 ) -> Option<(f32, f32, f32, f32, String)> {
-    let prefix = prefix.to_string();
-    match robot.get_semantics() {
-        Ok(semantics) => {
-            for root in semantics.iter() {
-                if let Some(result) = find_text_by_prefix(root, &prefix) {
-                    return Some(result);
-                }
-            }
-            None
-        }
+    match robot.find_text_by_prefix(prefix) {
+        Ok(bounds) => bounds,
         Err(e) => {
-            eprintln!("  ✗ Failed to get semantics: {}", e);
+            eprintln!("  ✗ Failed to query text prefix semantics: {}", e);
             None
         }
     }
@@ -203,7 +200,7 @@ pub fn find_button_in_semantics(
     robot: &cranpose::Robot,
     text: &str,
 ) -> Option<(f32, f32, f32, f32)> {
-    find_button_in_semantics_by(robot, text, text_contains)
+    find_button_in_semantics_by(robot, text, TextMatchMode::Contains)
 }
 
 /// Find button by exact text in semantics tree.
@@ -211,16 +208,16 @@ pub fn find_button_exact_in_semantics(
     robot: &cranpose::Robot,
     text: &str,
 ) -> Option<(f32, f32, f32, f32)> {
-    find_button_in_semantics_by(robot, text, text_equals)
+    find_button_in_semantics_by(robot, text, TextMatchMode::Exact)
 }
 
 fn find_button_in_semantics_by(
     robot: &cranpose::Robot,
     text: &str,
-    matcher: TextMatcher,
+    match_mode: TextMatchMode,
 ) -> Option<(f32, f32, f32, f32)> {
     let text_owned = text.to_string();
-    let mut bounds = find_in_semantics(robot, |elem| find_button_by(elem, &text_owned, matcher));
+    let mut bounds = find_button_bounds_for_mode(robot, &text_owned, match_mode);
 
     let Some(root) = root_bounds(robot) else {
         return bounds;
@@ -265,7 +262,7 @@ fn find_button_in_semantics_by(
         std::thread::sleep(Duration::from_millis(SCROLL_SETTLE_MS));
         let _ = robot.wait_for_idle();
 
-        bounds = find_in_semantics(robot, |elem| find_button_by(elem, &text_owned, matcher));
+        bounds = find_button_bounds_for_mode(robot, &text_owned, match_mode);
         if let Some(current) = bounds {
             if is_fully_visible(current, root) {
                 break;
@@ -558,12 +555,37 @@ const SCROLL_STEP: f32 = 240.0;
 const SCROLL_SETTLE_MS: u64 = 140;
 type TextMatcher = fn(&str, &str) -> bool;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TextMatchMode {
+    Contains,
+    Exact,
+}
+
 fn text_contains(actual: &str, needle: &str) -> bool {
     actual.contains(needle)
 }
 
+#[cfg(test)]
 fn text_equals(actual: &str, needle: &str) -> bool {
     actual == needle
+}
+
+fn find_button_bounds_for_mode(
+    robot: &cranpose::Robot,
+    text: &str,
+    match_mode: TextMatchMode,
+) -> Option<(f32, f32, f32, f32)> {
+    let result = match match_mode {
+        TextMatchMode::Contains => robot.find_button_bounds(text),
+        TextMatchMode::Exact => robot.find_button_bounds_exact(text),
+    };
+    match result {
+        Ok(bounds) => bounds,
+        Err(e) => {
+            eprintln!("  ✗ Failed to query button semantics: {}", e);
+            None
+        }
+    }
 }
 
 fn has_text_by(elem: &SemanticElement, text: &str, matcher: TextMatcher) -> bool {

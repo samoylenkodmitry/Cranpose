@@ -1,13 +1,48 @@
 use cranpose_core::NodeId;
-use std::cell::RefCell;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::Mutex;
+#[cfg(not(any(test, feature = "test-helpers")))]
+use std::sync::OnceLock;
+#[cfg(test)]
+use std::sync::OnceLock;
 
-thread_local! {
-    static LAYOUT_REPASS_MANAGER: RefCell<LayoutRepassManager> =
-        RefCell::new(LayoutRepassManager::new());
-    static DRAW_REPASS_MANAGER: RefCell<DrawRepassManager> =
-        RefCell::new(DrawRepassManager::new());
+struct RenderState {
+    layout_repasses: Mutex<LayoutRepassManager>,
+    draw_repasses: Mutex<DrawRepassManager>,
+    render_invalidated: AtomicBool,
+    pointer_invalidated: AtomicBool,
+    focus_invalidated: AtomicBool,
+    layout_invalidated: AtomicBool,
+    density_bits: AtomicU32,
+}
+
+impl RenderState {
+    fn new() -> Self {
+        Self {
+            layout_repasses: Mutex::new(LayoutRepassManager::new()),
+            draw_repasses: Mutex::new(DrawRepassManager::new()),
+            render_invalidated: AtomicBool::new(false),
+            pointer_invalidated: AtomicBool::new(false),
+            focus_invalidated: AtomicBool::new(false),
+            layout_invalidated: AtomicBool::new(false),
+            density_bits: AtomicU32::new(f32::to_bits(1.0)),
+        }
+    }
+}
+
+#[cfg(not(any(test, feature = "test-helpers")))]
+fn with_render_state<R>(f: impl FnOnce(&RenderState) -> R) -> R {
+    static STATE: OnceLock<RenderState> = OnceLock::new();
+    f(STATE.get_or_init(RenderState::new))
+}
+
+#[cfg(any(test, feature = "test-helpers"))]
+fn with_render_state<R>(f: impl FnOnce(&RenderState) -> R) -> R {
+    std::thread_local! {
+        static STATE: RenderState = RenderState::new();
+    }
+    STATE.with(f)
 }
 
 /// Manages scoped layout invalidations for specific nodes.
@@ -82,13 +117,17 @@ impl DrawRepassManager {
 ///
 /// For rare global events (window resize, global scale changes), use `request_layout_invalidation()` instead.
 pub fn schedule_layout_repass(node_id: NodeId) {
-    LAYOUT_REPASS_MANAGER.with(|manager| {
-        manager.borrow_mut().schedule_repass(node_id);
+    with_render_state(|state| {
+        state
+            .layout_repasses
+            .lock()
+            .expect("layout repass manager poisoned")
+            .schedule_repass(node_id);
+        state.layout_invalidated.store(true, Ordering::Relaxed);
     });
-    // Set the global flag so the app shell knows to process repasses.
+    // Set the layout-invalidated flag so the app shell knows to process repasses.
     // The app shell will check take_layout_repass_nodes() first (scoped path),
     // and only falls back to global invalidation if the flag is set without any repass nodes.
-    LAYOUT_INVALIDATED.store(true, Ordering::Relaxed);
     // Also request render invalidation so the frame is actually drawn.
     // Without this, programmatic scrolls (e.g., scroll_to_item) wouldn't trigger a redraw
     // until the next user interaction caused a frame request.
@@ -100,41 +139,64 @@ pub fn schedule_layout_repass(node_id: NodeId) {
 /// This ensures draw/pointer data stays in sync when modifier updates do not
 /// require a layout pass (e.g., draw-only modifier changes).
 pub fn schedule_draw_repass(node_id: NodeId) {
-    DRAW_REPASS_MANAGER.with(|manager| {
-        manager.borrow_mut().schedule_repass(node_id);
+    with_render_state(|state| {
+        state
+            .draw_repasses
+            .lock()
+            .expect("draw repass manager poisoned")
+            .schedule_repass(node_id);
     });
 }
 
 /// Returns true if any draw repasses are pending.
 pub fn has_pending_draw_repasses() -> bool {
-    DRAW_REPASS_MANAGER.with(|manager| manager.borrow().has_pending_repass())
+    with_render_state(|state| {
+        state
+            .draw_repasses
+            .lock()
+            .expect("draw repass manager poisoned")
+            .has_pending_repass()
+    })
 }
 
 /// Takes all pending draw repass node IDs.
 pub fn take_draw_repass_nodes() -> Vec<NodeId> {
-    DRAW_REPASS_MANAGER.with(|manager| manager.borrow_mut().take_dirty_nodes())
+    with_render_state(|state| {
+        state
+            .draw_repasses
+            .lock()
+            .expect("draw repass manager poisoned")
+            .take_dirty_nodes()
+    })
 }
 
 /// Returns true if any layout repasses are pending.
 pub fn has_pending_layout_repasses() -> bool {
-    LAYOUT_REPASS_MANAGER.with(|manager| manager.borrow().has_pending_repass())
+    with_render_state(|state| {
+        state
+            .layout_repasses
+            .lock()
+            .expect("layout repass manager poisoned")
+            .has_pending_repass()
+    })
 }
 
 /// Takes all pending layout repass node IDs.
 ///
 /// The caller should iterate over these and call `bubble_layout_dirty` for each.
 pub fn take_layout_repass_nodes() -> Vec<NodeId> {
-    LAYOUT_REPASS_MANAGER.with(|manager| manager.borrow_mut().take_dirty_nodes())
+    with_render_state(|state| {
+        state
+            .layout_repasses
+            .lock()
+            .expect("layout repass manager poisoned")
+            .take_dirty_nodes()
+    })
 }
-
-static RENDER_INVALIDATED: AtomicBool = AtomicBool::new(false);
-static POINTER_INVALIDATED: AtomicBool = AtomicBool::new(false);
-static FOCUS_INVALIDATED: AtomicBool = AtomicBool::new(false);
-static DENSITY_BITS: AtomicU32 = AtomicU32::new(f32::to_bits(1.0));
 
 /// Returns the current density scale factor (logical px per dp).
 pub fn current_density() -> f32 {
-    f32::from_bits(DENSITY_BITS.load(Ordering::Relaxed))
+    with_render_state(|state| f32::from_bits(state.density_bits.load(Ordering::Relaxed)))
 }
 
 /// Updates the current density scale factor.
@@ -148,58 +210,58 @@ pub fn set_density(density: f32) {
         1.0
     };
     let new_bits = normalized.to_bits();
-    let old_bits = DENSITY_BITS.swap(new_bits, Ordering::Relaxed);
-    if old_bits != new_bits {
-        request_layout_invalidation();
-    }
+    with_render_state(|state| {
+        let old_bits = state.density_bits.swap(new_bits, Ordering::Relaxed);
+        if old_bits != new_bits {
+            state.layout_invalidated.store(true, Ordering::Relaxed);
+        }
+    });
 }
 
 /// Requests that the renderer rebuild the current scene.
 pub fn request_render_invalidation() {
-    RENDER_INVALIDATED.store(true, Ordering::Relaxed);
+    with_render_state(|state| state.render_invalidated.store(true, Ordering::Relaxed));
 }
 
 /// Returns true if a render invalidation was pending and clears the flag.
 pub fn take_render_invalidation() -> bool {
-    RENDER_INVALIDATED.swap(false, Ordering::Relaxed)
+    with_render_state(|state| state.render_invalidated.swap(false, Ordering::Relaxed))
 }
 
 /// Returns true if a render invalidation is pending without clearing it.
 pub fn peek_render_invalidation() -> bool {
-    RENDER_INVALIDATED.load(Ordering::Relaxed)
+    with_render_state(|state| state.render_invalidated.load(Ordering::Relaxed))
 }
 
 /// Requests a new pointer-input pass without touching layout or draw dirties.
 pub fn request_pointer_invalidation() {
-    POINTER_INVALIDATED.store(true, Ordering::Relaxed);
+    with_render_state(|state| state.pointer_invalidated.store(true, Ordering::Relaxed));
 }
 
 /// Returns true if a pointer invalidation was pending and clears the flag.
 pub fn take_pointer_invalidation() -> bool {
-    POINTER_INVALIDATED.swap(false, Ordering::Relaxed)
+    with_render_state(|state| state.pointer_invalidated.swap(false, Ordering::Relaxed))
 }
 
 /// Returns true if a pointer invalidation is pending without clearing it.
 pub fn peek_pointer_invalidation() -> bool {
-    POINTER_INVALIDATED.load(Ordering::Relaxed)
+    with_render_state(|state| state.pointer_invalidated.load(Ordering::Relaxed))
 }
 
 /// Requests a focus recomposition without affecting layout/draw dirties.
 pub fn request_focus_invalidation() {
-    FOCUS_INVALIDATED.store(true, Ordering::Relaxed);
+    with_render_state(|state| state.focus_invalidated.store(true, Ordering::Relaxed));
 }
 
 /// Returns true if a focus invalidation was pending and clears the flag.
 pub fn take_focus_invalidation() -> bool {
-    FOCUS_INVALIDATED.swap(false, Ordering::Relaxed)
+    with_render_state(|state| state.focus_invalidated.swap(false, Ordering::Relaxed))
 }
 
 /// Returns true if a focus invalidation is pending without clearing it.
 pub fn peek_focus_invalidation() -> bool {
-    FOCUS_INVALIDATED.load(Ordering::Relaxed)
+    with_render_state(|state| state.focus_invalidated.load(Ordering::Relaxed))
 }
-
-static LAYOUT_INVALIDATED: AtomicBool = AtomicBool::new(false);
 
 /// Requests a **global** layout re-run.
 ///
@@ -228,15 +290,92 @@ static LAYOUT_INVALIDATED: AtomicBool = AtomicBool::new(false);
 /// Scoped repasses give you O(subtree) performance instead of O(app), and they don't
 /// invalidate caches across the entire app.
 pub fn request_layout_invalidation() {
-    LAYOUT_INVALIDATED.store(true, Ordering::Relaxed);
+    with_render_state(|state| state.layout_invalidated.store(true, Ordering::Relaxed));
 }
 
 /// Returns true if a layout invalidation was pending and clears the flag.
 pub fn take_layout_invalidation() -> bool {
-    LAYOUT_INVALIDATED.swap(false, Ordering::Relaxed)
+    with_render_state(|state| state.layout_invalidated.swap(false, Ordering::Relaxed))
 }
 
 /// Returns true if a layout invalidation is pending without clearing it.
 pub fn peek_layout_invalidation() -> bool {
-    LAYOUT_INVALIDATED.load(Ordering::Relaxed)
+    with_render_state(|state| state.layout_invalidated.load(Ordering::Relaxed))
+}
+
+#[cfg(any(test, feature = "test-helpers"))]
+#[doc(hidden)]
+pub fn reset_render_state_for_tests() {
+    let _ = take_draw_repass_nodes();
+    let _ = take_layout_repass_nodes();
+    let _ = take_render_invalidation();
+    let _ = take_pointer_invalidation();
+    let _ = take_focus_invalidation();
+    let _ = take_layout_invalidation();
+    set_density(1.0);
+    let _ = take_layout_invalidation();
+}
+
+#[cfg(test)]
+pub(crate) fn render_state_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    match TEST_LOCK.get_or_init(|| Mutex::new(())).lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{mpsc, Arc};
+
+    #[test]
+    fn invalidation_flags_are_shared_across_threads() {
+        let state = Arc::new(RenderState::new());
+        let (tx, rx) = mpsc::channel();
+        let worker_state = Arc::clone(&state);
+
+        let handle = std::thread::spawn(move || {
+            worker_state
+                .render_invalidated
+                .store(true, Ordering::Relaxed);
+            worker_state
+                .pointer_invalidated
+                .store(true, Ordering::Relaxed);
+            worker_state
+                .focus_invalidated
+                .store(true, Ordering::Relaxed);
+            worker_state
+                .layout_invalidated
+                .store(true, Ordering::Relaxed);
+            worker_state
+                .density_bits
+                .store(f32::to_bits(2.0), Ordering::Relaxed);
+            tx.send(()).expect("signal invalidation setup");
+
+            f32::from_bits(worker_state.density_bits.load(Ordering::Relaxed))
+        });
+
+        rx.recv().expect("wait for worker invalidation setup");
+        assert!(state.render_invalidated.load(Ordering::Relaxed));
+        assert!(state.pointer_invalidated.load(Ordering::Relaxed));
+        assert!(state.focus_invalidated.load(Ordering::Relaxed));
+        assert!(state.layout_invalidated.load(Ordering::Relaxed));
+        assert_eq!(
+            f32::from_bits(state.density_bits.load(Ordering::Relaxed)),
+            2.0
+        );
+        assert!(state.render_invalidated.swap(false, Ordering::Relaxed));
+        assert!(state.pointer_invalidated.swap(false, Ordering::Relaxed));
+        assert!(state.focus_invalidated.swap(false, Ordering::Relaxed));
+        assert!(state.layout_invalidated.swap(false, Ordering::Relaxed));
+
+        let density = handle.join().expect("worker invalidation snapshot");
+        assert_eq!(density, 2.0);
+        assert!(!state.render_invalidated.load(Ordering::Relaxed));
+        assert!(!state.pointer_invalidated.load(Ordering::Relaxed));
+        assert!(!state.focus_invalidated.load(Ordering::Relaxed));
+        assert!(!state.layout_invalidated.load(Ordering::Relaxed));
+    }
 }

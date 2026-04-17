@@ -1,11 +1,11 @@
 //! Hit path tracking for pointer input capture.
 //!
 //! This module implements a Jetpack Compose-style `HitPathTracker` that stores
-//! stable `NodeId` references instead of caching `HitRegion` geometry.
+//! stable `NodeId` capture paths instead of caching `HitRegion` geometry.
 //!
-//! Key insight from JC: Cache **node identity**, not geometry. Fresh geometry
+//! Key insight from JC: cache **node identity**, not geometry. Fresh geometry
 //! is resolved from the current scene on each dispatch, avoiding stale coordinates
-//! during scroll/layout changes.
+//! during scroll/layout changes while still preserving per-hit capture ordering.
 
 use cranpose_core::NodeId;
 use std::collections::HashMap;
@@ -42,8 +42,8 @@ impl PointerId {
 /// - Fresh `HitRegion` has current geometry from this frame
 /// - Handler closure is same `Rc`, so internal state (press_position) is preserved
 pub struct HitPathTracker {
-    /// Maps pointer IDs to the list of nodes hit on Down (ordered top-to-bottom by z-index)
-    paths: HashMap<PointerId, Vec<NodeId>>,
+    /// Maps pointer IDs to their capture paths, ordered top-to-bottom by hit z-index.
+    paths: HashMap<PointerId, Vec<Vec<NodeId>>>,
 }
 
 impl HitPathTracker {
@@ -54,24 +54,37 @@ impl HitPathTracker {
         }
     }
 
-    /// Records which nodes were hit for a pointer.
+    /// Records which capture paths were hit for a pointer.
     /// Called on PointerDown after hit-testing.
     ///
-    /// The `node_ids` should be ordered by z-index (top-to-bottom) so that
-    /// dispatch happens in the correct order for event consumption.
-    pub fn add_hit_path(&mut self, pointer: PointerId, node_ids: Vec<NodeId>) {
-        self.paths.insert(pointer, node_ids);
+    /// The `capture_paths` should be ordered by z-index (top-to-bottom). Each
+    /// path is leaf-first, followed by its pointer-input ancestors.
+    pub fn add_hit_path(&mut self, pointer: PointerId, capture_paths: Vec<Vec<NodeId>>) {
+        if capture_paths.is_empty() {
+            self.paths.remove(&pointer);
+        } else {
+            self.paths.insert(pointer, capture_paths);
+        }
     }
 
-    /// Gets the cached hit path for a pointer.
+    /// Gets the cached capture paths for a pointer.
     /// Returns None if no path exists (no active gesture for this pointer).
-    pub fn get_path(&self, pointer: PointerId) -> Option<&Vec<NodeId>> {
-        self.paths.get(&pointer)
+    pub fn get_path(&self, pointer: PointerId) -> Option<&[Vec<NodeId>]> {
+        self.paths.get(&pointer).map(Vec::as_slice)
+    }
+
+    /// Returns the dispatch order for a pointer using a merged capture tree.
+    ///
+    /// Shared ancestors are dispatched after all of their surviving children,
+    /// which preserves hit z-order instead of interleaving ancestors between
+    /// overlapping sibling hits.
+    pub fn dispatch_order(&self, pointer: PointerId) -> Option<Vec<NodeId>> {
+        self.get_path(pointer).map(dispatch_order_for_paths)
     }
 
     /// Removes and returns the hit path for a pointer.
     /// Called on PointerUp/Cancel to end the gesture.
-    pub fn remove_path(&mut self, pointer: PointerId) -> Option<Vec<NodeId>> {
+    pub fn remove_path(&mut self, pointer: PointerId) -> Option<Vec<Vec<NodeId>>> {
         self.paths.remove(&pointer)
     }
 
@@ -98,6 +111,51 @@ impl Default for HitPathTracker {
     }
 }
 
+#[derive(Default)]
+struct DispatchNode {
+    children: Vec<NodeId>,
+}
+
+fn dispatch_order_for_paths(paths: &[Vec<NodeId>]) -> Vec<NodeId> {
+    fn push_unique(nodes: &mut Vec<NodeId>, node_id: NodeId) {
+        if !nodes.contains(&node_id) {
+            nodes.push(node_id);
+        }
+    }
+
+    fn visit(node_id: NodeId, tree: &HashMap<NodeId, DispatchNode>, ordered: &mut Vec<NodeId>) {
+        if let Some(node) = tree.get(&node_id) {
+            for &child in &node.children {
+                visit(child, tree, ordered);
+            }
+        }
+        ordered.push(node_id);
+    }
+
+    let mut roots = Vec::new();
+    let mut tree: HashMap<NodeId, DispatchNode> = HashMap::new();
+
+    for path in paths {
+        let mut parent = None;
+        for node_id in path.iter().rev().copied() {
+            tree.entry(node_id).or_default();
+            if let Some(parent_id) = parent {
+                let parent_node = tree.get_mut(&parent_id).expect("parent inserted above");
+                push_unique(&mut parent_node.children, node_id);
+            } else {
+                push_unique(&mut roots, node_id);
+            }
+            parent = Some(node_id);
+        }
+    }
+
+    let mut ordered = Vec::new();
+    for root in roots {
+        visit(root, &tree, &mut ordered);
+    }
+    ordered
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,23 +163,23 @@ mod tests {
     #[test]
     fn test_add_and_get_path() {
         let mut tracker = HitPathTracker::new();
-        let nodes: Vec<NodeId> = vec![1, 2, 3];
+        let paths: Vec<Vec<NodeId>> = vec![vec![1, 2, 3], vec![4, 5]];
 
-        tracker.add_hit_path(PointerId::PRIMARY, nodes.clone());
+        tracker.add_hit_path(PointerId::PRIMARY, paths.clone());
 
         assert!(tracker.has_path(PointerId::PRIMARY));
-        assert_eq!(tracker.get_path(PointerId::PRIMARY), Some(&nodes));
+        assert_eq!(tracker.get_path(PointerId::PRIMARY), Some(paths.as_slice()));
     }
 
     #[test]
     fn test_remove_path() {
         let mut tracker = HitPathTracker::new();
-        let nodes: Vec<NodeId> = vec![1];
+        let paths: Vec<Vec<NodeId>> = vec![vec![1]];
 
-        tracker.add_hit_path(PointerId::PRIMARY, nodes.clone());
+        tracker.add_hit_path(PointerId::PRIMARY, paths.clone());
         let removed = tracker.remove_path(PointerId::PRIMARY);
 
-        assert_eq!(removed, Some(nodes));
+        assert_eq!(removed, Some(paths));
         assert!(!tracker.has_path(PointerId::PRIMARY));
         assert!(tracker.is_empty());
     }
@@ -129,8 +187,8 @@ mod tests {
     #[test]
     fn test_clear() {
         let mut tracker = HitPathTracker::new();
-        tracker.add_hit_path(PointerId(0), vec![1]);
-        tracker.add_hit_path(PointerId(1), vec![2]);
+        tracker.add_hit_path(PointerId(0), vec![vec![1]]);
+        tracker.add_hit_path(PointerId(1), vec![vec![2]]);
 
         assert!(!tracker.is_empty());
 
@@ -144,13 +202,20 @@ mod tests {
     #[test]
     fn test_multiple_pointers() {
         let mut tracker = HitPathTracker::new();
-        let nodes1: Vec<NodeId> = vec![1];
-        let nodes2: Vec<NodeId> = vec![2, 3];
+        let nodes1: Vec<Vec<NodeId>> = vec![vec![1]];
+        let nodes2: Vec<Vec<NodeId>> = vec![vec![2, 3]];
 
         tracker.add_hit_path(PointerId(0), nodes1.clone());
         tracker.add_hit_path(PointerId(1), nodes2.clone());
 
-        assert_eq!(tracker.get_path(PointerId(0)), Some(&nodes1));
-        assert_eq!(tracker.get_path(PointerId(1)), Some(&nodes2));
+        assert_eq!(tracker.get_path(PointerId(0)), Some(nodes1.as_slice()));
+        assert_eq!(tracker.get_path(PointerId(1)), Some(nodes2.as_slice()));
+    }
+
+    #[test]
+    fn test_dispatch_order_keeps_shared_ancestor_after_overlapping_hits() {
+        let paths = vec![vec![1, 99], vec![2, 99]];
+
+        assert_eq!(dispatch_order_for_paths(&paths), vec![1, 2, 99]);
     }
 }

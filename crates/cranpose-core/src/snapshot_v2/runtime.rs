@@ -17,10 +17,7 @@
 
 use super::*;
 use std::cell::Cell;
-#[cfg(test)]
 use std::cell::RefCell;
-#[cfg(not(test))]
-use std::sync::{LazyLock, Mutex};
 
 /// Snapshot identifiers less than or equal to this value are considered
 /// pre-existing. This mirrors `Snapshot.PreexistingSnapshotId` in the
@@ -33,14 +30,10 @@ const PREEXISTING_SNAPSHOT_ID: SnapshotId = 1;
 /// snapshot. We replicate that ordering here.
 const INITIAL_GLOBAL_SNAPSHOT_ID: SnapshotId = PREEXISTING_SNAPSHOT_ID + 1;
 
-/// Global runtime singleton, guarded by a mutex so we can mutate state safely.
-#[cfg(not(test))]
-static SNAPSHOT_RUNTIME: LazyLock<Mutex<SnapshotRuntime>> =
-    LazyLock::new(|| Mutex::new(SnapshotRuntime::new()));
-
-#[cfg(test)]
 thread_local! {
-    // Thread-local runtime for tests to avoid cross-thread interference.
+    // Snapshot runtime is per-thread because state objects and active snapshots
+    // are single-threaded. Independent UI threads must not share open-snapshot
+    // bookkeeping or they can invalidate each other's reads.
     static SNAPSHOT_RUNTIME: RefCell<Option<SnapshotRuntime>> = const { RefCell::new(None) };
 }
 
@@ -67,22 +60,6 @@ impl Drop for RuntimeLockGuard {
     }
 }
 
-/// Helper for temporarily mutating the runtime state.
-///
-/// This mirrors the `sync { ... }` helper in Kotlin by ensuring exclusive
-/// access to the global snapshot bookkeeping while the provided closure runs.
-#[cfg(not(test))]
-pub(crate) fn with_runtime<T>(f: impl FnOnce(&mut SnapshotRuntime) -> T) -> T {
-    let mut guard = SNAPSHOT_RUNTIME.lock().unwrap_or_else(|poisoned| {
-        // If the mutex was poisoned by a panic in another test, we can still
-        // use the data. This allows tests to continue even after a panic.
-        poisoned.into_inner()
-    });
-    let _scope = RuntimeLockGuard::enter();
-    f(&mut guard)
-}
-
-#[cfg(test)]
 pub(crate) fn with_runtime<T>(f: impl FnOnce(&mut SnapshotRuntime) -> T) -> T {
     let _scope = RuntimeLockGuard::enter();
     SNAPSHOT_RUNTIME.with(|runtime_cell| {

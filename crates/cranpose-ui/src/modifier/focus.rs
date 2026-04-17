@@ -15,7 +15,6 @@ use cranpose_foundation::{
 
 /// Focus direction for navigation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[allow(dead_code)] // TODO: used in future focus manager integration
 pub enum FocusDirection {
     /// Enter focus from outside.
     Enter,
@@ -74,13 +73,6 @@ impl FocusTargetNode {
                 callback(state);
             }
         }
-    }
-
-    /// Requests focus for this node.
-    #[allow(dead_code)] // TODO: used in future focus manager integration
-    pub fn request_focus(&self) -> bool {
-        // This will be wired up to the focus manager in the next phase
-        true
     }
 
     /// Clears focus from this node.
@@ -228,13 +220,6 @@ impl FocusRequesterNode {
             state: NodeState::new(),
             requester_id,
         }
-    }
-
-    /// Requests focus for the associated target.
-    #[allow(dead_code)] // TODO: used in future focus manager integration
-    pub fn request_focus(&self) -> bool {
-        // This will be wired up to the focus manager in the next phase
-        true
     }
 }
 

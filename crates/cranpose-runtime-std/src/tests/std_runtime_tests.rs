@@ -51,8 +51,16 @@ fn std_runtime_requests_frame_and_recomposes_on_state_change() {
     state.set(1);
 
     assert!(
+        runtime.has_frame_request(),
+        "has_frame_request should observe pending frames without consuming them"
+    );
+    assert!(
         runtime.take_frame_request(),
         "state.set should request a frame"
+    );
+    assert!(
+        !runtime.has_frame_request(),
+        "take_frame_request should consume the pending frame"
     );
 
     let runtime_handle = composition.runtime_handle();

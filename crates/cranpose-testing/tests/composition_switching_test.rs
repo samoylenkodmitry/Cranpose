@@ -234,9 +234,9 @@ fn test_switching_between_views_doesnt_duplicate_content() {
         "Node count should return to initial value after switching back"
     );
     assert_eq!(
-        render_count1.get(),
-        2,
-        "Counter view should render twice total"
+        render_count2.get(),
+        1,
+        "Switching back should not re-render the alternative view"
     );
 
     // Click increment button twice in counter view

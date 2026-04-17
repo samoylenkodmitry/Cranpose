@@ -35,6 +35,37 @@ fn graphics_layer_is_evaluated_on_slice_access() {
 }
 
 #[test]
+fn collecting_slices_does_not_eagerly_evaluate_lazy_graphics_layer() {
+    let reads = Rc::new(Cell::new(0usize));
+    let modifier = Modifier::empty().graphics_layer({
+        let reads = reads.clone();
+        move || {
+            reads.set(reads.get() + 1);
+            GraphicsLayer {
+                alpha: 0.42,
+                ..Default::default()
+            }
+        }
+    });
+
+    let slices = collect_slices_from_modifier(&modifier);
+
+    assert_eq!(
+        reads.get(),
+        2,
+        "lazy graphics layers should only resolve during node setup before slice access"
+    );
+
+    let layer = slices.graphics_layer().expect("layer");
+    assert!((layer.alpha - 0.42).abs() < 1e-6);
+    assert_eq!(
+        reads.get(),
+        3,
+        "reading the composed graphics layer should evaluate the resolver"
+    );
+}
+
+#[test]
 fn stacked_lazy_translation_and_backdrop_effect_are_both_preserved() {
     let modifier = Modifier::empty()
         .graphics_layer(|| GraphicsLayer {

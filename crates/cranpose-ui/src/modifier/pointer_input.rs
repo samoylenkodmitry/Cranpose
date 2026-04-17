@@ -295,12 +295,10 @@ impl PointerInputTask {
 
 impl Drop for PointerInputTask {
     fn drop(&mut self) {
-        // Don't remove from registry here! The registry holds a strong Rc<PointerInputTaskInner>,
-        // so the inner will stay alive even if this PointerInputTask wrapper is dropped.
-        // This is intentional - tasks created by temporary modifier chains (used for slice collection)
-        // will have their PointerInputTask dropped, but the inner task needs to stay alive in the
-        // registry so that wakers can still find and wake it.
-        // Tasks are only removed from the registry when explicitly cancelled via cancel().
+        self.inner.cancel();
+        POINTER_INPUT_TASKS.with(|registry| {
+            registry.borrow_mut().remove(&self.id);
+        });
     }
 }
 
@@ -426,7 +424,7 @@ impl SuspendingPointerInputNode {
 
 impl Drop for SuspendingPointerInputNode {
     fn drop(&mut self) {
-        // Cleanup happens automatically when task field is dropped
+        self.cancel();
     }
 }
 

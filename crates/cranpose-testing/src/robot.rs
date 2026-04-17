@@ -23,7 +23,7 @@
 //! ```
 
 use cranpose_app_shell::AppShell;
-use cranpose_core::{location_key, Key};
+use cranpose_core::location_key;
 use cranpose_foundation::PointerEvent;
 use cranpose_render_common::{HitTestTarget, RenderScene, Renderer};
 use cranpose_ui::LayoutTree;
@@ -38,8 +38,6 @@ where
     R: Renderer,
 {
     shell: AppShell<R>,
-    #[allow(dead_code)]
-    root_key: Key,
 }
 
 impl<R> RobotTestRule<R>
@@ -56,7 +54,7 @@ where
         shell.set_viewport(width as f32, height as f32);
         shell.set_buffer_size(width, height);
 
-        Self { shell, root_key }
+        Self { shell }
     }
 
     /// Get the current viewport size.
@@ -227,7 +225,7 @@ where
     }
 
     /// Get the layout tree if available.
-    fn get_layout_tree(&self) -> Option<&LayoutTree> {
+    fn get_layout_tree(&mut self) -> Option<&LayoutTree> {
         self.shell.layout_tree()
     }
 

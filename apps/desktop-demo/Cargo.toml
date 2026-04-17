@@ -78,12 +78,19 @@ wasm-bindgen-futures = "0.4.64"
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 
 [dev-dependencies]
+cranpose-app-shell = { path = "../../crates/cranpose-app-shell", features = ["test-support"] }
 cranpose-macros = { path = "../../crates/cranpose-macros" }
+cranpose-render-common = { path = "../../crates/cranpose-render/common" }
 cranpose-render-wgpu = { path = "../../crates/cranpose-render/wgpu" }
 cranpose-testing = { path = "../../crates/cranpose-testing" }
 pollster = "0.4.0"
 
 # Robot test runners
+[[example]]
+name = "robot_memory_leak"
+path = "robot-runners/robot_memory_leak.rs"
+required-features = ["robot-app"]
+
 [[example]]
 name = "robot_interactive"
 path = "robot-runners/robot_interactive.rs"
@@ -149,6 +156,11 @@ required-features = ["robot-app"]
 [[example]]
 name = "robot_tab_navigation"
 path = "robot-runners/robot_tab_navigation.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_tab_roundtrip_content"
+path = "robot-runners/robot_tab_roundtrip_content.rs"
 required-features = ["robot-app"]
 
 [[example]]
@@ -439,6 +451,11 @@ required-features = ["robot-app"]
 [[example]]
 name = "robot_hacker_news_scroll"
 path = "robot-runners/robot_hacker_news_scroll.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_hacker_news_back_drag_scroll"
+path = "robot-runners/robot_hacker_news_back_drag_scroll.rs"
 required-features = ["robot-app"]
 
 [[example]]

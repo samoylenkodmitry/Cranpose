@@ -655,17 +655,23 @@ impl MotionContextAnimatedNode {
 
 pub(crate) struct TranslatedContentContextNode {
     state: NodeState,
+    identity: usize,
 }
 
 impl TranslatedContentContextNode {
-    fn new() -> Self {
+    fn new(identity: usize) -> Self {
         Self {
             state: NodeState::new(),
+            identity,
         }
     }
 
     pub(crate) fn is_active(&self) -> bool {
         true
+    }
+
+    pub(crate) fn identity(&self) -> usize {
+        self.identity
     }
 }
 
@@ -803,10 +809,12 @@ impl ModifierNodeElement for TranslatedContentContextElement {
     type Node = TranslatedContentContextNode;
 
     fn create(&self) -> Self::Node {
-        TranslatedContentContextNode::new()
+        TranslatedContentContextNode::new(self.identity)
     }
 
-    fn update(&self, _node: &mut Self::Node) {}
+    fn update(&self, node: &mut Self::Node) {
+        node.identity = self.identity;
+    }
 
     fn capabilities(&self) -> NodeCapabilities {
         NodeCapabilities::LAYOUT

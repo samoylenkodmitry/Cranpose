@@ -140,6 +140,16 @@ impl CompositorScene {
         }
     }
 
+    pub fn clear(&mut self) {
+        self.shapes.clear();
+        self.images.clear();
+        self.texts.clear();
+        self.shadow_draws.clear();
+        self.effect_layers.clear();
+        self.backdrop_layers.clear();
+        self.next_z = 0;
+    }
+
     pub fn push_shape(
         &mut self,
         rect: Rect,

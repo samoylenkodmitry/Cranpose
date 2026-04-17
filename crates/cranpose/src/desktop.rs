@@ -2,14 +2,19 @@
 //!
 //! This module provides the desktop event loop implementation using winit.
 
-use crate::launcher::AppSettings;
+use crate::launcher::{AppSettings, LaunchError};
+#[cfg(feature = "robot")]
+use cranpose_app_shell::RuntimeLeakDebugStats;
 use cranpose_app_shell::{default_root_key, AppShell};
 use cranpose_platform_desktop_winit::DesktopWinitPlatform;
-#[cfg(feature = "robot")]
-use cranpose_render_wgpu::RenderStatsSnapshot;
 use cranpose_render_wgpu::WgpuRenderer;
+#[cfg(feature = "robot")]
+use cranpose_render_wgpu::{DebugCpuAllocationStats, RenderStatsSnapshot};
+use std::cell::RefCell;
+#[cfg(feature = "robot")]
+use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::OnceLock;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ButtonSource, ElementState, MouseButton, WindowEvent};
@@ -17,15 +22,10 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowAttributes, WindowId};
 
 #[cfg(feature = "robot")]
-use cranpose_ui::{LayoutBox, SemanticsAction, SemanticsNode, SemanticsRole};
+use cranpose_ui::{SemanticsAction, SemanticsNode, SemanticsRole};
 
 #[cfg(feature = "robot")]
 use std::sync::mpsc;
-
-fn desktop_input_debug_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_INPUT_DEBUG").is_some())
-}
 
 /// Serializable semantic element combining semantics + geometry
 ///
@@ -49,7 +49,7 @@ pub struct SemanticElement {
 
 /// Geometric bounds for a semantic element
 #[cfg(feature = "robot")]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct SemanticRect {
     /// X coordinate in logical pixels
     pub x: f32,
@@ -59,6 +59,32 @@ pub struct SemanticRect {
     pub width: f32,
     /// Height in logical pixels
     pub height: f32,
+}
+
+#[cfg(feature = "robot")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SemanticTextMatchKind {
+    Contains,
+    Exact,
+    Prefix,
+}
+
+#[cfg(feature = "robot")]
+#[derive(Debug, Clone)]
+struct SemanticQueryResult {
+    node_id: cranpose_core::NodeId,
+    bounds: SemanticRect,
+    text: Option<String>,
+}
+
+#[cfg(feature = "robot")]
+type TextMatchBounds = (f32, f32, f32, f32, String);
+
+#[cfg(feature = "robot")]
+fn pump_robot_frame(app: &mut AppShell<WgpuRenderer>) {
+    if app.needs_redraw() || app.has_active_animations() {
+        app.update();
+    }
 }
 
 /// RGBA screenshot captured from the current render scene.
@@ -80,7 +106,6 @@ pub struct RobotScreenshot {
 /// Robot command for controlling the application
 #[cfg(feature = "robot")]
 #[derive(Debug)]
-#[allow(dead_code)] // TouchDown, TouchMove, TouchUp reserved for future use
 enum RobotCommand {
     Click {
         x: f32,
@@ -119,9 +144,24 @@ enum RobotCommand {
     },
     WaitForIdle,
     GetSemantics,
+    FindText {
+        text: String,
+        match_kind: SemanticTextMatchKind,
+    },
+    FindButton {
+        text: String,
+        match_kind: SemanticTextMatchKind,
+    },
     GetScreenshot,
     GetScreenshotWithScale(f32),
     GetRenderStats,
+    GetRenderCpuAllocationStats,
+    GetRuntimeLeakDebugStats,
+    SetSemanticsEnabled(bool),
+    InvokeAppHook {
+        name: String,
+        argument: String,
+    },
     Exit,
 }
 
@@ -131,8 +171,12 @@ enum RobotCommand {
 enum RobotResponse {
     Ok,
     Semantics(Vec<SemanticElement>),
+    SemanticQuery(Option<SemanticQueryResult>),
     Screenshot(RobotScreenshot),
     RenderStats(Box<Option<RenderStatsSnapshot>>),
+    RenderCpuAllocationStats(Box<DebugCpuAllocationStats>),
+    RuntimeLeakDebugStats(Box<RuntimeLeakDebugStats>),
+    AppHookResult(Option<String>),
     Error(String),
 }
 
@@ -478,6 +522,95 @@ impl Robot {
         }
     }
 
+    fn request_semantic_query(
+        &self,
+        command: RobotCommand,
+    ) -> Result<Option<SemanticQueryResult>, String> {
+        self.tx
+            .send(command)
+            .map_err(|e| format!("Failed to send semantic query: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::SemanticQuery(result)) => Ok(result),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
+    }
+
+    /// Find the first semantic node whose text contains the provided substring.
+    pub fn find_text_bounds(&self, text: &str) -> Result<Option<(f32, f32, f32, f32)>, String> {
+        Ok(self
+            .request_semantic_query(RobotCommand::FindText {
+                text: text.to_string(),
+                match_kind: SemanticTextMatchKind::Contains,
+            })?
+            .map(|result| {
+                (
+                    result.bounds.x,
+                    result.bounds.y,
+                    result.bounds.width,
+                    result.bounds.height,
+                )
+            }))
+    }
+
+    /// Find the first semantic node whose text starts with the provided prefix.
+    pub fn find_text_by_prefix(&self, prefix: &str) -> Result<Option<TextMatchBounds>, String> {
+        Ok(self
+            .request_semantic_query(RobotCommand::FindText {
+                text: prefix.to_string(),
+                match_kind: SemanticTextMatchKind::Prefix,
+            })?
+            .and_then(|result| {
+                result.text.map(|text| {
+                    (
+                        result.bounds.x,
+                        result.bounds.y,
+                        result.bounds.width,
+                        result.bounds.height,
+                        text,
+                    )
+                })
+            }))
+    }
+
+    /// Find the first clickable semantic node whose subtree contains the provided substring.
+    pub fn find_button_bounds(&self, text: &str) -> Result<Option<(f32, f32, f32, f32)>, String> {
+        Ok(self
+            .request_semantic_query(RobotCommand::FindButton {
+                text: text.to_string(),
+                match_kind: SemanticTextMatchKind::Contains,
+            })?
+            .map(|result| {
+                (
+                    result.bounds.x,
+                    result.bounds.y,
+                    result.bounds.width,
+                    result.bounds.height,
+                )
+            }))
+    }
+
+    /// Find the first clickable semantic node whose subtree contains exactly matching text.
+    pub fn find_button_bounds_exact(
+        &self,
+        text: &str,
+    ) -> Result<Option<(f32, f32, f32, f32)>, String> {
+        Ok(self
+            .request_semantic_query(RobotCommand::FindButton {
+                text: text.to_string(),
+                match_kind: SemanticTextMatchKind::Exact,
+            })?
+            .map(|result| {
+                (
+                    result.bounds.x,
+                    result.bounds.y,
+                    result.bounds.width,
+                    result.bounds.height,
+                )
+            }))
+    }
+
     /// Capture a screenshot of the current render scene.
     pub fn screenshot(&self) -> Result<RobotScreenshot, String> {
         self.tx
@@ -511,6 +644,61 @@ impl Robot {
             .map_err(|e| format!("Failed to send render stats command: {}", e))?;
         match self.rx.recv() {
             Ok(RobotResponse::RenderStats(stats)) => Ok(*stats),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
+    }
+
+    /// Get a snapshot of CPU-side renderer allocation capacities.
+    pub fn get_render_cpu_allocation_stats(&self) -> Result<DebugCpuAllocationStats, String> {
+        self.tx
+            .send(RobotCommand::GetRenderCpuAllocationStats)
+            .map_err(|e| format!("Failed to send render CPU allocation stats command: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::RenderCpuAllocationStats(stats)) => Ok(*stats),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
+    }
+
+    /// Get a snapshot of runtime/applier allocation stats for leak diagnostics.
+    pub fn get_runtime_leak_debug_stats(&self) -> Result<RuntimeLeakDebugStats, String> {
+        self.tx
+            .send(RobotCommand::GetRuntimeLeakDebugStats)
+            .map_err(|e| format!("Failed to send runtime leak debug stats command: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::RuntimeLeakDebugStats(stats)) => Ok(*stats),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
+    }
+
+    /// Enable or disable eager semantics extraction for robot queries.
+    pub fn set_semantics_enabled(&self, enabled: bool) -> Result<(), String> {
+        self.tx
+            .send(RobotCommand::SetSemanticsEnabled(enabled))
+            .map_err(|e| format!("Failed to send semantics toggle command: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::Ok) => Ok(()),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
+    }
+
+    /// Invoke an application-defined robot hook on the app thread.
+    pub fn invoke_app_hook(&self, name: &str, argument: &str) -> Result<Option<String>, String> {
+        self.tx
+            .send(RobotCommand::InvokeAppHook {
+                name: name.to_string(),
+                argument: argument.to_string(),
+            })
+            .map_err(|e| format!("Failed to send app hook command: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::AppHookResult(result)) => Ok(result),
             Ok(RobotResponse::Error(e)) => Err(e),
             Ok(_) => Err("Unexpected response".to_string()),
             Err(e) => Err(format!("Failed to receive response: {}", e)),
@@ -587,13 +775,11 @@ impl Robot {
     /// robot.click_by_text("Increment")?;
     /// ```
     pub fn click_by_text(&self, text: &str) -> Result<(), String> {
-        let semantics = self.get_semantics()?;
-        let elem = Self::find_button(&semantics, text)
+        let (x, y, w, h) = self
+            .find_button_bounds(text)?
             .ok_or_else(|| format!("Button '{}' not found in semantic tree", text))?;
-
-        // Click center of bounds
-        let center_x = elem.bounds.x + elem.bounds.width / 2.0;
-        let center_y = elem.bounds.y + elem.bounds.height / 2.0;
+        let center_x = x + w / 2.0;
+        let center_y = y + h / 2.0;
 
         self.click(center_x, center_y)
     }
@@ -608,8 +794,7 @@ impl Robot {
     /// robot.validate_content("Expected Text")?;
     /// ```
     pub fn validate_content(&self, expected: &str) -> Result<(), String> {
-        let semantics = self.get_semantics()?;
-        if Self::find_by_text(&semantics, expected).is_some() {
+        if self.find_text_bounds(expected)?.is_some() {
             Ok(())
         } else {
             Err(format!("Validation failed: '{}' not found", expected))
@@ -627,17 +812,32 @@ impl Robot {
     /// Robot::print_semantics(&semantics, 0);
     /// ```
     pub fn print_semantics(elements: &[SemanticElement], indent: usize) {
-        for elem in elements {
-            let prefix = "  ".repeat(indent);
-            let text_info = elem
-                .text
-                .as_ref()
-                .map(|t| format!(" text=\"{}\"", t))
-                .unwrap_or_default();
-            let clickable = if elem.clickable { " [CLICKABLE]" } else { "" };
-            println!("{}role={}{}{}", prefix, elem.role, text_info, clickable);
-            Self::print_semantics(&elem.children, indent + 1);
+        let report = Self::format_semantics(elements, indent);
+        log::info!(target: "cranpose::robot::semantics", "\n{report}");
+    }
+
+    /// Format the semantic tree as a plain-text hierarchy for caller-controlled output.
+    pub fn format_semantics(elements: &[SemanticElement], indent: usize) -> String {
+        fn format_semantics_into(output: &mut String, elements: &[SemanticElement], indent: usize) {
+            for elem in elements {
+                let prefix = "  ".repeat(indent);
+                let text_info = elem
+                    .text
+                    .as_ref()
+                    .map(|t| format!(" text=\"{}\"", t))
+                    .unwrap_or_default();
+                let clickable = if elem.clickable { " [CLICKABLE]" } else { "" };
+                let _ = std::fmt::Write::write_fmt(
+                    output,
+                    format_args!("{prefix}role={}{}{}\n", elem.role, text_info, clickable),
+                );
+                format_semantics_into(output, &elem.children, indent + 1);
+            }
         }
+
+        let mut output = String::new();
+        format_semantics_into(&mut output, elements, indent);
+        output
     }
 }
 
@@ -664,17 +864,28 @@ struct App {
     /// Robot controller
     #[cfg(feature = "robot")]
     robot_controller: Option<RobotController>,
+    /// Optional robot hook executed on the app thread for deterministic test control.
+    #[cfg(feature = "robot")]
+    robot_app_hook: Option<Box<crate::RobotAppHook>>,
     /// Input recorder for generating robot tests
     recorder: Option<crate::recorder::InputRecorder>,
+    /// Launch failure captured during window/GPU initialization.
+    launch_error: Rc<RefCell<Option<LaunchError>>>,
 }
 
 impl App {
-    fn new(mut settings: AppSettings, content: impl FnMut() + 'static) -> Self {
+    fn new(
+        mut settings: AppSettings,
+        content: impl FnMut() + 'static,
+        launch_error: Rc<RefCell<Option<LaunchError>>>,
+    ) -> Self {
         // Create recorder if recording is enabled
         let recorder = settings
             .record_to
             .take()
             .map(crate::recorder::InputRecorder::new);
+        #[cfg(feature = "robot")]
+        let robot_app_hook = settings.robot_app_hook.take();
 
         Self {
             settings,
@@ -688,8 +899,19 @@ impl App {
             last_cursor_position: None,
             #[cfg(feature = "robot")]
             robot_controller: None,
+            #[cfg(feature = "robot")]
+            robot_app_hook,
             recorder,
+            launch_error,
         }
+    }
+
+    fn abort_launch(&self, event_loop: &dyn ActiveEventLoop, error: LaunchError) {
+        let mut slot = self.launch_error.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(error);
+        }
+        event_loop.exit();
     }
 
     #[cfg(feature = "robot")]
@@ -709,19 +931,22 @@ impl ApplicationHandler for App {
         let initial_height = self.settings.initial_height;
         let headless = self.settings.headless;
 
-        let window: Arc<dyn Window> = event_loop
-            .create_window(
-                WindowAttributes::default()
-                    .with_title(self.settings.window_title.clone())
-                    .with_surface_size(LogicalSize::new(
-                        initial_width as f64,
-                        initial_height as f64,
-                    ))
-                    // Hide window in headless mode for parallel robot testing
-                    .with_visible(!headless),
-            )
-            .expect("failed to create window")
-            .into();
+        let window: Arc<dyn Window> = match event_loop.create_window(
+            WindowAttributes::default()
+                .with_title(self.settings.window_title.clone())
+                .with_surface_size(LogicalSize::new(
+                    initial_width as f64,
+                    initial_height as f64,
+                ))
+                // Hide window in headless mode for parallel robot testing
+                .with_visible(!headless),
+        ) {
+            Ok(window) => window.into(),
+            Err(error) => {
+                self.abort_launch(event_loop, LaunchError::WindowCreate(error));
+                return;
+            }
+        };
 
         // Initialize WGPU
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -729,9 +954,13 @@ impl ApplicationHandler for App {
             ..Default::default()
         });
 
-        let surface = instance
-            .create_surface(window.clone())
-            .expect("failed to create surface");
+        let surface = match instance.create_surface(window.clone()) {
+            Ok(surface) => surface,
+            Err(error) => {
+                self.abort_launch(event_loop, LaunchError::SurfaceCreate(error));
+                return;
+            }
+        };
 
         let adapter =
             match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -740,75 +969,28 @@ impl ApplicationHandler for App {
                 force_fallback_adapter: false,
             })) {
                 Ok(adapter) => adapter,
-                Err(e) => {
-                    // Provide helpful error message for GPU issues
-                    eprintln!(
-                        "\n╔══════════════════════════════════════════════════════════════════╗"
-                    );
-                    eprintln!(
-                        "║                    GPU ADAPTER NOT FOUND                          ║"
-                    );
-                    eprintln!(
-                        "╠══════════════════════════════════════════════════════════════════╣"
-                    );
-                    eprintln!(
-                        "║ No suitable graphics adapter was found. This usually means:      ║"
-                    );
-                    eprintln!(
-                        "║                                                                  ║"
-                    );
-                    eprintln!(
-                        "║   • GPU drivers are not installed or not working                 ║"
-                    );
-                    eprintln!(
-                        "║   • Vulkan/OpenGL support is missing or broken                   ║"
-                    );
-                    eprintln!(
-                        "║   • A recent system update broke graphics drivers                ║"
-                    );
-                    eprintln!(
-                        "║                                                                  ║"
-                    );
-                    eprintln!(
-                        "║ To fix this on Linux:                                            ║"
-                    );
-                    eprintln!(
-                        "║   1. Check Vulkan: vulkaninfo | head -20                         ║"
-                    );
-                    eprintln!(
-                        "║   2. Reinstall drivers:                                          ║"
-                    );
-                    eprintln!(
-                        "║      - Mesa: sudo pacman -S mesa vulkan-mesa-layers              ║"
-                    );
-                    eprintln!(
-                        "║      - NVIDIA: sudo pacman -S nvidia-utils                       ║"
-                    );
-                    eprintln!(
-                        "║   3. Reboot your system                                          ║"
-                    );
-                    eprintln!(
-                        "║                                                                  ║"
-                    );
-                    eprintln!("║ Technical details: {:?}", e);
-                    eprintln!(
-                        "╚══════════════════════════════════════════════════════════════════╝\n"
-                    );
-                    event_loop.exit();
+                Err(error) => {
+                    self.abort_launch(event_loop, LaunchError::NoAdapter(error));
                     return;
                 }
             };
         let adapter_info = adapter.get_info();
 
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("Main Device"),
-            required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::default(),
-            experimental_features: wgpu::ExperimentalFeatures::disabled(),
-            memory_hints: wgpu::MemoryHints::default(),
-            trace: wgpu::Trace::Off,
-        }))
-        .expect("failed to create device");
+        let (device, queue) =
+            match pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                label: Some("Main Device"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                memory_hints: wgpu::MemoryHints::default(),
+                trace: wgpu::Trace::Off,
+            })) {
+                Ok(pair) => pair,
+                Err(error) => {
+                    self.abort_launch(event_loop, LaunchError::DeviceCreate(error));
+                    return;
+                }
+            };
 
         let size = window.surface_size();
         let surface_caps = surface.get_capabilities(&adapter);
@@ -947,12 +1129,12 @@ impl ApplicationHandler for App {
             WindowEvent::PointerMoved { position, .. } => {
                 let logical = platform.pointer_position(position);
                 self.last_cursor_position = Some((logical.x, logical.y));
-                if desktop_input_debug_enabled() {
-                    eprintln!(
-                        "[CRANPOSE_INPUT_DEBUG] desktop pointer move ({:.2},{:.2})",
-                        logical.x, logical.y
-                    );
-                }
+                log::trace!(
+                    target: "cranpose::input",
+                    "desktop pointer move ({:.2},{:.2})",
+                    logical.x,
+                    logical.y
+                );
                 app.set_cursor(logical.x, logical.y);
                 if let Some(recorder) = &mut self.recorder {
                     recorder.record_mouse_move(logical.x, logical.y);
@@ -978,12 +1160,13 @@ impl ApplicationHandler for App {
                     logical_delta.y = 0.0;
                 }
 
-                if desktop_input_debug_enabled() {
-                    eprintln!(
-                        "[CRANPOSE_INPUT_DEBUG] desktop wheel delta ({:.2},{:.2}) alt={}",
-                        logical_delta.x, logical_delta.y, alt_pressed
-                    );
-                }
+                log::trace!(
+                    target: "cranpose::input",
+                    "desktop wheel delta ({:.2},{:.2}) alt={}",
+                    logical_delta.x,
+                    logical_delta.y,
+                    alt_pressed
+                );
 
                 app.pointer_scrolled(logical_delta.x, logical_delta.y);
             }
@@ -993,12 +1176,13 @@ impl ApplicationHandler for App {
                 ..
             } => {
                 if let Some((x, y)) = self.last_cursor_position {
-                    if desktop_input_debug_enabled() {
-                        eprintln!(
-                            "[CRANPOSE_INPUT_DEBUG] desktop pointer button {:?} at ({:.2},{:.2})",
-                            state, x, y
-                        );
-                    }
+                    log::trace!(
+                        target: "cranpose::input",
+                        "desktop pointer button {:?} at ({:.2},{:.2})",
+                        state,
+                        x,
+                        y
+                    );
                     app.set_cursor(x, y);
                 }
                 match state {
@@ -1168,9 +1352,7 @@ impl ApplicationHandler for App {
                 app.cancel_gesture();
             }
             WindowEvent::RedrawRequested => {
-                if desktop_input_debug_enabled() {
-                    eprintln!("[CRANPOSE_INPUT_DEBUG] desktop redraw requested");
-                }
+                log::trace!(target: "cranpose::input", "desktop redraw requested");
                 app.update();
 
                 let output = match surface.get_current_texture() {
@@ -1279,18 +1461,33 @@ impl ApplicationHandler for App {
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
                     RobotCommand::GetSemantics => {
+                        pump_robot_frame(app);
                         let semantics = extract_semantics(app);
                         let _ = controller.tx.send(RobotResponse::Semantics(semantics));
                     }
-                    RobotCommand::GetScreenshot => match capture_screenshot(app) {
-                        Ok(screenshot) => {
-                            let _ = controller.tx.send(RobotResponse::Screenshot(screenshot));
+                    RobotCommand::FindText { text, match_kind } => {
+                        pump_robot_frame(app);
+                        let result = find_text_in_app(app, &text, match_kind);
+                        let _ = controller.tx.send(RobotResponse::SemanticQuery(result));
+                    }
+                    RobotCommand::FindButton { text, match_kind } => {
+                        pump_robot_frame(app);
+                        let result = find_button_in_app(app, &text, match_kind);
+                        let _ = controller.tx.send(RobotResponse::SemanticQuery(result));
+                    }
+                    RobotCommand::GetScreenshot => {
+                        pump_robot_frame(app);
+                        match capture_screenshot(app) {
+                            Ok(screenshot) => {
+                                let _ = controller.tx.send(RobotResponse::Screenshot(screenshot));
+                            }
+                            Err(err) => {
+                                let _ = controller.tx.send(RobotResponse::Error(err));
+                            }
                         }
-                        Err(err) => {
-                            let _ = controller.tx.send(RobotResponse::Error(err));
-                        }
-                    },
+                    }
                     RobotCommand::GetScreenshotWithScale(scale) => {
+                        pump_robot_frame(app);
                         match capture_screenshot_with_scale(app, scale) {
                             Ok(screenshot) => {
                                 let _ = controller.tx.send(RobotResponse::Screenshot(screenshot));
@@ -1304,6 +1501,39 @@ impl ApplicationHandler for App {
                         let _ = controller.tx.send(RobotResponse::RenderStats(Box::new(
                             app.renderer().last_frame_stats(),
                         )));
+                    }
+                    RobotCommand::GetRenderCpuAllocationStats => {
+                        let _ =
+                            controller
+                                .tx
+                                .send(RobotResponse::RenderCpuAllocationStats(Box::new(
+                                    app.renderer().debug_cpu_allocation_stats(),
+                                )));
+                    }
+                    RobotCommand::GetRuntimeLeakDebugStats => {
+                        let _ = controller
+                            .tx
+                            .send(RobotResponse::RuntimeLeakDebugStats(Box::new(
+                                app.debug_runtime_leak_stats(),
+                            )));
+                    }
+                    RobotCommand::SetSemanticsEnabled(enabled) => {
+                        app.set_semantics_enabled(enabled);
+                        let _ = controller.tx.send(RobotResponse::Ok);
+                    }
+                    RobotCommand::InvokeAppHook { name, argument } => {
+                        let response = match self.robot_app_hook.as_mut() {
+                            Some(hook) => hook(name, argument).map(RobotResponse::AppHookResult),
+                            None => Err("robot app hook not configured".to_string()),
+                        };
+                        match response {
+                            Ok(response) => {
+                                let _ = controller.tx.send(response);
+                            }
+                            Err(err) => {
+                                let _ = controller.tx.send(RobotResponse::Error(err));
+                            }
+                        }
                     }
                     RobotCommand::TypeText(text) => {
                         use cranpose_app_shell::{KeyEvent, KeyEventType, Modifiers};
@@ -1458,7 +1688,7 @@ impl ApplicationHandler for App {
 
             // Handle ongoing wait_for_idle
             if controller.waiting_for_idle {
-                const MAX_IDLE_ITERATIONS: u32 = 200;
+                const MAX_IDLE_ITERATIONS: u32 = 600;
 
                 let needs_draw = app.needs_redraw();
                 let has_anim = app.has_active_animations();
@@ -1484,19 +1714,20 @@ impl ApplicationHandler for App {
 
                     if controller.idle_iterations >= MAX_IDLE_ITERATIONS {
                         controller.waiting_for_idle = false;
-                        let _ = controller.tx.send(RobotResponse::Error(
-                            "wait_for_idle: timed out after 200 iterations".to_string(),
-                        ));
+                        let _ = controller.tx.send(RobotResponse::Error(format!(
+                            "wait_for_idle: timed out after {} iterations",
+                            MAX_IDLE_ITERATIONS
+                        )));
                     }
                 }
             }
         }
 
         let needs_redraw = app.needs_redraw();
-        if desktop_input_debug_enabled() && needs_redraw {
-            eprintln!(
-                "[CRANPOSE_INPUT_DEBUG] about_to_wait needs_redraw={}",
-                needs_redraw
+        if needs_redraw {
+            log::trace!(
+                target: "cranpose::input",
+                "about_to_wait needs_redraw={needs_redraw}"
             );
         }
         if needs_redraw {
@@ -1531,10 +1762,14 @@ impl ApplicationHandler for App {
 ///
 /// **Note:** Applications should use `AppLauncher` instead of calling this directly.
 #[allow(unused_mut)]
-pub fn run(mut settings: AppSettings, content: impl FnMut() + 'static) -> ! {
+pub fn try_run(
+    mut settings: AppSettings,
+    content: impl FnMut() + 'static,
+) -> Result<(), LaunchError> {
     let event_loop = EventLoop::builder()
         .build()
-        .expect("failed to create event loop");
+        .map_err(LaunchError::EventLoopCreate)?;
+    let launch_error = Rc::new(RefCell::new(None));
 
     // Spawn test driver if present
     #[cfg(feature = "robot")]
@@ -1548,26 +1783,34 @@ pub fn run(mut settings: AppSettings, content: impl FnMut() + 'static) -> ! {
         None
     };
 
-    let mut app = App::new(settings, content);
+    let mut app = App::new(settings, content, Rc::clone(&launch_error));
 
     #[cfg(feature = "robot")]
     if let Some(controller) = robot_controller {
         app.set_robot_controller(controller);
     }
 
-    let _ = event_loop.run_app(app);
+    let run_result = event_loop.run_app(app);
+    if let Some(error) = launch_error.borrow_mut().take() {
+        return Err(error);
+    }
 
+    run_result.map_err(LaunchError::EventLoopRun)
+}
+
+/// Runs a desktop application and exits the process on success.
+///
+/// Use [`try_run`] when the caller needs to handle launch failures explicitly.
+#[allow(unused_mut)]
+pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
+    try_run(settings, content)
+        .unwrap_or_else(|error| panic!("failed to launch desktop app: {error}"));
     std::process::exit(0)
 }
 
 #[cfg(feature = "robot")]
 fn capture_screenshot(app: &mut AppShell<WgpuRenderer>) -> Result<RobotScreenshot, String> {
-    let logical_size = app.layout_tree().map(|layout_tree| {
-        (
-            layout_tree.root().rect.width.max(1.0),
-            layout_tree.root().rect.height.max(1.0),
-        )
-    });
+    let logical_size = app.root_layout_size();
     let (width, height, capture_scale) =
         resolve_robot_screenshot_params(app.buffer_size(), logical_size);
 
@@ -1602,12 +1845,7 @@ fn capture_screenshot_with_scale(
     app: &mut AppShell<WgpuRenderer>,
     scale: f32,
 ) -> Result<RobotScreenshot, String> {
-    let logical_size = app.layout_tree().map(|layout_tree| {
-        (
-            layout_tree.root().rect.width.max(1.0),
-            layout_tree.root().rect.height.max(1.0),
-        )
-    });
+    let logical_size = app.root_layout_size();
     let (logical_width, logical_height) = logical_size.unwrap_or((1.0, 1.0));
     let width = (logical_width * scale).ceil() as u32;
     let height = (logical_height * scale).ceil() as u32;
@@ -1641,21 +1879,31 @@ fn resolve_robot_screenshot_params(
     (buffer_width.max(1), buffer_height.max(1), 1.0)
 }
 
-/// Extract semantic elements by combining semantic tree with layout tree
+/// Extract semantic elements by combining semantic tree with an on-demand layout snapshot.
 #[cfg(feature = "robot")]
-fn extract_semantics(app: &AppShell<WgpuRenderer>) -> Vec<SemanticElement> {
-    match (app.semantics_tree(), app.layout_tree()) {
-        (Some(sem_tree), Some(layout_tree)) => {
-            vec![combine_trees(sem_tree.root(), layout_tree.root())]
-        }
-        _ => Vec::new(),
-    }
+fn extract_semantics(app: &mut AppShell<WgpuRenderer>) -> Vec<SemanticElement> {
+    let Some(layout_tree) = app.layout_tree().cloned() else {
+        return Vec::new();
+    };
+    let Some(semantic_root) = app.semantics_tree().map(|tree| tree.root().clone()) else {
+        return Vec::new();
+    };
+    let bounds_by_node = build_semantic_bounds_index(layout_tree.root());
+    let mut bounds_for = |node_id| semantic_rect_for_node(&bounds_by_node, node_id);
+    vec![semantic_element_from_semantics_node(
+        &semantic_root,
+        &mut bounds_for,
+    )]
 }
 
-/// Recursively combine SemanticsNode + LayoutBox into SemanticElement
 #[cfg(feature = "robot")]
-fn combine_trees(sem_node: &SemanticsNode, layout_box: &LayoutBox) -> SemanticElement {
-    // Extract role as string
+fn semantic_element_from_semantics_node<F>(
+    sem_node: &SemanticsNode,
+    bounds_for: &mut F,
+) -> SemanticElement
+where
+    F: FnMut(cranpose_core::NodeId) -> SemanticRect,
+{
     let role = match &sem_node.role {
         SemanticsRole::Button => "Button",
         SemanticsRole::Text { .. } => "Text",
@@ -1666,32 +1914,20 @@ fn combine_trees(sem_node: &SemanticsNode, layout_box: &LayoutBox) -> SemanticEl
     }
     .to_string();
 
-    // Extract text content
     let text = match &sem_node.role {
         SemanticsRole::Text { value } => Some(value.clone()),
         _ => sem_node.description.clone(),
     };
 
-    // Check if clickable
     let clickable = sem_node
         .actions
         .iter()
         .any(|action| matches!(action, SemanticsAction::Click { .. }));
-
-    // Get bounds from layout
-    let bounds = SemanticRect {
-        x: layout_box.rect.x,
-        y: layout_box.rect.y,
-        width: layout_box.rect.width,
-        height: layout_box.rect.height,
-    };
-
-    // Recursively process children
+    let bounds = bounds_for(sem_node.node_id);
     let children = sem_node
         .children
         .iter()
-        .zip(layout_box.children.iter())
-        .map(|(sem_child, layout_child)| combine_trees(sem_child, layout_child))
+        .map(|child| semantic_element_from_semantics_node(child, bounds_for))
         .collect();
 
     SemanticElement {
@@ -1701,6 +1937,242 @@ fn combine_trees(sem_node: &SemanticsNode, layout_box: &LayoutBox) -> SemanticEl
         clickable,
         children,
     }
+}
+
+#[cfg(feature = "robot")]
+fn find_text_in_app(
+    app: &mut AppShell<WgpuRenderer>,
+    query: &str,
+    match_kind: SemanticTextMatchKind,
+) -> Option<SemanticQueryResult> {
+    let layout_tree = app.layout_tree()?.clone();
+    let root = app.semantics_tree()?.root().clone();
+    let bounds_by_node = build_semantic_bounds_index(layout_tree.root());
+    let result = find_text_in_semantics_tree(&bounds_by_node, &root, query, match_kind);
+    log::trace!(
+        target: "cranpose::input",
+        "find_text query={query:?} result={:?}",
+        result
+            .as_ref()
+            .map(|result| (result.node_id, result.bounds, result.text.clone()))
+    );
+    result
+}
+
+#[cfg(feature = "robot")]
+fn find_button_in_app(
+    app: &mut AppShell<WgpuRenderer>,
+    query: &str,
+    match_kind: SemanticTextMatchKind,
+) -> Option<SemanticQueryResult> {
+    let layout_tree = app.layout_tree()?.clone();
+    let root = app.semantics_tree()?.root().clone();
+    let bounds_by_node = build_semantic_bounds_index(layout_tree.root());
+    let result = find_button_in_semantics_tree(&bounds_by_node, &root, query, match_kind);
+    log::trace!(
+        target: "cranpose::input",
+        "find_button query={query:?} result={:?}",
+        result
+            .as_ref()
+            .map(|result| (result.node_id, result.bounds, result.text.clone()))
+    );
+    result
+}
+
+#[cfg(feature = "robot")]
+fn semantic_rect_for_node(
+    bounds_by_node: &HashMap<cranpose_core::NodeId, SemanticRect>,
+    node_id: cranpose_core::NodeId,
+) -> SemanticRect {
+    bounds_by_node
+        .get(&node_id)
+        .copied()
+        .unwrap_or(SemanticRect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        })
+}
+
+#[cfg(feature = "robot")]
+fn find_text_in_semantics_tree(
+    bounds_by_node: &HashMap<cranpose_core::NodeId, SemanticRect>,
+    sem_node: &SemanticsNode,
+    query: &str,
+    match_kind: SemanticTextMatchKind,
+) -> Option<SemanticQueryResult> {
+    if let Some(text) = semantics_node_text(sem_node) {
+        if semantics_text_matches(text, query, match_kind) {
+            return Some(SemanticQueryResult {
+                node_id: sem_node.node_id,
+                bounds: semantic_rect_for_node(bounds_by_node, sem_node.node_id),
+                text: Some(text.to_string()),
+            });
+        }
+    }
+
+    for child in &sem_node.children {
+        if let Some(result) = find_text_in_semantics_tree(bounds_by_node, child, query, match_kind)
+        {
+            return Some(result);
+        }
+    }
+
+    None
+}
+
+#[cfg(feature = "robot")]
+fn find_button_in_semantics_tree(
+    bounds_by_node: &HashMap<cranpose_core::NodeId, SemanticRect>,
+    sem_node: &SemanticsNode,
+    query: &str,
+    match_kind: SemanticTextMatchKind,
+) -> Option<SemanticQueryResult> {
+    if semantics_node_clickable(sem_node)
+        && subtree_contains_matching_text(sem_node, query, match_kind)
+    {
+        return Some(SemanticQueryResult {
+            node_id: sem_node.node_id,
+            bounds: semantic_rect_for_node(bounds_by_node, sem_node.node_id),
+            text: semantics_node_text(sem_node).map(str::to_string),
+        });
+    }
+
+    for child in &sem_node.children {
+        if let Some(result) =
+            find_button_in_semantics_tree(bounds_by_node, child, query, match_kind)
+        {
+            return Some(result);
+        }
+    }
+
+    None
+}
+
+#[cfg(feature = "robot")]
+fn semantics_text_matches(actual: &str, query: &str, match_kind: SemanticTextMatchKind) -> bool {
+    match match_kind {
+        SemanticTextMatchKind::Contains => actual.contains(query),
+        SemanticTextMatchKind::Exact => actual == query,
+        SemanticTextMatchKind::Prefix => actual.starts_with(query),
+    }
+}
+
+#[cfg(feature = "robot")]
+fn semantics_node_text(sem_node: &SemanticsNode) -> Option<&str> {
+    match &sem_node.role {
+        SemanticsRole::Text { value } => Some(value.as_str()),
+        _ => sem_node.description.as_deref(),
+    }
+}
+
+#[cfg(feature = "robot")]
+fn semantics_node_clickable(sem_node: &SemanticsNode) -> bool {
+    sem_node
+        .actions
+        .iter()
+        .any(|action| matches!(action, SemanticsAction::Click { .. }))
+}
+
+#[cfg(feature = "robot")]
+fn build_semantic_bounds_index(
+    root: &cranpose_ui::LayoutBox,
+) -> HashMap<cranpose_core::NodeId, SemanticRect> {
+    let mut bounds = HashMap::new();
+    collect_semantic_bounds(root, &mut bounds);
+    bounds
+}
+
+#[cfg(feature = "robot")]
+fn collect_semantic_bounds(
+    layout_box: &cranpose_ui::LayoutBox,
+    bounds: &mut HashMap<cranpose_core::NodeId, SemanticRect>,
+) {
+    bounds.insert(layout_box.node_id, bounds_from_layout_box(layout_box));
+    for child in &layout_box.children {
+        collect_semantic_bounds(child, bounds);
+    }
+}
+
+#[cfg(feature = "robot")]
+fn bounds_from_layout_box(layout_box: &cranpose_ui::LayoutBox) -> SemanticRect {
+    SemanticRect {
+        x: layout_box.rect.x,
+        y: layout_box.rect.y,
+        width: layout_box.rect.width,
+        height: layout_box.rect.height,
+    }
+}
+
+#[cfg(all(feature = "robot", test))]
+fn find_text_in_trees(
+    sem_node: &SemanticsNode,
+    layout_box: &cranpose_ui::LayoutBox,
+    query: &str,
+    match_kind: SemanticTextMatchKind,
+) -> Option<SemanticQueryResult> {
+    if let Some(text) = semantics_node_text(sem_node) {
+        if semantics_text_matches(text, query, match_kind) {
+            return Some(SemanticQueryResult {
+                node_id: layout_box.node_id,
+                bounds: bounds_from_layout_box(layout_box),
+                text: Some(text.to_string()),
+            });
+        }
+    }
+
+    sem_node
+        .children
+        .iter()
+        .zip(layout_box.children.iter())
+        .find_map(|(sem_child, layout_child)| {
+            find_text_in_trees(sem_child, layout_child, query, match_kind)
+        })
+}
+
+#[cfg(feature = "robot")]
+fn subtree_contains_matching_text(
+    sem_node: &SemanticsNode,
+    query: &str,
+    match_kind: SemanticTextMatchKind,
+) -> bool {
+    if let Some(text) = semantics_node_text(sem_node) {
+        if semantics_text_matches(text, query, match_kind) {
+            return true;
+        }
+    }
+
+    sem_node
+        .children
+        .iter()
+        .any(|child| subtree_contains_matching_text(child, query, match_kind))
+}
+
+#[cfg(all(feature = "robot", test))]
+fn find_button_in_trees(
+    sem_node: &SemanticsNode,
+    layout_box: &cranpose_ui::LayoutBox,
+    query: &str,
+    match_kind: SemanticTextMatchKind,
+) -> Option<SemanticQueryResult> {
+    if semantics_node_clickable(sem_node)
+        && subtree_contains_matching_text(sem_node, query, match_kind)
+    {
+        return Some(SemanticQueryResult {
+            node_id: layout_box.node_id,
+            bounds: bounds_from_layout_box(layout_box),
+            text: semantics_node_text(sem_node).map(str::to_string),
+        });
+    }
+
+    sem_node
+        .children
+        .iter()
+        .zip(layout_box.children.iter())
+        .find_map(|(sem_child, layout_child)| {
+            find_button_in_trees(sem_child, layout_child, query, match_kind)
+        })
 }
 
 /// Map a character to a KeyCode for robot typing
@@ -1753,7 +2225,20 @@ fn char_to_key_code(ch: char) -> cranpose_app_shell::KeyCode {
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "robot")]
-    use super::resolve_robot_screenshot_params;
+    use super::{
+        find_button_in_trees, find_text_in_trees, resolve_robot_screenshot_params,
+        semantic_element_from_semantics_node, subtree_contains_matching_text, SemanticRect,
+        SemanticTextMatchKind,
+    };
+    #[cfg(feature = "robot")]
+    use cranpose_core::NodeId;
+    #[cfg(feature = "robot")]
+    use cranpose_ui::{
+        LayoutBox, LayoutNodeData, LayoutNodeKind, Modifier, ModifierNodeSlices, Point, Rect,
+        ResolvedModifiers, SemanticsAction, SemanticsCallback, SemanticsNode, SemanticsRole,
+    };
+    #[cfg(feature = "robot")]
+    use std::rc::Rc;
 
     #[cfg(feature = "robot")]
     #[test]
@@ -1781,5 +2266,171 @@ mod tests {
     fn robot_screenshot_clamps_to_non_zero_target() {
         let resolved = resolve_robot_screenshot_params((0, 0), Some((10.0, 20.0)));
         assert_eq!(resolved, (10, 20, 1.0));
+    }
+
+    #[cfg(feature = "robot")]
+    fn sample_layout_box(
+        node_id: u64,
+        rect: (f32, f32, f32, f32),
+        children: Vec<LayoutBox>,
+    ) -> LayoutBox {
+        LayoutBox::new(
+            node_id as NodeId,
+            Rect {
+                x: rect.0,
+                y: rect.1,
+                width: rect.2,
+                height: rect.3,
+            },
+            Point { x: 0.0, y: 0.0 },
+            LayoutNodeData::new(
+                Modifier::empty(),
+                ResolvedModifiers::default(),
+                Rc::new(ModifierNodeSlices::default()),
+                LayoutNodeKind::Spacer,
+            ),
+            children,
+        )
+    }
+
+    #[cfg(feature = "robot")]
+    fn sample_semantics_node(
+        node_id: u64,
+        role: SemanticsRole,
+        clickable: bool,
+        description: Option<&str>,
+        children: Vec<SemanticsNode>,
+    ) -> SemanticsNode {
+        let mut actions = Vec::new();
+        if clickable {
+            actions.push(SemanticsAction::Click {
+                handler: SemanticsCallback::new(node_id as NodeId),
+            });
+        }
+        SemanticsNode {
+            node_id: node_id as NodeId,
+            role,
+            actions,
+            children,
+            description: description.map(str::to_string),
+        }
+    }
+
+    #[cfg(feature = "robot")]
+    fn sample_semantics_and_layout() -> (SemanticsNode, LayoutBox) {
+        let button_label = sample_semantics_node(
+            3,
+            SemanticsRole::Text {
+                value: "Increase depth".to_string(),
+            },
+            false,
+            None,
+            Vec::new(),
+        );
+        let depth_label = sample_semantics_node(
+            4,
+            SemanticsRole::Text {
+                value: "Current depth: 15".to_string(),
+            },
+            false,
+            None,
+            Vec::new(),
+        );
+        let root = sample_semantics_node(
+            1,
+            SemanticsRole::Layout,
+            false,
+            Some("Root"),
+            vec![
+                sample_semantics_node(2, SemanticsRole::Button, true, None, vec![button_label]),
+                depth_label,
+            ],
+        );
+        let layout = sample_layout_box(
+            1,
+            (0.0, 0.0, 100.0, 100.0),
+            vec![
+                sample_layout_box(
+                    2,
+                    (10.0, 10.0, 40.0, 20.0),
+                    vec![sample_layout_box(3, (12.0, 12.0, 36.0, 12.0), Vec::new())],
+                ),
+                sample_layout_box(4, (10.0, 40.0, 60.0, 12.0), Vec::new()),
+            ],
+        );
+        (root, layout)
+    }
+
+    #[cfg(feature = "robot")]
+    #[test]
+    fn robot_text_query_finds_prefix_without_building_snapshot() {
+        let (semantics, layout) = sample_semantics_and_layout();
+        let result = find_text_in_trees(
+            &semantics,
+            &layout,
+            "Current depth:",
+            SemanticTextMatchKind::Prefix,
+        )
+        .expect("prefix match");
+
+        assert_eq!(result.text.as_deref(), Some("Current depth: 15"));
+        assert_eq!(result.bounds.x, 10.0);
+        assert_eq!(result.bounds.y, 40.0);
+    }
+
+    #[cfg(feature = "robot")]
+    #[test]
+    fn robot_button_query_matches_descendant_text() {
+        let (semantics, layout) = sample_semantics_and_layout();
+        let result = find_button_in_trees(
+            &semantics,
+            &layout,
+            "Increase depth",
+            SemanticTextMatchKind::Exact,
+        )
+        .expect("button match");
+
+        assert_eq!(result.bounds.width, 40.0);
+        assert_eq!(result.bounds.height, 20.0);
+    }
+
+    #[cfg(feature = "robot")]
+    #[test]
+    fn robot_subtree_text_match_honors_exact_mode() {
+        let (semantics, _) = sample_semantics_and_layout();
+
+        assert!(subtree_contains_matching_text(
+            &semantics,
+            "Current depth: 15",
+            SemanticTextMatchKind::Exact,
+        ));
+        assert!(!subtree_contains_matching_text(
+            &semantics,
+            "Current depth:",
+            SemanticTextMatchKind::Exact,
+        ));
+    }
+
+    #[cfg(feature = "robot")]
+    #[test]
+    fn robot_semantics_export_uses_node_ids_for_bounds() {
+        let (semantics, _) = sample_semantics_and_layout();
+        let mut bounds_for = |node_id: NodeId| SemanticRect {
+            x: node_id as f32,
+            y: node_id as f32 * 2.0,
+            width: 10.0,
+            height: 5.0,
+        };
+
+        let exported = semantic_element_from_semantics_node(&semantics, &mut bounds_for);
+
+        assert_eq!(exported.bounds.x, 1.0);
+        assert_eq!(exported.children.len(), 2);
+        assert_eq!(exported.children[0].bounds.x, 2.0);
+        assert_eq!(exported.children[0].children[0].bounds.x, 3.0);
+        assert_eq!(
+            exported.children[1].text.as_deref(),
+            Some("Current depth: 15")
+        );
     }
 }

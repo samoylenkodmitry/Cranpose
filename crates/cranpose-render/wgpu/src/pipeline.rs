@@ -365,7 +365,7 @@ pub(crate) fn render_layout_tree_with_scale(root: &LayoutBox, scene: &mut Scene,
         scene,
         None,
     );
-    scene.graph = Some(graph);
+    scene.replace_graph(graph);
 }
 
 #[cfg(test)]
@@ -2050,7 +2050,7 @@ pub(crate) fn render_from_applier(
         scene,
         None,
     );
-    scene.graph = Some(graph);
+    scene.replace_graph(graph);
 }
 
 fn collect_hits_from_graph(
@@ -2067,6 +2067,7 @@ fn collect_hits_from_graph(
         fn push_hit(
             &mut self,
             node_id: NodeId,
+            capture_path: &[NodeId],
             geometry: cranpose_render_common::graph_scene::HitGeometry,
             shape: Option<RoundedCornerShape>,
             click_actions: &[Rc<dyn Fn(Point)>],
@@ -2074,6 +2075,7 @@ fn collect_hits_from_graph(
         ) {
             self.scene.push_hit(
                 node_id,
+                capture_path.to_vec(),
                 geometry,
                 shape,
                 click_actions

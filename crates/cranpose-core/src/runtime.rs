@@ -1,5 +1,6 @@
 use crate::collections::map::HashMap;
 use crate::collections::map::HashSet;
+use crate::state::{MutationPolicy, NeverEqual};
 use crate::MutableStateInner;
 use std::any::Any;
 use std::cell::{Cell, RefCell};
@@ -30,14 +31,20 @@ struct TypedStateCell<T: Clone + 'static> {
     inner: MutableStateInner<T>,
 }
 
-#[allow(dead_code)]
-struct RawStateCell<T: 'static> {
-    value: T,
+trait ScopeWatchCell {
+    fn unregister_scope(&self, scope_id: ScopeId);
+}
+
+impl<T: Clone + 'static> ScopeWatchCell for TypedStateCell<T> {
+    fn unregister_scope(&self, scope_id: ScopeId) {
+        self.inner.unregister_scope(scope_id);
+    }
 }
 
 struct StateArenaSlot {
     generation: u32,
     cell: Option<Rc<dyn Any>>,
+    watcher_cell: Option<Rc<dyn ScopeWatchCell>>,
     lease: Option<Weak<StateHandleLease>>,
 }
 
@@ -47,6 +54,35 @@ struct StateArenaInner {
     free: Vec<u32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct StateArenaDebugStats {
+    pub cells_len: usize,
+    pub cells_cap: usize,
+    pub free_len: usize,
+    pub free_cap: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RuntimeDebugStats {
+    pub node_updates_len: usize,
+    pub node_updates_cap: usize,
+    pub invalid_scopes_len: usize,
+    pub invalid_scopes_cap: usize,
+    pub scope_queue_len: usize,
+    pub scope_queue_cap: usize,
+    pub frame_callbacks_len: usize,
+    pub frame_callbacks_cap: usize,
+    pub local_tasks_len: usize,
+    pub local_tasks_cap: usize,
+    pub ui_conts_len: usize,
+    pub ui_conts_cap: usize,
+    pub tasks_len: usize,
+    pub tasks_cap: usize,
+    pub external_state_owners_len: usize,
+    pub external_state_owners_cap: usize,
+    pub ui_dispatcher_pending: usize,
+}
+
 #[derive(Default)]
 pub(crate) struct StateArena {
     inner: RefCell<StateArenaInner>,
@@ -54,6 +90,15 @@ pub(crate) struct StateArena {
 
 impl StateArena {
     pub(crate) fn alloc<T: Clone + 'static>(&self, value: T, runtime: RuntimeHandle) -> StateId {
+        self.alloc_with_policy(value, runtime, Arc::new(NeverEqual))
+    }
+
+    pub(crate) fn alloc_with_policy<T: Clone + 'static>(
+        &self,
+        value: T,
+        runtime: RuntimeHandle,
+        policy: Arc<dyn MutationPolicy<T>>,
+    ) -> StateId {
         let (slot, generation) = {
             let mut inner = self.inner.borrow_mut();
             match inner.free.pop() {
@@ -71,6 +116,7 @@ impl StateArena {
                     inner.cells.push(StateArenaSlot {
                         generation: 0,
                         cell: None,
+                        watcher_cell: None,
                         lease: None,
                     });
                     (slot, 0)
@@ -78,46 +124,16 @@ impl StateArena {
             }
         };
         let id = StateId::new(slot, generation);
-        let inner = MutableStateInner::new(value, runtime.clone());
+        let inner = MutableStateInner::new_with_policy(value, runtime.clone(), policy);
         inner.install_snapshot_observer(id);
-        let cell: Rc<dyn Any> = Rc::new(TypedStateCell { inner });
-        self.inner.borrow_mut().cells[slot as usize].cell = Some(cell);
+        let typed_cell = Rc::new(TypedStateCell { inner });
+        let cell: Rc<dyn Any> = typed_cell.clone();
+        let watcher_cell: Rc<dyn ScopeWatchCell> = typed_cell;
+        let mut arena = self.inner.borrow_mut();
+        let slot_entry = &mut arena.cells[slot as usize];
+        slot_entry.cell = Some(cell);
+        slot_entry.watcher_cell = Some(watcher_cell);
         id
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn alloc_raw<T: 'static>(&self, value: T) -> StateId {
-        let (slot, generation) = {
-            let mut inner = self.inner.borrow_mut();
-            match inner.free.pop() {
-                Some(slot) => {
-                    let entry = inner
-                        .cells
-                        .get_mut(slot as usize)
-                        .expect("state slot missing");
-                    debug_assert!(entry.cell.is_none(), "reused state slot must be empty");
-                    entry.generation = entry.generation.wrapping_add(1);
-                    (slot, entry.generation)
-                }
-                None => {
-                    let slot = inner.cells.len() as u32;
-                    inner.cells.push(StateArenaSlot {
-                        generation: 0,
-                        cell: None,
-                        lease: None,
-                    });
-                    (slot, 0)
-                }
-            }
-        };
-        let id = StateId::new(slot, generation);
-        let cell: Rc<dyn Any> = Rc::new(RawStateCell { value });
-        self.inner.borrow_mut().cells[slot as usize].cell = Some(cell);
-        id
-    }
-
-    fn get_cell(&self, id: StateId) -> Rc<dyn Any> {
-        self.get_cell_opt(id).expect("state cell missing")
     }
 
     fn get_cell_opt(&self, id: StateId) -> Option<Rc<dyn Any>> {
@@ -171,13 +187,6 @@ impl StateArena {
         Some(f(&cell.inner))
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn with_raw<T: 'static, R>(&self, id: StateId, f: impl FnOnce(&T) -> R) -> R {
-        let cell = Rc::downcast::<RawStateCell<T>>(self.get_cell(id))
-            .expect("raw state cell type mismatch");
-        f(&cell.value)
-    }
-
     pub(crate) fn release(&self, id: StateId) {
         let cell = {
             let mut inner = self.inner.borrow_mut();
@@ -188,6 +197,7 @@ impl StateArena {
                 return;
             }
             slot.lease = None;
+            slot.watcher_cell = None;
             let cell = slot.cell.take();
             if cell.is_some() {
                 inner.free.push(id.slot());
@@ -197,10 +207,34 @@ impl StateArena {
         drop(cell);
     }
 
-    #[cfg(test)]
     pub(crate) fn stats(&self) -> (usize, usize) {
         let inner = self.inner.borrow();
         (inner.cells.len(), inner.free.len())
+    }
+
+    pub(crate) fn debug_stats(&self) -> StateArenaDebugStats {
+        let inner = self.inner.borrow();
+        StateArenaDebugStats {
+            cells_len: inner.cells.len(),
+            cells_cap: inner.cells.capacity(),
+            free_len: inner.free.len(),
+            free_cap: inner.free.capacity(),
+        }
+    }
+
+    pub(crate) fn unregister_scope(&self, id: StateId, scope_id: ScopeId) {
+        let watcher_cell = {
+            let inner = self.inner.borrow();
+            inner
+                .cells
+                .get(id.slot_index())
+                .filter(|slot| slot.generation == id.generation())
+                .and_then(|slot| slot.watcher_cell.as_ref())
+                .cloned()
+        };
+        if let Some(watcher_cell) = watcher_cell {
+            watcher_cell.unregister_scope(scope_id);
+        }
     }
 
     pub(crate) fn register_lease(&self, id: StateId, lease: &Rc<StateHandleLease>) {
@@ -338,10 +372,10 @@ impl UiDispatcher {
 struct RuntimeInner {
     scheduler: Arc<dyn RuntimeScheduler>,
     needs_frame: RefCell<bool>,
-    node_updates: RefCell<Vec<Command>>, // FUTURE(no_std): replace Vec with ring buffer.
-    invalid_scopes: RefCell<HashSet<ScopeId>>, // FUTURE(no_std): replace HashSet with sparse bitset.
-    scope_queue: RefCell<Vec<(ScopeId, Weak<RecomposeScopeInner>)>>, // FUTURE(no_std): use smallvec-backed queue.
-    frame_callbacks: RefCell<VecDeque<FrameCallbackEntry>>, // FUTURE(no_std): migrate to ring buffer.
+    node_updates: RefCell<Vec<Command>>,
+    invalid_scopes: RefCell<HashSet<ScopeId>>,
+    scope_queue: RefCell<Vec<(ScopeId, Weak<RecomposeScopeInner>)>>,
+    frame_callbacks: RefCell<VecDeque<FrameCallbackEntry>>,
     next_frame_callback_id: Cell<u64>,
     ui_dispatcher: Arc<UiDispatcherInner>,
     ui_rx: RefCell<mpsc::Receiver<UiMessage>>,
@@ -349,7 +383,7 @@ struct RuntimeInner {
     ui_conts: RefCell<UiContinuationMap>,
     next_cont_id: Cell<u64>,
     ui_thread_id: ThreadId,
-    tasks: RefCell<Vec<TaskEntry>>, // FUTURE(no_std): migrate to smallvec-backed storage.
+    tasks: RefCell<Vec<TaskEntry>>,
     next_task_id: Cell<u64>,
     task_waker: RefCell<Option<Waker>>,
     state_arena: StateArena,
@@ -406,7 +440,6 @@ impl RuntimeInner {
     }
 
     fn take_updates(&self) -> Vec<Command> {
-        // FUTURE(no_std): return stack-allocated smallvec.
         let updates = self.node_updates.borrow_mut().drain(..).collect::<Vec<_>>();
         updates
     }
@@ -428,7 +461,6 @@ impl RuntimeInner {
     }
 
     fn take_invalidated_scopes(&self) -> Vec<(ScopeId, Weak<RecomposeScopeInner>)> {
-        // FUTURE(no_std): return iterator over small array storage.
         let mut queue = self.scope_queue.borrow_mut();
         if queue.is_empty() {
             return Vec::new();
@@ -674,11 +706,42 @@ impl RuntimeInner {
             *self.needs_frame.borrow_mut() = false;
         }
     }
+
+    fn debug_stats(&self) -> RuntimeDebugStats {
+        let node_updates = self.node_updates.borrow();
+        let invalid_scopes = self.invalid_scopes.borrow();
+        let scope_queue = self.scope_queue.borrow();
+        let frame_callbacks = self.frame_callbacks.borrow();
+        let local_tasks = self.local_tasks.borrow();
+        let ui_conts = self.ui_conts.borrow();
+        let tasks = self.tasks.borrow();
+        let external_state_owners = self.external_state_owners.borrow();
+
+        RuntimeDebugStats {
+            node_updates_len: node_updates.len(),
+            node_updates_cap: node_updates.capacity(),
+            invalid_scopes_len: invalid_scopes.len(),
+            invalid_scopes_cap: invalid_scopes.capacity(),
+            scope_queue_len: scope_queue.len(),
+            scope_queue_cap: scope_queue.capacity(),
+            frame_callbacks_len: frame_callbacks.len(),
+            frame_callbacks_cap: frame_callbacks.capacity(),
+            local_tasks_len: local_tasks.len(),
+            local_tasks_cap: local_tasks.capacity(),
+            ui_conts_len: ui_conts.len(),
+            ui_conts_cap: ui_conts.capacity(),
+            tasks_len: tasks.len(),
+            tasks_cap: tasks.capacity(),
+            external_state_owners_len: external_state_owners.len(),
+            external_state_owners_cap: external_state_owners.capacity(),
+            ui_dispatcher_pending: self.ui_dispatcher.pending.load(Ordering::SeqCst),
+        }
+    }
 }
 
 #[derive(Clone)]
 pub struct Runtime {
-    inner: Rc<RuntimeInner>, // FUTURE(no_std): replace Rc with arena-managed runtime storage.
+    inner: Rc<RuntimeInner>,
 }
 
 impl Runtime {
@@ -832,6 +895,21 @@ impl RuntimeHandle {
         lease
     }
 
+    pub(crate) fn alloc_state_with_policy<T: Clone + 'static>(
+        &self,
+        value: T,
+        policy: Arc<dyn MutationPolicy<T>>,
+    ) -> Rc<StateHandleLease> {
+        let id =
+            self.with_state_arena(|arena| arena.alloc_with_policy(value, self.clone(), policy));
+        let lease = Rc::new(StateHandleLease {
+            id,
+            runtime: self.clone(),
+        });
+        self.with_state_arena(|arena| arena.register_lease(id, &lease));
+        lease
+    }
+
     pub(crate) fn alloc_persistent_state<T: Clone + 'static>(
         &self,
         value: T,
@@ -857,25 +935,31 @@ impl RuntimeHandle {
             .unwrap_or_else(|| panic!("runtime dropped"))
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn alloc_value<T: 'static>(&self, value: T) -> StateId {
-        self.with_state_arena(|arena| arena.alloc_raw(value))
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn with_value<T: 'static, R>(&self, id: StateId, f: impl FnOnce(&T) -> R) -> R {
-        self.with_state_arena(|arena| arena.with_raw::<T, R>(id, f))
-    }
-
     fn release_state_immediate(&self, id: StateId) {
         if let Some(inner) = self.inner.upgrade() {
             inner.state_arena.release(id);
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn state_arena_stats(&self) -> (usize, usize) {
+    pub fn state_arena_stats(&self) -> (usize, usize) {
         self.with_state_arena(StateArena::stats)
+    }
+
+    pub fn state_arena_debug_stats(&self) -> StateArenaDebugStats {
+        self.with_state_arena(StateArena::debug_stats)
+    }
+
+    pub fn debug_stats(&self) -> RuntimeDebugStats {
+        self.inner
+            .upgrade()
+            .map(|inner| inner.debug_stats())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn unregister_state_scope(&self, id: StateId, scope_id: ScopeId) {
+        if let Some(inner) = self.inner.upgrade() {
+            inner.state_arena.unregister_scope(id, scope_id);
+        }
     }
 
     pub fn schedule(&self) {
@@ -987,7 +1071,6 @@ impl RuntimeHandle {
     }
 
     pub(crate) fn take_updates(&self) -> Vec<Command> {
-        // FUTURE(no_std): return iterator over static buffer.
         self.inner
             .upgrade()
             .map(|inner| inner.take_updates())
@@ -1001,20 +1084,19 @@ impl RuntimeHandle {
             .unwrap_or(false)
     }
 
-    pub(crate) fn register_invalid_scope(&self, id: ScopeId, scope: Weak<RecomposeScopeInner>) {
-        if let Some(inner) = self.inner.upgrade() {
-            inner.register_invalid_scope(id, scope);
-        }
-    }
-
     pub(crate) fn mark_scope_recomposed(&self, id: ScopeId) {
         if let Some(inner) = self.inner.upgrade() {
             inner.mark_scope_recomposed(id);
         }
     }
 
+    pub(crate) fn register_invalid_scope(&self, id: ScopeId, scope: Weak<RecomposeScopeInner>) {
+        if let Some(inner) = self.inner.upgrade() {
+            inner.register_invalid_scope(id, scope);
+        }
+    }
+
     pub(crate) fn take_invalidated_scopes(&self) -> Vec<(ScopeId, Weak<RecomposeScopeInner>)> {
-        // FUTURE(no_std): expose draining iterator without Vec allocation.
         self.inner
             .upgrade()
             .map(|inner| inner.take_invalidated_scopes())
@@ -1026,6 +1108,14 @@ impl RuntimeHandle {
             .upgrade()
             .map(|inner| inner.has_invalid_scopes())
             .unwrap_or(false)
+    }
+
+    #[doc(hidden)]
+    pub fn debug_invalid_scope_ids(&self) -> Vec<usize> {
+        self.inner
+            .upgrade()
+            .map(|inner| inner.invalid_scopes.borrow().iter().copied().collect())
+            .unwrap_or_default()
     }
 
     pub fn has_frame_callbacks(&self) -> bool {
@@ -1045,6 +1135,12 @@ impl RuntimeHandle {
 
     pub fn dispatcher(&self) -> UiDispatcher {
         self.dispatcher.clone()
+    }
+
+    #[doc(hidden)]
+    pub fn with_deferred_state_releases<R>(&self, f: impl FnOnce() -> R) -> R {
+        let _scope = enter_state_teardown_scope();
+        f()
     }
 }
 
@@ -1086,11 +1182,21 @@ impl futures_task::ArcWake for RuntimeTaskWaker {
 }
 
 thread_local! {
-    static ACTIVE_RUNTIMES: RefCell<Vec<RuntimeHandle>> = const { RefCell::new(Vec::new()) }; // FUTURE(no_std): move to bounded stack storage.
+    static ACTIVE_RUNTIMES: RefCell<Vec<RuntimeHandle>> = const { RefCell::new(Vec::new()) };
     static LAST_RUNTIME: RefCell<Option<RuntimeHandle>> = const { RefCell::new(None) };
     static REGISTERED_RUNTIMES: RefCell<HashMap<RuntimeId, RuntimeHandle>> = RefCell::new(HashMap::default());
     static STATE_TEARDOWN_DEPTH: Cell<usize> = const { Cell::new(0) };
     static DEFERRED_STATE_RELEASES: RefCell<Vec<DeferredStateRelease>> = const { RefCell::new(Vec::new()) };
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RuntimeThreadLocalDebugStats {
+    pub active_runtimes_len: usize,
+    pub active_runtimes_cap: usize,
+    pub registered_runtimes_len: usize,
+    pub registered_runtimes_cap: usize,
+    pub deferred_state_releases_len: usize,
+    pub deferred_state_releases_cap: usize,
 }
 
 /// Gets the current runtime handle from thread-local storage.
@@ -1106,6 +1212,31 @@ pub fn current_runtime_handle() -> Option<RuntimeHandle> {
 
 pub(crate) fn runtime_handle_by_id(id: RuntimeId) -> Option<RuntimeHandle> {
     REGISTERED_RUNTIMES.with(|registry| registry.borrow().get(&id).cloned())
+}
+
+pub fn debug_runtime_thread_local_stats() -> RuntimeThreadLocalDebugStats {
+    let (active_runtimes_len, active_runtimes_cap) = ACTIVE_RUNTIMES.with(|stack| {
+        let stack = stack.borrow();
+        (stack.len(), stack.capacity())
+    });
+    let (registered_runtimes_len, registered_runtimes_cap) = REGISTERED_RUNTIMES.with(|registry| {
+        let registry = registry.borrow();
+        (registry.len(), registry.capacity())
+    });
+    let (deferred_state_releases_len, deferred_state_releases_cap) =
+        DEFERRED_STATE_RELEASES.with(|releases| {
+            let releases = releases.borrow();
+            (releases.len(), releases.capacity())
+        });
+
+    RuntimeThreadLocalDebugStats {
+        active_runtimes_len,
+        active_runtimes_cap,
+        registered_runtimes_len,
+        registered_runtimes_cap,
+        deferred_state_releases_len,
+        deferred_state_releases_cap,
+    }
 }
 
 fn register_runtime_handle(handle: &RuntimeHandle) {

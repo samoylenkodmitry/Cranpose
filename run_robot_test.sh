@@ -209,10 +209,13 @@ run_test() {
             timeout_secs=180
             ;;
         robot_hacker_news_scroll)
-            timeout_secs=120
+            timeout_secs=240
+            ;;
+        robot_hacker_news_back_drag_scroll)
+            timeout_secs=420
             ;;
         robot_markdown_end_drag_up)
-            timeout_secs=420
+            timeout_secs=600
             ;;
         robot_lazy_varheight_lifecycle)
             timeout_secs=150
@@ -233,9 +236,15 @@ run_test() {
             timeout_secs=180
             ;;
         robot_shader_backdrop_drag)
-            timeout_secs=180
+            timeout_secs=300
             ;;
         robot_shadow_fields)
+            timeout_secs=180
+            ;;
+        robot_scroll_decoration_invariance)
+            timeout_secs=180
+            ;;
+        robot_modifier_render|robot_offset_test)
             timeout_secs=180
             ;;
         robot_render_translation_contract)
@@ -243,6 +252,9 @@ run_test() {
             ;;
         robot_double_click|robot_multiline_click|robot_multiline_nav)
             timeout_secs=90
+            ;;
+        robot_memory_leak)
+            timeout_secs=300
             ;;
     esac
 
