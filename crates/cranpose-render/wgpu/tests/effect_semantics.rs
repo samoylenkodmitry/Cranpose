@@ -670,11 +670,12 @@ fn translated_showcase_card_surface_stays_exact_at_fractional_root_scale() {
         "fractional root-scale showcase card surface",
         &base_normalized,
         &moved_normalized,
-        width,
-        height,
-        SHOWCASE_CARD_PIXEL_TOLERANCE,
-        SHOWCASE_CARD_MAX_DIFFERING_PIXELS,
-        SHOWCASE_CARD_MAX_PIXEL_DIFFERENCE,
+        (width, height),
+        NormalizedMatchTolerance {
+            pixel_tolerance: SHOWCASE_CARD_PIXEL_TOLERANCE,
+            max_differing_pixels: SHOWCASE_CARD_MAX_DIFFERING_PIXELS,
+            max_pixel_difference: SHOWCASE_CARD_MAX_PIXEL_DIFFERENCE,
+        },
     );
 }
 
@@ -1875,19 +1876,22 @@ fn assert_exact_normalized_match(label: &str, base: &[u8], moved: &[u8], width: 
     );
 }
 
+struct NormalizedMatchTolerance {
+    pixel_tolerance: u32,
+    max_differing_pixels: u32,
+    max_pixel_difference: u32,
+}
+
 fn assert_nearly_exact_normalized_match(
     label: &str,
     base: &[u8],
     moved: &[u8],
-    width: u32,
-    height: u32,
-    pixel_tolerance: u32,
-    max_differing_pixels: u32,
-    max_pixel_difference: u32,
+    size: (u32, u32),
+    tolerance: NormalizedMatchTolerance,
 ) {
-    let stats = image_difference_stats(base, moved, width, height, pixel_tolerance);
-    if stats.differing_pixels <= max_differing_pixels
-        && stats.max_difference <= max_pixel_difference
+    let stats = image_difference_stats(base, moved, size.0, size.1, tolerance.pixel_tolerance);
+    if stats.differing_pixels <= tolerance.max_differing_pixels
+        && stats.max_difference <= tolerance.max_pixel_difference
     {
         return;
     }

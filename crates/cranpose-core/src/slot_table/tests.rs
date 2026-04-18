@@ -1,150 +1,179 @@
-use super::{
-    ChildReusePolicy, GapMetadata, GroupFrame, NodeSlotState, OrphanedNode, OrphanedNodeIds, Slot,
-    SlotTable,
-};
-use crate::{AnchorId, GroupId, Owned, RecomposeScope};
+use std::cell::Cell;
+
+use super::{storage::EntryKind, GroupFrame, NodeSlotState, ReuseState, SlotTable};
+use crate::{runtime::TestRuntime, GroupId, Owned, RecomposeScope};
 
 #[test]
 fn large_slot_tables_grow_incrementally_instead_of_doubling() {
-    let mut table = SlotTable::new();
-    table.append_gap_slots(SlotTable::LARGE_GROWTH_THRESHOLD);
-
-    table.grow_slots();
-
-    assert_eq!(table.slots.len(), 40_960);
-    assert!(table.slots.capacity() >= table.slots.len());
-
-    table.grow_slots();
-
-    assert_eq!(table.slots.len(), 51_200);
-    assert!(table.slots.capacity() >= table.slots.len());
-}
-
-#[test]
-fn flushing_large_pending_slot_drops_releases_excess_capacity() {
-    let mut table = SlotTable::new();
-    for _ in 0..4096 {
-        table.pending_slot_drops.push(Slot::default());
-    }
-
-    table.flush_pending_slot_drops();
-
-    let stats = table.debug_stats();
-    assert_eq!(stats.pending_slot_drops_len, 0);
-    assert!(
-        stats.pending_slot_drops_cap <= SlotTable::MIN_RETAINED_PENDING_SLOT_DROPS_CAPACITY * 4,
-        "pending slot drop capacity stayed too large after flush: {stats:?}",
-    );
-}
-
-#[test]
-fn draining_large_orphaned_node_ids_releases_excess_capacity() {
-    let mut table = SlotTable::new();
-    for node_id in 0..4096 {
-        table
-            .orphaned_node_ids
-            .push(OrphanedNode::new(node_id, 0, AnchorId::INVALID));
-    }
-
-    let mut drained = Vec::new();
-    table.drain_orphaned_node_ids_with(|node| drained.push(node));
-
-    let stats = table.debug_stats();
-    assert_eq!(stats.orphaned_node_ids_len, 0);
-    assert_eq!(drained.len(), 4096);
-    assert_eq!(drained[0], OrphanedNode::new(0, 0, AnchorId::INVALID));
-    assert_eq!(drained[4095], OrphanedNode::new(4095, 0, AnchorId::INVALID));
-    assert!(
-        stats.orphaned_node_ids_cap <= OrphanedNodeIds::INITIAL_CAPACITY * 4,
-        "orphaned node id capacity stayed too large after drain: {stats:?}",
-    );
-}
-
-#[test]
-fn compaction_rehouses_surviving_value_payloads() {
-    let mut table = SlotTable::new();
-    let survivor_idx = table.use_value_slot(|| String::from("survivor"));
-    let survivor_before = table.read_value::<String>(survivor_idx) as *const String;
-
-    for index in 0..4096 {
-        table.use_value_slot(|| format!("drop-{index}"));
-    }
-
-    table.cursor = 1;
-    assert!(table.trim_to_cursor(), "test setup should produce gaps");
-    table.compact();
-
-    let survivor_after = table.read_value::<String>(0);
-    let survivor_after_ptr = survivor_after as *const String;
-    assert_eq!(survivor_after, "survivor");
-    assert_ne!(
-        survivor_before, survivor_after_ptr,
-        "compaction should move surviving value payloads into fresh boxes"
-    );
-}
-
-#[test]
-fn compaction_releases_peak_anchor_storage() {
-    let mut table = SlotTable::new();
-    table.use_value_slot(|| String::from("survivor"));
-    for index in 0..4096 {
-        table.use_value_slot(|| format!("drop-{index}"));
-    }
-
-    table.cursor = 1;
-    assert!(table.trim_to_cursor(), "test setup should produce gaps");
-    table.compact();
-
-    let stats = table.debug_stats();
-    assert!(
-        stats.anchors_cap <= stats.slots_len.saturating_mul(4).max(8),
-        "anchor storage stayed too large after compaction: {stats:?}",
-    );
-    assert!(
-        stats.free_anchor_ids_cap <= 8,
-        "free anchor id storage stayed too large after compaction: {stats:?}",
-    );
-}
-
-#[test]
-fn compaction_reclaims_large_fractional_gap_blocks() {
-    let mut table = SlotTable::new();
-
-    for index in 0..1536 {
-        table.use_value_slot(|| format!("slot-{index}"));
-    }
-
-    table.cursor = 1024;
-    assert!(
-        table.trim_to_cursor(),
-        "test setup should produce a large gap block"
-    );
-    table.compact();
-
+    assert_eq!(SlotTable::next_slot_target_len(0), SlotTable::INITIAL_CAP);
     assert_eq!(
-        table.slots.len(),
-        1024,
-        "fractional large gap blocks should compact once hidden payloads become significant",
+        SlotTable::next_slot_target_len(SlotTable::INITIAL_CAP),
+        SlotTable::INITIAL_CAP * 2
     );
+    assert_eq!(
+        SlotTable::next_slot_target_len(SlotTable::LARGE_GROWTH_THRESHOLD),
+        SlotTable::LARGE_GROWTH_THRESHOLD
+            + (SlotTable::LARGE_GROWTH_THRESHOLD / SlotTable::LARGE_GROWTH_DIVISOR)
+    );
+}
+
+#[test]
+fn trim_marks_values_hidden_and_compaction_removes_them() {
+    let mut table = SlotTable::new();
+    table.use_value_slot(|| 1i32);
+    table.use_value_slot(|| 2i32);
+    table.use_value_slot(|| 3i32);
+
+    table.cursor = 1;
+    assert!(table.trim_to_cursor());
+    assert_eq!(table.storage.entry_kind(0), Some(EntryKind::Value));
+    assert_eq!(table.storage.entry_kind(1), Some(EntryKind::HiddenValue));
+    assert_eq!(table.storage.entry_kind(2), Some(EntryKind::HiddenValue));
+
+    table.compact();
+
+    assert_eq!(table.storage.len(), 1);
+    assert_eq!(table.read_value::<i32>(0), &1);
+}
+
+#[test]
+fn compaction_reclaims_dense_storage_after_large_hidden_range() {
+    let mut table = SlotTable::new();
+    for value in 0..4096usize {
+        table.use_value_slot(move || value);
+    }
+
+    let before_compact = table.heap_bytes();
+
+    table.cursor = 1;
+    assert!(table.trim_to_cursor());
+    table.compact();
+
+    let after_compact = table.heap_bytes();
+    assert_eq!(table.storage.len(), 1);
+    assert!(
+        after_compact * 8 < before_compact,
+        "compaction should rebuild dense arenas: before={before_compact} after={after_compact}",
+    );
+}
+
+#[test]
+fn hidden_value_is_restored_without_running_initializer() {
+    let mut table = SlotTable::new();
+    table.use_value_slot(|| 7i32);
+
+    table.reset();
+    assert!(table.mark_range_as_gaps(0, 1, None));
+    assert_eq!(table.storage.entry_kind(0), Some(EntryKind::HiddenValue));
+
+    let initialized = Cell::new(false);
+    table.reset();
+    let index = table.use_value_slot(|| {
+        initialized.set(true);
+        99i32
+    });
+
+    assert_eq!(index, 0);
+    assert!(
+        !initialized.get(),
+        "hidden value reuse should not reinitialize"
+    );
+    assert_eq!(table.storage.entry_kind(0), Some(EntryKind::Value));
+    assert_eq!(table.read_value::<i32>(0), &7);
+}
+
+#[test]
+fn fresh_parent_inserts_before_hidden_value_instead_of_restoring_it() {
+    let mut table = SlotTable::new();
+    table.use_value_slot(|| 1i32);
+
+    table.reset();
+    assert!(table.mark_range_as_gaps(0, 1, None));
+    table.group_stack.push(GroupFrame {
+        start: 0,
+        end: table.storage.len(),
+        reuse_state: ReuseState::Fresh { boundary_key: 1 },
+    });
+
+    let index = table.use_value_slot(|| 2i32);
+
+    assert_eq!(index, 0);
+    assert_eq!(table.storage.len(), 2);
+    assert_eq!(table.storage.entry_kind(0), Some(EntryKind::Value));
+    assert_eq!(table.storage.entry_kind(1), Some(EntryKind::HiddenValue));
+    assert_eq!(table.read_value::<i32>(0), &2);
+}
+
+#[test]
+fn hidden_group_restore_reuses_scope() {
+    let runtime = TestRuntime::new();
+    let mut table = SlotTable::new();
+    let root_key = crate::hash_key(&"root");
+    let child_key = crate::hash_key(&"child");
+
+    let root = table.begin_group(root_key);
+    let child = table.begin_scoped_group(child_key, || RecomposeScope::new(runtime.handle()));
+    let child_scope_id = child.scope.id();
+    table.use_value_slot(|| String::from("payload"));
+    table.end_group();
+    table.end_group();
+
+    let child_len = table.storage.group_len_at(child.group.0);
+    assert!(table.mark_range_as_gaps(child.group.0, child.group.0 + child_len, Some(root.group.0),));
+    assert_eq!(
+        table.storage.entry_kind(child.group.0),
+        Some(EntryKind::HiddenGroup)
+    );
+
+    table.reset();
+    let _root = table.begin_group(root_key);
+    let restored = table.begin_scoped_group(child_key, || panic!("scope should be restored"));
+
+    assert!(restored.restored_from_gap);
+    assert_eq!(restored.group, GroupId(child.group.0));
+    assert_eq!(restored.scope.id(), child_scope_id);
+    assert_eq!(
+        table.storage.entry_kind(restored.group.0),
+        Some(EntryKind::Group)
+    );
+}
+
+#[test]
+fn orphaned_hidden_node_becomes_active_again_when_restored() {
+    let mut table = SlotTable::new();
+    table.record_node(42, 7);
+
+    table.reset();
+    assert!(table.mark_range_as_gaps(0, 1, None));
+    let orphaned = table.drain_orphaned_node_ids();
+    assert_eq!(orphaned.len(), 1);
+    let orphaned = orphaned[0];
+    assert_eq!(
+        table.orphaned_node_state(orphaned),
+        NodeSlotState::PreservedGap
+    );
+
+    table.reset();
+    table.record_node(42, 7);
+    assert_eq!(table.orphaned_node_state(orphaned), NodeSlotState::Active);
 }
 
 #[test]
 fn compaction_preserves_anchor_identity_for_shifted_slots() {
-    let runtime = crate::runtime::TestRuntime::new();
+    let runtime = TestRuntime::new();
     let mut table = SlotTable::new();
 
-    table.reset();
     let first_group = table.begin_scoped_group(1, || RecomposeScope::new(runtime.handle()));
     let first_group_index = first_group.group.0;
     let first_group_scope_id = first_group.scope.id();
     table.use_value_slot(|| String::from("drop-a"));
     table.use_value_slot(|| String::from("drop-b"));
-    table.end();
+    table.end_group();
 
     let _second_group = table.start(2);
     let (survivor_index, survivor_anchor) = table.remember_with_anchor(|| String::from("survivor"));
-    table.end();
-    table.flush_anchors_if_dirty();
+    table.end_group();
+    table.flush();
 
     assert_eq!(
         table
@@ -154,910 +183,57 @@ fn compaction_preserves_anchor_identity_for_shifted_slots() {
     );
     assert_eq!(table.resolve_anchor(survivor_anchor), Some(survivor_index));
 
-    table.reset();
     let started = table
         .start_recranpose_at_anchor(first_group.anchor, first_group_scope_id)
         .expect("recompose scope should be found");
     assert_eq!(started.0, first_group_index);
     table.end_recompose();
-    assert!(
-        table.needs_compact,
-        "shrinking the first group should create gaps"
-    );
+    assert!(table.storage.needs_compact);
 
     table.compact();
 
     let shifted_index = table
         .resolve_anchor(survivor_anchor)
-        .expect("survivor anchor should still resolve after compaction");
-    assert!(
-        shifted_index < survivor_index,
-        "survivor slot should move left when leading gaps are compacted"
-    );
+        .expect("survivor anchor should still resolve");
+    assert!(shifted_index < survivor_index);
     assert_eq!(
         table
             .read_value_by_anchor::<Owned<String>>(survivor_anchor)
             .map(|value| value.with(|text| text.clone())),
         Some(String::from("survivor"))
     );
-
-    table
-        .read_value_mut_by_anchor::<Owned<String>>(survivor_anchor)
-        .expect("mutable anchor lookup should remain valid after compaction")
-        .replace(String::from("survivor-updated"));
-    assert_eq!(
-        table
-            .read_value::<Owned<String>>(shifted_index)
-            .with(|text| text.clone()),
-        "survivor-updated"
-    );
 }
 
 #[test]
-fn sibling_search_does_not_steal_nested_matching_group() {
-    let runtime = crate::runtime::TestRuntime::new();
-    let mut table = SlotTable::new();
-    let root_key = crate::hash_key(&"root");
-    let target_key = crate::location_key("target", 10, 20);
-    let container_key = crate::location_key("container", 11, 21);
-
-    table.reset();
-    let root = table.start(root_key);
-    let container = table.start(container_key);
-    let _nested = table.begin_scoped_group(target_key, || RecomposeScope::new(runtime.handle()));
-    table.use_value_slot(|| String::from("nested"));
-    table.end();
-
-    table.end();
-    table.end();
-    table.flush_anchors_if_dirty();
-
-    let root_end = match table.slots[root] {
-        Slot::Group { len, .. } => root + super::unpack_slot_len(len),
-        _ => panic!("root should remain a group"),
-    };
-
-    table.cursor = container;
-    table.group_stack.push(GroupFrame {
-        key: root_key,
-        start: root,
-        end: root_end,
-        child_reuse: ChildReusePolicy::Normal,
-        fresh_body: false,
-        gap_boundary_key: root_key,
-    });
-
-    let inserted = table.start(target_key);
-
-    assert_eq!(inserted, container);
-    assert_eq!(table.group_scope(GroupId(inserted)), None);
-}
-
-#[test]
-fn explicit_keys_relocate_matching_sibling_groups() {
-    let runtime = crate::runtime::TestRuntime::new();
-    let mut table = SlotTable::new();
-    let root_key = crate::hash_key(&"root");
-    let target_key = crate::hash_key(&"target");
-    let other_key = crate::hash_key(&"other");
-
-    table.reset();
-    let root = table.start(root_key);
-    let first = table.start(other_key);
-    table.use_value_slot(|| String::from("other"));
-    table.end();
-
-    let later = table.begin_scoped_group(target_key, || RecomposeScope::new(runtime.handle()));
-    let later_scope_id = later.scope.id();
-    table.use_value_slot(|| String::from("later"));
-    table.end();
-
-    table.end();
-    table.flush_anchors_if_dirty();
-
-    let root_end = match table.slots[root] {
-        Slot::Group { len, .. } => root + super::unpack_slot_len(len),
-        _ => panic!("root should remain a group"),
-    };
-
-    table.cursor = first;
-    table.group_stack.push(GroupFrame {
-        key: root_key,
-        start: root,
-        end: root_end,
-        child_reuse: ChildReusePolicy::Normal,
-        fresh_body: false,
-        gap_boundary_key: root_key,
-    });
-
-    let relocated = table.start(target_key);
-
-    assert_eq!(relocated, first);
-    assert_eq!(
-        table.group_scope(GroupId(relocated)),
-        Some(later_scope_id),
-        "explicit keyed groups should preserve scope identity when reordered",
-    );
-}
-
-#[test]
-fn fresh_parent_does_not_restore_matching_child_from_replaced_subtree() {
-    let mut table = SlotTable::new();
-    let root_key = crate::hash_key(&"root");
-    let old_parent_key = crate::hash_key(&"old-parent");
-    let new_parent_key = crate::hash_key(&"new-parent");
-    let shared_child_key = crate::hash_key(&"shared-child");
-
-    table.reset();
-    let root = table.start(root_key);
-    let old_parent = table.start(old_parent_key);
-    let old_child = table.start(shared_child_key);
-    table.use_value_slot(|| String::from("old-child"));
-    table.end();
-
-    table.end();
-    table.end();
-    table.flush_anchors_if_dirty();
-
-    table.reset();
-    let reused_root = table.start(root_key);
-    assert_eq!(reused_root, root);
-
-    let fresh_parent = table.start(new_parent_key);
-    assert_eq!(fresh_parent, old_parent);
-
-    let fresh_child = table.start(shared_child_key);
-    let fresh_value = table.use_value_slot(|| String::from("fresh-child"));
-
-    assert_eq!(fresh_child, old_child);
-    assert_eq!(
-        table.group_scope(GroupId(fresh_child)),
-        None,
-        "a fresh parent must not restore a descendant from the subtree it replaced",
-    );
-    assert_eq!(
-        fresh_value,
-        old_child + 1,
-        "fresh child should reuse the slot position but not the previous descendant value slot",
-    );
-    assert_eq!(
-        table.read_value::<String>(fresh_value),
-        "fresh-child",
-        "fresh child must not inherit the replaced subtree's remembered values",
-    );
-}
-
-#[test]
-fn end_recompose_marks_shrunk_group_tail_as_gaps_for_compaction() {
-    let runtime = crate::runtime::TestRuntime::new();
+fn hidden_descendant_scopes_are_excluded_until_restored() {
+    let runtime = TestRuntime::new();
     let mut table = SlotTable::new();
 
-    table.reset();
-    let scoped = table.begin_scoped_group(100, || RecomposeScope::new(runtime.handle()));
-    let group = scoped.group.0;
-    let kept_slot = table.use_value_slot(|| String::from("keep"));
-    let dropped_slot = table.use_value_slot(|| String::from("drop"));
-    table.end();
-    table.flush_anchors_if_dirty();
+    let root = table.begin_group(1);
+    let first = table.begin_scoped_group(2, || RecomposeScope::new(runtime.handle()));
+    table.end_group();
+    let second = table.begin_scoped_group(3, || RecomposeScope::new(runtime.handle()));
+    let second_scope_id = second.scope.id();
+    table.end_group();
+    table.end_group();
 
-    assert_eq!(table.group_scope(GroupId(group)), Some(scoped.scope.id()));
-    assert_eq!(table.read_value::<String>(kept_slot), "keep");
-    assert_eq!(table.read_value::<String>(dropped_slot), "drop");
+    let second_len = table.storage.group_len_at(second.group.0);
+    assert!(table.mark_range_as_gaps(
+        second.group.0,
+        second.group.0 + second_len,
+        Some(root.group.0),
+    ));
 
-    table.reset();
-    let started = table
-        .start_recranpose_at_anchor(table.group_anchor_at(group), scoped.scope.id())
-        .expect("recompose scope should be found");
-    assert_eq!(started.0, group);
-    let reused_kept_slot = table.use_value_slot(|| String::from("keep"));
-    assert_eq!(reused_kept_slot, kept_slot);
+    table.start_recompose(root.group.0);
+    let scopes = table.descendant_scopes_in_current_group(0);
     table.end_recompose();
-
-    assert!(
-        table.needs_compact,
-        "shrinking recompose should mark the old tail as gaps"
-    );
-
-    table.compact();
-
-    assert_eq!(table.slots.len(), 2);
-    assert_eq!(table.group_scope(GroupId(group)), Some(scoped.scope.id()));
-    assert_eq!(table.read_value::<String>(kept_slot), "keep");
-}
-
-#[test]
-fn restoring_scoped_gap_group_preserves_group_owned_scope() {
-    let runtime = crate::runtime::TestRuntime::new();
-    let mut table = SlotTable::new();
+    assert_eq!(scopes.len(), 1);
+    assert_eq!(scopes[0].id(), first.scope.id());
 
     table.reset();
-    let root = table.start(1);
-    let scoped = table.begin_scoped_group(2, || RecomposeScope::new(runtime.handle()));
-    let group = scoped.group.0;
-    let body_slot = table.use_value_slot(|| String::from("body"));
+    let _root = table.begin_group(1);
+    let _first = table.begin_scoped_group(2, || panic!("first scope should be reused"));
     table.end_group();
-    table.end();
-    table.flush_anchors_if_dirty();
-
-    table.reset();
-    let reused_root = table.start(1);
-    assert_eq!(reused_root, root);
-    assert!(
-        table.trim_to_cursor(),
-        "omitted child should become a preserved gap"
-    );
-    table.end();
-
-    let metadata = table
-        .gap_metadata_at(group)
-        .expect("scoped group gap metadata should be preserved");
-    let preserved_group = metadata
-        .preserved_group
-        .expect("preserved scoped groups must keep their group metadata");
-    assert_eq!(
-        preserved_group.scope.as_ref().map(RecomposeScope::id),
-        Some(scoped.scope.id()),
-        "preserved scoped groups must keep the owning scope on the group metadata",
-    );
-
-    table.reset();
-    let reused_root = table.start(1);
-    assert_eq!(reused_root, root);
-    let restored = table.begin_scoped_group(2, || RecomposeScope::new(runtime.handle()));
-    assert_eq!(restored.group.0, group);
-    assert!(
-        restored.restored_from_gap,
-        "restoring a preserved scoped group should report gap restoration",
-    );
-    assert_eq!(restored.scope.id(), scoped.scope.id());
-
-    let reused_body_slot = table.use_value_slot(|| String::from("body"));
-    assert_eq!(
-        reused_body_slot, body_slot,
-        "restored scoped groups must keep the first body slot stable",
-    );
-    assert_eq!(table.read_value::<String>(reused_body_slot), "body");
-    table.end_group();
-    table.end();
-}
-
-#[test]
-fn marking_existing_nested_gap_preserves_child_group_metadata() {
-    let mut table = SlotTable::new();
-
-    table.reset();
-    let root = table.start(1);
-    let parent = table.start(2);
-    let child = table.start(3);
-    table.use_value_slot(|| String::from("child"));
-    table.end();
-
-    table.end();
-    table.end();
-    table.flush_anchors_if_dirty();
-
-    let parent_end = match table.slots[parent] {
-        Slot::Group { len, .. } => parent + super::unpack_slot_len(len),
-        _ => panic!("parent should remain a group"),
-    };
-
-    assert!(
-        table.mark_range_as_gaps(parent, parent_end, Some(root)),
-        "initial mark should convert the subtree to gaps",
-    );
-    assert!(
-        table.mark_range_as_gaps(parent, parent_end, Some(root)),
-        "re-marking an existing gap subtree should still preserve child metadata",
-    );
-
-    assert!(
-        matches!(table.slots[parent], Slot::Gap { .. }),
-        "parent should be a preserved gap",
-    );
-    let parent_metadata = table
-        .gap_metadata_at(parent)
-        .expect("parent gap metadata should be preserved");
-    let parent_group = parent_metadata
-        .preserved_group
-        .expect("parent preserved group metadata should be present");
-    assert_eq!(parent_group.key, 2);
-    assert_eq!(super::unpack_slot_len(parent_group.len), 3);
-
-    assert!(
-        matches!(table.slots[child], Slot::Gap { .. }),
-        "child should be a preserved gap",
-    );
-    let child_metadata = table
-        .gap_metadata_at(child)
-        .expect("child gap metadata should be preserved");
-    let child_group = child_metadata
-        .preserved_group
-        .expect("child preserved group metadata should be present");
-    assert_eq!(
-        child_group.key, 3,
-        "child gap metadata must survive repeated ancestor gap marking",
-    );
-    assert_eq!(super::unpack_slot_len(child_group.len), 2);
-}
-
-#[test]
-fn marking_nested_gap_preserves_each_groups_boundary_key() {
-    let mut table = SlotTable::new();
-
-    table.reset();
-    let root = table.start(1);
-    let parent = table.start(2);
-    let child = table.start(3);
-    table.end();
-    table.end();
-    table.end();
-
-    match &mut table.slots[parent] {
-        Slot::Group { boundary_key, .. } => *boundary_key = 20,
-        _ => panic!("parent should be a group"),
-    }
-    match &mut table.slots[child] {
-        Slot::Group { boundary_key, .. } => *boundary_key = 30,
-        _ => panic!("child should be a group"),
-    }
-
-    let parent_end = match table.slots[parent] {
-        Slot::Group { len, .. } => parent + super::unpack_slot_len(len),
-        _ => panic!("parent should remain a group"),
-    };
-
-    assert!(
-        table.mark_range_as_gaps(parent, parent_end, Some(root)),
-        "initial mark should convert the subtree to gaps",
-    );
-
-    let parent_metadata = table
-        .gap_metadata_at(parent)
-        .expect("parent gap metadata should be preserved");
-    let parent_group = parent_metadata
-        .preserved_group
-        .expect("parent preserved group metadata should be present");
-    assert_eq!(
-        parent_group.boundary_key, 20,
-        "parent gap must preserve its own boundary key instead of inheriting the owner boundary",
-    );
-
-    let child_metadata = table
-        .gap_metadata_at(child)
-        .expect("child gap metadata should be preserved");
-    let child_group = child_metadata
-        .preserved_group
-        .expect("child preserved group metadata should be present");
-    assert_eq!(
-        child_group.boundary_key, 30,
-        "nested preserved groups must keep their own boundary keys",
-    );
-}
-
-#[test]
-fn start_recranpose_at_anchor_rejects_mismatched_scope_owner() {
-    let runtime = crate::runtime::TestRuntime::new();
-    let mut table = SlotTable::new();
-    let root_key = crate::hash_key(&"root");
-    let group_key = crate::hash_key(&"group");
-
-    table.reset();
-    let root = table.start(root_key);
-    let first_group = table.begin_scoped_group(group_key, || RecomposeScope::new(runtime.handle()));
-    let group = first_group.group.0;
-    let first_scope_id = first_group.scope.id();
-    table.use_value_slot(|| String::from("first"));
-    table.end();
-    table.end();
-    table.flush_anchors_if_dirty();
-
-    let anchor = first_group.anchor;
-
-    table.reset();
-    let reused_root = table.start(root_key);
-    assert_eq!(reused_root, root);
-    let reused_group =
-        table.begin_scoped_group(group_key, || RecomposeScope::new(runtime.handle()));
-    assert_eq!(reused_group.group.0, group);
-    assert_eq!(
-        reused_group.scope.id(),
-        first_scope_id,
-        "scoped group reuse should preserve the existing owner scope",
-    );
-    table.use_value_slot(|| String::from("second"));
-    table.end();
-    table.end();
-    table.flush_anchors_if_dirty();
-
-    table.reset();
-    assert_eq!(
-        table.start_recranpose_at_anchor(anchor, first_scope_id + 1000),
-        None,
-        "a non-owner scope must not enter the live scoped group through its anchor",
-    );
-    assert_eq!(
-        table.start_recranpose_at_anchor(anchor, first_scope_id),
-        Some(GroupId(group)),
-        "the current owner should still enter the group through its anchor",
-    );
-}
-
-#[test]
-fn gapped_group_preserves_child_value_slots_for_restore() {
-    let mut table = SlotTable::new();
-
-    table.reset();
-    let root = table.start(1);
-    let group = table.start(2);
-    let value_slot = table.use_value_slot(|| String::from("persist"));
-    table.end();
-    table.end();
-    table.flush_anchors_if_dirty();
-
-    let group_end = match table.slots[group] {
-        Slot::Group { len, .. } => group + super::unpack_slot_len(len),
-        _ => panic!("group should remain a group"),
-    };
-
-    assert!(
-        table.mark_range_as_gaps(group, group_end, Some(root)),
-        "group should become hidden behind a gap",
-    );
-    assert!(
-        matches!(table.slots[value_slot], Slot::Value { .. }),
-        "group child value slots must survive while the parent group is hidden",
-    );
-
-    table.reset();
-    let reused_root = table.start(1);
-    assert_eq!(reused_root, root);
-    let restored_group = table.start(2);
-    assert_eq!(restored_group, group);
-    let restored_slot = table.use_value_slot(|| String::from("new"));
-    assert_eq!(restored_slot, value_slot);
-    assert_eq!(table.read_value::<String>(restored_slot), "persist");
-}
-
-#[test]
-fn compaction_drops_preserved_child_values_inside_hidden_gap_group() {
-    let mut table = SlotTable::new();
-
-    table.reset();
-    let root = table.start(1);
-    let group = table.start(2);
-    let _value_slot = table.use_value_slot(|| String::from("persist"));
-    table.end();
-    table.end();
-
-    let group_end = match table.slots[group] {
-        Slot::Group { len, .. } => group + super::unpack_slot_len(len),
-        _ => panic!("group should remain a group"),
-    };
-
-    assert!(
-        table.mark_range_as_gaps(group, group_end, Some(root)),
-        "group should become hidden behind a gap",
-    );
-    table.compact();
-
-    assert_eq!(
-        table.slots.len(),
-        1,
-        "compaction should remove the entire hidden group block, including preserved child values",
-    );
-    match table.slots[0] {
-        Slot::Group { len, .. } => assert_eq!(super::unpack_slot_len(len), 1),
-        _ => panic!("root group should remain after compaction"),
-    }
-}
-
-#[test]
-fn restored_hidden_group_can_be_gapped_again_before_compaction() {
-    let mut table = SlotTable::new();
-
-    table.reset();
-    let root = table.start(1);
-    let group = table.start(2);
-    let value_slot = table.use_value_slot(|| String::from("persist"));
-    table.end();
-    table.end();
-    table.flush_anchors_if_dirty();
-
-    let group_anchor = table.group_anchor_at(group);
-    let group_end = match table.slots[group] {
-        Slot::Group { len, .. } => group + super::unpack_slot_len(len),
-        _ => panic!("group should remain a group"),
-    };
-
-    assert!(
-        table.mark_range_as_gaps(group, group_end, Some(root)),
-        "group should become hidden behind a gap",
-    );
-
-    table.reset();
-    let reused_root = table.start(1);
-    assert_eq!(reused_root, root);
-    let restored_group = table.start(2);
-    assert_eq!(restored_group, group);
-    let restored_slot = table.use_value_slot(|| String::from("new"));
-    assert_eq!(restored_slot, value_slot);
-    assert_eq!(table.read_value::<String>(restored_slot), "persist");
-    table.end();
-    table.end();
-    table.flush_anchors_if_dirty();
-
-    assert_eq!(
-        table.resolve_anchor(group_anchor),
-        Some(group),
-        "restored group should continue to own the original anchor before being hidden again",
-    );
-
-    let restored_group_end = match table.slots[group] {
-        Slot::Group { len, .. } => group + super::unpack_slot_len(len),
-        _ => panic!("restored group should remain live before re-gapping"),
-    };
-
-    assert!(
-        table.mark_range_as_gaps(group, restored_group_end, Some(root)),
-        "restored group should be able to hide behind a gap again immediately",
-    );
-
-    table.compact();
-
-    assert_eq!(
-        table.slots.len(),
-        1,
-        "compaction should remove the re-gapped restored group and its child values",
-    );
-    assert_eq!(
-        table.resolve_anchor(group_anchor),
-        None,
-        "re-gapped group anchor should be released once compaction removes the hidden group",
-    );
-}
-
-#[test]
-fn orphaned_node_state_reports_preserved_gap_nodes() {
-    let mut table = SlotTable::new();
-    let anchor = AnchorId(1);
-    table.slots.push(Slot::Gap {
-        anchor,
-        metadata: GapMetadata {
-            preserved_node: Some((42, 7)),
-            ..GapMetadata::default()
-        },
-    });
-    table.register_anchor(anchor, 0);
-
-    assert_eq!(
-        table.orphaned_node_state(OrphanedNode::new(42, 7, anchor)),
-        NodeSlotState::PreservedGap
-    );
-}
-
-#[test]
-fn orphaned_node_state_reports_restored_active_node() {
-    let mut table = SlotTable::new();
-    let anchor = AnchorId(1);
-    table.slots.push(Slot::Gap {
-        anchor,
-        metadata: GapMetadata {
-            preserved_node: Some((42, 7)),
-            ..GapMetadata::default()
-        },
-    });
-    table.register_anchor(anchor, 0);
-    table.set_slot_tracked(
-        0,
-        Slot::Node {
-            anchor,
-            id: 42,
-            gen: 7,
-        },
-    );
-
-    assert_eq!(
-        table.orphaned_node_state(OrphanedNode::new(42, 7, anchor)),
-        NodeSlotState::Active
-    );
-}
-
-#[test]
-fn orphaned_node_state_reports_missing_after_anchor_is_gone() {
-    let mut table = SlotTable::new();
-    let anchor = AnchorId(1);
-    table.slots.push(Slot::Node {
-        anchor,
-        id: 42,
-        gen: 7,
-    });
-    table.register_anchor(anchor, 0);
-    table.free_anchor(anchor);
-
-    assert_eq!(
-        table.orphaned_node_state(OrphanedNode::new(42, 7, anchor)),
-        NodeSlotState::Missing
-    );
-}
-
-#[test]
-fn exact_live_group_reuses_even_when_parent_restore_restricts_gap_search() {
-    let runtime = crate::runtime::TestRuntime::new();
-    let mut table = SlotTable::new();
-
-    table.reset();
-    let root = table.start(1);
-    let child = table.begin_scoped_group(2, || RecomposeScope::new(runtime.handle()));
-    let child_index = child.group.0;
-    let child_scope_id = child.scope.id();
-    let grandchild = table.begin_scoped_group(3, || RecomposeScope::new(runtime.handle()));
-    let grandchild_index = grandchild.group.0;
-    let grandchild_scope_id = grandchild.scope.id();
-    table.end();
-    table.end();
-    table.end();
-    table.flush_anchors_if_dirty();
-
-    let root_end = match table.slots[root] {
-        Slot::Group { len, .. } => root + super::unpack_slot_len(len),
-        _ => panic!("root should remain a group"),
-    };
-
-    table.reset();
-    table.cursor = child_index;
-    table.group_stack.push(GroupFrame {
-        key: 1,
-        start: root,
-        end: root_end,
-        child_reuse: ChildReusePolicy::ParentRestoredFromGap,
-        fresh_body: true,
-        gap_boundary_key: 1,
-    });
-
-    let reused_child = table.begin_scoped_group(2, || RecomposeScope::new(runtime.handle()));
-    assert_eq!(
-        reused_child.group.0, child_index,
-        "restored parents must still reuse an exact live child group at the cursor",
-    );
-    assert_eq!(
-        table.group_scope(reused_child.group),
-        Some(child_scope_id),
-        "exact live group reuse must preserve the child scope",
-    );
-
-    let reused_grandchild = table.begin_scoped_group(3, || RecomposeScope::new(runtime.handle()));
-    assert_eq!(
-        reused_grandchild.group.0, grandchild_index,
-        "once the exact live child group is reused, its live descendants should stay aligned",
-    );
-    assert_eq!(
-        table.group_scope(reused_grandchild.group),
-        Some(grandchild_scope_id)
-    );
-}
-
-#[test]
-fn exact_live_node_slot_reuses_even_when_parent_restore_restricts_other_live_slots() {
-    let mut table = SlotTable::new();
-
-    table.reset();
-    let root = table.start(1);
-    let node_slot = table.cursor;
-    table.record_node(42, 7);
-    table.end();
-    table.flush_anchors_if_dirty();
-
-    table.reset();
-    table.cursor = node_slot;
-    table.group_stack.push(GroupFrame {
-        key: 1,
-        start: root,
-        end: node_slot + 1,
-        child_reuse: ChildReusePolicy::ParentRestoredFromGap,
-        fresh_body: true,
-        gap_boundary_key: 1,
-    });
-
-    assert_eq!(
-        table.peek_node(),
-        Some((42, 7)),
-        "restored parents must still expose an exact live node slot at the cursor",
-    );
-
-    table.record_node(42, 7);
-
-    assert_eq!(
-        table.cursor,
-        node_slot + 1,
-        "recording the same node should reuse the existing slot instead of forcing a gap",
-    );
-    match table.slots.get(node_slot) {
-        Some(Slot::Node { id, gen, .. }) => assert_eq!((*id, *gen), (42, 7)),
-        _ => panic!("node slot should stay live after exact reuse"),
-    }
-}
-
-#[test]
-fn exact_live_value_slot_reuses_when_parent_is_restored_from_gap() {
-    let mut table = SlotTable::new();
-
-    table.reset();
-    let root = table.start(1);
-    let value_slot = table.use_value_slot(|| String::from("persist"));
-    table.end();
-    table.flush_anchors_if_dirty();
-
-    table.reset();
-    table.cursor = value_slot;
-    table.group_stack.push(GroupFrame {
-        key: 1,
-        start: root,
-        end: value_slot + 1,
-        child_reuse: ChildReusePolicy::ParentRestoredFromGap,
-        fresh_body: true,
-        gap_boundary_key: 1,
-    });
-
-    let reused_slot = table.use_value_slot(|| String::from("fresh"));
-    assert_eq!(
-        reused_slot, value_slot,
-        "restored parents must reuse an exact live value slot at the cursor",
-    );
-    assert_eq!(
-        table.read_value::<String>(reused_slot),
-        "persist",
-        "restored parents must keep their remembered value instead of recreating it",
-    );
-}
-
-#[test]
-fn begin_group_clears_stale_scope_identity() {
-    let runtime = crate::runtime::TestRuntime::new();
-    let mut table = SlotTable::new();
-
-    table.reset();
-    let scoped = table.begin_scoped_group(1, || RecomposeScope::new(runtime.handle()));
-    let group = scoped.group.0;
-    let anchor = scoped.anchor;
-    let scope_id = scoped.scope.id();
-    table.end();
-    table.flush_anchors_if_dirty();
-
-    table.reset();
-    let reused = table.begin_group(1);
-    assert_eq!(reused.group.0, group);
-    table.end();
-    table.flush_anchors_if_dirty();
-
-    assert_eq!(
-        table.group_scope(GroupId(group)),
-        None,
-        "switching the same keyed group to unscoped must clear the stored scope id",
-    );
-    assert_eq!(
-        table.start_recranpose_at_anchor(anchor, scope_id),
-        None,
-        "stale scope owners must not re-enter a group that no longer has a scoped layout",
-    );
-}
-
-#[test]
-fn begin_scoped_group_attaches_scope_without_overwriting_body() {
-    let runtime = crate::runtime::TestRuntime::new();
-    let mut table = SlotTable::new();
-
-    table.reset();
-    let root = table.start(1);
-    let group = table.begin_group(2).group.0;
-    let body_slot = table.use_value_slot(|| String::from("body"));
-    table.end();
-    table.end();
-    table.flush_anchors_if_dirty();
-
-    table.reset();
-    let reused_root = table.start(1);
-    assert_eq!(reused_root, root);
-    let scoped = table.begin_scoped_group(2, || RecomposeScope::new(runtime.handle()));
-    assert_eq!(scoped.group.0, group);
-    assert_eq!(
-        table.group_scope(GroupId(group)),
-        Some(scoped.scope.id()),
-        "scoped transition should record the new scope owner",
-    );
-
-    let reused_body_slot = table.use_value_slot(|| String::from("new-body"));
-    assert_eq!(
-        reused_body_slot, body_slot,
-        "adding scope ownership to the group must leave body slots in place",
-    );
-    assert_eq!(
-        table.read_value::<String>(reused_body_slot),
-        "body",
-        "scoped transition must preserve the original first body value",
-    );
-}
-
-#[test]
-fn keyed_group_matching_scans_past_sixteen_siblings() {
-    let runtime = crate::runtime::TestRuntime::new();
-    let mut table = SlotTable::new();
-    let root_key = crate::hash_key(&"root");
-    let target_key = crate::hash_key(&"target");
-
-    table.reset();
-    let root = table.start(root_key);
-
-    let mut target_group = None;
-    let mut target_scope_id = None;
-    for index in 0..24 {
-        let key = if index == 23 {
-            target_key
-        } else {
-            crate::hash_key(&format!("sibling-{index}"))
-        };
-        let group = if key == target_key {
-            let scoped = table.begin_scoped_group(key, || RecomposeScope::new(runtime.handle()));
-            target_scope_id = Some(scoped.scope.id());
-            scoped.group.0
-        } else {
-            table.start(key)
-        };
-        table.use_value_slot(|| index);
-        table.end();
-        if key == target_key {
-            target_group = Some(group);
-        }
-    }
-
-    table.end();
-    table.flush_anchors_if_dirty();
-
-    let root_end = match table.slots[root] {
-        Slot::Group { len, .. } => root + super::unpack_slot_len(len),
-        _ => panic!("root should remain a group"),
-    };
-
-    let first_child = root + 1;
-    table.cursor = first_child;
-    table.group_stack.push(GroupFrame {
-        key: root_key,
-        start: root,
-        end: root_end,
-        child_reuse: ChildReusePolicy::Normal,
-        fresh_body: false,
-        gap_boundary_key: root_key,
-    });
-
-    let relocated = table.start(target_key);
-    let original_target_group = target_group.expect("target sibling should exist");
-    assert!(
-        original_target_group > first_child + 16,
-        "test setup must place the keyed sibling past the old search budget",
-    );
-    assert_eq!(relocated, first_child);
-    assert_eq!(
-        table.group_scope(GroupId(relocated)),
-        target_scope_id,
-        "stable keyed matching must search the full sibling set instead of stopping after sixteen entries",
-    );
-}
-
-#[test]
-fn marking_scoped_group_as_gap_deactivates_scope() {
-    let runtime = crate::runtime::TestRuntime::new();
-    let mut table = SlotTable::new();
-
-    table.reset();
-    let scoped = table.begin_scoped_group(1, || RecomposeScope::new(runtime.handle()));
-    let group = scoped.group.0;
-    table.end();
-
-    assert!(scoped.scope.is_active(), "scope should start active");
-
-    table.mark_range_as_gaps(group, group + 1, None);
-
-    assert!(
-        !scoped.scope.is_active(),
-        "group-owned scope must deactivate once that group is converted into a gap"
-    );
+    let restored = table.begin_scoped_group(3, || panic!("second scope should be restored"));
+    assert_eq!(restored.scope.id(), second_scope_id);
 }

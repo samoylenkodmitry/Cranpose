@@ -1,11 +1,11 @@
 use super::*;
 
 // ============================================================================
-// Slot Table Unit Tests - Gap Architecture
+// Slot Table Unit Tests - Explicit Hidden Entries
 // ============================================================================
 
 #[test]
-fn slot_table_marks_values_as_gaps() {
+fn slot_table_marks_values_hidden() {
     let mut slots = test_slot_table();
 
     // Create initial composition with 3 value slots
@@ -13,7 +13,7 @@ fn slot_table_marks_values_as_gaps() {
     let _idx2 = slots.use_value_slot(|| 2i32);
     let _idx3 = slots.use_value_slot(|| 3i32);
 
-    // Mark middle slot as gap
+    // Hide the middle slot
     slots.mark_range_as_gaps(1, 2, None);
 
     // Verify we can still read first and last slots
@@ -22,24 +22,32 @@ fn slot_table_marks_values_as_gaps() {
 }
 
 #[test]
-fn slot_table_reuses_gap_slots_for_values() {
+fn slot_table_restores_hidden_values() {
     let mut slots = test_slot_table();
 
     // Create initial value
     let idx1 = slots.use_value_slot(|| 1i32);
     assert_eq!(slots.read_value::<i32>(idx1), &1);
 
-    // Reset and mark as gap
+    // Hide the slot.
     slots.reset();
     slots.mark_range_as_gaps(0, 1, None);
 
-    // Reset cursor to reuse
+    // Reset cursor to restore.
     slots.reset();
 
-    // New value should reuse gap slot at position 0
-    let idx2 = slots.use_value_slot(|| 42i32);
-    assert_eq!(idx2, 0, "should reuse gap slot at position 0");
-    assert_eq!(slots.read_value::<i32>(idx2), &42);
+    let initialized = Cell::new(false);
+    let idx2 = slots.use_value_slot(|| {
+        initialized.set(true);
+        42i32
+    });
+
+    assert_eq!(idx2, 0, "hidden value should restore in place");
+    assert!(
+        !initialized.get(),
+        "restoring a hidden value must not reinitialize it"
+    );
+    assert_eq!(slots.read_value::<i32>(idx2), &1);
 }
 
 #[test]
@@ -60,7 +68,7 @@ fn slot_table_replaces_mismatched_value_types() {
 }
 
 #[test]
-fn slot_table_handles_nested_group_gaps() {
+fn slot_table_handles_nested_hidden_groups() {
     let mut slots = test_slot_table();
 
     // Create a parent group
@@ -77,15 +85,14 @@ fn slot_table_handles_nested_group_gaps() {
     let groups = slots.debug_dump_groups();
     assert!(groups.iter().any(|(idx, _, _, _)| *idx == parent_idx));
 
-    // Mark parent group range as gaps (should mark child too)
+    // Hide the parent group range. The child subtree should become hidden too.
     slots.mark_range_as_gaps(parent_idx, child_idx + 2, None);
 
-    // Groups should still be present, just marked as gaps internally
-    // The slot table preserves structure for reuse
+    // Structure remains preserved for reuse through hidden entries.
 }
 
 #[test]
-fn slot_table_preserves_sibling_groups_when_marking_gaps() {
+fn slot_table_preserves_sibling_groups_when_hiding_ranges() {
     let mut slots = test_slot_table();
 
     // Create first group with a value
@@ -107,13 +114,13 @@ fn slot_table_preserves_sibling_groups_when_marking_gaps() {
     let initial_groups = slots.debug_dump_groups();
     assert_eq!(initial_groups.len(), 3, "should have 3 groups initially");
 
-    // Mark only the first group's range as gaps
+    // Hide only the first group's range.
     slots.mark_range_as_gaps(g1, g2, None);
 
     // Third group should still be accessible (the value should remain)
     assert_eq!(slots.read_value::<&str>(v3_idx), &"third");
 
-    // After marking as gaps, group 1 is converted to a Gap slot, but groups 2 and 3 remain
+    // Groups outside the hidden range remain live.
     let remaining_groups = slots.debug_dump_groups();
     assert!(
         remaining_groups.len() >= 2,

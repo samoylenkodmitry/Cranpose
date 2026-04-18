@@ -358,7 +358,12 @@ impl LayoutNode {
                     if self.has_layout_modifier_nodes() {
                         self.mark_needs_measure();
                         if let Some(id) = self.id.get() {
-                            crate::schedule_layout_repass(id);
+                            let inside_composition =
+                                cranpose_core::composer_context::try_with_composer(|_| ())
+                                    .is_some();
+                            if !inside_composition {
+                                crate::schedule_layout_repass(id);
+                            }
                         }
                     }
                 }
@@ -1163,7 +1168,10 @@ mod tests {
 
     #[test]
     fn layout_invalidation_marks_flags_when_capability_present() {
+        let _guard = crate::render_state::render_state_test_guard();
+        crate::reset_render_state_for_tests();
         let mut node = fresh_node();
+        node.id.set(Some(11));
         node.clear_needs_measure();
         node.clear_needs_layout();
         node.modifier_capabilities = NodeCapabilities::LAYOUT;
@@ -1173,6 +1181,37 @@ mod tests {
 
         assert!(node.needs_measure());
         assert!(node.needs_layout());
+        assert_eq!(crate::take_layout_repass_nodes(), vec![11]);
+        assert!(crate::take_layout_invalidation());
+    }
+
+    #[test]
+    fn layout_invalidation_skips_repass_while_composing() {
+        let _guard = crate::render_state::render_state_test_guard();
+        crate::reset_render_state_for_tests();
+
+        let node = Rc::new(RefCell::new(fresh_node()));
+        {
+            let mut node = node.borrow_mut();
+            node.id.set(Some(17));
+            node.clear_needs_measure();
+            node.clear_needs_layout();
+            node.modifier_capabilities = NodeCapabilities::LAYOUT;
+            node.modifier_child_capabilities = node.modifier_capabilities;
+        }
+
+        let node_for_composition = Rc::clone(&node);
+        let _composition = crate::run_test_composition(move || {
+            node_for_composition
+                .borrow()
+                .dispatch_modifier_invalidations(&[invalidation(InvalidationKind::Layout)]);
+        });
+
+        let node = node.borrow();
+        assert!(node.needs_measure());
+        assert!(node.needs_layout());
+        assert!(crate::take_layout_repass_nodes().is_empty());
+        assert!(!crate::take_layout_invalidation());
     }
 
     #[test]
