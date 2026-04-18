@@ -335,16 +335,12 @@ fn end_recompose_marks_shrunk_group_tail_as_gaps_for_compaction() {
     table.reset();
     let scoped = table.begin_scoped_group(100, || RecomposeScope::new(runtime.handle()));
     let group = scoped.group.0;
-    let scope_slot = group + 1;
     let kept_slot = table.use_value_slot(|| String::from("keep"));
     let dropped_slot = table.use_value_slot(|| String::from("drop"));
     table.end();
     table.flush_anchors_if_dirty();
 
-    assert_eq!(
-        table.read_value::<RecomposeScope>(scope_slot).id(),
-        scoped.scope.id()
-    );
+    assert_eq!(table.group_scope(GroupId(group)), Some(scoped.scope.id()));
     assert_eq!(table.read_value::<String>(kept_slot), "keep");
     assert_eq!(table.read_value::<String>(dropped_slot), "drop");
 
@@ -364,16 +360,13 @@ fn end_recompose_marks_shrunk_group_tail_as_gaps_for_compaction() {
 
     table.compact();
 
-    assert_eq!(table.slots.len(), 3);
-    assert_eq!(
-        table.read_value::<RecomposeScope>(scope_slot).id(),
-        scoped.scope.id()
-    );
+    assert_eq!(table.slots.len(), 2);
+    assert_eq!(table.group_scope(GroupId(group)), Some(scoped.scope.id()));
     assert_eq!(table.read_value::<String>(kept_slot), "keep");
 }
 
 #[test]
-fn restoring_scoped_gap_group_preserves_scope_slot_layout() {
+fn restoring_scoped_gap_group_preserves_group_owned_scope() {
     let runtime = crate::runtime::TestRuntime::new();
     let mut table = SlotTable::new();
 
@@ -398,13 +391,13 @@ fn restoring_scoped_gap_group_preserves_scope_slot_layout() {
     let metadata = table
         .gap_metadata_at(group)
         .expect("scoped group gap metadata should be preserved");
-    assert!(
-        metadata.preserved_group.is_some(),
-        "preserved scoped groups must keep their group metadata"
-    );
-    assert!(
-        matches!(table.slots.get(group + 1), Some(Slot::ScopeValue { .. })),
-        "preserved scoped groups must keep the leading scope slot in the preserved body",
+    let preserved_group = metadata
+        .preserved_group
+        .expect("preserved scoped groups must keep their group metadata");
+    assert_eq!(
+        preserved_group.scope.as_ref().map(RecomposeScope::id),
+        Some(scoped.scope.id()),
+        "preserved scoped groups must keep the owning scope on the group metadata",
     );
 
     table.reset();
@@ -421,7 +414,7 @@ fn restoring_scoped_gap_group_preserves_scope_slot_layout() {
     let reused_body_slot = table.use_value_slot(|| String::from("body"));
     assert_eq!(
         reused_body_slot, body_slot,
-        "restored scoped groups must keep the first body slot after the scope slot",
+        "restored scoped groups must keep the first body slot stable",
     );
     assert_eq!(table.read_value::<String>(reused_body_slot), "body");
     table.end_group();
@@ -727,15 +720,14 @@ fn restored_hidden_group_can_be_gapped_again_before_compaction() {
 fn orphaned_node_state_reports_preserved_gap_nodes() {
     let mut table = SlotTable::new();
     let anchor = AnchorId(1);
-    table.slots.push(Slot::Gap { anchor });
-    table.register_anchor(anchor, 0);
-    table.set_gap_metadata(
+    table.slots.push(Slot::Gap {
         anchor,
-        GapMetadata {
+        metadata: GapMetadata {
             preserved_node: Some((42, 7)),
             ..GapMetadata::default()
         },
-    );
+    });
+    table.register_anchor(anchor, 0);
 
     assert_eq!(
         table.orphaned_node_state(OrphanedNode::new(42, 7, anchor)),
@@ -747,15 +739,14 @@ fn orphaned_node_state_reports_preserved_gap_nodes() {
 fn orphaned_node_state_reports_restored_active_node() {
     let mut table = SlotTable::new();
     let anchor = AnchorId(1);
-    table.slots.push(Slot::Gap { anchor });
-    table.register_anchor(anchor, 0);
-    table.set_gap_metadata(
+    table.slots.push(Slot::Gap {
         anchor,
-        GapMetadata {
+        metadata: GapMetadata {
             preserved_node: Some((42, 7)),
             ..GapMetadata::default()
         },
-    );
+    });
+    table.register_anchor(anchor, 0);
     table.set_slot_tracked(
         0,
         Slot::Node {
@@ -951,7 +942,7 @@ fn begin_group_clears_stale_scope_identity() {
 }
 
 #[test]
-fn begin_scoped_group_inserts_scope_slot_without_overwriting_body() {
+fn begin_scoped_group_attaches_scope_without_overwriting_body() {
     let runtime = crate::runtime::TestRuntime::new();
     let mut table = SlotTable::new();
 
@@ -976,9 +967,8 @@ fn begin_scoped_group_inserts_scope_slot_without_overwriting_body() {
 
     let reused_body_slot = table.use_value_slot(|| String::from("new-body"));
     assert_eq!(
-        reused_body_slot,
-        body_slot + 1,
-        "adding a scope slot must shift the first body slot instead of overwriting it",
+        reused_body_slot, body_slot,
+        "adding scope ownership to the group must leave body slots in place",
     );
     assert_eq!(
         table.read_value::<String>(reused_body_slot),
@@ -1053,7 +1043,7 @@ fn keyed_group_matching_scans_past_sixteen_siblings() {
 }
 
 #[test]
-fn marking_scope_slot_as_gap_deactivates_scope() {
+fn marking_scoped_group_as_gap_deactivates_scope() {
     let runtime = crate::runtime::TestRuntime::new();
     let mut table = SlotTable::new();
 
@@ -1064,10 +1054,10 @@ fn marking_scope_slot_as_gap_deactivates_scope() {
 
     assert!(scoped.scope.is_active(), "scope should start active");
 
-    table.mark_range_as_gaps(group, group + 2, None);
+    table.mark_range_as_gaps(group, group + 1, None);
 
     assert!(
         !scoped.scope.is_active(),
-        "scope stored in a slot must deactivate once that slot is converted into a gap"
+        "group-owned scope must deactivate once that group is converted into a gap"
     );
 }

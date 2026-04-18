@@ -9,8 +9,9 @@
 // Complex slot state machine logic benefits from explicit nested pattern matching for clarity
 #![allow(clippy::collapsible_match)]
 
-mod anchor_registry;
-mod pending;
+mod anchor_map;
+mod lifecycle_queue;
+mod reuse_planner;
 #[cfg(test)]
 mod tests;
 
@@ -19,10 +20,11 @@ use crate::{
     slot_storage::{GroupId, StartGroup, StartScopedGroup},
     AnchorId, Key, NodeId, Owned, RecomposeScope, ScopeId,
 };
-use anchor_registry::{AnchorRegistry, GapMetadata};
-pub use pending::OrphanedNode;
-use pending::{OrphanedNodeIds, PendingSlotDrops};
-use std::any::{Any, TypeId};
+use anchor_map::AnchorMap;
+pub use lifecycle_queue::OrphanedNode;
+use lifecycle_queue::{OrphanedNodeIds, PendingSlotDrops};
+use reuse_planner::{ReusePlanner, StartPlan};
+use std::any::Any;
 
 fn pack_slot_len(len: usize) -> u32 {
     u32::try_from(len).expect("slot length overflow")
@@ -32,11 +34,50 @@ fn unpack_slot_len(len: u32) -> usize {
     len as usize
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 struct PreservedGroup {
     key: Key,
     len: u32,
     boundary_key: Key,
+    scope: Option<RecomposeScope>,
+}
+
+impl std::fmt::Debug for PreservedGroup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreservedGroup")
+            .field("key", &self.key)
+            .field("len", &self.len)
+            .field("boundary_key", &self.boundary_key)
+            .field("scope_id", &self.scope.as_ref().map(RecomposeScope::id))
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct GapMetadata {
+    extent: u32,
+    preserved_group: Option<PreservedGroup>,
+    preserved_node: Option<(NodeId, u32)>,
+}
+
+impl std::fmt::Debug for GapMetadata {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GapMetadata")
+            .field("extent", &self.extent)
+            .field("preserved_group", &self.preserved_group)
+            .field("preserved_node", &self.preserved_node)
+            .finish()
+    }
+}
+
+impl Default for GapMetadata {
+    fn default() -> Self {
+        Self {
+            extent: 1,
+            preserved_group: None,
+            preserved_node: None,
+        }
+    }
 }
 
 pub struct SlotTable {
@@ -44,7 +85,7 @@ pub struct SlotTable {
     pending_slot_drops: PendingSlotDrops,
     cursor: usize,
     group_stack: Vec<GroupFrame>,
-    anchor_registry: AnchorRegistry,
+    anchor_map: AnchorMap,
     /// Tracks whether the most recent start() reused a gap slot.
     last_start_was_gap: bool,
     /// Node IDs orphaned when their slots were converted to gaps.
@@ -86,14 +127,11 @@ enum Slot {
         len: u32,
         boundary_key: Key,
         has_gap_children: bool,
+        scope: Option<RecomposeScope>,
     },
     Value {
         anchor: AnchorId,
         data: Box<dyn SlotValue>,
-    },
-    ScopeValue {
-        anchor: AnchorId,
-        scope: RecomposeScope,
     },
     Node {
         anchor: AnchorId,
@@ -104,7 +142,10 @@ enum Slot {
     /// This prevents destructive truncation that would destroy sibling components.
     /// For Groups marked as gaps (e.g., during tab switching), we preserve their
     /// key, boundary, and length so they can be properly matched and reused when reactivated.
-    Gap { anchor: AnchorId },
+    Gap {
+        anchor: AnchorId,
+        metadata: GapMetadata,
+    },
 }
 
 struct GroupFrame {
@@ -122,13 +163,7 @@ struct GroupCompactionFrame {
     kept_before: usize,
 }
 
-#[derive(Clone, Copy)]
-struct GapGroupCandidate {
-    anchor: AnchorId,
-    group: PreservedGroup,
-}
-
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct MatchedGroup {
     index: usize,
     anchor: AnchorId,
@@ -222,11 +257,17 @@ enum SlotKind {
 }
 
 impl Slot {
+    fn placeholder_gap() -> Self {
+        Slot::Gap {
+            anchor: AnchorId::INVALID,
+            metadata: GapMetadata::default(),
+        }
+    }
+
     fn kind(&self) -> SlotKind {
         match self {
             Slot::Group { .. } => SlotKind::Group,
             Slot::Value { .. } => SlotKind::Value,
-            Slot::ScopeValue { .. } => SlotKind::Value,
             Slot::Node { .. } => SlotKind::Node,
             Slot::Gap { .. } => SlotKind::Gap,
         }
@@ -237,9 +278,28 @@ impl Slot {
         match self {
             Slot::Group { anchor, .. } => *anchor,
             Slot::Value { anchor, .. } => *anchor,
-            Slot::ScopeValue { anchor, .. } => *anchor,
             Slot::Node { anchor, .. } => *anchor,
             Slot::Gap { anchor, .. } => *anchor,
+        }
+    }
+
+    fn gap_metadata(&self) -> Option<&GapMetadata> {
+        match self {
+            Slot::Gap { metadata, .. } => Some(metadata),
+            _ => None,
+        }
+    }
+
+    fn gap_extent(&self) -> usize {
+        self.gap_metadata()
+            .map(|metadata| unpack_slot_len(metadata.extent).max(1))
+            .unwrap_or(1)
+    }
+
+    fn group_scope(&self) -> Option<&RecomposeScope> {
+        match self {
+            Slot::Group { scope, .. } => scope.as_ref(),
+            _ => None,
         }
     }
 
@@ -247,9 +307,6 @@ impl Slot {
         match self {
             Slot::Value { data, .. } => data
                 .as_any()
-                .downcast_ref::<T>()
-                .expect("slot value type mismatch"),
-            Slot::ScopeValue { scope, .. } => (scope as &dyn Any)
                 .downcast_ref::<T>()
                 .expect("slot value type mismatch"),
             _ => panic!("slot is not a value"),
@@ -262,15 +319,15 @@ impl Slot {
                 .as_any_mut()
                 .downcast_mut::<T>()
                 .expect("slot value type mismatch"),
-            Slot::ScopeValue { scope, .. } => (scope as &mut dyn Any)
-                .downcast_mut::<T>()
-                .expect("slot value type mismatch"),
             _ => panic!("slot is not a value"),
         }
     }
 
     fn deactivate_scope(&self) {
-        if let Slot::ScopeValue { scope, .. } = self {
+        if let Slot::Group {
+            scope: Some(scope), ..
+        } = self
+        {
             scope.deactivate();
         }
     }
@@ -284,6 +341,7 @@ impl Default for Slot {
             len: 0,
             boundary_key: 0,
             has_gap_children: false,
+            scope: None,
         }
     }
 }
@@ -306,17 +364,9 @@ impl SlotTable {
     const MIN_RETAINED_PENDING_SLOT_DROPS_CAPACITY: usize = 4;
 
     fn make_value_slot<T: 'static>(anchor: AnchorId, value: T) -> Slot {
-        if TypeId::of::<T>() == TypeId::of::<RecomposeScope>() {
-            let value: Box<dyn Any> = Box::new(value);
-            let scope = *value
-                .downcast::<RecomposeScope>()
-                .expect("recompose scope slot type mismatch");
-            Slot::ScopeValue { anchor, scope }
-        } else {
-            Slot::Value {
-                anchor,
-                data: Box::new(TypedSlotValue(value)),
-            }
+        Slot::Value {
+            anchor,
+            data: Box::new(TypedSlotValue(value)),
         }
     }
 
@@ -339,7 +389,7 @@ impl SlotTable {
             pending_slot_drops: PendingSlotDrops::default(),
             cursor: 0,
             group_stack: Vec::new(),
-            anchor_registry: AnchorRegistry::default(),
+            anchor_map: AnchorMap::default(),
             last_start_was_gap: false,
             orphaned_node_ids: OrphanedNodeIds::default(),
             needs_compact: false,
@@ -347,12 +397,10 @@ impl SlotTable {
     }
 
     fn replace_slot_tracked(&mut self, index: usize, slot: Slot) -> Slot {
-        self.clear_gap_metadata_for_replacement(index, &slot);
         std::mem::replace(&mut self.slots[index], slot)
     }
 
     fn set_slot_tracked(&mut self, index: usize, slot: Slot) {
-        self.clear_gap_metadata_for_replacement(index, &slot);
         self.slots[index] = slot;
     }
 
@@ -370,7 +418,7 @@ impl SlotTable {
             self.orphaned_node_ids.capacity() * std::mem::size_of::<OrphanedNode>();
         slots_bytes
             + pending_bytes
-            + self.anchor_registry.debug_heap_bytes()
+            + self.anchor_map.debug_heap_bytes()
             + group_stack_bytes
             + orphaned_node_ids_bytes
     }
@@ -392,29 +440,17 @@ impl SlotTable {
             orphaned_node_ids_len: self.orphaned_node_ids.len(),
             orphaned_node_ids_cap: self.orphaned_node_ids.capacity(),
         };
-        self.anchor_registry.fill_debug_stats(&mut stats);
+        self.anchor_map.fill_debug_stats(&mut stats);
         stats
     }
 
-    fn clear_gap_metadata_for_replacement(&mut self, index: usize, new_slot: &Slot) {
-        self.anchor_registry
-            .clear_gap_metadata_for_replacement(&self.slots, index, new_slot);
+    #[cfg(test)]
+    fn gap_metadata_at_index(&self, index: usize) -> Option<GapMetadata> {
+        self.slots.get(index).and_then(Slot::gap_metadata).cloned()
     }
 
-    fn set_gap_metadata(&mut self, anchor: AnchorId, metadata: GapMetadata) {
-        self.anchor_registry.set_gap_metadata(anchor, metadata);
-    }
-
-    fn gap_preserved_group(&self, anchor: AnchorId) -> Option<PreservedGroup> {
-        self.anchor_registry.gap_preserved_group(anchor)
-    }
-
-    fn gap_preserved_node(&self, anchor: AnchorId) -> Option<(NodeId, u32)> {
-        self.anchor_registry.gap_preserved_node(anchor)
-    }
-
-    fn gap_extent_for_anchor(&self, anchor: AnchorId) -> usize {
-        self.anchor_registry.gap_extent_for_anchor(anchor)
+    fn gap_extent_at(&self, index: usize) -> usize {
+        self.slots.get(index).map(Slot::gap_extent).unwrap_or(1)
     }
 
     fn current_disallow_live_slot_reuse(&self) -> bool {
@@ -455,59 +491,24 @@ impl SlotTable {
         self.group_stack.last().map(|frame| frame.gap_boundary_key)
     }
 
-    fn gap_matches_current_boundary(&self, boundary_key: Option<Key>) -> bool {
-        match (self.current_parent_gap_boundary_key(), boundary_key) {
-            (Some(current), Some(boundary)) => current == boundary,
-            (Some(_), None) => false,
-            (None, _) => true,
-        }
-    }
-
-    fn live_group_len(&self, index: usize) -> Option<usize> {
-        match self.slots.get(index) {
-            Some(Slot::Group { len, .. }) => Some(unpack_slot_len(*len)),
-            _ => None,
-        }
-    }
-
-    fn leading_scope_slot_index(&self, group_index: usize) -> Option<usize> {
-        let group_len = self.live_group_len(group_index)?;
-        let scope_index = group_index.saturating_add(1);
-        (group_len > 1 && scope_index < self.slots.len()).then_some(scope_index)
+    fn group_scope_value(&self, group_index: usize) -> Option<&RecomposeScope> {
+        self.slots.get(group_index).and_then(Slot::group_scope)
     }
 
     fn group_scope_owner(&self, group_index: usize) -> Option<ScopeId> {
-        let scope_index = self.leading_scope_slot_index(group_index)?;
-        match self.slots.get(scope_index) {
-            Some(Slot::ScopeValue { scope, .. }) => Some(scope.id()),
-            _ => None,
-        }
+        self.group_scope_value(group_index).map(RecomposeScope::id)
     }
 
-    fn group_has_scope_slot(&self, group_index: usize) -> bool {
-        self.group_scope_owner(group_index).is_some()
+    fn group_has_scope(&self, group_index: usize) -> bool {
+        self.group_scope_value(group_index).is_some()
     }
 
-    fn clear_group_scope_slot(&mut self, group_index: usize) {
-        let Some(scope_index) = self.leading_scope_slot_index(group_index) else {
-            return;
-        };
-        if !matches!(self.slots.get(scope_index), Some(Slot::ScopeValue { .. })) {
-            return;
+    fn clear_group_scope(&mut self, group_index: usize) {
+        if let Some(Slot::Group { scope, .. }) = self.slots.get_mut(group_index) {
+            if let Some(existing_scope) = scope.take() {
+                existing_scope.deactivate();
+            }
         }
-
-        let group_len = self
-            .live_group_len(group_index)
-            .expect("clear_group_scope_slot requires a live group");
-        let group_end = group_index.saturating_add(group_len).min(self.slots.len());
-
-        if scope_index + 1 < group_end {
-            self.slots[scope_index..group_end].rotate_left(1);
-            self.anchor_registry.mark_dirty();
-        }
-
-        let tail_index = group_end.saturating_sub(1);
-        self.replace_gap_slot_deferred(tail_index, None);
     }
 
     fn ensure_capacity(&mut self) {
@@ -522,12 +523,7 @@ impl SlotTable {
     fn force_gap_here(&mut self, cursor: usize) {
         // we *know* we have capacity (ensure_capacity() already ran)
         // so just overwrite the slot at cursor with a fresh gap
-        self.replace_slot_deferred(
-            cursor,
-            Slot::Gap {
-                anchor: AnchorId::INVALID,
-            },
-        );
+        self.replace_slot_deferred(cursor, Slot::placeholder_gap());
     }
 
     fn find_right_gap_run(&self, from: usize, scan_limit: usize) -> Option<(usize, usize)> {
@@ -628,10 +624,6 @@ impl SlotTable {
         self.ensure_gap_at_local_with_mode(cursor, true);
     }
 
-    fn ensure_single_gap_at_local(&mut self, cursor: usize) {
-        self.ensure_gap_at_local_with_mode(cursor, false);
-    }
-
     fn preserve_terminal_group_block_at_tail(&mut self, start: usize, len: usize) {
         if len == 0 {
             return;
@@ -642,14 +634,9 @@ impl SlotTable {
         // cannot inherit or trim them through a stale parent extent.
         let mut moved = Vec::with_capacity(len);
         for index in start..start + len {
-            moved.push(self.replace_slot_tracked(
-                index,
-                Slot::Gap {
-                    anchor: AnchorId::INVALID,
-                },
-            ));
+            moved.push(self.replace_slot_tracked(index, Slot::placeholder_gap()));
         }
-        self.anchor_registry.mark_dirty();
+        self.anchor_map.mark_dirty();
 
         loop {
             let (run_start, run_len) = self.find_tail_gap_run().unwrap_or((self.slots.len(), 0));
@@ -674,9 +661,7 @@ impl SlotTable {
             return;
         }
         for _ in 0..count {
-            self.slots.push(Slot::Gap {
-                anchor: AnchorId::INVALID,
-            });
+            self.slots.push(Slot::placeholder_gap());
         }
     }
 
@@ -705,11 +690,11 @@ impl SlotTable {
 
     /// Allocate a new unique anchor ID.
     fn allocate_anchor(&mut self) -> AnchorId {
-        self.anchor_registry.allocate_anchor()
+        self.anchor_map.allocate_anchor()
     }
 
     fn free_anchor(&mut self, anchor: AnchorId) {
-        self.anchor_registry.free_anchor(anchor);
+        self.anchor_map.free_anchor(anchor);
     }
 
     fn replace_slot_deferred(&mut self, index: usize, slot: Slot) {
@@ -726,17 +711,33 @@ impl SlotTable {
 
     fn replace_gap_slot_deferred(&mut self, index: usize, preserved_group: Option<PreservedGroup>) {
         let anchor = self.slots[index].anchor_id();
-        let preserved_node = match self.slots.get(index) {
-            Some(Slot::Node { id, gen, .. }) => Some((*id, *gen)),
-            Some(Slot::Gap { anchor }) => self.gap_preserved_node(*anchor),
-            _ => None,
+        let (extent, preserved_node) = match self.slots.get(index) {
+            Some(Slot::Node { id, gen, .. }) => (pack_slot_len(1), Some((*id, *gen))),
+            Some(Slot::Gap { metadata, .. }) => {
+                return self.replace_gap_slot_deferred_from_gap(
+                    index,
+                    anchor,
+                    metadata.clone(),
+                    preserved_group,
+                );
+            }
+            _ => (
+                preserved_group
+                    .as_ref()
+                    .map(|group| group.len)
+                    .unwrap_or_else(|| pack_slot_len(1)),
+                None,
+            ),
         };
-        let old = self.replace_slot_tracked(index, Slot::Gap { anchor });
-        self.set_gap_metadata(
-            anchor,
-            GapMetadata {
-                preserved_group,
-                preserved_node,
+        let old = self.replace_slot_tracked(
+            index,
+            Slot::Gap {
+                anchor,
+                metadata: GapMetadata {
+                    extent,
+                    preserved_group,
+                    preserved_node,
+                },
             },
         );
         old.deactivate_scope();
@@ -744,6 +745,28 @@ impl SlotTable {
             self.orphaned_node_ids
                 .push(OrphanedNode::new(id, gen, anchor));
         }
+        self.pending_slot_drops.push(old);
+    }
+
+    fn replace_gap_slot_deferred_from_gap(
+        &mut self,
+        index: usize,
+        anchor: AnchorId,
+        metadata: GapMetadata,
+        preserved_group: Option<PreservedGroup>,
+    ) {
+        let old = self.replace_slot_tracked(
+            index,
+            Slot::Gap {
+                anchor,
+                metadata: GapMetadata {
+                    extent: metadata.extent,
+                    preserved_group: preserved_group.or(metadata.preserved_group.clone()),
+                    preserved_node: metadata.preserved_node,
+                },
+            },
+        );
+        old.deactivate_scope();
         self.pending_slot_drops.push(old);
     }
 
@@ -758,7 +781,7 @@ impl SlotTable {
 
     /// Register an anchor at a specific position in the slots array.
     fn register_anchor(&mut self, anchor: AnchorId, position: usize) {
-        self.anchor_registry.register_anchor(anchor, position);
+        self.anchor_map.register_anchor(anchor, position);
     }
 
     /// Returns whether the most recent `start` invocation reused a gap slot.
@@ -771,7 +794,7 @@ impl SlotTable {
 
     /// Resolve an anchor to its current position in the slots array.
     fn resolve_anchor(&self, anchor: AnchorId) -> Option<usize> {
-        self.anchor_registry.resolve_anchor(anchor)
+        self.anchor_map.resolve_anchor(anchor)
     }
 
     /// Mark a range of slots as gaps instead of truncating.
@@ -829,6 +852,7 @@ impl SlotTable {
                         len,
                         key,
                         boundary_key,
+                        scope,
                         ..
                     } if preserve_group_metadata => (
                         *len,
@@ -836,15 +860,16 @@ impl SlotTable {
                             key: *key,
                             len: *len,
                             boundary_key: *boundary_key,
+                            scope: scope.clone(),
                         }),
                     ),
                     Slot::Group { len, .. } => (*len, None),
-                    Slot::Gap { anchor } => {
+                    Slot::Gap { metadata, .. } => {
                         let preserved_group = preserve_group_metadata
-                            .then(|| self.gap_preserved_group(*anchor))
+                            .then_some(metadata.preserved_group.clone())
                             .flatten();
                         (
-                            preserved_group.map(|group| group.len).unwrap_or(0),
+                            preserved_group.as_ref().map(|group| group.len).unwrap_or(0),
                             preserved_group,
                         )
                     }
@@ -866,6 +891,7 @@ impl SlotTable {
                                 key,
                                 len,
                                 boundary_key,
+                                scope,
                                 ..
                             } if preserve_group_metadata => {
                                 self.replace_gap_slot_deferred(
@@ -874,6 +900,7 @@ impl SlotTable {
                                         key: *key,
                                         len: *len,
                                         boundary_key: *boundary_key,
+                                        scope: scope.clone(),
                                     }),
                                 );
                                 marked_any = true;
@@ -882,11 +909,8 @@ impl SlotTable {
                                 self.replace_gap_slot_deferred(j, None);
                                 marked_any = true;
                             }
-                            Slot::Gap { anchor } if preserve_group_metadata => {
-                                self.replace_gap_slot_deferred(
-                                    j,
-                                    self.gap_preserved_group(*anchor),
-                                );
+                            Slot::Gap { metadata, .. } if preserve_group_metadata => {
+                                self.replace_gap_slot_deferred(j, metadata.preserved_group.clone());
                                 marked_any = true;
                             }
                             Slot::Gap { .. } => {
@@ -896,9 +920,6 @@ impl SlotTable {
                             Slot::Node { .. } => {
                                 self.replace_gap_slot_deferred(j, None);
                                 marked_any = true;
-                            }
-                            Slot::ScopeValue { .. } => {
-                                self.slots[j].deactivate_scope();
                             }
                             Slot::Value { .. } => {}
                         }
@@ -978,22 +999,22 @@ impl SlotTable {
             .map(|(i, slot)| {
                 let kind = match slot {
                     Slot::Group { key, len, .. } => format!(
-                        "Group(key={:?}, scope={:?}, has_scope_slot={}, len={})",
+                        "Group(key={:?}, scope={:?}, has_scope={}, len={})",
                         key,
                         self.group_scope_owner(i),
-                        self.group_has_scope_slot(i),
+                        self.group_has_scope(i),
                         unpack_slot_len(*len)
                     ),
                     Slot::Value { .. } => "Value".to_string(),
-                    Slot::ScopeValue { .. } => "ScopeValue".to_string(),
                     Slot::Node { id, .. } => format!("Node(id={:?})", id),
-                    Slot::Gap { anchor } => {
-                        if let Some(group) = self.gap_preserved_group(*anchor) {
+                    Slot::Gap { metadata, .. } => {
+                        if let Some(group) = &metadata.preserved_group {
                             format!(
                                 "Gap(was_group_key={:?}, scope={:?})",
-                                group.key, None::<ScopeId>
+                                group.key,
+                                group.scope.as_ref().map(RecomposeScope::id)
                             )
-                        } else if let Some((id, gen)) = self.gap_preserved_node(*anchor) {
+                        } else if let Some((id, gen)) = metadata.preserved_node {
                             format!("Gap(was_node_id={id:?}, gen={gen})")
                         } else {
                             "Gap".to_string()
@@ -1009,13 +1030,13 @@ impl SlotTable {
         let mut counts: HashMap<&'static str, (usize, usize)> = HashMap::default();
         for slot in &self.slots {
             let Some((type_name, inline_payload_bytes)) = (match slot {
-                Slot::Value { data, .. } => {
-                    Some((data.debug_type_name(), data.debug_inline_payload_bytes()))
-                }
-                Slot::ScopeValue { .. } => Some((
+                Slot::Group { scope: Some(_), .. } => Some((
                     std::any::type_name::<RecomposeScope>(),
                     std::mem::size_of::<RecomposeScope>(),
                 )),
+                Slot::Value { data, .. } => {
+                    Some((data.debug_type_name(), data.debug_inline_payload_bytes()))
+                }
                 _ => None,
             }) else {
                 continue;
@@ -1052,7 +1073,7 @@ impl SlotTable {
     /// Update all anchor positions to match their current physical positions in the slots array.
     /// This should be called after any operation that modifies slot positions (insert, remove, etc.)
     fn rebuild_all_anchor_positions(&mut self) {
-        self.anchor_registry.rebuild_all_positions(&self.slots);
+        self.anchor_map.rebuild_all_positions(&self.slots);
     }
 
     fn shift_group_frames(&mut self, index: usize, delta: isize) {
@@ -1117,7 +1138,7 @@ impl SlotTable {
         make_slot: impl FnOnce(AnchorId) -> Slot,
     ) -> usize {
         let old_anchor = match self.slots.get(cursor) {
-            Some(Slot::Gap { anchor }) => *anchor,
+            Some(Slot::Gap { anchor, .. }) => *anchor,
             _ => panic!("expected gap at slot {}", cursor),
         };
         self.free_anchor(old_anchor);
@@ -1200,7 +1221,7 @@ impl SlotTable {
         let moved: Vec<_> = self.slots.drain(source_start..source_start + len).collect();
         self.shift_group_frames(dest, moved.len() as isize);
         self.slots.splice(dest..dest, moved);
-        self.anchor_registry.mark_dirty();
+        self.anchor_map.mark_dirty();
     }
 
     fn enter_group(&mut self, key: Key, start: usize, len: usize, plan: GroupEntryPlan) -> usize {
@@ -1216,52 +1237,6 @@ impl SlotTable {
         self.cursor = start + 1;
         self.update_group_bounds();
         start
-    }
-
-    fn try_reuse_live_group_at_cursor(
-        &mut self,
-        key: Key,
-        cursor: usize,
-        parent_reuse: ChildReusePolicy,
-        allow_exact_live_reuse: bool,
-        allow_gap_children: bool,
-    ) -> Option<usize> {
-        let Some(Slot::Group {
-            key: existing_key,
-            len,
-            boundary_key,
-            has_gap_children,
-            ..
-        }) = self.slots.get_mut(cursor)
-        else {
-            return None;
-        };
-
-        if *existing_key != key || !allow_exact_live_reuse {
-            return None;
-        }
-        if *has_gap_children && !allow_gap_children {
-            return None;
-        }
-
-        let group_len = *len;
-        let gap_boundary_key = *boundary_key;
-        if *has_gap_children {
-            *has_gap_children = false;
-        }
-
-        let inherited_fresh_body = inherited_fresh_body(parent_reuse);
-        Some(self.enter_group(
-            key,
-            cursor,
-            unpack_slot_len(group_len),
-            GroupEntryPlan {
-                child_reuse: parent_reuse,
-                fresh_body: inherited_fresh_body,
-                gap_boundary_key,
-                restored_from_gap: inherited_fresh_body,
-            },
-        ))
     }
 
     fn retire_conflicting_group_at_cursor(&mut self, key: Key, cursor: usize) {
@@ -1297,6 +1272,7 @@ impl SlotTable {
                 key: old_key,
                 len: pack_slot_len(old_len),
                 boundary_key: old_boundary_key,
+                scope: self.group_scope_value(cursor).cloned(),
             }),
         );
 
@@ -1305,78 +1281,28 @@ impl SlotTable {
         }
     }
 
-    fn gap_group_candidate_at(&self, cursor: usize) -> Option<GapGroupCandidate> {
-        let Some(Slot::Gap { anchor }) = self.slots.get(cursor) else {
-            return None;
-        };
-        Some(GapGroupCandidate {
-            anchor: *anchor,
-            group: self.gap_preserved_group(*anchor)?,
-        })
-    }
-
-    fn try_restore_gap_group_at_cursor(
+    fn restore_gap_group_at_cursor(
         &mut self,
         key: Key,
         cursor: usize,
         parent_reuse: ChildReusePolicy,
-        allow_live_search: bool,
-        parent_end: usize,
+        anchor: AnchorId,
+        group: PreservedGroup,
     ) -> Option<usize> {
-        let candidate = self.gap_group_candidate_at(cursor)?;
-        if candidate.group.key != key
-            || !(self.gap_matches_current_boundary(Some(candidate.group.boundary_key))
-                || allow_live_search)
-        {
+        if group.key != key {
             return None;
         }
 
-        let mut search_index = cursor.saturating_add(unpack_slot_len(candidate.group.len).max(1));
-        while search_index < parent_end {
-            match self.slots.get(search_index) {
-                Some(Slot::Group {
-                    key: existing_key,
-                    len,
-                    ..
-                }) if *existing_key == key => {
-                    let actual_len = unpack_slot_len(*len)
-                        .max(1)
-                        .min(self.slots.len().saturating_sub(search_index));
-                    self.move_slot_range_to_cursor(search_index, actual_len, cursor);
-                    let gap_boundary_key = candidate.group.boundary_key;
-                    return Some(self.enter_group(
-                        key,
-                        cursor,
-                        actual_len,
-                        GroupEntryPlan {
-                            child_reuse: ChildReusePolicy::Normal,
-                            fresh_body: false,
-                            gap_boundary_key,
-                            restored_from_gap: false,
-                        },
-                    ));
-                }
-                Some(Slot::Group { len, .. }) => {
-                    search_index = search_index.saturating_add(unpack_slot_len(*len).max(1));
-                }
-                Some(Slot::Gap { anchor }) => {
-                    search_index = search_index.saturating_add(self.gap_extent_for_anchor(*anchor));
-                }
-                Some(_) => search_index += 1,
-                None => break,
-            }
-        }
-
-        let len = unpack_slot_len(candidate.group.len);
-        let group_anchor = if candidate.anchor.is_valid() {
-            candidate.anchor
+        let len = unpack_slot_len(group.len);
+        let group_anchor = if anchor.is_valid() {
+            anchor
         } else {
             self.allocate_anchor()
         };
         let gap_boundary_key = if matches!(parent_reuse, ChildReusePolicy::FreshInsert) {
             self.next_gap_boundary_key(key, parent_reuse)
         } else {
-            candidate.group.boundary_key
+            group.boundary_key
         };
         let child_reuse = if matches!(parent_reuse, ChildReusePolicy::FreshInsert) {
             ChildReusePolicy::FreshInsert
@@ -1392,6 +1318,7 @@ impl SlotTable {
                 len: pack_slot_len(len),
                 boundary_key: gap_boundary_key,
                 has_gap_children: false,
+                scope: group.scope.clone(),
             },
         );
         Some(self.enter_group(
@@ -1405,69 +1332,6 @@ impl SlotTable {
                 restored_from_gap: true,
             },
         ))
-    }
-
-    fn find_matching_group(
-        &self,
-        key: Key,
-        cursor: usize,
-        _parent_reuse: ChildReusePolicy,
-        allow_live_search: bool,
-        parent_end: usize,
-        _restricted_reuse: bool,
-    ) -> Option<MatchedGroup> {
-        let mut search_index = cursor;
-
-        while search_index < parent_end {
-            match self.slots.get(search_index) {
-                Some(Slot::Group {
-                    key: existing_key,
-                    anchor,
-                    len,
-                    boundary_key,
-                    ..
-                }) => {
-                    if *existing_key == key && allow_live_search {
-                        return Some(MatchedGroup {
-                            index: search_index,
-                            anchor: *anchor,
-                            group: PreservedGroup {
-                                key: *existing_key,
-                                len: *len,
-                                boundary_key: *boundary_key,
-                            },
-                            gap_boundary_key: *boundary_key,
-                            reused_gap: false,
-                        });
-                    }
-                    search_index = search_index.saturating_add(unpack_slot_len(*len).max(1));
-                }
-                Some(Slot::Gap { anchor }) => {
-                    let Some(group) = self.gap_preserved_group(*anchor) else {
-                        search_index =
-                            search_index.saturating_add(self.gap_extent_for_anchor(*anchor));
-                        continue;
-                    };
-                    if group.key == key
-                        && (self.gap_matches_current_boundary(Some(group.boundary_key))
-                            || allow_live_search)
-                    {
-                        return Some(MatchedGroup {
-                            index: search_index,
-                            anchor: *anchor,
-                            group,
-                            gap_boundary_key: group.boundary_key,
-                            reused_gap: true,
-                        });
-                    }
-                    search_index = search_index.saturating_add(self.gap_extent_for_anchor(*anchor));
-                }
-                Some(_) => search_index += 1,
-                None => break,
-            }
-        }
-
-        None
     }
 
     fn try_restore_matching_group(
@@ -1492,6 +1356,7 @@ impl SlotTable {
                     len: matched.group.len,
                     boundary_key: restored_boundary_key,
                     has_gap_children: false,
+                    scope: matched.group.scope.clone(),
                 },
             );
         }
@@ -1529,22 +1394,7 @@ impl SlotTable {
 
         let cursor = self.cursor;
         let parent_reuse = self.current_parent_reuse();
-        let restricted_reuse = parent_reuse.requires_restricted_reuse();
-        let allow_exact_live_reuse = parent_reuse.allows_exact_live_reuse();
-        let allow_live_search = matches!(parent_reuse, ChildReusePolicy::Normal);
-
-        if let Some(reused) = self.try_reuse_live_group_at_cursor(
-            key,
-            cursor,
-            parent_reuse,
-            allow_exact_live_reuse,
-            false,
-        ) {
-            return reused;
-        }
-
         self.last_start_was_gap = false;
-        let cursor = self.cursor;
         debug_assert!(
             cursor <= self.slots.len(),
             "slot cursor {} out of bounds",
@@ -1561,49 +1411,59 @@ impl SlotTable {
             cursor
         );
 
-        if cursor > 0 && !matches!(self.slots.get(cursor), Some(Slot::Gap { .. })) {
-            if let Some(Slot::Group { key: prev_key, .. }) = self.slots.get(cursor - 1) {
-                if *prev_key == key {
-                    return self.insert_new_group_at_cursor(key, ChildReusePolicy::FreshInsert);
+        let plan = ReusePlanner::new(
+            &self.slots,
+            key,
+            cursor,
+            self.current_parent_end(),
+            parent_reuse,
+            self.current_parent_gap_boundary_key(),
+        )
+        .plan();
+
+        match plan {
+            StartPlan::ReuseLiveAtCursor {
+                len,
+                gap_boundary_key,
+            } => {
+                return self.enter_group(
+                    key,
+                    cursor,
+                    len,
+                    GroupEntryPlan {
+                        child_reuse: parent_reuse,
+                        fresh_body: inherited_fresh_body(parent_reuse),
+                        gap_boundary_key,
+                        restored_from_gap: inherited_fresh_body(parent_reuse),
+                    },
+                );
+            }
+            StartPlan::RestoreGapAtCursor { anchor, group } => {
+                if let Some(restored) =
+                    self.restore_gap_group_at_cursor(key, cursor, parent_reuse, anchor, group)
+                {
+                    return restored;
                 }
             }
-        }
-
-        if let Some(reused) = self.try_reuse_live_group_at_cursor(
-            key,
-            cursor,
-            parent_reuse,
-            allow_exact_live_reuse,
-            true,
-        ) {
-            return reused;
-        }
-
-        self.retire_conflicting_group_at_cursor(key, cursor);
-
-        let parent_end = self.current_parent_end();
-        if let Some(restored) = self.try_restore_gap_group_at_cursor(
-            key,
-            cursor,
-            parent_reuse,
-            allow_live_search,
-            parent_end,
-        ) {
-            return restored;
-        }
-
-        if let Some(matched) = self.find_matching_group(
-            key,
-            cursor,
-            parent_reuse,
-            allow_live_search,
-            parent_end,
-            restricted_reuse,
-        ) {
-            if let Some(restored) =
-                self.try_restore_matching_group(key, cursor, parent_reuse, matched)
-            {
-                return restored;
+            StartPlan::RestoreMatchingGroup {
+                matched_group,
+                retire_conflicting_group_at_cursor,
+            } => {
+                if retire_conflicting_group_at_cursor {
+                    self.retire_conflicting_group_at_cursor(key, cursor);
+                }
+                if let Some(restored) =
+                    self.try_restore_matching_group(key, cursor, parent_reuse, matched_group)
+                {
+                    return restored;
+                }
+            }
+            StartPlan::InsertFresh {
+                retire_conflicting_group_at_cursor,
+            } => {
+                if retire_conflicting_group_at_cursor {
+                    self.retire_conflicting_group_at_cursor(key, cursor);
+                }
             }
         }
 
@@ -1620,7 +1480,10 @@ impl SlotTable {
 
         if cursor < self.slots.len() {
             debug_assert!(matches!(self.slots[cursor], Slot::Gap { .. }));
-            if let Some(Slot::Gap { anchor: old_anchor }) = self.slots.get(cursor) {
+            if let Some(Slot::Gap {
+                anchor: old_anchor, ..
+            }) = self.slots.get(cursor)
+            {
                 self.free_anchor(*old_anchor);
             }
             let group_anchor = self.allocate_anchor();
@@ -1632,6 +1495,7 @@ impl SlotTable {
                     len: 0,
                     boundary_key: gap_boundary_key,
                     has_gap_children: false,
+                    scope: None,
                 },
             );
             self.register_anchor(group_anchor, cursor);
@@ -1643,6 +1507,7 @@ impl SlotTable {
                 len: 0,
                 boundary_key: gap_boundary_key,
                 has_gap_children: false,
+                scope: None,
             });
             self.register_anchor(group_anchor, cursor);
         }
@@ -1659,10 +1524,10 @@ impl SlotTable {
         )
     }
     fn shift_anchor_positions_from(&mut self, start_slot: usize, delta: isize) {
-        self.anchor_registry.shift_positions_from(start_slot, delta);
+        self.anchor_map.shift_positions_from(start_slot, delta);
     }
     fn flush_anchors_if_dirty(&mut self) {
-        if self.anchor_registry.take_dirty() {
+        if self.anchor_map.take_dirty() {
             self.rebuild_all_anchor_positions();
         }
     }
@@ -1715,19 +1580,6 @@ impl SlotTable {
         }
     }
 
-    fn advance_past_group_scope_slot_for_recompose(&mut self, group_index: usize) {
-        if !self.group_has_scope_slot(group_index) {
-            return;
-        }
-
-        match self.slots.get(self.cursor) {
-            Some(Slot::ScopeValue { .. }) => {
-                self.cursor += 1;
-            }
-            _ => panic!("scoped group at index {group_index} is missing its scope slot"),
-        }
-    }
-
     fn start_recompose(&mut self, index: usize) {
         if let Some(slot) = self.slots.get(index) {
             debug_assert_eq!(
@@ -1753,9 +1605,6 @@ impl SlotTable {
                 };
                 self.group_stack.push(frame);
                 self.cursor = index + 1;
-                if self.group_has_scope_slot(index) {
-                    self.advance_past_group_scope_slot_for_recompose(index);
-                }
             }
         }
     }
@@ -1788,8 +1637,8 @@ impl SlotTable {
     fn propagate_group_growth(&mut self, child_start: usize, new_end: usize) {
         let mut i = 0;
         while i < child_start {
-            if let Some(Slot::Gap { anchor }) = self.slots.get(i) {
-                i += self.gap_extent_for_anchor(*anchor);
+            if matches!(self.slots.get(i), Some(Slot::Gap { .. })) {
+                i += self.gap_extent_at(i);
                 continue;
             }
             match self.slots.get_mut(i) {
@@ -1847,7 +1696,10 @@ impl SlotTable {
         let mut seen = HashMap::default();
 
         for slot in &self.slots[frame.start.saturating_add(1)..end] {
-            let Slot::ScopeValue { scope, .. } = slot else {
+            let Slot::Group {
+                scope: Some(scope), ..
+            } = slot
+            else {
                 continue;
             };
 
@@ -1862,25 +1714,20 @@ impl SlotTable {
     }
 
     fn preserved_gap_node_at_cursor(&self, cursor: usize) -> Option<(AnchorId, NodeId, u32)> {
-        let Slot::Gap { anchor } = self.slots.get(cursor)? else {
+        let Slot::Gap { anchor, metadata } = self.slots.get(cursor)? else {
             return None;
         };
         if !self.current_parent_allows_exact_gap_node_reuse() {
             return None;
         }
-        self.gap_preserved_node(*anchor)
-            .map(|(id, gen)| (*anchor, id, gen))
+        metadata.preserved_node.map(|(id, gen)| (*anchor, id, gen))
     }
 
     pub fn use_value_slot<T: 'static>(&mut self, init: impl FnOnce() -> T) -> usize {
         let disallow_live_reuse = self.current_disallow_live_slot_reuse();
         self.materialize_slot_at_cursor(
             disallow_live_reuse,
-            |slot| match slot {
-                Slot::Value { data, .. } => data.as_any().is::<T>(),
-                Slot::ScopeValue { .. } => TypeId::of::<T>() == TypeId::of::<RecomposeScope>(),
-                _ => false,
-            },
+            |slot| matches!(slot, Slot::Value { data, .. } if data.as_any().is::<T>()),
             |_table, _cursor| None,
             |anchor| Self::make_value_slot(anchor, init()),
         )
@@ -2125,8 +1972,8 @@ impl SlotTable {
             {
                 NodeSlotState::Active
             }
-            Some(Slot::Gap { anchor })
-                if self.gap_preserved_node(*anchor) == Some((orphaned.id, orphaned.generation)) =>
+            Some(Slot::Gap { metadata, .. })
+                if metadata.preserved_node == Some((orphaned.id, orphaned.generation)) =>
             {
                 NodeSlotState::PreservedGap
             }
@@ -2136,10 +1983,7 @@ impl SlotTable {
 
     #[cfg(test)]
     fn gap_metadata_at(&self, index: usize) -> Option<GapMetadata> {
-        match self.slots.get(index) {
-            Some(Slot::Gap { anchor }) => self.anchor_registry.gap_metadata_for_anchor(*anchor),
-            _ => None,
-        }
+        self.gap_metadata_at_index(index)
     }
 
     #[cfg(test)]
@@ -2177,10 +2021,9 @@ impl SlotTable {
         let mut gap_scan = 0usize;
         while gap_scan < old_len {
             match &self.slots[gap_scan] {
-                Slot::Gap { anchor } => {
-                    let extent = self
-                        .gap_extent_for_anchor(*anchor)
-                        .min(old_len.saturating_sub(gap_scan));
+                Slot::Gap { metadata, .. } => {
+                    let extent =
+                        unpack_slot_len(metadata.extent).min(old_len.saturating_sub(gap_scan));
                     gap_count = gap_count.saturating_add(extent);
                     gap_scan = gap_scan.saturating_add(extent);
                 }
@@ -2224,10 +2067,8 @@ impl SlotTable {
             }
 
             match &self.slots[i] {
-                Slot::Gap { anchor } => {
-                    let extent = self
-                        .gap_extent_for_anchor(*anchor)
-                        .min(old_len.saturating_sub(i));
+                Slot::Gap { metadata, .. } => {
+                    let extent = unpack_slot_len(metadata.extent).min(old_len.saturating_sub(i));
                     i = i.saturating_add(extent);
                     continue;
                 }
@@ -2238,7 +2079,7 @@ impl SlotTable {
                         kept_before: new_len,
                     });
                 }
-                Slot::Value { .. } | Slot::ScopeValue { .. } | Slot::Node { .. } => {}
+                Slot::Value { .. } | Slot::Node { .. } => {}
             }
 
             new_len += 1;
@@ -2264,14 +2105,12 @@ impl SlotTable {
         // been collected in phase 3.
         let mut i = 0usize;
         while i < old_len {
-            if let Slot::Gap { anchor } = &self.slots[i] {
-                let extent = self
-                    .gap_extent_for_anchor(*anchor)
-                    .min(old_len.saturating_sub(i));
+            if let Slot::Gap { metadata, .. } = &self.slots[i] {
+                let extent = unpack_slot_len(metadata.extent).min(old_len.saturating_sub(i));
                 for j in i..i + extent {
                     let anchor = self.slots[j].anchor_id();
                     if anchor.is_valid() {
-                        self.anchor_registry.remove_position(anchor);
+                        self.anchor_map.remove_position(anchor);
                     }
                 }
                 i = i.saturating_add(extent);
@@ -2290,10 +2129,8 @@ impl SlotTable {
         let mut removed = Vec::with_capacity(gap_count);
         let mut read = 0usize;
         while read < old_len {
-            if let Slot::Gap { anchor } = &self.slots[read] {
-                let extent = self
-                    .gap_extent_for_anchor(*anchor)
-                    .min(old_len.saturating_sub(read));
+            if let Slot::Gap { metadata, .. } = &self.slots[read] {
+                let extent = unpack_slot_len(metadata.extent).min(old_len.saturating_sub(read));
                 for index in read..read + extent {
                     removed.push(std::mem::take(&mut self.slots[index]));
                 }
@@ -2307,7 +2144,6 @@ impl SlotTable {
         debug_assert_eq!(removed.len(), gap_count);
         self.slots = compacted;
         drop_slots_in_reverse(&mut removed);
-        self.anchor_registry.clear_all_gap_metadata();
         self.rehouse_live_value_payloads();
 
         // ── Phase 4: rebuild all derived structures ──────────────────
@@ -2330,7 +2166,7 @@ impl SlotTable {
     }
 
     fn rebuild_anchor_positions(&mut self) {
-        self.anchor_registry.rebuild_positions(&self.slots);
+        self.anchor_map.rebuild_positions(&self.slots);
     }
 }
 
@@ -2343,7 +2179,7 @@ impl Default for SlotTable {
 impl SlotTable {
     pub fn begin_group(&mut self, key: Key) -> StartGroup<GroupId> {
         let idx = SlotTable::start(self, key);
-        self.clear_group_scope_slot(idx);
+        self.clear_group_scope(idx);
         let restored = SlotTable::take_last_start_was_gap(self);
         StartGroup {
             group: GroupId(idx),
@@ -2358,16 +2194,20 @@ impl SlotTable {
         init_scope: impl FnOnce() -> RecomposeScope,
     ) -> StartScopedGroup<GroupId> {
         let idx = SlotTable::start(self, key);
-        let had_scope_slot = self.group_has_scope_slot(idx);
         let restored = SlotTable::take_last_start_was_gap(self);
-        if !had_scope_slot
-            && self.cursor < self.slots.len()
-            && !matches!(self.slots.get(self.cursor), Some(Slot::Gap { .. }))
-        {
-            self.ensure_single_gap_at_local(self.cursor);
-        }
-        let scope_slot = self.use_value_slot(init_scope);
-        let scope = self.read_value::<RecomposeScope>(scope_slot).clone();
+        let scope = if let Some(existing_scope) = self.group_scope_value(idx).cloned() {
+            existing_scope
+        } else {
+            let scope = init_scope();
+            if let Some(Slot::Group {
+                scope: stored_scope,
+                ..
+            }) = self.slots.get_mut(idx)
+            {
+                *stored_scope = Some(scope.clone());
+            }
+            scope
+        };
         StartScopedGroup {
             group: GroupId(idx),
             anchor: self.slots[idx].anchor_id(),

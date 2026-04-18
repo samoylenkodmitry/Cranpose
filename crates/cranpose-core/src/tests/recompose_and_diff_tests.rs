@@ -718,9 +718,9 @@ fn unit_return_composable_skips_without_return_slot_storage() {
 
     let all_slots = composition.debug_dump_all_slots();
     let value_count = all_slots.iter().filter(|(_, kind)| kind == "Value").count();
-    let scope_value_count = all_slots
+    let scoped_group_count = all_slots
         .iter()
-        .filter(|(_, kind)| kind == "ScopeValue")
+        .filter(|(_, kind)| kind.starts_with("Group(") && !kind.contains("scope=None"))
         .count();
 
     assert_eq!(
@@ -728,8 +728,8 @@ fn unit_return_composable_skips_without_return_slot_storage() {
         "unit-return composable should store 1 Value (parameter state)",
     );
     assert_eq!(
-        scope_value_count, 2,
-        "unit-return composable should store 2 ScopeValue (root + child scopes)",
+        scoped_group_count, 2,
+        "unit-return composable should store 2 scoped groups (root + child scopes)",
     );
     UNIT_INVOCATIONS.with(|calls| assert_eq!(calls.get(), 1));
 

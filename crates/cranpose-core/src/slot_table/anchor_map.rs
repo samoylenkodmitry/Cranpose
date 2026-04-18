@@ -1,30 +1,22 @@
 use crate::collections::map::HashMap;
-use crate::{AnchorId, NodeId};
+use crate::AnchorId;
 use std::cell::Cell;
 
-use super::{unpack_slot_len, PreservedGroup, Slot, SlotTableDebugStats};
+use super::{Slot, SlotTableDebugStats};
 
 const INVALID_ANCHOR_POS: usize = usize::MAX;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct GapMetadata {
-    pub(super) preserved_group: Option<PreservedGroup>,
-    pub(super) preserved_node: Option<(NodeId, u32)>,
-}
-
-pub(crate) struct AnchorRegistry {
+pub(crate) struct AnchorMap {
     positions: HashMap<usize, usize>,
-    gap_metadata: HashMap<usize, GapMetadata>,
     dirty: bool,
     next_anchor_id: Cell<usize>,
     free_anchor_ids: Vec<usize>,
 }
 
-impl Default for AnchorRegistry {
+impl Default for AnchorMap {
     fn default() -> Self {
         Self {
             positions: HashMap::default(),
-            gap_metadata: HashMap::default(),
             dirty: false,
             next_anchor_id: Cell::new(1),
             free_anchor_ids: Vec::new(),
@@ -32,84 +24,20 @@ impl Default for AnchorRegistry {
     }
 }
 
-impl AnchorRegistry {
+impl AnchorMap {
     pub(crate) fn debug_heap_bytes(&self) -> usize {
         let anchors_bytes = self.positions.capacity() * std::mem::size_of::<(usize, usize)>();
-        let gap_metadata_bytes =
-            self.gap_metadata.capacity() * std::mem::size_of::<(usize, GapMetadata)>();
         let free_anchors_bytes = self.free_anchor_ids.capacity() * std::mem::size_of::<usize>();
-        anchors_bytes + gap_metadata_bytes + free_anchors_bytes
+        anchors_bytes + free_anchors_bytes
     }
 
     pub(crate) fn fill_debug_stats(&self, stats: &mut SlotTableDebugStats) {
         stats.anchors_len = self.positions.len();
         stats.anchors_cap = self.positions.capacity();
-        stats.gap_metadata_len = self.gap_metadata.len();
-        stats.gap_metadata_cap = self.gap_metadata.capacity();
+        stats.gap_metadata_len = 0;
+        stats.gap_metadata_cap = 0;
         stats.free_anchor_ids_len = self.free_anchor_ids.len();
         stats.free_anchor_ids_cap = self.free_anchor_ids.capacity();
-    }
-
-    pub(crate) fn clear_gap_metadata_for_replacement(
-        &mut self,
-        slots: &[Slot],
-        index: usize,
-        new_slot: &Slot,
-    ) {
-        if matches!(new_slot, Slot::Gap { .. }) {
-            return;
-        }
-        let old_anchor = match slots.get(index) {
-            Some(Slot::Gap { anchor }) => Some(*anchor),
-            _ => None,
-        };
-        if let Some(anchor) = old_anchor {
-            self.clear_gap_metadata(anchor);
-        }
-    }
-
-    pub(crate) fn gap_metadata_for_anchor(&self, anchor: AnchorId) -> Option<GapMetadata> {
-        anchor
-            .is_valid()
-            .then(|| self.gap_metadata.get(&anchor.0).copied())
-            .flatten()
-    }
-
-    pub(crate) fn set_gap_metadata(&mut self, anchor: AnchorId, metadata: GapMetadata) {
-        if !anchor.is_valid() {
-            return;
-        }
-        if metadata == GapMetadata::default() {
-            self.gap_metadata.remove(&anchor.0);
-        } else {
-            self.gap_metadata.insert(anchor.0, metadata);
-        }
-    }
-
-    pub(crate) fn clear_gap_metadata(&mut self, anchor: AnchorId) {
-        if anchor.is_valid() {
-            self.gap_metadata.remove(&anchor.0);
-        }
-    }
-
-    pub(crate) fn gap_preserved_group(&self, anchor: AnchorId) -> Option<PreservedGroup> {
-        self.gap_metadata_for_anchor(anchor)
-            .and_then(|metadata| metadata.preserved_group)
-    }
-
-    pub(crate) fn gap_group_len(&self, anchor: AnchorId) -> u32 {
-        self.gap_metadata_for_anchor(anchor)
-            .and_then(|metadata| metadata.preserved_group.map(|group| group.len))
-            .unwrap_or(0)
-    }
-
-    pub(crate) fn gap_preserved_node(&self, anchor: AnchorId) -> Option<(NodeId, u32)> {
-        self.gap_metadata_for_anchor(anchor)
-            .and_then(|metadata| metadata.preserved_node)
-    }
-
-    pub(crate) fn gap_extent_for_anchor(&self, anchor: AnchorId) -> usize {
-        unpack_slot_len(self.gap_group_len(anchor)).max(1)
     }
 
     pub(crate) fn mark_dirty(&mut self) {
@@ -143,7 +71,6 @@ impl AnchorRegistry {
     pub(crate) fn free_anchor(&mut self, anchor: AnchorId) {
         if anchor.is_valid() && anchor.0 != 0 {
             self.positions.remove(&anchor.0);
-            self.gap_metadata.remove(&anchor.0);
             self.free_anchor_ids.push(anchor.0);
         }
     }
@@ -218,9 +145,5 @@ impl AnchorRegistry {
                     .saturating_add(1),
             ),
         );
-    }
-
-    pub(crate) fn clear_all_gap_metadata(&mut self) {
-        self.gap_metadata = HashMap::default();
     }
 }
