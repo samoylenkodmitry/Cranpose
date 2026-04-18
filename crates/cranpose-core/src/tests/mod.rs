@@ -76,6 +76,23 @@ pub(crate) fn test_slot_table() -> SlotTable {
     SlotTable::new()
 }
 
+pub(crate) fn begin_test_group(slots: &mut SlotTable, key: Key) -> GroupId {
+    crate::slot_table::begin_group_for_test(slots, key)
+}
+
+pub(crate) fn hide_test_range(
+    slots: &mut SlotTable,
+    start: usize,
+    end: usize,
+    owner_index: Option<usize>,
+) -> bool {
+    crate::slot_table::hide_range_for_test(slots, start, end, owner_index)
+}
+
+pub(crate) fn queue_test_orphaned_node(slots: &mut SlotTable, id: NodeId, generation: u32) {
+    crate::slot_table::queue_orphaned_node_for_test(slots, id, generation);
+}
+
 thread_local! {
     static INVOCATIONS: Cell<usize> = const { Cell::new(0) };
 }

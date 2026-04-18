@@ -67,7 +67,7 @@ pub use runtime::{
     current_runtime_handle, schedule_frame, schedule_node_update, DefaultScheduler, Runtime,
     RuntimeHandle, StateId, TaskHandle,
 };
-pub use slot_storage::{GroupId, StartGroup, StartScopedGroup};
+pub use slot_storage::{GroupId, StartScopedGroup};
 pub use slot_table::{SlotTable, SlotTableDebugStats, SlotValueTypeDebugStat};
 #[doc(hidden)]
 pub use snapshot_state_observer::SnapshotStateObserver;

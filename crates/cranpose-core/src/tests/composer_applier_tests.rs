@@ -493,10 +493,10 @@ fn orphaned_cleanup_skips_recycled_nodes_with_new_generation() {
         "same-frame recycle must advance the stable generation",
     );
 
-    composition
-        .slots
-        .borrow_mut()
-        .push_orphaned_node_for_test(stable_id, old_generation);
+    {
+        let mut slots = composition.slots.borrow_mut();
+        queue_test_orphaned_node(&mut slots, stable_id, old_generation);
+    }
 
     let removed_any = composition
         .finalize_compaction()

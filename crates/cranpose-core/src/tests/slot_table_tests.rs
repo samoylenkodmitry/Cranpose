@@ -14,7 +14,7 @@ fn slot_table_marks_values_hidden() {
     let _idx3 = slots.use_value_slot(|| 3i32);
 
     // Hide the middle slot
-    slots.mark_range_as_gaps(1, 2, None);
+    hide_test_range(&mut slots, 1, 2, None);
 
     // Verify we can still read first and last slots
     assert_eq!(slots.read_value::<i32>(0), &1);
@@ -31,7 +31,7 @@ fn slot_table_restores_hidden_values() {
 
     // Hide the slot.
     slots.reset();
-    slots.mark_range_as_gaps(0, 1, None);
+    hide_test_range(&mut slots, 0, 1, None);
 
     // Reset cursor to restore.
     slots.reset();
@@ -72,21 +72,21 @@ fn slot_table_handles_nested_hidden_groups() {
     let mut slots = test_slot_table();
 
     // Create a parent group
-    let parent_idx = slots.start(100);
+    let parent_idx = begin_test_group(&mut slots, 100).0;
 
     // Create child group
-    let child_idx = slots.start(200);
+    let child_idx = begin_test_group(&mut slots, 200).0;
     let _val_idx = slots.use_value_slot(|| 42i32);
-    slots.end(); // End child
+    slots.end_group(); // End child
 
-    slots.end(); // End parent
+    slots.end_group(); // End parent
 
     // Verify parent group was created
     let groups = slots.debug_dump_groups();
     assert!(groups.iter().any(|(idx, _, _, _)| *idx == parent_idx));
 
     // Hide the parent group range. The child subtree should become hidden too.
-    slots.mark_range_as_gaps(parent_idx, child_idx + 2, None);
+    hide_test_range(&mut slots, parent_idx, child_idx + 2, None);
 
     // Structure remains preserved for reuse through hidden entries.
 }
@@ -96,26 +96,26 @@ fn slot_table_preserves_sibling_groups_when_hiding_ranges() {
     let mut slots = test_slot_table();
 
     // Create first group with a value
-    let g1 = slots.start(1);
+    let g1 = begin_test_group(&mut slots, 1).0;
     let _v1 = slots.use_value_slot(|| "first");
-    slots.end();
+    slots.end_group();
 
     // Create second group with a value
-    let g2 = slots.start(2);
+    let g2 = begin_test_group(&mut slots, 2).0;
     let _v2 = slots.use_value_slot(|| "second");
-    slots.end();
+    slots.end_group();
 
     // Create third group with a value
-    let _g3 = slots.start(3);
+    let _g3 = begin_test_group(&mut slots, 3);
     let v3_idx = slots.use_value_slot(|| "third");
-    slots.end();
+    slots.end_group();
 
     // Capture initial group count
     let initial_groups = slots.debug_dump_groups();
     assert_eq!(initial_groups.len(), 3, "should have 3 groups initially");
 
     // Hide only the first group's range.
-    slots.mark_range_as_gaps(g1, g2, None);
+    hide_test_range(&mut slots, g1, g2, None);
 
     // Third group should still be accessible (the value should remain)
     assert_eq!(slots.read_value::<&str>(v3_idx), &"third");

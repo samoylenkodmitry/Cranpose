@@ -184,6 +184,7 @@ impl GroupArena {
         self.scopes[id as usize] = scope;
     }
 
+    #[cfg(test)]
     fn clear_scope(&mut self, id: u32) {
         let idx = id as usize;
         if let Some(scope) = self.scopes[idx].take() {
@@ -753,6 +754,7 @@ impl SlotStorage {
         self.live_group_scope(index).is_some()
     }
 
+    #[cfg(test)]
     pub(crate) fn clear_group_scope(&mut self, index: usize) {
         if let Some(group) = self.group_id_at(index) {
             self.groups.clear_scope(group);

@@ -1,6 +1,9 @@
 use std::cell::Cell;
 
-use super::{storage::EntryKind, GroupFrame, NodeSlotState, ReuseState, SlotTable};
+use super::{
+    begin_group_for_test, hide_range_for_test, storage::EntryKind, GroupFrame, NodeSlotState,
+    ReuseState, SlotTable,
+};
 use crate::{runtime::TestRuntime, GroupId, Owned, RecomposeScope};
 
 #[test]
@@ -63,7 +66,7 @@ fn hidden_value_is_restored_without_running_initializer() {
     table.use_value_slot(|| 7i32);
 
     table.reset();
-    assert!(table.mark_range_as_gaps(0, 1, None));
+    assert!(hide_range_for_test(&mut table, 0, 1, None));
     assert_eq!(table.storage.entry_kind(0), Some(EntryKind::HiddenValue));
 
     let initialized = Cell::new(false);
@@ -88,7 +91,7 @@ fn fresh_parent_inserts_before_hidden_value_instead_of_restoring_it() {
     table.use_value_slot(|| 1i32);
 
     table.reset();
-    assert!(table.mark_range_as_gaps(0, 1, None));
+    assert!(hide_range_for_test(&mut table, 0, 1, None));
     table.group_stack.push(GroupFrame {
         start: 0,
         end: table.storage.len(),
@@ -111,7 +114,7 @@ fn hidden_group_restore_reuses_scope() {
     let root_key = crate::hash_key(&"root");
     let child_key = crate::hash_key(&"child");
 
-    let root = table.begin_group(root_key);
+    let root = begin_group_for_test(&mut table, root_key);
     let child = table.begin_scoped_group(child_key, || RecomposeScope::new(runtime.handle()));
     let child_scope_id = child.scope.id();
     table.use_value_slot(|| String::from("payload"));
@@ -119,14 +122,19 @@ fn hidden_group_restore_reuses_scope() {
     table.end_group();
 
     let child_len = table.storage.group_len_at(child.group.0);
-    assert!(table.mark_range_as_gaps(child.group.0, child.group.0 + child_len, Some(root.group.0),));
+    assert!(hide_range_for_test(
+        &mut table,
+        child.group.0,
+        child.group.0 + child_len,
+        Some(root.0),
+    ));
     assert_eq!(
         table.storage.entry_kind(child.group.0),
         Some(EntryKind::HiddenGroup)
     );
 
     table.reset();
-    let _root = table.begin_group(root_key);
+    let _root = begin_group_for_test(&mut table, root_key);
     let restored = table.begin_scoped_group(child_key, || panic!("scope should be restored"));
 
     assert!(restored.restored_from_gap);
@@ -144,7 +152,7 @@ fn orphaned_hidden_node_becomes_active_again_when_restored() {
     table.record_node(42, 7);
 
     table.reset();
-    assert!(table.mark_range_as_gaps(0, 1, None));
+    assert!(hide_range_for_test(&mut table, 0, 1, None));
     let orphaned = table.drain_orphaned_node_ids();
     assert_eq!(orphaned.len(), 1);
     let orphaned = orphaned[0];
@@ -170,18 +178,23 @@ fn compaction_preserves_anchor_identity_for_shifted_slots() {
     table.use_value_slot(|| String::from("drop-b"));
     table.end_group();
 
-    let _second_group = table.start(2);
-    let (survivor_index, survivor_anchor) = table.remember_with_anchor(|| String::from("survivor"));
+    let _second_group = begin_group_for_test(&mut table, 2);
+    let survivor_index = table.use_value_slot(|| Owned::new(String::from("survivor")));
+    let survivor_anchor = table.storage.entry_anchor(survivor_index);
     table.end_group();
     table.flush();
 
+    let resolved_index = table
+        .storage
+        .resolve_anchor(survivor_anchor)
+        .expect("survivor anchor should resolve");
     assert_eq!(
         table
-            .read_value_by_anchor::<Owned<String>>(survivor_anchor)
-            .map(|value| value.with(|text| text.clone())),
-        Some(String::from("survivor"))
+            .read_value::<Owned<String>>(resolved_index)
+            .with(|text| text.clone()),
+        String::from("survivor")
     );
-    assert_eq!(table.resolve_anchor(survivor_anchor), Some(survivor_index));
+    assert_eq!(resolved_index, survivor_index);
 
     let started = table
         .start_recranpose_at_anchor(first_group.anchor, first_group_scope_id)
@@ -193,14 +206,15 @@ fn compaction_preserves_anchor_identity_for_shifted_slots() {
     table.compact();
 
     let shifted_index = table
+        .storage
         .resolve_anchor(survivor_anchor)
         .expect("survivor anchor should still resolve");
     assert!(shifted_index < survivor_index);
     assert_eq!(
         table
-            .read_value_by_anchor::<Owned<String>>(survivor_anchor)
-            .map(|value| value.with(|text| text.clone())),
-        Some(String::from("survivor"))
+            .read_value::<Owned<String>>(shifted_index)
+            .with(|text| text.clone()),
+        String::from("survivor")
     );
 }
 
@@ -209,7 +223,7 @@ fn hidden_descendant_scopes_are_excluded_until_restored() {
     let runtime = TestRuntime::new();
     let mut table = SlotTable::new();
 
-    let root = table.begin_group(1);
+    let root = begin_group_for_test(&mut table, 1);
     let first = table.begin_scoped_group(2, || RecomposeScope::new(runtime.handle()));
     table.end_group();
     let second = table.begin_scoped_group(3, || RecomposeScope::new(runtime.handle()));
@@ -218,20 +232,21 @@ fn hidden_descendant_scopes_are_excluded_until_restored() {
     table.end_group();
 
     let second_len = table.storage.group_len_at(second.group.0);
-    assert!(table.mark_range_as_gaps(
+    assert!(hide_range_for_test(
+        &mut table,
         second.group.0,
         second.group.0 + second_len,
-        Some(root.group.0),
+        Some(root.0),
     ));
 
-    table.start_recompose(root.group.0);
+    table.start_recompose(root.0);
     let scopes = table.descendant_scopes_in_current_group(0);
     table.end_recompose();
     assert_eq!(scopes.len(), 1);
     assert_eq!(scopes[0].id(), first.scope.id());
 
     table.reset();
-    let _root = table.begin_group(1);
+    let _root = begin_group_for_test(&mut table, 1);
     let _first = table.begin_scoped_group(2, || panic!("first scope should be reused"));
     table.end_group();
     let restored = table.begin_scoped_group(3, || panic!("second scope should be restored"));

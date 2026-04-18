@@ -5,8 +5,7 @@ mod lifecycle_queue;
 mod storage;
 
 use crate::{
-    collections::map::HashMap,
-    slot_storage::{GroupId, StartGroup, StartScopedGroup},
+    slot_storage::{GroupId, StartScopedGroup},
     AnchorId, Key, NodeId, Owned, RecomposeScope, ScopeId,
 };
 pub use lifecycle_queue::OrphanedNode;
@@ -238,11 +237,6 @@ impl SlotTable {
             .unwrap_or(AnchorId::INVALID)
     }
 
-    #[cfg(test)]
-    pub(crate) fn resolve_anchor(&self, anchor: AnchorId) -> Option<usize> {
-        self.storage.resolve_anchor(anchor)
-    }
-
     fn current_parent_boundary_key(&self) -> Option<Key> {
         self.group_stack
             .last()
@@ -274,6 +268,7 @@ impl SlotTable {
         self.storage.live_group_has_scope(group_index)
     }
 
+    #[cfg(test)]
     fn clear_group_scope(&mut self, group_index: usize) {
         self.storage.clear_group_scope(group_index);
     }
@@ -402,16 +397,6 @@ impl SlotTable {
         marked_any
     }
 
-    #[cfg(test)]
-    pub(crate) fn mark_range_as_gaps(
-        &mut self,
-        start: usize,
-        end: usize,
-        owner_index: Option<usize>,
-    ) -> bool {
-        self.mark_range_as_hidden(start, end, owner_index)
-    }
-
     pub(crate) fn start_recranpose_at_anchor(
         &mut self,
         anchor: AnchorId,
@@ -424,20 +409,6 @@ impl SlotTable {
         } else {
             None
         }
-    }
-
-    #[cfg(test)]
-    pub fn find_group_index_by_scope(&self, scope: ScopeId) -> Option<GroupId> {
-        (0..self.storage.len()).find_map(|index| {
-            (self.group_scope_owner(index) == Some(scope)).then_some(GroupId(index))
-        })
-    }
-
-    #[cfg(test)]
-    pub fn start_recranpose_at_scope(&mut self, scope: ScopeId) -> Option<GroupId> {
-        let group = self.find_group_index_by_scope(scope)?;
-        self.start_recompose(group.0);
-        Some(group)
     }
 
     pub fn debug_dump_groups(&self) -> Vec<(usize, Key, Option<ScopeId>, usize)> {
@@ -688,12 +659,7 @@ impl SlotTable {
         )
     }
 
-    #[cfg(test)]
-    pub(crate) fn start(&mut self, key: Key) -> usize {
-        self.start_group_entry(key).index
-    }
-
-    pub fn end(&mut self) {
+    fn end(&mut self) {
         let Some(frame) = self.group_stack.pop() else {
             return;
         };
@@ -776,13 +742,13 @@ impl SlotTable {
         }
     }
 
-    pub fn skip_current(&mut self) {
+    fn skip_current(&mut self) {
         if let Some(frame) = self.group_stack.last() {
             self.cursor = frame.end.min(self.storage.len());
         }
     }
 
-    pub fn node_ids_in_current_group(&self) -> Vec<NodeId> {
+    fn node_ids_in_current_group(&self) -> Vec<NodeId> {
         let Some(frame) = self.group_stack.last() else {
             return Vec::new();
         };
@@ -797,17 +763,15 @@ impl SlotTable {
         ids
     }
 
-    pub fn descendant_scopes_in_current_group(
-        &self,
-        current_scope: ScopeId,
-    ) -> Vec<RecomposeScope> {
+    #[cfg(test)]
+    fn descendant_scopes_in_current_group(&self, current_scope: ScopeId) -> Vec<RecomposeScope> {
         let Some(frame) = self.group_stack.last() else {
             return Vec::new();
         };
 
         let end = frame.end.min(self.storage.len());
         let mut scopes = Vec::new();
-        let mut seen = HashMap::default();
+        let mut seen = crate::collections::map::HashMap::default();
 
         for index in frame.start.saturating_add(1)..end {
             let Some(scope) = self.storage.live_group_scope(index).cloned() else {
@@ -869,27 +833,9 @@ impl SlotTable {
         self.storage.write_value(idx, value);
     }
 
-    pub fn read_value_by_anchor<T: 'static>(&self, anchor: AnchorId) -> Option<&T> {
-        let idx = self.storage.resolve_anchor(anchor)?;
-        Some(self.read_value(idx))
-    }
-
-    pub fn read_value_mut_by_anchor<T: 'static>(&mut self, anchor: AnchorId) -> Option<&mut T> {
-        let idx = self.storage.resolve_anchor(anchor)?;
-        Some(self.read_value_mut(idx))
-    }
-
     pub fn remember<T: 'static>(&mut self, init: impl FnOnce() -> T) -> Owned<T> {
         let index = self.use_value_slot(|| Owned::new(init()));
         self.read_value::<Owned<T>>(index).clone()
-    }
-
-    pub fn remember_with_anchor<T: 'static>(
-        &mut self,
-        init: impl FnOnce() -> T,
-    ) -> (usize, AnchorId) {
-        let index = self.use_value_slot(|| Owned::new(init()));
-        (index, self.storage.entry_anchor(index))
     }
 
     pub fn record_node(&mut self, id: NodeId, generation: u32) {
@@ -958,11 +904,6 @@ impl SlotTable {
         self.group_stack.clear();
     }
 
-    pub fn step_back(&mut self) {
-        debug_assert!(self.cursor > 0, "Cannot step back from cursor 0");
-        self.cursor = self.cursor.saturating_sub(1);
-    }
-
     pub fn trim_to_cursor(&mut self) -> bool {
         let mut marked = false;
         if let Some((owner_start, group_end)) = self
@@ -988,10 +929,6 @@ impl SlotTable {
         marked
     }
 
-    pub fn drain_orphaned_node_ids_with(&mut self, visitor: impl FnMut(OrphanedNode)) {
-        self.storage.drain_orphaned_node_ids_with(visitor);
-    }
-
     pub fn drain_orphaned_node_ids(&mut self) -> Vec<OrphanedNode> {
         self.storage.drain_orphaned_node_ids()
     }
@@ -1002,12 +939,6 @@ impl SlotTable {
 
     pub(crate) fn orphaned_node_state(&self, orphaned: OrphanedNode) -> NodeSlotState {
         self.storage.orphaned_node_state(orphaned)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn push_orphaned_node_for_test(&mut self, id: NodeId, generation: u32) {
-        self.storage
-            .requeue_orphaned_node(OrphanedNode::new(id, generation, AnchorId::INVALID));
     }
 
     pub fn compact(&mut self) {
@@ -1021,16 +952,6 @@ impl SlotTable {
     fn flush_anchors_if_dirty(&mut self) {
         if self.storage.take_anchors_dirty() {
             self.storage.rebuild_anchor_positions();
-        }
-    }
-
-    pub fn begin_group(&mut self, key: Key) -> StartGroup<GroupId> {
-        let started = self.start_group_entry(key);
-        self.clear_group_scope(started.index);
-        StartGroup {
-            group: GroupId(started.index),
-            anchor: self.storage.entry_anchor(started.index),
-            restored_from_gap: started.restored_from_hidden,
         }
     }
 
@@ -1075,6 +996,30 @@ impl SlotTable {
     pub fn flush(&mut self) {
         SlotTable::flush_anchors_if_dirty(self);
     }
+}
+
+#[cfg(test)]
+pub(crate) fn begin_group_for_test(table: &mut SlotTable, key: Key) -> GroupId {
+    let started = table.start_group_entry(key);
+    table.clear_group_scope(started.index);
+    GroupId(started.index)
+}
+
+#[cfg(test)]
+pub(crate) fn hide_range_for_test(
+    table: &mut SlotTable,
+    start: usize,
+    end: usize,
+    owner_index: Option<usize>,
+) -> bool {
+    table.mark_range_as_hidden(start, end, owner_index)
+}
+
+#[cfg(test)]
+pub(crate) fn queue_orphaned_node_for_test(table: &mut SlotTable, id: NodeId, generation: u32) {
+    table
+        .storage
+        .requeue_orphaned_node(OrphanedNode::new(id, generation, AnchorId::INVALID));
 }
 
 impl Default for SlotTable {
