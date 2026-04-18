@@ -19,7 +19,6 @@ members = [
     "crates/cranpose-render/pixels",
     "crates/cranpose-render/wgpu",
     "apps/desktop-demo",
-    "apps/minimal-single-file",
     "crates/cranpose-services",
 ]
 resolver = "2"

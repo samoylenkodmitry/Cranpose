@@ -2601,10 +2601,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "minimal-single-file"
-version = "0.1.0"
-
-[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"

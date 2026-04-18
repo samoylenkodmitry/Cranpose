@@ -188,6 +188,10 @@ fn restored_child_reuse(parent_reuse: ChildReusePolicy) -> ChildReusePolicy {
     }
 }
 
+fn inherited_fresh_body(parent_reuse: ChildReusePolicy) -> bool {
+    !matches!(parent_reuse, ChildReusePolicy::Normal)
+}
+
 trait SlotValue: Any {
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
@@ -591,78 +595,62 @@ impl SlotTable {
         found.then_some((run_start, run_len))
     }
 
-    fn ensure_gap_at_local(&mut self, cursor: usize) {
+    fn pull_gap_run_to_cursor(&mut self, cursor: usize, run_start: usize, moved_len: usize) {
+        self.shift_group_frames(cursor, moved_len as isize);
+        self.shift_anchor_positions_from(cursor, moved_len as isize);
+        self.slots[cursor..run_start + moved_len].rotate_right(moved_len);
+    }
+
+    fn try_pull_gap_run_to_cursor(
+        &mut self,
+        cursor: usize,
+        scan_limit: usize,
+        move_entire_run: bool,
+    ) -> bool {
+        let Some((run_start, run_len)) = self.find_right_gap_run(cursor, scan_limit) else {
+            return false;
+        };
+        let moved_len = if move_entire_run { run_len } else { 1 };
+        self.pull_gap_run_to_cursor(cursor, run_start, moved_len);
+        true
+    }
+
+    fn ensure_gap_at_local_with_mode(&mut self, cursor: usize, move_entire_run: bool) {
         if matches!(self.slots.get(cursor), Some(Slot::Gap { .. })) {
             return;
         }
         self.ensure_capacity();
 
         // Fast path: look for a gap run within the local scan window.
-        if let Some((run_start, run_len)) = self.find_right_gap_run(cursor, Self::LOCAL_GAP_SCAN) {
-            self.shift_group_frames(cursor, run_len as isize);
-            self.shift_anchor_positions_from(cursor, run_len as isize);
-            self.slots[cursor..run_start + run_len].rotate_right(run_len);
+        if self.try_pull_gap_run_to_cursor(cursor, Self::LOCAL_GAP_SCAN, move_entire_run) {
             return;
         }
 
         // Slow path: after compaction the nearest gap may be far away.
         // Search the entire tail before falling back to the destructive force_gap_here.
         let full_range = self.slots.len().saturating_sub(cursor);
-        if full_range > Self::LOCAL_GAP_SCAN {
-            if let Some((run_start, run_len)) = self.find_right_gap_run(cursor, full_range) {
-                self.shift_group_frames(cursor, run_len as isize);
-                self.shift_anchor_positions_from(cursor, run_len as isize);
-                self.slots[cursor..run_start + run_len].rotate_right(run_len);
-                return;
-            }
+        if full_range > Self::LOCAL_GAP_SCAN
+            && self.try_pull_gap_run_to_cursor(cursor, full_range, move_entire_run)
+        {
+            return;
         }
 
         // No gaps anywhere — grow the vec and try once more.
         self.grow_slots();
         let full_range = self.slots.len().saturating_sub(cursor);
-        if let Some((run_start, run_len)) = self.find_right_gap_run(cursor, full_range) {
-            self.shift_group_frames(cursor, run_len as isize);
-            self.shift_anchor_positions_from(cursor, run_len as isize);
-            self.slots[cursor..run_start + run_len].rotate_right(run_len);
+        if self.try_pull_gap_run_to_cursor(cursor, full_range, move_entire_run) {
             return;
         }
 
         self.force_gap_here(cursor);
     }
 
+    fn ensure_gap_at_local(&mut self, cursor: usize) {
+        self.ensure_gap_at_local_with_mode(cursor, true);
+    }
+
     fn ensure_single_gap_at_local(&mut self, cursor: usize) {
-        if matches!(self.slots.get(cursor), Some(Slot::Gap { .. })) {
-            return;
-        }
-        self.ensure_capacity();
-
-        let insert_gap = |table: &mut Self, run_start: usize| {
-            table.shift_group_frames(cursor, 1);
-            table.shift_anchor_positions_from(cursor, 1);
-            table.slots[cursor..run_start + 1].rotate_right(1);
-        };
-
-        if let Some((run_start, _)) = self.find_right_gap_run(cursor, Self::LOCAL_GAP_SCAN) {
-            insert_gap(self, run_start);
-            return;
-        }
-
-        let full_range = self.slots.len().saturating_sub(cursor);
-        if full_range > Self::LOCAL_GAP_SCAN {
-            if let Some((run_start, _)) = self.find_right_gap_run(cursor, full_range) {
-                insert_gap(self, run_start);
-                return;
-            }
-        }
-
-        self.grow_slots();
-        let full_range = self.slots.len().saturating_sub(cursor);
-        if let Some((run_start, _)) = self.find_right_gap_run(cursor, full_range) {
-            insert_gap(self, run_start);
-            return;
-        }
-
-        self.force_gap_here(cursor);
+        self.ensure_gap_at_local_with_mode(cursor, false);
     }
 
     fn preserve_terminal_group_block_at_tail(&mut self, start: usize, len: usize) {
@@ -1316,6 +1304,47 @@ impl SlotTable {
         self.finish_slot_write_at(cursor)
     }
 
+    fn materialize_slot_at_cursor(
+        &mut self,
+        disallow_live_reuse: bool,
+        reusable_live_slot: impl Fn(&Slot) -> bool,
+        mut preserved_gap_slot: impl FnMut(&mut Self, usize) -> Option<Slot>,
+        make_fresh_slot: impl FnOnce(AnchorId) -> Slot,
+    ) -> usize {
+        self.ensure_capacity();
+
+        let cursor = self.cursor;
+        debug_assert!(
+            cursor <= self.slots.len(),
+            "slot cursor {} out of bounds",
+            cursor
+        );
+
+        if cursor < self.slots.len() {
+            let reusable_live_slot =
+                !disallow_live_reuse && self.slots.get(cursor).is_some_and(reusable_live_slot);
+            if disallow_live_reuse && !matches!(self.slots.get(cursor), Some(Slot::Gap { .. })) {
+                self.ensure_gap_at_local(cursor);
+            }
+
+            if reusable_live_slot {
+                return self.finish_slot_write_at(cursor);
+            }
+
+            if let Some(slot) = preserved_gap_slot(self, cursor) {
+                return self.write_slot_at_cursor(cursor, slot);
+            }
+
+            if matches!(self.slots.get(cursor), Some(Slot::Gap { .. })) {
+                return self.replace_gap_at_cursor_with_fresh_slot(cursor, make_fresh_slot);
+            }
+
+            return self.replace_slot_at_cursor_with_fresh_slot(cursor, make_fresh_slot);
+        }
+
+        self.append_fresh_slot_at_cursor(cursor, make_fresh_slot)
+    }
+
     fn move_slot_range_to_cursor(&mut self, source_start: usize, len: usize, dest: usize) {
         debug_assert!(dest <= source_start, "unexpected rightward slot move");
         if len == 0 || source_start == dest {
@@ -1344,47 +1373,13 @@ impl SlotTable {
         start
     }
 
-    fn try_reuse_live_group_fast_path(
-        &mut self,
-        key: Key,
-        cursor: usize,
-        parent_reuse: ChildReusePolicy,
-    ) -> Option<usize> {
-        let Some(Slot::Group {
-            key: existing_key,
-            len,
-            boundary_key,
-            has_gap_children,
-            ..
-        }) = self.slots.get(cursor)
-        else {
-            return None;
-        };
-
-        if *existing_key != key || *has_gap_children || !parent_reuse.allows_exact_live_reuse() {
-            return None;
-        }
-
-        let inherited_fresh_body = !matches!(parent_reuse, ChildReusePolicy::Normal);
-        Some(self.enter_group(
-            key,
-            cursor,
-            unpack_slot_len(*len),
-            GroupEntryPlan {
-                child_reuse: parent_reuse,
-                fresh_body: inherited_fresh_body,
-                gap_boundary_key: *boundary_key,
-                restored_from_gap: inherited_fresh_body,
-            },
-        ))
-    }
-
     fn try_reuse_live_group_at_cursor(
         &mut self,
         key: Key,
         cursor: usize,
         parent_reuse: ChildReusePolicy,
         allow_exact_live_reuse: bool,
+        allow_gap_children: bool,
     ) -> Option<usize> {
         let Some(Slot::Group {
             key: existing_key,
@@ -1400,6 +1395,9 @@ impl SlotTable {
         if *existing_key != key || !allow_exact_live_reuse {
             return None;
         }
+        if *has_gap_children && !allow_gap_children {
+            return None;
+        }
 
         let group_len = *len;
         let gap_boundary_key = *boundary_key;
@@ -1407,7 +1405,7 @@ impl SlotTable {
             *has_gap_children = false;
         }
 
-        let inherited_fresh_body = !matches!(parent_reuse, ChildReusePolicy::Normal);
+        let inherited_fresh_body = inherited_fresh_body(parent_reuse);
         Some(self.enter_group(
             key,
             cursor,
@@ -1662,7 +1660,7 @@ impl SlotTable {
         }
 
         let restored_from_preserved = matched.reused_gap || matched.index != cursor;
-        let inherited_fresh_body = !matches!(parent_reuse, ChildReusePolicy::Normal);
+        let inherited_fresh_body = inherited_fresh_body(parent_reuse);
         let actual_len = matched
             .len
             .max(1)
@@ -1702,14 +1700,19 @@ impl SlotTable {
 
         let cursor = self.cursor;
         let parent_reuse = self.current_parent_reuse();
-
-        if let Some(reused) = self.try_reuse_live_group_fast_path(key, cursor, parent_reuse) {
-            return reused;
-        }
-
         let restricted_reuse = parent_reuse.requires_restricted_reuse();
         let allow_exact_live_reuse = parent_reuse.allows_exact_live_reuse();
         let allow_live_search = matches!(parent_reuse, ChildReusePolicy::Normal);
+
+        if let Some(reused) = self.try_reuse_live_group_at_cursor(
+            key,
+            cursor,
+            parent_reuse,
+            allow_exact_live_reuse,
+            false,
+        ) {
+            return reused;
+        }
 
         self.last_start_was_gap = false;
         let cursor = self.cursor;
@@ -1737,9 +1740,13 @@ impl SlotTable {
             }
         }
 
-        if let Some(reused) =
-            self.try_reuse_live_group_at_cursor(key, cursor, parent_reuse, allow_exact_live_reuse)
-        {
+        if let Some(reused) = self.try_reuse_live_group_at_cursor(
+            key,
+            cursor,
+            parent_reuse,
+            allow_exact_live_reuse,
+            true,
+        ) {
             return reused;
         }
 
@@ -2034,50 +2041,29 @@ impl SlotTable {
         scopes
     }
 
-    pub fn use_value_slot<T: 'static>(&mut self, init: impl FnOnce() -> T) -> usize {
-        self.ensure_capacity();
-
-        let cursor = self.cursor;
-        let disallow_live_reuse = self.current_disallow_live_slot_reuse();
-        debug_assert!(
-            cursor <= self.slots.len(),
-            "slot cursor {} out of bounds",
-            cursor
-        );
-
-        if cursor < self.slots.len() {
-            let reusable_live_value_slot = !disallow_live_reuse
-                && (matches!(
-                    self.slots.get(cursor),
-                    Some(Slot::Value { data, .. }) if data.as_any().is::<T>()
-                ) || (TypeId::of::<T>() == TypeId::of::<RecomposeScope>()
-                    && matches!(self.slots.get(cursor), Some(Slot::ScopeValue { .. }))));
-            let allow_live_reuse = !disallow_live_reuse;
-            if !allow_live_reuse && !matches!(self.slots.get(cursor), Some(Slot::Gap { .. })) {
-                self.ensure_gap_at_local(cursor);
-            }
-
-            // Check if we can reuse the existing slot
-            if reusable_live_value_slot {
-                return self.finish_slot_write_at(cursor);
-            }
-
-            // Check if the slot is a Gap that we can replace
-            if matches!(self.slots.get(cursor), Some(Slot::Gap { .. })) {
-                return self.replace_gap_at_cursor_with_fresh_slot(cursor, |anchor| {
-                    Self::make_value_slot(anchor, init())
-                });
-            }
-
-            // Type mismatch: replace current slot (mark old content as unreachable via gap)
-            // We replace in-place to maintain cursor position
-            return self.replace_slot_at_cursor_with_fresh_slot(cursor, |anchor| {
-                Self::make_value_slot(anchor, init())
-            });
+    fn preserved_gap_node_at_cursor(&self, cursor: usize) -> Option<(AnchorId, NodeId, u32)> {
+        let Slot::Gap { anchor } = self.slots.get(cursor)? else {
+            return None;
+        };
+        if !self.current_parent_allows_exact_gap_node_reuse() {
+            return None;
         }
+        self.gap_preserved_node(*anchor)
+            .map(|(id, gen)| (*anchor, id, gen))
+    }
 
-        // We're at the end of the slot table, append new slot
-        self.append_fresh_slot_at_cursor(cursor, |anchor| Self::make_value_slot(anchor, init()))
+    pub fn use_value_slot<T: 'static>(&mut self, init: impl FnOnce() -> T) -> usize {
+        let disallow_live_reuse = self.current_disallow_live_slot_reuse();
+        self.materialize_slot_at_cursor(
+            disallow_live_reuse,
+            |slot| match slot {
+                Slot::Value { data, .. } => data.as_any().is::<T>(),
+                Slot::ScopeValue { .. } => TypeId::of::<T>() == TypeId::of::<RecomposeScope>(),
+                _ => false,
+            },
+            |_table, _cursor| None,
+            |anchor| Self::make_value_slot(anchor, init()),
+        )
     }
 
     pub fn read_value<T: 'static>(&self, idx: usize) -> &T {
@@ -2158,62 +2144,33 @@ impl SlotTable {
     }
 
     pub fn record_node(&mut self, id: NodeId, gen: u32) {
-        self.ensure_capacity();
-
-        let cursor = self.cursor;
-        debug_assert!(
-            cursor <= self.slots.len(),
-            "slot cursor {} out of bounds",
-            cursor
+        self.materialize_slot_at_cursor(
+            false,
+            |slot| {
+                matches!(
+                    slot,
+                    Slot::Node {
+                        id: existing,
+                        gen: existing_gen,
+                        ..
+                    } if *existing == id && *existing_gen == gen
+                )
+            },
+            |table, cursor| {
+                let (old_anchor, preserved_id, preserved_gen) =
+                    table.preserved_gap_node_at_cursor(cursor)?;
+                if (preserved_id, preserved_gen) != (id, gen) {
+                    return None;
+                }
+                let anchor = if old_anchor.is_valid() {
+                    old_anchor
+                } else {
+                    table.allocate_anchor()
+                };
+                Some(Slot::Node { anchor, id, gen })
+            },
+            |anchor| Slot::Node { anchor, id, gen },
         );
-        if cursor < self.slots.len() {
-            // Check if we can reuse the existing node slot
-            if let Some(Slot::Node {
-                id: existing,
-                gen: existing_gen,
-                ..
-            }) = self.slots.get(cursor)
-            {
-                if *existing == id && *existing_gen == gen {
-                    self.finish_slot_write_at(cursor);
-                    return;
-                }
-            }
-            if let Some(Slot::Gap { anchor: old_anchor }) = self.slots.get(cursor) {
-                let preserved = self.gap_preserved_node(*old_anchor);
-                if self.current_parent_allows_exact_gap_node_reuse() && preserved == Some((id, gen))
-                {
-                    let anchor = if old_anchor.is_valid() {
-                        *old_anchor
-                    } else {
-                        self.allocate_anchor()
-                    };
-                    self.write_slot_at_cursor(cursor, Slot::Node { anchor, id, gen });
-                    return;
-                }
-            }
-
-            // Check if the slot is a Gap that we can replace
-            if matches!(self.slots.get(cursor), Some(Slot::Gap { .. })) {
-                self.replace_gap_at_cursor_with_fresh_slot(cursor, |anchor| Slot::Node {
-                    anchor,
-                    id,
-                    gen,
-                });
-                return;
-            }
-
-            // Type mismatch: Replace the slot directly with the new node
-            self.replace_slot_at_cursor_with_fresh_slot(cursor, |anchor| Slot::Node {
-                anchor,
-                id,
-                gen,
-            });
-            return;
-        }
-
-        // No existing slot at cursor: add new slot
-        self.append_fresh_slot_at_cursor(cursor, |anchor| Slot::Node { anchor, id, gen });
     }
 
     pub fn peek_node(&self) -> Option<(NodeId, u32)> {
@@ -2225,9 +2182,9 @@ impl SlotTable {
         );
         match self.slots.get(cursor) {
             Some(Slot::Node { id, gen, .. }) => Some((*id, *gen)),
-            Some(Slot::Gap { anchor }) if self.current_parent_allows_exact_gap_node_reuse() => {
-                self.gap_preserved_node(*anchor)
-            }
+            Some(Slot::Gap { .. }) => self
+                .preserved_gap_node_at_cursor(cursor)
+                .map(|(_, id, gen)| (id, gen)),
             Some(_slot) => None,
             None => None,
         }
@@ -2254,12 +2211,7 @@ impl SlotTable {
 
     pub fn advance_after_node_read(&mut self) {
         let cursor = self.cursor;
-        let preserved = match self.slots.get(cursor) {
-            Some(Slot::Gap { anchor }) if self.current_parent_allows_exact_gap_node_reuse() => self
-                .gap_preserved_node(*anchor)
-                .map(|(id, gen)| (*anchor, id, gen)),
-            _ => None,
-        };
+        let preserved = self.preserved_gap_node_at_cursor(cursor);
         if let Some((old_anchor, id, gen)) = preserved {
             let anchor = if old_anchor.is_valid() {
                 old_anchor
