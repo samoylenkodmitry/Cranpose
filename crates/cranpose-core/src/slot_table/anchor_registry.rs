@@ -1,18 +1,14 @@
 use crate::collections::map::HashMap;
-use crate::{AnchorId, Key, NodeId};
+use crate::{AnchorId, NodeId};
 use std::cell::Cell;
 
-use super::{unpack_slot_len, PackedScopeId, Slot, SlotTableDebugStats};
+use super::{unpack_slot_len, PreservedGroup, Slot, SlotTableDebugStats};
 
 const INVALID_ANCHOR_POS: usize = usize::MAX;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct GapMetadata {
-    pub(super) group_key: Option<Key>,
-    pub(super) boundary_key: Option<Key>,
-    pub(super) group_scope: PackedScopeId,
-    pub(super) has_scope_slot: bool,
-    pub(super) group_len: u32,
+    pub(super) preserved_group: Option<PreservedGroup>,
     pub(super) preserved_node: Option<(NodeId, u32)>,
 }
 
@@ -96,31 +92,14 @@ impl AnchorRegistry {
         }
     }
 
-    pub(crate) fn gap_group_key(&self, anchor: AnchorId) -> Option<Key> {
+    pub(crate) fn gap_preserved_group(&self, anchor: AnchorId) -> Option<PreservedGroup> {
         self.gap_metadata_for_anchor(anchor)
-            .and_then(|metadata| metadata.group_key)
-    }
-
-    pub(crate) fn gap_boundary_key(&self, anchor: AnchorId) -> Option<Key> {
-        self.gap_metadata_for_anchor(anchor)
-            .and_then(|metadata| metadata.boundary_key)
-    }
-
-    pub(crate) fn gap_group_scope(&self, anchor: AnchorId) -> PackedScopeId {
-        self.gap_metadata_for_anchor(anchor)
-            .map(|metadata| metadata.group_scope)
-            .unwrap_or_default()
-    }
-
-    pub(crate) fn gap_has_scope_slot(&self, anchor: AnchorId) -> bool {
-        self.gap_metadata_for_anchor(anchor)
-            .map(|metadata| metadata.has_scope_slot)
-            .unwrap_or(false)
+            .and_then(|metadata| metadata.preserved_group)
     }
 
     pub(crate) fn gap_group_len(&self, anchor: AnchorId) -> u32 {
         self.gap_metadata_for_anchor(anchor)
-            .map(|metadata| metadata.group_len)
+            .and_then(|metadata| metadata.preserved_group.map(|group| group.len))
             .unwrap_or(0)
     }
 
