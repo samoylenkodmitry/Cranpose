@@ -4,8 +4,9 @@ use crate::{
     ApplierHost, ChildList, Command, CommandQueue, CompositionLocal, DirtyBubble, Key, LocalKey,
     LocalStackSnapshot, LocalStateEntry, MutableState, Node, NodeError, NodeId, Owned,
     ProvidedValue, RecomposeOptions, RecomposeScope, RecycledNode, RuntimeHandle, SlotId,
-    SlotTable, SlotsHost, SnapshotStateList, SnapshotStateMap, SnapshotStateObserver, StartGroup,
-    StaticCompositionLocal, StaticLocalEntry, SubcomposeState, COMMAND_FLUSH_THRESHOLD,
+    SlotTable, SlotsHost, SnapshotStateList, SnapshotStateMap, SnapshotStateObserver,
+    StartScopedGroup, StaticCompositionLocal, StaticLocalEntry, SubcomposeState,
+    COMMAND_FLUSH_THRESHOLD,
 };
 use smallvec::SmallVec;
 use std::any::Any;
@@ -392,15 +393,14 @@ impl Composer {
 
     pub fn with_group<R>(&self, key: Key, f: impl FnOnce(&Composer) -> R) -> R {
         let parent_scope = self.current_recranpose_scope();
-        let (group, group_anchor, scope_ref, restored_from_gap) = self.with_slots_mut(|slots| {
-            let StartGroup {
-                group,
+        let (group_anchor, scope_ref, restored_from_gap) = self.with_slots_mut(|slots| {
+            let StartScopedGroup {
                 anchor,
+                scope,
                 restored_from_gap,
-            } = slots.begin_group(key);
-            let scope_slot = slots.use_value_slot(|| RecomposeScope::new(self.runtime_handle()));
-            let scope_ref = slots.read_value::<RecomposeScope>(scope_slot).clone();
-            (group, anchor, scope_ref, restored_from_gap)
+                ..
+            } = slots.begin_scoped_group(key, || RecomposeScope::new(self.runtime_handle()));
+            (anchor, scope, restored_from_gap)
         });
 
         scope_ref.reactivate();
@@ -417,10 +417,6 @@ impl Composer {
         if restored_from_gap {
             scope_ref.force_recompose();
         }
-
-        self.with_slots_mut(|slots| {
-            slots.set_group_scope(group.0, scope_ref.id());
-        });
 
         let slots_host = self.active_slots_host();
         scope_ref.set_slots_host(Rc::downgrade(&slots_host));

@@ -607,6 +607,57 @@ fn animations_tab_advances_display_values_after_switch() {
 }
 
 #[test]
+fn async_runtime_progress_advances_after_switching_from_animations() {
+    TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow_mut().take());
+
+    let mut composition = Composition::new(MemoryApplier::new());
+    let key = location_key(file!(), line!(), column!());
+    composition
+        .render(key, combined_app)
+        .expect("install combined app content");
+    drain_all(&mut composition).expect("initial drain");
+
+    set_active_tab(DemoTab::Animations);
+    drain_all(&mut composition).expect("switch to animations tab");
+    assert_composition_contains_text(
+        &mut composition,
+        "Animations Showcase",
+        "before switching to async runtime",
+    );
+
+    set_active_tab(DemoTab::Async);
+    drain_all(&mut composition).expect("switch to async runtime tab");
+
+    let runtime = composition.runtime_handle();
+    let initial_texts = composition_layout_texts(&mut composition);
+    let initial_progress = async_progress_percent(&initial_texts)
+        .expect("initial async progress text should be present after tab switch");
+    let mut last_progress = initial_progress;
+    let mut last_texts = initial_texts;
+    let mut time = 0u64;
+
+    for _ in 0..180 {
+        time += 16_666_667;
+        runtime.drain_frame_callbacks(time);
+        drain_all(&mut composition).expect("advance async runtime after animations switch");
+
+        let texts = composition_layout_texts(&mut composition);
+        let progress = async_progress_percent(&texts)
+            .expect("async progress text should remain present while advancing");
+        last_progress = progress;
+        last_texts = texts;
+
+        if progress != initial_progress {
+            return;
+        }
+    }
+
+    panic!(
+        "async runtime progress stayed frozen after Animations -> Async switch: initial={initial_progress}% last={last_progress}% visible_texts={last_texts:?}"
+    );
+}
+
+#[test]
 fn recursive_layout_tab_renders_accent_box_chrome() {
     TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow_mut().take());
 

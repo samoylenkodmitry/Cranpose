@@ -185,8 +185,12 @@ impl<A: Applier + 'static> Composition<A> {
     fn clear_pending_invalid_scopes(&mut self) -> HashSet<ScopeId> {
         let runtime_handle = self.runtime_handle();
         let mut cleared = HashSet::default();
-        for (id, _) in runtime_handle.take_invalidated_scopes() {
-            runtime_handle.mark_scope_recomposed(id);
+        for (id, weak) in runtime_handle.take_invalidated_scopes() {
+            if let Some(inner) = weak.upgrade() {
+                RecomposeScope { inner }.mark_recomposed();
+            } else {
+                runtime_handle.mark_scope_recomposed(id);
+            }
             cleared.insert(id);
         }
         cleared
@@ -385,7 +389,11 @@ impl<A: Applier + 'static> Composition<A> {
             let mut scopes = Vec::new();
             for (id, weak) in pending {
                 if suppressed_invalid_scopes.is_some_and(|suppressed| suppressed.contains(&id)) {
-                    runtime_handle.mark_scope_recomposed(id);
+                    if let Some(inner) = weak.upgrade() {
+                        RecomposeScope { inner }.mark_recomposed();
+                    } else {
+                        runtime_handle.mark_scope_recomposed(id);
+                    }
                     continue;
                 }
                 if let Some(inner) = weak.upgrade() {

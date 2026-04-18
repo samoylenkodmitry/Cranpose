@@ -751,6 +751,108 @@ fn render_stable_reaches_fixpoint_when_internal_invalid_scope_processing_request
 }
 
 #[test]
+fn reconcile_clears_suppressed_scope_flags_during_root_replay() {
+    thread_local! {
+        static PARENT_SCOPE: RefCell<Option<RecomposeScope>> = const { RefCell::new(None) };
+        static CALLBACKLESS_SCOPE: RefCell<Option<RecomposeScope>> = const { RefCell::new(None) };
+        static TRACKED_SCOPE: RefCell<Option<RecomposeScope>> = const { RefCell::new(None) };
+        static INVALIDATE_TRACKED_DURING_PARENT: Cell<bool> = const { Cell::new(false) };
+        static TRACKED_RENDERS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    let mut composition = test_composition();
+    let root_key = location_key(file!(), line!(), column!());
+
+    PARENT_SCOPE.with(|slot| slot.borrow_mut().take());
+    CALLBACKLESS_SCOPE.with(|slot| slot.borrow_mut().take());
+    TRACKED_SCOPE.with(|slot| slot.borrow_mut().take());
+    INVALIDATE_TRACKED_DURING_PARENT.with(|flag| flag.set(false));
+    TRACKED_RENDERS.with(|count| count.set(0));
+
+    #[composable]
+    fn tracked_scope_leaf() {
+        TRACKED_RENDERS.with(|count| count.set(count.get() + 1));
+        with_current_composer(|composer| {
+            let scope = composer
+                .current_recranpose_scope()
+                .expect("tracked scope available");
+            TRACKED_SCOPE.with(|slot| slot.replace(Some(scope)));
+        });
+    }
+
+    #[composable]
+    fn parent_scope_host() {
+        with_current_composer(|composer| {
+            let scope = composer
+                .current_recranpose_scope()
+                .expect("parent scope available");
+            PARENT_SCOPE.with(|slot| slot.replace(Some(scope)));
+        });
+
+        if INVALIDATE_TRACKED_DURING_PARENT.with(|flag| flag.replace(false)) {
+            TRACKED_SCOPE.with(|slot| {
+                slot.borrow()
+                    .clone()
+                    .expect("tracked scope captured")
+                    .invalidate();
+            });
+        }
+
+        tracked_scope_leaf();
+    }
+
+    let mut render = || {
+        parent_scope_host();
+        cranpose_core::with_key(&"root-callbackless", || {
+            with_current_composer(|composer| {
+                let scope = composer
+                    .current_recranpose_scope()
+                    .expect("callbackless root scope available");
+                CALLBACKLESS_SCOPE.with(|slot| slot.replace(Some(scope)));
+            });
+        });
+    };
+
+    composition
+        .render_stable(root_key, &mut render)
+        .expect("initial stable render");
+
+    let parent_scope = PARENT_SCOPE
+        .with(|slot| slot.borrow().clone())
+        .expect("captured parent scope");
+    let callbackless_scope = CALLBACKLESS_SCOPE
+        .with(|slot| slot.borrow().clone())
+        .expect("captured callbackless scope");
+    let tracked_scope = TRACKED_SCOPE
+        .with(|slot| slot.borrow().clone())
+        .expect("captured tracked scope");
+
+    INVALIDATE_TRACKED_DURING_PARENT.with(|flag| flag.set(true));
+    parent_scope.invalidate();
+    callbackless_scope.invalidate();
+
+    let changed = composition
+        .reconcile(root_key, &mut render)
+        .expect("reconcile mixed invalid scopes");
+    assert!(changed, "expected reconcile to perform work");
+    assert!(
+        !tracked_scope.is_invalid(),
+        "root replay must fully clear suppressed callbackful scopes so they can be invalidated again",
+    );
+
+    tracked_scope.invalidate();
+    let recomposed = composition
+        .process_invalid_scopes()
+        .expect("process tracked scope after replay");
+    assert!(recomposed, "tracked scope should recompose after replay");
+    assert_eq!(
+        TRACKED_RENDERS.with(|count| count.get()),
+        3,
+        "tracked scope should render initially, during reconcile, and once more after explicit reinvalidation",
+    );
+}
+
+#[test]
 fn process_invalid_scopes_preserves_later_fresh_subtree_when_earlier_scope_runs_after_it() {
     thread_local! {
         static EARLY_SCOPE: RefCell<Option<RecomposeScope>> = const { RefCell::new(None) };

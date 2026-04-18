@@ -11,6 +11,7 @@ pub(super) struct GapMetadata {
     pub(super) group_key: Option<Key>,
     pub(super) boundary_key: Option<Key>,
     pub(super) group_scope: PackedScopeId,
+    pub(super) has_scope_slot: bool,
     pub(super) group_len: u32,
     pub(super) preserved_node: Option<(NodeId, u32)>,
 }
@@ -109,6 +110,12 @@ impl AnchorRegistry {
         self.gap_metadata_for_anchor(anchor)
             .map(|metadata| metadata.group_scope)
             .unwrap_or_default()
+    }
+
+    pub(crate) fn gap_has_scope_slot(&self, anchor: AnchorId) -> bool {
+        self.gap_metadata_for_anchor(anchor)
+            .map(|metadata| metadata.has_scope_slot)
+            .unwrap_or(false)
     }
 
     pub(crate) fn gap_group_len(&self, anchor: AnchorId) -> u32 {

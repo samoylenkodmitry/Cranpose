@@ -182,6 +182,21 @@ fn semantics_texts(shell: &AppShell<HitGraphRenderer>) -> Vec<String> {
     texts
 }
 
+fn async_progress_percent(texts: &[String]) -> Option<i32> {
+    texts.iter().find_map(|text| {
+        let suffix = text.strip_prefix("Progress: ")?;
+        let digits = suffix.trim().trim_end_matches('%').trim();
+        digits.parse::<i32>().ok()
+    })
+}
+
+fn animation_alpha_value(texts: &[String]) -> Option<f32> {
+    texts.iter().find_map(|text| {
+        text.strip_prefix("Alpha ")
+            .and_then(|value| value.parse::<f32>().ok())
+    })
+}
+
 fn counter_state() -> MutableState<i32> {
     TEST_COUNTER_APP_COUNTER_STATE.with(|cell| {
         *cell
@@ -273,5 +288,140 @@ fn counter_increment_survives_combined_app_tab_roundtrip_robot_path() {
     assert!(
         texts.iter().any(|text| text.contains("Counter: 1")),
         "counter label did not update after increment: {texts:?}",
+    );
+}
+
+#[test]
+fn async_runtime_progress_advances_after_animations_click_robot_path() {
+    TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow_mut().take());
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(HitGraphRenderer::default(), root_key, combined_app);
+    shell.set_buffer_size(1200, 800);
+    shell.set_viewport(1200.0, 800.0);
+    shell.set_semantics_enabled(true);
+    pump_shell_until_stable(&mut shell);
+
+    click_button_by_text(&mut shell, "Animations");
+    let animations_texts = semantics_texts(&shell);
+    assert!(
+        animations_texts
+            .iter()
+            .any(|text| text.contains("Animations Showcase")),
+        "animations tab should be visible after click; visible_texts={animations_texts:?}",
+    );
+
+    click_button_by_text(&mut shell, "Async Runtime");
+    let initial_texts = semantics_texts(&shell);
+    let initial_progress = async_progress_percent(&initial_texts)
+        .expect("async progress text should be present after switching from Animations");
+
+    let mut last_progress = initial_progress;
+    let mut last_texts = initial_texts;
+    for _ in 0..40 {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        shell.update();
+        let texts = semantics_texts(&shell);
+        let progress = async_progress_percent(&texts)
+            .expect("async progress text should remain present while advancing");
+        last_progress = progress;
+        last_texts = texts;
+        if progress != initial_progress {
+            return;
+        }
+    }
+
+    let debug = shell.debug_runtime_leak_stats();
+    panic!(
+        "async runtime progress stayed frozen on the robot click path after Animations -> Async: initial={initial_progress}% last={last_progress}% visible_texts={last_texts:?} runtime_stats={:?} slot_stats={:?} pass_stats={:?}",
+        debug.runtime_stats,
+        debug.slot_stats,
+        debug.pass_stats,
+    );
+}
+
+#[test]
+fn async_runtime_progress_advances_after_animations_direct_state_switch_in_shell() {
+    TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow_mut().take());
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(HitGraphRenderer::default(), root_key, combined_app);
+    shell.set_buffer_size(1200, 800);
+    shell.set_viewport(1200.0, 800.0);
+    shell.set_semantics_enabled(true);
+    pump_shell_until_stable(&mut shell);
+
+    active_tab_state().set(DemoTab::Animations);
+    pump_shell_until_stable(&mut shell);
+    active_tab_state().set(DemoTab::Async);
+    pump_shell_until_stable(&mut shell);
+
+    let initial_texts = semantics_texts(&shell);
+    let initial_progress = async_progress_percent(&initial_texts)
+        .expect("async progress text should be present after direct state switch");
+
+    let mut last_progress = initial_progress;
+    let mut last_texts = initial_texts;
+    for _ in 0..40 {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        shell.update();
+        let texts = semantics_texts(&shell);
+        let progress = async_progress_percent(&texts)
+            .expect("async progress text should remain present while advancing");
+        last_progress = progress;
+        last_texts = texts;
+        if progress != initial_progress {
+            return;
+        }
+    }
+
+    let debug = shell.debug_runtime_leak_stats();
+    panic!(
+        "async runtime progress stayed frozen on the shell direct-state path after Animations -> Async: initial={initial_progress}% last={last_progress}% visible_texts={last_texts:?} runtime_stats={:?} slot_stats={:?} pass_stats={:?}",
+        debug.runtime_stats,
+        debug.slot_stats,
+        debug.pass_stats,
+    );
+}
+
+#[test]
+fn animations_tab_alpha_advances_on_shell_path() {
+    TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow_mut().take());
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(HitGraphRenderer::default(), root_key, combined_app);
+    shell.set_buffer_size(1200, 800);
+    shell.set_viewport(1200.0, 800.0);
+    shell.set_semantics_enabled(true);
+    pump_shell_until_stable(&mut shell);
+
+    active_tab_state().set(DemoTab::Animations);
+    pump_shell_until_stable(&mut shell);
+
+    let initial_texts = semantics_texts(&shell);
+    let initial_alpha =
+        animation_alpha_value(&initial_texts).expect("animations alpha text should be present");
+
+    let mut last_alpha = initial_alpha;
+    let mut last_texts = initial_texts;
+    for _ in 0..40 {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        shell.update();
+        let texts = semantics_texts(&shell);
+        let alpha =
+            animation_alpha_value(&texts).expect("animations alpha text should remain present");
+        last_alpha = alpha;
+        last_texts = texts;
+        if (alpha - initial_alpha).abs() > 0.01 {
+            return;
+        }
+    }
+
+    let debug = shell.debug_runtime_leak_stats();
+    panic!(
+        "animations alpha stayed frozen on the shell path: initial={initial_alpha} last={last_alpha} visible_texts={last_texts:?} runtime_stats={:?} slot_stats={:?} pass_stats={:?}",
+        debug.runtime_stats,
+        debug.slot_stats,
+        debug.pass_stats,
     );
 }
