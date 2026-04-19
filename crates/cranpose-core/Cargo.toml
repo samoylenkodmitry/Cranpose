@@ -26,6 +26,7 @@ internal = []
 
 [dev-dependencies]
 cranpose-macros = { workspace = true }
+trybuild = "1.0.116"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4"

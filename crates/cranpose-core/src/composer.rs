@@ -1,12 +1,11 @@
 use crate::collections::map::HashMap;
 use crate::{
-    composer_context, empty_local_stack, hash_key, remove_child_and_cleanup_now, runtime, Applier,
-    ApplierHost, ChildList, Command, CommandQueue, CompositionLocal, DirtyBubble, Key, LocalKey,
-    LocalStackSnapshot, LocalStateEntry, MutableState, Node, NodeError, NodeId, Owned,
-    ProvidedValue, RecomposeOptions, RecomposeScope, RecycledNode, RuntimeHandle, SlotId,
-    SlotTable, SlotsHost, SnapshotStateList, SnapshotStateMap, SnapshotStateObserver,
-    StartScopedGroup, StaticCompositionLocal, StaticLocalEntry, SubcomposeState,
-    COMMAND_FLUSH_THRESHOLD,
+    composer_context, empty_local_stack, hash_key, runtime, Applier, ApplierHost, ChildList,
+    Command, CommandQueue, CompositionLocal, DirtyBubble, Key, LocalKey, LocalStackSnapshot,
+    LocalStateEntry, MutableState, Node, NodeError, NodeId, Owned, ProvidedValue, RecomposeOptions,
+    RecomposeScope, RecycledNode, RuntimeHandle, SlotId, SlotPassOutcome, SlotTable, SlotsHost,
+    SnapshotStateList, SnapshotStateMap, SnapshotStateObserver, StartScopedGroup,
+    StaticCompositionLocal, StaticLocalEntry, SubcomposeState, COMMAND_FLUSH_THRESHOLD,
 };
 use smallvec::SmallVec;
 use std::any::Any;
@@ -14,6 +13,25 @@ use std::cell::{Cell, RefCell, RefMut};
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::rc::Rc;
+
+#[derive(Clone, Copy)]
+pub struct ValueSlotHandle<'pass> {
+    index: usize,
+    _pass: PhantomData<&'pass Composer>,
+}
+
+impl ValueSlotHandle<'_> {
+    pub(crate) fn new(index: usize) -> Self {
+        Self {
+            index,
+            _pass: PhantomData,
+        }
+    }
+
+    pub(crate) fn index(self) -> usize {
+        self.index
+    }
+}
 
 pub(crate) struct ParentFrame {
     pub(crate) id: NodeId,
@@ -41,7 +59,7 @@ pub(crate) struct LocalContext {
 
 pub(crate) struct ComposerCore {
     pub(crate) slots: Rc<SlotsHost>,
-    pub(crate) slots_override: RefCell<Vec<Rc<SlotsHost>>>,
+    slot_hosts: RefCell<Vec<Rc<SlotsHost>>>,
     pub(crate) applier: Rc<dyn ApplierHost>,
     pub(crate) runtime: RuntimeHandle,
     pub(crate) observer: SnapshotStateObserver,
@@ -81,7 +99,7 @@ impl ComposerCore {
 
         Self {
             slots,
-            slots_override: RefCell::new(Vec::new()),
+            slot_hosts: RefCell::new(Vec::new()),
             applier,
             runtime,
             observer,
@@ -152,7 +170,7 @@ impl Composer {
 
     fn active_slots_host(&self) -> Rc<SlotsHost> {
         self.core
-            .slots_override
+            .slot_hosts
             .borrow()
             .last()
             .cloned()
@@ -160,53 +178,82 @@ impl Composer {
     }
 
     pub(crate) fn with_slots<R>(&self, f: impl FnOnce(&SlotTable) -> R) -> R {
-        let override_host = {
-            let overrides = self.core.slots_override.borrow();
-            overrides.last().cloned()
-        };
-        if let Some(host) = override_host {
-            let slots = host.borrow();
-            f(&slots)
-        } else {
-            let slots = self.core.slots.borrow();
-            f(&slots)
-        }
+        let host = self.active_slots_host();
+        let slots = host.borrow();
+        f(&slots)
     }
 
     pub(crate) fn with_slots_mut<R>(&self, f: impl FnOnce(&mut SlotTable) -> R) -> R {
-        let override_host = {
-            let overrides = self.core.slots_override.borrow();
-            overrides.last().cloned()
-        };
-        if let Some(host) = override_host {
-            let mut slots = host.borrow_mut();
-            f(&mut slots)
-        } else {
-            let mut slots = self.core.slots.borrow_mut();
-            f(&mut slots)
+        let host = self.active_slots_host();
+        let mut slots = host.borrow_mut();
+        f(&mut slots)
+    }
+
+    pub(crate) fn with_slot_session_mut<R>(
+        &self,
+        f: impl FnOnce(&mut crate::slot_table::SlotWriteSession<'_>) -> R,
+    ) -> R {
+        self.active_slots_host().with_write_session(f)
+    }
+
+    pub(crate) fn with_slot_host_pass<R>(
+        &self,
+        slots: Rc<SlotsHost>,
+        mode: crate::slot_table::SlotPassMode,
+        f: impl FnOnce(&Composer) -> R,
+    ) -> (R, SlotPassOutcome) {
+        slots.begin_pass(mode);
+        self.core.slot_hosts.borrow_mut().push(Rc::clone(&slots));
+
+        struct Guard {
+            core: Rc<ComposerCore>,
+            host: Rc<SlotsHost>,
+            outcome: Rc<RefCell<Option<SlotPassOutcome>>>,
         }
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                let host = self
+                    .core
+                    .slot_hosts
+                    .borrow_mut()
+                    .pop()
+                    .expect("slot host underflow");
+                debug_assert!(Rc::ptr_eq(&host, &self.host));
+
+                let outcome = {
+                    let mut applier = self.core.applier.borrow_dyn();
+                    self.host.finish_pass(&mut *applier)
+                };
+
+                if outcome.compacted {
+                    self.core.applier.compact();
+                    self.core.applier.borrow_dyn().clear_recycled_nodes();
+                }
+
+                *self.outcome.borrow_mut() = Some(outcome);
+            }
+        }
+        let outcome = Rc::new(RefCell::new(None));
+        let guard = Guard {
+            core: self.clone_core(),
+            host: Rc::clone(&slots),
+            outcome: Rc::clone(&outcome),
+        };
+        let result = f(self);
+        drop(guard);
+        let outcome = outcome
+            .borrow_mut()
+            .take()
+            .expect("slot pass should produce an outcome");
+        (result, outcome)
     }
 
     pub(crate) fn with_slot_override<R>(
         &self,
         slots: Rc<SlotsHost>,
         f: impl FnOnce(&Composer) -> R,
-    ) -> R {
-        self.core.slots_override.borrow_mut().push(slots);
-        struct Guard {
-            core: Rc<ComposerCore>,
-        }
-        impl Drop for Guard {
-            fn drop(&mut self) {
-                self.core.slots_override.borrow_mut().pop();
-            }
-        }
-        let guard = Guard {
-            core: self.clone_core(),
-        };
-        let result = f(self);
-        drop(guard);
-        result
+    ) -> (R, SlotPassOutcome) {
+        self.with_slot_host_pass(slots, crate::slot_table::SlotPassMode::Compose, f)
     }
 
     pub(crate) fn parent_stack(&self) -> RefMut<'_, Vec<ParentFrame>> {
@@ -349,51 +396,30 @@ impl Composer {
             .expect("mid-composition command flush failed");
     }
 
-    pub(crate) fn drain_orphaned_nodes_from_slots(&self) {
-        let orphaned = self.with_slots_mut(|slots| slots.drain_orphaned_node_ids());
-        if orphaned.is_empty() {
-            return;
+    fn with_group_in_active_pass<R>(&self, key: Key, f: impl FnOnce(&Composer) -> R) -> R {
+        struct GroupGuard {
+            composer: Composer,
+            scope: RecomposeScope,
         }
-        let mut deferred = Vec::new();
-        let mut applier = self.borrow_applier();
-        for orphaned in orphaned {
-            match self.with_slots(|slots| slots.orphaned_node_state(orphaned)) {
-                crate::slot_table::NodeSlotState::Active => continue,
-                crate::slot_table::NodeSlotState::PreservedGap => {
-                    deferred.push(orphaned);
-                    continue;
-                }
-                crate::slot_table::NodeSlotState::Missing => {}
-            }
-            if applier.node_generation(orphaned.id) != orphaned.generation {
-                continue;
-            }
-            let parent_id = applier
-                .get_mut(orphaned.id)
-                .ok()
-                .and_then(|node| node.parent());
-            if let Some(parent_id) = parent_id {
-                let _ = remove_child_and_cleanup_now(&mut *applier, parent_id, orphaned.id);
-                continue;
-            }
-            if let Ok(node) = applier.get_mut(orphaned.id) {
-                node.on_removed_from_parent();
-                node.unmount();
-            }
-            let _ = applier.remove(orphaned.id);
-        }
-        if !deferred.is_empty() {
-            self.with_slots_mut(|slots| {
-                for orphaned in deferred {
-                    slots.requeue_orphaned_node(orphaned);
-                }
-            });
-        }
-    }
 
-    pub fn with_group<R>(&self, key: Key, f: impl FnOnce(&Composer) -> R) -> R {
+        impl Drop for GroupGuard {
+            fn drop(&mut self) {
+                let trimmed = self
+                    .composer
+                    .with_slot_session_mut(|slots| slots.finalize_current_group());
+                if trimmed {
+                    self.scope.force_recompose();
+                }
+                self.composer.scope_stack().pop();
+                self.scope.mark_recomposed();
+                self.composer
+                    .with_slot_session_mut(|slots| slots.end_group());
+                self.composer.flush_pending_commands_if_large();
+            }
+        }
+
         let parent_scope = self.current_recranpose_scope();
-        let (group_anchor, scope_ref, restored_from_gap) = self.with_slots_mut(|slots| {
+        let (group_anchor, scope_ref, restored_from_gap) = self.with_slot_session_mut(|slots| {
             let StartScopedGroup {
                 anchor,
                 scope,
@@ -439,23 +465,25 @@ impl Composer {
             scope_ref.set_parent_hint(parent_hint);
         }
 
+        let guard = GroupGuard {
+            composer: self.clone(),
+            scope: scope_ref.clone(),
+        };
         let result = self.observe_scope(&scope_ref, || f(self));
-
         scope_ref.mark_composed_once();
+        drop(guard);
+        result
+    }
 
-        let trimmed = self.with_slots_mut(|slots| slots.trim_to_cursor());
-        if trimmed {
-            scope_ref.force_recompose();
+    pub fn with_group<R>(&self, key: Key, f: impl FnOnce(&Composer) -> R) -> R {
+        let host = self.active_slots_host();
+        if host.has_active_pass() {
+            return self.with_group_in_active_pass(key, f);
         }
-        self.drain_orphaned_nodes_from_slots();
-
-        {
-            let mut stack = self.scope_stack();
-            stack.pop();
-        }
-        scope_ref.mark_recomposed();
-        self.with_slots_mut(|slots| slots.end_group());
-        self.flush_pending_commands_if_large();
+        let (result, _) =
+            self.with_slot_host_pass(host, crate::slot_table::SlotPassMode::Compose, |composer| {
+                composer.with_group_in_active_pass(key, f)
+            });
         result
     }
 
@@ -475,23 +503,39 @@ impl Composer {
     }
 
     pub fn remember<T: 'static>(&self, init: impl FnOnce() -> T) -> Owned<T> {
-        self.with_slots_mut(|slots| slots.remember(init))
+        self.with_slot_session_mut(|slots| slots.remember(init))
     }
 
-    pub fn use_value_slot<T: 'static>(&self, init: impl FnOnce() -> T) -> usize {
-        self.with_slots_mut(|slots| slots.use_value_slot(init))
+    pub fn use_value_slot<'pass, T: 'static>(
+        &'pass self,
+        init: impl FnOnce() -> T,
+    ) -> ValueSlotHandle<'pass> {
+        let index = self.with_slot_session_mut(|slots| slots.use_value_slot(init));
+        ValueSlotHandle::new(index)
     }
 
-    pub fn with_slot_value<T: 'static, R>(&self, idx: usize, f: impl FnOnce(&T) -> R) -> R {
-        self.with_slots(|slots| f(slots.read_value(idx)))
+    pub fn with_slot_value<'pass, T: 'static, R>(
+        &'pass self,
+        handle: ValueSlotHandle<'pass>,
+        f: impl FnOnce(&T) -> R,
+    ) -> R {
+        self.with_slots(|slots| f(slots.read_value(handle.index())))
     }
 
-    pub fn with_slot_value_mut<T: 'static, R>(&self, idx: usize, f: impl FnOnce(&mut T) -> R) -> R {
-        self.with_slots_mut(|slots| f(slots.read_value_mut(idx)))
+    pub fn with_slot_value_mut<'pass, T: 'static, R>(
+        &'pass self,
+        handle: ValueSlotHandle<'pass>,
+        f: impl FnOnce(&mut T) -> R,
+    ) -> R {
+        self.with_slots_mut(|slots| f(slots.read_value_mut(handle.index())))
     }
 
-    pub fn write_slot_value<T: 'static>(&self, idx: usize, value: T) {
-        self.with_slots_mut(|slots| slots.write_value(idx, value));
+    pub fn write_slot_value<'pass, T: 'static>(
+        &'pass self,
+        handle: ValueSlotHandle<'pass>,
+        value: T,
+    ) {
+        self.with_slots_mut(|slots| slots.write_value(handle.index(), value));
     }
 
     pub fn mutable_state_of<T: Clone + 'static>(&self, initial: T) -> MutableState<T> {
@@ -594,18 +638,9 @@ impl Composer {
         };
 
         let slot_host = state.get_or_create_slots(slot_id);
-        {
-            let mut slots = slot_host.borrow_mut();
-            slots.reset();
-        }
-        let result = self.with_slot_override(slot_host.clone(), |composer| {
+        let (result, _) = self.with_slot_override(slot_host.clone(), |composer| {
             composer.with_group(slot_id.raw(), |composer| content(composer))
         });
-        {
-            let mut slots = slot_host.borrow_mut();
-            slots.finalize_current_group();
-            slots.flush();
-        }
 
         let frame = {
             let mut stack = guard.core.subcompose_stack.borrow_mut();
@@ -641,7 +676,6 @@ impl Composer {
         f: impl FnOnce(&Composer) -> R,
     ) -> Result<R, NodeError> {
         let runtime_handle = self.runtime_handle();
-        slots.borrow_mut().reset();
         let phase = self.phase();
         let locals = self.current_local_stack();
         let core = Rc::new(ComposerCore::new(
@@ -655,7 +689,11 @@ impl Composer {
         *core.local_stack.borrow_mut() = locals;
         let composer = Composer::from_core(core);
         let (result, commands, side_effects) = composer.install(|composer| {
-            let output = f(composer);
+            let (output, _) = composer.with_slot_host_pass(
+                Rc::clone(slots),
+                crate::slot_table::SlotPassMode::Compose,
+                |composer| f(composer),
+            );
             let commands = composer.take_commands();
             let side_effects = composer.take_side_effects();
             (output, commands, side_effects)
@@ -672,11 +710,6 @@ impl Composer {
             effect();
         }
         runtime_handle.drain_ui();
-        {
-            let mut slots_mut = slots.borrow_mut();
-            slots_mut.finalize_current_group();
-            slots_mut.flush();
-        }
         Ok(result)
     }
 
@@ -691,7 +724,6 @@ impl Composer {
         f: impl FnOnce(&Composer) -> R,
     ) -> Result<(R, Vec<RecomposeScope>), NodeError> {
         let runtime_handle = self.runtime_handle();
-        slots.borrow_mut().reset();
         let phase = self.phase();
         let locals = self.current_local_stack();
         let core = Rc::new(ComposerCore::new(
@@ -722,10 +754,17 @@ impl Composer {
         };
         let root_group_key = crate::location_key(file!(), line!(), column!());
         let (result, commands, side_effects) = composer.install(|composer| {
-            let output = composer.with_group(root_group_key, |composer| f(composer));
-            if root.is_some() {
-                composer.pop_parent();
-            }
+            let (output, _) = composer.with_slot_host_pass(
+                Rc::clone(slots),
+                crate::slot_table::SlotPassMode::Compose,
+                |composer| {
+                    let output = composer.with_group(root_group_key, |composer| f(composer));
+                    if root.is_some() {
+                        composer.pop_parent();
+                    }
+                    output
+                },
+            );
             let commands = composer.take_commands();
             let side_effects = composer.take_side_effects();
             (output, commands, side_effects)
@@ -749,11 +788,6 @@ impl Composer {
             effect();
         }
         runtime_handle.drain_ui();
-        {
-            let mut slots_mut = slots.borrow_mut();
-            let _ = slots_mut.finalize_current_group();
-            slots_mut.flush();
-        }
         Ok((result, frame.scopes))
     }
 
@@ -771,9 +805,9 @@ impl Composer {
     }
 
     pub fn skip_current_group(&self) {
-        let nodes = self.with_slots(|slots| slots.nodes_in_current_group());
+        let nodes = self.with_slot_session_mut(|slots| slots.nodes_in_current_group());
         let root_nodes = self.skipped_group_root_nodes(&nodes);
-        self.with_slots_mut(|slots| slots.skip_current_group());
+        self.with_slot_session_mut(|slots| slots.skip_current_group());
         for id in root_nodes {
             self.attach_to_parent_with_mode(id, true);
         }

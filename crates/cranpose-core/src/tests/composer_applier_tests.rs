@@ -19,23 +19,30 @@ fn emit_node_rejects_reuse_when_parent_did_not_own_child() {
         setup_composer(&mut slots, &mut applier, handle.clone(), Some(parent_a));
 
     // First, emit a child under parent_a's context
-    let child_id = composer.emit_node(|| TestDummyNode);
+    let (child_id, _) = composer.with_slot_host_pass(
+        Rc::clone(&slots_host),
+        crate::slot_table::SlotPassMode::Compose,
+        |composer| {
+            let child_id = composer.emit_node(|| TestDummyNode);
 
-    // Now push parent_b with last_node_reused=false (simulating new parent)
-    composer.core.last_node_reused.set(Some(false));
-    composer.push_parent(parent_b);
+            // Now push parent_b with last_node_reused=false (simulating new parent)
+            composer.core.last_node_reused.set(Some(false));
+            composer.push_parent(parent_b);
 
-    // The parent_b's previous children should be empty since it wasn't reused
-    {
-        let stack = composer.parent_stack();
-        let frame = stack.last().expect("parent frame should exist");
-        assert!(
-            frame.previous.is_empty(),
-            "New parent should have empty previous children"
-        );
-    }
+            // The parent_b's previous children should be empty since it wasn't reused
+            {
+                let stack = composer.parent_stack();
+                let frame = stack.last().expect("parent frame should exist");
+                assert!(
+                    frame.previous.is_empty(),
+                    "New parent should have empty previous children"
+                );
+            }
 
-    composer.pop_parent();
+            composer.pop_parent();
+            child_id
+        },
+    );
     drop(composer);
     teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
 
@@ -87,10 +94,17 @@ fn new_parent_attaches_children_immediately_without_sync_children() {
     let (composer, slots_host, applier_host) =
         setup_composer(&mut slots, &mut applier, handle.clone(), None);
 
-    composer.core.last_node_reused.set(Some(false));
-    composer.push_parent(parent_id);
-    let child_id = composer.emit_node(RecordingNode::default);
-    composer.pop_parent();
+    let (child_id, _) = composer.with_slot_host_pass(
+        Rc::clone(&slots_host),
+        crate::slot_table::SlotPassMode::Compose,
+        |composer| {
+            composer.core.last_node_reused.set(Some(false));
+            composer.push_parent(parent_id);
+            let child_id = composer.emit_node(RecordingNode::default);
+            composer.pop_parent();
+            child_id
+        },
+    );
 
     let commands = composer.take_commands();
     assert_eq!(commands.attach_children.len(), 1);
@@ -498,9 +512,11 @@ fn orphaned_cleanup_skips_recycled_nodes_with_new_generation() {
         queue_test_orphaned_node(&mut slots, stable_id, old_generation);
     }
 
-    let removed_any = composition
-        .finalize_compaction()
-        .expect("orphaned cleanup should succeed");
+    let removed_any = {
+        let slots = Rc::clone(&composition.slots);
+        let mut applier = composition.applier_mut();
+        slots.drain_orphaned_nodes(&mut *applier)
+    };
     assert!(
         !removed_any,
         "stale orphaned generation should not remove the recycled live node",
@@ -940,9 +956,6 @@ fn push_parent_inherits_previous_when_reused() {
         })
         .expect("parent node exists");
 
-    // Reset for second pass
-    slots.reset();
-
     {
         let (composer, slots_host, applier_host) =
             setup_composer(&mut slots, &mut applier, handle.clone(), Some(parent_id));
@@ -1096,35 +1109,36 @@ fn emit_node_works_with_new_parent_having_empty_previous() {
     let (composer, slots_host, applier_host) =
         setup_composer(&mut slots, &mut applier, handle.clone(), Some(parent_id));
 
-    // Simulate a NEW parent (not reused) - this gives empty previous children
-    composer.core.last_node_reused.set(Some(false));
-    composer.push_parent(parent_id);
+    let (_child_id, _) = composer.with_slot_host_pass(
+        Rc::clone(&slots_host),
+        crate::slot_table::SlotPassMode::Compose,
+        |composer| {
+            // Simulate a NEW parent (not reused) - this gives empty previous children
+            composer.core.last_node_reused.set(Some(false));
+            composer.push_parent(parent_id);
 
-    // Verify previous is empty (this is the push_parent conditional behavior)
-    {
-        let stack = composer.parent_stack();
-        let frame = stack.last().expect("parent frame should exist");
-        assert!(
-            frame.previous.is_empty(),
-            "New parent should have empty previous"
-        );
-    }
+            // Verify previous is empty (this is the push_parent conditional behavior)
+            {
+                let stack = composer.parent_stack();
+                let frame = stack.last().expect("parent frame should exist");
+                assert!(
+                    frame.previous.is_empty(),
+                    "New parent should have empty previous"
+                );
+            }
 
-    // Now emit a child - this should WORK even though previous is empty
-    // The child should be created (or reused based on type, if one exists in slots)
-    let child_id = composer.emit_node(|| TestDummyNode);
+            let child_id = composer.emit_node(|| TestDummyNode);
+            assert!(child_id > 0, "Child should be emitted successfully");
+            let was_reused = composer.core.last_node_reused.get();
+            assert!(
+                was_reused.is_some(),
+                "emit_node should set last_node_reused"
+            );
 
-    // The child should have a valid ID
-    assert!(child_id > 0, "Child should be emitted successfully");
-
-    // last_node_reused should be set (either true for reuse or false for new)
-    let was_reused = composer.core.last_node_reused.get();
-    assert!(
-        was_reused.is_some(),
-        "emit_node should set last_node_reused"
+            composer.pop_parent();
+            child_id
+        },
     );
-
-    composer.pop_parent();
     drop(composer);
     teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
 }

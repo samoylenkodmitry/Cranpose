@@ -165,7 +165,6 @@ fn subcompose_reuses_nodes_across_measures() {
         node_id,
         Constraints::loose(100.0, 100.0),
     );
-    slots.reset();
     let _ = measure_once(
         &mut slots,
         &mut applier,
@@ -234,8 +233,6 @@ fn inactive_slots_move_to_reusable_pool() {
         node_id,
         Constraints::loose(50.0, 50.0),
     );
-
-    slots.reset();
     toggle.set(false);
 
     let _ = measure_once(

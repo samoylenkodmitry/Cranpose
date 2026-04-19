@@ -35,8 +35,6 @@ fn subcompose_reuses_nodes_across_calls() {
         teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
     }
 
-    slots.reset();
-
     {
         let (composer, slots_host, applier_host) =
             setup_composer(&mut slots, &mut applier, handle.clone(), None);
@@ -1162,23 +1160,24 @@ fn stats_scope_survives_conditional_gap() {
 #[test]
 fn slot_table_remember_replaces_mismatched_type() {
     let mut slots = test_slot_table();
+    let mut state = test_slot_session();
 
     {
-        let value = slots.remember(|| 42i32);
+        let value = remember_test_value(&mut slots, &mut state, || 42i32);
         assert_eq!(value.with(|value| *value), 42);
     }
 
-    slots.reset();
+    reset_slot_session(&mut state);
 
     {
-        let value = slots.remember(|| "updated");
+        let value = remember_test_value(&mut slots, &mut state, || "updated");
         assert_eq!(value.with(|&value| value), "updated");
     }
 
-    slots.reset();
+    reset_slot_session(&mut state);
 
     {
-        let value = slots.remember(|| "should not run");
+        let value = remember_test_value(&mut slots, &mut state, || "should not run");
         assert_eq!(value.with(|&value| value), "updated");
     }
 }

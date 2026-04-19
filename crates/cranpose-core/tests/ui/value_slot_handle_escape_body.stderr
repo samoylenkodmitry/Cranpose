@@ -1,0 +1,9 @@
+error[E0521]: borrowed data escapes outside of closure
+ --> tests/ui/value_slot_handle_escape_body.rs:8:9
+  |
+6 |     let mut leaked = None;
+  |         ---------- `leaked` declared here, outside of the closure body
+7 |     with_current_composer(|composer| {
+  |                            -------- `composer` is a reference that is only valid in the closure body
+8 |         leaked = Some(composer.use_value_slot(|| 1_i32));
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `composer` escapes the closure body here

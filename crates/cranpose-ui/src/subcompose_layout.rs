@@ -1051,7 +1051,7 @@ impl SubcomposeLayoutNodeInner {
         // from per-item slot scopes. When a widget updates the data captured by
         // the measure lambda through shared cells, the next layout pass must not
         // reuse the previous root measure group wholesale.
-        *self.slots.borrow_mut() = SlotTable::default();
+        self.slots.reset();
     }
 
     /// Updates the modifier and collects invalidations without dispatching them.

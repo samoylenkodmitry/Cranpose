@@ -7,11 +7,12 @@ use super::*;
 #[test]
 fn slot_table_marks_values_hidden() {
     let mut slots = test_slot_table();
+    let mut state = test_slot_session();
 
     // Create initial composition with 3 value slots
-    let _idx1 = slots.use_value_slot(|| 1i32);
-    let _idx2 = slots.use_value_slot(|| 2i32);
-    let _idx3 = slots.use_value_slot(|| 3i32);
+    let _idx1 = use_test_value_slot(&mut slots, &mut state, || 1i32);
+    let _idx2 = use_test_value_slot(&mut slots, &mut state, || 2i32);
+    let _idx3 = use_test_value_slot(&mut slots, &mut state, || 3i32);
 
     // Hide the middle slot
     hide_test_range(&mut slots, 1, 2, None);
@@ -24,20 +25,21 @@ fn slot_table_marks_values_hidden() {
 #[test]
 fn slot_table_restores_hidden_values() {
     let mut slots = test_slot_table();
+    let mut state = test_slot_session();
 
     // Create initial value
-    let idx1 = slots.use_value_slot(|| 1i32);
+    let idx1 = use_test_value_slot(&mut slots, &mut state, || 1i32);
     assert_eq!(slots.read_value::<i32>(idx1), &1);
 
     // Hide the slot.
-    slots.reset();
+    reset_slot_session(&mut state);
     hide_test_range(&mut slots, 0, 1, None);
 
     // Reset cursor to restore.
-    slots.reset();
+    reset_slot_session(&mut state);
 
     let initialized = Cell::new(false);
-    let idx2 = slots.use_value_slot(|| {
+    let idx2 = use_test_value_slot(&mut slots, &mut state, || {
         initialized.set(true);
         42i32
     });
@@ -53,14 +55,15 @@ fn slot_table_restores_hidden_values() {
 #[test]
 fn slot_table_replaces_mismatched_value_types() {
     let mut slots = test_slot_table();
+    let mut state = test_slot_session();
 
     // Create initial value of type i32
-    let idx = slots.use_value_slot(|| 1i32);
+    let idx = use_test_value_slot(&mut slots, &mut state, || 1i32);
     assert_eq!(slots.read_value::<i32>(idx), &1);
 
     // Reset and try to use with different type
-    slots.reset();
-    let idx2 = slots.use_value_slot(|| "hello");
+    reset_slot_session(&mut state);
+    let idx2 = use_test_value_slot(&mut slots, &mut state, || "hello");
 
     // Should replace at same position
     assert_eq!(idx, idx2);
@@ -70,16 +73,17 @@ fn slot_table_replaces_mismatched_value_types() {
 #[test]
 fn slot_table_handles_nested_hidden_groups() {
     let mut slots = test_slot_table();
+    let mut state = test_slot_session();
 
     // Create a parent group
-    let parent_idx = begin_test_group(&mut slots, 100).0;
+    let parent_idx = begin_test_group(&mut slots, &mut state, 100).0;
 
     // Create child group
-    let child_idx = begin_test_group(&mut slots, 200).0;
-    let _val_idx = slots.use_value_slot(|| 42i32);
-    slots.end_group(); // End child
+    let child_idx = begin_test_group(&mut slots, &mut state, 200).0;
+    let _val_idx = use_test_value_slot(&mut slots, &mut state, || 42i32);
+    end_test_group(&mut slots, &mut state); // End child
 
-    slots.end_group(); // End parent
+    end_test_group(&mut slots, &mut state); // End parent
 
     // Verify parent group was created
     let groups = slots.debug_dump_groups();
@@ -94,21 +98,22 @@ fn slot_table_handles_nested_hidden_groups() {
 #[test]
 fn slot_table_preserves_sibling_groups_when_hiding_ranges() {
     let mut slots = test_slot_table();
+    let mut state = test_slot_session();
 
     // Create first group with a value
-    let g1 = begin_test_group(&mut slots, 1).0;
-    let _v1 = slots.use_value_slot(|| "first");
-    slots.end_group();
+    let g1 = begin_test_group(&mut slots, &mut state, 1).0;
+    let _v1 = use_test_value_slot(&mut slots, &mut state, || "first");
+    end_test_group(&mut slots, &mut state);
 
     // Create second group with a value
-    let g2 = begin_test_group(&mut slots, 2).0;
-    let _v2 = slots.use_value_slot(|| "second");
-    slots.end_group();
+    let g2 = begin_test_group(&mut slots, &mut state, 2).0;
+    let _v2 = use_test_value_slot(&mut slots, &mut state, || "second");
+    end_test_group(&mut slots, &mut state);
 
     // Create third group with a value
-    let _g3 = begin_test_group(&mut slots, 3);
-    let v3_idx = slots.use_value_slot(|| "third");
-    slots.end_group();
+    let _g3 = begin_test_group(&mut slots, &mut state, 3);
+    let v3_idx = use_test_value_slot(&mut slots, &mut state, || "third");
+    end_test_group(&mut slots, &mut state);
 
     // Capture initial group count
     let initial_groups = slots.debug_dump_groups();

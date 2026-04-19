@@ -73,11 +73,72 @@ pub(crate) fn test_composition_with_runtime(runtime: Runtime) -> Composition<Mem
 }
 
 pub(crate) fn test_slot_table() -> SlotTable {
+    with_test_slot_lifecycle(|lifecycle| {
+        *lifecycle = crate::slot_table::SlotLifecycleCoordinator::default()
+    });
     SlotTable::new()
 }
 
-pub(crate) fn begin_test_group(slots: &mut SlotTable, key: Key) -> GroupId {
-    crate::slot_table::begin_group_for_test(slots, key)
+pub(crate) fn test_slot_session() -> crate::slot_table::SlotWriteSessionState {
+    crate::slot_table::SlotWriteSessionState::default()
+}
+
+thread_local! {
+    static TEST_SLOT_LIFECYCLE: RefCell<crate::slot_table::SlotLifecycleCoordinator> =
+        RefCell::new(crate::slot_table::SlotLifecycleCoordinator::default());
+}
+
+fn with_test_slot_lifecycle<R>(
+    f: impl FnOnce(&mut crate::slot_table::SlotLifecycleCoordinator) -> R,
+) -> R {
+    TEST_SLOT_LIFECYCLE.with(|slot| f(&mut slot.borrow_mut()))
+}
+
+pub(crate) fn reset_slot_session(state: &mut crate::slot_table::SlotWriteSessionState) {
+    *state = crate::slot_table::SlotWriteSessionState::default();
+}
+
+pub(crate) fn begin_test_group(
+    slots: &mut SlotTable,
+    state: &mut crate::slot_table::SlotWriteSessionState,
+    key: Key,
+) -> GroupId {
+    crate::slot_table::begin_group_for_test(slots, state, key)
+}
+
+pub(crate) fn use_test_value_slot<T: 'static>(
+    slots: &mut SlotTable,
+    state: &mut crate::slot_table::SlotWriteSessionState,
+    init: impl FnOnce() -> T,
+) -> usize {
+    with_test_slot_lifecycle(|lifecycle| {
+        slots
+            .write_session(lifecycle, state, crate::slot_table::SlotPassMode::Compose)
+            .use_value_slot(init)
+    })
+}
+
+pub(crate) fn remember_test_value<T: 'static>(
+    slots: &mut SlotTable,
+    state: &mut crate::slot_table::SlotWriteSessionState,
+    init: impl FnOnce() -> T,
+) -> Owned<T> {
+    with_test_slot_lifecycle(|lifecycle| {
+        slots
+            .write_session(lifecycle, state, crate::slot_table::SlotPassMode::Compose)
+            .remember(init)
+    })
+}
+
+pub(crate) fn end_test_group(
+    slots: &mut SlotTable,
+    state: &mut crate::slot_table::SlotWriteSessionState,
+) {
+    with_test_slot_lifecycle(|lifecycle| {
+        slots
+            .write_session(lifecycle, state, crate::slot_table::SlotPassMode::Compose)
+            .end_group();
+    });
 }
 
 pub(crate) fn hide_test_range(
@@ -86,11 +147,16 @@ pub(crate) fn hide_test_range(
     end: usize,
     owner_index: Option<usize>,
 ) -> bool {
-    crate::slot_table::hide_range_for_test(slots, start, end, owner_index)
+    with_test_slot_lifecycle(|lifecycle| {
+        crate::slot_table::hide_range_for_test(slots, lifecycle, start, end, owner_index)
+    })
 }
 
 pub(crate) fn queue_test_orphaned_node(slots: &mut SlotTable, id: NodeId, generation: u32) {
-    crate::slot_table::queue_orphaned_node_for_test(slots, id, generation);
+    let _ = slots;
+    with_test_slot_lifecycle(|lifecycle| {
+        crate::slot_table::queue_orphaned_node_for_test(lifecycle, id, generation)
+    });
 }
 
 thread_local! {

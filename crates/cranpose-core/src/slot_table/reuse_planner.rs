@@ -2,12 +2,12 @@ use crate::Key;
 
 use super::{
     storage::{EntryKind, SlotStorage},
-    MatchedGroup, ReuseState,
+    MatchedGroup, PassBoundary,
 };
 
 pub(super) enum StartPlan {
     ReuseLiveAtCursor {
-        len: usize,
+        extent: usize,
         boundary_key: Key,
     },
     RestoreHiddenAtCursor {
@@ -27,7 +27,7 @@ pub(super) struct ReusePlanner<'a> {
     key: Key,
     cursor: usize,
     parent_end: usize,
-    parent_reuse: ReuseState,
+    parent_boundary: PassBoundary,
     current_parent_boundary_key: Option<Key>,
 }
 
@@ -37,7 +37,7 @@ impl<'a> ReusePlanner<'a> {
         key: Key,
         cursor: usize,
         parent_end: usize,
-        parent_reuse: ReuseState,
+        parent_boundary: PassBoundary,
         current_parent_boundary_key: Option<Key>,
     ) -> Self {
         Self {
@@ -45,7 +45,7 @@ impl<'a> ReusePlanner<'a> {
             key,
             cursor,
             parent_end,
-            parent_reuse,
+            parent_boundary,
             current_parent_boundary_key,
         }
     }
@@ -67,8 +67,8 @@ impl<'a> ReusePlanner<'a> {
 
         if let Some(group) = self.hidden_group_candidate_at(self.cursor) {
             if group.key == self.key
-                && (self.hidden_boundary_matches(Some(group.boundary_key))
-                    || self.parent_reuse.allows_live_search())
+                && (self.hidden_boundary_matches(Some(group.retention.boundary_key()))
+                    || self.parent_boundary.allows_live_search())
             {
                 if let Some(matched_live_group) = self.find_matching_live_group_after_hidden(&group)
                 {
@@ -99,16 +99,16 @@ impl<'a> ReusePlanner<'a> {
         }
 
         let group = self.storage.group_snapshot_at(self.cursor)?;
-        if group.key != self.key || !self.parent_reuse.allows_exact_live_reuse() {
+        if group.key != self.key || !self.parent_boundary.allows_exact_live_reuse() {
             return None;
         }
-        if group.has_hidden_children && !allow_hidden_children {
+        if group.retention.is_preserved() && !allow_hidden_children {
             return None;
         }
 
         Some(StartPlan::ReuseLiveAtCursor {
-            len: group.len as usize,
-            boundary_key: group.boundary_key,
+            extent: group.extent as usize,
+            boundary_key: group.retention.boundary_key(),
         })
     }
 
@@ -140,7 +140,7 @@ impl<'a> ReusePlanner<'a> {
     ) -> Option<MatchedGroup> {
         let mut search_index = self
             .cursor
-            .saturating_add((current_hidden_group.len as usize).max(1));
+            .saturating_add((current_hidden_group.extent as usize).max(1));
 
         while search_index < self.parent_end {
             match self.storage.entry_kind(search_index) {
@@ -175,7 +175,7 @@ impl<'a> ReusePlanner<'a> {
             match self.storage.entry_kind(search_index) {
                 Some(EntryKind::Group) => {
                     let group = self.storage.group_snapshot_at(search_index)?;
-                    if group.key == self.key && self.parent_reuse.allows_live_search() {
+                    if group.key == self.key && self.parent_boundary.allows_live_search() {
                         return Some(MatchedGroup {
                             index: search_index,
                             group,
@@ -188,8 +188,8 @@ impl<'a> ReusePlanner<'a> {
                 Some(EntryKind::HiddenGroup) => {
                     let group = self.storage.group_snapshot_at(search_index)?;
                     if group.key == self.key
-                        && (self.hidden_boundary_matches(Some(group.boundary_key))
-                            || self.parent_reuse.allows_live_search())
+                        && (self.hidden_boundary_matches(Some(group.retention.boundary_key()))
+                            || self.parent_boundary.allows_live_search())
                     {
                         return Some(MatchedGroup {
                             index: search_index,

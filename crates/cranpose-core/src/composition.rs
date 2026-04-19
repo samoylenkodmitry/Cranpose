@@ -1,9 +1,9 @@
 use crate::{
     collections::map::{HashMap, HashSet},
-    remove_child_and_cleanup_now, runtime, snapshot_state_observer, Applier, ApplierGuard,
-    ApplierHost, CommandQueue, Composer, CompositionPassDebugStats, ConcreteApplierHost,
-    DefaultScheduler, Key, NodeError, NodeId, RecomposeScope, Runtime, RuntimeHandle, ScopeId,
-    SlotTable, SlotTableDebugStats, SlotValueTypeDebugStat, SlotsHost, SnapshotStateObserver,
+    runtime, snapshot_state_observer, Applier, ApplierGuard, ApplierHost, CommandQueue, Composer,
+    CompositionPassDebugStats, ConcreteApplierHost, DefaultScheduler, Key, NodeError, NodeId,
+    RecomposeScope, Runtime, RuntimeHandle, ScopeId, SlotTable, SlotTableDebugStats,
+    SlotValueTypeDebugStat, SlotsHost, SnapshotStateObserver,
 };
 use std::rc::Rc;
 use std::sync::Arc;
@@ -137,51 +137,6 @@ impl<A: Applier + 'static> Composition<A> {
         }
     }
 
-    pub(crate) fn finalize_compaction(&mut self) -> Result<bool, NodeError> {
-        let mut removed_orphaned = false;
-        let mut orphaned_node_count = 0usize;
-        self.slots.borrow_mut().compact();
-        let orphaned = self.slots.borrow_mut().drain_orphaned_node_ids();
-        {
-            let mut applier = self.applier.borrow_dyn();
-            for orphaned in orphaned {
-                if !matches!(
-                    self.slots.borrow().orphaned_node_state(orphaned),
-                    crate::slot_table::NodeSlotState::Missing
-                ) {
-                    continue;
-                }
-                if applier.node_generation(orphaned.id) != orphaned.generation {
-                    continue;
-                }
-                removed_orphaned = true;
-                orphaned_node_count += 1;
-                let parent_id = applier
-                    .get_mut(orphaned.id)
-                    .ok()
-                    .and_then(|node| node.parent());
-                if let Some(parent_id) = parent_id {
-                    let _ = remove_child_and_cleanup_now(&mut *applier, parent_id, orphaned.id);
-                    continue;
-                }
-                if let Ok(node) = applier.get_mut(orphaned.id) {
-                    node.on_removed_from_parent();
-                    node.unmount();
-                }
-                let _ = applier.remove(orphaned.id);
-            }
-        }
-        self.applier_host().compact();
-        self.applier.borrow_dyn().clear_recycled_nodes();
-        if removed_orphaned {
-            log::debug!(
-                "finalize_compaction: removing {} orphaned nodes",
-                orphaned_node_count
-            );
-        }
-        Ok(removed_orphaned)
-    }
-
     fn clear_pending_invalid_scopes(&mut self) -> HashSet<ScopeId> {
         let runtime_handle = self.runtime_handle();
         let mut cleared = HashSet::default();
@@ -209,7 +164,6 @@ impl<A: Applier + 'static> Composition<A> {
         } else {
             HashSet::default()
         };
-        self.slots.borrow_mut().reset();
         let runtime_handle = self.runtime_handle();
         runtime_handle.drain_ui();
         let side_effects = {
@@ -223,7 +177,11 @@ impl<A: Applier + 'static> Composition<A> {
             );
             self.observer.begin_frame();
             let (root, commands, side_effects) = composer.install(|composer| {
-                composer.with_group(key, |_| content());
+                let (_, _) = composer.with_slot_host_pass(
+                    Rc::clone(&self.slots),
+                    crate::slot_table::SlotPassMode::Compose,
+                    |composer| composer.with_group(key, |_| content()),
+                );
                 let root = composer.root();
                 let commands = composer.take_commands();
                 let side_effects = composer.take_side_effects();
@@ -239,12 +197,6 @@ impl<A: Applier + 'static> Composition<A> {
             }
 
             self.root = root;
-            {
-                let mut slots = self.slots.borrow_mut();
-                let _ = slots.finalize_current_group();
-                slots.flush();
-            }
-            let _ = self.finalize_compaction()?;
             side_effects
         };
         runtime_handle.drain_ui();
@@ -347,7 +299,7 @@ impl<A: Applier + 'static> Composition<A> {
     }
 
     pub fn debug_slot_table_stats(&self) -> SlotTableDebugStats {
-        self.slots.borrow().debug_stats()
+        self.slots.debug_stats()
     }
 
     pub fn debug_slot_value_type_counts(&self, limit: usize) -> Vec<SlotValueTypeDebugStat> {
@@ -430,26 +382,32 @@ impl<A: Applier + 'static> Composition<A> {
                     self.root,
                 );
                 self.observer.begin_frame();
-                let (root, commands, side_effects, requested_root_render) =
+                let (root, commands, side_effects, requested_root_render, removed_orphaned) =
                     composer.install(|composer| {
+                        let mut removed_orphaned = false;
                         for (host, scopes) in scope_groups.into_iter() {
-                            if Rc::ptr_eq(&host, &root_host) {
-                                for scope in &scopes {
-                                    composer.recranpose_group(scope);
-                                }
-                            } else {
-                                composer.with_slot_override(host, |composer| {
+                            let (_, outcome) = composer.with_slot_host_pass(
+                                host,
+                                crate::slot_table::SlotPassMode::Recompose,
+                                |composer| {
                                     for scope in &scopes {
                                         composer.recranpose_group(scope);
                                     }
-                                });
-                            }
+                                },
+                            );
+                            removed_orphaned |= outcome.removed_orphaned_nodes;
                         }
                         let root = composer.root();
                         let commands = composer.take_commands();
                         let side_effects = composer.take_side_effects();
                         let requested_root_render = composer.take_root_render_request();
-                        (root, commands, side_effects, requested_root_render)
+                        (
+                            root,
+                            commands,
+                            side_effects,
+                            requested_root_render,
+                            removed_orphaned,
+                        )
                     });
                 self.record_pass_stats(&commands, &side_effects);
                 {
@@ -462,11 +420,6 @@ impl<A: Applier + 'static> Composition<A> {
                 if root.is_some() {
                     self.root = root;
                 }
-                {
-                    let mut slots = self.slots.borrow_mut();
-                    slots.flush();
-                }
-                let removed_orphaned = self.finalize_compaction()?;
                 if removed_orphaned {
                     did_recompose = true;
                     self.root_render_requested = true;

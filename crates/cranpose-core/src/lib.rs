@@ -34,7 +34,7 @@ pub mod internal {
     pub use crate::frame_clock::{FrameCallbackRegistration, FrameClock};
 }
 pub use callbacks::{CallbackHolder, CallbackHolder1, ParamSlot, ParamState, ReturnSlot};
-pub use composer::Composer;
+pub use composer::{Composer, ValueSlotHandle};
 pub(crate) use composer::{ComposerCore, EmittedNode, ParentAttachMode, ParentFrame};
 pub use composition::{Composition, ROOT_RENDER_REPLAY_LIMIT};
 pub use composition_locals::{
@@ -3226,26 +3226,160 @@ impl<'a, A: Applier + 'static> DerefMut for ApplierGuard<'a, A> {
 }
 
 pub struct SlotsHost {
-    inner: RefCell<SlotTable>,
+    inner: RefCell<SlotsHostInner>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SlotPassOutcome {
+    pub(crate) compacted: bool,
+    pub(crate) removed_orphaned_nodes: bool,
+}
+
+struct ActivePassState {
+    mode: slot_table::SlotPassMode,
+    state: slot_table::SlotWriteSessionState,
+}
+
+struct SlotsHostInner {
+    table: SlotTable,
+    lifecycle: slot_table::SlotLifecycleCoordinator,
+    active_pass: Option<ActivePassState>,
+}
+
+impl Drop for SlotsHostInner {
+    fn drop(&mut self) {
+        self.lifecycle.dispose_slot_table(&mut self.table);
+    }
 }
 
 impl SlotsHost {
     pub fn new(storage: SlotTable) -> Self {
         Self {
-            inner: RefCell::new(storage),
+            inner: RefCell::new(SlotsHostInner {
+                table: storage,
+                lifecycle: slot_table::SlotLifecycleCoordinator::default(),
+                active_pass: None,
+            }),
         }
     }
 
-    pub fn borrow(&self) -> Ref<'_, SlotTable> {
-        self.inner.borrow()
+    pub(crate) fn borrow(&self) -> Ref<'_, SlotTable> {
+        Ref::map(self.inner.borrow(), |inner| &inner.table)
     }
 
-    pub fn borrow_mut(&self) -> RefMut<'_, SlotTable> {
-        self.inner.borrow_mut()
+    pub(crate) fn borrow_mut(&self) -> RefMut<'_, SlotTable> {
+        RefMut::map(self.inner.borrow_mut(), |inner| &mut inner.table)
     }
 
     pub fn take(&self) -> SlotTable {
-        std::mem::take(&mut *self.inner.borrow_mut())
+        let mut inner = self.inner.borrow_mut();
+        assert!(
+            inner.active_pass.is_none(),
+            "cannot take SlotsHost during an active pass"
+        );
+        inner.lifecycle.flush_pending_drops();
+        std::mem::take(&mut inner.table)
+    }
+
+    pub fn reset(&self) {
+        let mut inner = self.inner.borrow_mut();
+        let SlotsHostInner {
+            table,
+            lifecycle,
+            active_pass,
+        } = &mut *inner;
+        assert!(
+            active_pass.is_none(),
+            "cannot reset SlotsHost during an active pass"
+        );
+        lifecycle.dispose_slot_table(table);
+        *table = SlotTable::default();
+        *lifecycle = slot_table::SlotLifecycleCoordinator::default();
+    }
+
+    pub(crate) fn debug_stats(&self) -> SlotTableDebugStats {
+        let inner = self.inner.borrow();
+        let mut stats = inner.table.debug_stats();
+        inner.lifecycle.fill_debug_stats(&mut stats);
+        stats
+    }
+
+    pub(crate) fn begin_pass(&self, mode: slot_table::SlotPassMode) {
+        let mut inner = self.inner.borrow_mut();
+        assert!(
+            inner.active_pass.is_none(),
+            "slot pass already active for host"
+        );
+        inner.active_pass = Some(ActivePassState {
+            mode,
+            state: slot_table::SlotWriteSessionState::default(),
+        });
+    }
+
+    pub(crate) fn has_active_pass(&self) -> bool {
+        self.inner.borrow().active_pass.is_some()
+    }
+
+    pub(crate) fn with_write_session<R>(
+        &self,
+        f: impl FnOnce(&mut slot_table::SlotWriteSession<'_>) -> R,
+    ) -> R {
+        let mut inner = self.inner.borrow_mut();
+        let SlotsHostInner {
+            table,
+            lifecycle,
+            active_pass,
+        } = &mut *inner;
+        let active_pass = active_pass
+            .as_mut()
+            .expect("slot write session requires an active pass");
+        let active_mode = active_pass.mode;
+        let mut session = table.write_session(lifecycle, &mut active_pass.state, active_mode);
+        f(&mut session)
+    }
+
+    pub(crate) fn finish_pass(&self, applier: &mut dyn Applier) -> SlotPassOutcome {
+        let mut inner = self.inner.borrow_mut();
+        let SlotsHostInner {
+            table,
+            lifecycle,
+            active_pass: active_pass_slot,
+        } = &mut *inner;
+        let Some(active_pass) = active_pass_slot.as_mut() else {
+            return SlotPassOutcome::default();
+        };
+
+        {
+            let mut session =
+                table.write_session(lifecycle, &mut active_pass.state, active_pass.mode);
+            let _ = session.finalize_pass();
+        }
+
+        lifecycle.flush_pending_drops();
+        let mut outcome = SlotPassOutcome {
+            removed_orphaned_nodes: lifecycle.drain_orphaned_nodes(table, applier),
+            ..SlotPassOutcome::default()
+        };
+
+        let removed = table.compact();
+        if !removed.is_empty() {
+            outcome.compacted = true;
+            lifecycle.dispose_drops_reverse(removed);
+        }
+        outcome.removed_orphaned_nodes |= lifecycle.drain_orphaned_nodes(table, applier);
+        lifecycle.trim_orphaned_node_capacity(32);
+        table.flush();
+        *active_pass_slot = None;
+        outcome
+    }
+
+    #[cfg(test)]
+    pub(crate) fn drain_orphaned_nodes(&self, applier: &mut dyn Applier) -> bool {
+        let mut inner = self.inner.borrow_mut();
+        let SlotsHostInner {
+            table, lifecycle, ..
+        } = &mut *inner;
+        lifecycle.drain_orphaned_nodes(table, applier)
     }
 }
 

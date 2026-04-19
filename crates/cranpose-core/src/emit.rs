@@ -8,7 +8,7 @@ use std::any::TypeId;
 impl Composer {
     pub fn use_state<T: Clone + 'static>(&self, init: impl FnOnce() -> T) -> MutableState<T> {
         let runtime = self.runtime_handle();
-        let state = self.with_slots_mut(|slots| {
+        let state = self.with_slot_session_mut(|slots| {
             slots.remember(|| OwnedMutableState::with_runtime(init(), runtime.clone()))
         });
         state.with(|state| state.handle())
@@ -20,7 +20,7 @@ impl Composer {
     ) -> NodeId {
         // Peek at the slot without advancing cursor
         let (existing_id, type_matches, gen_matches) = {
-            if let Some((id, slot_gen)) = self.with_slots_mut(|slots| slots.peek_node()) {
+            if let Some((id, slot_gen)) = self.with_slot_session_mut(|slots| slots.peek_node()) {
                 let mut applier = self.borrow_applier();
                 let gen_ok = applier.node_generation(id) == slot_gen;
                 let type_ok = match applier.get_mut(id) {
@@ -48,7 +48,7 @@ impl Composer {
                     scope_debug.0,
                     scope_debug.1,
                 );
-                self.with_slots_mut(|slots| slots.advance_after_node_read());
+                self.with_slot_session_mut(|slots| slots.advance_after_node_read());
 
                 self.commands_mut().push(Command::update_node::<N>(id));
                 self.attach_to_parent(id);
@@ -111,7 +111,7 @@ impl Composer {
             scope_debug.1,
         );
         {
-            self.with_slots_mut(|slots| slots.record_node(id, gen));
+            self.with_slot_session_mut(|slots| slots.record_node(id, gen));
         }
         self.commands_mut().push(Command::MountNode { id });
         self.attach_to_parent(id);

@@ -1,4 +1,5 @@
-use crate::{runtime, AnchorId, NodeId};
+use crate::{runtime, AnchorId, NodeId, RecomposeScope};
+use std::any::Any;
 
 struct ChunkedPending<T> {
     sealed: Vec<Vec<T>>,
@@ -70,6 +71,20 @@ impl<T> ChunkedPending<T> {
         self.sealed = Vec::new();
         if self.active.capacity() > retained.saturating_mul(4) {
             self.active = Vec::with_capacity(retained.max(initial_capacity));
+        }
+    }
+}
+
+pub(crate) enum DeferredDrop {
+    Group(Option<RecomposeScope>),
+    Value(Box<dyn Any>),
+}
+
+impl DeferredDrop {
+    fn dispose(self) {
+        match self {
+            Self::Group(scope) => drop(scope),
+            Self::Value(value) => drop(value),
         }
     }
 }
@@ -161,5 +176,68 @@ impl OrphanedNodeIds {
     pub(in crate::slot_table) fn trim_retained_capacity(&mut self, retained: usize) {
         self.inner
             .trim_retained_capacity(retained, Self::INITIAL_CAPACITY);
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct SlotLifecycleCoordinator {
+    pending_drops: PendingDrops<DeferredDrop>,
+    orphaned_node_ids: OrphanedNodeIds,
+}
+
+impl SlotLifecycleCoordinator {
+    pub(crate) fn pending_drops_len(&self) -> usize {
+        self.pending_drops.len()
+    }
+
+    pub(crate) fn pending_drops_capacity(&self) -> usize {
+        self.pending_drops.capacity()
+    }
+
+    pub(crate) fn orphaned_node_ids_len(&self) -> usize {
+        self.orphaned_node_ids.len()
+    }
+
+    pub(crate) fn orphaned_node_ids_capacity(&self) -> usize {
+        self.orphaned_node_ids.capacity()
+    }
+
+    pub(crate) fn deactivate_scope(&self, scope: &RecomposeScope) {
+        scope.deactivate();
+    }
+
+    pub(crate) fn push_drop(&mut self, deferred_drop: DeferredDrop) {
+        self.pending_drops.push(deferred_drop);
+    }
+
+    pub(crate) fn queue_orphaned_node(&mut self, orphaned: OrphanedNode) {
+        self.orphaned_node_ids.push(orphaned);
+    }
+
+    pub(crate) fn drain_orphaned_node_ids_with(&mut self, visitor: impl FnMut(OrphanedNode)) {
+        self.orphaned_node_ids.drain_forward(visitor);
+    }
+
+    pub(crate) fn drain_orphaned_node_ids(&mut self) -> Vec<OrphanedNode> {
+        let mut orphaned = Vec::with_capacity(self.orphaned_node_ids.len());
+        self.drain_orphaned_node_ids_with(|node| orphaned.push(node));
+        orphaned
+    }
+
+    pub(crate) fn flush_pending_drops(&mut self) {
+        self.pending_drops.clear_and_drop_reverse();
+        let retained = self.pending_drops.len().max(4);
+        self.pending_drops.trim_retained_capacity(retained);
+    }
+
+    pub(crate) fn dispose_drops_reverse(&mut self, mut drops: Vec<DeferredDrop>) {
+        let _teardown = runtime::enter_state_teardown_scope();
+        while let Some(deferred_drop) = drops.pop() {
+            deferred_drop.dispose();
+        }
+    }
+
+    pub(crate) fn trim_orphaned_node_capacity(&mut self, retained: usize) {
+        self.orphaned_node_ids.trim_retained_capacity(retained);
     }
 }

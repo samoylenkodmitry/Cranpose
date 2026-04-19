@@ -6,6 +6,27 @@ use std::rc::Rc;
 
 impl Composer {
     pub(crate) fn recranpose_group(&self, scope: &RecomposeScope) {
+        struct RecomposeGuard {
+            composer: Composer,
+            scope: RecomposeScope,
+        }
+
+        impl Drop for RecomposeGuard {
+            fn drop(&mut self) {
+                self.composer.scope_stack().pop();
+                self.composer
+                    .with_slot_session_mut(|slots| slots.end_recompose());
+                log::trace!(
+                    target: "cranpose::compose::recompose",
+                    "scope_id={} label={:?} ended",
+                    self.scope.id(),
+                    debug_scope_label(self.scope.id()),
+                );
+                self.scope.mark_recomposed();
+                self.composer.flush_pending_commands_if_large();
+            }
+        }
+
         // CRITICAL FIX: Check if scope is still invalid before recomposing.
         // When parent and child scopes are both invalidated, the child may be
         // visited (and marked recomposed) during parent's recomposition.
@@ -15,7 +36,7 @@ impl Composer {
             scope.mark_recomposed();
             return;
         }
-        let started = self.with_slots_mut(|slots| {
+        let started = self.with_slot_session_mut(|slots| {
             slots.start_recranpose_at_anchor(scope.group_anchor(), scope.id())
         });
         log::trace!(
@@ -47,6 +68,10 @@ impl Composer {
                 let mut stack = self.scope_stack();
                 stack.push(scope.clone());
             }
+            let guard = RecomposeGuard {
+                composer: self.clone(),
+                scope: scope.clone(),
+            };
             let saved_locals = self.current_local_stack();
             {
                 let mut locals = self.local_stack();
@@ -74,20 +99,7 @@ impl Composer {
                 let mut locals = self.local_stack();
                 *locals = saved_locals;
             }
-            {
-                let mut stack = self.scope_stack();
-                stack.pop();
-            }
-            self.with_slots_mut(|slots| slots.end_recompose());
-            log::trace!(
-                target: "cranpose::compose::recompose",
-                "scope_id={} label={:?} ended",
-                scope.id(),
-                debug_scope_label(scope.id()),
-            );
-            self.drain_orphaned_nodes_from_slots();
-            scope.mark_recomposed();
-            self.flush_pending_commands_if_large();
+            drop(guard);
         } else {
             scope.mark_recomposed();
         }

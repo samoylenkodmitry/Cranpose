@@ -689,8 +689,6 @@ fn box_with_constraints_composes_different_content() {
 
     assert_eq!(record.borrow().as_slice(), ["wide"]);
 
-    slots.reset();
-
     measure_subcompose_node(
         &mut composition,
         &mut slots,
@@ -727,7 +725,6 @@ fn box_with_constraints_reacts_to_constraint_changes() {
     for width in [120.0, 60.0] {
         let constraints = Constraints::tight(width, 40.0);
         measure_subcompose_node(&mut composition, &mut slots, &handle, root, constraints);
-        slots.reset();
     }
 
     assert_eq!(invocations.get(), 2);
