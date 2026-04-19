@@ -3020,6 +3020,15 @@ mod tests {
             }
         });
         robot.shell_mut().set_semantics_enabled(true);
+        eprintln!(
+            "slots before pump: {:?}",
+            robot
+                .shell_mut()
+                .debug_all_slots()
+                .into_iter()
+                .take(40)
+                .collect::<Vec<_>>()
+        );
 
         pump_robot_until(
             &mut robot,
@@ -3166,6 +3175,10 @@ mod tests {
             }
         });
         robot.shell_mut().set_semantics_enabled(true);
+        eprintln!(
+            "programmatic scroll initial groups: {:?}",
+            interesting_slot_groups(&mut robot)
+        );
 
         pump_robot_until(
             &mut robot,

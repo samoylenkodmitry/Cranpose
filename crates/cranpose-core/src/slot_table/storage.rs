@@ -7,35 +7,86 @@ use crate::{AnchorId, Key, NodeId, RecomposeScope};
 use std::any::Any;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum EntryKind {
-    Unused,
+pub(crate) enum EntryClass {
     Group,
     Value,
     Node,
-    HiddenGroup,
-    HiddenValue,
-    HiddenNode,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EntryVisibility {
+    Live,
+    Hidden,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EntryKind {
+    Unused,
+    Occupied {
+        class: EntryClass,
+        visibility: EntryVisibility,
+    },
 }
 
 impl EntryKind {
+    pub(crate) fn live(class: EntryClass) -> Self {
+        Self::Occupied {
+            class,
+            visibility: EntryVisibility::Live,
+        }
+    }
+
+    pub(crate) fn hidden(class: EntryClass) -> Self {
+        Self::Occupied {
+            class,
+            visibility: EntryVisibility::Hidden,
+        }
+    }
+
+    pub(crate) fn class(self) -> Option<EntryClass> {
+        match self {
+            Self::Unused => None,
+            Self::Occupied { class, .. } => Some(class),
+        }
+    }
+
+    pub(crate) fn visibility(self) -> Option<EntryVisibility> {
+        match self {
+            Self::Unused => None,
+            Self::Occupied { visibility, .. } => Some(visibility),
+        }
+    }
+
     pub(crate) fn is_group(self) -> bool {
-        matches!(self, Self::Group | Self::HiddenGroup)
+        self.class() == Some(EntryClass::Group)
     }
 
     pub(crate) fn is_hidden(self) -> bool {
-        matches!(
-            self,
-            Self::HiddenGroup | Self::HiddenValue | Self::HiddenNode
-        )
+        self.visibility() == Some(EntryVisibility::Hidden)
     }
 
     pub(crate) fn restore(self) -> Self {
         match self {
-            Self::HiddenGroup => Self::Group,
-            Self::HiddenValue => Self::Value,
-            Self::HiddenNode => Self::Node,
+            Self::Occupied { class, .. } => Self::live(class),
             other => other,
         }
+    }
+
+    pub(crate) fn hide(self) -> Self {
+        match self {
+            Self::Occupied { class, .. } => Self::hidden(class),
+            other => other,
+        }
+    }
+
+    pub(crate) fn matches(self, class: EntryClass, visibility: EntryVisibility) -> bool {
+        matches!(
+            self,
+            Self::Occupied {
+                class: entry_class,
+                visibility: entry_visibility,
+            } if entry_class == class && entry_visibility == visibility
+        )
     }
 }
 
@@ -46,24 +97,76 @@ pub(crate) struct EntryDescriptor {
     pub(crate) payload: u32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GroupSpans {
+    pub(crate) live_extent: u32,
+    pub(crate) scan_extent: u32,
+}
+
+impl GroupSpans {
+    pub(crate) fn new(live_extent: usize, scan_extent: usize) -> Self {
+        Self {
+            live_extent: live_extent as u32,
+            scan_extent: scan_extent as u32,
+        }
+    }
+
+    pub(crate) fn live_extent(self) -> usize {
+        self.live_extent as usize
+    }
+
+    pub(crate) fn scan_extent(self) -> usize {
+        self.scan_extent as usize
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct GroupSnapshot {
     pub(crate) key: Key,
-    pub(crate) extent: u32,
+    pub(crate) spans: GroupSpans,
     pub(crate) retention: GroupRetention,
+    pub(crate) hidden_descendants: usize,
     pub(crate) scope: Option<RecomposeScope>,
 }
 
-pub(crate) enum StorageLifecycleEvent {
-    DeactivateScope(RecomposeScope),
-    OrphanNode(OrphanedNode),
+#[derive(Default)]
+pub(crate) struct StorageEffects {
+    deactivated_scopes: Vec<RecomposeScope>,
+    orphaned_nodes: Vec<OrphanedNode>,
+}
+
+impl StorageEffects {
+    pub(crate) fn deactivate_scope(&mut self, scope: RecomposeScope) {
+        self.deactivated_scopes.push(scope);
+    }
+
+    pub(crate) fn orphan_node(&mut self, orphaned: OrphanedNode) {
+        self.orphaned_nodes.push(orphaned);
+    }
+
+    pub(crate) fn take_deactivated_scopes(&mut self) -> Vec<RecomposeScope> {
+        std::mem::take(&mut self.deactivated_scopes)
+    }
+
+    pub(crate) fn take_orphaned_nodes(&mut self) -> Vec<OrphanedNode> {
+        std::mem::take(&mut self.orphaned_nodes)
+    }
+}
+
+pub(crate) struct HideRangeResult {
+    pub(crate) effects: StorageEffects,
+    pub(crate) hidden_group_roots: Vec<(usize, usize)>,
+    pub(crate) top_level_hidden_group_roots: Vec<usize>,
+    pub(crate) marked_any: bool,
+    pub(crate) newly_hidden_entries: usize,
 }
 
 struct GroupRecord {
     key: Key,
-    extent: u32,
+    spans: GroupSpans,
     retention: GroupRetention,
     parent_anchor: AnchorId,
+    hidden_descendants: u32,
     scope: Option<RecomposeScope>,
 }
 
@@ -81,9 +184,11 @@ struct NodeRecord {
 #[derive(Default)]
 struct GroupArena {
     keys: Vec<Key>,
-    extents: Vec<u32>,
+    live_extents: Vec<u32>,
+    scan_extents: Vec<u32>,
     retentions: Vec<GroupRetention>,
     parent_anchors: Vec<AnchorId>,
+    hidden_descendants: Vec<u32>,
     scopes: Vec<Option<RecomposeScope>>,
     free: Vec<u32>,
 }
@@ -92,9 +197,11 @@ impl GroupArena {
     fn push_record(&mut self, record: GroupRecord) -> u32 {
         let id = self.keys.len() as u32;
         self.keys.push(record.key);
-        self.extents.push(record.extent);
+        self.live_extents.push(record.spans.live_extent);
+        self.scan_extents.push(record.spans.scan_extent);
         self.retentions.push(record.retention);
         self.parent_anchors.push(record.parent_anchor);
+        self.hidden_descendants.push(record.hidden_descendants);
         self.scopes.push(record.scope);
         id
     }
@@ -102,7 +209,7 @@ impl GroupArena {
     fn alloc(
         &mut self,
         key: Key,
-        extent: u32,
+        spans: GroupSpans,
         retention: GroupRetention,
         parent_anchor: AnchorId,
         scope: Option<RecomposeScope>,
@@ -110,17 +217,21 @@ impl GroupArena {
         if let Some(id) = self.free.pop() {
             let idx = id as usize;
             self.keys[idx] = key;
-            self.extents[idx] = extent;
+            self.live_extents[idx] = spans.live_extent;
+            self.scan_extents[idx] = spans.scan_extent;
             self.retentions[idx] = retention;
             self.parent_anchors[idx] = parent_anchor;
+            self.hidden_descendants[idx] = 0;
             self.scopes[idx] = scope;
             id
         } else {
             let id = self.keys.len() as u32;
             self.keys.push(key);
-            self.extents.push(extent);
+            self.live_extents.push(spans.live_extent);
+            self.scan_extents.push(spans.scan_extent);
             self.retentions.push(retention);
             self.parent_anchors.push(parent_anchor);
+            self.hidden_descendants.push(0);
             self.scopes.push(scope);
             id
         }
@@ -130,8 +241,12 @@ impl GroupArena {
         let idx = id as usize;
         GroupSnapshot {
             key: self.keys[idx],
-            extent: self.extents[idx],
+            spans: GroupSpans {
+                live_extent: self.live_extents[idx],
+                scan_extent: self.scan_extents[idx],
+            },
             retention: self.retentions[idx],
+            hidden_descendants: self.hidden_descendants[idx] as usize,
             scope: self.scopes[idx].clone(),
         }
     }
@@ -140,12 +255,17 @@ impl GroupArena {
         self.keys[id as usize]
     }
 
-    fn extent(&self, id: u32) -> usize {
-        self.extents[id as usize] as usize
+    fn live_extent(&self, id: u32) -> usize {
+        self.live_extents[id as usize] as usize
     }
 
-    fn set_extent(&mut self, id: u32, extent: usize) {
-        self.extents[id as usize] = extent as u32;
+    fn scan_extent(&self, id: u32) -> usize {
+        self.scan_extents[id as usize] as usize
+    }
+
+    fn set_spans(&mut self, id: u32, spans: GroupSpans) {
+        self.live_extents[id as usize] = spans.live_extent;
+        self.scan_extents[id as usize] = spans.scan_extent;
     }
 
     fn retention(&self, id: u32) -> GroupRetention {
@@ -158,6 +278,28 @@ impl GroupArena {
 
     fn parent_anchor(&self, id: u32) -> AnchorId {
         self.parent_anchors[id as usize]
+    }
+
+    fn set_parent_anchor(&mut self, id: u32, parent_anchor: AnchorId) {
+        self.parent_anchors[id as usize] = parent_anchor;
+    }
+
+    fn hidden_descendants(&self, id: u32) -> usize {
+        self.hidden_descendants[id as usize] as usize
+    }
+
+    fn set_hidden_descendants(&mut self, id: u32, hidden_descendants: usize) {
+        self.hidden_descendants[id as usize] = hidden_descendants as u32;
+    }
+
+    fn adjust_hidden_descendants(&mut self, id: u32, delta: isize) {
+        let idx = id as usize;
+        let next = self.hidden_descendants[idx] as i64 + delta as i64;
+        assert!(
+            next >= 0,
+            "group hidden descendant count underflow: id={id} delta={delta}"
+        );
+        self.hidden_descendants[idx] = next as u32;
     }
 
     fn scope(&self, id: u32) -> Option<&RecomposeScope> {
@@ -178,9 +320,11 @@ impl GroupArena {
         let idx = id as usize;
         let scope = self.scopes[idx].take();
         self.keys[idx] = 0;
-        self.extents[idx] = 0;
-        self.retentions[idx] = GroupRetention::clean(0);
+        self.live_extents[idx] = 0;
+        self.scan_extents[idx] = 0;
+        self.retentions[idx] = GroupRetention::new(0);
         self.parent_anchors[idx] = AnchorId::INVALID;
+        self.hidden_descendants[idx] = 0;
         self.free.push(id);
         DeferredDrop::Group(scope)
     }
@@ -189,20 +333,33 @@ impl GroupArena {
         let idx = id as usize;
         GroupRecord {
             key: std::mem::take(&mut self.keys[idx]),
-            extent: std::mem::take(&mut self.extents[idx]),
-            retention: std::mem::replace(&mut self.retentions[idx], GroupRetention::clean(0)),
+            spans: GroupSpans {
+                live_extent: std::mem::take(&mut self.live_extents[idx]),
+                scan_extent: std::mem::take(&mut self.scan_extents[idx]),
+            },
+            retention: std::mem::replace(&mut self.retentions[idx], GroupRetention::new(0)),
             parent_anchor: std::mem::replace(&mut self.parent_anchors[idx], AnchorId::INVALID),
+            hidden_descendants: std::mem::take(&mut self.hidden_descendants[idx]),
             scope: self.scopes[idx].take(),
         }
     }
 
     fn heap_bytes(&self) -> usize {
         self.keys.capacity() * std::mem::size_of::<Key>()
-            + self.extents.capacity() * std::mem::size_of::<u32>()
+            + self.live_extents.capacity() * std::mem::size_of::<u32>()
+            + self.scan_extents.capacity() * std::mem::size_of::<u32>()
             + self.retentions.capacity() * std::mem::size_of::<GroupRetention>()
             + self.parent_anchors.capacity() * std::mem::size_of::<AnchorId>()
+            + self.hidden_descendants.capacity() * std::mem::size_of::<u32>()
             + self.scopes.capacity() * std::mem::size_of::<Option<RecomposeScope>>()
             + self.free.capacity() * std::mem::size_of::<u32>()
+    }
+
+    fn preserved_count(&self) -> usize {
+        self.hidden_descendants
+            .iter()
+            .filter(|&&hidden_descendants| hidden_descendants > 0)
+            .count()
     }
 }
 
@@ -470,10 +627,13 @@ impl EntryBuffer {
         } else {
             for logical in self.gap_start..index {
                 let physical = logical + self.gap_len;
+                if physical >= self.anchors.len() {
+                    break;
+                }
                 let anchor = self.anchors[physical];
                 anchor_map.update_for_gap_move(anchor, logical, index, self.len);
             }
-            let end = index + self.gap_len;
+            let end = (index + self.gap_len).min(self.kinds.len());
             self.kinds[self.gap_start..end].rotate_left(self.gap_len);
             self.anchors[self.gap_start..end].rotate_left(self.gap_len);
             self.payloads[self.gap_start..end].rotate_left(self.gap_len);
@@ -623,10 +783,6 @@ impl SlotStorage {
         self.buffer.move_gap_to(index, &mut self.anchor_map);
     }
 
-    pub(crate) fn take_anchors_dirty(&mut self) -> bool {
-        self.anchor_map.take_dirty()
-    }
-
     pub(crate) fn rebuild_anchor_positions(&mut self) {
         let live_anchors = (0..self.buffer.len()).filter_map(|index| {
             let entry = self.buffer.entry(index)?;
@@ -652,8 +808,8 @@ impl SlotStorage {
             pending_slot_drops_cap: 0,
             anchors_len: 0,
             anchors_cap: 0,
-            gap_metadata_len: 0,
-            gap_metadata_cap: 0,
+            hidden_entries_len: self.hidden_count,
+            preserved_groups_len: self.groups.preserved_count(),
             free_anchor_ids_len: 0,
             free_anchor_ids_cap: 0,
             group_stack_len: 0,
@@ -679,11 +835,11 @@ impl SlotStorage {
             .unwrap_or(AnchorId::INVALID)
     }
 
-    pub(crate) fn entry_extent(&self, index: usize) -> usize {
+    pub(crate) fn entry_scan_extent(&self, index: usize) -> usize {
         match self.entry(index).map(|entry| entry.kind) {
             Some(kind) if kind.is_group() => self.group_extent_at(index),
-            Some(_) => 1,
-            None => 0,
+            Some(EntryKind::Occupied { .. }) => 1,
+            Some(EntryKind::Unused) | None => 0,
         }
     }
 
@@ -694,7 +850,10 @@ impl SlotStorage {
 
     pub(crate) fn live_group_id_at(&self, index: usize) -> Option<u32> {
         let entry = self.entry(index)?;
-        (entry.kind == EntryKind::Group).then_some(entry.payload)
+        entry
+            .kind
+            .matches(EntryClass::Group, EntryVisibility::Live)
+            .then_some(entry.payload)
     }
 
     pub(crate) fn group_snapshot_at(&self, index: usize) -> Option<GroupSnapshot> {
@@ -703,8 +862,18 @@ impl SlotStorage {
     }
 
     pub(crate) fn group_extent_at(&self, index: usize) -> usize {
+        self.group_scan_extent_at(index)
+    }
+
+    pub(crate) fn group_live_extent_at(&self, index: usize) -> usize {
         self.group_id_at(index)
-            .map(|group| self.groups.extent(group))
+            .map(|group| self.groups.live_extent(group))
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn group_scan_extent_at(&self, index: usize) -> usize {
+        self.group_id_at(index)
+            .map(|group| self.groups.scan_extent(group))
             .unwrap_or(0)
     }
 
@@ -715,6 +884,12 @@ impl SlotStorage {
     pub(crate) fn group_retention_at(&self, index: usize) -> Option<GroupRetention> {
         self.group_id_at(index)
             .map(|group| self.groups.retention(group))
+    }
+
+    pub(crate) fn group_hidden_descendants_at(&self, index: usize) -> usize {
+        self.group_id_at(index)
+            .map(|group| self.groups.hidden_descendants(group))
+            .unwrap_or(0)
     }
 
     pub(crate) fn live_group_scope(&self, index: usize) -> Option<&RecomposeScope> {
@@ -739,9 +914,9 @@ impl SlotStorage {
         }
     }
 
-    pub(crate) fn set_group_extent(&mut self, index: usize, extent: usize) {
+    pub(crate) fn set_group_spans(&mut self, index: usize, spans: GroupSpans) {
         if let Some(group) = self.group_id_at(index) {
-            self.groups.set_extent(group, extent);
+            self.groups.set_spans(group, spans);
         }
     }
 
@@ -751,9 +926,28 @@ impl SlotStorage {
         }
     }
 
+    pub(crate) fn set_group_hidden_descendants(&mut self, index: usize, hidden_descendants: usize) {
+        if let Some(group) = self.group_id_at(index) {
+            self.groups
+                .set_hidden_descendants(group, hidden_descendants);
+        }
+    }
+
+    pub(crate) fn adjust_group_hidden_descendants(&mut self, index: usize, delta: isize) {
+        if let Some(group) = self.group_id_at(index) {
+            self.groups.adjust_hidden_descendants(group, delta);
+        }
+    }
+
     pub(crate) fn group_parent_anchor_at(&self, index: usize) -> Option<AnchorId> {
         self.group_id_at(index)
             .map(|group| self.groups.parent_anchor(group))
+    }
+
+    pub(crate) fn set_group_parent_anchor(&mut self, index: usize, parent_anchor: AnchorId) {
+        if let Some(group) = self.group_id_at(index) {
+            self.groups.set_parent_anchor(group, parent_anchor);
+        }
     }
 
     pub(crate) fn alloc_group(
@@ -763,7 +957,8 @@ impl SlotStorage {
         parent_anchor: AnchorId,
         scope: Option<RecomposeScope>,
     ) -> u32 {
-        self.groups.alloc(key, 0, retention, parent_anchor, scope)
+        self.groups
+            .alloc(key, GroupSpans::new(0, 0), retention, parent_anchor, scope)
     }
 
     pub(crate) fn insert_group(
@@ -774,9 +969,9 @@ impl SlotStorage {
         hidden: bool,
     ) {
         let kind = if hidden {
-            EntryKind::HiddenGroup
+            EntryKind::hidden(EntryClass::Group)
         } else {
-            EntryKind::Group
+            EntryKind::live(EntryClass::Group)
         };
         self.buffer.insert_entry(
             index,
@@ -802,9 +997,9 @@ impl SlotStorage {
         hidden: bool,
     ) {
         let kind = if hidden {
-            EntryKind::HiddenValue
+            EntryKind::hidden(EntryClass::Value)
         } else {
-            EntryKind::Value
+            EntryKind::live(EntryClass::Value)
         };
         self.buffer.insert_entry(
             index,
@@ -827,9 +1022,9 @@ impl SlotStorage {
     ) -> Option<DeferredDrop> {
         let dropped = self.drop_entry(index);
         let kind = if hidden {
-            EntryKind::HiddenValue
+            EntryKind::hidden(EntryClass::Value)
         } else {
-            EntryKind::Value
+            EntryKind::live(EntryClass::Value)
         };
         self.buffer.set_entry(
             index,
@@ -849,14 +1044,14 @@ impl SlotStorage {
         let Some(entry) = self.entry(index) else {
             return false;
         };
-        matches!(entry.kind, EntryKind::Value | EntryKind::HiddenValue)
+        matches!(entry.kind.class(), Some(EntryClass::Value))
             && self.values.is_type::<T>(entry.payload)
     }
 
     pub(crate) fn read_value<T: 'static>(&self, index: usize) -> &T {
         let entry = self.entry(index).expect("slot index out of bounds");
         debug_assert!(
-            matches!(entry.kind, EntryKind::Value | EntryKind::HiddenValue),
+            matches!(entry.kind.class(), Some(EntryClass::Value)),
             "slot is not a value"
         );
         self.values.read(entry.payload)
@@ -865,7 +1060,7 @@ impl SlotStorage {
     pub(crate) fn read_value_mut<T: 'static>(&mut self, index: usize) -> &mut T {
         let entry = self.entry(index).expect("slot index out of bounds");
         debug_assert!(
-            matches!(entry.kind, EntryKind::Value | EntryKind::HiddenValue),
+            matches!(entry.kind.class(), Some(EntryClass::Value)),
             "slot is not a value"
         );
         self.values.read_mut(entry.payload)
@@ -874,7 +1069,7 @@ impl SlotStorage {
     pub(crate) fn write_value<T: 'static>(&mut self, index: usize, value: T) {
         let entry = self.entry(index).expect("slot index out of bounds");
         debug_assert!(
-            matches!(entry.kind, EntryKind::Value | EntryKind::HiddenValue),
+            matches!(entry.kind.class(), Some(EntryClass::Value)),
             "slot is not a value"
         );
         self.values.write(entry.payload, value);
@@ -886,9 +1081,9 @@ impl SlotStorage {
 
     pub(crate) fn insert_node(&mut self, index: usize, anchor: AnchorId, node: u32, hidden: bool) {
         let kind = if hidden {
-            EntryKind::HiddenNode
+            EntryKind::hidden(EntryClass::Node)
         } else {
-            EntryKind::Node
+            EntryKind::live(EntryClass::Node)
         };
         self.buffer.insert_entry(
             index,
@@ -911,9 +1106,9 @@ impl SlotStorage {
     ) -> Option<DeferredDrop> {
         let dropped = self.drop_entry(index);
         let kind = if hidden {
-            EntryKind::HiddenNode
+            EntryKind::hidden(EntryClass::Node)
         } else {
-            EntryKind::Node
+            EntryKind::live(EntryClass::Node)
         };
         self.buffer.set_entry(
             index,
@@ -931,50 +1126,111 @@ impl SlotStorage {
 
     pub(crate) fn node_at(&self, index: usize) -> Option<(EntryKind, NodeId, u32)> {
         let entry = self.entry(index)?;
-        matches!(entry.kind, EntryKind::Node | EntryKind::HiddenNode).then(|| {
+        matches!(entry.kind.class(), Some(EntryClass::Node)).then(|| {
             let (id, generation) = self.nodes.get(entry.payload);
             (entry.kind, id, generation)
         })
     }
 
-    pub(crate) fn hide_entry(&mut self, index: usize) -> Option<StorageLifecycleEvent> {
-        let entry = self.entry(index)?;
+    fn hide_entry_into(&mut self, index: usize, effects: &mut StorageEffects) -> bool {
+        let Some(entry) = self.entry(index) else {
+            return false;
+        };
+        let Some(class) = entry.kind.class() else {
+            return false;
+        };
+        if entry.kind.is_hidden() {
+            return false;
+        }
 
-        match entry.kind {
-            EntryKind::Group => {
-                self.buffer.set_kind(index, EntryKind::HiddenGroup);
-                self.hidden_count += 1;
-                self.groups
-                    .scope(entry.payload)
-                    .cloned()
-                    .map(StorageLifecycleEvent::DeactivateScope)
+        self.buffer.set_kind(index, entry.kind.hide());
+        self.hidden_count += 1;
+        match class {
+            EntryClass::Group => {
+                if let Some(scope) = self.groups.scope(entry.payload).cloned() {
+                    effects.deactivate_scope(scope);
+                }
             }
-            EntryKind::Value => {
-                self.buffer.set_kind(index, EntryKind::HiddenValue);
-                self.hidden_count += 1;
-                None
-            }
-            EntryKind::Node => {
+            EntryClass::Value => {}
+            EntryClass::Node => {
                 let (id, generation) = self.nodes.get(entry.payload);
-                self.buffer.set_kind(index, EntryKind::HiddenNode);
-                self.hidden_count += 1;
-                Some(StorageLifecycleEvent::OrphanNode(OrphanedNode::new(
-                    id,
-                    generation,
-                    entry.anchor,
-                )))
+                effects.orphan_node(OrphanedNode::new(id, generation, entry.anchor));
             }
-            EntryKind::HiddenGroup
-            | EntryKind::HiddenValue
-            | EntryKind::HiddenNode
-            | EntryKind::Unused => None,
+        }
+        true
+    }
+
+    pub(crate) fn hide_range(&mut self, start: usize, end: usize) -> HideRangeResult {
+        let end = end.min(self.len());
+        let mut effects = StorageEffects::default();
+        let mut hidden_group_roots = Vec::new();
+        let mut top_level_hidden_group_roots = Vec::new();
+        let mut marked_any = false;
+        let mut newly_hidden_entries = 0usize;
+        let mut index = start;
+
+        while index < end {
+            let Some(kind) = self.entry_kind(index) else {
+                break;
+            };
+            let extent = self.entry_scan_extent(index).max(1);
+            match kind {
+                EntryKind::Occupied {
+                    class: EntryClass::Group,
+                    visibility: EntryVisibility::Live,
+                } => {
+                    let subtree_end = (index + extent).min(end);
+                    top_level_hidden_group_roots.push(index);
+                    for child in index..subtree_end {
+                        if self.entry_kind(child) == Some(EntryKind::live(EntryClass::Group)) {
+                            hidden_group_roots.push((child, self.entry_scan_extent(child).max(1)));
+                        }
+                        if self.hide_entry_into(child, &mut effects) {
+                            marked_any = true;
+                            newly_hidden_entries += 1;
+                        }
+                    }
+                    index = subtree_end;
+                }
+                EntryKind::Occupied {
+                    class: EntryClass::Value | EntryClass::Node,
+                    visibility: EntryVisibility::Live,
+                } => {
+                    if self.hide_entry_into(index, &mut effects) {
+                        marked_any = true;
+                        newly_hidden_entries += 1;
+                    }
+                    index += 1;
+                }
+                EntryKind::Occupied {
+                    visibility: EntryVisibility::Hidden,
+                    ..
+                } => {
+                    index += extent;
+                }
+                EntryKind::Unused => {
+                    index += 1;
+                }
+            }
+        }
+
+        if marked_any {
+            self.needs_compact = true;
+        }
+
+        HideRangeResult {
+            effects,
+            hidden_group_roots,
+            top_level_hidden_group_roots,
+            marked_any,
+            newly_hidden_entries,
         }
     }
 
     pub(crate) fn restore_hidden_entry(&mut self, index: usize) {
         if let Some(entry) = self.entry(index) {
             if entry.kind.is_hidden() {
-                self.hidden_count = self.hidden_count.saturating_sub(1);
+                self.decrement_hidden_count();
             }
             self.buffer.set_kind(index, entry.kind.restore());
         }
@@ -984,17 +1240,17 @@ impl SlotStorage {
         let entry = self.entry(index)?;
 
         if entry.kind.is_hidden() {
-            self.hidden_count = self.hidden_count.saturating_sub(1);
+            self.decrement_hidden_count();
         }
 
-        let deferred_drop = match entry.kind {
-            EntryKind::Group | EntryKind::HiddenGroup => Some(self.groups.take_drop(entry.payload)),
-            EntryKind::Value | EntryKind::HiddenValue => Some(self.values.take_drop(entry.payload)),
-            EntryKind::Node | EntryKind::HiddenNode => {
+        let deferred_drop = match entry.kind.class() {
+            Some(EntryClass::Group) => Some(self.groups.take_drop(entry.payload)),
+            Some(EntryClass::Value) => Some(self.values.take_drop(entry.payload)),
+            Some(EntryClass::Node) => {
                 self.nodes.free(entry.payload);
                 None
             }
-            EntryKind::Unused => None,
+            None => None,
         };
 
         if entry.anchor.is_valid() {
@@ -1017,14 +1273,22 @@ impl SlotStorage {
         };
 
         match self.node_at(index) {
-            Some((EntryKind::Node, id, generation))
-                if id == orphaned.id && generation == orphaned.generation =>
-            {
-                NodeSlotState::Active
-            }
-            Some((EntryKind::HiddenNode, id, generation))
-                if id == orphaned.id && generation == orphaned.generation =>
-            {
+            Some((
+                EntryKind::Occupied {
+                    class: EntryClass::Node,
+                    visibility: EntryVisibility::Live,
+                },
+                id,
+                generation,
+            )) if id == orphaned.id && generation == orphaned.generation => NodeSlotState::Active,
+            Some((
+                EntryKind::Occupied {
+                    class: EntryClass::Node,
+                    visibility: EntryVisibility::Hidden,
+                },
+                id,
+                generation,
+            )) if id == orphaned.id && generation == orphaned.generation => {
                 NodeSlotState::PreservedGap
             }
             _ => NodeSlotState::Missing,
@@ -1094,17 +1358,19 @@ impl SlotStorage {
         while index < old_len {
             while stack.last().is_some_and(|frame| frame.end <= index) {
                 let frame = stack.pop().expect("compaction frame");
+                let live_extent = kept.saturating_sub(frame.kept_before);
                 self.groups
-                    .set_extent(frame.group, kept.saturating_sub(frame.kept_before));
-                let boundary_key = self.groups.retention(frame.group).boundary_key();
-                self.groups
-                    .set_retention(frame.group, GroupRetention::clean(boundary_key));
+                    .set_spans(frame.group, GroupSpans::new(live_extent, live_extent));
+                self.groups.set_hidden_descendants(frame.group, 0);
             }
 
             let entry = self.entry(index).expect("entry during compaction");
             if entry.kind.is_hidden() {
-                if entry.kind == EntryKind::HiddenGroup {
-                    let hidden_len = self.group_extent_at(index);
+                if entry
+                    .kind
+                    .matches(EntryClass::Group, EntryVisibility::Hidden)
+                {
+                    let hidden_len = self.group_scan_extent_at(index);
                     for hidden_index in index..index + hidden_len {
                         let hidden_entry = self.entry(hidden_index).expect("hidden entry");
                         if let Some(deferred_drop) = self.collect_removed_entry(hidden_entry) {
@@ -1121,10 +1387,10 @@ impl SlotStorage {
                 continue;
             }
 
-            if entry.kind == EntryKind::Group {
+            if entry.kind.matches(EntryClass::Group, EntryVisibility::Live) {
                 stack.push(CompactionFrame {
                     group: entry.payload,
-                    end: index + self.group_extent_at(index),
+                    end: index + self.group_scan_extent_at(index),
                     kept_before: kept,
                 });
             }
@@ -1135,11 +1401,10 @@ impl SlotStorage {
         }
 
         while let Some(frame) = stack.pop() {
+            let live_extent = kept.saturating_sub(frame.kept_before);
             self.groups
-                .set_extent(frame.group, kept.saturating_sub(frame.kept_before));
-            let boundary_key = self.groups.retention(frame.group).boundary_key();
-            self.groups
-                .set_retention(frame.group, GroupRetention::clean(boundary_key));
+                .set_spans(frame.group, GroupSpans::new(live_extent, live_extent));
+            self.groups.set_hidden_descendants(frame.group, 0);
         }
 
         self.rebuild_live_arenas(&mut survivors);
@@ -1156,8 +1421,8 @@ impl SlotStorage {
             let Some(entry) = self.entry(index) else {
                 continue;
             };
-            match entry.kind {
-                EntryKind::Group | EntryKind::HiddenGroup => {
+            match entry.kind.class() {
+                Some(EntryClass::Group) => {
                     if self.groups.scope(entry.payload).is_some() {
                         let name = std::any::type_name::<RecomposeScope>();
                         let bytes = std::mem::size_of::<RecomposeScope>();
@@ -1166,13 +1431,13 @@ impl SlotStorage {
                         count.1 += bytes;
                     }
                 }
-                EntryKind::Value | EntryKind::HiddenValue => {
+                Some(EntryClass::Value) => {
                     let stat = self.values.type_debug_stat(entry.payload);
                     let count = counts.entry(stat.type_name).or_insert((0, 0));
                     count.0 += 1;
                     count.1 += stat.inline_payload_bytes;
                 }
-                EntryKind::Node | EntryKind::HiddenNode | EntryKind::Unused => {}
+                Some(EntryClass::Node) | None => {}
             }
         }
 
@@ -1210,14 +1475,14 @@ impl SlotStorage {
     }
 
     fn collect_removed_entry(&mut self, entry: EntryDescriptor) -> Option<DeferredDrop> {
-        let deferred_drop = match entry.kind {
-            EntryKind::Group | EntryKind::HiddenGroup => Some(self.groups.take_drop(entry.payload)),
-            EntryKind::Value | EntryKind::HiddenValue => Some(self.values.take_drop(entry.payload)),
-            EntryKind::Node | EntryKind::HiddenNode => {
+        let deferred_drop = match entry.kind.class() {
+            Some(EntryClass::Group) => Some(self.groups.take_drop(entry.payload)),
+            Some(EntryClass::Value) => Some(self.values.take_drop(entry.payload)),
+            Some(EntryClass::Node) => {
                 self.nodes.free(entry.payload);
                 None
             }
-            EntryKind::Unused => None,
+            None => None,
         };
         if entry.anchor.is_valid() {
             self.anchor_map.free_anchor(entry.anchor);
@@ -1235,14 +1500,15 @@ impl SlotStorage {
         let mut rebuilt_nodes = NodeArena::default();
 
         for entry in survivors {
-            entry.payload = match entry.kind {
-                EntryKind::Group => rebuilt_groups.push_record(groups.take_live(entry.payload)),
-                EntryKind::Value => rebuilt_values.push_record(values.take_live(entry.payload)),
-                EntryKind::Node => rebuilt_nodes.push_record(nodes.take_live(entry.payload)),
-                EntryKind::HiddenGroup
-                | EntryKind::HiddenValue
-                | EntryKind::HiddenNode
-                | EntryKind::Unused => entry.payload,
+            entry.payload = match entry.kind.class() {
+                Some(EntryClass::Group) => {
+                    rebuilt_groups.push_record(groups.take_live(entry.payload))
+                }
+                Some(EntryClass::Value) => {
+                    rebuilt_values.push_record(values.take_live(entry.payload))
+                }
+                Some(EntryClass::Node) => rebuilt_nodes.push_record(nodes.take_live(entry.payload)),
+                None => entry.payload,
             };
         }
 
@@ -1272,6 +1538,13 @@ impl SlotStorage {
         if kind.is_hidden() {
             self.hidden_count += 1;
         }
+    }
+
+    fn decrement_hidden_count(&mut self) {
+        self.hidden_count = self
+            .hidden_count
+            .checked_sub(1)
+            .expect("hidden entry count underflow");
     }
 }
 

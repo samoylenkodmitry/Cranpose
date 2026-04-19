@@ -39,7 +39,7 @@ fn main() {
                 TabAxis::Vertical => span_y > root.3 - 40.0,
             };
 
-            let find_tab = |tabs: &Vec<(String, (f32, f32, f32, f32))>, label: &str| {
+            let find_tab = |tabs: &TabBounds, label: &str| {
                 tabs.iter()
                     .find(|(name, _)| name == label)
                     .map(|(_, bounds)| *bounds)
@@ -168,3 +168,4 @@ fn main() {
             app::combined_app();
         });
 }
+type TabBounds = Vec<(String, (f32, f32, f32, f32))>;

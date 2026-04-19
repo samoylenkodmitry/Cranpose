@@ -58,8 +58,7 @@ fn main() {
             println!("Checking visible items...");
 
             let viewport_bounds =
-                find_in_semantics(&robot, |elem| find_text_exact(elem, "LazyListViewport"))
-                    .map(|(x, y, w, h)| (x, y, w, h));
+                find_in_semantics(&robot, |elem| find_text_exact(elem, "LazyListViewport"));
 
             let is_visible = |bounds: (f32, f32, f32, f32)| -> bool {
                 if let Some((vx, vy, vw, vh)) = viewport_bounds {

@@ -140,7 +140,7 @@ fn main() {
                 after_down_item, after_down_y
             );
 
-            let item_jump = (after_down_item as i32 - before_item as i32).abs();
+            let item_jump = (after_down_item - before_item).abs();
             if item_jump > 1 {
                 println!(
                     "  ✗ JUMP DETECTED! Jumped {} items on mouse down!",

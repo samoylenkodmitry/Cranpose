@@ -122,15 +122,15 @@ fn main() {
                     );
                     println!("\n=== Bug is FIXED: LazyList redraws after Jump to Middle ===");
                 }
-                Some(index) if index == 0 => {
-                    println!("");
+                Some(0) => {
+                    println!();
                     println!("╔════════════════════════════════════════════════════════════════╗");
                     println!("║  FAIL: FirstIndex is still 0 after Jump to Middle!            ║");
                     println!("║                                                                ║");
                     println!("║  This proves the REDRAW BUG exists:                            ║");
                     println!("║  scroll_to_item updated data but UI didn't redraw.            ║");
                     println!("╚════════════════════════════════════════════════════════════════╝");
-                    println!("");
+                    println!();
                     robot.exit().ok();
                     std::process::exit(1);
                 }
@@ -156,7 +156,7 @@ fn main() {
                 || find_text_in_semantics(&robot, "Hello #0").is_some();
 
             if found_item_0 {
-                println!("");
+                println!();
                 println!("╔════════════════════════════════════════════════════════════════╗");
                 println!("║  FAIL: Item #0 is STILL VISIBLE after Jump to Middle!          ║");
                 println!("║                                                                ║");
@@ -165,7 +165,7 @@ fn main() {
                 println!("║  - But LazyColumn ITEMS did NOT rebuild/redraw                 ║");
                 println!("║  - The lazy list content is stale until user scrolls           ║");
                 println!("╚════════════════════════════════════════════════════════════════╝");
-                println!("");
+                println!();
                 robot.exit().ok();
                 std::process::exit(1);
             } else {

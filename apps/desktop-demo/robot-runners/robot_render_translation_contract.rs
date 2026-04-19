@@ -120,10 +120,12 @@ fn verify_text_drag_release_contract(robot: &cranpose::Robot) {
         before_region,
         &after_shot,
         after_region,
-        TEXT_PIXEL_DIFFERENCE_TOLERANCE,
-        TEXT_MAX_DIFFERING_PIXELS,
-        TEXT_MAX_PIXEL_DIFFERENCE,
-        Some(TEXT_DOWNSAMPLE_FACTOR),
+        RegionStabilityConfig {
+            difference_tolerance: TEXT_PIXEL_DIFFERENCE_TOLERANCE,
+            max_differing_pixels: TEXT_MAX_DIFFERING_PIXELS,
+            max_pixel_difference: TEXT_MAX_PIXEL_DIFFERENCE,
+            downsample_factor: Some(TEXT_DOWNSAMPLE_FACTOR),
+        },
     );
 }
 
@@ -200,10 +202,12 @@ fn verify_lazy_list_translation_contract(robot: &cranpose::Robot) {
         padded_region(before_item_bounds, 2.0),
         &after_shot,
         padded_region(after_item_bounds, 2.0),
-        LAZY_PIXEL_DIFFERENCE_TOLERANCE,
-        LAZY_TEXT_MAX_DIFFERING_PIXELS,
-        LAZY_TEXT_MAX_PIXEL_DIFFERENCE,
-        Some(LAZY_DOWNSAMPLE_FACTOR),
+        RegionStabilityConfig {
+            difference_tolerance: LAZY_PIXEL_DIFFERENCE_TOLERANCE,
+            max_differing_pixels: LAZY_TEXT_MAX_DIFFERING_PIXELS,
+            max_pixel_difference: LAZY_TEXT_MAX_PIXEL_DIFFERENCE,
+            downsample_factor: Some(LAZY_DOWNSAMPLE_FACTOR),
+        },
     );
     assert_normalized_region_stable(
         "lazy_hello_label",
@@ -211,10 +215,12 @@ fn verify_lazy_list_translation_contract(robot: &cranpose::Robot) {
         padded_region(before_hello_bounds, 2.0),
         &after_shot,
         padded_region(after_hello_bounds, 2.0),
-        LAZY_PIXEL_DIFFERENCE_TOLERANCE,
-        LAZY_TEXT_MAX_DIFFERING_PIXELS,
-        LAZY_TEXT_MAX_PIXEL_DIFFERENCE,
-        Some(LAZY_DOWNSAMPLE_FACTOR),
+        RegionStabilityConfig {
+            difference_tolerance: LAZY_PIXEL_DIFFERENCE_TOLERANCE,
+            max_differing_pixels: LAZY_TEXT_MAX_DIFFERING_PIXELS,
+            max_pixel_difference: LAZY_TEXT_MAX_PIXEL_DIFFERENCE,
+            downsample_factor: Some(LAZY_DOWNSAMPLE_FACTOR),
+        },
     );
 }
 
@@ -274,10 +280,12 @@ fn verify_lazy_list_drag_release_contract(robot: &cranpose::Robot) {
         during_drag.capture_region,
         &after_shot,
         after_release.capture_region,
-        LAZY_PIXEL_DIFFERENCE_TOLERANCE,
-        LAZY_MAX_DIFFERING_PIXELS,
-        LAZY_MAX_PIXEL_DIFFERENCE,
-        Some(LAZY_DOWNSAMPLE_FACTOR),
+        RegionStabilityConfig {
+            difference_tolerance: LAZY_PIXEL_DIFFERENCE_TOLERANCE,
+            max_differing_pixels: LAZY_MAX_DIFFERING_PIXELS,
+            max_pixel_difference: LAZY_MAX_PIXEL_DIFFERENCE,
+            downsample_factor: Some(LAZY_DOWNSAMPLE_FACTOR),
+        },
     );
 }
 
@@ -358,16 +366,20 @@ fn scroll_at(robot: &cranpose::Robot, center: (f32, f32), delta_y: f32) {
     let _ = robot.wait_for_idle();
 }
 
+struct RegionStabilityConfig {
+    difference_tolerance: u32,
+    max_differing_pixels: usize,
+    max_pixel_difference: u32,
+    downsample_factor: Option<u32>,
+}
+
 fn assert_normalized_region_stable(
     name: &str,
     before_shot: &cranpose::RobotScreenshot,
     before_region: (f32, f32, f32, f32),
     after_shot: &cranpose::RobotScreenshot,
     after_region: (f32, f32, f32, f32),
-    difference_tolerance: u32,
-    max_differing_pixels: usize,
-    max_pixel_difference: u32,
-    downsample_factor: Option<u32>,
+    config: RegionStabilityConfig,
 ) {
     let output_size = region_output_size(before_region);
     let before =
@@ -375,22 +387,25 @@ fn assert_normalized_region_stable(
             .expect("normalize before screenshot");
     let after = normalize_screenshot_region(after_shot, after_region, output_size.0, output_size.1)
         .expect("normalize after screenshot");
-    let before = downsample_factor
+    let before = config
+        .downsample_factor
         .filter(|factor| *factor > 1)
         .map(|factor| box_downsample_screenshot(&before, factor))
         .unwrap_or(before);
-    let after = downsample_factor
+    let after = config
+        .downsample_factor
         .filter(|factor| *factor > 1)
         .map(|factor| box_downsample_screenshot(&after, factor))
         .unwrap_or(after);
-    let stats = screenshot_difference_stats(&before, &after, difference_tolerance)
+    let stats = screenshot_difference_stats(&before, &after, config.difference_tolerance)
         .expect("normalized screenshots should have matching size");
     println!(
         "  {} normalized diff: differing_pixels={} max_diff={}",
         name, stats.differing_pixels, stats.max_difference
     );
 
-    if stats.differing_pixels > max_differing_pixels || stats.max_difference > max_pixel_difference
+    if stats.differing_pixels > config.max_differing_pixels
+        || stats.max_difference > config.max_pixel_difference
     {
         save_debug_images(name, before_shot, after_shot, &before, &after);
         let diff = stats

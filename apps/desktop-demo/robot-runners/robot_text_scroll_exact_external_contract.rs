@@ -152,9 +152,7 @@ struct InternalDiagnostic {
 }
 
 fn prepare_internal_diagnostic() -> Option<InternalDiagnostic> {
-    if std::env::var_os(INTERNAL_DIAGNOSTIC_ENV).is_none() {
-        return None;
-    }
+    std::env::var_os(INTERNAL_DIAGNOSTIC_ENV)?;
 
     let output_dir = PathBuf::from("/tmp/cranpose_text_scroll_exact_internal");
     recreate_output_dir(&output_dir);

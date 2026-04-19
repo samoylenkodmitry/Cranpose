@@ -179,14 +179,14 @@ fn provider_items_test_app() {
                 Modifier::empty().padding(4.0),
                 TextStyle::default(),
             );
-            lazy_list_with_provider(state1.clone(), Rc::clone(&data));
+            lazy_list_with_provider(state1, Rc::clone(&data));
 
             Text(
                 "items_indexed_with_provider (callback with index):",
                 Modifier::empty().padding(4.0),
                 TextStyle::default(),
             );
-            lazy_list_with_indexed_provider(state2.clone(), Rc::clone(&data));
+            lazy_list_with_indexed_provider(state2, Rc::clone(&data));
         },
     );
 }

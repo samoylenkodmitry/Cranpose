@@ -60,14 +60,14 @@ fn main() {
                     println!("✓ PASS: scroll_to_item triggered immediate redraw!");
                 }
                 None => {
-                    println!("");
+                    println!();
                     println!("╔════════════════════════════════════════════════════════════════╗");
                     println!("║  FAIL: Item 50 NOT visible after scroll_to_item!               ║");
                     println!("║                                                                ║");
                     println!("║  This indicates the redraw bug is present:                     ║");
                     println!("║  scroll_to_item updated data but didn't trigger render.        ║");
                     println!("╚════════════════════════════════════════════════════════════════╝");
-                    println!("");
+                    println!();
                     panic!("REDRAW BUG: Item 50 NOT visible after scroll_to_item!");
                 }
             }

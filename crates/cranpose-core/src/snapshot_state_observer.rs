@@ -547,7 +547,7 @@ impl SnapshotStateObserverInner {
             return;
         }
 
-        let mut seen_scope_ids = HashSet::default();
+        let mut seen_scope_ids: HashSet<usize> = HashSet::default();
         let mut to_notify: Vec<Rc<RefCell<ScopeEntry>>> = Vec::new();
         {
             let observed_to_scopes = self.observed_to_scopes.borrow();

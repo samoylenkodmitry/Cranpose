@@ -1,3 +1,4 @@
+use super::{NodeSlotState, SlotTable};
 use crate::{runtime, AnchorId, NodeId, RecomposeScope};
 use std::any::Any;
 
@@ -71,6 +72,18 @@ impl<T> ChunkedPending<T> {
         self.sealed = Vec::new();
         if self.active.capacity() > retained.saturating_mul(4) {
             self.active = Vec::with_capacity(retained.max(initial_capacity));
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    fn visit(&self, mut visitor: impl FnMut(&T)) {
+        for chunk in &self.sealed {
+            for value in chunk {
+                visitor(value);
+            }
+        }
+        for value in &self.active {
+            visitor(value);
         }
     }
 }
@@ -177,12 +190,20 @@ impl OrphanedNodeIds {
         self.inner
             .trim_retained_capacity(retained, Self::INITIAL_CAPACITY);
     }
+
+    #[cfg(debug_assertions)]
+    pub(in crate::slot_table) fn snapshot(&self) -> Vec<OrphanedNode> {
+        let mut orphaned = Vec::with_capacity(self.len());
+        self.inner.visit(|node| orphaned.push(*node));
+        orphaned
+    }
 }
 
 #[derive(Default)]
 pub(crate) struct SlotLifecycleCoordinator {
     pending_drops: PendingDrops<DeferredDrop>,
     orphaned_node_ids: OrphanedNodeIds,
+    preserved_orphaned_node_ids: OrphanedNodeIds,
 }
 
 impl SlotLifecycleCoordinator {
@@ -214,6 +235,10 @@ impl SlotLifecycleCoordinator {
         self.orphaned_node_ids.push(orphaned);
     }
 
+    pub(crate) fn preserve_orphaned_node(&mut self, orphaned: OrphanedNode) {
+        self.preserved_orphaned_node_ids.push(orphaned);
+    }
+
     pub(crate) fn drain_orphaned_node_ids_with(&mut self, visitor: impl FnMut(OrphanedNode)) {
         self.orphaned_node_ids.drain_forward(visitor);
     }
@@ -230,6 +255,17 @@ impl SlotLifecycleCoordinator {
         self.pending_drops.trim_retained_capacity(retained);
     }
 
+    pub(crate) fn reconcile_orphaned_nodes(&mut self, table: &SlotTable) {
+        let preserved = self.drain_preserved_orphaned_node_ids();
+        for orphaned in preserved {
+            match table.orphaned_node_state(orphaned) {
+                NodeSlotState::Active => {}
+                NodeSlotState::PreservedGap => self.preserve_orphaned_node(orphaned),
+                NodeSlotState::Missing => self.queue_orphaned_node(orphaned),
+            }
+        }
+    }
+
     pub(crate) fn dispose_drops_reverse(&mut self, mut drops: Vec<DeferredDrop>) {
         let _teardown = runtime::enter_state_teardown_scope();
         while let Some(deferred_drop) = drops.pop() {
@@ -239,5 +275,29 @@ impl SlotLifecycleCoordinator {
 
     pub(crate) fn trim_orphaned_node_capacity(&mut self, retained: usize) {
         self.orphaned_node_ids.trim_retained_capacity(retained);
+    }
+
+    #[cfg(debug_assertions)]
+    pub(crate) fn orphaned_node_ids_snapshot(&self) -> Vec<OrphanedNode> {
+        self.orphaned_node_ids.snapshot()
+    }
+
+    #[cfg(debug_assertions)]
+    pub(crate) fn preserved_orphaned_node_ids_snapshot(&self) -> Vec<OrphanedNode> {
+        self.preserved_orphaned_node_ids.snapshot()
+    }
+
+    pub(crate) fn clear_orphaned_nodes(&mut self) {
+        let _ = self.drain_orphaned_node_ids();
+        let _ = self.drain_preserved_orphaned_node_ids();
+        self.trim_orphaned_node_capacity(32);
+        self.preserved_orphaned_node_ids.trim_retained_capacity(32);
+    }
+
+    fn drain_preserved_orphaned_node_ids(&mut self) -> Vec<OrphanedNode> {
+        let mut orphaned = Vec::with_capacity(self.preserved_orphaned_node_ids.len());
+        self.preserved_orphaned_node_ids
+            .drain_forward(|node| orphaned.push(node));
+        orphaned
     }
 }

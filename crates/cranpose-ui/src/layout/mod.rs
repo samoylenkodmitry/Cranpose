@@ -918,7 +918,8 @@ impl LayoutBuilderState {
         let measure_error = RefCell::new(None);
         let state_rc_for_subcompose = Rc::clone(&state_rc_clone);
         let error_for_subcompose = &measure_error;
-        let measured_children = Rc::new(RefCell::new(HashMap::default()));
+        let measured_children: Rc<RefCell<HashMap<NodeId, Rc<MeasuredNode>>>> =
+            Rc::new(RefCell::new(HashMap::default()));
         let measured_children_for_subcompose = Rc::clone(&measured_children);
 
         let measure_result = node_handle.measure(

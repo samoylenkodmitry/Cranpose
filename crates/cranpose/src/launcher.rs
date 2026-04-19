@@ -395,7 +395,7 @@ impl AppLauncher {
     ///
     /// * `app` - The `AndroidApp` handle provided by `android_activity`.
     /// * `content` - The root composable function of your application.
-    #[cfg(target_os = "android")]
+    #[cfg(all(feature = "android", target_os = "android"))]
     pub fn run(self, app: android_activity::AndroidApp, content: impl FnMut() + 'static) {
         let mut content = content;
         crate::android::run(app, self.settings, move || {

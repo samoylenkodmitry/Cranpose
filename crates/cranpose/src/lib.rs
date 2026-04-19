@@ -49,7 +49,7 @@ pub mod prelude {
 }
 
 // Platform-specific runtime modules
-#[cfg(all(feature = "android", feature = "renderer-wgpu"))]
+#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 pub mod android;
 
 #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
@@ -58,7 +58,7 @@ pub mod desktop;
 #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
 pub mod recorder;
 
-#[cfg(all(feature = "web", feature = "renderer-wgpu"))]
+#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
 pub mod web;
 
 // Re-export Robot type from desktop module when robot feature is enabled

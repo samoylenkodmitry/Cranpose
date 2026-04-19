@@ -27,7 +27,7 @@ fn main() {
     AppLauncher::new()
         .with_title("Robot: Modifier Render Test")
         .with_size(1200, 900)
-        .with_fonts(&DEMO_FONTS)
+        .with_fonts(DEMO_FONTS)
         .with_headless(true)
         .with_fps_counter(true)
         .with_test_driver(|robot| {

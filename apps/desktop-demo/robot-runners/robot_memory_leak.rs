@@ -255,7 +255,7 @@ fn log_runtime_stats(robot: &cranpose::Robot, phase: &str) {
     match robot.get_runtime_leak_debug_stats() {
         Ok(stats) => {
             eprintln!(
-                "[runtime:{phase}] nodes={}/{} live_heap_mb={:.1} recycled_heap_mb={:.1} slot_heap_mb={:.1} slots={}/{} pending={}/{} anchors={}/{} gap_metadata={}/{} free_anchors={}/{} groups={}/{} orphaned={}/{} scopes={}/{} commands={}/{} observer_states={}/{}",
+                "[runtime:{phase}] nodes={}/{} live_heap_mb={:.1} recycled_heap_mb={:.1} slot_heap_mb={:.1} slots={}/{} pending={}/{} anchors={}/{} hidden_entries={} preserved_groups={} free_anchors={}/{} groups={}/{} orphaned={}/{} scopes={}/{} commands={}/{} observer_states={}/{}",
                 stats.applier_stats.nodes_len,
                 stats.applier_stats.nodes_cap,
                 stats.live_node_heap_bytes as f64 / (1024.0 * 1024.0),
@@ -267,8 +267,8 @@ fn log_runtime_stats(robot: &cranpose::Robot, phase: &str) {
                 stats.slot_stats.pending_slot_drops_cap,
                 stats.slot_stats.anchors_len,
                 stats.slot_stats.anchors_cap,
-                stats.slot_stats.gap_metadata_len,
-                stats.slot_stats.gap_metadata_cap,
+                stats.slot_stats.hidden_entries_len,
+                stats.slot_stats.preserved_groups_len,
                 stats.slot_stats.free_anchor_ids_len,
                 stats.slot_stats.free_anchor_ids_cap,
                 stats.slot_stats.group_stack_len,
@@ -377,9 +377,7 @@ fn main() {
                     .map_err(|err| format!("invalid recursive depth {argument:?}: {err}"))?
                     .max(1);
                 desktop_app::app::TEST_RECURSIVE_LAYOUT_DEPTH_STATE.with(|cell| {
-                    let state = cell
-                        .borrow()
-                        .clone()
+                    let state = (*cell.borrow())
                         .ok_or_else(|| "recursive layout depth state unavailable".to_string())?;
                     state.set(depth);
                     Ok(Some(state.get().to_string()))

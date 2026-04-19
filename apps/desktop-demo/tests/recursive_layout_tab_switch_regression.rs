@@ -154,18 +154,18 @@ fn switching_away_from_deep_recursive_layout_releases_actual_app_tree() {
     );
     assert!(
         after_slot_table_heap <= baseline_slot_table_heap + 2 * 1024 * 1024,
-        "tab switch retained slot table heap: baseline={} after={} gap_metadata_cap={}",
+        "tab switch retained slot table heap: baseline={} after={} hidden_entries={}",
         baseline_slot_table_heap,
         after_slot_table_heap,
-        after_runtime.slot_stats.gap_metadata_cap,
+        after_runtime.slot_stats.hidden_entries_len,
     );
     assert_eq!(
-        after_runtime.slot_stats.gap_metadata_len, 0,
-        "tab switch left gap metadata live after compaction",
+        after_runtime.slot_stats.hidden_entries_len, 0,
+        "tab switch left hidden entries live after compaction",
     );
     assert!(
-        after_runtime.slot_stats.gap_metadata_cap <= 64,
-        "tab switch retained gap metadata capacity: {}",
-        after_runtime.slot_stats.gap_metadata_cap,
+        after_runtime.slot_stats.preserved_groups_len == 0,
+        "tab switch retained preserved groups after compaction: {}",
+        after_runtime.slot_stats.preserved_groups_len,
     );
 }

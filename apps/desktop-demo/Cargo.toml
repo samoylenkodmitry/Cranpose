@@ -154,6 +154,11 @@ path = "robot-runners/robot_increment_bug.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_counter_conditional_text_top"
+path = "robot-runners/robot_counter_conditional_text_top.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_tab_navigation"
 path = "robot-runners/robot_tab_navigation.rs"
 required-features = ["robot-app"]
@@ -301,6 +306,11 @@ required-features = ["robot-app"]
 [[example]]
 name = "robot_recursive_layout"
 path = "robot-runners/robot_recursive_layout.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_recursive_layout_depth_six"
+path = "robot-runners/robot_recursive_layout_depth_six.rs"
 required-features = ["robot-app"]
 
 [[example]]

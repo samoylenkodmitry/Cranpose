@@ -111,30 +111,34 @@ fn click_button(robot: &cranpose::Robot, label: &str) {
     let _ = robot.wait_for_idle();
 }
 
-fn drag_viewport(
-    robot: &cranpose::Robot,
-    viewport_bounds: (f32, f32, f32, f32),
+struct DragViewportConfig {
     from_frac: f32,
     to_frac: f32,
     steps: u32,
     step_delay_ms: u64,
     settle_delay_ms: u64,
     wait_for_idle: bool,
+}
+
+fn drag_viewport(
+    robot: &cranpose::Robot,
+    viewport_bounds: (f32, f32, f32, f32),
+    config: DragViewportConfig,
 ) {
     let x = viewport_bounds.0 + viewport_bounds.2 * 0.5;
-    let y0 = viewport_bounds.1 + viewport_bounds.3 * from_frac;
-    let y1 = viewport_bounds.1 + viewport_bounds.3 * to_frac;
+    let y0 = viewport_bounds.1 + viewport_bounds.3 * config.from_frac;
+    let y1 = viewport_bounds.1 + viewport_bounds.3 * config.to_frac;
     let _ = robot.mouse_move(x, y0);
     let _ = robot.mouse_down();
-    for step in 0..=steps {
-        let t = step as f32 / steps as f32;
+    for step in 0..=config.steps {
+        let t = step as f32 / config.steps as f32;
         let y = y0 + (y1 - y0) * t;
         let _ = robot.mouse_move(x, y);
-        std::thread::sleep(Duration::from_millis(step_delay_ms));
+        std::thread::sleep(Duration::from_millis(config.step_delay_ms));
     }
     let _ = robot.mouse_up();
-    std::thread::sleep(Duration::from_millis(settle_delay_ms));
-    if wait_for_idle {
+    std::thread::sleep(Duration::from_millis(config.settle_delay_ms));
+    if config.wait_for_idle {
         let _ = robot.wait_for_idle();
     }
 }
@@ -291,12 +295,14 @@ fn drag_down_until_stalled(
         drag_viewport(
             robot,
             viewport_bounds,
-            down_drag_from_frac,
-            down_drag_to_frac,
-            7,
-            8,
-            120,
-            true,
+            DragViewportConfig {
+                from_frac: down_drag_from_frac,
+                to_frac: down_drag_to_frac,
+                steps: 7,
+                step_delay_ms: 8,
+                settle_delay_ms: 120,
+                wait_for_idle: true,
+            },
         );
 
         let current_sig = viewport_signature(robot, viewport_bounds);

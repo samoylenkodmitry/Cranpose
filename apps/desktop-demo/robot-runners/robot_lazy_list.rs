@@ -80,8 +80,10 @@ fn main() {
 
             // Find items with FULL BOUNDS (x, y, width, height)
             let find_visible_items_with_bounds = || {
-                let mut items: Vec<(usize, (f32, f32, f32, f32), (f32, f32, f32, f32))> =
-                    Vec::new(); // (index, row_bounds, group_bounds)
+                type Rect = (f32, f32, f32, f32);
+                type VisibleItemBounds = (usize, Rect, Rect);
+
+                let mut items: Vec<VisibleItemBounds> = Vec::new(); // (index, row_bounds, group_bounds)
                 for i in 0..20 {
                     let item_text = format!("ItemRow #{}", i);
                     let item_bounds = find_in_semantics(&robot, |elem| {

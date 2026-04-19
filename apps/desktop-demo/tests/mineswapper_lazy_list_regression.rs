@@ -106,7 +106,13 @@ fn assert_composition_contains_text(
 fn live_slot_count(slots: &[(usize, String)]) -> usize {
     slots
         .iter()
-        .filter(|(_, desc)| *desc != "Gap" && !desc.starts_with("Gap("))
+        .filter(|(_, desc)| {
+            *desc != "Gap"
+                && !desc.starts_with("Gap(")
+                && !desc.starts_with("HiddenGroup(")
+                && *desc != "HiddenValue"
+                && !desc.starts_with("HiddenNode(")
+        })
         .count()
 }
 

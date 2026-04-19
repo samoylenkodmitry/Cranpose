@@ -128,7 +128,7 @@ fn main() {
                             all_passed = false;
                         } else {
                             // Close to 50 is acceptable due to scroll settling
-                            if num >= 45 && num <= 55 {
+                            if (45..=55).contains(&num) {
                                 println!("  PASS: FirstIndex is {} (close to 50)\n", num);
                             } else {
                                 println!("  WARN: FirstIndex is {} (expected ~50)\n", num);

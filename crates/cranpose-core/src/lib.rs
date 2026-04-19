@@ -3356,6 +3356,7 @@ impl SlotsHost {
         }
 
         lifecycle.flush_pending_drops();
+        lifecycle.reconcile_orphaned_nodes(table);
         let mut outcome = SlotPassOutcome {
             removed_orphaned_nodes: lifecycle.drain_orphaned_nodes(table, applier),
             ..SlotPassOutcome::default()
@@ -3366,9 +3367,14 @@ impl SlotsHost {
             outcome.compacted = true;
             lifecycle.dispose_drops_reverse(removed);
         }
+        lifecycle.reconcile_orphaned_nodes(table);
         outcome.removed_orphaned_nodes |= lifecycle.drain_orphaned_nodes(table, applier);
+        debug_assert!(
+            lifecycle.orphaned_node_ids_len() == 0,
+            "slot pass left orphaned nodes queued after post-compaction drain"
+        );
         lifecycle.trim_orphaned_node_capacity(32);
-        table.flush();
+        table.debug_verify(Some(lifecycle));
         *active_pass_slot = None;
         outcome
     }

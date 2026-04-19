@@ -178,11 +178,7 @@ impl RenderStatsAccumulator {
     }
 
     fn average_u64(&self, total: u64) -> u64 {
-        if self.samples == 0 {
-            0
-        } else {
-            total / self.samples
-        }
+        total.checked_div(self.samples).unwrap_or(0)
     }
 
     fn cache_hit_rate_pct(self) -> f64 {
@@ -216,7 +212,6 @@ fn PerfHarnessApp(scenario: PerfScenario) {
                 Modifier::empty().fill_max_size().padding(14.0),
                 ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(10.0)),
                 {
-                    let list_state = list_state.clone();
                     move || {
                         Text(
                             format!("Perf Harness: {}", scenario.title()),
@@ -229,7 +224,7 @@ fn PerfHarnessApp(scenario: PerfScenario) {
                             TextStyle::default(),
                         );
 
-                        ScenarioViewport(list_state.clone(), scenario);
+                        ScenarioViewport(list_state, scenario);
                     }
                 },
             );
@@ -244,7 +239,6 @@ fn ScenarioViewport(list_state: LazyListState, scenario: PerfScenario) {
         Modifier::empty().fill_max_width().height(610.0),
         BoxSpec::new(),
         {
-            let list_state = list_state.clone();
             move || {
                 Box(
                     Modifier::empty()
@@ -259,9 +253,8 @@ fn ScenarioViewport(list_state: LazyListState, scenario: PerfScenario) {
                     Modifier::empty().fill_max_size().padding(12.0),
                     BoxSpec::new(),
                     {
-                        let list_state = list_state.clone();
                         move || {
-                            PerfScenarioList(list_state.clone(), scenario);
+                            PerfScenarioList(list_state, scenario);
                             if scenario == PerfScenario::BackdropBlur {
                                 BackdropOverlayCard();
                             }
@@ -310,7 +303,7 @@ fn PerfScenarioItem(index: usize, scenario: PerfScenario) {
 #[composable]
 #[allow(non_snake_case)]
 fn CacheRow(index: usize, scenario: PerfScenario) {
-    let card = if index % 2 == 0 {
+    let card = if index.is_multiple_of(2) {
         Color(0.11, 0.13, 0.18, 1.0)
     } else {
         Color(0.09, 0.11, 0.16, 1.0)
@@ -354,7 +347,7 @@ fn CacheRow(index: usize, scenario: PerfScenario) {
 #[composable]
 #[allow(non_snake_case)]
 fn TextHeavyRow(index: usize, scenario: PerfScenario) {
-    let card = if index % 2 == 0 {
+    let card = if index.is_multiple_of(2) {
         Color(0.14, 0.11, 0.09, 1.0)
     } else {
         Color(0.16, 0.13, 0.1, 1.0)
@@ -404,7 +397,7 @@ fn TextHeavyRow(index: usize, scenario: PerfScenario) {
 #[composable]
 #[allow(non_snake_case)]
 fn BackdropRow(index: usize) {
-    let base = if index % 3 == 0 {
+    let base = if index.is_multiple_of(3) {
         Color(0.18, 0.24, 0.32, 1.0)
     } else if index % 3 == 1 {
         Color(0.24, 0.18, 0.28, 1.0)
@@ -444,7 +437,7 @@ fn BackdropRow(index: usize) {
 #[composable]
 #[allow(non_snake_case)]
 fn OpaqueRow(index: usize) {
-    let primary = if index % 2 == 0 {
+    let primary = if index.is_multiple_of(2) {
         Color(0.18, 0.2, 0.24, 1.0)
     } else {
         Color(0.14, 0.16, 0.2, 1.0)

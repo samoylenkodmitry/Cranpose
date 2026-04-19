@@ -1,13 +1,19 @@
 use std::cell::{Cell, RefCell};
 
 use super::{
-    begin_group_for_test, compact_for_test, drain_orphaned_node_ids_for_test, hide_range_for_test,
+    begin_group_for_test,
+    boundary_policy::BoundaryTransition,
+    compact_for_test, drain_orphaned_node_ids_for_test, hide_range_for_test,
+    preserved_orphaned_node_ids_for_test,
     reuse_planner::{ReusePlanner, StartPlan},
-    storage::EntryKind,
-    GroupFrame, GroupRetention, NodeSlotState, PassBoundary, SlotLifecycleCoordinator,
-    SlotPassMode, SlotTable, SlotWriteSessionState,
+    storage::{EntryClass, EntryKind, GroupSpans},
+    verifier::SlotTableVerifier,
+    GroupFrame, NodeSlotState, PassBoundary, SlotLifecycleCoordinator, SlotPassMode, SlotTable,
+    SlotWriteSessionState,
 };
-use crate::{runtime::TestRuntime, GroupId, Owned, RecomposeScope, ScopeId, StartScopedGroup};
+use crate::{
+    runtime::TestRuntime, AnchorId, GroupId, Owned, RecomposeScope, ScopeId, StartScopedGroup,
+};
 
 thread_local! {
     static TEST_LIFECYCLE: RefCell<SlotLifecycleCoordinator> =
@@ -33,11 +39,13 @@ fn begin_scoped_group(
     key: crate::Key,
     init_scope: impl FnOnce() -> RecomposeScope,
 ) -> StartScopedGroup<GroupId> {
-    with_test_lifecycle(|lifecycle| {
+    let started = with_test_lifecycle(|lifecycle| {
         table
             .write_session(lifecycle, state, SlotPassMode::Compose)
             .begin_scoped_group(key, init_scope)
-    })
+    });
+    started.scope.set_group_anchor(started.anchor);
+    started
 }
 
 fn use_value_slot<T: 'static>(
@@ -115,8 +123,17 @@ fn drain_orphaned(table: &mut SlotTable) -> Vec<super::OrphanedNode> {
     with_test_lifecycle(drain_orphaned_node_ids_for_test)
 }
 
+fn preserved_orphaned(table: &SlotTable) -> Vec<super::OrphanedNode> {
+    let _ = table;
+    with_test_lifecycle(|lifecycle| preserved_orphaned_node_ids_for_test(lifecycle))
+}
+
 fn compact(table: &mut SlotTable) {
     with_test_lifecycle(|lifecycle| compact_for_test(table, lifecycle));
+}
+
+fn verify_table(table: &SlotTable) -> Result<(), String> {
+    with_test_lifecycle(|lifecycle| SlotTableVerifier::new(table, Some(lifecycle)).verify())
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -144,14 +161,15 @@ enum PlannedAction {
 fn describe_plan(plan: StartPlan) -> PlannedAction {
     match plan {
         StartPlan::ReuseLiveAtCursor {
-            extent,
+            scan_extent,
             boundary_key,
+            ..
         } => PlannedAction::ReuseLiveAtCursor {
-            extent,
+            extent: scan_extent,
             boundary_key,
         },
         StartPlan::RestoreHiddenAtCursor { group } => PlannedAction::RestoreHiddenAtCursor {
-            extent: group.extent as usize,
+            extent: group.spans.scan_extent(),
             boundary_key: group.retention.boundary_key(),
         },
         StartPlan::RestoreMatchingGroup {
@@ -159,7 +177,7 @@ fn describe_plan(plan: StartPlan) -> PlannedAction {
             retire_conflicting_group_at_cursor,
         } => PlannedAction::RestoreMatchingGroup {
             index: matched_group.index,
-            extent: matched_group.group.extent as usize,
+            extent: matched_group.group.spans.scan_extent(),
             boundary_key: matched_group.group.retention.boundary_key(),
             reused_hidden: matched_group.reused_hidden,
             retire_conflicting_group_at_cursor,
@@ -180,6 +198,26 @@ fn plan_start(
     parent_boundary: PassBoundary,
     current_parent_boundary_key: Option<crate::Key>,
 ) -> PlannedAction {
+    plan_start_with_parent_anchor(
+        table,
+        key,
+        cursor,
+        parent_end,
+        parent_boundary,
+        current_parent_boundary_key,
+        AnchorId::INVALID,
+    )
+}
+
+fn plan_start_with_parent_anchor(
+    table: &SlotTable,
+    key: crate::Key,
+    cursor: usize,
+    parent_end: usize,
+    parent_boundary: PassBoundary,
+    current_parent_boundary_key: Option<crate::Key>,
+    current_parent_anchor: AnchorId,
+) -> PlannedAction {
     describe_plan(
         ReusePlanner::new(
             &table.storage,
@@ -188,6 +226,7 @@ fn plan_start(
             parent_end,
             parent_boundary,
             current_parent_boundary_key,
+            current_parent_anchor,
         )
         .plan(),
     )
@@ -217,9 +256,18 @@ fn trim_marks_values_hidden_and_compaction_removes_them() {
 
     state.cursor = 1;
     assert!(finalize_current_group(&mut table, &mut state));
-    assert_eq!(table.storage.entry_kind(0), Some(EntryKind::Value));
-    assert_eq!(table.storage.entry_kind(1), Some(EntryKind::HiddenValue));
-    assert_eq!(table.storage.entry_kind(2), Some(EntryKind::HiddenValue));
+    assert_eq!(
+        table.storage.entry_kind(0),
+        Some(EntryKind::live(EntryClass::Value))
+    );
+    assert_eq!(
+        table.storage.entry_kind(1),
+        Some(EntryKind::hidden(EntryClass::Value))
+    );
+    assert_eq!(
+        table.storage.entry_kind(2),
+        Some(EntryKind::hidden(EntryClass::Value))
+    );
 
     compact(&mut table);
 
@@ -257,7 +305,10 @@ fn hidden_value_is_restored_without_running_initializer() {
 
     reset_session(&mut state);
     assert!(hide_range(&mut table, 0, 1, None));
-    assert_eq!(table.storage.entry_kind(0), Some(EntryKind::HiddenValue));
+    assert_eq!(
+        table.storage.entry_kind(0),
+        Some(EntryKind::hidden(EntryClass::Value))
+    );
 
     let initialized = Cell::new(false);
     reset_session(&mut state);
@@ -271,7 +322,10 @@ fn hidden_value_is_restored_without_running_initializer() {
         !initialized.get(),
         "hidden value reuse should not reinitialize"
     );
-    assert_eq!(table.storage.entry_kind(0), Some(EntryKind::Value));
+    assert_eq!(
+        table.storage.entry_kind(0),
+        Some(EntryKind::live(EntryClass::Value))
+    );
     assert_eq!(table.read_value::<i32>(0), &7);
 }
 
@@ -286,6 +340,8 @@ fn fresh_parent_inserts_before_hidden_value_instead_of_restoring_it() {
     state.group_stack.push(GroupFrame {
         start: 0,
         end: table.storage.len(),
+        stored_live_end: table.storage.len(),
+        live_end: table.storage.len(),
         pass_boundary: PassBoundary::Fresh { boundary_key: 1 },
     });
 
@@ -293,8 +349,14 @@ fn fresh_parent_inserts_before_hidden_value_instead_of_restoring_it() {
 
     assert_eq!(index, 0);
     assert_eq!(table.storage.len(), 2);
-    assert_eq!(table.storage.entry_kind(0), Some(EntryKind::Value));
-    assert_eq!(table.storage.entry_kind(1), Some(EntryKind::HiddenValue));
+    assert_eq!(
+        table.storage.entry_kind(0),
+        Some(EntryKind::live(EntryClass::Value))
+    );
+    assert_eq!(
+        table.storage.entry_kind(1),
+        Some(EntryKind::hidden(EntryClass::Value))
+    );
     assert_eq!(table.read_value::<i32>(0), &2);
 }
 
@@ -324,7 +386,7 @@ fn hidden_group_restore_reuses_scope() {
     ));
     assert_eq!(
         table.storage.entry_kind(child.group.0),
-        Some(EntryKind::HiddenGroup)
+        Some(EntryKind::hidden(EntryClass::Group))
     );
 
     reset_session(&mut state);
@@ -338,8 +400,38 @@ fn hidden_group_restore_reuses_scope() {
     assert_eq!(restored.scope.id(), child_scope_id);
     assert_eq!(
         table.storage.entry_kind(restored.group.0),
-        Some(EntryKind::Group)
+        Some(EntryKind::live(EntryClass::Group))
     );
+}
+
+#[test]
+fn restoring_hidden_value_clears_parent_preservation_immediately() {
+    let mut table = new_table();
+    let mut state = SlotWriteSessionState::default();
+
+    let root = begin_group_for_test(&mut table, &mut state, 1);
+    use_value_slot(&mut table, &mut state, || 7i32);
+    end_group(&mut table, &mut state);
+
+    assert!(hide_range(&mut table, 1, 2, Some(root.0)));
+    assert!(table.storage.group_hidden_descendants_at(root.0) > 0);
+
+    reset_session(&mut state);
+    let _root = begin_group_for_test(&mut table, &mut state, 1);
+    let restored = Cell::new(false);
+    let index = use_value_slot(&mut table, &mut state, || {
+        restored.set(true);
+        99i32
+    });
+    assert_eq!(index, 1);
+    end_group(&mut table, &mut state);
+    assert!(
+        !restored.get(),
+        "hidden value should restore without reinitializing"
+    );
+
+    assert_eq!(table.storage.group_hidden_descendants_at(root.0), 0);
+    verify_table(&table).expect("table should remain well-formed");
 }
 
 #[test]
@@ -350,13 +442,14 @@ fn orphaned_hidden_node_becomes_active_again_when_restored() {
 
     reset_session(&mut state);
     assert!(hide_range(&mut table, 0, 1, None));
-    let orphaned = drain_orphaned(&mut table);
+    let orphaned = preserved_orphaned(&table);
     assert_eq!(orphaned.len(), 1);
     let orphaned = orphaned[0];
     assert_eq!(
         table.orphaned_node_state(orphaned),
         NodeSlotState::PreservedGap
     );
+    assert!(drain_orphaned(&mut table).is_empty());
 
     reset_session(&mut state);
     record_node(&mut table, &mut state, 42, 7);
@@ -384,7 +477,6 @@ fn compaction_preserves_anchor_identity_for_shifted_slots() {
     });
     let survivor_anchor = table.storage.entry_anchor(survivor_index);
     end_group(&mut table, &mut compose_state);
-    table.flush();
 
     let resolved_index = table
         .storage
@@ -491,7 +583,6 @@ fn anchor_resolution_tracks_group_and_value_anchors_across_sibling_reorders() {
             group_anchors.insert(key, table.storage.entry_anchor(group.0));
             value_anchors.insert(key, table.storage.entry_anchor(value_index));
         }
-        table.flush();
 
         reset_session(&mut state);
         for key in order {
@@ -499,7 +590,6 @@ fn anchor_resolution_tracks_group_and_value_anchors_across_sibling_reorders() {
             let _value = use_value_slot(&mut table, &mut state, move || key as i32);
             end_group(&mut table, &mut state);
         }
-        table.flush();
 
         for (position, key) in order.into_iter().enumerate() {
             let expected_group_index = position * 2;
@@ -625,6 +715,81 @@ fn planner_moves_matching_live_group_only_when_parent_boundary_is_open() {
 }
 
 #[test]
+fn planner_rejects_live_group_candidates_from_the_wrong_parent() {
+    let mut table = new_table();
+    let mut state = SlotWriteSessionState::default();
+
+    let root = begin_group_for_test(&mut table, &mut state, 1);
+    let _child = begin_group_for_test(&mut table, &mut state, 2);
+    let nested = begin_group_for_test(&mut table, &mut state, 9);
+    end_group(&mut table, &mut state);
+    end_group(&mut table, &mut state);
+    end_group(&mut table, &mut state);
+
+    assert_ne!(
+        table.storage.group_parent_anchor_at(nested.0),
+        Some(table.storage.entry_anchor(root.0)),
+        "test setup must place the candidate under a different parent",
+    );
+
+    assert_eq!(
+        plan_start_with_parent_anchor(
+            &table,
+            9,
+            nested.0,
+            root.0 + table.storage.group_scan_extent_at(root.0),
+            PassBoundary::Open,
+            None,
+            table.storage.entry_anchor(root.0),
+        ),
+        PlannedAction::InsertFresh {
+            retire_conflicting_group_at_cursor: false,
+        },
+        "planner must not reuse a live descendant as a direct child candidate",
+    );
+}
+
+#[test]
+fn planner_rejects_preserved_live_group_when_previous_sibling_has_same_key() {
+    let mut table = new_table();
+    let mut state = SlotWriteSessionState::default();
+
+    let root = begin_group_for_test(&mut table, &mut state, 1);
+    let _first = begin_group_for_test(&mut table, &mut state, 7);
+    use_value_slot(&mut table, &mut state, || 11i32);
+    end_group(&mut table, &mut state);
+    let second = begin_group_for_test(&mut table, &mut state, 7);
+    let _second_live = use_value_slot(&mut table, &mut state, || 22i32);
+    let second_hidden = use_value_slot(&mut table, &mut state, || 33i32);
+    end_group(&mut table, &mut state);
+    end_group(&mut table, &mut state);
+
+    assert!(hide_range(
+        &mut table,
+        second_hidden,
+        second_hidden + 1,
+        Some(second.0),
+    ));
+    assert_eq!(table.storage.group_hidden_descendants_at(second.0), 1);
+
+    assert_eq!(
+        plan_start_with_parent_anchor(
+            &table,
+            7,
+            second.0,
+            root.0 + table.storage.group_scan_extent_at(root.0),
+            PassBoundary::Open,
+            None,
+            table.storage.entry_anchor(root.0),
+        ),
+        PlannedAction::InsertFresh {
+            retire_conflicting_group_at_cursor: false,
+        },
+        "planner must not reuse a preserved group occurrence when the previous sibling has the same key",
+    );
+}
+
+#[test]
 fn planner_hidden_group_restore_and_move_respects_parent_boundary() {
     let mut restore_only = new_table();
     let mut restore_state = SlotWriteSessionState::default();
@@ -636,9 +801,6 @@ fn planner_hidden_group_restore_and_move_respects_parent_boundary() {
         hidden_only.0 + 1,
         None,
     ));
-    restore_only
-        .storage
-        .set_group_retention(hidden_only.0, GroupRetention::preserved(7));
 
     let restore_cases = [
         (
@@ -715,9 +877,6 @@ fn planner_hidden_group_restore_and_move_respects_parent_boundary() {
         hidden.0 + 1,
         None,
     ));
-    restore_or_move
-        .storage
-        .set_group_retention(hidden.0, GroupRetention::preserved(7));
 
     for (label, parent_boundary, current_boundary_key) in [
         ("open", PassBoundary::Open, None),
@@ -747,4 +906,304 @@ fn planner_hidden_group_restore_and_move_respects_parent_boundary() {
             "{label} should move the later live group after a hidden placeholder",
         );
     }
+}
+
+#[test]
+fn fresh_boundary_reuse_live_enters_restricted_restored_mode() {
+    let boundary = PassBoundary::Fresh { boundary_key: 7 }
+        .transition(BoundaryTransition::ReuseLive { boundary_key: 11 });
+
+    assert_eq!(boundary, PassBoundary::Restored { boundary_key: 11 });
+    assert!(boundary.allows_exact_live_reuse());
+    assert!(!boundary.disallows_live_value_reuse());
+    assert_eq!(boundary.restricted_boundary(), Some(11));
+}
+
+#[test]
+fn fresh_boundary_restore_enters_restricted_restored_mode() {
+    let boundary = PassBoundary::Fresh { boundary_key: 7 }
+        .transition(BoundaryTransition::Restore { boundary_key: 13 });
+
+    assert_eq!(boundary, PassBoundary::Restored { boundary_key: 13 });
+    assert!(boundary.allows_exact_live_reuse());
+    assert!(!boundary.disallows_live_value_reuse());
+    assert_eq!(boundary.restricted_boundary(), Some(13));
+}
+
+#[test]
+fn restart_recompose_reopens_boundary_for_child_live_search() {
+    let runtime = TestRuntime::new();
+    let mut table = new_table();
+    let mut state = SlotWriteSessionState::default();
+
+    let root = begin_scoped_group(&mut table, &mut state, 10, || {
+        RecomposeScope::new(runtime.handle())
+    });
+    let _first = begin_group_for_test(&mut table, &mut state, 1);
+    end_group(&mut table, &mut state);
+    let _second = begin_group_for_test(&mut table, &mut state, 2);
+    end_group(&mut table, &mut state);
+    end_group(&mut table, &mut state);
+
+    reset_session(&mut state);
+    let started = start_recompose_at_anchor(&mut table, &mut state, root.anchor, root.scope.id());
+    assert_eq!(started, Some(root.group));
+    assert_eq!(
+        state.group_stack.last().map(|frame| frame.pass_boundary),
+        Some(PassBoundary::Open)
+    );
+
+    let _second = begin_group_for_test(&mut table, &mut state, 2);
+    end_group(&mut table, &mut state);
+    let _first = begin_group_for_test(&mut table, &mut state, 1);
+    end_group(&mut table, &mut state);
+    end_recompose(&mut table, &mut state);
+
+    assert_eq!(table.storage.group_key_at(0), Some(10));
+    assert_eq!(table.storage.group_key_at(1), Some(2));
+    assert_eq!(table.storage.group_key_at(2), Some(1));
+    verify_table(&table).expect("restarted recompose should keep the table well-formed");
+}
+
+#[test]
+fn verifier_rejects_invalid_group_spans() {
+    let mut table = new_table();
+    let mut state = SlotWriteSessionState::default();
+    let group = begin_group_for_test(&mut table, &mut state, 7);
+    end_group(&mut table, &mut state);
+
+    table
+        .storage
+        .set_group_spans(group.0, GroupSpans::new(3, 2));
+
+    let err = verify_table(&table).expect_err("invalid spans should fail verification");
+    assert!(err.contains("invalid spans"), "{err}");
+}
+
+#[test]
+fn verifier_rejects_unresolved_parent_anchor() {
+    let mut table = new_table();
+    let mut state = SlotWriteSessionState::default();
+    let group = begin_group_for_test(&mut table, &mut state, 7);
+    end_group(&mut table, &mut state);
+
+    table
+        .storage
+        .set_group_parent_anchor(group.0, AnchorId(999_999));
+
+    let err = verify_table(&table).expect_err("unresolved parent anchor should fail verification");
+    assert!(err.contains("unexpectedly has parent anchor"), "{err}");
+}
+
+#[test]
+fn verifier_rejects_wrong_resolved_parent_anchor() {
+    let mut table = new_table();
+    let mut state = SlotWriteSessionState::default();
+
+    let root = begin_group_for_test(&mut table, &mut state, 1);
+    let first_child = begin_group_for_test(&mut table, &mut state, 2);
+    end_group(&mut table, &mut state);
+    let second_child = begin_group_for_test(&mut table, &mut state, 3);
+    end_group(&mut table, &mut state);
+    end_group(&mut table, &mut state);
+
+    table
+        .storage
+        .set_group_parent_anchor(second_child.0, table.storage.entry_anchor(first_child.0));
+
+    let err =
+        verify_table(&table).expect_err("wrong resolved parent anchor should fail verification");
+    assert!(err.contains("wrong parent anchor"), "{err}");
+    assert_eq!(
+        table.storage.group_parent_anchor_at(second_child.0),
+        Some(table.storage.entry_anchor(first_child.0))
+    );
+    assert_eq!(
+        table.storage.group_parent_anchor_at(first_child.0),
+        Some(table.storage.entry_anchor(root.0))
+    );
+}
+
+#[test]
+fn planner_scans_preserved_tail_before_matching_the_next_sibling() {
+    let mut table = new_table();
+    let mut state = SlotWriteSessionState::default();
+
+    let root = begin_group_for_test(&mut table, &mut state, 1);
+    let first = begin_group_for_test(&mut table, &mut state, 2);
+    let first_live = use_value_slot(&mut table, &mut state, || 11i32);
+    let first_hidden = use_value_slot(&mut table, &mut state, || 12i32);
+    end_group(&mut table, &mut state);
+    let second = begin_group_for_test(&mut table, &mut state, 3);
+    end_group(&mut table, &mut state);
+    end_group(&mut table, &mut state);
+
+    assert!(hide_range(
+        &mut table,
+        first_hidden,
+        first_hidden + 1,
+        Some(first.0),
+    ));
+    assert_eq!(table.storage.group_hidden_descendants_at(first.0), 1);
+    table
+        .storage
+        .set_group_spans(first.0, GroupSpans::new(2, 3));
+
+    reset_session(&mut state);
+    let reused_root = begin_group_for_test(&mut table, &mut state, 1);
+    assert_eq!(reused_root, root);
+    let reused_first = begin_group_for_test(&mut table, &mut state, 2);
+    assert_eq!(reused_first, first);
+    let reused_first_value = use_value_slot(&mut table, &mut state, || 99i32);
+    assert_eq!(reused_first_value, first_live);
+    end_group(&mut table, &mut state);
+
+    assert_eq!(
+        state.cursor,
+        first.0 + table.storage.group_scan_extent_at(first.0),
+        "ending a preserved group must advance to the end of its preserved scan span",
+    );
+
+    let reused_second = begin_group_for_test(&mut table, &mut state, 3);
+    assert_eq!(reused_second, second);
+    end_group(&mut table, &mut state);
+    end_group(&mut table, &mut state);
+
+    verify_table(&table).expect("next sibling reuse must happen after the preserved tail");
+}
+
+#[test]
+fn planner_does_not_extract_nested_hidden_descendant_from_previous_sibling_tail() {
+    let mut table = new_table();
+    let mut state = SlotWriteSessionState::default();
+
+    let root = begin_group_for_test(&mut table, &mut state, 1);
+    let first = begin_group_for_test(&mut table, &mut state, 2);
+    let nested_parent = begin_group_for_test(&mut table, &mut state, 3);
+    let target = begin_group_for_test(&mut table, &mut state, 4);
+    end_group(&mut table, &mut state);
+    end_group(&mut table, &mut state);
+    let _second = begin_group_for_test(&mut table, &mut state, 5);
+    end_group(&mut table, &mut state);
+    end_group(&mut table, &mut state);
+
+    let root_anchor = table.storage.entry_anchor(root.0);
+    let nested_parent_anchor = table.storage.entry_anchor(nested_parent.0);
+    let target_anchor = table.storage.entry_anchor(target.0);
+    let target_extent = table.storage.group_scan_extent_at(target.0);
+
+    assert!(hide_range(
+        &mut table,
+        target.0,
+        target.0 + target_extent,
+        Some(nested_parent.0),
+    ));
+    table
+        .storage
+        .set_group_spans(nested_parent.0, GroupSpans::new(1, 2));
+    table
+        .storage
+        .set_group_spans(first.0, GroupSpans::new(2, 3));
+
+    reset_session(&mut state);
+    assert_eq!(begin_group_for_test(&mut table, &mut state, 1), root);
+    assert_eq!(begin_group_for_test(&mut table, &mut state, 2), first);
+    assert_eq!(
+        begin_group_for_test(&mut table, &mut state, 3),
+        nested_parent
+    );
+    end_group(&mut table, &mut state);
+    end_group(&mut table, &mut state);
+
+    assert_eq!(
+        state.cursor,
+        first.0 + table.storage.group_scan_extent_at(first.0),
+        "ending the parent group must advance across the preserved tail",
+    );
+
+    let restarted_target = begin_group_for_test(&mut table, &mut state, 4);
+    assert_ne!(
+        restarted_target, target,
+        "nested hidden descendants must not be restored as direct children of the ancestor",
+    );
+    assert_eq!(
+        table.storage.group_parent_anchor_at(restarted_target.0),
+        Some(root_anchor)
+    );
+
+    let preserved_target = table
+        .storage
+        .resolve_anchor(target_anchor)
+        .expect("original hidden target anchor should still resolve");
+    assert_ne!(preserved_target, restarted_target.0);
+    assert_eq!(
+        table.storage.entry_kind(preserved_target),
+        Some(EntryKind::hidden(EntryClass::Group))
+    );
+    assert_eq!(
+        table.storage.group_parent_anchor_at(preserved_target),
+        Some(nested_parent_anchor)
+    );
+}
+
+#[test]
+fn verifier_rejects_anchor_resolution_drift() {
+    let mut table = new_table();
+    let mut state = SlotWriteSessionState::default();
+    use_value_slot(&mut table, &mut state, || 1i32);
+    use_value_slot(&mut table, &mut state, || 2i32);
+
+    let reused_anchor = table.storage.entry_anchor(0);
+    let payload = table.storage.alloc_value(3i32);
+    let _ = table
+        .storage
+        .overwrite_value(1, reused_anchor, payload, false);
+
+    let err = verify_table(&table).expect_err("anchor resolution drift should fail verification");
+    assert!(err.contains("does not resolve to slot"), "{err}");
+}
+
+#[test]
+fn verifier_rejects_scope_anchor_mismatch() {
+    let runtime = TestRuntime::new();
+    let mut table = new_table();
+    let mut state = SlotWriteSessionState::default();
+    let first = begin_scoped_group(&mut table, &mut state, 1, || {
+        RecomposeScope::new(runtime.handle())
+    });
+    end_group(&mut table, &mut state);
+    let second = begin_scoped_group(&mut table, &mut state, 2, || {
+        RecomposeScope::new(runtime.handle())
+    });
+    end_group(&mut table, &mut state);
+
+    table
+        .storage
+        .set_group_scope(first.group.0, Some(second.scope.clone()));
+
+    let err = verify_table(&table).expect_err("scope anchor mismatch should fail verification");
+    assert!(err.contains("scope anchor mismatch"), "{err}");
+}
+
+#[test]
+fn verifier_rejects_ready_orphan_queue_entries() {
+    let mut table = new_table();
+    let mut state = SlotWriteSessionState::default();
+    record_node(&mut table, &mut state, 17, 3);
+    let orphan = super::OrphanedNode::new(17, 3, table.storage.entry_anchor(0));
+    with_test_lifecycle(|lifecycle| lifecycle.queue_orphaned_node(orphan));
+
+    let err = verify_table(&table).expect_err("ready orphan queue should fail verification");
+    assert!(err.contains("orphaned node queue must be empty"), "{err}");
+}
+
+#[test]
+fn verifier_rejects_stale_preserved_orphan_state() {
+    let table = new_table();
+    with_test_lifecycle(|lifecycle| {
+        lifecycle.preserve_orphaned_node(super::OrphanedNode::new(41, 9, AnchorId(777_777)));
+    });
+
+    let err = verify_table(&table).expect_err("stale preserved orphan should fail verification");
+    assert!(err.contains("preserved orphan"), "{err}");
 }

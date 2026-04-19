@@ -13,7 +13,6 @@ pub(crate) struct AnchorMap {
     pages: Vec<Option<AnchorPage>>,
     next_anchor_id: Cell<usize>,
     free_anchor_ids: Vec<usize>,
-    dirty: bool,
     live_locations: usize,
 }
 
@@ -23,7 +22,6 @@ impl Default for AnchorMap {
             pages: Vec::new(),
             next_anchor_id: Cell::new(1),
             free_anchor_ids: Vec::new(),
-            dirty: false,
             live_locations: 0,
         }
     }
@@ -41,16 +39,8 @@ impl AnchorMap {
     pub(crate) fn fill_debug_stats(&self, stats: &mut SlotTableDebugStats) {
         stats.anchors_len = self.live_locations;
         stats.anchors_cap = self.live_locations + self.free_anchor_ids.capacity();
-        stats.gap_metadata_len = 0;
-        stats.gap_metadata_cap = 0;
         stats.free_anchor_ids_len = self.free_anchor_ids.len();
         stats.free_anchor_ids_cap = self.free_anchor_ids.capacity();
-    }
-
-    pub(crate) fn take_dirty(&mut self) -> bool {
-        let dirty = self.dirty;
-        self.dirty = false;
-        dirty
     }
 
     pub(crate) fn allocate_anchor(&mut self) -> AnchorId {

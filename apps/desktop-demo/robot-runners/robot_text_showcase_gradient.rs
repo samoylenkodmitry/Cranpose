@@ -24,7 +24,7 @@ fn main() {
     AppLauncher::new()
         .with_title("Robot Text Showcase Gradient")
         .with_size(1400, 1100)
-        .with_fonts(&desktop_app::fonts::DEMO_FONTS)
+        .with_fonts(desktop_app::fonts::DEMO_FONTS)
         .with_headless(true)
         .with_test_driver(|robot| {
             std::thread::sleep(Duration::from_millis(700));

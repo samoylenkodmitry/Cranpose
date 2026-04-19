@@ -11,6 +11,7 @@ use cranpose_ui::{LayoutTree, SemanticsAction, SemanticsNode, SemanticsRole, Siz
 use cranpose_ui_graphics::{Point, Rect, RoundedCornerShape};
 use desktop_app::app::{
     combined_app, DemoTab, TEST_ACTIVE_TAB_STATE, TEST_COUNTER_APP_COUNTER_STATE,
+    TEST_RECURSIVE_LAYOUT_DEPTH_STATE,
 };
 use std::rc::Rc;
 use tab_switch_regression_support::{active_tab_state, pump_shell_until_stable};
@@ -289,6 +290,45 @@ fn counter_increment_survives_combined_app_tab_roundtrip_robot_path() {
         texts.iter().any(|text| text.contains("Counter: 1")),
         "counter label did not update after increment: {texts:?}",
     );
+}
+
+#[test]
+fn recursive_layout_depth_six_survives_combined_app_shell_robot_path() {
+    TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow_mut().take());
+    TEST_RECURSIVE_LAYOUT_DEPTH_STATE.with(|cell| cell.borrow_mut().take());
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(HitGraphRenderer::default(), root_key, combined_app);
+    shell.set_buffer_size(1024, 768);
+    shell.set_viewport(1024.0, 768.0);
+    shell.set_semantics_enabled(true);
+    pump_shell_until_stable(&mut shell);
+
+    click_button_by_text(&mut shell, "Recursive Layout");
+    assert_eq!(active_tab_state().get(), DemoTab::Layout);
+
+    let mut texts = semantics_texts(&shell);
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.contains("Recursive Layout Playground")),
+        "recursive layout tab content missing after tab click: {texts:?}",
+    );
+
+    for depth in 4..=6 {
+        click_button_by_text(&mut shell, "Increase depth");
+        texts = semantics_texts(&shell);
+        assert!(
+            texts
+                .iter()
+                .any(|text| text == &format!("Current depth: {depth}")),
+            "recursive layout depth label stalled at step {depth}: {texts:?}",
+        );
+        assert!(
+            texts.iter().any(|text| text == &format!("Depth {depth}")),
+            "recursive layout root text missing at step {depth}: {texts:?}",
+        );
+    }
 }
 
 #[test]

@@ -1,18 +1,26 @@
 //! Slot table implementation with a single logical gap buffer and explicit hidden entries.
 
 mod anchor_map;
+mod boundary_policy;
+mod editor;
 mod lifecycle_queue;
 mod storage;
+mod verifier;
 
 use crate::{
     remove_child_and_cleanup_now,
     slot_storage::{GroupId, StartScopedGroup},
     AnchorId, Applier, Key, NodeId, Owned, RecomposeScope, ScopeId,
 };
+use boundary_policy::{BoundaryTransition, PassBoundary};
+use editor::PassEditor;
 use lifecycle_queue::DeferredDrop;
 pub use lifecycle_queue::OrphanedNode;
 pub(crate) use lifecycle_queue::SlotLifecycleCoordinator;
-use storage::{EntryKind, GroupSnapshot, SlotStorage, StorageLifecycleEvent};
+use storage::{
+    EntryClass, EntryKind, EntryVisibility, GroupSnapshot, GroupSpans, SlotStorage, StorageEffects,
+};
+use verifier::debug_verify_slot_table;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SlotTableDebugStats {
@@ -22,8 +30,8 @@ pub struct SlotTableDebugStats {
     pub pending_slot_drops_cap: usize,
     pub anchors_len: usize,
     pub anchors_cap: usize,
-    pub gap_metadata_len: usize,
-    pub gap_metadata_cap: usize,
+    pub hidden_entries_len: usize,
+    pub preserved_groups_len: usize,
     pub free_anchor_ids_len: usize,
     pub free_anchor_ids_cap: usize,
     pub group_stack_len: usize,
@@ -46,50 +54,6 @@ pub(crate) enum NodeSlotState {
     Missing,
 }
 
-fn unpack_group_extent(extent: u32) -> usize {
-    extent as usize
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PassBoundary {
-    Open,
-    Restored { boundary_key: Key },
-    Fresh { boundary_key: Key },
-}
-
-impl PassBoundary {
-    fn restricted_boundary(self) -> Option<Key> {
-        match self {
-            Self::Open => None,
-            Self::Restored { boundary_key } | Self::Fresh { boundary_key } => Some(boundary_key),
-        }
-    }
-
-    fn inherited_boundary(self, key: Key) -> Key {
-        self.restricted_boundary().unwrap_or(key)
-    }
-
-    fn allows_exact_live_reuse(self) -> bool {
-        !matches!(self, Self::Fresh { .. })
-    }
-
-    fn allows_live_search(self) -> bool {
-        matches!(self, Self::Open)
-    }
-
-    fn disallows_live_value_reuse(self) -> bool {
-        matches!(self, Self::Fresh { .. })
-    }
-
-    fn child_for_restored(self, boundary_key: Key) -> Self {
-        if matches!(self, Self::Fresh { .. }) {
-            Self::Fresh { boundary_key }
-        } else {
-            Self::Restored { boundary_key }
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SlotPassMode {
     Compose,
@@ -100,6 +64,8 @@ pub(crate) enum SlotPassMode {
 struct GroupFrame {
     start: usize,
     end: usize,
+    stored_live_end: usize,
+    live_end: usize,
     pass_boundary: PassBoundary,
 }
 
@@ -122,35 +88,18 @@ struct StartedGroup {
     restored_from_hidden: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GroupRetention {
-    Clean { boundary_key: Key },
-    Preserved { boundary_key: Key },
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
+pub(crate) struct GroupRetention {
+    boundary_key: Key,
 }
 
 impl GroupRetention {
-    pub(crate) fn clean(boundary_key: Key) -> Self {
-        Self::Clean { boundary_key }
-    }
-
-    fn preserved(boundary_key: Key) -> Self {
-        Self::Preserved { boundary_key }
+    pub(crate) fn new(boundary_key: Key) -> Self {
+        Self { boundary_key }
     }
 
     pub(crate) fn boundary_key(self) -> Key {
-        match self {
-            Self::Clean { boundary_key } | Self::Preserved { boundary_key } => boundary_key,
-        }
-    }
-
-    fn is_preserved(self) -> bool {
-        matches!(self, Self::Preserved { .. })
-    }
-
-    fn preserve(self) -> Self {
-        Self::Preserved {
-            boundary_key: self.boundary_key(),
-        }
+        self.boundary_key
     }
 }
 
@@ -244,6 +193,17 @@ impl SlotTable {
             if frame.end < state.cursor {
                 frame.end = state.cursor;
             }
+            if frame.live_end < state.cursor {
+                frame.live_end = state.cursor;
+            }
+        }
+    }
+
+    fn update_group_live_bounds_to(&self, state: &mut SlotWriteSessionState, live_cursor: usize) {
+        for frame in &mut state.group_stack {
+            if frame.live_end < live_cursor {
+                frame.live_end = live_cursor;
+            }
         }
     }
 
@@ -258,8 +218,16 @@ impl SlotTable {
                 if frame.start >= index {
                     frame.start += delta;
                     frame.end += delta;
+                    frame.stored_live_end += delta;
+                    frame.live_end += delta;
                 } else if frame.end >= index {
                     frame.end += delta;
+                    if frame.stored_live_end >= index {
+                        frame.stored_live_end += delta;
+                    }
+                    if frame.live_end >= index {
+                        frame.live_end += delta;
+                    }
                 }
             }
         } else {
@@ -268,8 +236,16 @@ impl SlotTable {
                 if frame.start >= index {
                     frame.start = frame.start.saturating_sub(delta);
                     frame.end = frame.end.saturating_sub(delta);
+                    frame.stored_live_end = frame.stored_live_end.saturating_sub(delta);
+                    frame.live_end = frame.live_end.saturating_sub(delta);
                 } else if frame.end > index {
                     frame.end = frame.end.saturating_sub(delta);
+                    if frame.stored_live_end > index {
+                        frame.stored_live_end = frame.stored_live_end.saturating_sub(delta);
+                    }
+                    if frame.live_end > index {
+                        frame.live_end = frame.live_end.saturating_sub(delta);
+                    }
                 }
             }
         }
@@ -344,35 +320,44 @@ impl SlotTable {
         self.storage.clear_group_scope(group_index);
     }
 
-    fn move_slot_range_to_cursor(
+    fn move_slot_range(
         &mut self,
         state: &mut SlotWriteSessionState,
         source_start: usize,
         len: usize,
         dest: usize,
-    ) {
-        debug_assert!(dest <= source_start, "unexpected rightward slot move");
+    ) -> usize {
         if len == 0 || source_start == dest {
-            return;
+            return source_start;
         }
 
         let removed = self.storage.remove_entry_range(source_start, len);
         self.shift_group_frames(state, source_start, -(len as isize));
-        self.ensure_insert_capacity(dest);
-        self.shift_group_frames(state, dest, len as isize);
-        self.storage.insert_entry_range(dest, &removed);
+        let insert_at = if dest > source_start {
+            dest.saturating_sub(len)
+        } else {
+            dest
+        }
+        .min(self.storage.len());
+        self.ensure_insert_capacity(insert_at);
+        self.shift_group_frames(state, insert_at, len as isize);
+        self.storage.insert_entry_range(insert_at, &removed);
+        insert_at
     }
 
     fn enter_group(
         &self,
         state: &mut SlotWriteSessionState,
         start: usize,
-        len: usize,
+        scan_len: usize,
+        live_len: usize,
         plan: GroupEntryPlan,
     ) -> StartedGroup {
         state.group_stack.push(GroupFrame {
             start,
-            end: start + len,
+            end: start + scan_len,
+            stored_live_end: start + live_len,
+            live_end: start + 1,
             pass_boundary: plan.pass_boundary,
         });
         state.cursor = start + 1;
@@ -395,7 +380,7 @@ impl SlotTable {
         let anchor = self.storage.allocate_anchor();
         let group = self.storage.alloc_group(
             key,
-            GroupRetention::clean(boundary_key),
+            GroupRetention::new(boundary_key),
             self.current_parent_anchor(state),
             scope,
         );
@@ -420,10 +405,19 @@ impl SlotTable {
     fn overwrite_value_entry<T: 'static>(
         &mut self,
         lifecycle: &mut SlotLifecycleCoordinator,
+        owner_index: Option<usize>,
         index: usize,
         value: T,
         hidden: bool,
     ) {
+        if !hidden
+            && self
+                .storage
+                .entry_kind(index)
+                .is_some_and(EntryKind::is_hidden)
+        {
+            self.adjust_hidden_descendants(owner_index, -1);
+        }
         let anchor = self.storage.entry_anchor(index);
         let payload = self.storage.alloc_value(value);
         if let Some(deferred_drop) = self.storage.overwrite_value(index, anchor, payload, hidden) {
@@ -448,11 +442,20 @@ impl SlotTable {
     fn overwrite_node_entry(
         &mut self,
         lifecycle: &mut SlotLifecycleCoordinator,
+        owner_index: Option<usize>,
         index: usize,
         id: NodeId,
         generation: u32,
         hidden: bool,
     ) {
+        if !hidden
+            && self
+                .storage
+                .entry_kind(index)
+                .is_some_and(EntryKind::is_hidden)
+        {
+            self.adjust_hidden_descendants(owner_index, -1);
+        }
         let anchor = self.storage.entry_anchor(index);
         let payload = self.storage.alloc_node(id, generation);
         if let Some(deferred_drop) = self.storage.overwrite_node(index, anchor, payload, hidden) {
@@ -467,83 +470,167 @@ impl SlotTable {
         end: usize,
         owner_index: Option<usize>,
     ) -> bool {
-        let end = end.min(self.storage.len());
-        let mut index = start;
-        let mut marked_any = false;
+        let mut result = self.storage.hide_range(start, end);
+        Self::apply_storage_effects(lifecycle, &mut result.effects);
+        if result.marked_any {
+            let owner_anchor = owner_index
+                .map(|index| self.storage.entry_anchor(index))
+                .unwrap_or(AnchorId::INVALID);
+            for group_index in result.top_level_hidden_group_roots.iter().copied() {
+                self.storage
+                    .set_group_parent_anchor(group_index, owner_anchor);
+            }
+            self.adjust_hidden_descendants(owner_index, result.newly_hidden_entries as isize);
+            for (group_index, scan_extent) in result.hidden_group_roots {
+                self.storage
+                    .set_group_hidden_descendants(group_index, scan_extent.saturating_sub(1));
+            }
+        }
+        result.marked_any
+    }
 
-        while index < end {
+    fn adjust_hidden_descendants(&mut self, owner_index: Option<usize>, delta: isize) {
+        if delta == 0 {
+            return;
+        }
+
+        let mut current = owner_index;
+        while let Some(index) = current {
+            self.storage.adjust_group_hidden_descendants(index, delta);
+            current = self
+                .storage
+                .group_parent_anchor_at(index)
+                .filter(|anchor| anchor.is_valid())
+                .and_then(|anchor| self.storage.resolve_anchor(anchor));
+        }
+    }
+
+    fn shrink_group_preserved_tail(&mut self, index: usize, removed_scan_extent: usize) {
+        let live_extent = self.storage.group_live_extent_at(index).max(1);
+        let scan_extent = self.storage.group_scan_extent_at(index).max(live_extent);
+        let next_scan_extent = scan_extent
+            .saturating_sub(removed_scan_extent)
+            .max(live_extent);
+        self.storage
+            .set_group_spans(index, GroupSpans::new(live_extent, next_scan_extent));
+    }
+
+    fn reparent_direct_child_groups(&mut self, parent_index: usize) {
+        let parent_anchor = self.storage.entry_anchor(parent_index);
+        let scan_end = parent_index + self.storage.group_scan_extent_at(parent_index).max(1);
+        let mut index = parent_index + 1;
+
+        while index < scan_end {
             let Some(kind) = self.storage.entry_kind(index) else {
                 break;
             };
-            let extent = self.storage.entry_extent(index).max(1);
-            match kind {
-                EntryKind::Group => {
-                    let subtree_end = (index + extent).min(end);
-                    for child in index..subtree_end {
-                        let event = self.storage.hide_entry(child);
-                        Self::handle_lifecycle_event(lifecycle, event);
-                        marked_any = true;
+            let extent = self.storage.entry_scan_extent(index).max(1);
+
+            if kind.matches(EntryClass::Group, EntryVisibility::Live)
+                || kind.matches(EntryClass::Group, EntryVisibility::Hidden)
+            {
+                let previous_parent_anchor = self
+                    .storage
+                    .group_parent_anchor_at(index)
+                    .unwrap_or(AnchorId::INVALID);
+                if previous_parent_anchor != parent_anchor {
+                    let hidden_owned = self.storage.group_hidden_descendants_at(index)
+                        + usize::from(kind.matches(EntryClass::Group, EntryVisibility::Hidden));
+
+                    if let Some(previous_parent_index) = previous_parent_anchor
+                        .is_valid()
+                        .then(|| self.storage.resolve_anchor(previous_parent_anchor))
+                        .flatten()
+                    {
+                        if hidden_owned > 0 {
+                            self.adjust_hidden_descendants(
+                                Some(previous_parent_index),
+                                -(hidden_owned as isize),
+                            );
+                        }
+                        if kind.matches(EntryClass::Group, EntryVisibility::Hidden) {
+                            self.shrink_group_preserved_tail(previous_parent_index, extent);
+                        }
                     }
-                    if subtree_end > index + 1 {
-                        self.preserve_group_retention(index);
+
+                    if hidden_owned > 0 {
+                        self.adjust_hidden_descendants(Some(parent_index), hidden_owned as isize);
                     }
-                    index = subtree_end;
-                }
-                EntryKind::Value | EntryKind::Node => {
-                    let event = self.storage.hide_entry(index);
-                    Self::handle_lifecycle_event(lifecycle, event);
-                    marked_any = true;
-                    index += 1;
-                }
-                EntryKind::HiddenGroup | EntryKind::HiddenValue | EntryKind::HiddenNode => {
-                    index += extent;
-                }
-                EntryKind::Unused => {
-                    index += 1;
+
+                    self.storage.set_group_parent_anchor(index, parent_anchor);
                 }
             }
-        }
 
-        if marked_any {
-            self.storage.needs_compact = true;
-            if let Some(owner_index) = owner_index {
-                self.preserve_group_retention(owner_index);
-            }
+            index += extent;
         }
-
-        marked_any
     }
 
-    fn preserve_group_retention(&mut self, index: usize) {
-        if let Some(retention) = self.storage.group_retention_at(index) {
-            self.storage
-                .set_group_retention(index, retention.preserve());
+    fn restore_hidden_entry(&mut self, owner_index: Option<usize>, index: usize) {
+        let was_hidden = self
+            .storage
+            .entry_kind(index)
+            .is_some_and(EntryKind::is_hidden);
+        self.storage.restore_hidden_entry(index);
+        if was_hidden {
+            self.adjust_hidden_descendants(owner_index, -1);
         }
+    }
+
+    fn restore_hidden_group_for_current_parent(
+        &mut self,
+        state: &SlotWriteSessionState,
+        index: usize,
+        scan_extent: usize,
+    ) {
+        let current_parent_anchor = self.current_parent_anchor(state);
+        let current_owner_index = state.group_stack.last().map(|frame| frame.start);
+        let previous_parent_anchor = self
+            .storage
+            .group_parent_anchor_at(index)
+            .unwrap_or(AnchorId::INVALID);
+        let hidden_descendants = self.storage.group_hidden_descendants_at(index);
+
+        if previous_parent_anchor != current_parent_anchor {
+            if let Some(previous_parent_index) = previous_parent_anchor
+                .is_valid()
+                .then(|| self.storage.resolve_anchor(previous_parent_anchor))
+                .flatten()
+            {
+                self.adjust_hidden_descendants(
+                    Some(previous_parent_index),
+                    -((hidden_descendants + 1) as isize),
+                );
+                self.shrink_group_preserved_tail(previous_parent_index, scan_extent);
+            }
+            if hidden_descendants > 0 {
+                self.adjust_hidden_descendants(current_owner_index, hidden_descendants as isize);
+            }
+            self.storage
+                .set_group_parent_anchor(index, current_parent_anchor);
+        } else {
+            self.adjust_hidden_descendants(current_owner_index, -1);
+        }
+
+        self.storage.restore_hidden_entry(index);
+        self.reparent_direct_child_groups(index);
     }
 
     fn set_group_boundary_key(&mut self, index: usize, boundary_key: Key) {
-        if let Some(retention) = self.storage.group_retention_at(index) {
-            let next_retention = if retention.is_preserved() {
-                GroupRetention::preserved(boundary_key)
-            } else {
-                GroupRetention::clean(boundary_key)
-            };
-            self.storage.set_group_retention(index, next_retention);
+        if self.storage.group_retention_at(index).is_some() {
+            self.storage
+                .set_group_retention(index, GroupRetention::new(boundary_key));
         }
     }
 
-    fn handle_lifecycle_event(
+    fn apply_storage_effects(
         lifecycle: &mut SlotLifecycleCoordinator,
-        event: Option<StorageLifecycleEvent>,
+        effects: &mut StorageEffects,
     ) {
-        match event {
-            Some(StorageLifecycleEvent::DeactivateScope(scope)) => {
-                lifecycle.deactivate_scope(&scope);
-            }
-            Some(StorageLifecycleEvent::OrphanNode(orphaned)) => {
-                lifecycle.queue_orphaned_node(orphaned);
-            }
-            None => {}
+        for scope in effects.take_deactivated_scopes() {
+            lifecycle.deactivate_scope(&scope);
+        }
+        for orphaned in effects.take_orphaned_nodes() {
+            lifecycle.preserve_orphaned_node(orphaned);
         }
     }
 
@@ -569,13 +656,104 @@ impl SlotTable {
         let Some(group) = self.storage.group_snapshot_at(cursor) else {
             return;
         };
-        if self.storage.entry_kind(cursor) != Some(EntryKind::Group) || group.key == key {
+        if self.storage.entry_kind(cursor) != Some(EntryKind::live(EntryClass::Group))
+            || group.key == key
+        {
             return;
         }
 
-        let old_extent = unpack_group_extent(group.extent).max(1);
+        let old_extent = group.spans.scan_extent().max(1);
         let owner_index = state.group_stack.last().map(|frame| frame.start);
         let _ = self.mark_range_as_hidden(lifecycle, cursor, cursor + old_extent, owner_index);
+    }
+
+    fn hidden_boundary_matches(
+        &self,
+        current_parent_boundary_key: Option<Key>,
+        boundary_key: Key,
+    ) -> bool {
+        match current_parent_boundary_key {
+            Some(current) => current == boundary_key,
+            None => true,
+        }
+    }
+
+    fn previous_live_sibling_root_ending_at(
+        &self,
+        state: &SlotWriteSessionState,
+        cursor: usize,
+    ) -> Option<usize> {
+        let current_parent_anchor = self.current_parent_anchor(state);
+        let mut search_index = cursor;
+        while search_index > 0 {
+            search_index -= 1;
+            let kind = self.storage.entry_kind(search_index)?;
+            if !kind.matches(EntryClass::Group, EntryVisibility::Live) {
+                continue;
+            }
+            if self
+                .storage
+                .group_parent_anchor_at(search_index)
+                .unwrap_or(AnchorId::INVALID)
+                != current_parent_anchor
+            {
+                continue;
+            }
+            let scan_end = search_index + self.storage.group_scan_extent_at(search_index).max(1);
+            if scan_end == cursor {
+                return Some(search_index);
+            }
+        }
+        None
+    }
+
+    fn find_matching_hidden_group_in_previous_tail(
+        &self,
+        state: &SlotWriteSessionState,
+        key: Key,
+        parent_boundary: PassBoundary,
+    ) -> Option<MatchedGroup> {
+        let cursor = state.cursor;
+        let current_parent_anchor = self.current_parent_anchor(state);
+        let previous_sibling = self.previous_live_sibling_root_ending_at(state, cursor)?;
+        let previous_sibling_anchor = self.storage.entry_anchor(previous_sibling);
+        let tail_start =
+            previous_sibling + self.storage.group_live_extent_at(previous_sibling).max(1);
+        let tail_end =
+            previous_sibling + self.storage.group_scan_extent_at(previous_sibling).max(1);
+        let current_parent_boundary_key = self.current_parent_boundary_key(state);
+        let mut index = tail_start;
+
+        while index < tail_end {
+            let Some(kind) = self.storage.entry_kind(index) else {
+                break;
+            };
+            let extent = self.storage.entry_scan_extent(index).max(1);
+            if kind.matches(EntryClass::Group, EntryVisibility::Hidden) {
+                let group = self.storage.group_snapshot_at(index)?;
+                let stored_parent_anchor = self
+                    .storage
+                    .group_parent_anchor_at(index)
+                    .unwrap_or(AnchorId::INVALID);
+                if (stored_parent_anchor == current_parent_anchor
+                    || stored_parent_anchor == previous_sibling_anchor)
+                    && group.key == key
+                    && (self.hidden_boundary_matches(
+                        current_parent_boundary_key,
+                        group.retention.boundary_key(),
+                    ) || parent_boundary.policy().allows_live_search())
+                {
+                    return Some(MatchedGroup {
+                        index,
+                        group,
+                        reused_hidden: true,
+                    });
+                }
+            }
+            index += extent;
+        }
+
+        None
     }
 
     fn restore_hidden_group_at_cursor(
@@ -586,23 +764,27 @@ impl SlotTable {
         parent_boundary: PassBoundary,
         group: GroupSnapshot,
     ) -> Option<StartedGroup> {
-        if self.storage.entry_kind(cursor) != Some(EntryKind::HiddenGroup) || group.key != key {
+        if self.storage.entry_kind(cursor) != Some(EntryKind::hidden(EntryClass::Group))
+            || group.key != key
+        {
             return None;
         }
 
         let boundary_key = if matches!(parent_boundary, PassBoundary::Fresh { .. }) {
-            parent_boundary.inherited_boundary(key)
+            parent_boundary.policy().inherited_boundary(key)
         } else {
             group.retention.boundary_key()
         };
-        let pass_boundary = parent_boundary.child_for_restored(boundary_key);
+        let pass_boundary =
+            parent_boundary.transition(BoundaryTransition::Restore { boundary_key });
 
-        self.storage.restore_hidden_entry(cursor);
+        self.restore_hidden_group_for_current_parent(state, cursor, group.spans.scan_extent());
         self.set_group_boundary_key(cursor, boundary_key);
         Some(self.enter_group(
             state,
             cursor,
-            unpack_group_extent(group.extent),
+            group.spans.scan_extent(),
+            group.spans.live_extent(),
             GroupEntryPlan {
                 pass_boundary,
                 restored_from_hidden: true,
@@ -618,45 +800,60 @@ impl SlotTable {
         parent_boundary: PassBoundary,
         matched: MatchedGroup,
     ) -> Option<StartedGroup> {
+        let current_parent_anchor = self.current_parent_anchor(state);
+        if !matched.reused_hidden
+            && self
+                .storage
+                .group_parent_anchor_at(matched.index)
+                .unwrap_or(AnchorId::INVALID)
+                != current_parent_anchor
+        {
+            return None;
+        }
+
         let restored_boundary_key =
             if matched.reused_hidden && matches!(parent_boundary, PassBoundary::Fresh { .. }) {
-                parent_boundary.inherited_boundary(key)
+                parent_boundary.policy().inherited_boundary(key)
             } else {
                 matched.group.retention.boundary_key()
             };
 
         if matched.reused_hidden {
-            self.storage.restore_hidden_entry(matched.index);
+            self.restore_hidden_group_for_current_parent(
+                state,
+                matched.index,
+                matched.group.spans.scan_extent(),
+            );
             self.set_group_boundary_key(matched.index, restored_boundary_key);
         }
 
         let restored_from_hidden = matched.reused_hidden || matched.index != cursor;
-        let actual_extent = unpack_group_extent(matched.group.extent)
+        let actual_extent = matched
+            .group
+            .spans
+            .scan_extent()
             .max(1)
             .min(self.storage.len().saturating_sub(matched.index));
         if actual_extent == 0 {
             return None;
         }
 
-        self.move_slot_range_to_cursor(state, matched.index, actual_extent, cursor);
+        let restored_index = self.move_slot_range(state, matched.index, actual_extent, cursor);
         let pass_boundary = if restored_from_hidden {
-            parent_boundary.child_for_restored(restored_boundary_key)
+            parent_boundary.transition(BoundaryTransition::Restore {
+                boundary_key: restored_boundary_key,
+            })
         } else {
-            match parent_boundary {
-                PassBoundary::Open => PassBoundary::Open,
-                PassBoundary::Restored { .. } => PassBoundary::Restored {
-                    boundary_key: restored_boundary_key,
-                },
-                PassBoundary::Fresh { .. } => PassBoundary::Fresh {
-                    boundary_key: restored_boundary_key,
-                },
-            }
+            parent_boundary.transition(BoundaryTransition::ReuseLive {
+                boundary_key: restored_boundary_key,
+            })
         };
 
         Some(self.enter_group(
             state,
-            cursor,
+            restored_index,
             actual_extent,
+            matched.group.spans.live_extent().min(actual_extent),
             GroupEntryPlan {
                 pass_boundary,
                 restored_from_hidden,
@@ -670,11 +867,12 @@ impl SlotTable {
         key: Key,
         pass_boundary: PassBoundary,
     ) -> StartedGroup {
-        let boundary_key = pass_boundary.inherited_boundary(key);
+        let boundary_key = pass_boundary.policy().inherited_boundary(key);
         self.insert_group_entry(state, state.cursor, key, boundary_key, None);
         self.enter_group(
             state,
             state.cursor,
+            1,
             1,
             GroupEntryPlan {
                 pass_boundary,
@@ -692,6 +890,16 @@ impl SlotTable {
         let cursor = state.cursor;
         let parent_boundary = self.current_parent_boundary(state);
 
+        if let Some(matched_group) =
+            self.find_matching_hidden_group_in_previous_tail(state, key, parent_boundary)
+        {
+            if let Some(restored) =
+                self.try_restore_matching_group(state, key, cursor, parent_boundary, matched_group)
+            {
+                return restored;
+            }
+        }
+
         let plan = ReusePlanner::new(
             &self.storage,
             key,
@@ -699,23 +907,23 @@ impl SlotTable {
             self.current_parent_end(state),
             parent_boundary,
             self.current_parent_boundary_key(state),
+            self.current_parent_anchor(state),
         )
         .plan();
 
         match plan {
             StartPlan::ReuseLiveAtCursor {
-                extent,
+                scan_extent,
+                live_extent,
                 boundary_key,
             } => {
-                let pass_boundary = match parent_boundary {
-                    PassBoundary::Open => PassBoundary::Open,
-                    PassBoundary::Restored { .. } => PassBoundary::Restored { boundary_key },
-                    PassBoundary::Fresh { .. } => PassBoundary::Fresh { boundary_key },
-                };
+                let pass_boundary =
+                    parent_boundary.transition(BoundaryTransition::ReuseLive { boundary_key });
                 return self.enter_group(
                     state,
                     cursor,
-                    extent,
+                    scan_extent,
+                    live_extent,
                     GroupEntryPlan {
                         pass_boundary,
                         restored_from_hidden: !matches!(pass_boundary, PassBoundary::Open),
@@ -758,9 +966,9 @@ impl SlotTable {
         self.insert_new_group_at_cursor(
             state,
             key,
-            PassBoundary::Fresh {
-                boundary_key: parent_boundary.inherited_boundary(key),
-            },
+            parent_boundary.transition(BoundaryTransition::InsertFresh {
+                boundary_key: parent_boundary.policy().inherited_boundary(key),
+            }),
         )
     }
 
@@ -769,28 +977,42 @@ impl SlotTable {
             return;
         };
 
-        let end = state.cursor;
-        let old_extent = self.storage.group_extent_at(frame.start);
-        let new_extent = end.saturating_sub(frame.start);
-        let stored_extent = old_extent.max(new_extent).max(1);
+        let scan_end = frame.end;
+        let live_end = frame.live_end.max(frame.start + 1);
+        let old_live_extent = self.storage.group_live_extent_at(frame.start).max(1);
+        let old_scan_extent = self
+            .storage
+            .group_scan_extent_at(frame.start)
+            .max(old_live_extent);
+        let new_live_extent = live_end.saturating_sub(frame.start).max(1);
+        let new_scan_extent = scan_end
+            .saturating_sub(frame.start)
+            .max(new_live_extent)
+            .max(1);
 
-        if old_extent > new_extent {
-            self.preserve_group_retention(frame.start);
-        }
-
-        if stored_extent != old_extent {
-            self.storage.set_group_extent(frame.start, stored_extent);
-        }
-
-        if new_extent > old_extent {
-            self.propagate_group_growth(frame.start, end);
-        }
+        self.storage.set_group_spans(
+            frame.start,
+            GroupSpans::new(new_live_extent, new_scan_extent),
+        );
+        self.propagate_group_span_delta(
+            frame.start,
+            new_live_extent as isize - old_live_extent as isize,
+            new_scan_extent as isize - old_scan_extent as isize,
+        );
+        self.reparent_direct_child_groups(frame.start);
 
         if let Some(parent) = state.group_stack.last_mut() {
-            if parent.end < end {
-                parent.end = end;
+            if parent.end < scan_end {
+                parent.end = scan_end;
+            }
+            if parent.live_end < live_end {
+                parent.live_end = live_end;
             }
         }
+        if let Some(parent_start) = state.group_stack.last().map(|frame| frame.start) {
+            self.reparent_direct_child_groups(parent_start);
+        }
+        state.cursor = scan_end.min(self.storage.len());
     }
 
     fn start_recompose_entry(&self, state: &mut SlotWriteSessionState, index: usize) {
@@ -799,7 +1021,12 @@ impl SlotTable {
         };
         state.group_stack.push(GroupFrame {
             start: index,
-            end: index + unpack_group_extent(group.extent),
+            end: index + group.spans.scan_extent(),
+            stored_live_end: index + group.spans.live_extent(),
+            live_end: index + 1,
+            // Restarted recomposition operates inside an already-materialized live subtree.
+            // Fresh/restored restrictions only apply while a compose pass is replaying a
+            // parent boundary; they must not leak into later scope-local restarts.
             pass_boundary: PassBoundary::Open,
         });
         state.cursor = index + 1;
@@ -819,22 +1046,49 @@ impl SlotTable {
             let _ = self.mark_range_as_hidden(lifecycle, actual_end, frame.end, Some(frame.start));
         }
 
-        let actual_extent = actual_end.saturating_sub(frame.start).max(1);
-        let old_extent = self.storage.group_extent_at(frame.start);
-        let stored_extent = old_extent.max(actual_extent);
-        if stored_extent != old_extent {
-            self.storage.set_group_extent(frame.start, stored_extent);
+        let actual_extent = frame.live_end.saturating_sub(frame.start).max(1);
+        let old_live_extent = self.storage.group_live_extent_at(frame.start).max(1);
+        let old_scan_extent = self
+            .storage
+            .group_scan_extent_at(frame.start)
+            .max(old_live_extent);
+        let new_scan_extent = frame
+            .end
+            .saturating_sub(frame.start)
+            .max(actual_extent)
+            .max(1);
+        self.storage
+            .set_group_spans(frame.start, GroupSpans::new(actual_extent, new_scan_extent));
+        self.propagate_group_span_delta(
+            frame.start,
+            actual_extent as isize - old_live_extent as isize,
+            new_scan_extent as isize - old_scan_extent as isize,
+        );
+        self.reparent_direct_child_groups(frame.start);
+        if let Some(parent) = state.group_stack.last_mut() {
+            if parent.end < frame.end {
+                parent.end = frame.end;
+            }
+            if parent.live_end < frame.live_end {
+                parent.live_end = frame.live_end;
+            }
         }
-        if actual_extent > old_extent {
-            self.propagate_group_growth(frame.start, actual_end);
+        if let Some(parent_start) = state.group_stack.last().map(|frame| frame.start) {
+            self.reparent_direct_child_groups(parent_start);
         }
-        if old_extent > actual_extent {
-            self.preserve_group_retention(frame.start);
-        }
-        state.cursor = actual_end;
+        state.cursor = frame.end.min(self.storage.len());
     }
 
-    fn propagate_group_growth(&mut self, child_start: usize, new_end: usize) {
+    fn propagate_group_span_delta(
+        &mut self,
+        child_start: usize,
+        live_delta: isize,
+        scan_delta: isize,
+    ) {
+        if live_delta == 0 && scan_delta == 0 {
+            return;
+        }
+
         let mut current = child_start;
         while let Some(parent_anchor) = self.storage.group_parent_anchor_at(current) {
             if !parent_anchor.is_valid() {
@@ -843,19 +1097,29 @@ impl SlotTable {
             let Some(parent_index) = self.storage.resolve_anchor(parent_anchor) else {
                 break;
             };
-            let parent_extent = self.storage.group_extent_at(parent_index).max(1);
-            let parent_end = parent_index + parent_extent;
-            if parent_end < new_end {
-                self.storage
-                    .set_group_extent(parent_index, new_end.saturating_sub(parent_index));
-            }
+            let parent_scan_extent = self.storage.group_scan_extent_at(parent_index).max(1);
+            let parent_live_extent = self.storage.group_live_extent_at(parent_index).max(1);
+            let next_live_extent = parent_live_extent.saturating_add_signed(live_delta).max(1);
+            let next_scan_extent = parent_scan_extent.saturating_add_signed(scan_delta).max(1);
+            self.storage.set_group_spans(
+                parent_index,
+                GroupSpans::new(next_live_extent, next_scan_extent),
+            );
             current = parent_index;
         }
     }
 
-    fn skip_current(&self, state: &mut SlotWriteSessionState) {
-        if let Some(frame) = state.group_stack.last() {
-            state.cursor = frame.end.min(self.storage.len());
+    fn skip_current(&mut self, state: &mut SlotWriteSessionState) {
+        if let Some((live_end, scan_end)) = state
+            .group_stack
+            .last()
+            .map(|frame| (frame.stored_live_end, frame.end))
+        {
+            if let Some(frame) = state.group_stack.last() {
+                self.reparent_direct_child_groups(frame.start);
+            }
+            self.update_group_live_bounds_to(state, live_end.min(self.storage.len()));
+            state.cursor = scan_end.min(self.storage.len());
         }
     }
 
@@ -890,7 +1154,7 @@ impl SlotTable {
         cursor: usize,
     ) -> Option<(NodeId, u32)> {
         let (kind, id, generation) = self.storage.node_at(cursor)?;
-        if kind != EntryKind::HiddenNode
+        if !kind.matches(EntryClass::Node, EntryVisibility::Hidden)
             || !self.current_parent_allows_exact_hidden_node_reuse(state)
         {
             return None;
@@ -922,14 +1186,8 @@ impl SlotTable {
         )
     }
 
-    fn flush_anchors_if_dirty(&mut self) {
-        if self.storage.take_anchors_dirty() {
-            self.storage.rebuild_anchor_positions();
-        }
-    }
-
-    pub(crate) fn flush(&mut self) {
-        SlotTable::flush_anchors_if_dirty(self);
+    pub(crate) fn debug_verify(&self, lifecycle: Option<&SlotLifecycleCoordinator>) {
+        debug_verify_slot_table(self, lifecycle);
     }
 
     pub(crate) fn drop_all_reverse(&mut self) -> Vec<DeferredDrop> {
@@ -956,12 +1214,11 @@ impl SlotLifecycleCoordinator {
         }
 
         let mut removed_any = false;
-        let mut deferred = Vec::new();
         for orphaned in orphaned {
             match table.orphaned_node_state(orphaned) {
                 NodeSlotState::Active => continue,
                 NodeSlotState::PreservedGap => {
-                    deferred.push(orphaned);
+                    self.preserve_orphaned_node(orphaned);
                     continue;
                 }
                 NodeSlotState::Missing => {}
@@ -985,10 +1242,6 @@ impl SlotLifecycleCoordinator {
             let _ = applier.remove(orphaned.id);
         }
 
-        for orphaned in deferred {
-            self.queue_orphaned_node(orphaned);
-        }
-
         removed_any
     }
 
@@ -996,7 +1249,7 @@ impl SlotLifecycleCoordinator {
         self.flush_pending_drops();
         let removed = table.drop_all_reverse();
         self.dispose_drops_reverse(removed);
-        self.trim_orphaned_node_capacity(32);
+        self.clear_orphaned_nodes();
     }
 }
 
@@ -1008,8 +1261,10 @@ impl<'a> SlotReadCursor<'a> {
     fn collect_node_ids(&self, start: usize, end: usize) -> Vec<NodeId> {
         let mut ids = Vec::new();
         for index in start..end {
-            if let Some((EntryKind::Node, id, _)) = self.table.storage.node_at(index) {
-                ids.push(id);
+            if let Some((kind, id, _)) = self.table.storage.node_at(index) {
+                if kind.matches(EntryClass::Node, EntryVisibility::Live) {
+                    ids.push(id);
+                }
             }
         }
         ids
@@ -1018,7 +1273,7 @@ impl<'a> SlotReadCursor<'a> {
     fn collect_group_debug_rows(&self) -> Vec<(usize, Key, Option<ScopeId>, usize)> {
         let mut groups = Vec::new();
         for index in 0..self.table.storage.len() {
-            if self.table.storage.entry_kind(index) != Some(EntryKind::Group) {
+            if self.table.storage.entry_kind(index) != Some(EntryKind::live(EntryClass::Group)) {
                 continue;
             }
             let Some(group) = self.table.storage.group_snapshot_at(index) else {
@@ -1028,7 +1283,7 @@ impl<'a> SlotReadCursor<'a> {
                 index,
                 group.key,
                 group.scope.as_ref().map(RecomposeScope::id),
-                unpack_group_extent(group.extent),
+                group.spans.live_extent(),
             ));
         }
         groups
@@ -1041,44 +1296,51 @@ impl<'a> SlotReadCursor<'a> {
                 continue;
             };
             let desc = match entry.kind {
-                EntryKind::Group => {
+                kind if kind.matches(EntryClass::Group, EntryVisibility::Live) => {
                     let group = self
                         .table
                         .storage
                         .group_snapshot_at(index)
                         .expect("live group snapshot");
                     format!(
-                        "Group(key={:?}, scope={:?}, has_scope={}, len={})",
+                        "Group(key={:?}, scope={:?}, has_scope={}, live_len={}, scan_len={})",
                         group.key,
                         group.scope.as_ref().map(RecomposeScope::id),
                         self.table.group_has_scope(index),
-                        unpack_group_extent(group.extent)
+                        group.spans.live_extent(),
+                        group.spans.scan_extent(),
                     )
                 }
-                EntryKind::Value => "Value".to_string(),
-                EntryKind::Node => {
+                kind if kind.matches(EntryClass::Value, EntryVisibility::Live) => {
+                    "Value".to_string()
+                }
+                kind if kind.matches(EntryClass::Node, EntryVisibility::Live) => {
                     let (_, id, _) = self.table.storage.node_at(index).expect("live node");
                     format!("Node(id={id:?})")
                 }
-                EntryKind::HiddenGroup => {
+                kind if kind.matches(EntryClass::Group, EntryVisibility::Hidden) => {
                     let group = self
                         .table
                         .storage
                         .group_snapshot_at(index)
                         .expect("hidden group snapshot");
                     format!(
-                        "HiddenGroup(key={:?}, scope={:?}, len={})",
+                        "HiddenGroup(key={:?}, scope={:?}, live_len={}, scan_len={})",
                         group.key,
                         group.scope.as_ref().map(RecomposeScope::id),
-                        unpack_group_extent(group.extent)
+                        group.spans.live_extent(),
+                        group.spans.scan_extent(),
                     )
                 }
-                EntryKind::HiddenValue => "HiddenValue".to_string(),
-                EntryKind::HiddenNode => {
+                kind if kind.matches(EntryClass::Value, EntryVisibility::Hidden) => {
+                    "HiddenValue".to_string()
+                }
+                kind if kind.matches(EntryClass::Node, EntryVisibility::Hidden) => {
                     let (_, id, generation) =
                         self.table.storage.node_at(index).expect("hidden node");
                     format!("HiddenNode(id={id:?}, gen={generation})")
                 }
+                EntryKind::Occupied { .. } => "Occupied".to_string(),
                 EntryKind::Unused => "Unused".to_string(),
             };
             slots.push((index, desc));
@@ -1094,7 +1356,8 @@ impl<'a> SlotReadCursor<'a> {
         current_scope: ScopeId,
     ) -> Vec<RecomposeScope> {
         let mut scopes = Vec::new();
-        let mut seen = crate::collections::map::HashMap::default();
+        let mut seen: crate::collections::map::HashMap<ScopeId, ()> =
+            crate::collections::map::HashMap::default();
 
         for index in start..end {
             let Some(scope) = self.table.storage.live_group_scope(index).cloned() else {
@@ -1116,13 +1379,8 @@ impl SlotWriteSession<'_> {
         anchor: AnchorId,
         owner: ScopeId,
     ) -> Option<GroupId> {
-        let index = self.table.storage.resolve_anchor(anchor)?;
-        if self.table.group_scope_owner(index) == Some(owner) {
-            self.table.start_recompose_entry(self.state, index);
-            Some(GroupId(index))
-        } else {
-            None
-        }
+        PassEditor::new(self.table, self.lifecycle, self.state, self.mode)
+            .start_recranpose_at_anchor(anchor, owner)
     }
 
     pub(crate) fn begin_scoped_group(
@@ -1130,108 +1388,43 @@ impl SlotWriteSession<'_> {
         key: Key,
         init_scope: impl FnOnce() -> RecomposeScope,
     ) -> StartScopedGroup<GroupId> {
-        let started = self
-            .table
-            .start_group_entry(self.lifecycle, self.state, key);
-        let scope =
-            if let Some(existing_scope) = self.table.group_scope_value(started.index).cloned() {
-                existing_scope
-            } else {
-                let scope = init_scope();
-                self.table
-                    .storage
-                    .set_group_scope(started.index, Some(scope.clone()));
-                scope
-            };
-        StartScopedGroup {
-            group: GroupId(started.index),
-            anchor: self.table.storage.entry_anchor(started.index),
-            scope,
-            restored_from_gap: started.restored_from_hidden,
-        }
+        PassEditor::new(self.table, self.lifecycle, self.state, self.mode)
+            .begin_scoped_group(key, init_scope)
     }
 
     pub(crate) fn end_group(&mut self) {
-        self.table.end_group_entry(self.state);
+        PassEditor::new(self.table, self.lifecycle, self.state, self.mode).end_group();
     }
 
     pub(crate) fn end_recompose(&mut self) {
-        self.table.end_recompose_entry(self.lifecycle, self.state);
+        PassEditor::new(self.table, self.lifecycle, self.state, self.mode).end_recompose();
     }
 
     pub(crate) fn use_value_slot<T: 'static>(&mut self, init: impl FnOnce() -> T) -> usize {
-        let cursor = self.state.cursor;
-        let disallow_live_reuse = self.table.current_disallow_live_slot_reuse(self.state);
-
-        match self.table.storage.entry_kind(cursor) {
-            Some(EntryKind::Value)
-                if !disallow_live_reuse && self.table.storage.value_matches_type::<T>(cursor) =>
-            {
-                self.table.finish_slot_write_at(self.state, cursor)
-            }
-            Some(EntryKind::HiddenValue)
-                if !disallow_live_reuse && self.table.storage.value_matches_type::<T>(cursor) =>
-            {
-                self.table.storage.restore_hidden_entry(cursor);
-                self.table.finish_slot_write_at(self.state, cursor)
-            }
-            Some(EntryKind::Value | EntryKind::HiddenValue) if !disallow_live_reuse => {
-                self.table
-                    .overwrite_value_entry(self.lifecycle, cursor, init(), false);
-                self.table.finish_slot_write_at(self.state, cursor)
-            }
-            _ => {
-                self.table.insert_value_entry(self.state, cursor, init());
-                self.table.finish_slot_write_at(self.state, cursor)
-            }
-        }
+        PassEditor::new(self.table, self.lifecycle, self.state, self.mode).use_value_slot(init)
     }
 
     pub(crate) fn remember<T: 'static>(&mut self, init: impl FnOnce() -> T) -> Owned<T> {
-        let index = self.use_value_slot(|| Owned::new(init()));
-        self.table.read_value::<Owned<T>>(index).clone()
+        PassEditor::new(self.table, self.lifecycle, self.state, self.mode).remember(init)
     }
 
     pub(crate) fn record_node(&mut self, id: NodeId, generation: u32) {
-        let cursor = self.state.cursor;
-        match self.table.storage.node_at(cursor) {
-            Some((EntryKind::Node, existing, existing_generation))
-                if existing == id && existing_generation == generation =>
-            {
-                let _ = self.table.finish_slot_write_at(self.state, cursor);
-            }
-            Some((EntryKind::HiddenNode, existing, existing_generation))
-                if existing == id
-                    && existing_generation == generation
-                    && self
-                        .table
-                        .current_parent_allows_exact_hidden_node_reuse(self.state) =>
-            {
-                self.table.storage.restore_hidden_entry(cursor);
-                let _ = self.table.finish_slot_write_at(self.state, cursor);
-            }
-            Some((EntryKind::Node | EntryKind::HiddenNode, _, _))
-                if !self.table.current_disallow_live_slot_reuse(self.state) =>
-            {
-                self.table
-                    .overwrite_node_entry(self.lifecycle, cursor, id, generation, false);
-                let _ = self.table.finish_slot_write_at(self.state, cursor);
-            }
-            _ => {
-                self.table
-                    .insert_node_entry(self.state, cursor, id, generation);
-                let _ = self.table.finish_slot_write_at(self.state, cursor);
-            }
-        }
+        PassEditor::new(self.table, self.lifecycle, self.state, self.mode)
+            .record_node(id, generation);
     }
 
     pub(crate) fn peek_node(&self) -> Option<(NodeId, u32)> {
         match self.table.storage.node_at(self.state.cursor) {
-            Some((EntryKind::Node, id, generation)) => Some((id, generation)),
-            Some((EntryKind::HiddenNode, id, generation))
-                if self
-                    .table
-                    .current_parent_allows_exact_hidden_node_reuse(self.state) =>
+            Some((kind, id, generation))
+                if kind.matches(EntryClass::Node, EntryVisibility::Live) =>
+            {
+                Some((id, generation))
+            }
+            Some((kind, id, generation))
+                if kind.matches(EntryClass::Node, EntryVisibility::Hidden)
+                    && self
+                        .table
+                        .current_parent_allows_exact_hidden_node_reuse(self.state) =>
             {
                 Some((id, generation))
             }
@@ -1240,19 +1433,12 @@ impl SlotWriteSession<'_> {
     }
 
     pub(crate) fn advance_after_node_read(&mut self) {
-        if self
-            .table
-            .preserved_hidden_node_at_cursor(self.state, self.state.cursor)
-            .is_some()
-        {
-            self.table.storage.restore_hidden_entry(self.state.cursor);
-        }
-        self.state.cursor += 1;
-        self.table.update_group_bounds(self.state);
+        PassEditor::new(self.table, self.lifecycle, self.state, self.mode)
+            .advance_after_node_read();
     }
 
     pub(crate) fn skip_current_group(&mut self) {
-        self.table.skip_current(self.state);
+        PassEditor::new(self.table, self.lifecycle, self.state, self.mode).skip_current_group();
     }
 
     pub(crate) fn nodes_in_current_group(&self) -> Vec<NodeId> {
@@ -1260,55 +1446,11 @@ impl SlotWriteSession<'_> {
     }
 
     pub(crate) fn finalize_current_group(&mut self) -> bool {
-        let mut marked = false;
-        if let Some((owner_start, group_end)) = self
-            .state
-            .group_stack
-            .last()
-            .map(|frame| (frame.start, frame.end.min(self.table.storage.len())))
-        {
-            if self.state.cursor < group_end
-                && self.table.mark_range_as_hidden(
-                    self.lifecycle,
-                    self.state.cursor,
-                    group_end,
-                    Some(owner_start),
-                )
-            {
-                marked = true;
-            }
-            if let Some(frame) = self.state.group_stack.last_mut() {
-                frame.end = self.state.cursor;
-            }
-        } else if self.state.cursor < self.table.storage.len()
-            && self.table.mark_range_as_hidden(
-                self.lifecycle,
-                self.state.cursor,
-                self.table.storage.len(),
-                None,
-            )
-        {
-            marked = true;
-        }
-
-        marked
+        PassEditor::new(self.table, self.lifecycle, self.state, self.mode).finalize_current_group()
     }
 
     pub(crate) fn finalize_pass(&mut self) -> bool {
-        let mut marked_hidden = false;
-        while !self.state.group_stack.is_empty() {
-            marked_hidden |= self.finalize_current_group();
-            match self.mode {
-                SlotPassMode::Compose => self.table.end_group_entry(self.state),
-                SlotPassMode::Recompose => {
-                    self.table.end_recompose_entry(self.lifecycle, self.state)
-                }
-            }
-        }
-        match self.mode {
-            SlotPassMode::Compose => marked_hidden | self.finalize_current_group(),
-            SlotPassMode::Recompose => marked_hidden,
-        }
+        PassEditor::new(self.table, self.lifecycle, self.state, self.mode).finalize_pass()
     }
 }
 
@@ -1352,11 +1494,17 @@ pub(crate) fn drain_orphaned_node_ids_for_test(
 }
 
 #[cfg(test)]
+pub(crate) fn preserved_orphaned_node_ids_for_test(
+    lifecycle: &SlotLifecycleCoordinator,
+) -> Vec<OrphanedNode> {
+    lifecycle.preserved_orphaned_node_ids_snapshot()
+}
+
+#[cfg(test)]
 pub(crate) fn compact_for_test(table: &mut SlotTable, lifecycle: &mut SlotLifecycleCoordinator) {
     let removed = table.compact();
     lifecycle.dispose_drops_reverse(removed);
     lifecycle.trim_orphaned_node_capacity(32);
-    table.flush();
 }
 
 impl Default for SlotTable {
