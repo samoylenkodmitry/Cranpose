@@ -16,6 +16,6 @@ pub struct StartScopedGroup<G> {
     pub group: G,
     pub anchor: AnchorId,
     pub scope: RecomposeScope,
-    /// True if this group was restored from a gap (unstable children).
-    pub restored_from_gap: bool,
+    /// True if preserved structure was reused and children must recompose.
+    pub requires_recompose: bool,
 }

@@ -124,8 +124,6 @@ impl GroupSpans {
 pub(crate) struct GroupSnapshot {
     pub(crate) key: Key,
     pub(crate) spans: GroupSpans,
-    pub(crate) retention: GroupRetention,
-    pub(crate) hidden_descendants: usize,
     pub(crate) scope: Option<RecomposeScope>,
 }
 
@@ -245,8 +243,6 @@ impl GroupArena {
                 live_extent: self.live_extents[idx],
                 scan_extent: self.scan_extents[idx],
             },
-            retention: self.retentions[idx],
-            hidden_descendants: self.hidden_descendants[idx] as usize,
             scope: self.scopes[idx].clone(),
         }
     }
@@ -353,13 +349,6 @@ impl GroupArena {
             + self.hidden_descendants.capacity() * std::mem::size_of::<u32>()
             + self.scopes.capacity() * std::mem::size_of::<Option<RecomposeScope>>()
             + self.free.capacity() * std::mem::size_of::<u32>()
-    }
-
-    fn preserved_count(&self) -> usize {
-        self.hidden_descendants
-            .iter()
-            .filter(|&&hidden_descendants| hidden_descendants > 0)
-            .count()
     }
 }
 
@@ -809,7 +798,7 @@ impl SlotStorage {
             anchors_len: 0,
             anchors_cap: 0,
             hidden_entries_len: self.hidden_count,
-            preserved_groups_len: self.groups.preserved_count(),
+            preserved_groups_len: self.preserved_group_count(),
             free_anchor_ids_len: 0,
             free_anchor_ids_cap: 0,
             group_stack_len: 0,
@@ -1020,7 +1009,7 @@ impl SlotStorage {
         value: u32,
         hidden: bool,
     ) -> Option<DeferredDrop> {
-        let dropped = self.drop_entry(index);
+        let dropped = self.take_entry_payload_for_overwrite(index);
         let kind = if hidden {
             EntryKind::hidden(EntryClass::Value)
         } else {
@@ -1104,7 +1093,7 @@ impl SlotStorage {
         node: u32,
         hidden: bool,
     ) -> Option<DeferredDrop> {
-        let dropped = self.drop_entry(index);
+        let dropped = self.take_entry_payload_for_overwrite(index);
         let kind = if hidden {
             EntryKind::hidden(EntryClass::Node)
         } else {
@@ -1236,35 +1225,22 @@ impl SlotStorage {
         }
     }
 
-    pub(crate) fn drop_entry(&mut self, index: usize) -> Option<DeferredDrop> {
+    fn take_entry_payload_for_overwrite(&mut self, index: usize) -> Option<DeferredDrop> {
         let entry = self.entry(index)?;
-
         if entry.kind.is_hidden() {
             self.decrement_hidden_count();
         }
 
-        let deferred_drop = match entry.kind.class() {
-            Some(EntryClass::Group) => Some(self.groups.take_drop(entry.payload)),
+        match entry.kind.class() {
             Some(EntryClass::Value) => Some(self.values.take_drop(entry.payload)),
             Some(EntryClass::Node) => {
                 self.nodes.free(entry.payload);
                 None
             }
-            None => None,
-        };
-
-        if entry.anchor.is_valid() {
-            self.anchor_map.free_anchor(entry.anchor);
+            Some(EntryClass::Group) | None => {
+                panic!("overwrite path encountered non-value/node entry at slot {index}")
+            }
         }
-        self.buffer.set_entry(
-            index,
-            EntryDescriptor {
-                kind: EntryKind::Unused,
-                anchor: AnchorId::INVALID,
-                payload: 0,
-            },
-        );
-        deferred_drop
     }
 
     pub(crate) fn orphaned_node_state(&self, orphaned: OrphanedNode) -> NodeSlotState {
@@ -1538,6 +1514,16 @@ impl SlotStorage {
         if kind.is_hidden() {
             self.hidden_count += 1;
         }
+    }
+
+    fn preserved_group_count(&self) -> usize {
+        let mut preserved = 0usize;
+        for index in 0..self.buffer.len() {
+            if self.entry_kind(index) == Some(EntryKind::hidden(EntryClass::Group)) {
+                preserved += 1;
+            }
+        }
+        preserved
     }
 
     fn decrement_hidden_count(&mut self) {

@@ -13,7 +13,9 @@ pub(super) enum StartPlan {
         boundary_key: Key,
     },
     RestoreHiddenAtCursor {
-        group: super::GroupSnapshot,
+        scan_extent: usize,
+        live_extent: usize,
+        boundary_key: Key,
     },
     RestoreMatchingGroup {
         matched_group: MatchedGroup,
@@ -56,6 +58,13 @@ impl<'a> ReusePlanner<'a> {
     }
 
     pub(super) fn plan(&self) -> StartPlan {
+        if let Some(matched_group) = self.find_matching_hidden_group_in_previous_tail() {
+            return StartPlan::RestoreMatchingGroup {
+                matched_group,
+                retire_conflicting_group_at_cursor: false,
+            };
+        }
+
         if self.cursor >= self.parent_end {
             return StartPlan::InsertFresh {
                 retire_conflicting_group_at_cursor: false,
@@ -77,18 +86,23 @@ impl<'a> ReusePlanner<'a> {
         }
 
         if let Some(group) = self.hidden_group_candidate_at(self.cursor) {
-            if group.key == self.key
-                && (self.hidden_boundary_matches(Some(group.retention.boundary_key()))
+            if self.storage.group_key_at(self.cursor) == Some(self.key)
+                && (self.hidden_boundary_matches(Some(group.boundary_key))
                     || self.parent_boundary.allows_live_search())
             {
-                if let Some(matched_live_group) = self.find_matching_live_group_after_hidden(&group)
+                if let Some(matched_live_group) =
+                    self.find_matching_live_group_after_hidden(group.scan_extent)
                 {
                     return StartPlan::RestoreMatchingGroup {
                         matched_group: matched_live_group,
                         retire_conflicting_group_at_cursor: false,
                     };
                 }
-                return StartPlan::RestoreHiddenAtCursor { group };
+                return StartPlan::RestoreHiddenAtCursor {
+                    scan_extent: group.scan_extent,
+                    live_extent: group.live_extent,
+                    boundary_key: group.boundary_key,
+                };
             }
         }
 
@@ -112,18 +126,20 @@ impl<'a> ReusePlanner<'a> {
             return None;
         }
 
-        let group = self.storage.group_snapshot_at(self.cursor)?;
-        if group.key != self.key || !self.parent_boundary.policy().allows_exact_live_reuse() {
+        if self.storage.group_key_at(self.cursor) != Some(self.key)
+            || !self.parent_boundary.policy().allows_exact_live_reuse()
+        {
             return None;
         }
-        if group.hidden_descendants > 0 && !allow_hidden_children {
+        let hidden_descendants = self.storage.group_hidden_descendants_at(self.cursor);
+        if hidden_descendants > 0 && !allow_hidden_children {
             return None;
         }
 
         Some(StartPlan::ReuseLiveAtCursor {
-            scan_extent: group.spans.scan_extent(),
-            live_extent: group.spans.live_extent(),
-            boundary_key: group.retention.boundary_key(),
+            scan_extent: self.storage.group_scan_extent_at(self.cursor),
+            live_extent: self.storage.group_live_extent_at(self.cursor),
+            boundary_key: self.storage.group_retention_at(self.cursor)?.boundary_key(),
         })
     }
 
@@ -146,19 +162,18 @@ impl<'a> ReusePlanner<'a> {
             && self.storage.group_key_at(self.cursor) != Some(self.key)
     }
 
-    fn hidden_group_candidate_at(&self, index: usize) -> Option<super::GroupSnapshot> {
-        (self.storage.entry_kind(index) == Some(EntryKind::hidden(EntryClass::Group)))
-            .then(|| self.storage.group_snapshot_at(index))
-            .flatten()
+    fn hidden_group_candidate_at(&self, index: usize) -> Option<MatchedGroup> {
+        if self.storage.entry_kind(index) != Some(EntryKind::hidden(EntryClass::Group)) {
+            return None;
+        }
+        self.matched_group_at(index, true)
     }
 
     fn find_matching_live_group_after_hidden(
         &self,
-        current_hidden_group: &super::GroupSnapshot,
+        hidden_scan_extent: usize,
     ) -> Option<MatchedGroup> {
-        let mut search_index = self
-            .cursor
-            .saturating_add(current_hidden_group.spans.scan_extent().max(1));
+        let mut search_index = self.cursor.saturating_add(hidden_scan_extent.max(1));
 
         while search_index < self.parent_end {
             match self.storage.entry_kind(search_index) {
@@ -168,13 +183,8 @@ impl<'a> ReusePlanner<'a> {
                             .saturating_add(self.storage.entry_scan_extent(search_index).max(1));
                         continue;
                     }
-                    let group = self.storage.group_snapshot_at(search_index)?;
-                    if group.key == self.key {
-                        return Some(MatchedGroup {
-                            index: search_index,
-                            group,
-                            reused_hidden: false,
-                        });
+                    if self.storage.group_key_at(search_index) == Some(self.key) {
+                        return self.matched_group_at(search_index, false);
                     }
                     search_index = search_index
                         .saturating_add(self.storage.entry_scan_extent(search_index).max(1));
@@ -202,28 +212,24 @@ impl<'a> ReusePlanner<'a> {
                             .saturating_add(self.storage.entry_scan_extent(search_index).max(1));
                         continue;
                     }
-                    let group = self.storage.group_snapshot_at(search_index)?;
-                    if group.key == self.key && self.parent_boundary.policy().allows_live_search() {
-                        return Some(MatchedGroup {
-                            index: search_index,
-                            group,
-                            reused_hidden: false,
-                        });
+                    if self.storage.group_key_at(search_index) == Some(self.key)
+                        && self.parent_boundary.policy().allows_live_search()
+                    {
+                        return self.matched_group_at(search_index, false);
                     }
                     search_index = search_index
                         .saturating_add(self.storage.entry_scan_extent(search_index).max(1));
                 }
                 Some(kind) if kind.matches(EntryClass::Group, EntryVisibility::Hidden) => {
-                    let group = self.storage.group_snapshot_at(search_index)?;
-                    if group.key == self.key
-                        && (self.hidden_boundary_matches(Some(group.retention.boundary_key()))
+                    let boundary_key = self
+                        .storage
+                        .group_retention_at(search_index)?
+                        .boundary_key();
+                    if self.storage.group_key_at(search_index) == Some(self.key)
+                        && (self.hidden_boundary_matches(Some(boundary_key))
                             || self.parent_boundary.policy().allows_live_search())
                     {
-                        return Some(MatchedGroup {
-                            index: search_index,
-                            group,
-                            reused_hidden: true,
-                        });
+                        return self.matched_group_at(search_index, true);
                     }
                     search_index = search_index
                         .saturating_add(self.storage.entry_scan_extent(search_index).max(1));
@@ -234,6 +240,60 @@ impl<'a> ReusePlanner<'a> {
         }
 
         None
+    }
+
+    fn find_matching_hidden_group_in_previous_tail(&self) -> Option<MatchedGroup> {
+        if self.cursor == 0
+            || !self
+                .storage
+                .entry_kind(self.cursor - 1)
+                .is_some_and(EntryKind::is_hidden)
+        {
+            return None;
+        }
+
+        let previous_sibling = self.previous_live_sibling_root()?;
+        let previous_sibling_anchor = self.storage.entry_anchor(previous_sibling);
+        let tail_start =
+            previous_sibling + self.storage.group_live_extent_at(previous_sibling).max(1);
+        let tail_end =
+            previous_sibling + self.storage.group_scan_extent_at(previous_sibling).max(1);
+        let mut index = tail_start;
+
+        while index < tail_end {
+            let Some(kind) = self.storage.entry_kind(index) else {
+                break;
+            };
+            let extent = self.storage.entry_scan_extent(index).max(1);
+            if kind.matches(EntryClass::Group, EntryVisibility::Hidden) {
+                let stored_parent_anchor = self
+                    .storage
+                    .group_parent_anchor_at(index)
+                    .unwrap_or(AnchorId::INVALID);
+                let boundary_key = self.storage.group_retention_at(index)?.boundary_key();
+                if (stored_parent_anchor == self.current_parent_anchor
+                    || stored_parent_anchor == previous_sibling_anchor)
+                    && self.storage.group_key_at(index) == Some(self.key)
+                    && (self.hidden_boundary_matches(Some(boundary_key))
+                        || self.parent_boundary.policy().allows_live_search())
+                {
+                    return self.matched_group_at(index, true);
+                }
+            }
+            index += extent;
+        }
+
+        None
+    }
+
+    fn matched_group_at(&self, index: usize, reused_hidden: bool) -> Option<MatchedGroup> {
+        Some(MatchedGroup {
+            index,
+            scan_extent: self.storage.group_scan_extent_at(index),
+            live_extent: self.storage.group_live_extent_at(index),
+            boundary_key: self.storage.group_retention_at(index)?.boundary_key(),
+            reused_hidden,
+        })
     }
 
     fn hidden_boundary_matches(&self, boundary_key: Option<Key>) -> bool {

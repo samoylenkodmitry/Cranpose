@@ -168,17 +168,21 @@ fn describe_plan(plan: StartPlan) -> PlannedAction {
             extent: scan_extent,
             boundary_key,
         },
-        StartPlan::RestoreHiddenAtCursor { group } => PlannedAction::RestoreHiddenAtCursor {
-            extent: group.spans.scan_extent(),
-            boundary_key: group.retention.boundary_key(),
+        StartPlan::RestoreHiddenAtCursor {
+            scan_extent,
+            boundary_key,
+            ..
+        } => PlannedAction::RestoreHiddenAtCursor {
+            extent: scan_extent,
+            boundary_key,
         },
         StartPlan::RestoreMatchingGroup {
             matched_group,
             retire_conflicting_group_at_cursor,
         } => PlannedAction::RestoreMatchingGroup {
             index: matched_group.index,
-            extent: matched_group.group.spans.scan_extent(),
-            boundary_key: matched_group.group.retention.boundary_key(),
+            extent: matched_group.scan_extent,
+            boundary_key: matched_group.boundary_key,
             reused_hidden: matched_group.reused_hidden,
             retire_conflicting_group_at_cursor,
         },
@@ -395,13 +399,39 @@ fn hidden_group_restore_reuses_scope() {
         panic!("scope should be restored")
     });
 
-    assert!(restored.restored_from_gap);
+    assert!(restored.requires_recompose);
     assert_eq!(restored.group, GroupId(child.group.0));
     assert_eq!(restored.scope.id(), child_scope_id);
     assert_eq!(
         table.storage.entry_kind(restored.group.0),
         Some(EntryKind::live(EntryClass::Group))
     );
+}
+
+#[test]
+fn live_group_reuse_at_cursor_does_not_require_recompose() {
+    let runtime = TestRuntime::new();
+    let mut table = new_table();
+    let mut state = SlotWriteSessionState::default();
+    let root_key = crate::hash_key(&"root");
+    let child_key = crate::hash_key(&"child");
+
+    let _root = begin_group_for_test(&mut table, &mut state, root_key);
+    let child = begin_scoped_group(&mut table, &mut state, child_key, || {
+        RecomposeScope::new(runtime.handle())
+    });
+    end_group(&mut table, &mut state);
+    end_group(&mut table, &mut state);
+
+    reset_session(&mut state);
+    let _root = begin_group_for_test(&mut table, &mut state, root_key);
+    let reused = begin_scoped_group(&mut table, &mut state, child_key, || {
+        panic!("scope should be reused in place")
+    });
+
+    assert!(!reused.requires_recompose);
+    assert_eq!(reused.group, child.group);
+    assert_eq!(reused.scope.id(), child.scope.id());
 }
 
 #[test]
@@ -515,6 +545,28 @@ fn compaction_preserves_anchor_identity_for_shifted_slots() {
             .with(|text| text.clone()),
         String::from("survivor")
     );
+}
+
+#[test]
+fn overwrite_value_keeps_anchor_out_of_free_list() {
+    let mut table = new_table();
+    let mut state = SlotWriteSessionState::default();
+    let index = use_value_slot(&mut table, &mut state, || 7i32);
+    let anchor = table.storage.entry_anchor(index);
+    let replacement = table.storage.alloc_value(11i32);
+
+    let dropped = table
+        .storage
+        .overwrite_value(index, anchor, replacement, false);
+    assert!(
+        dropped.is_some(),
+        "overwrite should return previous payload for disposal"
+    );
+
+    let stats = table.debug_stats();
+    assert_eq!(stats.free_anchor_ids_len, 0);
+    assert_eq!(table.storage.resolve_anchor(anchor), Some(index));
+    assert_eq!(table.read_value::<i32>(index), &11);
 }
 
 #[test]
@@ -1144,6 +1196,50 @@ fn planner_does_not_extract_nested_hidden_descendant_from_previous_sibling_tail(
         table.storage.group_parent_anchor_at(preserved_target),
         Some(nested_parent_anchor)
     );
+}
+
+#[test]
+fn planner_restores_previous_tail_even_at_parent_end() {
+    let mut table = new_table();
+    let mut state = SlotWriteSessionState::default();
+
+    let root = begin_group_for_test(&mut table, &mut state, 1);
+    let parent = begin_group_for_test(&mut table, &mut state, 2);
+    let child = begin_group_for_test(&mut table, &mut state, 3);
+    end_group(&mut table, &mut state);
+    end_group(&mut table, &mut state);
+    end_group(&mut table, &mut state);
+
+    let child_extent = table.storage.group_scan_extent_at(child.0).max(1);
+    assert!(hide_range(
+        &mut table,
+        child.0,
+        child.0 + child_extent,
+        Some(parent.0),
+    ));
+    assert_eq!(
+        table.storage.entry_kind(child.0),
+        Some(EntryKind::hidden(EntryClass::Group))
+    );
+
+    reset_session(&mut state);
+    assert_eq!(begin_group_for_test(&mut table, &mut state, 1), root);
+    assert_eq!(begin_group_for_test(&mut table, &mut state, 2), parent);
+    end_group(&mut table, &mut state);
+
+    let restored_child = begin_group_for_test(&mut table, &mut state, 3);
+    assert_eq!(
+        restored_child, child,
+        "the preserved tail child must restore even when the cursor is already at the parent end",
+    );
+    assert_eq!(
+        table.storage.group_parent_anchor_at(restored_child.0),
+        Some(table.storage.entry_anchor(root.0))
+    );
+    end_group(&mut table, &mut state);
+    end_group(&mut table, &mut state);
+
+    verify_table(&table).expect("table should remain well-formed after tail restoration");
 }
 
 #[test]

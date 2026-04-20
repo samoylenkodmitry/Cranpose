@@ -419,14 +419,14 @@ impl Composer {
         }
 
         let parent_scope = self.current_recranpose_scope();
-        let (group_anchor, scope_ref, restored_from_gap) = self.with_slot_session_mut(|slots| {
+        let (group_anchor, scope_ref, requires_recompose) = self.with_slot_session_mut(|slots| {
             let StartScopedGroup {
                 anchor,
                 scope,
-                restored_from_gap,
+                requires_recompose,
                 ..
             } = slots.begin_scoped_group(key, || RecomposeScope::new(self.runtime_handle()));
-            (anchor, scope, restored_from_gap)
+            (anchor, scope, requires_recompose)
         });
 
         scope_ref.reactivate();
@@ -440,7 +440,7 @@ impl Composer {
                 scope_ref.force_reuse();
             }
         }
-        if restored_from_gap {
+        if requires_recompose {
             scope_ref.force_recompose();
         }
 
