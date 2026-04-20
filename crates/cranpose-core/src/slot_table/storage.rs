@@ -978,13 +978,7 @@ impl SlotStorage {
         self.values.alloc(value)
     }
 
-    pub(crate) fn insert_value(
-        &mut self,
-        index: usize,
-        anchor: AnchorId,
-        value: u32,
-        hidden: bool,
-    ) {
+    pub(crate) fn insert_value(&mut self, index: usize, value: u32, hidden: bool) {
         let kind = if hidden {
             EntryKind::hidden(EntryClass::Value)
         } else {
@@ -994,7 +988,7 @@ impl SlotStorage {
             index,
             EntryDescriptor {
                 kind,
-                anchor,
+                anchor: AnchorId::INVALID,
                 payload: value,
             },
             &mut self.anchor_map,
@@ -1005,10 +999,10 @@ impl SlotStorage {
     pub(crate) fn overwrite_value(
         &mut self,
         index: usize,
-        anchor: AnchorId,
         value: u32,
         hidden: bool,
     ) -> Option<DeferredDrop> {
+        let previous_anchor = self.entry_anchor(index);
         let dropped = self.take_entry_payload_for_overwrite(index);
         let kind = if hidden {
             EntryKind::hidden(EntryClass::Value)
@@ -1019,12 +1013,13 @@ impl SlotStorage {
             index,
             EntryDescriptor {
                 kind,
-                anchor,
+                anchor: AnchorId::INVALID,
                 payload: value,
             },
         );
-        self.anchor_map
-            .register_anchor(anchor, index, self.buffer.gap_start, self.buffer.len());
+        if previous_anchor.is_valid() {
+            self.anchor_map.free_anchor(previous_anchor);
+        }
         self.adjust_hidden_count_for_insert(kind);
         dropped
     }

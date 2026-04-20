@@ -201,9 +201,18 @@ impl<'a> SlotTableVerifier<'a> {
                     index = group_end;
                 }
                 EntryKind::Occupied {
-                    class: EntryClass::Value | EntryClass::Node,
+                    class: EntryClass::Value,
                     visibility,
-                    ..
+                } => {
+                    self.verify_missing_anchor(index, entry.anchor, "value")?;
+                    if visibility == EntryVisibility::Hidden {
+                        hidden_entries_in_range += 1;
+                    }
+                    index += 1;
+                }
+                EntryKind::Occupied {
+                    class: EntryClass::Node,
+                    visibility,
                 } => {
                     self.verify_anchor(index, entry.anchor)?;
                     if visibility == EntryVisibility::Hidden {
@@ -228,6 +237,20 @@ impl<'a> SlotTableVerifier<'a> {
             return Err(format!(
                 "anchor {:?} does not resolve to slot {index}",
                 anchor
+            ));
+        }
+        Ok(())
+    }
+
+    fn verify_missing_anchor(
+        &mut self,
+        index: usize,
+        anchor: AnchorId,
+        kind: &str,
+    ) -> Result<(), String> {
+        if anchor.is_valid() {
+            return Err(format!(
+                "{kind} at slot {index} unexpectedly has anchor {anchor:?}"
             ));
         }
         Ok(())

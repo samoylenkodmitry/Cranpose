@@ -26,6 +26,16 @@ pub(super) enum StartPlan {
     },
 }
 
+pub(super) struct ReusePlannerContext {
+    pub(super) key: Key,
+    pub(super) cursor: usize,
+    pub(super) parent_end: usize,
+    pub(super) parent_boundary: PassBoundary,
+    pub(super) current_parent_boundary_key: Option<Key>,
+    pub(super) current_parent_anchor: AnchorId,
+    pub(super) previous_live_sibling_group: Option<AnchorId>,
+}
+
 pub(super) struct ReusePlanner<'a> {
     storage: &'a SlotStorage,
     key: Key,
@@ -34,18 +44,20 @@ pub(super) struct ReusePlanner<'a> {
     parent_boundary: PassBoundary,
     current_parent_boundary_key: Option<Key>,
     current_parent_anchor: AnchorId,
+    previous_live_sibling_group: Option<AnchorId>,
 }
 
 impl<'a> ReusePlanner<'a> {
-    pub(super) fn new(
-        storage: &'a SlotStorage,
-        key: Key,
-        cursor: usize,
-        parent_end: usize,
-        parent_boundary: PassBoundary,
-        current_parent_boundary_key: Option<Key>,
-        current_parent_anchor: AnchorId,
-    ) -> Self {
+    pub(super) fn new(storage: &'a SlotStorage, context: ReusePlannerContext) -> Self {
+        let ReusePlannerContext {
+            key,
+            cursor,
+            parent_end,
+            parent_boundary,
+            current_parent_boundary_key,
+            current_parent_anchor,
+            previous_live_sibling_group,
+        } = context;
         Self {
             storage,
             key,
@@ -54,6 +66,7 @@ impl<'a> ReusePlanner<'a> {
             parent_boundary,
             current_parent_boundary_key,
             current_parent_anchor,
+            previous_live_sibling_group,
         }
     }
 
@@ -88,7 +101,7 @@ impl<'a> ReusePlanner<'a> {
         if let Some(group) = self.hidden_group_candidate_at(self.cursor) {
             if self.storage.group_key_at(self.cursor) == Some(self.key)
                 && (self.hidden_boundary_matches(Some(group.boundary_key))
-                    || self.parent_boundary.allows_live_search())
+                    || self.parent_boundary.policy().allows_live_search())
             {
                 if let Some(matched_live_group) =
                     self.find_matching_live_group_after_hidden(group.scan_extent)
@@ -305,22 +318,17 @@ impl<'a> ReusePlanner<'a> {
     }
 
     fn previous_live_sibling_root(&self) -> Option<usize> {
-        let mut search_index = self.cursor;
-        while search_index > 0 {
-            search_index -= 1;
-            let kind = self.storage.entry_kind(search_index)?;
-            if !kind.matches(EntryClass::Group, EntryVisibility::Live) {
-                continue;
-            }
-            if !self.live_group_belongs_to_current_parent(search_index) {
-                continue;
-            }
-            let group_end = search_index + self.storage.entry_scan_extent(search_index).max(1);
-            if group_end == self.cursor {
-                return Some(search_index);
-            }
+        let anchor = self.previous_live_sibling_group?;
+        let index = self.storage.resolve_anchor(anchor)?;
+        let kind = self.storage.entry_kind(index)?;
+        if !kind.matches(EntryClass::Group, EntryVisibility::Live)
+            || !self.live_group_belongs_to_current_parent(index)
+        {
+            return None;
         }
-        None
+
+        let group_end = index + self.storage.entry_scan_extent(index).max(1);
+        (group_end == self.cursor).then_some(index)
     }
 
     fn live_group_belongs_to_current_parent(&self, index: usize) -> bool {

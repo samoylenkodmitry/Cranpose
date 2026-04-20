@@ -5,7 +5,7 @@ use super::{
     boundary_policy::BoundaryTransition,
     compact_for_test, drain_orphaned_node_ids_for_test, hide_range_for_test,
     preserved_orphaned_node_ids_for_test,
-    reuse_planner::{ReusePlanner, StartPlan},
+    reuse_planner::{ReusePlanner, ReusePlannerContext, StartPlan},
     storage::{EntryClass, EntryKind, GroupSpans},
     verifier::SlotTableVerifier,
     GroupFrame, NodeSlotState, PassBoundary, SlotLifecycleCoordinator, SlotPassMode, SlotTable,
@@ -222,18 +222,51 @@ fn plan_start_with_parent_anchor(
     current_parent_boundary_key: Option<crate::Key>,
     current_parent_anchor: AnchorId,
 ) -> PlannedAction {
+    let previous_live_sibling_group =
+        derive_previous_live_sibling_group_anchor(table, cursor, current_parent_anchor);
     describe_plan(
         ReusePlanner::new(
             &table.storage,
-            key,
-            cursor,
-            parent_end,
-            parent_boundary,
-            current_parent_boundary_key,
-            current_parent_anchor,
+            ReusePlannerContext {
+                key,
+                cursor,
+                parent_end,
+                parent_boundary,
+                current_parent_boundary_key,
+                current_parent_anchor,
+                previous_live_sibling_group,
+            },
         )
         .plan(),
     )
+}
+
+fn derive_previous_live_sibling_group_anchor(
+    table: &SlotTable,
+    cursor: usize,
+    current_parent_anchor: AnchorId,
+) -> Option<AnchorId> {
+    let mut search_index = cursor;
+    while search_index > 0 {
+        search_index -= 1;
+        let kind = table.storage.entry_kind(search_index)?;
+        if !kind.matches(EntryClass::Group, super::storage::EntryVisibility::Live) {
+            continue;
+        }
+        if table
+            .storage
+            .group_parent_anchor_at(search_index)
+            .unwrap_or(AnchorId::INVALID)
+            != current_parent_anchor
+        {
+            continue;
+        }
+        let group_end = search_index + table.storage.entry_scan_extent(search_index).max(1);
+        if group_end == cursor {
+            return Some(table.storage.entry_anchor(search_index));
+        }
+    }
+    None
 }
 
 #[test]
@@ -347,6 +380,7 @@ fn fresh_parent_inserts_before_hidden_value_instead_of_restoring_it() {
         stored_live_end: table.storage.len(),
         live_end: table.storage.len(),
         pass_boundary: PassBoundary::Fresh { boundary_key: 1 },
+        previous_direct_child_group: None,
     });
 
     let index = use_value_slot(&mut table, &mut state, || 2i32);
@@ -501,17 +535,18 @@ fn compaction_preserves_anchor_identity_for_shifted_slots() {
     use_value_slot(&mut table, &mut compose_state, || String::from("drop-b"));
     end_group(&mut table, &mut compose_state);
 
-    let _second_group = begin_group_for_test(&mut table, &mut compose_state, 2);
+    let second_group = begin_group_for_test(&mut table, &mut compose_state, 2);
     let survivor_index = use_value_slot(&mut table, &mut compose_state, || {
         Owned::new(String::from("survivor"))
     });
-    let survivor_anchor = table.storage.entry_anchor(survivor_index);
+    let second_group_anchor = table.storage.entry_anchor(second_group.0);
     end_group(&mut table, &mut compose_state);
 
-    let resolved_index = table
+    let resolved_group_index = table
         .storage
-        .resolve_anchor(survivor_anchor)
-        .expect("survivor anchor should resolve");
+        .resolve_anchor(second_group_anchor)
+        .expect("second group anchor should resolve");
+    let resolved_index = resolved_group_index + 1;
     assert_eq!(
         table
             .read_value::<Owned<String>>(resolved_index)
@@ -534,10 +569,11 @@ fn compaction_preserves_anchor_identity_for_shifted_slots() {
 
     compact(&mut table);
 
-    let shifted_index = table
+    let shifted_group_index = table
         .storage
-        .resolve_anchor(survivor_anchor)
-        .expect("survivor anchor should still resolve");
+        .resolve_anchor(second_group_anchor)
+        .expect("second group anchor should still resolve");
+    let shifted_index = shifted_group_index + 1;
     assert!(shifted_index < survivor_index);
     assert_eq!(
         table
@@ -548,24 +584,23 @@ fn compaction_preserves_anchor_identity_for_shifted_slots() {
 }
 
 #[test]
-fn overwrite_value_keeps_anchor_out_of_free_list() {
+fn overwrite_value_keeps_value_slots_anchorless() {
     let mut table = new_table();
     let mut state = SlotWriteSessionState::default();
     let index = use_value_slot(&mut table, &mut state, || 7i32);
-    let anchor = table.storage.entry_anchor(index);
+    assert_eq!(table.storage.entry_anchor(index), AnchorId::INVALID);
     let replacement = table.storage.alloc_value(11i32);
 
-    let dropped = table
-        .storage
-        .overwrite_value(index, anchor, replacement, false);
+    let dropped = table.storage.overwrite_value(index, replacement, false);
     assert!(
         dropped.is_some(),
         "overwrite should return previous payload for disposal"
     );
 
     let stats = table.debug_stats();
+    assert_eq!(stats.anchors_len, 0);
     assert_eq!(stats.free_anchor_ids_len, 0);
-    assert_eq!(table.storage.resolve_anchor(anchor), Some(index));
+    assert_eq!(table.storage.entry_anchor(index), AnchorId::INVALID);
     assert_eq!(table.read_value::<i32>(index), &11);
 }
 
@@ -615,7 +650,7 @@ fn hidden_descendant_scopes_are_excluded_until_restored() {
 }
 
 #[test]
-fn anchor_resolution_tracks_group_and_value_anchors_across_sibling_reorders() {
+fn group_anchor_resolution_tracks_sibling_reorders_without_value_anchors() {
     let cases = [
         ("swap_front_pair", [2u64, 1, 3]),
         ("move_tail_to_front", [3u64, 1, 2]),
@@ -626,14 +661,17 @@ fn anchor_resolution_tracks_group_and_value_anchors_across_sibling_reorders() {
         let mut table = new_table();
         let mut state = SlotWriteSessionState::default();
         let mut group_anchors = std::collections::BTreeMap::new();
-        let mut value_anchors = std::collections::BTreeMap::new();
 
         for key in [1u64, 2, 3] {
             let group = begin_group_for_test(&mut table, &mut state, key);
             let value_index = use_value_slot(&mut table, &mut state, move || key as i32);
             end_group(&mut table, &mut state);
             group_anchors.insert(key, table.storage.entry_anchor(group.0));
-            value_anchors.insert(key, table.storage.entry_anchor(value_index));
+            assert_eq!(
+                table.storage.entry_anchor(value_index),
+                AnchorId::INVALID,
+                "{label}: value slot for key {key} should not allocate an anchor",
+            );
         }
 
         reset_session(&mut state);
@@ -647,7 +685,6 @@ fn anchor_resolution_tracks_group_and_value_anchors_across_sibling_reorders() {
             let expected_group_index = position * 2;
             let expected_value_index = expected_group_index + 1;
             let group_anchor = group_anchors[&key];
-            let value_anchor = value_anchors[&key];
 
             assert_eq!(
                 table.storage.resolve_anchor(group_anchor),
@@ -655,14 +692,14 @@ fn anchor_resolution_tracks_group_and_value_anchors_across_sibling_reorders() {
                 "{label}: group anchor for key {key} resolved incorrectly",
             );
             assert_eq!(
-                table.storage.resolve_anchor(value_anchor),
-                Some(expected_value_index),
-                "{label}: value anchor for key {key} resolved incorrectly",
-            );
-            assert_eq!(
                 table.read_value::<i32>(expected_value_index),
                 &(key as i32),
                 "{label}: reused value for key {key} moved incorrectly",
+            );
+            assert_eq!(
+                table.storage.entry_anchor(expected_value_index),
+                AnchorId::INVALID,
+                "{label}: reordered value for key {key} unexpectedly gained an anchor",
             );
         }
     }
@@ -680,7 +717,10 @@ fn compaction_is_idempotent_after_hidden_ranges_are_removed() {
     let kept = begin_group_for_test(&mut table, &mut state, 2);
     let kept_value_index = use_value_slot(&mut table, &mut state, || String::from("keep"));
     let kept_group_anchor = table.storage.entry_anchor(kept.0);
-    let kept_value_anchor = table.storage.entry_anchor(kept_value_index);
+    assert_eq!(
+        table.storage.entry_anchor(kept_value_index),
+        AnchorId::INVALID
+    );
     end_group(&mut table, &mut state);
 
     assert!(hide_range(&mut table, dropped.0, kept.0, None));
@@ -690,24 +730,22 @@ fn compaction_is_idempotent_after_hidden_ranges_are_removed() {
     let first_groups = table.debug_dump_groups();
     let first_heap_bytes = table.heap_bytes();
     let first_group_anchor = table.storage.resolve_anchor(kept_group_anchor);
-    let first_value_anchor = table.storage.resolve_anchor(kept_value_anchor);
+    let first_value_index = first_group_anchor.expect("kept group anchor should resolve") + 1;
 
     compact(&mut table);
     let second_slots = table.debug_dump_all_slots();
     let second_groups = table.debug_dump_groups();
     let second_heap_bytes = table.heap_bytes();
     let second_group_anchor = table.storage.resolve_anchor(kept_group_anchor);
-    let second_value_anchor = table.storage.resolve_anchor(kept_value_anchor);
+    let second_value_index =
+        second_group_anchor.expect("kept group anchor should still resolve") + 1;
 
     assert_eq!(first_slots, second_slots);
     assert_eq!(first_groups, second_groups);
     assert_eq!(first_heap_bytes, second_heap_bytes);
     assert_eq!(first_group_anchor, second_group_anchor);
-    assert_eq!(first_value_anchor, second_value_anchor);
-    assert_eq!(
-        table.read_value::<String>(second_value_anchor.unwrap()),
-        "keep"
-    );
+    assert_eq!(first_value_index, second_value_index);
+    assert_eq!(table.read_value::<String>(second_value_index), "keep");
 }
 
 #[test]
@@ -964,22 +1002,24 @@ fn planner_hidden_group_restore_and_move_respects_parent_boundary() {
 fn fresh_boundary_reuse_live_enters_restricted_restored_mode() {
     let boundary = PassBoundary::Fresh { boundary_key: 7 }
         .transition(BoundaryTransition::ReuseLive { boundary_key: 11 });
+    let policy = boundary.policy();
 
     assert_eq!(boundary, PassBoundary::Restored { boundary_key: 11 });
-    assert!(boundary.allows_exact_live_reuse());
-    assert!(!boundary.disallows_live_value_reuse());
-    assert_eq!(boundary.restricted_boundary(), Some(11));
+    assert!(policy.allows_exact_live_reuse());
+    assert!(!policy.disallows_live_value_reuse());
+    assert_eq!(policy.restricted_boundary(), Some(11));
 }
 
 #[test]
 fn fresh_boundary_restore_enters_restricted_restored_mode() {
     let boundary = PassBoundary::Fresh { boundary_key: 7 }
         .transition(BoundaryTransition::Restore { boundary_key: 13 });
+    let policy = boundary.policy();
 
     assert_eq!(boundary, PassBoundary::Restored { boundary_key: 13 });
-    assert!(boundary.allows_exact_live_reuse());
-    assert!(!boundary.disallows_live_value_reuse());
-    assert_eq!(boundary.restricted_boundary(), Some(13));
+    assert!(policy.allows_exact_live_reuse());
+    assert!(!policy.disallows_live_value_reuse());
+    assert_eq!(policy.restricted_boundary(), Some(13));
 }
 
 #[test]
@@ -1125,6 +1165,54 @@ fn planner_scans_preserved_tail_before_matching_the_next_sibling() {
 }
 
 #[test]
+fn ending_group_caches_previous_direct_child_anchor_even_after_many_values() {
+    let mut table = new_table();
+    let mut state = SlotWriteSessionState::default();
+
+    let _root = begin_group_for_test(&mut table, &mut state, 1);
+    let child = begin_group_for_test(&mut table, &mut state, 2);
+    for value in 0..50 {
+        let _ = use_value_slot(&mut table, &mut state, move || value);
+    }
+    end_group(&mut table, &mut state);
+
+    assert_eq!(
+        state
+            .group_stack
+            .last()
+            .and_then(|frame| frame.previous_direct_child_group),
+        Some(table.storage.entry_anchor(child.0)),
+        "parent frame should cache the direct child group anchor instead of rediscovering it from the child's value slots",
+    );
+
+    let _ = use_value_slot(&mut table, &mut state, || 999i32);
+    assert_eq!(
+        state
+            .group_stack
+            .last()
+            .and_then(|frame| frame.previous_direct_child_group),
+        None,
+        "a direct scalar slot after the child group must clear the cached sibling group",
+    );
+}
+
+#[test]
+fn direct_child_reparent_batch_coalesces_previous_parent_updates() {
+    let mut batch = super::DirectChildReparentBatch::default();
+    batch.record_previous_parent(7, 2, 3);
+    batch.record_previous_parent(7, 4, 5);
+    batch.record_previous_parent(9, 1, 0);
+    batch.add_hidden_descendants_to_new_parent(6);
+
+    assert_eq!(batch.removed_hidden_descendants.len(), 2);
+    assert_eq!(batch.removed_hidden_descendants.get(&7), Some(&6));
+    assert_eq!(batch.removed_hidden_descendants.get(&9), Some(&1));
+    assert_eq!(batch.removed_preserved_scan.len(), 1);
+    assert_eq!(batch.removed_preserved_scan.get(&7), Some(&8));
+    assert_eq!(batch.added_hidden_descendants, 6);
+}
+
+#[test]
 fn planner_does_not_extract_nested_hidden_descendant_from_previous_sibling_tail() {
     let mut table = new_table();
     let mut state = SlotWriteSessionState::default();
@@ -1243,20 +1331,16 @@ fn planner_restores_previous_tail_even_at_parent_end() {
 }
 
 #[test]
-fn verifier_rejects_anchor_resolution_drift() {
+fn value_slots_never_register_anchors() {
     let mut table = new_table();
     let mut state = SlotWriteSessionState::default();
-    use_value_slot(&mut table, &mut state, || 1i32);
-    use_value_slot(&mut table, &mut state, || 2i32);
+    let first = use_value_slot(&mut table, &mut state, || 1i32);
+    let second = use_value_slot(&mut table, &mut state, || 2i32);
 
-    let reused_anchor = table.storage.entry_anchor(0);
-    let payload = table.storage.alloc_value(3i32);
-    let _ = table
-        .storage
-        .overwrite_value(1, reused_anchor, payload, false);
-
-    let err = verify_table(&table).expect_err("anchor resolution drift should fail verification");
-    assert!(err.contains("does not resolve to slot"), "{err}");
+    assert_eq!(table.storage.entry_anchor(first), AnchorId::INVALID);
+    assert_eq!(table.storage.entry_anchor(second), AnchorId::INVALID);
+    assert_eq!(table.debug_stats().anchors_len, 0);
+    verify_table(&table).expect("anchorless value slots should remain well-formed");
 }
 
 #[test]

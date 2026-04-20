@@ -83,20 +83,4 @@ impl PassBoundary {
             BoundaryTransition::InsertFresh { boundary_key } => Self::Fresh { boundary_key },
         }
     }
-
-    pub(crate) fn restricted_boundary(self) -> Option<Key> {
-        self.policy().restricted_boundary()
-    }
-
-    pub(crate) fn allows_exact_live_reuse(self) -> bool {
-        self.policy().allows_exact_live_reuse()
-    }
-
-    pub(crate) fn allows_live_search(self) -> bool {
-        self.policy().allows_live_search()
-    }
-
-    pub(crate) fn disallows_live_value_reuse(self) -> bool {
-        self.policy().disallows_live_value_reuse()
-    }
 }
