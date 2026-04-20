@@ -955,7 +955,7 @@ fn process_invalid_scopes_preserves_later_fresh_subtree_when_earlier_scope_runs_
 }
 
 #[test]
-fn gapped_scope_kept_alive_externally_stays_inactive_until_restored() {
+fn retained_scope_stays_inactive_until_restored() {
     thread_local! {
         static CAPTURED_SCOPE: RefCell<Option<RecomposeScope>> = const { RefCell::new(None) };
         static INVOCATIONS: Cell<usize> = const { Cell::new(0) };
@@ -968,21 +968,19 @@ fn gapped_scope_kept_alive_externally_stays_inactive_until_restored() {
     let root_key = location_key(file!(), line!(), column!());
 
     #[composable]
-    fn conditional_branch(observed: MutableState<i32>) {
-        INVOCATIONS.with(|count| count.set(count.get() + 1));
-        with_current_composer(|composer| {
-            let scope = composer
-                .current_recranpose_scope()
-                .expect("scope available");
-            CAPTURED_SCOPE.with(|slot| slot.replace(Some(scope)));
-        });
-        let _ = observed.value();
-    }
-
-    #[composable]
     fn root(show_branch: MutableState<bool>, observed: MutableState<i32>) {
         if show_branch.value() {
-            conditional_branch(observed);
+            let branch_key = location_key(file!(), line!(), column!());
+            with_current_composer(|composer| {
+                composer.cranpose_with_reuse(branch_key, RecomposeOptions::default(), |composer| {
+                    INVOCATIONS.with(|count| count.set(count.get() + 1));
+                    let scope = composer
+                        .current_recranpose_scope()
+                        .expect("scope available");
+                    CAPTURED_SCOPE.with(|slot| slot.replace(Some(scope)));
+                    let _ = observed.value();
+                });
+            });
         }
     }
 
@@ -1001,13 +999,13 @@ fn gapped_scope_kept_alive_externally_stays_inactive_until_restored() {
     );
 
     show_branch.set_value(false);
-    let _ = composition
-        .process_invalid_scopes()
-        .expect("hide branch recomposition");
+    composition
+        .render(root_key, || root(show_branch, observed))
+        .expect("hide branch render");
 
     assert!(
         !scope.is_active(),
-        "scope retained outside the slot table must deactivate once its group is gapped; scope_id={} groups={:?} slots={:?}",
+        "retained scope must deactivate when its subtree leaves the active table; scope_id={} groups={:?} slots={:?}",
         scope.id(),
         composition.debug_dump_slot_table_groups(),
         composition.debug_dump_all_slots(),
@@ -1021,12 +1019,150 @@ fn gapped_scope_kept_alive_externally_stays_inactive_until_restored() {
     assert_eq!(
         INVOCATIONS.with(|count| count.get()),
         1,
-        "a hidden gapped scope must not recompose just because an external clone kept it alive"
+        "a hidden retained scope must not recompose just because an external clone kept it alive"
+    );
+
+    show_branch.set_value(true);
+    composition
+        .render(root_key, || root(show_branch, observed))
+        .expect("restore retained branch");
+
+    let restored_scope = CAPTURED_SCOPE
+        .with(|slot| slot.borrow().clone())
+        .expect("captured scope after restore");
+    assert_eq!(
+        restored_scope.id(),
+        scope.id(),
+        "restoring a retained subtree must reactivate the same scope",
+    );
+    assert!(
+        restored_scope.is_active(),
+        "restored scope should be active"
+    );
+    assert_eq!(
+        INVOCATIONS.with(|count| count.get()),
+        2,
+        "restoring the retained subtree must recompose it once",
     );
 }
 
 #[test]
-fn skipped_group_reparents_root_nodes_when_moved_to_a_new_parent() {
+fn with_key_keeps_callsite_identity_when_user_key_repeats() {
+    thread_local! {
+        static SECOND_SLOT: RefCell<Option<Owned<i32>>> = const { RefCell::new(None) };
+    }
+
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let show_first = MutableState::with_runtime(true, runtime.clone());
+    let root_key = location_key(file!(), line!(), column!());
+
+    #[composable]
+    fn root(show_first: MutableState<bool>) {
+        if show_first.value() {
+            cranpose_core::with_key(&"shared-user-key", || {
+                let slot = with_current_composer(|composer| composer.remember(|| 10));
+                let _ = slot;
+            });
+        }
+
+        cranpose_core::with_key(&"shared-user-key", || {
+            let slot = with_current_composer(|composer| composer.remember(|| 20));
+            SECOND_SLOT.with(|cell| cell.replace(Some(slot)));
+        });
+    }
+
+    composition
+        .render(root_key, || root(show_first))
+        .expect("initial keyed composition");
+
+    let second = SECOND_SLOT
+        .with(|cell| cell.borrow().clone())
+        .expect("second keyed slot captured");
+    second.replace(99);
+
+    show_first.set_value(false);
+    composition
+        .render(root_key, || root(show_first))
+        .expect("hide first keyed branch");
+
+    let second_after = SECOND_SLOT
+        .with(|cell| cell.borrow().clone())
+        .expect("second keyed slot recaptured");
+    assert_eq!(
+        second_after.with(|value| *value),
+        99,
+        "keyed identity must include the callsite so later siblings do not inherit earlier state",
+    );
+}
+
+#[test]
+fn retained_siblings_with_same_raw_key_keep_distinct_state() {
+    thread_local! {
+        static CAPTURED: RefCell<Vec<Owned<i32>>> = const { RefCell::new(Vec::new()) };
+    }
+
+    const SHARED_KEY: Key = 0xCAFE_BABE;
+
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let show_children = MutableState::with_runtime(true, runtime.clone());
+    let root_key = location_key(file!(), line!(), column!());
+
+    #[composable]
+    fn root(show_children: MutableState<bool>) {
+        CAPTURED.with(|slots| slots.borrow_mut().clear());
+        if !show_children.value() {
+            return;
+        }
+
+        with_current_composer(|composer| {
+            for initial in [10, 20] {
+                composer.cranpose_with_reuse(SHARED_KEY, RecomposeOptions::default(), |composer| {
+                    let slot = composer.remember(|| initial);
+                    CAPTURED.with(|slots| slots.borrow_mut().push(slot));
+                });
+            }
+        });
+    }
+
+    composition
+        .render(root_key, || root(show_children))
+        .expect("initial retained sibling composition");
+
+    CAPTURED.with(|slots| {
+        let slots = slots.borrow();
+        assert_eq!(slots.len(), 2, "expected two retained siblings");
+        slots[0].replace(101);
+        slots[1].replace(202);
+    });
+
+    show_children.set_value(false);
+    composition
+        .render(root_key, || root(show_children))
+        .expect("hide retained siblings");
+
+    show_children.set_value(true);
+    composition
+        .render(root_key, || root(show_children))
+        .expect("restore retained siblings");
+
+    let restored = CAPTURED.with(|slots| {
+        slots
+            .borrow()
+            .iter()
+            .map(|slot| slot.with(|value| *value))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        restored,
+        vec![101, 202],
+        "retention must key preserved siblings by full structural identity, not raw key alone",
+    );
+}
+
+#[test]
+fn keyed_child_moved_between_parents_rebuilds_without_stale_attachment() {
     thread_local! {
         static ROOT_ID: Cell<Option<NodeId>> = const { Cell::new(None) };
         static PARENT_ID: Cell<Option<NodeId>> = const { Cell::new(None) };
@@ -1119,12 +1255,8 @@ fn skipped_group_reparents_root_nodes_when_moved_to_a_new_parent() {
     let current_child_id = CHILD_ID.with(|slot| slot.get()).expect("current child id");
     let mut applier = composition.applier_mut();
     let tree = applier.dump_tree(Some(root_id));
-    assert_eq!(
-        current_child_id, child_id,
-        "moving a skipped child between parents must reuse the same node; tree=\n{tree}",
-    );
     let child_parent = applier
-        .with_node::<TrackingChild, _>(child_id, |node| node.parent())
+        .with_node::<TrackingChild, _>(current_child_id, |node| node.parent())
         .expect("child should still exist after move");
     let root_children = applier
         .with_node::<RecordingNode, _>(root_id, |node| node.children.clone())
@@ -1136,15 +1268,21 @@ fn skipped_group_reparents_root_nodes_when_moved_to_a_new_parent() {
     assert_eq!(
         child_parent,
         Some(root_id),
-        "a skipped moved group must reattach its root node to the new parent; tree=\n{tree}",
+        "the moved child must attach under the new parent; tree=\n{tree}",
     );
     assert_eq!(
         root_children,
-        vec![parent_id, child_id],
+        vec![parent_id, current_child_id],
         "root should now own the moved child directly; tree=\n{tree}",
     );
     assert!(
         parent_children.is_empty(),
-        "old parent must release the moved child when the skipped group changes parents; tree=\n{tree}",
+        "old parent must release the moved child when it changes parents; tree=\n{tree}",
     );
+    if current_child_id != child_id {
+        assert!(
+            applier.get_mut(child_id).is_err(),
+            "without explicit retention, the old child node must be disposed when rebuilt; tree=\n{tree}",
+        );
+    }
 }

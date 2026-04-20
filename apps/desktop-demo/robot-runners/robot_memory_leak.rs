@@ -255,7 +255,7 @@ fn log_runtime_stats(robot: &cranpose::Robot, phase: &str) {
     match robot.get_runtime_leak_debug_stats() {
         Ok(stats) => {
             eprintln!(
-                "[runtime:{phase}] nodes={}/{} live_heap_mb={:.1} recycled_heap_mb={:.1} slot_heap_mb={:.1} slots={}/{} pending={}/{} anchors={}/{} hidden_entries={} preserved_groups={} free_anchors={}/{} groups={}/{} orphaned={}/{} scopes={}/{} commands={}/{} observer_states={}/{}",
+                "[runtime:{phase}] nodes={}/{} live_heap_mb={:.1} recycled_heap_mb={:.1} slot_heap_mb={:.1} slots={}/{} pending={}/{} anchors={}/{} scopes={}/{} commands={}/{} observer_states={}/{}",
                 stats.applier_stats.nodes_len,
                 stats.applier_stats.nodes_cap,
                 stats.live_node_heap_bytes as f64 / (1024.0 * 1024.0),
@@ -267,14 +267,6 @@ fn log_runtime_stats(robot: &cranpose::Robot, phase: &str) {
                 stats.slot_stats.pending_slot_drops_cap,
                 stats.slot_stats.anchors_len,
                 stats.slot_stats.anchors_cap,
-                stats.slot_stats.hidden_entries_len,
-                stats.slot_stats.preserved_groups_len,
-                stats.slot_stats.free_anchor_ids_len,
-                stats.slot_stats.free_anchor_ids_cap,
-                stats.slot_stats.group_stack_len,
-                stats.slot_stats.group_stack_cap,
-                stats.slot_stats.orphaned_node_ids_len,
-                stats.slot_stats.orphaned_node_ids_cap,
                 stats.recompose_scope_stats.len,
                 stats.recompose_scope_stats.capacity,
                 stats.pass_stats.commands_len,

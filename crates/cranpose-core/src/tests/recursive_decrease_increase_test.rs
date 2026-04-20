@@ -28,34 +28,6 @@ fn count_groups(composition: &Composition<MemoryApplier>) -> usize {
     composition.debug_dump_slot_table_groups().len()
 }
 
-/// Count all gaps with preserved group keys by inspecting the debug output
-fn count_gap_groups(composition: &Composition<MemoryApplier>) -> usize {
-    composition
-        .debug_dump_all_slots()
-        .iter()
-        .filter(|(_idx, desc)| desc.contains("Gap") && desc.contains("was_group_key"))
-        .count()
-}
-
-/// Get all gap keys
-fn get_gap_keys(composition: &Composition<MemoryApplier>) -> Vec<u64> {
-    composition
-        .debug_dump_all_slots()
-        .iter()
-        .filter_map(|(_idx, desc)| {
-            if desc.contains("Gap(was_group_key=") {
-                // Extract key from string like "Gap(was_group_key=12345..."
-                let key_start = desc.find("was_group_key=")? + "was_group_key=".len();
-                let key_end = desc[key_start..].find(',')?;
-                let key_str = &desc[key_start..key_start + key_end];
-                key_str.parse::<u64>().ok()
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
 #[test]
 fn recursive_decrease_increase_preserves_structure() {
     let mut composition = test_composition();
@@ -73,11 +45,7 @@ fn recursive_decrease_increase_preserves_structure() {
         .expect("initial render");
 
     let initial_groups = count_groups(&composition);
-    let initial_gaps = count_gap_groups(&composition);
-    eprintln!(
-        "Groups: {}, Gaps with keys: {}",
-        initial_groups, initial_gaps
-    );
+    eprintln!("Groups: {}", initial_groups);
     eprintln!(
         "Group keys: {:?}",
         composition
@@ -101,11 +69,7 @@ fn recursive_decrease_increase_preserves_structure() {
     eprintln!("Recomposed {} times", recomp_count);
 
     let decreased_groups = count_groups(&composition);
-    let decreased_gaps = count_gap_groups(&composition);
-    eprintln!(
-        "Groups: {}, Gaps with keys: {}",
-        decreased_groups, decreased_gaps
-    );
+    eprintln!("Groups: {}", decreased_groups);
     eprintln!(
         "Group keys: {:?}",
         composition
@@ -119,8 +83,7 @@ fn recursive_decrease_increase_preserves_structure() {
         eprintln!("  [{}] {}", idx, desc);
     }
 
-    // After decrease + compaction, gaps are removed (compaction reclaims them).
-    // The important property is that the group count decreased.
+    // The important property is that the active tree shrinks after the render.
     assert!(
         decreased_groups < initial_groups,
         "Decreasing depth should reduce group count"
@@ -135,11 +98,7 @@ fn recursive_decrease_increase_preserves_structure() {
     {}
 
     let restored_groups = count_groups(&composition);
-    let restored_gaps = count_gap_groups(&composition);
-    eprintln!(
-        "Groups: {}, Gaps with keys: {}",
-        restored_groups, restored_gaps
-    );
+    eprintln!("Groups: {}", restored_groups);
     eprintln!(
         "Group keys: {:?}",
         composition
@@ -198,12 +157,7 @@ fn recursive_decrease_increase_multiple_cycles() {
         depth_state.set(2);
         while composition.process_invalid_scopes().expect("recompose") {}
 
-        let gaps_after_decrease = count_gap_groups(&composition);
-        let gap_keys = get_gap_keys(&composition);
-        eprintln!(
-            "After decrease: {} gaps with keys: {:?}",
-            gaps_after_decrease, gap_keys
-        );
+        eprintln!("After decrease");
 
         // Increase
         depth_state.set(3);
@@ -215,10 +169,9 @@ fn recursive_decrease_increase_multiple_cycles() {
             .iter()
             .map(|(_idx, key, _, _)| *key)
             .collect();
-        let gaps_after_increase = count_gap_groups(&composition);
         eprintln!(
-            "After cycle {}: {} groups (initial: {}), {} gaps remaining",
-            cycle, groups, initial_groups, gaps_after_increase
+            "After cycle {}: {} groups (initial: {})",
+            cycle, groups, initial_groups
         );
         eprintln!("Current keys: {:?}", current_keys);
 

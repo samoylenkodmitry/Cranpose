@@ -176,8 +176,8 @@ impl<A: Applier + 'static> Composition<A> {
                 self.root,
             );
             self.observer.begin_frame();
-            let (root, commands, side_effects) = composer.install(|composer| {
-                let (_, _) = composer.with_slot_host_pass(
+            let (root, commands, side_effects, compact_applier) = composer.install(|composer| {
+                let (_, outcome) = composer.with_slot_host_pass(
                     Rc::clone(&self.slots),
                     crate::slot_table::SlotPassMode::Compose,
                     |composer| composer.with_group(key, |_| content()),
@@ -185,7 +185,7 @@ impl<A: Applier + 'static> Composition<A> {
                 let root = composer.root();
                 let commands = composer.take_commands();
                 let side_effects = composer.take_side_effects();
-                (root, commands, side_effects)
+                (root, commands, side_effects, outcome.compacted)
             });
             self.record_pass_stats(&commands, &side_effects);
             {
@@ -194,6 +194,10 @@ impl<A: Applier + 'static> Composition<A> {
                 for update in runtime_handle.take_updates() {
                     update.apply(&mut *applier)?;
                 }
+            }
+            if compact_applier {
+                self.applier.compact();
+                self.applier.borrow_dyn().clear_recycled_nodes();
             }
 
             self.root = root;
@@ -382,9 +386,9 @@ impl<A: Applier + 'static> Composition<A> {
                     self.root,
                 );
                 self.observer.begin_frame();
-                let (root, commands, side_effects, requested_root_render, removed_orphaned) =
+                let (root, commands, side_effects, requested_root_render, compact_applier) =
                     composer.install(|composer| {
-                        let mut removed_orphaned = false;
+                        let mut compact_applier = false;
                         for (host, scopes) in scope_groups.into_iter() {
                             let (_, outcome) = composer.with_slot_host_pass(
                                 host,
@@ -395,7 +399,7 @@ impl<A: Applier + 'static> Composition<A> {
                                     }
                                 },
                             );
-                            removed_orphaned |= outcome.removed_orphaned_nodes;
+                            compact_applier |= outcome.compacted;
                         }
                         let root = composer.root();
                         let commands = composer.take_commands();
@@ -406,7 +410,7 @@ impl<A: Applier + 'static> Composition<A> {
                             commands,
                             side_effects,
                             requested_root_render,
-                            removed_orphaned,
+                            compact_applier,
                         )
                     });
                 self.record_pass_stats(&commands, &side_effects);
@@ -417,12 +421,12 @@ impl<A: Applier + 'static> Composition<A> {
                         update.apply(&mut *applier)?;
                     }
                 }
+                if compact_applier {
+                    self.applier.compact();
+                    self.applier.borrow_dyn().clear_recycled_nodes();
+                }
                 if root.is_some() {
                     self.root = root;
-                }
-                if removed_orphaned {
-                    did_recompose = true;
-                    self.root_render_requested = true;
                 }
                 if requested_root_render {
                     self.root_render_requested = true;

@@ -16,6 +16,7 @@ mod launched_effect;
 pub mod owned;
 pub mod platform;
 mod recompose;
+mod retention;
 pub mod runtime;
 mod slot_storage;
 pub mod slot_table;
@@ -42,8 +43,6 @@ pub use composition_locals::{
     CompositionLocalProvider, ProvidedValue, StaticCompositionLocal,
 };
 pub(crate) use composition_locals::{LocalStateEntry, StaticLocalEntry};
-#[cfg(test)]
-pub(crate) use debug_trace::set_debug_scope_tracking_override_for_tests;
 #[doc(hidden)]
 pub use debug_trace::{
     debug_label_current_scope, debug_live_recompose_scope_count,
@@ -62,12 +61,13 @@ pub use launched_effect::{
 };
 pub use owned::Owned;
 pub use platform::{Clock, RuntimeScheduler};
+pub use retention::RetentionMode;
 #[doc(hidden)]
 pub use runtime::{
     current_runtime_handle, schedule_frame, schedule_node_update, DefaultScheduler, Runtime,
     RuntimeHandle, StateId, TaskHandle,
 };
-pub use slot_storage::{GroupId, StartScopedGroup};
+pub use slot_storage::{GroupId, GroupStartKind, StartScopedGroup, ValueSlotId};
 pub use slot_table::{SlotTable, SlotTableDebugStats, SlotValueTypeDebugStat};
 #[doc(hidden)]
 pub use snapshot_state_observer::SnapshotStateObserver;
@@ -205,15 +205,28 @@ pub fn location_key(file: &str, line: u32, column: u32) -> Key {
 /// the slot table is reorganized (e.g., during conditional rendering or group moves).
 /// This prevents effect states from being prematurely removed during recomposition.
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq, Default)]
-pub struct AnchorId(usize);
+pub struct AnchorId {
+    id: u32,
+    generation: u32,
+}
 
 impl AnchorId {
     /// Invalid anchor that represents no anchor.
-    pub(crate) const INVALID: AnchorId = AnchorId(0);
+    pub(crate) const INVALID: AnchorId = AnchorId {
+        id: 0,
+        generation: 0,
+    };
+
+    pub(crate) fn new(id: usize) -> Self {
+        Self {
+            id: id as u32,
+            generation: 1,
+        }
+    }
 
     /// Check if this anchor is valid (non-zero).
     pub fn is_valid(&self) -> bool {
-        self.0 != 0
+        self.id != 0
     }
 }
 
@@ -264,6 +277,7 @@ pub(crate) struct RecomposeScopeInner {
     pending_recompose: Cell<bool>,
     force_reuse: Cell<bool>,
     force_recompose: Cell<bool>,
+    retention_mode: Cell<RetentionMode>,
     group_anchor: Cell<AnchorId>,
     parent_hint: Cell<Option<NodeId>>,
     recompose: RefCell<Option<RecomposeCallback>>,
@@ -286,6 +300,7 @@ impl RecomposeScopeInner {
             pending_recompose: Cell::new(false),
             force_reuse: Cell::new(false),
             force_recompose: Cell::new(false),
+            retention_mode: Cell::new(RetentionMode::DisposeWhenInactive),
             group_anchor: Cell::new(AnchorId::INVALID),
             parent_hint: Cell::new(None),
             recompose: RefCell::new(None),
@@ -430,7 +445,8 @@ impl RecomposeScope {
         self.inner.group_anchor.set(anchor);
     }
 
-    fn group_anchor(&self) -> AnchorId {
+    #[cfg(test)]
+    pub(crate) fn group_anchor(&self) -> AnchorId {
         self.inner.group_anchor.get()
     }
 
@@ -518,6 +534,14 @@ impl RecomposeScope {
         self.inner.pending_recompose.set(false);
     }
 
+    pub(crate) fn set_retention_mode(&self, mode: RetentionMode) {
+        self.inner.retention_mode.set(mode);
+    }
+
+    pub(crate) fn retention_mode(&self) -> RetentionMode {
+        self.inner.retention_mode.get()
+    }
+
     pub fn should_recompose(&self) -> bool {
         if self.inner.force_recompose.replace(false) {
             self.inner.force_reuse.set(false);
@@ -549,6 +573,7 @@ impl RecomposeScope {
 pub struct RecomposeOptions {
     pub force_reuse: bool,
     pub force_recompose: bool,
+    pub retention: RetentionMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -600,8 +625,10 @@ fn with_current_composer_opt<R>(f: impl FnOnce(&Composer) -> R) -> Option<R> {
     composer_context::try_with_composer(f)
 }
 
+#[track_caller]
 pub fn with_key<K: Hash>(key: &K, content: impl FnOnce()) {
-    with_current_composer(|composer| composer.with_key(key, |_| content()));
+    let seed = explicit_group_key_seed(key, std::panic::Location::caller());
+    with_current_composer(|composer| composer.with_group_seed(seed, |_| content()));
 }
 
 #[allow(non_snake_case)]
@@ -3232,7 +3259,6 @@ pub struct SlotsHost {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SlotPassOutcome {
     pub(crate) compacted: bool,
-    pub(crate) removed_orphaned_nodes: bool,
 }
 
 struct ActivePassState {
@@ -3243,12 +3269,16 @@ struct ActivePassState {
 struct SlotsHostInner {
     table: SlotTable,
     lifecycle: slot_table::SlotLifecycleCoordinator,
+    retention: retention::RetentionManager,
+    scope_registry: HashMap<ScopeId, RecomposeScope>,
     active_pass: Option<ActivePassState>,
 }
 
 impl Drop for SlotsHostInner {
     fn drop(&mut self) {
         self.lifecycle.dispose_slot_table(&mut self.table);
+        self.retention.clear();
+        self.scope_registry.clear();
     }
 }
 
@@ -3258,6 +3288,8 @@ impl SlotsHost {
             inner: RefCell::new(SlotsHostInner {
                 table: storage,
                 lifecycle: slot_table::SlotLifecycleCoordinator::default(),
+                retention: retention::RetentionManager::default(),
+                scope_registry: HashMap::default(),
                 active_pass: None,
             }),
         }
@@ -3277,7 +3309,13 @@ impl SlotsHost {
             inner.active_pass.is_none(),
             "cannot take SlotsHost during an active pass"
         );
+        assert!(
+            inner.retention.is_empty(),
+            "cannot take SlotsHost while retained subtrees are still owned by the host"
+        );
         inner.lifecycle.flush_pending_drops();
+        inner.retention.clear();
+        inner.scope_registry.clear();
         std::mem::take(&mut inner.table)
     }
 
@@ -3286,13 +3324,21 @@ impl SlotsHost {
         let SlotsHostInner {
             table,
             lifecycle,
+            retention,
+            scope_registry,
             active_pass,
         } = &mut *inner;
         assert!(
             active_pass.is_none(),
             "cannot reset SlotsHost during an active pass"
         );
+        assert!(
+            retention.is_empty(),
+            "cannot reset SlotsHost while retained subtrees are still owned by the host"
+        );
         lifecycle.dispose_slot_table(table);
+        retention.clear();
+        scope_registry.clear();
         *table = SlotTable::default();
         *lifecycle = slot_table::SlotLifecycleCoordinator::default();
     }
@@ -3310,10 +3356,9 @@ impl SlotsHost {
             inner.active_pass.is_none(),
             "slot pass already active for host"
         );
-        inner.active_pass = Some(ActivePassState {
-            mode,
-            state: slot_table::SlotWriteSessionState::default(),
-        });
+        let mut state = slot_table::SlotWriteSessionState::default();
+        state.reset_for_pass(&inner.table, mode);
+        inner.active_pass = Some(ActivePassState { mode, state });
     }
 
     pub(crate) fn has_active_pass(&self) -> bool {
@@ -3329,6 +3374,7 @@ impl SlotsHost {
             table,
             lifecycle,
             active_pass,
+            ..
         } = &mut *inner;
         let active_pass = active_pass
             .as_mut()
@@ -3338,12 +3384,54 @@ impl SlotsHost {
         f(&mut session)
     }
 
+    pub(crate) fn with_table_and_lifecycle_mut<R>(
+        &self,
+        f: impl FnOnce(&mut SlotTable, &mut slot_table::SlotLifecycleCoordinator) -> R,
+    ) -> R {
+        let mut inner = self.inner.borrow_mut();
+        let SlotsHostInner {
+            table, lifecycle, ..
+        } = &mut *inner;
+        f(table, lifecycle)
+    }
+
+    pub(crate) fn take_retained(
+        &self,
+        key: retention::RetainKey,
+    ) -> Option<slot_table::DetachedSubtree> {
+        self.inner.borrow_mut().retention.take(key)
+    }
+
+    pub(crate) fn insert_retained(
+        &self,
+        key: retention::RetainKey,
+        subtree: slot_table::DetachedSubtree,
+    ) {
+        self.inner.borrow_mut().retention.insert(key, subtree);
+    }
+
+    pub(crate) fn scope_for_id(&self, scope_id: ScopeId) -> Option<RecomposeScope> {
+        self.inner.borrow().scope_registry.get(&scope_id).cloned()
+    }
+
+    pub(crate) fn register_scope(&self, scope: &RecomposeScope) {
+        self.inner
+            .borrow_mut()
+            .scope_registry
+            .insert(scope.id(), scope.clone());
+    }
+
+    pub(crate) fn remove_scope(&self, scope_id: ScopeId) -> Option<RecomposeScope> {
+        self.inner.borrow_mut().scope_registry.remove(&scope_id)
+    }
+
     pub(crate) fn finish_pass(&self, applier: &mut dyn Applier) -> SlotPassOutcome {
         let mut inner = self.inner.borrow_mut();
         let SlotsHostInner {
             table,
             lifecycle,
             active_pass: active_pass_slot,
+            ..
         } = &mut *inner;
         let Some(active_pass) = active_pass_slot.as_mut() else {
             return SlotPassOutcome::default();
@@ -3352,40 +3440,20 @@ impl SlotsHost {
         {
             let mut session =
                 table.write_session(lifecycle, &mut active_pass.state, active_pass.mode);
-            let _ = session.finalize_pass();
+            session.finalize_pass(applier);
         }
 
         lifecycle.flush_pending_drops();
-        lifecycle.reconcile_orphaned_nodes(table);
-        let mut outcome = SlotPassOutcome {
-            removed_orphaned_nodes: lifecycle.drain_orphaned_nodes(table, applier),
-            ..SlotPassOutcome::default()
+        let outcome = SlotPassOutcome {
+            compacted: active_pass.state.request_compaction,
         };
-
-        let removed = table.compact();
-        if !removed.is_empty() {
-            outcome.compacted = true;
-            lifecycle.dispose_drops_reverse(removed);
+        if outcome.compacted {
+            table.compact_storage();
+            lifecycle.compact_storage();
         }
-        lifecycle.reconcile_orphaned_nodes(table);
-        outcome.removed_orphaned_nodes |= lifecycle.drain_orphaned_nodes(table, applier);
-        debug_assert!(
-            lifecycle.orphaned_node_ids_len() == 0,
-            "slot pass left orphaned nodes queued after post-compaction drain"
-        );
-        lifecycle.trim_orphaned_node_capacity(32);
         table.debug_verify(Some(lifecycle));
         *active_pass_slot = None;
         outcome
-    }
-
-    #[cfg(test)]
-    pub(crate) fn drain_orphaned_nodes(&self, applier: &mut dyn Applier) -> bool {
-        let mut inner = self.inner.borrow_mut();
-        let SlotsHostInner {
-            table, lifecycle, ..
-        } = &mut *inner;
-        lifecycle.drain_orphaned_nodes(table, applier)
     }
 }
 
@@ -3449,6 +3517,15 @@ fn hash_key<K: Hash>(key: &K) -> Key {
     let mut hasher = hash::default::new();
     key.hash(&mut hasher);
     hasher.finish()
+}
+
+pub(crate) fn explicit_group_key_seed<K: Hash>(
+    key: &K,
+    caller: &'static std::panic::Location<'static>,
+) -> slot_storage::GroupKeySeed {
+    let source_key = location_key(caller.file(), caller.line(), caller.column());
+    let explicit_key = hash_key(key);
+    slot_storage::GroupKeySeed::keyed(source_key, explicit_key)
 }
 
 #[cfg(test)]

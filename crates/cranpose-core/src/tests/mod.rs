@@ -68,10 +68,6 @@ pub(crate) fn test_composition() -> Composition<MemoryApplier> {
     Composition::new(test_applier())
 }
 
-pub(crate) fn test_composition_with_runtime(runtime: Runtime) -> Composition<MemoryApplier> {
-    Composition::with_runtime(test_applier(), runtime)
-}
-
 pub(crate) fn test_slot_table() -> SlotTable {
     with_test_slot_lifecycle(|lifecycle| {
         *lifecycle = crate::slot_table::SlotLifecycleCoordinator::default()
@@ -94,28 +90,12 @@ fn with_test_slot_lifecycle<R>(
     TEST_SLOT_LIFECYCLE.with(|slot| f(&mut slot.borrow_mut()))
 }
 
-pub(crate) fn reset_slot_session(state: &mut crate::slot_table::SlotWriteSessionState) {
-    *state = crate::slot_table::SlotWriteSessionState::default();
-}
-
 pub(crate) fn begin_test_group(
     slots: &mut SlotTable,
     state: &mut crate::slot_table::SlotWriteSessionState,
     key: Key,
 ) -> GroupId {
     crate::slot_table::begin_group_for_test(slots, state, key)
-}
-
-pub(crate) fn use_test_value_slot<T: 'static>(
-    slots: &mut SlotTable,
-    state: &mut crate::slot_table::SlotWriteSessionState,
-    init: impl FnOnce() -> T,
-) -> usize {
-    with_test_slot_lifecycle(|lifecycle| {
-        slots
-            .write_session(lifecycle, state, crate::slot_table::SlotPassMode::Compose)
-            .use_value_slot(init)
-    })
 }
 
 pub(crate) fn remember_test_value<T: 'static>(
@@ -138,24 +118,6 @@ pub(crate) fn end_test_group(
         slots
             .write_session(lifecycle, state, crate::slot_table::SlotPassMode::Compose)
             .end_group();
-    });
-}
-
-pub(crate) fn hide_test_range(
-    slots: &mut SlotTable,
-    start: usize,
-    end: usize,
-    owner_index: Option<usize>,
-) -> bool {
-    with_test_slot_lifecycle(|lifecycle| {
-        crate::slot_table::hide_range_for_test(slots, lifecycle, start, end, owner_index)
-    })
-}
-
-pub(crate) fn queue_test_orphaned_node(slots: &mut SlotTable, id: NodeId, generation: u32) {
-    let _ = slots;
-    with_test_slot_lifecycle(|lifecycle| {
-        crate::slot_table::queue_orphaned_node_for_test(lifecycle, id, generation)
     });
 }
 
@@ -466,6 +428,5 @@ fn disposable_effect_host() -> NodeId {
 mod composer_applier_tests;
 mod composition_and_recompose_scope_tests;
 mod recompose_and_diff_tests;
-mod slot_table_tests;
 mod snapshot_state_tests;
 mod state_and_effect_tests;

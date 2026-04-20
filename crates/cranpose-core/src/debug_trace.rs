@@ -105,11 +105,6 @@ pub fn debug_scope_invalidation_sources(scope_id: usize) -> Vec<String> {
     Vec::new()
 }
 
-#[cfg(test)]
-pub(crate) fn set_debug_scope_tracking_override_for_tests(enabled: Option<bool>) {
-    DEBUG_SCOPE_TRACKING_OVERRIDE.with(|override_flag| override_flag.set(enabled));
-}
-
 #[doc(hidden)]
 pub fn debug_live_recompose_scope_count() -> usize {
     LIVE_RECOMPOSE_SCOPE_COUNT.load(Ordering::Relaxed)

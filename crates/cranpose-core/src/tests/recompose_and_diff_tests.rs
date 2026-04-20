@@ -717,7 +717,10 @@ fn unit_return_composable_skips_without_return_slot_storage() {
         .expect("initial unit render");
 
     let all_slots = composition.debug_dump_all_slots();
-    let value_count = all_slots.iter().filter(|(_, kind)| kind == "Value").count();
+    let value_count = all_slots
+        .iter()
+        .filter(|(_, kind)| kind.starts_with("Value"))
+        .count();
     let scoped_group_count = all_slots
         .iter()
         .filter(|(_, kind)| kind.starts_with("Group(") && !kind.contains("scope=None"))

@@ -20,7 +20,9 @@ impl Composer {
     ) -> NodeId {
         // Peek at the slot without advancing cursor
         let (existing_id, type_matches, gen_matches) = {
-            if let Some((id, slot_gen)) = self.with_slot_session_mut(|slots| slots.peek_node()) {
+            if let Some((id, slot_gen)) =
+                self.with_slot_session_mut(|slots| slots.current_node_record())
+            {
                 let mut applier = self.borrow_applier();
                 let gen_ok = applier.node_generation(id) == slot_gen;
                 let type_ok = match applier.get_mut(id) {
@@ -48,7 +50,7 @@ impl Composer {
                     scope_debug.0,
                     scope_debug.1,
                 );
-                self.with_slot_session_mut(|slots| slots.advance_after_node_read());
+                self.with_slot_session_mut(|slots| slots.consume_reused_node());
 
                 self.commands_mut().push(Command::update_node::<N>(id));
                 self.attach_to_parent(id);

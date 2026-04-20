@@ -23,24 +23,26 @@ fn emit_node_rejects_reuse_when_parent_did_not_own_child() {
         Rc::clone(&slots_host),
         crate::slot_table::SlotPassMode::Compose,
         |composer| {
-            let child_id = composer.emit_node(|| TestDummyNode);
+            composer.with_group(location_key(file!(), line!(), column!()), |composer| {
+                let child_id = composer.emit_node(|| TestDummyNode);
 
-            // Now push parent_b with last_node_reused=false (simulating new parent)
-            composer.core.last_node_reused.set(Some(false));
-            composer.push_parent(parent_b);
+                // Now push parent_b with last_node_reused=false (simulating new parent)
+                composer.core.last_node_reused.set(Some(false));
+                composer.push_parent(parent_b);
 
-            // The parent_b's previous children should be empty since it wasn't reused
-            {
-                let stack = composer.parent_stack();
-                let frame = stack.last().expect("parent frame should exist");
-                assert!(
-                    frame.previous.is_empty(),
-                    "New parent should have empty previous children"
-                );
-            }
+                // The parent_b's previous children should be empty since it wasn't reused
+                {
+                    let stack = composer.parent_stack();
+                    let frame = stack.last().expect("parent frame should exist");
+                    assert!(
+                        frame.previous.is_empty(),
+                        "New parent should have empty previous children"
+                    );
+                }
 
-            composer.pop_parent();
-            child_id
+                composer.pop_parent();
+                child_id
+            })
         },
     );
     drop(composer);
@@ -98,11 +100,13 @@ fn new_parent_attaches_children_immediately_without_sync_children() {
         Rc::clone(&slots_host),
         crate::slot_table::SlotPassMode::Compose,
         |composer| {
-            composer.core.last_node_reused.set(Some(false));
-            composer.push_parent(parent_id);
-            let child_id = composer.emit_node(RecordingNode::default);
-            composer.pop_parent();
-            child_id
+            composer.with_group(location_key(file!(), line!(), column!()), |composer| {
+                composer.core.last_node_reused.set(Some(false));
+                composer.push_parent(parent_id);
+                let child_id = composer.emit_node(RecordingNode::default);
+                composer.pop_parent();
+                child_id
+            })
         },
     );
 
@@ -462,69 +466,6 @@ fn warm_recycled_nodes_can_be_reused_again_in_the_same_frame() {
         .take_recycled_node(std::any::TypeId::of::<RecyclableTestNode>())
         .expect("warm-origin shell should be reusable in the same frame");
     assert_eq!(recycled_again.stable_id(), stable_id);
-}
-
-#[test]
-fn orphaned_cleanup_skips_recycled_nodes_with_new_generation() {
-    #[derive(Default)]
-    struct RecyclableTestNode;
-
-    impl Node for RecyclableTestNode {
-        fn recycle_key(&self) -> Option<std::any::TypeId> {
-            Some(std::any::TypeId::of::<Self>())
-        }
-    }
-
-    let mut composition = test_composition();
-    let key = std::any::TypeId::of::<RecyclableTestNode>();
-    let stable_id = composition
-        .applier_mut()
-        .create(Box::new(RecyclableTestNode));
-    let old_generation = composition.applier_mut().node_generation(stable_id);
-
-    {
-        let mut applier = composition.applier_mut();
-        applier
-            .remove(stable_id)
-            .expect("remove recyclable node before reuse");
-        applier.record_fresh_recyclable_creation(key);
-        applier.clear_recycled_nodes();
-
-        let recycled = applier
-            .take_recycled_node(key)
-            .expect("warm recyclable node should be available");
-        let (reused_id, node, warm_origin) = recycled.into_parts();
-        assert_eq!(reused_id, stable_id);
-        applier
-            .insert_with_id(reused_id, node)
-            .expect("reinsert warm recyclable node");
-        applier.set_recycled_node_origin(reused_id, warm_origin);
-    }
-
-    let new_generation = composition.applier_mut().node_generation(stable_id);
-    assert_ne!(
-        old_generation, new_generation,
-        "same-frame recycle must advance the stable generation",
-    );
-
-    {
-        let mut slots = composition.slots.borrow_mut();
-        queue_test_orphaned_node(&mut slots, stable_id, old_generation);
-    }
-
-    let removed_any = {
-        let slots = Rc::clone(&composition.slots);
-        let mut applier = composition.applier_mut();
-        slots.drain_orphaned_nodes(&mut *applier)
-    };
-    assert!(
-        !removed_any,
-        "stale orphaned generation should not remove the recycled live node",
-    );
-    assert!(
-        composition.applier_mut().get_mut(stable_id).is_ok(),
-        "recycled live node should survive stale orphan cleanup",
-    );
 }
 
 #[test]
@@ -1113,30 +1054,32 @@ fn emit_node_works_with_new_parent_having_empty_previous() {
         Rc::clone(&slots_host),
         crate::slot_table::SlotPassMode::Compose,
         |composer| {
-            // Simulate a NEW parent (not reused) - this gives empty previous children
-            composer.core.last_node_reused.set(Some(false));
-            composer.push_parent(parent_id);
+            composer.with_group(location_key(file!(), line!(), column!()), |composer| {
+                // Simulate a NEW parent (not reused) - this gives empty previous children
+                composer.core.last_node_reused.set(Some(false));
+                composer.push_parent(parent_id);
 
-            // Verify previous is empty (this is the push_parent conditional behavior)
-            {
-                let stack = composer.parent_stack();
-                let frame = stack.last().expect("parent frame should exist");
+                // Verify previous is empty (this is the push_parent conditional behavior)
+                {
+                    let stack = composer.parent_stack();
+                    let frame = stack.last().expect("parent frame should exist");
+                    assert!(
+                        frame.previous.is_empty(),
+                        "New parent should have empty previous"
+                    );
+                }
+
+                let child_id = composer.emit_node(|| TestDummyNode);
+                assert!(child_id > 0, "Child should be emitted successfully");
+                let was_reused = composer.core.last_node_reused.get();
                 assert!(
-                    frame.previous.is_empty(),
-                    "New parent should have empty previous"
+                    was_reused.is_some(),
+                    "emit_node should set last_node_reused"
                 );
-            }
 
-            let child_id = composer.emit_node(|| TestDummyNode);
-            assert!(child_id > 0, "Child should be emitted successfully");
-            let was_reused = composer.core.last_node_reused.get();
-            assert!(
-                was_reused.is_some(),
-                "emit_node should set last_node_reused"
-            );
-
-            composer.pop_parent();
-            child_id
+                composer.pop_parent();
+                child_id
+            })
         },
     );
     drop(composer);

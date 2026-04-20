@@ -1,11 +1,14 @@
 use crate::collections::map::HashMap;
+use crate::remove_child_and_cleanup_now;
+use crate::retention::RetainKey;
 use crate::{
-    composer_context, empty_local_stack, hash_key, runtime, Applier, ApplierHost, ChildList,
-    Command, CommandQueue, CompositionLocal, DirtyBubble, Key, LocalKey, LocalStackSnapshot,
-    LocalStateEntry, MutableState, Node, NodeError, NodeId, Owned, ProvidedValue, RecomposeOptions,
-    RecomposeScope, RecycledNode, RuntimeHandle, SlotId, SlotPassOutcome, SlotTable, SlotsHost,
-    SnapshotStateList, SnapshotStateMap, SnapshotStateObserver, StartScopedGroup,
-    StaticCompositionLocal, StaticLocalEntry, SubcomposeState, COMMAND_FLUSH_THRESHOLD,
+    composer_context, empty_local_stack, explicit_group_key_seed, runtime, Applier, ApplierHost,
+    ChildList, Command, CommandQueue, CompositionLocal, DirtyBubble, GroupStartKind, Key, LocalKey,
+    LocalStackSnapshot, LocalStateEntry, MutableState, Node, NodeError, NodeId, Owned,
+    ProvidedValue, RecomposeOptions, RecomposeScope, RecycledNode, RetentionMode, RuntimeHandle,
+    ScopeId, SlotId, SlotPassOutcome, SlotTable, SlotsHost, SnapshotStateList, SnapshotStateMap,
+    SnapshotStateObserver, StartScopedGroup, StaticCompositionLocal, StaticLocalEntry,
+    SubcomposeState, ValueSlotId, COMMAND_FLUSH_THRESHOLD,
 };
 use smallvec::SmallVec;
 use std::any::Any;
@@ -16,20 +19,20 @@ use std::rc::Rc;
 
 #[derive(Clone, Copy)]
 pub struct ValueSlotHandle<'pass> {
-    index: usize,
+    slot: ValueSlotId,
     _pass: PhantomData<&'pass Composer>,
 }
 
 impl ValueSlotHandle<'_> {
-    pub(crate) fn new(index: usize) -> Self {
+    pub(crate) fn new(slot: ValueSlotId) -> Self {
         Self {
-            index,
+            slot,
             _pass: PhantomData,
         }
     }
 
-    pub(crate) fn index(self) -> usize {
-        self.index
+    pub(crate) fn slot(self) -> ValueSlotId {
+        self.slot
     }
 }
 
@@ -225,11 +228,6 @@ impl Composer {
                     self.host.finish_pass(&mut *applier)
                 };
 
-                if outcome.compacted {
-                    self.core.applier.compact();
-                    self.core.applier.borrow_dyn().clear_recycled_nodes();
-                }
-
                 *self.outcome.borrow_mut() = Some(outcome);
             }
         }
@@ -277,6 +275,18 @@ impl Composer {
 
     pub(crate) fn scope_stack(&self) -> RefMut<'_, Vec<RecomposeScope>> {
         self.core.scope_stack.borrow_mut()
+    }
+
+    fn scope_for_id(&self, scope_id: ScopeId) -> Option<RecomposeScope> {
+        self.active_slots_host().scope_for_id(scope_id)
+    }
+
+    fn register_scope(&self, scope: &RecomposeScope) {
+        self.active_slots_host().register_scope(scope);
+    }
+
+    fn remove_scope(&self, scope_id: ScopeId) -> Option<RecomposeScope> {
+        self.active_slots_host().remove_scope(scope_id)
     }
 
     pub(crate) fn local_stack(&self) -> RefMut<'_, LocalStackSnapshot> {
@@ -396,7 +406,11 @@ impl Composer {
             .expect("mid-composition command flush failed");
     }
 
-    fn with_group_in_active_pass<R>(&self, key: Key, f: impl FnOnce(&Composer) -> R) -> R {
+    fn with_group_in_active_pass<R>(
+        &self,
+        key: crate::slot_storage::GroupKeySeed,
+        f: impl FnOnce(&Composer) -> R,
+    ) -> R {
         struct GroupGuard {
             composer: Composer,
             scope: RecomposeScope,
@@ -404,12 +418,17 @@ impl Composer {
 
         impl Drop for GroupGuard {
             fn drop(&mut self) {
-                let trimmed = self
+                let crate::slot_table::FinishGroupResult {
+                    detached_children,
+                    structure_changed: _structure_changed,
+                    direct_nodes,
+                    subtree_nodes: _subtree_nodes,
+                } = self
                     .composer
-                    .with_slot_session_mut(|slots| slots.finalize_current_group());
-                if trimmed {
-                    self.scope.force_recompose();
-                }
+                    .with_slot_session_mut(|slots| slots.finish_group_body());
+                self.composer.dispose_detached_nodes(direct_nodes);
+                self.composer
+                    .handle_detached_children(Some(self.scope.id()), detached_children);
                 self.composer.scope_stack().pop();
                 self.scope.mark_recomposed();
                 self.composer
@@ -419,28 +438,45 @@ impl Composer {
         }
 
         let parent_scope = self.current_recranpose_scope();
-        let (group_anchor, scope_ref, requires_recompose) = self.with_slot_session_mut(|slots| {
-            let StartScopedGroup {
-                anchor,
-                scope,
-                requires_recompose,
-                ..
-            } = slots.begin_scoped_group(key, || RecomposeScope::new(self.runtime_handle()));
-            (anchor, scope, requires_recompose)
+        let options = self.pending_scope_options().take().unwrap_or_default();
+        let parent_scope_id = parent_scope.as_ref().map(RecomposeScope::id);
+        let reserved_key = self.with_slot_session_mut(|slots| slots.preview_group_key(key));
+        let restored = self.active_slots_host().take_retained(RetainKey {
+            parent_scope: parent_scope_id,
+            key: reserved_key,
         });
+        let (group, group_anchor, start_scope_id, start_kind) =
+            self.with_slot_session_mut(|slots| {
+                let StartScopedGroup {
+                    group,
+                    anchor,
+                    scope_id,
+                    kind,
+                    ..
+                } = slots.begin_scoped_group(reserved_key, restored);
+                (group, anchor, scope_id, kind)
+            });
+        let scope_ref = if let Some(scope_id) = start_scope_id {
+            self.scope_for_id(scope_id)
+                .expect("group scope id must resolve through composer registry")
+        } else {
+            let scope = RecomposeScope::new(self.runtime_handle());
+            self.register_scope(&scope);
+            self.with_slot_session_mut(|slots| slots.set_group_scope(group, scope.id()));
+            scope
+        };
 
         scope_ref.reactivate();
         scope_ref.set_group_anchor(group_anchor);
         scope_ref.set_parent_scope(parent_scope);
+        scope_ref.set_retention_mode(options.retention);
 
-        if let Some(options) = self.pending_scope_options().take() {
-            if options.force_recompose {
-                scope_ref.force_recompose();
-            } else if options.force_reuse {
-                scope_ref.force_reuse();
-            }
+        if options.force_recompose {
+            scope_ref.force_recompose();
+        } else if options.force_reuse {
+            scope_ref.force_reuse();
         }
-        if requires_recompose {
+        if matches!(start_kind, GroupStartKind::Restored) {
             scope_ref.force_recompose();
         }
 
@@ -475,7 +511,11 @@ impl Composer {
         result
     }
 
-    pub fn with_group<R>(&self, key: Key, f: impl FnOnce(&Composer) -> R) -> R {
+    pub(crate) fn with_group_seed<R>(
+        &self,
+        key: crate::slot_storage::GroupKeySeed,
+        f: impl FnOnce(&Composer) -> R,
+    ) -> R {
         let host = self.active_slots_host();
         if host.has_active_pass() {
             return self.with_group_in_active_pass(key, f);
@@ -487,19 +527,119 @@ impl Composer {
         result
     }
 
+    pub fn with_group<R>(&self, key: Key, f: impl FnOnce(&Composer) -> R) -> R {
+        self.with_group_seed(crate::slot_storage::GroupKeySeed::unkeyed(key), f)
+    }
+
     pub fn cranpose_with_reuse<R>(
         &self,
         key: Key,
-        options: RecomposeOptions,
+        mut options: RecomposeOptions,
         f: impl FnOnce(&Composer) -> R,
     ) -> R {
+        options.retention = RetentionMode::RetainWhenInactive;
         self.pending_scope_options().replace(options);
         self.with_group(key, f)
     }
 
+    #[track_caller]
     pub fn with_key<K: Hash, R>(&self, key: &K, f: impl FnOnce(&Composer) -> R) -> R {
-        let hashed = hash_key(key);
-        self.with_group(hashed, f)
+        let seed = explicit_group_key_seed(key, std::panic::Location::caller());
+        self.with_group_seed(seed, f)
+    }
+
+    pub(crate) fn dispose_detached_nodes(&self, nodes: Vec<NodeId>) {
+        for node_id in nodes {
+            self.commands_mut().push(Command::callback(move |applier| {
+                let parent_id = applier.get_mut(node_id).ok().and_then(|node| node.parent());
+                if let Some(parent_id) = parent_id {
+                    return remove_child_and_cleanup_now(applier, parent_id, node_id);
+                }
+                if let Ok(node) = applier.get_mut(node_id) {
+                    node.on_removed_from_parent();
+                    node.unmount();
+                }
+                match applier.remove(node_id) {
+                    Ok(()) | Err(NodeError::Missing { .. }) => Ok(()),
+                    Err(err) => Err(err),
+                }
+            }));
+        }
+    }
+
+    fn deactivate_scope_ids(&self, scope_ids: &[ScopeId]) {
+        for &scope_id in scope_ids {
+            if let Some(scope) = self.scope_for_id(scope_id) {
+                scope.deactivate();
+            }
+        }
+    }
+
+    fn dispose_scope_ids(&self, scope_ids: &[ScopeId]) {
+        for &scope_id in scope_ids {
+            if let Some(scope) = self.remove_scope(scope_id) {
+                scope.deactivate();
+                scope.set_group_anchor(crate::AnchorId::INVALID);
+            }
+        }
+    }
+
+    fn retain_detached_subtree(
+        &self,
+        parent_scope: Option<ScopeId>,
+        subtree: crate::slot_table::DetachedSubtree,
+    ) {
+        let scope_ids = subtree.scope_ids();
+        self.deactivate_scope_ids(&scope_ids);
+        let roots = self.skipped_group_root_nodes(&subtree.node_ids());
+        for root in roots {
+            let parent_id = {
+                let mut applier = self.borrow_applier();
+                applier.get_mut(root).ok().and_then(|node| node.parent())
+            };
+            if let Some(parent_id) = parent_id {
+                self.commands_mut().push(Command::RemoveChild {
+                    parent_id,
+                    child_id: root,
+                });
+            }
+        }
+        self.active_slots_host().insert_retained(
+            RetainKey {
+                parent_scope,
+                key: subtree.root_key(),
+            },
+            subtree,
+        );
+    }
+
+    fn dispose_detached_subtree(&self, subtree: crate::slot_table::DetachedSubtree) {
+        let scope_ids = subtree.scope_ids();
+        self.dispose_scope_ids(&scope_ids);
+        let roots = self.skipped_group_root_nodes(&subtree.node_ids());
+        self.dispose_detached_nodes(roots);
+        self.active_slots_host()
+            .with_table_and_lifecycle_mut(|_, lifecycle| lifecycle.queue_subtree_disposal(subtree));
+    }
+
+    pub(crate) fn handle_detached_children(
+        &self,
+        parent_scope: Option<ScopeId>,
+        detached: Vec<crate::slot_table::DetachedSubtree>,
+    ) {
+        for subtree in detached {
+            let retention_mode = subtree
+                .root_scope_id()
+                .and_then(|scope_id| self.scope_for_id(scope_id))
+                .map(|scope| scope.retention_mode())
+                .unwrap_or_default();
+            match retention_mode {
+                RetentionMode::DisposeWhenInactive => self.dispose_detached_subtree(subtree),
+                RetentionMode::RetainWhenInactive => {
+                    self.retain_detached_subtree(parent_scope, subtree)
+                }
+            }
+        }
     }
 
     pub fn remember<T: 'static>(&self, init: impl FnOnce() -> T) -> Owned<T> {
@@ -510,8 +650,8 @@ impl Composer {
         &'pass self,
         init: impl FnOnce() -> T,
     ) -> ValueSlotHandle<'pass> {
-        let index = self.with_slot_session_mut(|slots| slots.use_value_slot(init));
-        ValueSlotHandle::new(index)
+        let slot = self.with_slot_session_mut(|slots| slots.use_value_slot(init));
+        ValueSlotHandle::new(slot)
     }
 
     pub fn with_slot_value<'pass, T: 'static, R>(
@@ -519,7 +659,7 @@ impl Composer {
         handle: ValueSlotHandle<'pass>,
         f: impl FnOnce(&T) -> R,
     ) -> R {
-        self.with_slots(|slots| f(slots.read_value(handle.index())))
+        self.with_slots(|slots| f(slots.read_value(handle.slot())))
     }
 
     pub fn with_slot_value_mut<'pass, T: 'static, R>(
@@ -527,7 +667,7 @@ impl Composer {
         handle: ValueSlotHandle<'pass>,
         f: impl FnOnce(&mut T) -> R,
     ) -> R {
-        self.with_slots_mut(|slots| f(slots.read_value_mut(handle.index())))
+        self.with_slots_mut(|slots| f(slots.read_value_mut(handle.slot())))
     }
 
     pub fn write_slot_value<'pass, T: 'static>(
@@ -535,7 +675,7 @@ impl Composer {
         handle: ValueSlotHandle<'pass>,
         value: T,
     ) {
-        self.with_slots_mut(|slots| slots.write_value(handle.index(), value));
+        self.with_slots_mut(|slots| slots.write_value(handle.slot(), value));
     }
 
     pub fn mutable_state_of<T: Clone + 'static>(&self, initial: T) -> MutableState<T> {

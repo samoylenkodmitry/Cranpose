@@ -1041,7 +1041,7 @@ fn launched_effect_async_keeps_frames_after_backward_forward_flip() {
 }
 
 #[test]
-fn stats_scope_survives_conditional_gap() {
+fn stats_scope_survives_conditional_hide() {
     #[derive(Clone, Copy, Debug, Default)]
     struct SimpleStats {
         frames: u32,
@@ -1152,7 +1152,7 @@ fn stats_scope_survives_conditional_gap() {
         let entries = log.borrow();
         assert!(
             entries.iter().any(|entry| entry == "frames 1"),
-            "frames text should re-render after stats change even after a gap"
+            "frames text should re-render after stats change even after the branch was hidden"
         );
     }
 }
@@ -1161,24 +1161,30 @@ fn stats_scope_survives_conditional_gap() {
 fn slot_table_remember_replaces_mismatched_type() {
     let mut slots = test_slot_table();
     let mut state = test_slot_session();
+    let group_key = location_key(file!(), line!(), column!());
 
     {
+        state.reset_for_pass(&slots, crate::slot_table::SlotPassMode::Compose);
+        begin_test_group(&mut slots, &mut state, group_key);
         let value = remember_test_value(&mut slots, &mut state, || 42i32);
         assert_eq!(value.with(|value| *value), 42);
+        end_test_group(&mut slots, &mut state);
     }
 
-    reset_slot_session(&mut state);
-
     {
+        state.reset_for_pass(&slots, crate::slot_table::SlotPassMode::Compose);
+        begin_test_group(&mut slots, &mut state, group_key);
         let value = remember_test_value(&mut slots, &mut state, || "updated");
         assert_eq!(value.with(|&value| value), "updated");
+        end_test_group(&mut slots, &mut state);
     }
 
-    reset_slot_session(&mut state);
-
     {
+        state.reset_for_pass(&slots, crate::slot_table::SlotPassMode::Compose);
+        begin_test_group(&mut slots, &mut state, group_key);
         let value = remember_test_value(&mut slots, &mut state, || "should not run");
         assert_eq!(value.with(|&value| value), "updated");
+        end_test_group(&mut slots, &mut state);
     }
 }
 

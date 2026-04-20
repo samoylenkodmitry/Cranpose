@@ -13,6 +13,17 @@ impl Composer {
 
         impl Drop for RecomposeGuard {
             fn drop(&mut self) {
+                let crate::slot_table::FinishGroupResult {
+                    detached_children,
+                    structure_changed: _structure_changed,
+                    direct_nodes,
+                    subtree_nodes: _subtree_nodes,
+                } = self
+                    .composer
+                    .with_slot_session_mut(|slots| slots.finish_group_body());
+                self.composer.dispose_detached_nodes(direct_nodes);
+                self.composer
+                    .handle_detached_children(Some(self.scope.id()), detached_children);
                 self.composer.scope_stack().pop();
                 self.composer
                     .with_slot_session_mut(|slots| slots.end_recompose());
@@ -36,9 +47,8 @@ impl Composer {
             scope.mark_recomposed();
             return;
         }
-        let started = self.with_slot_session_mut(|slots| {
-            slots.start_recranpose_at_anchor(scope.group_anchor(), scope.id())
-        });
+        let started =
+            self.with_slot_session_mut(|slots| slots.start_recompose_at_scope(scope.id()));
         log::trace!(
             target: "cranpose::compose::recompose",
             "scope_id={} label={:?} started_at={started:?} sources={:?}",
