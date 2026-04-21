@@ -2,8 +2,8 @@ use crate::{
     collections::map::{HashMap, HashSet},
     runtime, snapshot_state_observer, Applier, ApplierGuard, ApplierHost, CommandQueue, Composer,
     CompositionPassDebugStats, ConcreteApplierHost, DefaultScheduler, Key, NodeError, NodeId,
-    RecomposeScope, Runtime, RuntimeHandle, ScopeId, SlotTable, SlotTableDebugStats,
-    SlotValueTypeDebugStat, SlotsHost, SnapshotStateObserver,
+    RecomposeScope, Runtime, RuntimeHandle, ScopeId, SlotDebugSnapshot, SlotTable,
+    SlotTableDebugStats, SlotsHost, SnapshotStateObserver,
 };
 use std::rc::Rc;
 use std::sync::Arc;
@@ -77,6 +77,16 @@ impl<A: Applier + 'static> Composition<A> {
 
     fn reset_last_pass_stats(&mut self) {
         self.last_pass_stats = CompositionPassDebugStats::default();
+    }
+
+    fn maybe_dump_slot_table(&self, label: &str) {
+        if std::env::var_os("COMPOSE_DEBUG_SLOT_TABLE").is_none() {
+            return;
+        }
+        eprintln!(
+            "[COMPOSE_DEBUG_SLOT_TABLE] {label}\n{:#?}",
+            self.debug_slot_snapshot()
+        );
     }
 
     pub fn take_root_render_request(&mut self) -> bool {
@@ -208,6 +218,7 @@ impl<A: Applier + 'static> Composition<A> {
             effect();
         }
         runtime_handle.drain_ui();
+        self.maybe_dump_slot_table("root_render_pass");
         Ok(cleared_invalid_scopes)
     }
 
@@ -306,8 +317,8 @@ impl<A: Applier + 'static> Composition<A> {
         self.slots.debug_stats()
     }
 
-    pub fn debug_slot_value_type_counts(&self, limit: usize) -> Vec<SlotValueTypeDebugStat> {
-        self.slots.borrow().debug_value_type_counts(limit)
+    pub fn debug_slot_snapshot(&self) -> SlotDebugSnapshot {
+        self.slots.debug_snapshot()
     }
 
     pub fn debug_observer_stats(&self) -> snapshot_state_observer::SnapshotStateObserverDebugStats {
@@ -438,6 +449,7 @@ impl<A: Applier + 'static> Composition<A> {
                 effect();
             }
             runtime_handle.drain_ui();
+            self.maybe_dump_slot_table("recompose_pass");
             if self.root_render_requested {
                 break;
             }

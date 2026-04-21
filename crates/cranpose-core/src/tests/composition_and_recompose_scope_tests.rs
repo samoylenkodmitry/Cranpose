@@ -959,6 +959,7 @@ fn retained_scope_stays_inactive_until_restored() {
     thread_local! {
         static CAPTURED_SCOPE: RefCell<Option<RecomposeScope>> = const { RefCell::new(None) };
         static INVOCATIONS: Cell<usize> = const { Cell::new(0) };
+        static OBSERVED_VALUES: RefCell<Vec<i32>> = const { RefCell::new(Vec::new()) };
     }
 
     let mut composition = test_composition();
@@ -966,6 +967,7 @@ fn retained_scope_stays_inactive_until_restored() {
     let show_branch = MutableState::with_runtime(true, runtime.clone());
     let observed = MutableState::with_runtime(0, runtime.clone());
     let root_key = location_key(file!(), line!(), column!());
+    OBSERVED_VALUES.with(|values| values.borrow_mut().clear());
 
     #[composable]
     fn root(show_branch: MutableState<bool>, observed: MutableState<i32>) {
@@ -978,7 +980,7 @@ fn retained_scope_stays_inactive_until_restored() {
                         .current_recranpose_scope()
                         .expect("scope available");
                     CAPTURED_SCOPE.with(|slot| slot.replace(Some(scope)));
-                    let _ = observed.value();
+                    OBSERVED_VALUES.with(|values| values.borrow_mut().push(observed.value()));
                 });
             });
         }
@@ -988,7 +990,18 @@ fn retained_scope_stays_inactive_until_restored() {
         .render(root_key, || root(show_branch, observed))
         .expect("initial composition");
 
+    let initial_snapshot = composition.debug_slot_snapshot();
+    assert_eq!(initial_snapshot.retained_subtree_count, 0);
+    assert_eq!(initial_snapshot.retained_scope_count, 0);
+    assert!(
+        initial_snapshot.active_scope_count >= 1,
+        "initial render should expose the active retained-branch scope in the slot snapshot"
+    );
+
     assert_eq!(INVOCATIONS.with(|count| count.get()), 1);
+    OBSERVED_VALUES.with(|values| {
+        assert_eq!(values.borrow().as_slice(), &[0]);
+    });
 
     let scope = CAPTURED_SCOPE
         .with(|slot| slot.borrow().clone())
@@ -1002,6 +1015,14 @@ fn retained_scope_stays_inactive_until_restored() {
     composition
         .render(root_key, || root(show_branch, observed))
         .expect("hide branch render");
+
+    let hidden_snapshot = composition.debug_slot_snapshot();
+    assert_eq!(hidden_snapshot.retained_subtree_count, 1);
+    assert!(
+        hidden_snapshot.retained_group_count >= 1,
+        "hiding a retained branch must move at least one group into retained storage",
+    );
+    assert_eq!(hidden_snapshot.retained_scope_count, 1);
 
     assert!(
         !scope.is_active(),
@@ -1027,6 +1048,10 @@ fn retained_scope_stays_inactive_until_restored() {
         .render(root_key, || root(show_branch, observed))
         .expect("restore retained branch");
 
+    let restored_snapshot = composition.debug_slot_snapshot();
+    assert_eq!(restored_snapshot.retained_subtree_count, 0);
+    assert_eq!(restored_snapshot.retained_scope_count, 0);
+
     let restored_scope = CAPTURED_SCOPE
         .with(|slot| slot.borrow().clone())
         .expect("captured scope after restore");
@@ -1044,6 +1069,96 @@ fn retained_scope_stays_inactive_until_restored() {
         2,
         "restoring the retained subtree must recompose it once",
     );
+    OBSERVED_VALUES.with(|values| {
+        assert_eq!(
+            values.borrow().as_slice(),
+            &[0, 1],
+            "invalidations that happen while retained must be observed when the subtree is restored",
+        );
+    });
+}
+
+#[test]
+fn changing_root_key_does_not_leak_root_scopes() {
+    let mut composition = test_composition();
+
+    composition.render(11, || {}).expect("initial root render");
+    assert_eq!(
+        composition.debug_slot_snapshot().scope_registry_count,
+        1,
+        "initial render should register exactly one root scope"
+    );
+
+    composition.render(22, || {}).expect("second root render");
+    assert_eq!(
+        composition.debug_slot_snapshot().scope_registry_count,
+        1,
+        "changing the root key must dispose the previous root scope instead of leaking it",
+    );
+
+    composition.render(33, || {}).expect("third root render");
+    assert_eq!(
+        composition.debug_slot_snapshot().scope_registry_count,
+        1,
+        "repeated root-key churn must keep the scope registry bounded",
+    );
+}
+
+#[test]
+fn subcompose_in_retains_root_level_groups() {
+    let (handle, _runtime) = runtime_handle();
+    let mut slots = SlotTable::default();
+    let mut applier = test_applier();
+    let (composer, slots_host, applier_host) =
+        setup_composer(&mut slots, &mut applier, handle.clone(), None);
+    let subcompose_slots = Rc::new(SlotsHost::new(SlotTable::new()));
+    let remembered = Rc::new(RefCell::new(None::<Owned<i32>>));
+    let group_key = location_key(file!(), line!(), column!());
+
+    let render = |show_branch: bool| {
+        let remembered = Rc::clone(&remembered);
+        composer
+            .subcompose_in(&subcompose_slots, None, |composer| {
+                if show_branch {
+                    composer.cranpose_with_reuse(
+                        group_key,
+                        RecomposeOptions::default(),
+                        |composer| {
+                            let slot = composer.remember(|| 7_i32);
+                            remembered.replace(Some(slot));
+                        },
+                    );
+                }
+            })
+            .expect("subcompose_in render");
+    };
+
+    render(true);
+    let slot = remembered
+        .borrow()
+        .clone()
+        .expect("captured retained root-level slot");
+    slot.replace(41);
+
+    render(false);
+    let hidden_snapshot = subcompose_slots.debug_snapshot();
+    assert_eq!(hidden_snapshot.retained_subtree_count, 1);
+    assert_eq!(hidden_snapshot.retained_scope_count, 1);
+
+    render(true);
+    let restored = remembered
+        .borrow()
+        .clone()
+        .expect("restored retained root-level slot");
+    assert_eq!(
+        restored.with(|value| *value),
+        41,
+        "root-level retained groups in subcompose_in must restore remembered state"
+    );
+    assert_eq!(subcompose_slots.debug_snapshot().retained_subtree_count, 0);
+
+    drop(composer);
+    teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
 }
 
 #[test]

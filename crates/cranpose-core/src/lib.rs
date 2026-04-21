@@ -68,7 +68,10 @@ pub use runtime::{
     RuntimeHandle, StateId, TaskHandle,
 };
 pub use slot_storage::{GroupId, GroupStartKind, StartScopedGroup, ValueSlotId};
-pub use slot_table::{SlotTable, SlotTableDebugStats, SlotValueTypeDebugStat};
+pub use slot_table::{
+    SlotDebugAnchor, SlotDebugGroup, SlotDebugScope, SlotDebugSnapshot, SlotTable,
+    SlotTableDebugStats,
+};
 #[doc(hidden)]
 pub use snapshot_state_observer::SnapshotStateObserver;
 
@@ -3256,7 +3259,7 @@ pub struct SlotsHost {
     inner: RefCell<SlotsHostInner>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default)]
 pub(crate) struct SlotPassOutcome {
     pub(crate) compacted: bool,
 }
@@ -3279,6 +3282,58 @@ impl Drop for SlotsHostInner {
         self.lifecycle.dispose_slot_table(&mut self.table);
         self.retention.clear();
         self.scope_registry.clear();
+    }
+}
+
+fn detached_subtree_root_nodes(
+    applier: &mut dyn Applier,
+    subtree: &slot_table::DetachedSubtree,
+) -> Vec<NodeId> {
+    let nodes = subtree.node_ids();
+    let node_set = nodes.iter().copied().collect::<HashSet<_>>();
+    nodes
+        .into_iter()
+        .filter(|&node_id| {
+            let parent = applier.get_mut(node_id).ok().and_then(|node| node.parent());
+            parent.is_none_or(|parent_id| !node_set.contains(&parent_id))
+        })
+        .collect()
+}
+
+fn detach_retained_node_now(applier: &mut dyn Applier, node_id: NodeId) {
+    let parent_id = applier.get_mut(node_id).ok().and_then(|node| node.parent());
+    let Some(parent_id) = parent_id else {
+        return;
+    };
+
+    if let Ok(parent_node) = applier.get_mut(parent_id) {
+        parent_node.remove_child(node_id);
+    }
+    bubble_layout_dirty(applier, parent_id);
+    bubble_measure_dirty(applier, parent_id);
+
+    if let Ok(node) = applier.get_mut(node_id) {
+        if node.parent() == Some(parent_id) {
+            node.on_removed_from_parent();
+        }
+    }
+}
+
+fn dispose_detached_root_subtree_now(
+    applier: &mut dyn Applier,
+    subtree: &slot_table::DetachedSubtree,
+) {
+    for root in detached_subtree_root_nodes(applier, subtree) {
+        let parent_id = applier.get_mut(root).ok().and_then(|node| node.parent());
+        if let Some(parent_id) = parent_id {
+            let _ = remove_child_and_cleanup_now(applier, parent_id, root);
+            continue;
+        }
+        if let Ok(node) = applier.get_mut(root) {
+            node.on_removed_from_parent();
+            node.unmount();
+        }
+        let _ = applier.remove(root);
     }
 }
 
@@ -3348,6 +3403,18 @@ impl SlotsHost {
         let mut stats = inner.table.debug_stats();
         inner.lifecycle.fill_debug_stats(&mut stats);
         stats
+    }
+
+    pub(crate) fn debug_snapshot(&self) -> slot_table::SlotDebugSnapshot {
+        let inner = self.inner.borrow();
+        let mut snapshot = inner.table.debug_snapshot();
+        let retention = inner.retention.debug_stats();
+        snapshot.scope_registry_count = inner.scope_registry.len();
+        snapshot.retained_subtree_count = retention.subtree_count;
+        snapshot.retained_group_count = retention.group_count;
+        snapshot.retained_node_count = retention.node_count;
+        snapshot.retained_scope_count = retention.scope_count;
+        snapshot
     }
 
     pub(crate) fn begin_pass(&self, mode: slot_table::SlotPassMode) {
@@ -3430,17 +3497,55 @@ impl SlotsHost {
         let SlotsHostInner {
             table,
             lifecycle,
+            retention,
+            scope_registry,
             active_pass: active_pass_slot,
-            ..
         } = &mut *inner;
         let Some(active_pass) = active_pass_slot.as_mut() else {
             return SlotPassOutcome::default();
         };
 
-        {
+        let detached_root_children = {
             let mut session =
                 table.write_session(lifecycle, &mut active_pass.state, active_pass.mode);
-            session.finalize_pass(applier);
+            session.finalize_pass(applier)
+        };
+
+        for subtree in detached_root_children {
+            let retention_mode = subtree
+                .root_scope_id()
+                .and_then(|scope_id| scope_registry.get(&scope_id))
+                .map(RecomposeScope::retention_mode)
+                .unwrap_or_default();
+            match retention_mode {
+                RetentionMode::DisposeWhenInactive => {
+                    for scope_id in subtree.scope_ids() {
+                        if let Some(scope) = scope_registry.remove(&scope_id) {
+                            scope.deactivate();
+                            scope.set_group_anchor(AnchorId::INVALID);
+                        }
+                    }
+                    dispose_detached_root_subtree_now(applier, &subtree);
+                    lifecycle.queue_subtree_disposal(subtree);
+                }
+                RetentionMode::RetainWhenInactive => {
+                    for scope_id in subtree.scope_ids() {
+                        if let Some(scope) = scope_registry.get(&scope_id) {
+                            scope.deactivate();
+                        }
+                    }
+                    for root in detached_subtree_root_nodes(applier, &subtree) {
+                        detach_retained_node_now(applier, root);
+                    }
+                    retention.insert(
+                        retention::RetainKey {
+                            parent_scope: None,
+                            key: subtree.root_key(),
+                        },
+                        subtree,
+                    );
+                }
+            }
         }
 
         lifecycle.flush_pending_drops();

@@ -828,15 +828,15 @@ impl Composer {
         core.phase.set(phase);
         *core.local_stack.borrow_mut() = locals;
         let composer = Composer::from_core(core);
-        let (result, commands, side_effects) = composer.install(|composer| {
-            let (output, _) = composer.with_slot_host_pass(
+        let (result, commands, side_effects, compact_applier) = composer.install(|composer| {
+            let (output, outcome) = composer.with_slot_host_pass(
                 Rc::clone(slots),
                 crate::slot_table::SlotPassMode::Compose,
                 |composer| f(composer),
             );
             let commands = composer.take_commands();
             let side_effects = composer.take_side_effects();
-            (output, commands, side_effects)
+            (output, commands, side_effects, outcome.compacted)
         });
         {
             let mut applier = self.borrow_applier();
@@ -844,6 +844,10 @@ impl Composer {
             for update in runtime_handle.take_updates() {
                 update.apply(&mut *applier)?;
             }
+        }
+        if compact_applier {
+            self.core.applier.compact();
+            self.core.applier.borrow_dyn().clear_recycled_nodes();
         }
         runtime_handle.drain_ui();
         for effect in side_effects {
@@ -893,8 +897,8 @@ impl Composer {
             leaked: false,
         };
         let root_group_key = crate::location_key(file!(), line!(), column!());
-        let (result, commands, side_effects) = composer.install(|composer| {
-            let (output, _) = composer.with_slot_host_pass(
+        let (result, commands, side_effects, compact_applier) = composer.install(|composer| {
+            let (output, outcome) = composer.with_slot_host_pass(
                 Rc::clone(slots),
                 crate::slot_table::SlotPassMode::Compose,
                 |composer| {
@@ -907,7 +911,7 @@ impl Composer {
             );
             let commands = composer.take_commands();
             let side_effects = composer.take_side_effects();
-            (output, commands, side_effects)
+            (output, commands, side_effects, outcome.compacted)
         });
         let frame = {
             let mut stack = guard.core.subcompose_stack.borrow_mut();
@@ -922,6 +926,10 @@ impl Composer {
             for update in runtime_handle.take_updates() {
                 update.apply(&mut *applier)?;
             }
+        }
+        if compact_applier {
+            self.core.applier.compact();
+            self.core.applier.borrow_dyn().clear_recycled_nodes();
         }
         runtime_handle.drain_ui();
         for effect in side_effects {

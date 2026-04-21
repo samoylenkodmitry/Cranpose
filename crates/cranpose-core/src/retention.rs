@@ -20,6 +20,14 @@ pub(crate) struct RetainedGroup {
     scope_ids: Vec<ScopeId>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct RetentionDebugStats {
+    pub(crate) subtree_count: usize,
+    pub(crate) group_count: usize,
+    pub(crate) node_count: usize,
+    pub(crate) scope_count: usize,
+}
+
 #[derive(Default)]
 pub(crate) struct RetentionManager {
     groups: HashMap<RetainKey, RetainedGroup>,
@@ -64,5 +72,18 @@ impl RetentionManager {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.groups.is_empty()
+    }
+
+    pub(crate) fn debug_stats(&self) -> RetentionDebugStats {
+        RetentionDebugStats {
+            subtree_count: self.groups.len(),
+            group_count: self
+                .groups
+                .values()
+                .map(|retained| retained.subtree.group_count())
+                .sum(),
+            node_count: self.nodes.len(),
+            scope_count: self.scopes.len(),
+        }
     }
 }

@@ -97,7 +97,6 @@ fn switching_away_from_deep_recursive_layout_releases_actual_app_tree() {
     let peak_recycled_nodes = rule.applier_mut().debug_recycled_node_count();
     let peak_recycled_heap = rule.applier_mut().debug_recycled_node_heap_bytes();
     let peak_runtime = capture_runtime_debug_stats(&mut rule);
-    let peak_slot_value_types = rule.composition().debug_slot_value_type_counts(12);
     assert!(
         peak_active > baseline_active * 20,
         "expected deep recursive layout to grow active nodes: baseline={baseline_active} peak={peak_active}",
@@ -119,7 +118,6 @@ fn switching_away_from_deep_recursive_layout_releases_actual_app_tree() {
     let after_recycled_heap = rule.applier_mut().debug_recycled_node_heap_bytes();
     let after_runtime = capture_runtime_debug_stats(&mut rule);
     let after_slot_table_heap = after_runtime.slot_table_heap_bytes;
-    let after_slot_value_types = rule.composition().debug_slot_value_type_counts(12);
 
     touch_runtime_debug_stats(baseline_runtime);
     touch_runtime_debug_stats(peak_runtime);
@@ -133,12 +131,10 @@ fn switching_away_from_deep_recursive_layout_releases_actual_app_tree() {
         "peak: active={peak_active} slots={peak_slots} recycled_nodes={peak_recycled_nodes} recycled_heap={peak_recycled_heap}"
     );
     println!("peak runtime: {peak_runtime:#?}");
-    println!("peak slot value types: {peak_slot_value_types:#?}");
     println!(
         "after: active={after_active} capacity={after_capacity} tombstones={after_tombstones} slots={after_slots} recycled_nodes={after_recycled_nodes} recycled_heap={after_recycled_heap}"
     );
     println!("after runtime: {after_runtime:#?}");
-    println!("after slot value types: {after_slot_value_types:#?}");
 
     assert!(
         after_active <= baseline_active + 24,

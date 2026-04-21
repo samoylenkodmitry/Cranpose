@@ -36,3 +36,7 @@ criterion = "0.8"
 [[bench]]
 name = "pipeline"
 harness = false
+
+[[bench]]
+name = "slot_table_v2"
+harness = false

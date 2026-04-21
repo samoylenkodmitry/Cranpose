@@ -6,6 +6,7 @@ use crate::{
     },
     AnchorId, Applier, Key, NodeId, Owned, ScopeId,
 };
+use smallvec::{Array, SmallVec};
 use std::any::Any;
 use std::mem;
 
@@ -19,11 +20,48 @@ pub struct SlotTableDebugStats {
     pub anchors_cap: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SlotValueTypeDebugStat {
-    pub type_name: &'static str,
-    pub count: usize,
-    pub inline_payload_bytes: usize,
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SlotDebugSnapshot {
+    pub active_groups: Vec<SlotDebugGroup>,
+    pub anchors: Vec<SlotDebugAnchor>,
+    pub scopes: Vec<SlotDebugScope>,
+    pub active_payload_count: usize,
+    pub active_node_count: usize,
+    pub active_scope_count: usize,
+    pub scope_registry_count: usize,
+    pub retained_subtree_count: usize,
+    pub retained_group_count: usize,
+    pub retained_node_count: usize,
+    pub retained_scope_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SlotDebugGroup {
+    pub index: usize,
+    pub anchor: AnchorId,
+    pub parent_anchor: AnchorId,
+    pub static_key: Key,
+    pub explicit_key: Option<Key>,
+    pub ordinal: u32,
+    pub scope_id: Option<ScopeId>,
+    pub depth: u32,
+    pub subtree_len: u32,
+    pub payload_len: usize,
+    pub node_len: usize,
+    pub subtree_node_count: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SlotDebugAnchor {
+    pub anchor: AnchorId,
+    pub group_index: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SlotDebugScope {
+    pub scope_id: ScopeId,
+    pub anchor: AnchorId,
+    pub group_index: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,8 +79,8 @@ struct GroupRecord {
     generation: u32,
     anchor: AnchorId,
     scope_id: Option<ScopeId>,
-    payloads: Vec<PayloadRecord>,
-    nodes: Vec<NodeRecord>,
+    payloads: SmallVec<[PayloadRecord; 4]>,
+    nodes: SmallVec<[NodeRecord; 4]>,
 }
 
 struct PayloadRecord {
@@ -178,6 +216,7 @@ struct RootFrame {
     old_cursor: usize,
     next_child_index: usize,
     key_ordinals: HashMap<Key, u32>,
+    sibling_index: Option<HashMap<GroupKey, usize>>,
 }
 
 struct GroupFrame {
@@ -191,6 +230,7 @@ struct GroupFrame {
     node_cursor: usize,
     old_node_len: usize,
     key_ordinals: HashMap<Key, u32>,
+    sibling_index: Option<HashMap<GroupKey, usize>>,
     body_finished: bool,
 }
 
@@ -213,6 +253,7 @@ impl SlotWriteSessionState {
             old_cursor: 0,
             next_child_index: 0,
             key_ordinals: HashMap::default(),
+            sibling_index: None,
         };
         self.group_stack.clear();
         self.removed_node_count = 0;
@@ -328,6 +369,22 @@ pub struct SlotTable {
 }
 
 impl SlotTable {
+    fn smallvec_heap_capacity<A: Array>(values: &SmallVec<A>) -> usize {
+        if values.spilled() {
+            values.capacity()
+        } else {
+            0
+        }
+    }
+
+    fn smallvec_debug_capacity<A: Array>(values: &SmallVec<A>) -> usize {
+        if values.spilled() {
+            values.capacity()
+        } else {
+            values.len()
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             groups: Vec::new(),
@@ -344,12 +401,16 @@ impl SlotTable {
             + self
                 .groups
                 .iter()
-                .map(|group| group.payloads.capacity() * mem::size_of::<PayloadRecord>())
+                .map(|group| {
+                    Self::smallvec_heap_capacity(&group.payloads) * mem::size_of::<PayloadRecord>()
+                })
                 .sum::<usize>()
             + self
                 .groups
                 .iter()
-                .map(|group| group.nodes.capacity() * mem::size_of::<NodeRecord>())
+                .map(|group| {
+                    Self::smallvec_heap_capacity(&group.nodes) * mem::size_of::<NodeRecord>()
+                })
                 .sum::<usize>()
             + self.group_anchor_to_index.capacity() * mem::size_of::<(AnchorId, usize)>()
             + self.payload_anchor_to_location.capacity()
@@ -366,7 +427,7 @@ impl SlotTable {
         let payload_cap = self
             .groups
             .iter()
-            .map(|group| group.payloads.capacity())
+            .map(|group| Self::smallvec_debug_capacity(&group.payloads))
             .sum::<usize>();
         let node_len = self
             .groups
@@ -376,7 +437,7 @@ impl SlotTable {
         let node_cap = self
             .groups
             .iter()
-            .map(|group| group.nodes.capacity())
+            .map(|group| Self::smallvec_debug_capacity(&group.nodes))
             .sum::<usize>();
         SlotTableDebugStats {
             slots_len: self.groups.len() + payload_len + node_len,
@@ -400,6 +461,67 @@ impl SlotTable {
                 )
             })
             .collect()
+    }
+
+    pub fn debug_snapshot(&self) -> SlotDebugSnapshot {
+        let active_groups = self
+            .groups
+            .iter()
+            .enumerate()
+            .map(|(index, group)| SlotDebugGroup {
+                index,
+                anchor: group.anchor,
+                parent_anchor: group.parent_anchor,
+                static_key: group.key.static_key,
+                explicit_key: group.key.explicit_key,
+                ordinal: group.key.ordinal,
+                scope_id: group.scope_id,
+                depth: group.depth,
+                subtree_len: group.subtree_len,
+                payload_len: group.payloads.len(),
+                node_len: group.nodes.len(),
+                subtree_node_count: group.subtree_node_count,
+            })
+            .collect::<Vec<_>>();
+        let mut anchors = self
+            .group_anchor_to_index
+            .iter()
+            .map(|(&anchor, &group_index)| SlotDebugAnchor {
+                anchor,
+                group_index,
+            })
+            .collect::<Vec<_>>();
+        anchors.sort_by_key(|entry| entry.group_index);
+
+        let mut scopes = self
+            .scope_anchor_to_group
+            .iter()
+            .filter_map(|(&scope_id, &anchor)| {
+                self.group_anchor_to_index
+                    .get(&anchor)
+                    .copied()
+                    .map(|group_index| SlotDebugScope {
+                        scope_id,
+                        anchor,
+                        group_index,
+                    })
+            })
+            .collect::<Vec<_>>();
+        scopes.sort_by_key(|entry| entry.scope_id);
+
+        SlotDebugSnapshot {
+            active_payload_count: self.groups.iter().map(|group| group.payloads.len()).sum(),
+            active_node_count: self.groups.iter().map(|group| group.nodes.len()).sum(),
+            active_scope_count: scopes.len(),
+            scope_registry_count: scopes.len(),
+            active_groups,
+            anchors,
+            scopes,
+            retained_subtree_count: 0,
+            retained_group_count: 0,
+            retained_node_count: 0,
+            retained_scope_count: 0,
+        }
     }
 
     pub fn debug_dump_all_slots(&self) -> Vec<(usize, String)> {
@@ -446,35 +568,6 @@ impl SlotTable {
             }
         }
         rows
-    }
-
-    pub fn debug_value_type_counts(&self, limit: usize) -> Vec<SlotValueTypeDebugStat> {
-        let mut counts: HashMap<&'static str, (usize, usize)> = HashMap::default();
-        for group in &self.groups {
-            for payload in &group.payloads {
-                let entry = counts.entry(payload.type_name).or_insert((0, 0));
-                entry.0 += 1;
-                entry.1 += payload.inline_payload_bytes;
-            }
-        }
-        let mut stats = counts
-            .into_iter()
-            .map(
-                |(type_name, (count, inline_payload_bytes))| SlotValueTypeDebugStat {
-                    type_name,
-                    count,
-                    inline_payload_bytes,
-                },
-            )
-            .collect::<Vec<_>>();
-        stats.sort_by(|left, right| {
-            right
-                .count
-                .cmp(&left.count)
-                .then_with(|| left.type_name.cmp(right.type_name))
-        });
-        stats.truncate(limit);
-        stats
     }
 
     pub(crate) fn write_session<'a>(
@@ -834,11 +927,25 @@ impl SlotTable {
             .unwrap_or(AnchorId::INVALID)
     }
 
-    fn current_old_children(state: &mut SlotWriteSessionState) -> (&mut Vec<AnchorId>, &mut usize) {
+    fn current_child_cursor(
+        state: &mut SlotWriteSessionState,
+    ) -> (
+        &mut Vec<AnchorId>,
+        &mut usize,
+        &mut Option<HashMap<GroupKey, usize>>,
+    ) {
         if let Some(frame) = state.group_stack.last_mut() {
-            (&mut frame.old_children, &mut frame.old_cursor)
+            (
+                &mut frame.old_children,
+                &mut frame.old_cursor,
+                &mut frame.sibling_index,
+            )
         } else {
-            (&mut state.root.old_children, &mut state.root.old_cursor)
+            (
+                &mut state.root.old_children,
+                &mut state.root.old_cursor,
+                &mut state.root.sibling_index,
+            )
         }
     }
 
@@ -889,8 +996,8 @@ impl SlotTable {
                 generation: 1,
                 anchor,
                 scope_id: None,
-                payloads: Vec::new(),
-                nodes: Vec::new(),
+                payloads: SmallVec::new(),
+                nodes: SmallVec::new(),
             },
         );
         self.refresh_group_indexes_from(insert_index);
@@ -936,6 +1043,7 @@ impl SlotTable {
             node_cursor: 0,
             old_node_len: group.nodes.len(),
             key_ordinals: HashMap::default(),
+            sibling_index: None,
             body_finished: false,
         });
         group_index
@@ -1052,7 +1160,10 @@ impl SlotTable {
         }
 
         let mut detached_children = Vec::new();
-        let remaining = frame.old_children[frame.old_cursor..].to_vec();
+        let remaining = frame
+            .old_children
+            .drain(frame.old_cursor..)
+            .collect::<Vec<_>>();
         for anchor in remaining.into_iter().rev() {
             if self.group_anchor_to_index.contains_key(&anchor) {
                 detached_children.push(self.detach_subtree(anchor));
@@ -1079,7 +1190,11 @@ impl SlotTable {
     }
 
     fn root_finish_result(&mut self, state: &mut SlotWriteSessionState) -> Vec<DetachedSubtree> {
-        let remaining = state.root.old_children[state.root.old_cursor..].to_vec();
+        let remaining = state
+            .root
+            .old_children
+            .drain(state.root.old_cursor..)
+            .collect::<Vec<_>>();
         let mut detached = Vec::new();
         for anchor in remaining.into_iter().rev() {
             if self.group_anchor_to_index.contains_key(&anchor) {
@@ -1324,11 +1439,13 @@ impl SlotWriteSession<'_> {
         key: GroupKey,
         restored: Option<DetachedSubtree>,
     ) -> StartScopedGroup<GroupId> {
+        const SIBLING_INDEX_THRESHOLD: usize = 16;
+
         SlotTable::consume_group_key(self.state, key);
         let parent_anchor = SlotTable::current_parent_anchor(self.state);
         let insert_index = *SlotTable::current_next_child_index(self.state);
 
-        let (old_children, old_cursor) = SlotTable::current_old_children(self.state);
+        let (old_children, old_cursor, sibling_index) = SlotTable::current_child_cursor(self.state);
         let mut reused_position = None;
         let mut moved = false;
         if restored.is_none() {
@@ -1337,17 +1454,41 @@ impl SlotWriteSession<'_> {
                 if expected.parent_anchor == parent_anchor && expected.key == key {
                     reused_position = Some(*old_cursor);
                 } else {
-                    for position in (*old_cursor + 1)..old_children.len() {
+                    let later_position = if old_children.len().saturating_sub(*old_cursor + 1)
+                        >= SIBLING_INDEX_THRESHOLD
+                    {
+                        let index = sibling_index.get_or_insert_with(|| {
+                            let mut index = HashMap::default();
+                            for (position, &anchor) in
+                                old_children.iter().enumerate().skip(*old_cursor + 1)
+                            {
+                                let group = self.table.current_group(anchor);
+                                if group.parent_anchor == parent_anchor {
+                                    index.entry(group.key).or_insert(position);
+                                }
+                            }
+                            index
+                        });
+                        index.get(&key).copied()
+                    } else {
+                        None
+                    };
+                    let search_start = *old_cursor + 1;
+                    let search_position = later_position.or_else(|| {
+                        (search_start..old_children.len()).find(|&position| {
+                            let anchor = old_children[position];
+                            let group = self.table.current_group(anchor);
+                            group.parent_anchor == parent_anchor && group.key == key
+                        })
+                    });
+                    if let Some(position) = search_position {
                         let anchor = old_children[position];
-                        let group = self.table.current_group(anchor);
-                        if group.parent_anchor == parent_anchor && group.key == key {
-                            old_children.remove(position);
-                            old_children.insert(*old_cursor, anchor);
-                            reused_position = Some(*old_cursor);
-                            self.table.move_subtree(anchor, insert_index);
-                            moved = true;
-                            break;
-                        }
+                        old_children.remove(position);
+                        old_children.insert(*old_cursor, anchor);
+                        *sibling_index = None;
+                        reused_position = Some(*old_cursor);
+                        self.table.move_subtree(anchor, insert_index);
+                        moved = true;
                     }
                 }
             }
@@ -1362,6 +1503,7 @@ impl SlotWriteSession<'_> {
         } else if reused_position.is_some() {
             let anchor = old_children[*old_cursor];
             *old_cursor += 1;
+            *sibling_index = None;
             (
                 anchor,
                 if moved {
@@ -1562,7 +1704,7 @@ impl SlotWriteSession<'_> {
             .collect()
     }
 
-    pub(crate) fn finalize_pass(&mut self, applier: &mut dyn Applier) {
+    pub(crate) fn finalize_pass(&mut self, applier: &mut dyn Applier) -> Vec<DetachedSubtree> {
         while !self.state.group_stack.is_empty() {
             let result = self.finish_group_body();
             for subtree in result.detached_children {
@@ -1577,10 +1719,7 @@ impl SlotWriteSession<'_> {
 
         let root_detached = self.table.root_finish_result(self.state);
         self.state.note_detached_subtrees(&root_detached);
-        for subtree in root_detached {
-            dispose_detached_subtree_now(applier, &subtree);
-            self.lifecycle.queue_subtree_disposal(subtree);
-        }
+        root_detached
     }
 }
 
@@ -1623,14 +1762,717 @@ impl Default for SlotTable {
 }
 
 #[cfg(test)]
-pub(crate) fn begin_group_for_test(
-    table: &mut SlotTable,
-    state: &mut SlotWriteSessionState,
-    key: Key,
-) -> GroupId {
-    let mut lifecycle = SlotLifecycleCoordinator::default();
-    let mut session = table.write_session(&mut lifecycle, state, SlotPassMode::Compose);
-    let group_key = session.preview_group_key(GroupKeySeed::unkeyed(key));
-    let started = session.begin_scoped_group(group_key, None);
-    started.group
+mod tests {
+    use super::*;
+    use crate::MemoryApplier;
+    use std::collections::{BTreeMap, HashSet};
+
+    struct SlotHarness {
+        table: SlotTable,
+        lifecycle: SlotLifecycleCoordinator,
+        state: SlotWriteSessionState,
+        applier: MemoryApplier,
+    }
+
+    impl SlotHarness {
+        fn new() -> Self {
+            Self {
+                table: SlotTable::new(),
+                lifecycle: SlotLifecycleCoordinator::default(),
+                state: SlotWriteSessionState::default(),
+                applier: MemoryApplier::new(),
+            }
+        }
+
+        fn begin_pass(&mut self, mode: SlotPassMode) {
+            self.state.reset_for_pass(&self.table, mode);
+        }
+
+        fn session<R>(
+            &mut self,
+            mode: SlotPassMode,
+            f: impl FnOnce(&mut SlotWriteSession<'_>) -> R,
+        ) -> R {
+            let mut session = self
+                .table
+                .write_session(&mut self.lifecycle, &mut self.state, mode);
+            f(&mut session)
+        }
+
+        fn finish_pass(&mut self, mode: SlotPassMode) {
+            {
+                let mut session =
+                    self.table
+                        .write_session(&mut self.lifecycle, &mut self.state, mode);
+                session.finalize_pass(&mut self.applier);
+            }
+            self.lifecycle.flush_pending_drops();
+            self.table.debug_verify(Some(&self.lifecycle));
+        }
+    }
+
+    fn begin_unkeyed(
+        session: &mut SlotWriteSession<'_>,
+        key: Key,
+        restored: Option<DetachedSubtree>,
+    ) -> StartScopedGroup<GroupId> {
+        let group_key = session.preview_group_key(GroupKeySeed::unkeyed(key));
+        session.begin_scoped_group(group_key, restored)
+    }
+
+    fn begin_keyed(
+        session: &mut SlotWriteSession<'_>,
+        static_key: Key,
+        explicit_key: Key,
+        restored: Option<DetachedSubtree>,
+    ) -> StartScopedGroup<GroupId> {
+        let group_key = session.preview_group_key(GroupKeySeed::keyed(static_key, explicit_key));
+        session.begin_scoped_group(group_key, restored)
+    }
+
+    fn next_bool(seed: &mut u64) -> bool {
+        *seed ^= *seed << 13;
+        *seed ^= *seed >> 7;
+        *seed ^= *seed << 17;
+        (*seed & 1) == 0
+    }
+
+    fn shuffle<T>(values: &mut [T], seed: &mut u64) {
+        for index in (1..values.len()).rev() {
+            *seed ^= *seed << 13;
+            *seed ^= *seed >> 7;
+            *seed ^= *seed << 17;
+            let swap_with = (*seed as usize) % (index + 1);
+            values.swap(index, swap_with);
+        }
+    }
+
+    #[test]
+    fn slot_v2_empty_table_validates() {
+        let table = SlotTable::new();
+        assert_eq!(table.validate(), Ok(()));
+        assert!(table.groups.is_empty());
+        assert!(table.debug_dump_groups().is_empty());
+        assert!(table.debug_dump_all_slots().is_empty());
+    }
+
+    #[test]
+    fn first_composition_records_group_value_and_node() {
+        let mut harness = SlotHarness::new();
+        harness.begin_pass(SlotPassMode::Compose);
+        let slot = harness.session(SlotPassMode::Compose, |session| {
+            let started = begin_unkeyed(session, 1, None);
+            assert_eq!(started.kind, GroupStartKind::Inserted);
+            let slot = session.use_value_slot(|| 41_i32);
+            session.record_node(7, 1);
+            let result = session.finish_group_body();
+            assert!(result.detached_children.is_empty());
+            assert!(result.direct_nodes.is_empty());
+            assert!(result.subtree_nodes.is_empty());
+            session.end_group();
+            slot
+        });
+        harness.finish_pass(SlotPassMode::Compose);
+
+        assert_eq!(*harness.table.read_value::<i32>(slot), 41);
+        assert_eq!(harness.table.groups.len(), 1);
+        assert_eq!(harness.table.groups[0].payloads.len(), 1);
+        assert_eq!(harness.table.groups[0].nodes.len(), 1);
+        assert_eq!(harness.table.groups[0].subtree_len, 1);
+        assert_eq!(harness.table.groups[0].subtree_node_count, 1);
+    }
+
+    #[test]
+    fn debug_snapshot_reports_active_groups_anchors_and_scopes() {
+        const ROOT_KEY: Key = 41;
+        const CHILD_KEY: Key = 42;
+        const ROOT_SCOPE: ScopeId = 101;
+        const CHILD_SCOPE: ScopeId = 202;
+
+        let mut harness = SlotHarness::new();
+
+        harness.begin_pass(SlotPassMode::Compose);
+        harness.session(SlotPassMode::Compose, |session| {
+            let root = begin_unkeyed(session, ROOT_KEY, None);
+            session.set_group_scope(root.group, ROOT_SCOPE);
+            let _ = session.use_value_slot(|| 7_i32);
+            session.record_node(11, 1);
+
+            let child = begin_unkeyed(session, CHILD_KEY, None);
+            session.set_group_scope(child.group, CHILD_SCOPE);
+            let _ = session.use_value_slot(|| 9_i32);
+            let child_result = session.finish_group_body();
+            assert!(child_result.detached_children.is_empty());
+            session.end_group();
+
+            let root_result = session.finish_group_body();
+            assert!(root_result.detached_children.is_empty());
+            session.end_group();
+        });
+        harness.finish_pass(SlotPassMode::Compose);
+
+        let snapshot = harness.table.debug_snapshot();
+        assert_eq!(snapshot.active_groups.len(), 2);
+        assert_eq!(snapshot.anchors.len(), 2);
+        assert_eq!(snapshot.scopes.len(), 2);
+        assert_eq!(snapshot.active_payload_count, 2);
+        assert_eq!(snapshot.active_node_count, 1);
+        assert_eq!(snapshot.active_scope_count, 2);
+        assert_eq!(snapshot.scope_registry_count, 2);
+        assert_eq!(snapshot.retained_subtree_count, 0);
+
+        let root = snapshot
+            .active_groups
+            .iter()
+            .find(|group| group.static_key == ROOT_KEY)
+            .expect("root group snapshot");
+        assert_eq!(root.scope_id, Some(ROOT_SCOPE));
+        assert_eq!(root.subtree_len, 2);
+        assert_eq!(root.payload_len, 1);
+        assert_eq!(root.node_len, 1);
+
+        let child = snapshot
+            .active_groups
+            .iter()
+            .find(|group| group.static_key == CHILD_KEY)
+            .expect("child group snapshot");
+        assert_eq!(child.parent_anchor, root.anchor);
+        assert_eq!(child.scope_id, Some(CHILD_SCOPE));
+        assert_eq!(child.subtree_len, 1);
+        assert_eq!(child.payload_len, 1);
+    }
+
+    #[test]
+    fn second_identical_composition_reuses_group_and_value() {
+        let mut harness = SlotHarness::new();
+
+        harness.begin_pass(SlotPassMode::Compose);
+        let first_slot = harness.session(SlotPassMode::Compose, |session| {
+            begin_unkeyed(session, 11, None);
+            let slot = session.use_value_slot(|| 10_i32);
+            let result = session.finish_group_body();
+            assert!(result.detached_children.is_empty());
+            session.end_group();
+            slot
+        });
+        harness.finish_pass(SlotPassMode::Compose);
+        harness.table.write_value(first_slot, 99_i32);
+
+        harness.begin_pass(SlotPassMode::Compose);
+        let (kind, second_slot) = harness.session(SlotPassMode::Compose, |session| {
+            let started = begin_unkeyed(session, 11, None);
+            let slot = session.use_value_slot(|| 0_i32);
+            let result = session.finish_group_body();
+            assert!(result.detached_children.is_empty());
+            session.end_group();
+            (started.kind, slot)
+        });
+        harness.finish_pass(SlotPassMode::Compose);
+
+        assert_eq!(kind, GroupStartKind::Reused);
+        assert_eq!(second_slot, first_slot);
+        assert_eq!(*harness.table.read_value::<i32>(second_slot), 99);
+    }
+
+    #[test]
+    fn detach_restore_preserves_nested_payloads_and_scopes() {
+        const PARENT_KEY: Key = 100;
+        const CHILD_KEY: Key = 200;
+        const GRANDCHILD_KEY: Key = 300;
+        const CHILD_SCOPE: ScopeId = 7;
+        const GRANDCHILD_SCOPE: ScopeId = 8;
+
+        let mut harness = SlotHarness::new();
+
+        harness.begin_pass(SlotPassMode::Compose);
+        let (child_slot, grandchild_slot, child_anchor) =
+            harness.session(SlotPassMode::Compose, |session| {
+                begin_unkeyed(session, PARENT_KEY, None);
+
+                let child = begin_unkeyed(session, CHILD_KEY, None);
+                session.set_group_scope(child.group, CHILD_SCOPE);
+                let child_slot = session.use_value_slot(|| 70_i32);
+                session.record_node(21, 1);
+
+                let grandchild = begin_unkeyed(session, GRANDCHILD_KEY, None);
+                session.set_group_scope(grandchild.group, GRANDCHILD_SCOPE);
+                let grandchild_slot = session.use_value_slot(|| 110_i32);
+                session.record_node(22, 1);
+                let grandchild_result = session.finish_group_body();
+                assert!(grandchild_result.detached_children.is_empty());
+                session.end_group();
+
+                let child_result = session.finish_group_body();
+                assert!(child_result.detached_children.is_empty());
+                session.end_group();
+
+                let parent_result = session.finish_group_body();
+                assert!(parent_result.detached_children.is_empty());
+                session.end_group();
+
+                (child_slot, grandchild_slot, child.anchor)
+            });
+        harness.finish_pass(SlotPassMode::Compose);
+        harness.table.write_value(child_slot, 71_i32);
+        harness.table.write_value(grandchild_slot, 111_i32);
+
+        harness.begin_pass(SlotPassMode::Compose);
+        let detached = harness.session(SlotPassMode::Compose, |session| {
+            begin_unkeyed(session, PARENT_KEY, None);
+            let parent_result = session.finish_group_body();
+            session.end_group();
+            assert_eq!(parent_result.detached_children.len(), 1);
+            parent_result.detached_children.into_iter().next().unwrap()
+        });
+        harness.finish_pass(SlotPassMode::Compose);
+        assert!(
+            !harness
+                .table
+                .group_anchor_to_index
+                .contains_key(&child_anchor),
+            "detached child must leave the active anchor index"
+        );
+
+        harness.begin_pass(SlotPassMode::Compose);
+        let (
+            child_kind,
+            restored_child_scope,
+            restored_child_slot,
+            grandchild_kind,
+            restored_grandchild_scope,
+            restored_grandchild_slot,
+        ) = harness.session(SlotPassMode::Compose, move |session| {
+            begin_unkeyed(session, PARENT_KEY, None);
+
+            let child = begin_unkeyed(session, CHILD_KEY, Some(detached));
+            let child_slot = session.use_value_slot(|| 0_i32);
+
+            let grandchild = begin_unkeyed(session, GRANDCHILD_KEY, None);
+            let grandchild_slot = session.use_value_slot(|| 0_i32);
+            let grandchild_result = session.finish_group_body();
+            assert!(grandchild_result.detached_children.is_empty());
+            session.end_group();
+
+            let child_result = session.finish_group_body();
+            assert!(child_result.detached_children.is_empty());
+            session.end_group();
+
+            let parent_result = session.finish_group_body();
+            assert!(parent_result.detached_children.is_empty());
+            session.end_group();
+
+            (
+                child.kind,
+                child.scope_id,
+                child_slot,
+                grandchild.kind,
+                grandchild.scope_id,
+                grandchild_slot,
+            )
+        });
+        harness.finish_pass(SlotPassMode::Compose);
+
+        assert_eq!(child_kind, GroupStartKind::Restored);
+        assert_eq!(restored_child_scope, Some(CHILD_SCOPE));
+        assert_eq!(grandchild_kind, GroupStartKind::Reused);
+        assert_eq!(restored_grandchild_scope, Some(GRANDCHILD_SCOPE));
+        assert_eq!(*harness.table.read_value::<i32>(restored_child_slot), 71);
+        assert_eq!(
+            *harness.table.read_value::<i32>(restored_grandchild_slot),
+            111
+        );
+    }
+
+    #[test]
+    fn keyed_sibling_reorder_preserves_values_and_anchors() {
+        const PARENT_KEY: Key = 400;
+        const STATIC_KEY: Key = 401;
+
+        let mut harness = SlotHarness::new();
+
+        harness.begin_pass(SlotPassMode::Compose);
+        let (first_slot, first_anchor, second_slot, second_anchor) =
+            harness.session(SlotPassMode::Compose, |session| {
+                begin_unkeyed(session, PARENT_KEY, None);
+
+                let first = begin_keyed(session, STATIC_KEY, 1, None);
+                let first_slot = session.use_value_slot(|| 10_i32);
+                let first_result = session.finish_group_body();
+                assert!(first_result.detached_children.is_empty());
+                session.end_group();
+
+                let second = begin_keyed(session, STATIC_KEY, 2, None);
+                let second_slot = session.use_value_slot(|| 20_i32);
+                let second_result = session.finish_group_body();
+                assert!(second_result.detached_children.is_empty());
+                session.end_group();
+
+                let parent_result = session.finish_group_body();
+                assert!(parent_result.detached_children.is_empty());
+                session.end_group();
+
+                (first_slot, first.anchor, second_slot, second.anchor)
+            });
+        harness.finish_pass(SlotPassMode::Compose);
+        harness.table.write_value(first_slot, 101_i32);
+        harness.table.write_value(second_slot, 202_i32);
+
+        harness.begin_pass(SlotPassMode::Compose);
+        let (
+            second_kind,
+            reordered_second_anchor,
+            reordered_second_slot,
+            first_kind,
+            reordered_first_anchor,
+            reordered_first_slot,
+        ) = harness.session(SlotPassMode::Compose, |session| {
+            begin_unkeyed(session, PARENT_KEY, None);
+
+            let second = begin_keyed(session, STATIC_KEY, 2, None);
+            let second_slot = session.use_value_slot(|| 0_i32);
+            let second_result = session.finish_group_body();
+            assert!(second_result.detached_children.is_empty());
+            session.end_group();
+
+            let first = begin_keyed(session, STATIC_KEY, 1, None);
+            let first_slot = session.use_value_slot(|| 0_i32);
+            let first_result = session.finish_group_body();
+            assert!(first_result.detached_children.is_empty());
+            session.end_group();
+
+            let parent_result = session.finish_group_body();
+            assert!(parent_result.detached_children.is_empty());
+            session.end_group();
+
+            (
+                second.kind,
+                second.anchor,
+                second_slot,
+                first.kind,
+                first.anchor,
+                first_slot,
+            )
+        });
+        harness.finish_pass(SlotPassMode::Compose);
+
+        assert_eq!(second_kind, GroupStartKind::Moved);
+        assert_eq!(reordered_second_anchor, second_anchor);
+        assert_eq!(first_kind, GroupStartKind::Reused);
+        assert_eq!(reordered_first_anchor, first_anchor);
+        assert_eq!(*harness.table.read_value::<i32>(reordered_second_slot), 202);
+        assert_eq!(*harness.table.read_value::<i32>(reordered_first_slot), 101);
+    }
+
+    #[test]
+    fn unkeyed_siblings_follow_positional_identity() {
+        const PARENT_KEY: Key = 450;
+        const SHARED_KEY: Key = 451;
+
+        let mut harness = SlotHarness::new();
+
+        harness.begin_pass(SlotPassMode::Compose);
+        let (first_slot, second_slot) = harness.session(SlotPassMode::Compose, |session| {
+            begin_unkeyed(session, PARENT_KEY, None);
+
+            begin_unkeyed(session, SHARED_KEY, None);
+            let first_slot = session.use_value_slot(|| 10_i32);
+            let first_result = session.finish_group_body();
+            assert!(first_result.detached_children.is_empty());
+            session.end_group();
+
+            begin_unkeyed(session, SHARED_KEY, None);
+            let second_slot = session.use_value_slot(|| 20_i32);
+            let second_result = session.finish_group_body();
+            assert!(second_result.detached_children.is_empty());
+            session.end_group();
+
+            let parent_result = session.finish_group_body();
+            assert!(parent_result.detached_children.is_empty());
+            session.end_group();
+
+            (first_slot, second_slot)
+        });
+        harness.finish_pass(SlotPassMode::Compose);
+        harness.table.write_value(first_slot, 101_i32);
+        harness.table.write_value(second_slot, 202_i32);
+
+        harness.begin_pass(SlotPassMode::Compose);
+        let remaining_slot = harness.session(SlotPassMode::Compose, |session| {
+            begin_unkeyed(session, PARENT_KEY, None);
+
+            let remaining = begin_unkeyed(session, SHARED_KEY, None);
+            assert_eq!(remaining.kind, GroupStartKind::Reused);
+            let slot = session.use_value_slot(|| 0_i32);
+            let result = session.finish_group_body();
+            assert_eq!(result.detached_children.len(), 0);
+            session.end_group();
+
+            let parent_result = session.finish_group_body();
+            assert_eq!(parent_result.detached_children.len(), 1);
+            session.end_group();
+            slot
+        });
+        harness.finish_pass(SlotPassMode::Compose);
+
+        assert_eq!(
+            *harness.table.read_value::<i32>(remaining_slot),
+            101,
+            "unkeyed duplicate siblings must follow positional identity, not the removed sibling's previous state",
+        );
+    }
+
+    #[test]
+    fn duplicate_explicit_keys_are_rejected_by_validation() {
+        const PARENT_KEY: Key = 460;
+        const STATIC_KEY: Key = 461;
+        const EXPLICIT_KEY: Key = 77;
+
+        let mut table = SlotTable::new();
+        let mut lifecycle = SlotLifecycleCoordinator::default();
+        let mut state = SlotWriteSessionState::default();
+        state.reset_for_pass(&table, SlotPassMode::Compose);
+        {
+            let mut session =
+                table.write_session(&mut lifecycle, &mut state, SlotPassMode::Compose);
+            begin_unkeyed(&mut session, PARENT_KEY, None);
+
+            begin_keyed(&mut session, STATIC_KEY, EXPLICIT_KEY, None);
+            let first = session.finish_group_body();
+            assert!(first.detached_children.is_empty());
+            session.end_group();
+
+            begin_keyed(&mut session, STATIC_KEY, EXPLICIT_KEY, None);
+            let second = session.finish_group_body();
+            assert!(second.detached_children.is_empty());
+            session.end_group();
+
+            let parent = session.finish_group_body();
+            assert!(parent.detached_children.is_empty());
+            session.end_group();
+        }
+
+        assert!(
+            matches!(
+                table.validate(),
+                Err(SlotInvariantError::DuplicateSiblingKey { .. })
+            ),
+            "duplicate explicit sibling keys must fail validation instead of silently aliasing state",
+        );
+    }
+
+    #[test]
+    fn skip_group_advances_by_exact_subtree_size_and_keeps_nodes_stable() {
+        const PARENT_KEY: Key = 500;
+        const CHILD_A_KEY: Key = 501;
+        const GRANDCHILD_KEY: Key = 502;
+        const CHILD_B_KEY: Key = 503;
+
+        let mut harness = SlotHarness::new();
+
+        harness.begin_pass(SlotPassMode::Compose);
+        harness.session(SlotPassMode::Compose, |session| {
+            begin_unkeyed(session, PARENT_KEY, None);
+
+            begin_unkeyed(session, CHILD_A_KEY, None);
+            session.record_node(10, 1);
+            begin_unkeyed(session, GRANDCHILD_KEY, None);
+            session.record_node(20, 1);
+            let grandchild_result = session.finish_group_body();
+            assert!(grandchild_result.detached_children.is_empty());
+            session.end_group();
+            let child_a_result = session.finish_group_body();
+            assert!(child_a_result.detached_children.is_empty());
+            session.end_group();
+
+            begin_unkeyed(session, CHILD_B_KEY, None);
+            session.record_node(30, 1);
+            let child_b_result = session.finish_group_body();
+            assert!(child_b_result.detached_children.is_empty());
+            session.end_group();
+
+            let parent_result = session.finish_group_body();
+            assert!(parent_result.detached_children.is_empty());
+            session.end_group();
+        });
+        harness.finish_pass(SlotPassMode::Compose);
+
+        harness.begin_pass(SlotPassMode::Compose);
+        let child_b_kind = harness.session(SlotPassMode::Compose, |session| {
+            begin_unkeyed(session, PARENT_KEY, None);
+
+            let child_a = begin_unkeyed(session, CHILD_A_KEY, None);
+            assert_eq!(child_a.kind, GroupStartKind::Reused);
+            assert_eq!(session.nodes_in_current_group(), vec![10, 20]);
+            session.skip_current_group();
+            let child_a_result = session.finish_group_body();
+            assert!(child_a_result.detached_children.is_empty());
+            session.end_group();
+
+            let child_b = begin_unkeyed(session, CHILD_B_KEY, None);
+            let child_b_result = session.finish_group_body();
+            assert!(child_b_result.detached_children.is_empty());
+            session.end_group();
+
+            let parent_result = session.finish_group_body();
+            assert!(parent_result.detached_children.is_empty());
+            session.end_group();
+
+            child_b.kind
+        });
+        harness.finish_pass(SlotPassMode::Compose);
+
+        assert_eq!(child_b_kind, GroupStartKind::Reused);
+    }
+
+    #[test]
+    fn scope_index_resolves_active_groups_and_omits_detached_ones() {
+        const GROUP_KEY: Key = 600;
+        const SCOPE_ID: ScopeId = 55;
+
+        let mut harness = SlotHarness::new();
+
+        harness.begin_pass(SlotPassMode::Compose);
+        let group_anchor = harness.session(SlotPassMode::Compose, |session| {
+            let started = begin_unkeyed(session, GROUP_KEY, None);
+            session.set_group_scope(started.group, SCOPE_ID);
+            let result = session.finish_group_body();
+            assert!(result.detached_children.is_empty());
+            session.end_group();
+            started.anchor
+        });
+        harness.finish_pass(SlotPassMode::Compose);
+
+        harness.begin_pass(SlotPassMode::Recompose);
+        harness.session(SlotPassMode::Recompose, |session| {
+            let group = session
+                .start_recompose_at_scope(SCOPE_ID)
+                .expect("active scope must resolve through the scope index");
+            assert_eq!(group.index(), 0);
+            session.skip_current_group();
+            let result = session.finish_group_body();
+            assert!(result.detached_children.is_empty());
+            session.end_recompose();
+        });
+        harness.finish_pass(SlotPassMode::Recompose);
+
+        harness.begin_pass(SlotPassMode::Compose);
+        harness.finish_pass(SlotPassMode::Compose);
+
+        assert!(harness.table.groups.is_empty());
+        assert!(
+            !harness
+                .table
+                .group_anchor_to_index
+                .contains_key(&group_anchor),
+            "disposed groups must invalidate their active anchor lookup"
+        );
+
+        harness.begin_pass(SlotPassMode::Recompose);
+        harness.session(SlotPassMode::Recompose, |session| {
+            assert!(
+                session.start_recompose_at_scope(SCOPE_ID).is_none(),
+                "detached or disposed scopes must not resolve through the active-table scope index"
+            );
+        });
+        harness.finish_pass(SlotPassMode::Recompose);
+    }
+
+    #[test]
+    fn deterministic_random_reorders_and_restore_preserve_model_state() {
+        const PARENT_KEY: Key = 700;
+        const STATIC_KEY: Key = 701;
+        const CHILDREN: [Key; 4] = [1, 2, 3, 4];
+
+        let mut harness = SlotHarness::new();
+        let mut retained = BTreeMap::<Key, DetachedSubtree>::new();
+        let mut expected_values = BTreeMap::<Key, i32>::new();
+        let mut seed = 0x9E37_79B9_7F4A_7C15_u64;
+
+        for _ in 0..64 {
+            let mut order = CHILDREN
+                .iter()
+                .copied()
+                .filter(|_| next_bool(&mut seed))
+                .collect::<Vec<_>>();
+            if order.is_empty() {
+                order.push(CHILDREN[(seed as usize) % CHILDREN.len()]);
+            }
+            shuffle(&mut order, &mut seed);
+
+            harness.begin_pass(SlotPassMode::Compose);
+            let detached_children = harness.session(SlotPassMode::Compose, |session| {
+                begin_unkeyed(session, PARENT_KEY, None);
+
+                for key in order.iter().copied() {
+                    let restored = retained.remove(&key);
+                    let started = begin_keyed(session, STATIC_KEY, key, restored);
+                    assert!(
+                        matches!(
+                            started.kind,
+                            GroupStartKind::Inserted
+                                | GroupStartKind::Reused
+                                | GroupStartKind::Moved
+                                | GroupStartKind::Restored
+                        ),
+                        "unexpected start kind for child {key}: {:?}",
+                        started.kind
+                    );
+
+                    let slot = session.use_value_slot(|| (key as i32) * 10);
+                    let expected = expected_values.entry(key).or_insert((key as i32) * 10);
+                    let actual = *session.table.read_value::<i32>(slot);
+                    assert_eq!(
+                        actual, *expected,
+                        "remembered value must follow the retained structural identity"
+                    );
+                    if next_bool(&mut seed) {
+                        *expected += 1;
+                        session.table.write_value(slot, *expected);
+                    }
+
+                    let child_result = session.finish_group_body();
+                    assert!(child_result.detached_children.is_empty());
+                    session.end_group();
+                }
+
+                let parent_result = session.finish_group_body();
+                session.end_group();
+                parent_result.detached_children
+            });
+            for subtree in detached_children {
+                let key = subtree
+                    .root_key()
+                    .explicit_key
+                    .expect("property test uses explicit child keys");
+                retained.insert(key, subtree);
+            }
+            harness.finish_pass(SlotPassMode::Compose);
+
+            let active_keys = harness
+                .table
+                .groups
+                .iter()
+                .filter(|group| group.depth == 1)
+                .map(|group| group.key.explicit_key.expect("child keys are explicit"))
+                .collect::<Vec<_>>();
+            assert_eq!(active_keys, order);
+
+            let active_anchors = harness
+                .table
+                .groups
+                .iter()
+                .map(|group| group.anchor)
+                .collect::<HashSet<_>>();
+            for subtree in retained.values() {
+                for group in &subtree.groups {
+                    assert!(
+                        !active_anchors.contains(&group.anchor),
+                        "active and retained storage must stay disjoint"
+                    );
+                }
+            }
+
+            assert_eq!(harness.table.validate(), Ok(()));
+        }
+    }
 }

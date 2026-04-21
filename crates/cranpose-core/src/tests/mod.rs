@@ -95,7 +95,12 @@ pub(crate) fn begin_test_group(
     state: &mut crate::slot_table::SlotWriteSessionState,
     key: Key,
 ) -> GroupId {
-    crate::slot_table::begin_group_for_test(slots, state, key)
+    with_test_slot_lifecycle(|lifecycle| {
+        let mut session =
+            slots.write_session(lifecycle, state, crate::slot_table::SlotPassMode::Compose);
+        let group_key = session.preview_group_key(crate::slot_storage::GroupKeySeed::unkeyed(key));
+        session.begin_scoped_group(group_key, None).group
+    })
 }
 
 pub(crate) fn remember_test_value<T: 'static>(

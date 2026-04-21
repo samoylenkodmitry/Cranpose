@@ -1,461 +1,634 @@
-## 17. Testing plan
-
-### 17.1 Unit tests for slot storage
-
-Create `crates/cranpose-core/src/slot/tests.rs`.
-
-Required tests:
-
-1. empty table validates;
-2. first composition inserts root/group/value/node;
-3. second identical composition reuses groups and values;
-4. conditional child removed returns `DetachedSubtree`;
-5. default removed child is disposed when composer chooses dispose;
-6. retained child restores remembered value;
-7. restored child gets `GroupStartKind::Restored`;
-8. keyed sibling reorder preserves values;
-9. unkeyed sibling ordinal preserves order semantics;
-10. duplicate explicit key under same parent debug-fails or gets deterministic ordinal;
-11. nested detach/restore preserves nested payloads and scopes;
-12. active scope lookup is O(1) by index behavior, not scan-dependent;
-13. detached scope is not recomposed by active-table entry;
-14. moving group updates anchors;
-15. deleting group invalidates anchors;
-16. value type mismatch panics or returns typed error consistently;
-17. `skip_group` advances by exact subtree size;
-18. node list for skipped group is exact and stable;
-19. retained nodes are not disposed;
-20. disposed nodes are removed.
-
-### 17.2 Composer integration tests
-
-Required behavior tests:
-
-1. `remember` survives normal recomposition.
-2. `remember` resets when a conditional branch disappears with default retention.
-3. `remember` survives when branch uses retain/reuse options.
-4. switching tabs preserves tab state only when retention is requested.
-5. switching tabs disposes state when retention is not requested.
-6. list item reorder with explicit keys preserves item state.
-7. list item reorder without explicit keys follows positional identity.
-8. invalidating active scope recomposes that scope.
-9. invalidating inactive retained scope marks dirty and recomposes on restore.
-10. `DisposableEffect` cleanup runs on dispose but not on retain.
-11. retained node IDs are reused on restore.
-12. disposed node IDs are not reused unless applier explicitly reuses IDs.
-13. subcompose keeps per-slot compositions and works with V2 storage.
-
-### 17.3 Property tests
-
-Add a model test module using generated operations:
-
-```text
-begin group
-end group
-remember value
-record node
-conditional include/exclude
-move keyed sibling
-retain child
-dispose child
-restore retained child
-skip group
-```
-
-Compare `SlotTable` against a simple reference tree model.
-
-Properties:
-
-- active tree equals model tree;
-- remembered values appear under the same retained identity;
-- no duplicate active anchors;
-- no active group also exists in retention manager;
-- all invariants hold after every operation.
-
-Use `proptest` if acceptable; otherwise write deterministic random tests with a fixed seed.
-
----
-
-## 18. Coding-agent implementation plan
-
-### Phase 0 — prepare branch and safety net
-
-1. Create a rewrite branch.
-2. Run current tests to get baseline failures/pass count.
-3. Add a `docs/slot_table_v2.md` copy of this design.
-4. Add a failing placeholder test: `slot_v2_empty_table_validates`.
-
-### Phase 1 — define V2 types
-
-Create:
-
-```text
-src/slot/mod.rs
-src/slot/types.rs
-src/slot_storage.rs
-```
-
-Implement:
-
-- `GroupKey`
-- `GroupId`
-- `ValueSlotId`
-- `GroupAnchor`
-- `GroupStartKind`
-- `BeginGroupInput`
-- `GroupStart`
-- `FinishGroupResult`
-- `DetachedSubtree`
-- `SlotInvariantError`
-- V2 `SlotStorage` trait
-
-Do not implement old trait compatibility.
-
-### Phase 2 — implement core tables
-
-Create:
-
-```text
-src/slot/table.rs
-src/slot/groups.rs
-src/slot/payload.rs
-src/slot/nodes.rs
-src/slot/anchors.rs
-src/slot/scope_index.rs
-src/slot/validate.rs
-```
-
-Implement minimal operations:
-
-- `SlotTable::new`
-- insert root/child groups
-- value slots
-- node records
-- exact `subtree_len`
-- validation
-
-Tests to pass:
-
-- empty table validates;
-- simple group/value/node composition validates.
-
-### Phase 3 — implement writer traversal
-
-Create `src/slot/writer.rs`.
-
-Implement:
-
-- writer stack;
-- `begin_group` insert/reuse;
-- `end_group`;
-- `finish_group_body` without retention;
-- `skip_group`.
-
-Tests to pass:
-
-- identical recomposition reuses values;
-- skipping advances exactly;
-- removing a child returns a detached subtree.
-
-### Phase 4 — implement sibling moves
-
-Implement:
-
-- parent-bounded direct-child scan;
-- lazy `SiblingIndex` for larger sibling ranges;
-- `move_subtree` using `Vec::splice` or drain/insert;
-- anchor repair.
-
-Tests to pass:
-
-- keyed sibling reorder preserves state;
-- nested children are not searched/moved as siblings;
-- anchors survive moves.
-
-### Phase 5 — implement detach/restore
-
-Implement:
-
-- `detach_subtree`;
-- `detach_range`;
-- `restore_detached_at_cursor`;
-- payload extraction/insertion;
-- node extraction/insertion;
-- scope active/detached index updates;
-- anchor active/detached/invalidated states.
-
-Tests to pass:
-
-- conditional removal returns valid detached subtree;
-- restore recreates exact active subtree;
-- nested restore preserves payloads;
-- disposed subtree drops payloads and invalidates anchors.
-
-### Phase 6 — composer retention manager
-
-Create `src/retention.rs`.
-
-Implement:
-
-- `RetentionMode`;
-- `RetainKey`;
-- `RetainedGroup`;
-- `RetentionManager`;
-- retained node set;
-- dirty retained scope tracking.
-
-Update `ComposerCore`:
-
-- add `retention`;
-- add `scope_registry`;
-- update `pending_scope_options` to include retention mode.
-
-Tests to pass:
-
-- default conditional branch disposes state;
-- retain mode preserves remembered state;
-- invalid retained scope recomposes when restored.
-
-### Phase 7 — update Composer::with_group
-
-Rewrite `with_group` around V2 semantics.
-
-Required flow:
-
-1. compute group key;
-2. compute retain key;
-3. take retained subtree if present;
-4. call `begin_group` with optional restored subtree;
-5. obtain/create remembered `RecomposeScope`;
-6. register scope ID;
-7. apply `force_recompose`, `force_reuse`, and `Restored` behavior;
-8. run body under observer;
-9. call `finish_group_body`;
-10. retain or dispose returned children;
-11. pop scope;
-12. end group.
-
-Delete all use of `restored_from_gap`.
-
-### Phase 8 — update node/apply logic
-
-Update parent diff/removal logic:
-
-- retained nodes are detached, not removed from applier;
-- disposed nodes are removed;
-- restored retained nodes can be reattached by existing parent diff.
-
-Tests to pass:
-
-- retained tab nodes are not recreated;
-- disposed conditional node is removed;
-- moving keyed nodes reorders rather than destroys.
-
-### Phase 9 — update subcompose
-
-Keep the architectural idea already present in `SubcomposeState`: per-slot compositions and policy-owned reuse.
-
-Update:
-
-- `slot_compositions` to use V2 `SlotTable`;
-- active/reusable slot registration to mark V2 retention if necessary;
-- cleanup to dispose compositions not active/reusable.
-
-Tests to pass:
-
-- subcompose basic;
-- lazy list scroll reuse;
-- content-type-compatible reuse;
-- precompose activation.
-
-### Phase 10 — remove old implementation
-
-Delete or fully replace:
-
-```text
-Slot::Gap
-last_start_was_gap
-has_gap_children
-mark_range_as_gaps
-trim_to_cursor old behavior
-SEARCH_BUDGET
-EXTENDED_SEARCH_BUDGET
-SHRINK_MIN_DROP
-SHRINK_RATIO
-force_gap_here
-ensure_gap_at_local
-find_right_gap_run
-step_back
-advance_after_node_read
-```
-
-Search the repo for these names and remove them.
-
-### Phase 11 — documentation and debug tools
-
-Add:
-
-- `SlotTable::debug_snapshot()`;
-- `SlotDebugSnapshot` with active groups, retained counts, anchors, scopes;
-- `COMPOSE_DEBUG_SLOT_TABLE=1` dump path;
-- docs explaining retention vs disposal.
-
-### Phase 12 — performance pass
-
-Only after correctness tests pass:
-
-- reduce unnecessary `Vec` cloning;
-- use `SmallVec` for small node/payload lists;
-- lazily build sibling index;
-- benchmark keyed list reorder;
-- benchmark tab switching;
-- benchmark subcompose scrolling;
-- consider chunked group storage if large `Vec::splice` appears hot.
-
-Do not reintroduce semantic gaps for performance.
-
----
-
-## 19. Example API sketches
-
-### 19.1 SlotStorage usage from composer
-
-```rust
-let start = slots.begin_group(BeginGroupInput {
-    key,
-    restored: retained.map(|r| r.subtree),
-});
-
-match start.kind {
-    GroupStartKind::Inserted => { /* create scope */ }
-    GroupStartKind::Reused => { /* normal */ }
-    GroupStartKind::Moved => { /* preserve state; maybe mark parent structural change */ }
-    GroupStartKind::Restored => { /* reactivate scopes and force recompose */ }
-}
-```
-
-### 19.2 Retain/dispose handling
-
-```rust
-fn handle_detached_children(&self, detached: Vec<DetachedSubtree>, mode: RetentionMode) {
-    for subtree in detached {
-        match mode {
-            RetentionMode::RetainWhenInactive => self.retain_subtree(subtree),
-            RetentionMode::DisposeWhenInactive => self.dispose_subtree(subtree),
-        }
-    }
-}
-```
-
-### 19.3 Retain subtree
-
-```rust
-fn retain_subtree(&self, subtree: DetachedSubtree) {
-    for scope_id in subtree.scope_ids() {
-        if let Some(scope) = self.core.scope_registry.borrow().get(&scope_id) {
-            scope.deactivate();
-        }
-    }
-
-    for node in subtree.root_nodes() {
-        self.core.retention.borrow_mut().mark_node_retained(node);
-        self.detach_node_without_dispose(node);
-    }
-
-    let key = self.make_retain_key(&subtree);
-    self.core.retention.borrow_mut().insert(key, subtree);
-}
-```
-
-### 19.4 Dispose subtree
-
-```rust
-fn dispose_subtree(&self, subtree: DetachedSubtree) {
-    for node in subtree.root_nodes() {
-        self.dispose_node(node);
-    }
-
-    for scope_id in subtree.scope_ids() {
-        self.core.scope_registry.borrow_mut().remove(&scope_id);
-    }
-
-    drop(subtree); // drops remembered payloads/effects
-}
-```
-
----
-
-## 20. Success criteria
-
-The rewrite is successful when:
-
-1. There is no `Slot::Gap` equivalent carrying group metadata.
-2. There is no `restored_from_gap` API.
-3. There are no rescue scan budgets.
-4. Group sizes are exact active subtree sizes.
-5. Scope lookup is indexed.
-6. Removed children are returned as `DetachedSubtree` objects.
-7. Composer decides retain vs dispose.
-8. Retained state survives restore.
-9. Default removed state disposes cleanly.
-10. Keyed reorder preserves state and nodes.
-11. Unkeyed reorder follows positional semantics.
-12. Subcompose still works with per-slot compositions.
-13. Debug `validate()` passes after every core test operation.
-14. The design can be explained without special cases like “gap children,” “preserved physical extent,” or “extended rescue search.”
-
----
-
-## 21. Coding-agent hard rules
-
-When implementing this rewrite:
-
-1. Do not patch the current gap algorithm.
-2. Do not preserve group metadata in free storage.
-3. Do not scan the whole table to find a group by key.
-4. Do not scan the whole table to find a scope.
-5. Do not keep stale group lengths.
-6. Do not expose cursor repair APIs.
-7. Do not make retention automatic for every conditional branch.
-8. Do not dispose retained nodes.
-9. Do not retain disposed payloads.
-10. Do not optimize by weakening invariants.
-
-If stuck, implement the simple model first even if it is slower.
-
----
-
-## 22. Minimal first passing implementation
-
-For the first working PR, it is acceptable to have:
-
-- plain `Vec<GroupRecord>`;
-- plain `Vec<PayloadRecord>`;
-- subtree movement by drain/insert;
-- O(number of direct siblings) keyed search;
-- no chunking;
-- no packed arrays;
-- no custom allocator;
-- validation everywhere in tests.
-
-It is not acceptable to have:
-
-- semantic gaps;
-- stale subtree lengths;
-- global key rescue scans;
-- storage-owned retention decisions.
-
----
-
-## 23. Future optimizations
-
-After V2 is correct:
-
-1. Replace direct `Vec` subtree moves with a chunked sequence.
-2. Pack `GroupRecord` fields into compact arrays.
-3. Use gap-relative anchors internally, but keep semantics unchanged.
-4. Add retained subtree LRU limits.
-5. Add debug instrumentation for retained memory.
-6. Add collision-resistant keys in debug/profile builds.
-7. Add specialized lazy-list retention policy.
-8. Support no-std allocator-backed tables if still desired.
+# Slot Table V2 Roadmap
+
+Source: `docs/cranpose_slot_table_v2_design.md`
+
+## Rewrite Principles
+
+- [ ] Replace the current gap-based model instead of patching it.
+- [ ] Separate active group structure, remembered payload storage, emitted node identity, and inactive/restorable retention.
+- [ ] Keep dormant groups as explicit `DetachedSubtree` values owned by composer-side retention.
+- [ ] Ensure a gap, free slot, or spare capacity is never treated as a dormant group.
+- [ ] Remove `Slot::Gap` carrying semantic group metadata.
+- [ ] Remove `restored_from_gap`.
+- [ ] Remove `last_start_was_gap`.
+- [ ] Remove `has_gap_children`.
+- [ ] Remove stale group length as physical extent semantics.
+- [ ] Remove `SEARCH_BUDGET` and `EXTENDED_SEARCH_BUDGET` rescue scans.
+- [ ] Remove `step_back` cursor repair.
+- [ ] Remove `advance_after_node_read` cursor repair.
+- [ ] Remove scope lookup by scanning all slots.
+
+## Correctness Goals
+
+- [ ] Active groups form one preorder forest.
+- [ ] Every group has an exact active subtree size.
+- [ ] Parent and child boundaries are exact and parent-bounded.
+- [ ] Payload ranges are exact and owned by a group.
+- [ ] Group identity is matched only among siblings of the current parent.
+- [ ] A detached group is not present in the active table.
+- [ ] Retained groups are explicit detached objects, not gaps.
+- [ ] Anchors resolve to active groups, payloads, and nodes or fail cleanly.
+- [ ] Scope lookup is indexed instead of scanning slots.
+- [ ] Node lifecycle is explicit: active, retained-detached, or disposed.
+
+## Architectural Goals
+
+- [ ] Keep the slot table responsible for structure and payload storage.
+- [ ] Keep the composer responsible for lifecycle decisions.
+- [ ] Keep the applier responsible for concrete node objects.
+- [ ] Make retention policy-driven and explicit.
+- [ ] Ensure skipping and recomposition never depend on stale physical lengths.
+- [ ] Make keyed sibling reordering deterministic.
+- [ ] Optimize the first V2 pass for clarity and invariants over raw speed.
+- [ ] Allow later chunking, packed arrays, or internal gap buffers only if semantics stay unchanged.
+
+## API Goals
+
+- [ ] Replace `restored_from_gap: bool` with semantic `GroupStartKind`.
+- [ ] Replace `finalize_current_group() -> bool` with `finish_group_body() -> FinishGroupResult`.
+- [ ] Remove `step_back` from the storage trait.
+- [ ] Remove `advance_after_node_read` from the storage trait.
+- [ ] Add explicit detach operations.
+- [ ] Add explicit restore operations.
+- [ ] Add storage validation methods for tests and debugging.
+- [ ] Keep public `remember`, `useState`, `with_key`, and composable macro behavior as stable as possible while allowing internal API breakage.
+
+## Non-Goals
+
+- [ ] Do not keep `Slot::Gap` semantics.
+- [ ] Do not keep old group length behavior.
+- [ ] Do not preserve old rescue-scan logic.
+- [ ] Do not preserve old experimental backend internals.
+- [ ] Do not make the storage trait object-safe just to preserve the old shape.
+- [ ] Do not optimize memory packing before correctness.
+- [ ] Do not keep undocumented internal debug output unchanged.
+
+## Core Concepts To Preserve
+
+- [ ] Model an active group as a group currently present in the active composition tree.
+- [ ] Model `DetachedSubtree` as an owned inactive subtree removed from the active table.
+- [ ] Ensure detached subtrees contain group records, payload records, node IDs, scope IDs, and anchor metadata needed for restore or disposal.
+- [ ] Ensure detached subtrees have no active parent.
+- [ ] Model a retained group as a detached subtree intentionally kept alive by retention policy.
+- [ ] Support retained groups for tab pages, reusable lazy or subcompose items, and precomposed content waiting to activate.
+- [ ] Model a disposed group as a detached subtree whose payloads, effects, anchors, scopes, and nodes are fully cleaned up.
+- [ ] Use `GroupKey { static_key, explicit_key, ordinal }` as the internal group identity model.
+- [ ] Keep `static_key` as the usual call-site key.
+- [ ] Keep `explicit_key` as the `with_key` or list item key hash.
+- [ ] Use `ordinal` to disambiguate duplicate unkeyed sibling calls under the same parent.
+- [ ] Make long-term `with_key` identity be source-location key plus user key rather than replacing source location with only the user hash.
+
+## Target Module Layout
+
+- [ ] Replace the current slot table layout with `src/slot_storage.rs` as the V2 trait and public-ish handle definitions.
+- [ ] Replace or wrap `src/slot_backend.rs` around the new `SlotTable`.
+- [ ] Add `src/slot/mod.rs`.
+- [ ] Add `src/slot/types.rs`.
+- [ ] Add `src/slot/table.rs`.
+- [ ] Add `src/slot/writer.rs`.
+- [ ] Add `src/slot/reader.rs`.
+- [ ] Add `src/slot/groups.rs`.
+- [ ] Add `src/slot/payload.rs`.
+- [ ] Add `src/slot/nodes.rs`.
+- [ ] Add `src/slot/anchors.rs`.
+- [ ] Add `src/slot/scope_index.rs`.
+- [ ] Add `src/slot/detach.rs`.
+- [ ] Add `src/slot/validate.rs`.
+- [ ] Add `src/retention.rs`.
+- [ ] Update `lib.rs` re-exports for `SlotTable`, `SlotStorage`, handles, and public APIs from the new modules.
+- [ ] Delete or temporarily disable `chunked_slot_storage.rs`.
+- [ ] Delete or temporarily disable `hierarchical_slot_storage.rs`.
+- [ ] Delete or temporarily disable `split_slot_storage.rs`.
+- [ ] If the old experimental backends remain temporarily, turn them into thin wrappers over `SlotTable`.
+
+## Core Data Model
+
+- [ ] Use generational `GroupId`.
+- [ ] Use generational `ValueSlotId`.
+- [ ] Use generational `GroupAnchor`.
+- [ ] Prefer anchor-based `ValueSlotId` resolution when it is exposed outside one composition frame.
+- [ ] Implement `SlotTable { groups, payloads, nodes, anchors, scopes, writer, version }`.
+- [ ] Allow the first implementation to use plain `Vec` storage and `Vec::splice` for subtree edits.
+- [ ] Implement `GroupRecord` with `key`.
+- [ ] Implement `GroupRecord` with `parent`.
+- [ ] Implement `GroupRecord` with `depth`.
+- [ ] Implement `GroupRecord` with exact active `subtree_len`.
+- [ ] Implement `GroupRecord` with `payload_start`.
+- [ ] Implement `GroupRecord` with `payload_len`.
+- [ ] Implement `GroupRecord` with `node_start`.
+- [ ] Implement `GroupRecord` with `node_len`.
+- [ ] Implement `GroupRecord` with aggregate `subtree_node_count`.
+- [ ] Implement `GroupRecord` with `anchor`.
+- [ ] Implement `GroupRecord` with `scope_id`.
+- [ ] Implement `GroupRecord` with `flags`.
+- [ ] Implement `GroupRecord` with `generation`.
+- [ ] Ensure `subtree_len` always means exact active group count and never physical extent including holes.
+- [ ] Implement `PayloadTable { records }`.
+- [ ] Implement `PayloadRecord` with `owner`.
+- [ ] Implement `PayloadRecord` with `anchor`.
+- [ ] Implement `PayloadRecord` with `type_id`.
+- [ ] Implement `PayloadRecord` with `kind`.
+- [ ] Implement `PayloadRecord` with `value`.
+- [ ] Implement `PayloadKind::Remember`.
+- [ ] Implement `PayloadKind::Param`.
+- [ ] Implement `PayloadKind::Return`.
+- [ ] Implement `PayloadKind::Effect`.
+- [ ] Implement `PayloadKind::Scope`.
+- [ ] Implement `PayloadKind::Internal`.
+- [ ] Keep remembered state in storage while leaving retain-vs-dispose lifecycle decisions to the composer.
+- [ ] Implement `NodeTable { records }`.
+- [ ] Implement `NodeRecord` with `owner`.
+- [ ] Implement `NodeRecord` with `node_id`.
+- [ ] Implement `NodeRecord` with `generation`.
+- [ ] Store node records in a dedicated node table instead of mixing them with groups and values.
+- [ ] Make each group own a range of directly emitted node records.
+- [ ] Keep aggregate subtree node count on groups for skip and attach operations.
+
+## SlotStorage V2 Trait
+
+- [ ] Replace the storage trait with semantic group operations.
+- [ ] Add `begin_group(&mut self, input: BeginGroupInput) -> GroupStart<Self::Group>`.
+- [ ] Add `finish_group_body(&mut self) -> FinishGroupResult`.
+- [ ] Add `end_group(&mut self)`.
+- [ ] Add `skip_group(&mut self) -> SkippedGroup`.
+- [ ] Add `detach_unvisited_children(&mut self) -> Vec<DetachedSubtree>`.
+- [ ] Add `restore_detached_at_cursor(&mut self, subtree: DetachedSubtree) -> RestoreResult<Self::Group>`.
+- [ ] Add `set_group_scope(&mut self, group: Self::Group, scope: ScopeId)`.
+- [ ] Add `begin_recompose_at_scope(&mut self, scope: ScopeId) -> Option<RecomposeStart<Self::Group>>`.
+- [ ] Add `end_recompose(&mut self)`.
+- [ ] Add `value_slot<T: 'static>(&mut self, init: impl FnOnce() -> T) -> Self::ValueSlot`.
+- [ ] Add `read_value<T: 'static>(&self, slot: Self::ValueSlot) -> &T`.
+- [ ] Add `read_value_mut<T: 'static>(&mut self, slot: Self::ValueSlot) -> &mut T`.
+- [ ] Add `write_value<T: 'static>(&mut self, slot: Self::ValueSlot, value: T)`.
+- [ ] Add `remember<T: 'static>(&mut self, init: impl FnOnce() -> T) -> Owned<T>`.
+- [ ] Add `record_node(&mut self, id: NodeId) -> NodeRecordResult`.
+- [ ] Add `nodes_in_current_group(&self) -> Vec<NodeId>`.
+- [ ] Add `reset(&mut self)`.
+- [ ] Add `validate(&self) -> Result<(), SlotInvariantError>`.
+- [ ] Add `debug_snapshot(&self) -> SlotDebugSnapshot`.
+- [ ] Remove `peek_node`.
+- [ ] Remove `advance_after_node_read`.
+- [ ] Remove `step_back`.
+- [ ] Remove `finalize_current_group() -> bool`.
+- [ ] Remove `flush` as an anchor-rebuild workaround.
+- [ ] If `flush` remains temporarily, make it a no-op or only apply queued structural edits instead of repairing dirty anchors from hacks.
+- [ ] Add `BeginGroupInput { key, restored }`.
+- [ ] Add `GroupStart { group, anchor, kind, scope_id }`.
+- [ ] Add `GroupStartKind::Inserted`.
+- [ ] Add `GroupStartKind::Reused`.
+- [ ] Add `GroupStartKind::Moved`.
+- [ ] Add `GroupStartKind::Restored`.
+- [ ] Make `Restored` mean composer-supplied detached subtree insertion rather than gap discovery.
+- [ ] Add `FinishGroupResult { detached_children, structure_changed, direct_nodes, subtree_nodes }`.
+
+## Writer Model
+
+- [ ] Route all mutation through a writer state rather than random helper methods that patch cursors.
+- [ ] Implement `WriterState { cursor, payload_cursor, node_cursor, stack }`.
+- [ ] Implement `Frame { group_index, parent, old_end, next_child, payload_start, payload_cursor, node_start, node_cursor, sibling_index }`.
+- [ ] Define each current frame as the state that decides whether the next child is reused, moved, restored, or inserted.
+- [ ] In `begin_group`, restore an explicitly supplied detached subtree before any active-table matching.
+- [ ] In `begin_group`, reuse the group at the expected direct-child position when parent and key match.
+- [ ] In `begin_group`, search later direct siblings for a move candidate when the expected child does not match.
+- [ ] In `begin_group`, insert a new group when there is no restore, reuse, or later-sibling move.
+- [ ] Constrain `find_later_sibling` to inspect only siblings of the current parent.
+- [ ] Ensure `find_later_sibling` never scans into grandchildren.
+- [ ] Ensure `find_later_sibling` never scans beyond the current parent range.
+- [ ] Ensure `find_later_sibling` never searches retained or detached groups.
+- [ ] Remove any fixed rescue-search budget from sibling lookup.
+- [ ] Use a linear parent-bounded scan for small sibling counts.
+- [ ] Build a lazy per-frame `SiblingIndex` for larger sibling ranges.
+- [ ] Build `SiblingIndex` from `[next_child, old_end)` and include only direct children.
+- [ ] Implement `finish_group_body` to detach unvisited old children.
+- [ ] Implement `finish_group_body` to close payloads for the current group.
+- [ ] Implement `finish_group_body` to close nodes for the current group.
+- [ ] Implement `finish_group_body` to recompute exact sizes.
+- [ ] Implement `finish_group_body` to return detached children to the composer without making retention decisions.
+- [ ] Implement `end_group` to pop the current frame.
+- [ ] Implement `end_group` to advance the parent cursor past the closed group.
+
+## Detach And Restore
+
+- [ ] Implement `DetachedSubtree { root_key, groups, payloads, nodes, root_nodes, scope_ids, anchors, generation }`.
+- [ ] Make detached subtrees own remembered payloads.
+- [ ] Ensure dropping a detached subtree disposes remembered values and effect state.
+- [ ] Implement `detach_subtree`.
+- [ ] Drain the exact group range for detach using `subtree_len`.
+- [ ] Extract payloads for detached groups during detach.
+- [ ] Extract nodes for detached groups during detach.
+- [ ] Mark detached anchors as detached during detach.
+- [ ] Mark detached scopes as detached during detach.
+- [ ] Repair indices after subtree removal.
+- [ ] Implement `restore_detached_at_cursor`.
+- [ ] Reparent the restored root to the current parent during restore.
+- [ ] Insert restored groups at the writer cursor.
+- [ ] Insert restored payloads during restore.
+- [ ] Insert restored nodes during restore.
+- [ ] Mark restored anchors as active during restore.
+- [ ] Mark restored scopes as active during restore.
+- [ ] Repair indices after subtree insertion.
+- [ ] Keep storage responsible for restoring records only.
+- [ ] Keep the composer responsible for scope reactivation and node reattachment after restore.
+
+## Composer-Owned Retention
+
+- [ ] Create `crates/cranpose-core/src/retention.rs`.
+- [ ] Implement `RetentionMode::DisposeWhenInactive`.
+- [ ] Implement `RetentionMode::RetainWhenInactive`.
+- [ ] Implement `RetainKey { parent_scope, key }`.
+- [ ] Implement `RetainedGroup { retain_key, subtree, dirty, retained_nodes, scope_ids }`.
+- [ ] Implement `RetentionManager { groups, nodes }`.
+- [ ] Add `retention: RefCell<RetentionManager>` to `ComposerCore`.
+- [ ] Add `scope_registry: RefCell<HashMap<ScopeId, RecomposeScope>>` to `ComposerCore`.
+- [ ] Add `current_group_options: RefCell<Vec<GroupOptionsFrame>>` to `ComposerCore`.
+- [ ] Extend `RecomposeOptions` with `retention: RetentionMode`.
+- [ ] Keep `RecomposeOptions::default()` set to `RetentionMode::DisposeWhenInactive`.
+- [ ] Make `cranpose_with_reuse` default to `RetentionMode::RetainWhenInactive` unless explicitly overridden.
+- [ ] Rewrite `Composer::with_group` around V2 group semantics.
+- [ ] Compute the group key in `with_group`.
+- [ ] Compute the retain key in `with_group`.
+- [ ] Take a retained subtree from the retention manager when present.
+- [ ] Call `begin_group` with an optional restored subtree.
+- [ ] Obtain or create the `RecomposeScope` for the started group.
+- [ ] Register the scope ID in `scope_registry`.
+- [ ] Write the scope ID back into slot storage with `set_group_scope`.
+- [ ] Apply `force_recompose`, `force_reuse`, and `Restored` behavior when preparing the scope.
+- [ ] Run the group body under scope observation.
+- [ ] Call `finish_group_body` after executing the body.
+- [ ] Retain or dispose returned detached children according to retention mode.
+- [ ] Pop the scope after body completion.
+- [ ] Mark the scope recomposed.
+- [ ] End the group in slot storage.
+- [ ] When a retained inactive scope is invalidated, do not attempt slot-table recomposition by anchor.
+- [ ] When a retained inactive scope is invalidated, mark the retained group dirty.
+- [ ] When a retained inactive scope is invalidated, optionally schedule the nearest active ancestor or root.
+- [ ] When a retained group is restored, call `scope.reactivate()`.
+- [ ] When a retained group is restored, call `scope.force_recompose()`.
+- [ ] Keep the current rule that inactive scopes mark invalid but do not enqueue active recomposition immediately.
+
+## Recomposition Entry
+
+- [ ] Implement `ScopeIndex { active, detached }`.
+- [ ] Resolve active recomposition through `ScopeIndex` instead of scanning the table.
+- [ ] Implement `begin_recompose_at_scope` by loading the active anchor from the scope index.
+- [ ] Resolve the active group through the anchor registry in `begin_recompose_at_scope`.
+- [ ] Start writer recomposition from the resolved group.
+- [ ] Return `None` from storage for detached scopes.
+- [ ] Make runtime or composer check the retention manager for detached scope recomposition.
+- [ ] Mark retained detached entries dirty instead of trying to recompose them through active storage.
+- [ ] Force recomposition later when the retained subtree is restored.
+
+## Node Lifecycle
+
+- [ ] Introduce `NodeLifecycle::Active`.
+- [ ] Introduce `NodeLifecycle::RetainedDetached`.
+- [ ] Introduce `NodeLifecycle::Disposed`.
+- [ ] Make `record_node(id)` record a node under the current group without overwriting a slot.
+- [ ] Make `record_node(id)` not require `peek_node`.
+- [ ] Make `record_node(id)` not require `step_back`.
+- [ ] Return `NodeRecordResult { reused, id }` from `record_node`.
+- [ ] When retaining a removed group, remove its root node IDs from parent child lists.
+- [ ] When retaining a removed group, do not call `applier.remove(node_id)`.
+- [ ] When retaining a removed group, optionally call `on_removed_from_parent` and `unmount` if detached nodes must become inactive for the renderer.
+- [ ] When retaining a removed group, mark its node IDs as retained in `RetentionManager`.
+- [ ] When restoring a retained group, record the existing node IDs again under the restored group.
+- [ ] When restoring a retained group, let parent diff reattach those existing node IDs.
+- [ ] When restoring a retained group, avoid creating new nodes unless the composable emits a genuinely different node type or key.
+- [ ] When disposing a removed group, remove each node from its parent.
+- [ ] When disposing a removed group, unmount each node.
+- [ ] When disposing a removed group, call `applier.remove(node_id)`.
+- [ ] When disposing a removed group, allow payload and effect drops.
+- [ ] Update parent diff so retained children are detached without removing applier nodes.
+- [ ] Update parent diff so non-retained children are removed and disposed.
+- [ ] Ensure retaining payloads while deleting nodes is impossible.
+
+## Keying Model
+
+- [ ] Make ordinary composable calls use `GroupKey { static_key: location_key(...), explicit_key: None, ordinal }`.
+- [ ] Use sibling ordinal to disambiguate duplicate unkeyed sibling calls with the same static key.
+- [ ] Make explicit keyed content use `GroupKey { static_key: location_key(...), explicit_key: Some(hash_key(user_key)), ordinal: 0 }`.
+- [ ] Make item identity be source-location plus user key instead of only the user key.
+- [ ] Accept `u64` collision risk initially because current Cranpose already hashes to `u64`.
+- [ ] Leave room for future `Key128` or stronger key models.
+- [ ] Add optional debug collision info using source file, line, and column metadata.
+
+## Backend Strategy
+
+- [ ] Choose backend strategy Option A by simplifying to `SlotBackendKind::Default` and `SlotBackend::Default(SlotTable)`, or choose Option B by preserving the enum surface but routing every backend kind to V2 `SlotTable`.
+- [ ] If Option B is chosen, make `SlotBackend::new(_kind)` always construct the V2 table backend.
+- [ ] Do not preserve old backend internals.
+
+## Invariants And Validation
+
+- [ ] Implement `SlotTable::validate()`.
+- [ ] Call `validate()` in debug tests after each operation.
+- [ ] Validate that every active group index is valid.
+- [ ] Validate that root groups have `parent = None`.
+- [ ] Validate that child groups point to a parent whose range contains them.
+- [ ] Validate that `subtree_len` exactly spans descendants in preorder.
+- [ ] Validate that sibling groups are contiguous inside their parent range.
+- [ ] Validate that no child range overlaps another child range.
+- [ ] Validate that payload ranges stay within `PayloadTable`.
+- [ ] Validate that payload owner anchors resolve to active groups.
+- [ ] Validate that node ranges stay within `NodeTable`.
+- [ ] Validate that node owner anchors resolve to active groups.
+- [ ] Validate that the scope index maps every active `scope_id` to the correct group anchor.
+- [ ] Validate that the anchor registry resolves active anchors and rejects invalidated anchors.
+- [ ] Validate that detached subtrees are not present in active `groups`.
+- [ ] Validate that writer stack frames are balanced and within active group ranges.
+- [ ] Validate that no two active groups under the same parent share the same full `GroupKey` unless their ordinal differs.
+- [ ] Validate that retained subtree roots have no active parent.
+- [ ] Return structured `SlotInvariantError::InvalidParent`.
+- [ ] Return structured `SlotInvariantError::BadSubtreeLen`.
+- [ ] Return structured `SlotInvariantError::PayloadOutOfRange`.
+- [ ] Return structured `SlotInvariantError::ScopeIndexMismatch`.
+- [ ] Return structured `SlotInvariantError::AnchorMismatch`.
+- [ ] Return structured `SlotInvariantError::WriterFrameOutOfBounds`.
+- [ ] Return structured `SlotInvariantError::DuplicateSiblingKey`.
+
+## Unit Tests For Slot Storage
+
+- [ ] Add `crates/cranpose-core/src/slot/tests.rs`.
+- [ ] Test that an empty table validates.
+- [ ] Test that first composition inserts root, group, value, and node.
+- [ ] Test that a second identical composition reuses groups and values.
+- [ ] Test that removing a conditional child returns `DetachedSubtree`.
+- [ ] Test that a default-removed child is disposed when the composer chooses dispose.
+- [ ] Test that a retained child restores its remembered value.
+- [ ] Test that a restored child gets `GroupStartKind::Restored`.
+- [ ] Test that keyed sibling reorder preserves values.
+- [ ] Test that unkeyed sibling ordinal preserves positional order semantics.
+- [ ] Test that duplicate explicit keys under the same parent either debug-fail or receive deterministic ordinal handling.
+- [ ] Test that nested detach and restore preserve nested payloads and scopes.
+- [ ] Test that active scope lookup behaves as O(1) indexed lookup rather than scan-dependent behavior.
+- [ ] Test that a detached scope is not recomposed through active-table entry.
+- [ ] Test that moving a group updates anchors.
+- [ ] Test that deleting a group invalidates anchors.
+- [ ] Test that value type mismatch panics or returns a typed error consistently.
+- [ ] Test that `skip_group` advances by exact subtree size.
+- [ ] Test that the node list for a skipped group is exact and stable.
+- [ ] Test that retained nodes are not disposed.
+- [ ] Test that disposed nodes are removed.
+
+## Composer Integration Tests
+
+- [ ] Test that `remember` survives normal recomposition.
+- [ ] Test that `remember` resets when a conditional branch disappears with default retention.
+- [ ] Test that `remember` survives when a branch uses retain or reuse options.
+- [ ] Test that switching tabs preserves tab state only when retention is requested.
+- [ ] Test that switching tabs disposes state when retention is not requested.
+- [ ] Test that list item reorder with explicit keys preserves item state.
+- [ ] Test that list item reorder without explicit keys follows positional identity.
+- [ ] Test that invalidating an active scope recomposes that scope.
+- [ ] Test that invalidating an inactive retained scope marks it dirty and recomposes on restore.
+- [ ] Test that `DisposableEffect` cleanup runs on dispose but not on retain.
+- [ ] Test that retained node IDs are reused on restore.
+- [ ] Test that disposed node IDs are not reused unless the applier explicitly reuses IDs.
+- [ ] Test that subcompose keeps per-slot compositions and works with V2 storage.
+
+## Property And Model Tests
+
+- [ ] Add a model-test module driven by generated operations.
+- [ ] Cover operations for begin group.
+- [ ] Cover operations for end group.
+- [ ] Cover operations for remember value.
+- [ ] Cover operations for record node.
+- [ ] Cover operations for conditional include and exclude.
+- [ ] Cover operations for keyed sibling moves.
+- [ ] Cover operations for retain child.
+- [ ] Cover operations for dispose child.
+- [ ] Cover operations for restore retained child.
+- [ ] Cover operations for skip group.
+- [ ] Compare `SlotTable` behavior against a simple reference tree model.
+- [ ] Assert that the active tree equals the model tree.
+- [ ] Assert that remembered values appear under the same retained identity in the model and implementation.
+- [ ] Assert that there are no duplicate active anchors.
+- [ ] Assert that no active group also exists in the retention manager.
+- [ ] Assert that all invariants hold after every operation.
+- [ ] Use `proptest` if acceptable, or deterministic random tests with a fixed seed otherwise.
+
+## Phase 0 - Prepare Branch And Safety Net
+
+- [ ] Create a rewrite branch.
+- [ ] Run the current tests to capture baseline failures and pass count.
+- [ ] Add `docs/slot_table_v2.md` as a copy of the design.
+- [ ] Add a failing placeholder test `slot_v2_empty_table_validates`.
+
+## Phase 1 - Define V2 Types
+
+- [ ] Create `src/slot/mod.rs`.
+- [ ] Create `src/slot/types.rs`.
+- [ ] Create `src/slot_storage.rs`.
+- [ ] Implement `GroupKey`.
+- [ ] Implement `GroupId`.
+- [ ] Implement `ValueSlotId`.
+- [ ] Implement `GroupAnchor`.
+- [ ] Implement `GroupStartKind`.
+- [ ] Implement `BeginGroupInput`.
+- [ ] Implement `GroupStart`.
+- [ ] Implement `FinishGroupResult`.
+- [ ] Implement `DetachedSubtree`.
+- [ ] Implement `SlotInvariantError`.
+- [ ] Implement the V2 `SlotStorage` trait.
+- [ ] Do not implement old trait compatibility.
+
+## Phase 2 - Implement Core Tables
+
+- [ ] Create `src/slot/table.rs`.
+- [ ] Create `src/slot/groups.rs`.
+- [ ] Create `src/slot/payload.rs`.
+- [ ] Create `src/slot/nodes.rs`.
+- [ ] Create `src/slot/anchors.rs`.
+- [ ] Create `src/slot/scope_index.rs`.
+- [ ] Create `src/slot/validate.rs`.
+- [ ] Implement `SlotTable::new`.
+- [ ] Implement root and child group insertion.
+- [ ] Implement value slots.
+- [ ] Implement node records.
+- [ ] Implement exact `subtree_len`.
+- [ ] Implement validation.
+- [ ] Make the empty-table validation test pass.
+- [ ] Make the simple group, value, and node composition test pass.
+
+## Phase 3 - Implement Writer Traversal
+
+- [ ] Create `src/slot/writer.rs`.
+- [ ] Implement the writer stack.
+- [ ] Implement `begin_group` insert and reuse.
+- [ ] Implement `end_group`.
+- [ ] Implement `finish_group_body` without retention.
+- [ ] Implement `skip_group`.
+- [ ] Make identical recomposition reuse values.
+- [ ] Make skipping advance exactly.
+- [ ] Make child removal return a detached subtree.
+
+## Phase 4 - Implement Sibling Moves
+
+- [ ] Implement parent-bounded direct-child scan.
+- [ ] Implement lazy `SiblingIndex` for larger sibling ranges.
+- [ ] Implement `move_subtree` using `Vec::splice` or drain and insert.
+- [ ] Implement anchor repair after subtree moves.
+- [ ] Make keyed sibling reorder preserve state.
+- [ ] Ensure nested children are not searched or moved as siblings.
+- [ ] Make anchors survive sibling moves.
+
+## Phase 5 - Implement Detach And Restore
+
+- [ ] Implement `detach_subtree`.
+- [ ] Implement `detach_range`.
+- [ ] Implement `restore_detached_at_cursor`.
+- [ ] Implement payload extraction and insertion.
+- [ ] Implement node extraction and insertion.
+- [ ] Implement scope active and detached index updates.
+- [ ] Implement anchor active, detached, and invalidated states.
+- [ ] Make conditional removal return a valid detached subtree.
+- [ ] Make restore recreate the exact active subtree.
+- [ ] Make nested restore preserve payloads.
+- [ ] Make disposed subtree drop payloads and invalidate anchors.
+
+## Phase 6 - Composer Retention Manager
+
+- [ ] Create `src/retention.rs`.
+- [ ] Implement `RetentionMode`.
+- [ ] Implement `RetainKey`.
+- [ ] Implement `RetainedGroup`.
+- [ ] Implement `RetentionManager`.
+- [ ] Implement retained node tracking.
+- [ ] Implement dirty retained scope tracking.
+- [ ] Add `retention` to `ComposerCore`.
+- [ ] Add `scope_registry` to `ComposerCore`.
+- [ ] Update `pending_scope_options` to include retention mode.
+- [ ] Make default conditional branch disposal pass.
+- [ ] Make retain mode preserve remembered state.
+- [ ] Make invalid retained scope recompose when restored.
+
+## Phase 7 - Update `Composer::with_group`
+
+- [ ] Rewrite `with_group` around V2 semantics.
+- [ ] Compute the group key.
+- [ ] Compute the retain key.
+- [ ] Take retained subtree if present.
+- [ ] Call `begin_group` with an optional restored subtree.
+- [ ] Obtain or create the remembered `RecomposeScope`.
+- [ ] Register the scope ID.
+- [ ] Apply `force_recompose`, `force_reuse`, and `Restored` behavior.
+- [ ] Run the body under observer.
+- [ ] Call `finish_group_body`.
+- [ ] Retain or dispose returned children.
+- [ ] Pop the scope.
+- [ ] End the group.
+- [ ] Delete all use of `restored_from_gap`.
+
+## Phase 8 - Update Node And Apply Logic
+
+- [ ] Update parent diff and removal logic for retained nodes.
+- [ ] Ensure retained nodes are detached instead of removed from the applier.
+- [ ] Ensure disposed nodes are removed.
+- [ ] Ensure restored retained nodes can be reattached by existing parent diff.
+- [ ] Make retained tab nodes avoid recreation.
+- [ ] Make disposed conditional nodes get removed.
+- [ ] Make moving keyed nodes reorder rather than destroy.
+
+## Phase 9 - Update Subcompose
+
+- [ ] Keep the existing architectural idea of per-slot compositions and policy-owned reuse.
+- [ ] Update `slot_compositions` to use V2 `SlotTable`.
+- [ ] Update active and reusable slot registration to mark V2 retention where needed.
+- [ ] Update cleanup to dispose compositions that are not active or reusable.
+- [ ] Make subcompose basic tests pass.
+- [ ] Make lazy list scroll reuse tests pass.
+- [ ] Make content-type-compatible reuse tests pass.
+- [ ] Make precompose activation tests pass.
+
+## Phase 10 - Remove Old Implementation
+
+- [ ] Remove `Slot::Gap`.
+- [ ] Remove `last_start_was_gap`.
+- [ ] Remove `has_gap_children`.
+- [ ] Remove `mark_range_as_gaps`.
+- [ ] Remove old `trim_to_cursor` behavior.
+- [ ] Remove `SEARCH_BUDGET`.
+- [ ] Remove `EXTENDED_SEARCH_BUDGET`.
+- [ ] Remove `SHRINK_MIN_DROP`.
+- [ ] Remove `SHRINK_RATIO`.
+- [ ] Remove `force_gap_here`.
+- [ ] Remove `ensure_gap_at_local`.
+- [ ] Remove `find_right_gap_run`.
+- [ ] Remove `step_back`.
+- [ ] Remove `advance_after_node_read`.
+- [ ] Search the repo for the removed names and delete all remaining uses.
+
+## Phase 11 - Documentation And Debug Tools
+
+- [ ] Add `SlotTable::debug_snapshot()`.
+- [ ] Add `SlotDebugSnapshot` with active groups, retained counts, anchors, and scopes.
+- [ ] Add `COMPOSE_DEBUG_SLOT_TABLE=1` dump support.
+- [ ] Add documentation explaining retention versus disposal.
+
+## Phase 12 - Performance Pass
+
+- [ ] Only begin the performance pass after correctness tests are green.
+- [ ] Reduce unnecessary `Vec` cloning.
+- [ ] Use `SmallVec` for small node lists and payload lists.
+- [ ] Build the sibling index lazily.
+- [ ] Benchmark keyed list reorder.
+- [ ] Benchmark tab switching.
+- [ ] Benchmark subcompose scrolling.
+- [ ] Consider chunked group storage if large `Vec::splice` costs show up hot.
+- [ ] Do not reintroduce semantic gaps for performance.
+
+## Success Criteria
+
+- [ ] There is no `Slot::Gap` equivalent carrying group metadata.
+- [ ] There is no `restored_from_gap` API.
+- [ ] There are no rescue scan budgets.
+- [ ] Group sizes are exact active subtree sizes.
+- [ ] Scope lookup is indexed.
+- [ ] Removed children are returned as `DetachedSubtree` objects.
+- [ ] The composer decides retain versus dispose.
+- [ ] Retained state survives restore.
+- [ ] Default removed state disposes cleanly.
+- [ ] Keyed reorder preserves state and nodes.
+- [ ] Unkeyed reorder follows positional semantics.
+- [ ] Subcompose still works with per-slot compositions.
+- [ ] Debug `validate()` passes after every core test operation.
+- [ ] The design is explainable without "gap children", "preserved physical extent", or "extended rescue search" special cases.
+
+## Hard Rules
+
+- [ ] Do not patch the current gap algorithm.
+- [ ] Do not preserve group metadata in free storage.
+- [ ] Do not scan the whole table to find a group by key.
+- [ ] Do not scan the whole table to find a scope.
+- [ ] Do not keep stale group lengths.
+- [ ] Do not expose cursor repair APIs.
+- [ ] Do not make retention automatic for every conditional branch.
+- [ ] Do not dispose retained nodes.
+- [ ] Do not retain disposed payloads.
+- [ ] Do not optimize by weakening invariants.
+
+## Minimal First Passing Implementation
+
+- [ ] Allow plain `Vec<GroupRecord>`.
+- [ ] Allow plain `Vec<PayloadRecord>`.
+- [ ] Allow subtree movement by drain and insert.
+- [ ] Allow O(number of direct siblings) keyed search.
+- [ ] Allow no chunking in the first passing version.
+- [ ] Allow no packed arrays in the first passing version.
+- [ ] Allow no custom allocator in the first passing version.
+- [ ] Keep validation everywhere in tests.
+- [ ] Do not allow semantic gaps.
+- [ ] Do not allow stale subtree lengths.
+- [ ] Do not allow global key rescue scans.
+- [ ] Do not allow storage-owned retention decisions.
+
+## Future Optimizations
+
+- [ ] Replace direct `Vec` subtree moves with a chunked sequence.
+- [ ] Pack `GroupRecord` fields into compact arrays.
+- [ ] Use gap-relative anchors internally while keeping semantics unchanged.
+- [ ] Add retained subtree LRU limits.
+- [ ] Add debug instrumentation for retained memory.
+- [ ] Add collision-resistant keys in debug and profile builds.
+- [ ] Add specialized lazy-list retention policy.
+- [ ] Support allocator-backed tables for no-std if still desired.

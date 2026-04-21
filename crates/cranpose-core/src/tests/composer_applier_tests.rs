@@ -122,6 +122,40 @@ fn new_parent_attaches_children_immediately_without_sync_children() {
 }
 
 #[test]
+fn subcompose_in_compacts_applier_after_large_teardown() {
+    let (handle, _runtime) = runtime_handle();
+    let mut slots = SlotTable::default();
+    let mut applier = test_applier();
+    let (composer, slots_host, applier_host) =
+        setup_composer(&mut slots, &mut applier, handle.clone(), None);
+    let subcompose_slots = Rc::new(SlotsHost::new(SlotTable::new()));
+    const NODE_COUNT: usize = 17_000;
+
+    composer
+        .subcompose_in(&subcompose_slots, None, |composer| {
+            composer.with_group(location_key(file!(), line!(), column!()), |composer| {
+                for _ in 0..NODE_COUNT {
+                    let _ = composer.emit_node(|| TestDummyNode);
+                }
+            });
+        })
+        .expect("initial subcompose_in render");
+
+    composer
+        .subcompose_in(&subcompose_slots, None, |_composer| {})
+        .expect("teardown subcompose_in render");
+
+    drop(composer);
+    teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
+
+    assert_eq!(
+        applier.tombstone_count(),
+        0,
+        "non-Composition slot passes must compact the applier after large teardowns",
+    );
+}
+
+#[test]
 fn reused_parent_with_existing_children_still_defers_to_sync_children() {
     let (handle, _runtime) = runtime_handle();
     let mut slots = SlotTable::default();
