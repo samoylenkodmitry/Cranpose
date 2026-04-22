@@ -55,6 +55,20 @@ advance_after_node_read cursor repair
 scope lookup by scanning all slots
 ```
 
+### Retention versus disposal
+
+Retention and disposal are different policies and the runtime must keep them separate.
+
+- Slot storage owns structure only: active groups, remembered payload records, node records, anchors, scope lookup, detach, and restore.
+- The composer owns lifecycle policy: whether a removed subtree should be dropped immediately or kept while inactive.
+- A removed subtree always leaves active storage as a `DetachedSubtree`.
+- Disposal means the subtree is dropped, remembered payloads are released, effect state is torn down, and nodes are removed from the applier.
+- Retention means the detached subtree is kept in the retention manager, remembered payloads stay alive, and existing node identities are preserved for later restore.
+- Restoring a retained subtree is structural: storage reinserts the groups, payloads, nodes, anchors, and scope lookups into the active table.
+- Reattachment policy stays outside storage: the composer and applier decide how preserved nodes become attached again.
+
+This is the core boundary that prevents storage internals from quietly encoding semantic lifecycle decisions.
+
 ---
 
 ## 2. Source snapshot and current-state observations
@@ -358,10 +372,16 @@ Each group owns a range of directly emitted node records. The group also stores 
 
 ## 8. SlotStorage V2 trait
 
-Replace the trait with semantic operations.
+The current rewrite keeps the trait internal to the crate and implements it on
+the active `SlotWriteSession`. The goal is still the same: the composer speaks
+in group/value/node operations, not table-repair hacks.
+
+Detached-child draining stays folded into `finish_group_body`, restore stays
+folded into `begin_group(BeginGroupInput { restored: ... })`, and reset stays
+outside the trait on pass/host state.
 
 ```rust
-pub trait SlotStorage {
+pub(crate) trait SlotStorage {
     type Group: Copy + Eq;
     type ValueSlot: Copy + Eq;
 
@@ -369,15 +389,11 @@ pub trait SlotStorage {
     fn begin_group(&mut self, input: BeginGroupInput) -> GroupStart<Self::Group>;
     fn finish_group_body(&mut self) -> FinishGroupResult;
     fn end_group(&mut self);
-    fn skip_group(&mut self) -> SkippedGroup;
-
-    // Explicit detach / restore
-    fn detach_unvisited_children(&mut self) -> Vec<DetachedSubtree>;
-    fn restore_detached_at_cursor(&mut self, subtree: DetachedSubtree) -> RestoreResult<Self::Group>;
+    fn skip_group(&mut self);
 
     // Scopes
     fn set_group_scope(&mut self, group: Self::Group, scope: ScopeId);
-    fn begin_recompose_at_scope(&mut self, scope: ScopeId) -> Option<RecomposeStart<Self::Group>>;
+    fn begin_recompose_at_scope(&mut self, scope: ScopeId) -> Option<Self::Group>;
     fn end_recompose(&mut self);
 
     // Values
@@ -388,11 +404,10 @@ pub trait SlotStorage {
     fn remember<T: 'static>(&mut self, init: impl FnOnce() -> T) -> Owned<T>;
 
     // Nodes
-    fn record_node(&mut self, id: NodeId) -> NodeRecordResult;
+    fn record_node(&mut self, id: NodeId, generation: u32);
     fn nodes_in_current_group(&self) -> Vec<NodeId>;
 
-    // Lifecycle/debug
-    fn reset(&mut self);
+    // Debug/validation
     fn validate(&self) -> Result<(), SlotInvariantError>;
     fn debug_snapshot(&self) -> SlotDebugSnapshot;
 }
@@ -639,9 +654,7 @@ pub struct RetainKey {
 }
 
 pub struct RetainedGroup {
-    pub retain_key: RetainKey,
     pub subtree: DetachedSubtree,
-    pub dirty: bool,
     pub retained_nodes: Vec<NodeId>,
     pub scope_ids: Vec<ScopeId>,
 }
@@ -649,6 +662,7 @@ pub struct RetainedGroup {
 pub struct RetentionManager {
     groups: HashMap<RetainKey, RetainedGroup>,
     nodes: HashSet<NodeId>,
+    scopes: HashMap<ScopeId, RetainKey>,
 }
 ```
 
@@ -659,7 +673,7 @@ pub(crate) struct ComposerCore {
     // existing fields
     retention: RefCell<RetentionManager>,
     scope_registry: RefCell<HashMap<ScopeId, RecomposeScope>>,
-    current_group_options: RefCell<Vec<GroupOptionsFrame>>,
+    pending_scope_options: RefCell<Option<RecomposeOptions>>,
 }
 ```
 
@@ -741,7 +755,7 @@ pub fn with_group<R>(&self, key: GroupKey, f: impl FnOnce(&Composer) -> R) -> R 
 When a retained inactive scope is invalidated:
 
 - do not attempt slot-table recomposition by anchor;
-- mark the retained group dirty;
+- keep the `RecomposeScope` invalid while it remains inactive;
 - optionally schedule the nearest active ancestor/root;
 - when restored, call `scope.reactivate()` and `scope.force_recompose()`.
 
@@ -758,7 +772,6 @@ Use a real index:
 ```rust
 pub struct ScopeIndex {
     active: HashMap<ScopeId, GroupAnchor>,
-    detached: HashMap<ScopeId, RetainKey>,
 }
 ```
 
@@ -777,7 +790,7 @@ Detached recomposition:
 
 - storage returns `None` for detached scopes;
 - runtime/composer checks retention manager;
-- retained entry is marked dirty;
+- the inactive `RecomposeScope` remains invalid while detached;
 - restore later forces recomposition.
 
 Slot storage must not scan all groups for a scope.
@@ -1016,7 +1029,7 @@ Required behavior tests:
 6. list item reorder with explicit keys preserves item state.
 7. list item reorder without explicit keys follows positional identity.
 8. invalidating active scope recomposes that scope.
-9. invalidating inactive retained scope marks dirty and recomposes on restore.
+9. invalidating inactive retained scope stays invalid and recomposes on restore.
 10. `DisposableEffect` cleanup runs on dispose but not on retain.
 11. retained node IDs are reused on restore.
 12. disposed node IDs are not reused unless applier explicitly reuses IDs.
@@ -1179,7 +1192,7 @@ Implement:
 - `RetainedGroup`;
 - `RetentionManager`;
 - retained node set;
-- dirty retained scope tracking.
+- inactive retained-scope invalidation tracking.
 
 Update `ComposerCore`:
 
@@ -1436,4 +1449,3 @@ After V2 is correct:
 6. Add collision-resistant keys in debug/profile builds.
 7. Add specialized lazy-list retention policy.
 8. Support no-std allocator-backed tables if still desired.
-

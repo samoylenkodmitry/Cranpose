@@ -42,8 +42,8 @@ pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType, Modifiers};
 
 #[cfg(any(test, feature = "test-support"))]
 use cranpose_core::{
-    debug_recompose_scope_registry_stats, slot_table::SlotTableDebugStats, MemoryApplierDebugStats,
-    RecomposeScopeRegistryDebugStats,
+    debug_recompose_scope_registry_stats, MemoryApplierDebugStats,
+    RecomposeScopeRegistryDebugStats, SlotTableDebugStats,
 };
 #[cfg(any(test, feature = "test-support"))]
 use cranpose_core::{

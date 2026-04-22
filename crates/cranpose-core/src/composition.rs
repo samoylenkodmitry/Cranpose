@@ -189,7 +189,7 @@ impl<A: Applier + 'static> Composition<A> {
             let (root, commands, side_effects, compact_applier) = composer.install(|composer| {
                 let (_, outcome) = composer.with_slot_host_pass(
                     Rc::clone(&self.slots),
-                    crate::slot_table::SlotPassMode::Compose,
+                    crate::slot::SlotPassMode::Compose,
                     |composer| composer.with_group(key, |_| content()),
                 );
                 let root = composer.root();
@@ -403,7 +403,7 @@ impl<A: Applier + 'static> Composition<A> {
                         for (host, scopes) in scope_groups.into_iter() {
                             let (_, outcome) = composer.with_slot_host_pass(
                                 host,
-                                crate::slot_table::SlotPassMode::Recompose,
+                                crate::slot::SlotPassMode::Recompose,
                                 |composer| {
                                     for scope in &scopes {
                                         composer.recranpose_group(scope);

@@ -19,7 +19,7 @@ impl Composer {
         make_node: impl FnOnce(&mut dyn Applier) -> EmittedNode,
     ) -> NodeId {
         // Peek at the slot without advancing cursor
-        let (existing_id, type_matches, gen_matches) = {
+        let (existing_id, existing_generation, type_matches, gen_matches) = {
             if let Some((id, slot_gen)) =
                 self.with_slot_session_mut(|slots| slots.current_node_record())
             {
@@ -29,16 +29,15 @@ impl Composer {
                     Ok(node) => node.as_any_mut().downcast_ref::<N>().is_some(),
                     Err(_) => false,
                 };
-                (Some(id), type_ok, gen_ok)
+                (Some(id), Some(slot_gen), type_ok, gen_ok)
             } else {
-                (None, false, false)
+                (None, None, false, false)
             }
         };
 
         // If we have a matching node with correct generation, advance cursor and reuse it
         if let Some(id) = existing_id {
             if type_matches && gen_matches {
-                self.core.last_node_reused.set(Some(true));
                 let scope_debug = self
                     .current_recranpose_scope()
                     .map(|scope| (scope.id(), debug_scope_label(scope.id())))
@@ -50,7 +49,14 @@ impl Composer {
                     scope_debug.0,
                     scope_debug.1,
                 );
-                self.with_slot_session_mut(|slots| slots.consume_reused_node());
+                let slot_gen =
+                    existing_generation.expect("reused node must keep its slot generation");
+                let recorded = self.with_slot_session_mut(|slots| slots.record_node(id, slot_gen));
+                debug_assert!(
+                    recorded.reused && recorded.id == id,
+                    "reused node recording must keep the same node identity"
+                );
+                self.core.last_node_reused.set(Some(recorded.reused));
 
                 self.commands_mut().push(Command::update_node::<N>(id));
                 self.attach_to_parent(id);
@@ -98,7 +104,6 @@ impl Composer {
             let gen = applier.node_generation(id);
             (id, gen)
         };
-        self.core.last_node_reused.set(Some(false));
         let scope_debug = self
             .current_recranpose_scope()
             .map(|scope| (scope.id(), debug_scope_label(scope.id())))
@@ -112,9 +117,12 @@ impl Composer {
             scope_debug.0,
             scope_debug.1,
         );
-        {
-            self.with_slot_session_mut(|slots| slots.record_node(id, gen));
-        }
+        let recorded = self.with_slot_session_mut(|slots| slots.record_node(id, gen));
+        debug_assert!(
+            !recorded.reused && recorded.id == id,
+            "fresh or replacement node recording must report a non-reused node"
+        );
+        self.core.last_node_reused.set(Some(recorded.reused));
         self.commands_mut().push(Command::MountNode { id });
         self.attach_to_parent(id);
         id

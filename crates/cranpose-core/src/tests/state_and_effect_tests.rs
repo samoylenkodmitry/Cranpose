@@ -49,6 +49,37 @@ fn subcompose_reuses_nodes_across_calls() {
     }
 }
 
+type CapturedSubcomposeSlot = (SlotId, Owned<i32>, NodeId);
+type SubcomposePassResult = (Vec<CapturedSubcomposeSlot>, Vec<NodeId>);
+
+fn run_subcompose_pass(
+    slots: &mut SlotTable,
+    applier: &mut MemoryApplier,
+    state: &mut SubcomposeState,
+    handle: &RuntimeHandle,
+    active: &[(SlotId, i32)],
+) -> SubcomposePassResult {
+    let (composer, slots_host, applier_host) = setup_composer(slots, applier, handle.clone(), None);
+    composer.set_phase(Phase::Measure);
+    state.begin_pass();
+
+    let mut captured = Vec::with_capacity(active.len());
+    for &(slot_id, init) in active {
+        let ((value, node_id), nodes) = composer.subcompose(state, slot_id, |composer| {
+            let value = composer.remember(|| init);
+            let node_id = composer.emit_node(|| TestDummyNode);
+            (value, node_id)
+        });
+        assert_eq!(nodes, vec![node_id]);
+        captured.push((slot_id, value, node_id));
+    }
+
+    let disposed = state.finish_pass();
+    drop(composer);
+    teardown_composer(slots, applier, slots_host, applier_host);
+    (captured, disposed)
+}
+
 #[test]
 fn apply_pending_commands_makes_subcomposed_nodes_available() {
     let (handle, _runtime) = runtime_handle();
@@ -76,6 +107,108 @@ fn apply_pending_commands_makes_subcomposed_nodes_available() {
 
     drop(composer);
     teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
+}
+
+#[test]
+fn subcompose_keeps_per_slot_compositions_with_v2_slot_tables() {
+    let (handle, _runtime) = runtime_handle();
+    let mut slots = SlotTable::default();
+    let mut applier = test_applier();
+    let mut state = SubcomposeState::default();
+    let slot_one = SlotId::new(1);
+    let slot_two = SlotId::new(2);
+
+    let (first_pass, disposed) = run_subcompose_pass(
+        &mut slots,
+        &mut applier,
+        &mut state,
+        &handle,
+        &[(slot_one, 10), (slot_two, 20)],
+    );
+    assert!(disposed.is_empty());
+
+    let first_slot_one = first_pass
+        .iter()
+        .find(|(slot_id, _, _)| *slot_id == slot_one)
+        .map(|(_, value, node_id)| (value.clone(), *node_id))
+        .expect("slot one after first subcompose pass");
+    let first_slot_two = first_pass
+        .iter()
+        .find(|(slot_id, _, _)| *slot_id == slot_two)
+        .map(|(_, value, node_id)| (value.clone(), *node_id))
+        .expect("slot two after first subcompose pass");
+    first_slot_one.0.replace(101);
+    first_slot_two.0.replace(202);
+
+    let (second_pass, disposed) = run_subcompose_pass(
+        &mut slots,
+        &mut applier,
+        &mut state,
+        &handle,
+        &[(slot_two, 20)],
+    );
+    assert!(disposed.is_empty());
+    let second_slot_two = second_pass
+        .iter()
+        .find(|(slot_id, _, _)| *slot_id == slot_two)
+        .map(|(_, value, node_id)| (value.clone(), *node_id))
+        .expect("slot two after second subcompose pass");
+    assert_eq!(
+        second_slot_two.0.with(|value| *value),
+        202,
+        "each subcomposed slot must keep its own remembered state when another slot goes inactive",
+    );
+    assert_eq!(
+        second_slot_two.1, first_slot_two.1,
+        "an active subcomposed slot must keep reusing its node identity across passes",
+    );
+    assert_eq!(state.active_slots_count(), 1);
+    assert_eq!(state.reusable_slots_count(), 1);
+    assert!(
+        state.debug_slot_table_groups_for_slot(slot_one).is_some(),
+        "inactive reusable slots must keep their dedicated slot table",
+    );
+    assert!(
+        state.debug_slot_table_groups_for_slot(slot_two).is_some(),
+        "active subcomposed slots must keep their dedicated slot table",
+    );
+
+    let (third_pass, disposed) = run_subcompose_pass(
+        &mut slots,
+        &mut applier,
+        &mut state,
+        &handle,
+        &[(slot_two, 20), (slot_one, 10)],
+    );
+    assert!(disposed.is_empty());
+    let third_slot_one = third_pass
+        .iter()
+        .find(|(slot_id, _, _)| *slot_id == slot_one)
+        .map(|(_, value, node_id)| (value.clone(), *node_id))
+        .expect("slot one after restoring subcompose pass");
+    let third_slot_two = third_pass
+        .iter()
+        .find(|(slot_id, _, _)| *slot_id == slot_two)
+        .map(|(_, value, node_id)| (value.clone(), *node_id))
+        .expect("slot two after restoring subcompose pass");
+    assert_eq!(
+        third_slot_one.0.with(|value| *value),
+        101,
+        "subcompose must restore remembered state by slot identity rather than by call order",
+    );
+    assert_eq!(
+        third_slot_two.0.with(|value| *value),
+        202,
+        "reordering subcompose calls must not swap remembered state between slot tables",
+    );
+    assert_eq!(
+        third_slot_one.1, first_slot_one.1,
+        "restoring a reusable subcomposed slot must reuse its original node identity",
+    );
+    assert_eq!(
+        third_slot_two.1, first_slot_two.1,
+        "reordered active subcompose slots must keep their original node identities",
+    );
 }
 
 #[test]
@@ -1164,7 +1297,7 @@ fn slot_table_remember_replaces_mismatched_type() {
     let group_key = location_key(file!(), line!(), column!());
 
     {
-        state.reset_for_pass(&slots, crate::slot_table::SlotPassMode::Compose);
+        state.reset_for_pass(&slots, crate::slot::SlotPassMode::Compose);
         begin_test_group(&mut slots, &mut state, group_key);
         let value = remember_test_value(&mut slots, &mut state, || 42i32);
         assert_eq!(value.with(|value| *value), 42);
@@ -1172,7 +1305,7 @@ fn slot_table_remember_replaces_mismatched_type() {
     }
 
     {
-        state.reset_for_pass(&slots, crate::slot_table::SlotPassMode::Compose);
+        state.reset_for_pass(&slots, crate::slot::SlotPassMode::Compose);
         begin_test_group(&mut slots, &mut state, group_key);
         let value = remember_test_value(&mut slots, &mut state, || "updated");
         assert_eq!(value.with(|&value| value), "updated");
@@ -1180,7 +1313,7 @@ fn slot_table_remember_replaces_mismatched_type() {
     }
 
     {
-        state.reset_for_pass(&slots, crate::slot_table::SlotPassMode::Compose);
+        state.reset_for_pass(&slots, crate::slot::SlotPassMode::Compose);
         begin_test_group(&mut slots, &mut state, group_key);
         let value = remember_test_value(&mut slots, &mut state, || "should not run");
         assert_eq!(value.with(|&value| value), "updated");

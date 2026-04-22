@@ -21,6 +21,22 @@ fn reset_snapshot_runtime() -> TestRuntimeGuard {
     reset_runtime_for_tests()
 }
 
+#[test]
+fn location_key_debug_registry_detects_collisions() {
+    clear_location_key_registry_for_test();
+    register_location_key_debug_info_for_test(7, "first.rs", 10, 20);
+
+    let panic = std::panic::catch_unwind(|| {
+        register_location_key_debug_info_for_test(7, "second.rs", 30, 40);
+    });
+    assert!(
+        panic.is_err(),
+        "debug collision tracking must reject different call sites with the same location key",
+    );
+
+    clear_location_key_registry_for_test();
+}
+
 #[derive(Default)]
 struct TestTextNode {
     text: String,
@@ -70,58 +86,59 @@ pub(crate) fn test_composition() -> Composition<MemoryApplier> {
 
 pub(crate) fn test_slot_table() -> SlotTable {
     with_test_slot_lifecycle(|lifecycle| {
-        *lifecycle = crate::slot_table::SlotLifecycleCoordinator::default()
+        *lifecycle = crate::slot::SlotLifecycleCoordinator::default()
     });
     SlotTable::new()
 }
 
-pub(crate) fn test_slot_session() -> crate::slot_table::SlotWriteSessionState {
-    crate::slot_table::SlotWriteSessionState::default()
+pub(crate) fn test_slot_session() -> crate::slot::SlotWriteSessionState {
+    crate::slot::SlotWriteSessionState::default()
 }
 
 thread_local! {
-    static TEST_SLOT_LIFECYCLE: RefCell<crate::slot_table::SlotLifecycleCoordinator> =
-        RefCell::new(crate::slot_table::SlotLifecycleCoordinator::default());
+    static TEST_SLOT_LIFECYCLE: RefCell<crate::slot::SlotLifecycleCoordinator> =
+        RefCell::new(crate::slot::SlotLifecycleCoordinator::default());
 }
 
 fn with_test_slot_lifecycle<R>(
-    f: impl FnOnce(&mut crate::slot_table::SlotLifecycleCoordinator) -> R,
+    f: impl FnOnce(&mut crate::slot::SlotLifecycleCoordinator) -> R,
 ) -> R {
     TEST_SLOT_LIFECYCLE.with(|slot| f(&mut slot.borrow_mut()))
 }
 
 pub(crate) fn begin_test_group(
     slots: &mut SlotTable,
-    state: &mut crate::slot_table::SlotWriteSessionState,
+    state: &mut crate::slot::SlotWriteSessionState,
     key: Key,
 ) -> GroupId {
     with_test_slot_lifecycle(|lifecycle| {
-        let mut session =
-            slots.write_session(lifecycle, state, crate::slot_table::SlotPassMode::Compose);
+        let mut session = slots.write_session(lifecycle, state, crate::slot::SlotPassMode::Compose);
         let group_key = session.preview_group_key(crate::slot_storage::GroupKeySeed::unkeyed(key));
-        session.begin_scoped_group(group_key, None).group
+        session
+            .begin_group(crate::BeginGroupInput::new(group_key, None))
+            .group
     })
 }
 
 pub(crate) fn remember_test_value<T: 'static>(
     slots: &mut SlotTable,
-    state: &mut crate::slot_table::SlotWriteSessionState,
+    state: &mut crate::slot::SlotWriteSessionState,
     init: impl FnOnce() -> T,
 ) -> Owned<T> {
     with_test_slot_lifecycle(|lifecycle| {
         slots
-            .write_session(lifecycle, state, crate::slot_table::SlotPassMode::Compose)
+            .write_session(lifecycle, state, crate::slot::SlotPassMode::Compose)
             .remember(init)
     })
 }
 
 pub(crate) fn end_test_group(
     slots: &mut SlotTable,
-    state: &mut crate::slot_table::SlotWriteSessionState,
+    state: &mut crate::slot::SlotWriteSessionState,
 ) {
     with_test_slot_lifecycle(|lifecycle| {
         slots
-            .write_session(lifecycle, state, crate::slot_table::SlotPassMode::Compose)
+            .write_session(lifecycle, state, crate::slot::SlotPassMode::Compose)
             .end_group();
     });
 }

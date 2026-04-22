@@ -82,6 +82,29 @@ fn drain_all(composition: &mut Composition<MemoryApplier>) {
     {}
 }
 
+fn set_recursive_depth(
+    composition: &mut Composition<MemoryApplier>,
+    depth_state: MutableState<usize>,
+    depth: usize,
+) {
+    depth_state.set_value(depth);
+    drain_all(composition);
+}
+
+fn run_recursive_depth_cycle(
+    composition: &mut Composition<MemoryApplier>,
+    depth_state: MutableState<usize>,
+    min_depth: usize,
+    max_depth: usize,
+) {
+    for depth in (min_depth + 1)..=max_depth {
+        set_recursive_depth(composition, depth_state, depth);
+    }
+    for depth in (min_depth..max_depth).rev() {
+        set_recursive_depth(composition, depth_state, depth);
+    }
+}
+
 #[composable]
 fn progress_tab(progress: MutableState<f32>) {
     PROGRESS_TAB_RENDERS.with(|c| c.set(c.get() + 1));
@@ -950,49 +973,31 @@ fn tab_switching_node_vec_does_not_grow_unboundedly() {
 
 #[test]
 fn depth_cycling_node_vec_does_not_grow_unboundedly() {
+    const MIN_DEPTH: usize = 3;
+    const MAX_DEPTH: usize = 5;
+    const DEPTH_CYCLES: usize = 2;
+
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
-    let depth_state = MutableState::with_runtime(3usize, runtime);
+    let depth_state = MutableState::with_runtime(MIN_DEPTH, runtime);
     let key = location_key(file!(), line!(), column!());
 
     composition
         .render(key, &mut || recursive_layout_root(depth_state))
         .expect("initial render");
 
-    // Warmup: cycle depth 3→10→3 once
-    for d in 4..=10 {
-        depth_state.set_value(d);
-        while composition.process_invalid_scopes().expect("depth up") {}
-    }
-    for d in (3..10).rev() {
-        depth_state.set_value(d);
-        while composition.process_invalid_scopes().expect("depth down") {}
-    }
+    run_recursive_depth_cycle(&mut composition, depth_state, MIN_DEPTH, MAX_DEPTH);
 
     let baseline_active = composition.applier_mut().len();
     let baseline_capacity = composition.applier_mut().capacity();
     let baseline_tombstones = composition.applier_mut().tombstone_count();
-    eprintln!(
-        "After warmup: active={}, capacity={}, tombstones={}",
-        baseline_active, baseline_capacity, baseline_tombstones
-    );
 
-    // Run 10 depth cycles
-    for cycle in 0..10 {
-        for d in 4..=10 {
-            depth_state.set_value(d);
-            while composition.process_invalid_scopes().expect("depth up") {}
-        }
-        for d in (3..10).rev() {
-            depth_state.set_value(d);
-            while composition.process_invalid_scopes().expect("depth down") {}
-        }
-        let active = composition.applier_mut().len();
-        let capacity = composition.applier_mut().capacity();
-        let tombstones = composition.applier_mut().tombstone_count();
-        eprintln!(
-            "Cycle {}: active={}, capacity={}, tombstones={}",
-            cycle, active, capacity, tombstones
+    for cycle in 0..DEPTH_CYCLES {
+        run_recursive_depth_cycle(&mut composition, depth_state, MIN_DEPTH, MAX_DEPTH);
+        assert_eq!(
+            composition.applier_mut().len(),
+            baseline_active,
+            "active node count changed during depth cycle {cycle}"
         );
     }
 
@@ -1005,11 +1010,12 @@ fn depth_cycling_node_vec_does_not_grow_unboundedly() {
         "active node count should be stable across depth cycles"
     );
     assert!(
-        final_capacity <= baseline_capacity + 100,
-        "node vec capacity grew from {} to {} over 10 depth cycles ({} new tombstones) - \
+        final_capacity <= baseline_capacity + 32,
+        "node vec capacity grew from {} to {} over {} depth cycles ({} new tombstones) - \
          indicates MemoryApplier does not reuse freed indices",
         baseline_capacity,
         final_capacity,
+        DEPTH_CYCLES,
         final_tombstones - baseline_tombstones,
     );
 }

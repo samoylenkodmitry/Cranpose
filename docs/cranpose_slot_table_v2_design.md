@@ -1,9 +1,9 @@
 # Cranpose Slot Table V2 — Full Rearchitecture Design Doc
 
-Status: proposed full rewrite  
+Status: active implementation target  
 Target crate: `crates/cranpose-core`  
-Primary files affected: `slot_table.rs`, `slot_storage.rs`, `slot_backend.rs`, `lib.rs`, `subcompose.rs`, tests  
-Principle: do not patch the existing gap-based implementation; replace its model.
+Primary files affected: `slot_storage.rs`, `lib.rs`, `subcompose.rs`, `retention.rs`, `slot/*`, tests  
+Principle: keep one slot-table architecture; do not preserve obsolete gap-based surfaces or wrapper modules.
 
 ---
 
@@ -57,9 +57,9 @@ scope lookup by scanning all slots
 
 ---
 
-## 2. Source snapshot and current-state observations
+## 2. Historical baseline and current-state observations
 
-This design is based on the public Cranpose 0.1.0 source and docs available on docs.rs and GitHub.
+This section keeps the pre-V2 baseline for rationale only. The current repository implementation is the source of truth for active architecture decisions.
 
 Relevant source URLs:
 
@@ -70,15 +70,15 @@ Relevant source URLs:
 - `subcompose.rs`: https://docs.rs/cranpose-core/latest/src/cranpose_core/subcompose.rs.html
 - repository README: https://github.com/samoylenkodmitry/Cranpose
 
-Current source-level observations:
+Historical source-level observations:
 
 - `slot_table.rs` describes the baseline implementation as gap-buffer based and claims support for gap-based slot reuse, anchors, group skipping, scope-based recomposition, and batch anchor rebuilds.
 - The current `Slot` enum contains `Group`, `Value`, `Node`, and `Gap`. `Gap` preserves `group_key`, `group_scope`, and `group_len`, which makes a storage hole double as semantic retention state.
 - `GroupFrame` stores physical `start` and `end`, and the source comments that those physical positions should eventually be phased out.
 - `SlotTable::start` includes fast paths, parent-forced recomposition, gap conversion, group-to-gap conversion, limited sibling scans, recursive gap scans, and extended rescue scans.
 - `trim_to_cursor` marks unreachable slots as gaps and intentionally keeps group length as physical extent rather than active subtree size.
-- `SlotStorage::begin_group` returns `StartGroup { restored_from_gap: bool }`; `Composer::with_group` checks that flag and forces recomposition.
-- `SlotStorage` currently exposes cursor-repair methods such as `step_back` and `advance_after_node_read`.
+- `SlotStorage::begin_group` returned `StartGroup { restored_from_gap: bool }`; `Composer::with_group` checked that flag and forced recomposition.
+- `SlotStorage` exposed cursor-repair methods such as `step_back` and `advance_after_node_read`.
 - `begin_recranpose_at_scope` starts from a `ScopeId`; the current slot table finds a group by scanning slots for a matching scope.
 - `SubcomposeState` already shows a cleaner lifecycle pattern: it owns active slots, reusable pools, slot compositions, precomposed nodes, and a reuse policy outside the main slot table.
 
@@ -197,8 +197,7 @@ Replace the current slot table files with this layout:
 
 ```text
 crates/cranpose-core/src/
-  slot_storage.rs              // V2 trait and public-ish handle types
-  slot_backend.rs              // simple wrapper around the new SlotTable, optional during V2
+  slot_storage.rs              // semantic storage trait and handle types
   slot/
     mod.rs
     types.rs                   // GroupId, ValueSlotId, GroupKey, flags, errors
@@ -212,10 +211,12 @@ crates/cranpose-core/src/
     scope_index.rs             // ScopeId -> GroupAnchor map
     detach.rs                  // DetachedSubtree and detach/restore helpers
     validate.rs                // invariant checking
+    lifecycle.rs               // deferred drop coordination
+    debug.rs                   // public debug snapshot structs
   retention.rs                 // Composer-owned retention manager
 ```
 
-Update `lib.rs` to re-export `SlotTable`, `SlotStorage`, handles, and public APIs from the new modules.
+Update `lib.rs` to re-export `SlotTable`, handle types, and public debug APIs from the new modules. The semantic `SlotStorage` trait can stay internal until there is a real second backend or external integration that needs it.
 
 During the rewrite, remove or temporarily disable these old/experimental backends:
 
@@ -244,21 +245,19 @@ pub struct GroupId {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ValueSlotId {
-    group: GroupId,
-    offset: u32,
+    anchor: u32,
     generation: u32,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct GroupAnchor {
     id: u32,
-    generation: u32,
 }
 ```
 
 `GroupId` is a transient active-table handle.  
 `GroupAnchor` is stable across moves and can be invalidated.  
-`ValueSlotId` should prefer anchor-based resolution when exposed outside one composition frame.
+`ValueSlotId` is anchor-based because composer-held value handles routinely outlive one active writer frame. Group-and-offset addressing is still useful as a transient internal concept while writing one group body, but it is not robust as the exposed handle shape.
 
 ### 7.2 SlotTable
 
@@ -366,18 +365,14 @@ pub trait SlotStorage {
     type ValueSlot: Copy + Eq;
 
     // Groups
-    fn begin_group(&mut self, input: BeginGroupInput) -> GroupStart<Self::Group>;
+    fn begin_group(&mut self, input: BeginGroupInput<DetachedSubtree>) -> GroupStart<Self::Group>;
     fn finish_group_body(&mut self) -> FinishGroupResult;
     fn end_group(&mut self);
-    fn skip_group(&mut self) -> SkippedGroup;
-
-    // Explicit detach / restore
-    fn detach_unvisited_children(&mut self) -> Vec<DetachedSubtree>;
-    fn restore_detached_at_cursor(&mut self, subtree: DetachedSubtree) -> RestoreResult<Self::Group>;
+    fn skip_group(&mut self);
 
     // Scopes
     fn set_group_scope(&mut self, group: Self::Group, scope: ScopeId);
-    fn begin_recompose_at_scope(&mut self, scope: ScopeId) -> Option<RecomposeStart<Self::Group>>;
+    fn begin_recompose_at_scope(&mut self, scope: ScopeId) -> Option<Self::Group>;
     fn end_recompose(&mut self);
 
     // Values
@@ -388,15 +383,16 @@ pub trait SlotStorage {
     fn remember<T: 'static>(&mut self, init: impl FnOnce() -> T) -> Owned<T>;
 
     // Nodes
-    fn record_node(&mut self, id: NodeId) -> NodeRecordResult;
+    fn record_node(&mut self, id: NodeId, generation: u32) -> NodeRecordResult;
     fn nodes_in_current_group(&self) -> Vec<NodeId>;
 
     // Lifecycle/debug
-    fn reset(&mut self);
     fn validate(&self) -> Result<(), SlotInvariantError>;
     fn debug_snapshot(&self) -> SlotDebugSnapshot;
 }
 ```
+
+Explicit detach/restore stays as concrete slot-table behavior instead of trait surface: `finish_group_body()` yields detached children, and `begin_group(BeginGroupInput { restored: Some(subtree), .. })` restores at the current cursor.
 
 Remove these methods from the trait:
 
@@ -599,19 +595,7 @@ fn detach_subtree(&mut self, root_index: usize) -> DetachedSubtree {
 
 ### 10.3 Restore operation
 
-```rust
-fn restore_detached_at_cursor(&mut self, subtree: DetachedSubtree) -> RestoreResult<GroupId> {
-    let insert_at = self.writer.cursor;
-    self.reparent_root(&mut subtree, self.current_group());
-    self.insert_groups(insert_at, subtree.groups);
-    self.insert_payloads(subtree.payloads);
-    self.insert_nodes(subtree.nodes);
-    self.anchors.mark_active(...);
-    self.scopes.mark_active(...);
-    self.repair_indices_after_insert(insert_at, len);
-    RestoreResult { group, nodes, scopes }
-}
-```
+Restore is initiated through `begin_group(BeginGroupInput { restored: Some(subtree), .. })`. Internally that operation reparents the restored root, inserts groups/payloads/nodes at the current cursor, marks anchors and scopes active again, and returns `GroupStartKind::Restored`.
 
 Storage restores bytes/records. Composer reactivates scopes and reattaches nodes.
 
@@ -765,11 +749,11 @@ pub struct ScopeIndex {
 Active recomposition:
 
 ```rust
-fn begin_recompose_at_scope(&mut self, scope: ScopeId) -> Option<RecomposeStart<GroupId>> {
+fn begin_recompose_at_scope(&mut self, scope: ScopeId) -> Option<GroupId> {
     let anchor = self.scopes.active.get(&scope)?;
     let group = self.anchors.resolve_group(*anchor)?;
     self.writer.start_recompose(group);
-    Some(RecomposeStart { group, anchor: *anchor })
+    Some(group)
 }
 ```
 
@@ -798,7 +782,7 @@ pub enum NodeLifecycle {
 
 ### 13.1 Record node
 
-`record_node(id)` records a node under the current group. It does not overwrite a slot and does not require `peek_node` / `step_back`.
+`record_node(id, generation)` records a node under the current group. It does not overwrite a slot and does not require `peek_node` / `step_back`. The generation comes from the applier-side stable-node arena and is part of stale-identity protection when node IDs are recycled.
 
 ```rust
 pub struct NodeRecordResult {
@@ -1155,7 +1139,7 @@ Implement:
 
 - `detach_subtree`;
 - `detach_range`;
-- `restore_detached_at_cursor`;
+- restore through `begin_group(BeginGroupInput { restored: Some(subtree), .. })`;
 - payload extraction/insertion;
 - node extraction/insertion;
 - scope active/detached index updates;
@@ -1436,4 +1420,3 @@ After V2 is correct:
 6. Add collision-resistant keys in debug/profile builds.
 7. Add specialized lazy-list retention policy.
 8. Support no-std allocator-backed tables if still desired.
-

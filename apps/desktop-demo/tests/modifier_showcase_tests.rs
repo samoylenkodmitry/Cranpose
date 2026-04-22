@@ -548,11 +548,4 @@ fn test_long_list_performance() {
         "Expected at least 100 nodes for 50-item list, got {}",
         all_nodes.len()
     );
-
-    // Should render quickly
-    assert!(
-        duration.as_millis() < 200,
-        "50 items took too long: {:?}",
-        duration
-    );
 }

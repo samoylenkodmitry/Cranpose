@@ -18,8 +18,8 @@ pub mod platform;
 mod recompose;
 mod retention;
 pub mod runtime;
+mod slot;
 mod slot_storage;
-pub mod slot_table;
 pub mod snapshot_double_index_heap;
 pub mod snapshot_id_set;
 pub mod snapshot_pinning;
@@ -67,10 +67,13 @@ pub use runtime::{
     current_runtime_handle, schedule_frame, schedule_node_update, DefaultScheduler, Runtime,
     RuntimeHandle, StateId, TaskHandle,
 };
-pub use slot_storage::{GroupId, GroupStartKind, StartScopedGroup, ValueSlotId};
-pub use slot_table::{
-    SlotDebugAnchor, SlotDebugGroup, SlotDebugScope, SlotDebugSnapshot, SlotTable,
+pub use slot::{
+    GroupFlags, SlotDebugAnchor, SlotDebugGroup, SlotDebugScope, SlotDebugSnapshot, SlotTable,
     SlotTableDebugStats,
+};
+pub use slot_storage::{
+    BeginGroupInput, GroupAnchor, GroupId, GroupKey, GroupStart, GroupStartKind, NodeRecordResult,
+    ValueSlotId,
 };
 #[doc(hidden)]
 pub use snapshot_state_observer::SnapshotStateObserver;
@@ -193,13 +196,96 @@ use std::hash::{Hash, Hasher};
 use std::ops::{Deref, DerefMut};
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(test)]
+use std::sync::{Mutex, OnceLock};
 
 pub type Key = u64;
 pub type NodeId = usize;
 
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LocationKeyDebugInfo {
+    file: String,
+    line: u32,
+    column: u32,
+}
+
+#[cfg(test)]
+fn location_key_registry() -> &'static Mutex<HashMap<Key, LocationKeyDebugInfo>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<Key, LocationKeyDebugInfo>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashMap::default()))
+}
+
+#[cfg(test)]
+fn lock_location_key_registry() -> std::sync::MutexGuard<'static, HashMap<Key, LocationKeyDebugInfo>>
+{
+    location_key_registry()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(test)]
+fn register_location_key_debug_info(key: Key, file: &str, line: u32, column: u32) {
+    let info = LocationKeyDebugInfo {
+        file: file.to_owned(),
+        line,
+        column,
+    };
+    let collision = {
+        let mut registry = lock_location_key_registry();
+        match registry.entry(key) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(info);
+                None
+            }
+            std::collections::hash_map::Entry::Occupied(entry) => {
+                let existing = entry.get();
+                (existing != &info).then(|| (existing.clone(), info))
+            }
+        }
+    };
+    if let Some((existing, incoming)) = collision {
+        panic!("location key collision: key={key} first={existing:?} second={incoming:?}");
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn clear_location_key_registry_for_test() {
+    lock_location_key_registry().clear();
+}
+
+#[cfg(test)]
+pub(crate) fn register_location_key_debug_info_for_test(
+    key: Key,
+    file: &str,
+    line: u32,
+    column: u32,
+) {
+    register_location_key_debug_info(key, file, line, column);
+}
+
+#[cfg(test)]
+pub(crate) fn slot_validation_diagnostics_enabled() -> bool {
+    true
+}
+
+#[cfg(all(debug_assertions, not(test)))]
+pub(crate) fn slot_validation_diagnostics_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_VALIDATE_SLOTS").is_some())
+}
+
+#[cfg(not(any(test, debug_assertions)))]
+pub(crate) fn slot_validation_diagnostics_enabled() -> bool {
+    false
+}
+
 pub fn location_key(file: &str, line: u32, column: u32) -> Key {
     let base = file.as_ptr() as u64;
-    base.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ ((line as u64) << 32) ^ (column as u64)
+    let key = base.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ ((line as u64) << 32) ^ (column as u64);
+    #[cfg(test)]
+    register_location_key_debug_info(key, file, line, column);
+    key
 }
 
 /// Stable identifier for a slot in the slot table.
@@ -3265,13 +3351,13 @@ pub(crate) struct SlotPassOutcome {
 }
 
 struct ActivePassState {
-    mode: slot_table::SlotPassMode,
-    state: slot_table::SlotWriteSessionState,
+    mode: slot::SlotPassMode,
+    state: slot::SlotWriteSessionState,
 }
 
 struct SlotsHostInner {
     table: SlotTable,
-    lifecycle: slot_table::SlotLifecycleCoordinator,
+    lifecycle: slot::SlotLifecycleCoordinator,
     retention: retention::RetentionManager,
     scope_registry: HashMap<ScopeId, RecomposeScope>,
     active_pass: Option<ActivePassState>,
@@ -3287,7 +3373,7 @@ impl Drop for SlotsHostInner {
 
 fn detached_subtree_root_nodes(
     applier: &mut dyn Applier,
-    subtree: &slot_table::DetachedSubtree,
+    subtree: &slot::DetachedSubtree,
 ) -> Vec<NodeId> {
     let nodes = subtree.node_ids();
     let node_set = nodes.iter().copied().collect::<HashSet<_>>();
@@ -3319,10 +3405,7 @@ fn detach_retained_node_now(applier: &mut dyn Applier, node_id: NodeId) {
     }
 }
 
-fn dispose_detached_root_subtree_now(
-    applier: &mut dyn Applier,
-    subtree: &slot_table::DetachedSubtree,
-) {
+fn dispose_detached_root_subtree_now(applier: &mut dyn Applier, subtree: &slot::DetachedSubtree) {
     for root in detached_subtree_root_nodes(applier, subtree) {
         let parent_id = applier.get_mut(root).ok().and_then(|node| node.parent());
         if let Some(parent_id) = parent_id {
@@ -3342,7 +3425,7 @@ impl SlotsHost {
         Self {
             inner: RefCell::new(SlotsHostInner {
                 table: storage,
-                lifecycle: slot_table::SlotLifecycleCoordinator::default(),
+                lifecycle: slot::SlotLifecycleCoordinator::default(),
                 retention: retention::RetentionManager::default(),
                 scope_registry: HashMap::default(),
                 active_pass: None,
@@ -3395,7 +3478,7 @@ impl SlotsHost {
         retention.clear();
         scope_registry.clear();
         *table = SlotTable::default();
-        *lifecycle = slot_table::SlotLifecycleCoordinator::default();
+        *lifecycle = slot::SlotLifecycleCoordinator::default();
     }
 
     pub(crate) fn debug_stats(&self) -> SlotTableDebugStats {
@@ -3405,7 +3488,7 @@ impl SlotsHost {
         stats
     }
 
-    pub(crate) fn debug_snapshot(&self) -> slot_table::SlotDebugSnapshot {
+    pub(crate) fn debug_snapshot(&self) -> slot::SlotDebugSnapshot {
         let inner = self.inner.borrow();
         let mut snapshot = inner.table.debug_snapshot();
         let retention = inner.retention.debug_stats();
@@ -3417,13 +3500,13 @@ impl SlotsHost {
         snapshot
     }
 
-    pub(crate) fn begin_pass(&self, mode: slot_table::SlotPassMode) {
+    pub(crate) fn begin_pass(&self, mode: slot::SlotPassMode) {
         let mut inner = self.inner.borrow_mut();
         assert!(
             inner.active_pass.is_none(),
             "slot pass already active for host"
         );
-        let mut state = slot_table::SlotWriteSessionState::default();
+        let mut state = slot::SlotWriteSessionState::default();
         state.reset_for_pass(&inner.table, mode);
         inner.active_pass = Some(ActivePassState { mode, state });
     }
@@ -3434,7 +3517,7 @@ impl SlotsHost {
 
     pub(crate) fn with_write_session<R>(
         &self,
-        f: impl FnOnce(&mut slot_table::SlotWriteSession<'_>) -> R,
+        f: impl FnOnce(&mut slot::SlotWriteSession<'_>) -> R,
     ) -> R {
         let mut inner = self.inner.borrow_mut();
         let SlotsHostInner {
@@ -3453,7 +3536,7 @@ impl SlotsHost {
 
     pub(crate) fn with_table_and_lifecycle_mut<R>(
         &self,
-        f: impl FnOnce(&mut SlotTable, &mut slot_table::SlotLifecycleCoordinator) -> R,
+        f: impl FnOnce(&mut SlotTable, &mut slot::SlotLifecycleCoordinator) -> R,
     ) -> R {
         let mut inner = self.inner.borrow_mut();
         let SlotsHostInner {
@@ -3462,17 +3545,14 @@ impl SlotsHost {
         f(table, lifecycle)
     }
 
-    pub(crate) fn take_retained(
-        &self,
-        key: retention::RetainKey,
-    ) -> Option<slot_table::DetachedSubtree> {
+    pub(crate) fn take_retained(&self, key: retention::RetainKey) -> Option<slot::DetachedSubtree> {
         self.inner.borrow_mut().retention.take(key)
     }
 
     pub(crate) fn insert_retained(
         &self,
         key: retention::RetainKey,
-        subtree: slot_table::DetachedSubtree,
+        subtree: slot::DetachedSubtree,
     ) {
         self.inner.borrow_mut().retention.insert(key, subtree);
     }
@@ -3505,6 +3585,11 @@ impl SlotsHost {
             return SlotPassOutcome::default();
         };
 
+        #[cfg(debug_assertions)]
+        if let Err(err) = active_pass.state.validate(table) {
+            panic!("slot writer invariant violation before finalize_pass: {err:?}");
+        }
+
         let detached_root_children = {
             let mut session =
                 table.write_session(lifecycle, &mut active_pass.state, active_pass.mode);
@@ -3526,6 +3611,7 @@ impl SlotsHost {
                         }
                     }
                     dispose_detached_root_subtree_now(applier, &subtree);
+                    table.invalidate_detached_subtree_anchors(&subtree);
                     lifecycle.queue_subtree_disposal(subtree);
                 }
                 RetentionMode::RetainWhenInactive => {
@@ -3557,6 +3643,7 @@ impl SlotsHost {
             lifecycle.compact_storage();
         }
         table.debug_verify(Some(lifecycle));
+        retention.debug_verify(table);
         *active_pass_slot = None;
         outcome
     }

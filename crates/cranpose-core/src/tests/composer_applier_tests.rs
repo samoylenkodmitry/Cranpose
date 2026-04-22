@@ -21,7 +21,7 @@ fn emit_node_rejects_reuse_when_parent_did_not_own_child() {
     // First, emit a child under parent_a's context
     let (child_id, _) = composer.with_slot_host_pass(
         Rc::clone(&slots_host),
-        crate::slot_table::SlotPassMode::Compose,
+        crate::slot::SlotPassMode::Compose,
         |composer| {
             composer.with_group(location_key(file!(), line!(), column!()), |composer| {
                 let child_id = composer.emit_node(|| TestDummyNode);
@@ -98,7 +98,7 @@ fn new_parent_attaches_children_immediately_without_sync_children() {
 
     let (child_id, _) = composer.with_slot_host_pass(
         Rc::clone(&slots_host),
-        crate::slot_table::SlotPassMode::Compose,
+        crate::slot::SlotPassMode::Compose,
         |composer| {
             composer.with_group(location_key(file!(), line!(), column!()), |composer| {
                 composer.core.last_node_reused.set(Some(false));
@@ -1086,7 +1086,7 @@ fn emit_node_works_with_new_parent_having_empty_previous() {
 
     let (_child_id, _) = composer.with_slot_host_pass(
         Rc::clone(&slots_host),
-        crate::slot_table::SlotPassMode::Compose,
+        crate::slot::SlotPassMode::Compose,
         |composer| {
             composer.with_group(location_key(file!(), line!(), column!()), |composer| {
                 // Simulate a NEW parent (not reused) - this gives empty previous children

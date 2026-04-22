@@ -589,6 +589,48 @@ fn inactive_scopes_delay_invalidation_until_reactivated() {
 }
 
 #[test]
+fn invalidating_active_scope_recomposes_that_scope() {
+    thread_local! {
+        static CAPTURED_SCOPE: RefCell<Option<RecomposeScope>> = const { RefCell::new(None) };
+        static INVOCATIONS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    let mut composition = test_composition();
+    let root_key = location_key(file!(), line!(), column!());
+
+    #[composable]
+    fn capture_scope() {
+        INVOCATIONS.with(|count| count.set(count.get() + 1));
+        with_current_composer(|composer| {
+            let scope = composer
+                .current_recranpose_scope()
+                .expect("scope available");
+            CAPTURED_SCOPE.with(|slot| slot.replace(Some(scope)));
+        });
+    }
+
+    composition
+        .render(root_key, capture_scope)
+        .expect("initial composition");
+    assert_eq!(INVOCATIONS.with(|count| count.get()), 1);
+
+    let scope = CAPTURED_SCOPE
+        .with(|slot| slot.borrow().clone())
+        .expect("captured active scope");
+    assert!(scope.is_active());
+
+    scope.invalidate();
+    let recomposed = composition
+        .process_invalid_scopes()
+        .expect("recompose after explicit invalidation");
+    assert!(
+        recomposed,
+        "active scope invalidation must trigger recomposition"
+    );
+    assert_eq!(INVOCATIONS.with(|count| count.get()), 2);
+}
+
+#[test]
 fn callbackless_scope_promotes_via_parent_scope_metadata() {
     thread_local! {
         static CHILD_SCOPE: RefCell<Option<RecomposeScope>> = const { RefCell::new(None) };
@@ -1102,6 +1144,562 @@ fn changing_root_key_does_not_leak_root_scopes() {
         1,
         "repeated root-key churn must keep the scope registry bounded",
     );
+}
+
+#[test]
+fn remember_survives_normal_recomposition() {
+    thread_local! {
+        static INVOCATIONS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let observed = MutableState::with_runtime(0, runtime.clone());
+    let root_key = location_key(file!(), line!(), column!());
+    let group_key = location_key(file!(), line!(), column!());
+    let remembered = Rc::new(RefCell::new(None::<Owned<i32>>));
+
+    let mut render = || {
+        let remembered = Rc::clone(&remembered);
+        composition
+            .render(root_key, || {
+                let _ = observed.value();
+                with_current_composer(|composer| {
+                    composer.with_group(group_key, |composer| {
+                        INVOCATIONS.with(|count| count.set(count.get() + 1));
+                        let slot = composer.remember(|| 7_i32);
+                        remembered.replace(Some(slot));
+                    });
+                });
+            })
+            .expect("render remembered branch");
+    };
+
+    render();
+    let first = remembered
+        .borrow()
+        .clone()
+        .expect("initial remembered slot");
+    first.replace(41);
+
+    observed.set_value(1);
+    render();
+
+    let restored = remembered
+        .borrow()
+        .clone()
+        .expect("remembered slot after recomposition");
+    assert_eq!(
+        restored.with(|value| *value),
+        41,
+        "normal recomposition must preserve remembered state",
+    );
+    assert_eq!(INVOCATIONS.with(|count| count.get()), 2);
+}
+
+#[test]
+fn conditional_branch_without_retention_resets_remembered_state() {
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let show_branch = MutableState::with_runtime(true, runtime.clone());
+    let root_key = location_key(file!(), line!(), column!());
+    let branch_key = location_key(file!(), line!(), column!());
+    let remembered = Rc::new(RefCell::new(None::<Owned<i32>>));
+
+    let mut render = || {
+        let remembered = Rc::clone(&remembered);
+        composition
+            .render(root_key, || {
+                remembered.replace(None);
+                if show_branch.value() {
+                    with_current_composer(|composer| {
+                        composer.with_group(branch_key, |composer| {
+                            let slot = composer.remember(|| 7_i32);
+                            remembered.replace(Some(slot));
+                        });
+                    });
+                }
+            })
+            .expect("render conditional branch");
+    };
+
+    render();
+    let first = remembered
+        .borrow()
+        .clone()
+        .expect("initial remembered state");
+    first.replace(41);
+
+    show_branch.set_value(false);
+    render();
+    assert!(
+        remembered.borrow().is_none(),
+        "hidden branches must not leave an active remembered slot behind"
+    );
+
+    show_branch.set_value(true);
+    render();
+    let restored = remembered
+        .borrow()
+        .clone()
+        .expect("remembered state after restoring the branch");
+    assert_eq!(
+        restored.with(|value| *value),
+        7,
+        "without retention, removing a conditional branch must reset its remembered state",
+    );
+}
+
+#[test]
+fn retained_branch_hides_without_running_disposable_effect_cleanup() {
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let show_branch = MutableState::with_runtime(true, runtime.clone());
+    let cleanup_calls = Rc::new(Cell::new(0usize));
+    let root_key = location_key(file!(), line!(), column!());
+    let branch_key = location_key(file!(), line!(), column!());
+
+    let mut render = || {
+        let cleanup_calls = Rc::clone(&cleanup_calls);
+        composition
+            .render(root_key, || {
+                if show_branch.value() {
+                    with_current_composer(|composer| {
+                        let cleanup_calls = Rc::clone(&cleanup_calls);
+                        composer.cranpose_with_reuse(
+                            branch_key,
+                            RecomposeOptions::default(),
+                            move |_composer| {
+                                let cleanup_calls = Rc::clone(&cleanup_calls);
+                                DisposableEffect!((), move |_| {
+                                    let cleanup_calls = Rc::clone(&cleanup_calls);
+                                    DisposableEffectResult::new(move || {
+                                        cleanup_calls.set(cleanup_calls.get() + 1);
+                                    })
+                                });
+                            },
+                        );
+                    });
+                }
+            })
+            .expect("render retained disposable branch");
+    };
+
+    render();
+    assert_eq!(cleanup_calls.get(), 0);
+
+    show_branch.set_value(false);
+    render();
+    assert_eq!(
+        cleanup_calls.get(),
+        0,
+        "retained branches must not run DisposableEffect cleanup merely because they went inactive",
+    );
+
+    show_branch.set_value(true);
+    render();
+    assert_eq!(
+        cleanup_calls.get(),
+        0,
+        "restoring a retained branch must not trigger disposal cleanup for the preserved effect",
+    );
+}
+
+#[test]
+fn retained_branch_restores_the_same_node_id() {
+    const BRANCH_KEY: Key = 0xD01;
+
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let show_branch = MutableState::with_runtime(true, runtime.clone());
+    let root_key = location_key(file!(), line!(), column!());
+    let captured = Rc::new(RefCell::new(Vec::<NodeId>::new()));
+
+    let mut render = || {
+        let captured = Rc::clone(&captured);
+        composition
+            .render(root_key, || {
+                if show_branch.value() {
+                    with_current_composer(|composer| {
+                        let captured = Rc::clone(&captured);
+                        composer.cranpose_with_reuse(
+                            BRANCH_KEY,
+                            RecomposeOptions::default(),
+                            move |_composer| {
+                                let node_id = cranpose_test_node(TestTextNode::default);
+                                captured.borrow_mut().push(node_id);
+                            },
+                        );
+                    });
+                }
+            })
+            .expect("render retained node branch");
+    };
+
+    render();
+    let first = *captured.borrow().last().expect("initial retained node id");
+
+    show_branch.set_value(false);
+    render();
+
+    show_branch.set_value(true);
+    render();
+    let restored = *captured.borrow().last().expect("restored retained node id");
+
+    assert_eq!(
+        restored, first,
+        "retained branches must restore the same node id instead of recreating the subtree",
+    );
+}
+
+#[test]
+fn disposed_branch_recreates_node_id_without_explicit_reuse() {
+    const BRANCH_KEY: Key = 0xD02;
+
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let show_branch = MutableState::with_runtime(true, runtime.clone());
+    let root_key = location_key(file!(), line!(), column!());
+    let captured = Rc::new(RefCell::new(Vec::<NodeId>::new()));
+
+    let mut render = || {
+        let captured = Rc::clone(&captured);
+        composition
+            .render(root_key, || {
+                if show_branch.value() {
+                    with_current_composer(|composer| {
+                        let captured = Rc::clone(&captured);
+                        composer.with_group(BRANCH_KEY, |_composer| {
+                            let node_id = cranpose_test_node(TestTextNode::default);
+                            captured.borrow_mut().push(node_id);
+                        });
+                    });
+                }
+            })
+            .expect("render disposable node branch");
+    };
+
+    render();
+    let first = *captured
+        .borrow()
+        .last()
+        .expect("initial disposable node id");
+
+    show_branch.set_value(false);
+    render();
+
+    show_branch.set_value(true);
+    render();
+    let restored = *captured
+        .borrow()
+        .last()
+        .expect("restored disposable node id");
+
+    assert_ne!(
+        restored, first,
+        "without explicit retention or applier-level reuse, removing a branch must recreate its node id",
+    );
+}
+
+#[test]
+fn conditional_branch_without_retention_disposes_removed_node() {
+    const BRANCH_KEY: Key = 0xD03;
+
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let show_branch = MutableState::with_runtime(true, runtime.clone());
+    let root_key = location_key(file!(), line!(), column!());
+    let captured = Rc::new(RefCell::new(Vec::<NodeId>::new()));
+
+    let mut render = || {
+        let captured = Rc::clone(&captured);
+        composition
+            .render(root_key, || {
+                if show_branch.value() {
+                    with_current_composer(|composer| {
+                        let captured = Rc::clone(&captured);
+                        composer.with_group(BRANCH_KEY, |_composer| {
+                            let node_id = cranpose_test_node(TestTextNode::default);
+                            captured.borrow_mut().push(node_id);
+                        });
+                    });
+                }
+            })
+            .expect("render disposable branch");
+    };
+
+    render();
+    let first = *captured
+        .borrow()
+        .last()
+        .expect("initial disposable branch node id");
+
+    show_branch.set_value(false);
+    render();
+
+    assert!(
+        composition.applier_mut().get_mut(first).is_err(),
+        "default-retained branches must remove disposed nodes from the applier when hidden",
+    );
+}
+
+#[test]
+fn switching_tabs_with_retention_preserves_each_tab_state() {
+    const TAB_A_KEY: Key = 0xA11;
+    const TAB_B_KEY: Key = 0xB22;
+
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let active_tab = MutableState::with_runtime(0usize, runtime.clone());
+    let root_key = location_key(file!(), line!(), column!());
+    let tab_a = Rc::new(RefCell::new(None::<Owned<i32>>));
+    let tab_b = Rc::new(RefCell::new(None::<Owned<i32>>));
+
+    let mut render = || {
+        let tab_a = Rc::clone(&tab_a);
+        let tab_b = Rc::clone(&tab_b);
+        composition
+            .render(root_key, || {
+                tab_a.replace(None);
+                tab_b.replace(None);
+                with_current_composer(|composer| match active_tab.value() {
+                    0 => composer.cranpose_with_reuse(
+                        TAB_A_KEY,
+                        RecomposeOptions::default(),
+                        |composer| {
+                            let slot = composer.remember(|| 10_i32);
+                            tab_a.replace(Some(slot));
+                        },
+                    ),
+                    1 => composer.cranpose_with_reuse(
+                        TAB_B_KEY,
+                        RecomposeOptions::default(),
+                        |composer| {
+                            let slot = composer.remember(|| 20_i32);
+                            tab_b.replace(Some(slot));
+                        },
+                    ),
+                    _ => unreachable!("only two tabs are expected"),
+                });
+            })
+            .expect("render retained tabs");
+    };
+
+    render();
+    let first_a = tab_a
+        .borrow()
+        .clone()
+        .expect("tab A slot after first render");
+    first_a.replace(101);
+
+    active_tab.set_value(1);
+    render();
+    let first_b = tab_b.borrow().clone().expect("tab B slot after switch");
+    first_b.replace(202);
+
+    active_tab.set_value(0);
+    render();
+    let restored_a = tab_a.borrow().clone().expect("tab A slot after restore");
+    assert_eq!(
+        restored_a.with(|value| *value),
+        101,
+        "retained tabs must restore previously remembered state when switched back in",
+    );
+
+    active_tab.set_value(1);
+    render();
+    let restored_b = tab_b
+        .borrow()
+        .clone()
+        .expect("tab B slot after second restore");
+    assert_eq!(
+        restored_b.with(|value| *value),
+        202,
+        "each retained tab must preserve its own remembered state independently",
+    );
+}
+
+#[test]
+fn switching_tabs_without_retention_resets_inactive_tab_state() {
+    const TAB_A_KEY: Key = 0xA33;
+    const TAB_B_KEY: Key = 0xB44;
+
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let active_tab = MutableState::with_runtime(0usize, runtime.clone());
+    let root_key = location_key(file!(), line!(), column!());
+    let tab_a = Rc::new(RefCell::new(None::<Owned<i32>>));
+    let tab_b = Rc::new(RefCell::new(None::<Owned<i32>>));
+
+    let mut render = || {
+        let tab_a = Rc::clone(&tab_a);
+        let tab_b = Rc::clone(&tab_b);
+        composition
+            .render(root_key, || {
+                tab_a.replace(None);
+                tab_b.replace(None);
+                with_current_composer(|composer| match active_tab.value() {
+                    0 => composer.with_group(TAB_A_KEY, |composer| {
+                        let slot = composer.remember(|| 10_i32);
+                        tab_a.replace(Some(slot));
+                    }),
+                    1 => composer.with_group(TAB_B_KEY, |composer| {
+                        let slot = composer.remember(|| 20_i32);
+                        tab_b.replace(Some(slot));
+                    }),
+                    _ => unreachable!("only two tabs are expected"),
+                });
+            })
+            .expect("render non-retained tabs");
+    };
+
+    render();
+    let first_a = tab_a
+        .borrow()
+        .clone()
+        .expect("tab A slot after first render");
+    first_a.replace(101);
+
+    active_tab.set_value(1);
+    render();
+    let first_b = tab_b.borrow().clone().expect("tab B slot after switch");
+    first_b.replace(202);
+
+    active_tab.set_value(0);
+    render();
+    let restored_a = tab_a.borrow().clone().expect("tab A slot after restore");
+    assert_eq!(
+        restored_a.with(|value| *value),
+        10,
+        "without retention, switching away from a tab must dispose its remembered state",
+    );
+
+    active_tab.set_value(1);
+    render();
+    let restored_b = tab_b
+        .borrow()
+        .clone()
+        .expect("tab B slot after second restore");
+    assert_eq!(
+        restored_b.with(|value| *value),
+        20,
+        "without retention, each tab must reinitialize when it becomes active again",
+    );
+}
+
+#[test]
+fn list_item_reorder_with_explicit_keys_preserves_item_state() {
+    let mut composition = test_composition();
+    let root_key = location_key(file!(), line!(), column!());
+    let order = Rc::new(RefCell::new(vec![1_i32, 2, 3]));
+    let captured = Rc::new(RefCell::new(Vec::<(i32, Owned<i32>)>::new()));
+
+    let mut render = || {
+        let order = Rc::clone(&order);
+        let captured = Rc::clone(&captured);
+        composition
+            .render(root_key, || {
+                captured.replace(Vec::new());
+                let current_order = order.borrow().clone();
+                for item in current_order {
+                    cranpose_core::with_key(&item, || {
+                        let slot =
+                            with_current_composer(|composer| composer.remember(|| item * 10));
+                        captured.borrow_mut().push((item, slot));
+                    });
+                }
+            })
+            .expect("render keyed list");
+    };
+
+    render();
+    {
+        let slots = captured.borrow();
+        for (item, value) in [(1, 101), (2, 202), (3, 303)] {
+            let slot = slots
+                .iter()
+                .find(|(captured_item, _)| *captured_item == item)
+                .map(|(_, slot)| slot.clone())
+                .expect("captured keyed slot");
+            slot.replace(value);
+        }
+    }
+
+    order.replace(vec![3, 1, 2]);
+    render();
+
+    let slots = captured.borrow();
+    for (item, expected) in [(3, 303), (1, 101), (2, 202)] {
+        let slot = slots
+            .iter()
+            .find(|(captured_item, _)| *captured_item == item)
+            .map(|(_, slot)| slot.clone())
+            .expect("captured reordered keyed slot");
+        assert_eq!(
+            slot.with(|value| *value),
+            expected,
+            "explicit keys must preserve remembered state for item {item}",
+        );
+    }
+}
+
+#[test]
+fn list_item_reorder_without_explicit_keys_follows_positional_identity() {
+    const ITEM_GROUP_KEY: Key = 0x51A7;
+
+    let mut composition = test_composition();
+    let root_key = location_key(file!(), line!(), column!());
+    let order = Rc::new(RefCell::new(vec![1_i32, 2, 3]));
+    let captured = Rc::new(RefCell::new(Vec::<(i32, Owned<i32>)>::new()));
+
+    let mut render = || {
+        let order = Rc::clone(&order);
+        let captured = Rc::clone(&captured);
+        composition
+            .render(root_key, || {
+                captured.replace(Vec::new());
+                let current_order = order.borrow().clone();
+                with_current_composer(|composer| {
+                    for item in current_order {
+                        composer.with_group(ITEM_GROUP_KEY, |composer| {
+                            let slot = composer.remember(|| item * 10);
+                            captured.borrow_mut().push((item, slot));
+                        });
+                    }
+                });
+            })
+            .expect("render unkeyed list");
+    };
+
+    render();
+    {
+        let slots = captured.borrow();
+        for (item, value) in [(1, 101), (2, 202), (3, 303)] {
+            let slot = slots
+                .iter()
+                .find(|(captured_item, _)| *captured_item == item)
+                .map(|(_, slot)| slot.clone())
+                .expect("captured unkeyed slot");
+            slot.replace(value);
+        }
+    }
+
+    order.replace(vec![3, 1, 2]);
+    render();
+
+    let slots = captured.borrow();
+    for (item, expected) in [(3, 101), (1, 202), (2, 303)] {
+        let slot = slots
+            .iter()
+            .find(|(captured_item, _)| *captured_item == item)
+            .map(|(_, slot)| slot.clone())
+            .expect("captured reordered unkeyed slot");
+        assert_eq!(
+            slot.with(|value| *value),
+            expected,
+            "without explicit keys, remembered state must follow position for item {item}",
+        );
+    }
 }
 
 #[test]

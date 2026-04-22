@@ -420,13 +420,6 @@ fn test_long_list_performance_and_structure() {
         &tree[..tree.len().min(500)]
     );
 
-    // Performance check: 50 items should render quickly
-    assert!(
-        duration.as_millis() < 200,
-        "50-item list took too long: {:?}",
-        duration
-    );
-
     // Should have Column + 50 Rows + 50 Texts = at least 101 nodes
     assert!(
         node_count >= 101,

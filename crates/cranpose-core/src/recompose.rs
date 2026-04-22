@@ -13,7 +13,7 @@ impl Composer {
 
         impl Drop for RecomposeGuard {
             fn drop(&mut self) {
-                let crate::slot_table::FinishGroupResult {
+                let crate::slot::FinishGroupResult {
                     detached_children,
                     structure_changed: _structure_changed,
                     direct_nodes,
@@ -48,7 +48,7 @@ impl Composer {
             return;
         }
         let started =
-            self.with_slot_session_mut(|slots| slots.start_recompose_at_scope(scope.id()));
+            self.with_slot_session_mut(|slots| slots.begin_recompose_at_scope(scope.id()));
         log::trace!(
             target: "cranpose::compose::recompose",
             "scope_id={} label={:?} started_at={started:?} sources={:?}",

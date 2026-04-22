@@ -16,7 +16,7 @@ use tab_switch_regression_support::{
 struct RuntimeLeakDebugStats {
     slot_table_heap_bytes: usize,
     pass_stats: cranpose_core::CompositionPassDebugStats,
-    slot_stats: cranpose_core::slot_table::SlotTableDebugStats,
+    slot_stats: cranpose_core::SlotTableDebugStats,
     observer_stats: cranpose_core::snapshot_state_observer::SnapshotStateObserverDebugStats,
     runtime_stats: cranpose_core::runtime::RuntimeDebugStats,
     state_arena_stats: cranpose_core::runtime::StateArenaDebugStats,

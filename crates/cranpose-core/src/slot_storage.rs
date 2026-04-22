@@ -1,11 +1,11 @@
-//! Slot storage helper types used by [`crate::SlotTable`].
+//! Semantic slot storage types used by [`crate::SlotTable`].
 //!
-//! The slot table is the single storage implementation in this crate. These
-//! helpers keep the call sites readable without reintroducing an abstraction
-//! layer around that single concrete type.
+//! The runtime still has one concrete slot table implementation, but the
+//! composer talks in terms of group/value/node operations rather than physical
+//! table layout details.
 
-use crate::AnchorId;
-use crate::{Key, ScopeId};
+use crate::slot::{DetachedSubtree, FinishGroupResult, SlotInvariantError};
+use crate::{AnchorId, Key, NodeId, Owned, ScopeId, SlotDebugSnapshot};
 
 /// Stable structural identity for a group among siblings.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -75,32 +75,26 @@ impl GroupId {
 /// Opaque handle to a value slot in the slot storage.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ValueSlotId {
-    pub(crate) group: GroupId,
-    pub(crate) offset: u32,
+    pub(crate) anchor: usize,
     pub(crate) generation: u32,
 }
 
 impl ValueSlotId {
-    pub(crate) fn new(group: GroupId, offset: usize, generation: u32) -> Self {
-        Self {
-            group,
-            offset: offset as u32,
-            generation,
-        }
+    pub(crate) fn new(anchor: usize, generation: u32) -> Self {
+        Self { anchor, generation }
     }
 
-    pub(crate) fn group(self) -> GroupId {
-        self.group
-    }
-
-    pub(crate) fn offset(self) -> usize {
-        self.offset as usize
+    pub(crate) fn anchor(self) -> usize {
+        self.anchor
     }
 
     pub(crate) fn generation(self) -> u32 {
         self.generation
     }
 }
+
+/// Opaque anchor handle for a group in active slot storage.
+pub type GroupAnchor = AnchorId;
 
 /// Semantic result of starting a group at the current writer cursor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -111,10 +105,55 @@ pub enum GroupStartKind {
     Restored,
 }
 
-/// Result of starting a scoped group.
-pub struct StartScopedGroup<G> {
+/// Semantic input required to begin a group at the current writer cursor.
+pub struct BeginGroupInput<R> {
+    pub key: GroupKey,
+    pub restored: Option<R>,
+}
+
+impl<R> BeginGroupInput<R> {
+    pub fn new(key: GroupKey, restored: Option<R>) -> Self {
+        Self { key, restored }
+    }
+}
+
+/// Result of starting a group.
+pub struct GroupStart<G> {
     pub group: G,
-    pub anchor: AnchorId,
+    pub anchor: GroupAnchor,
     pub scope_id: Option<ScopeId>,
     pub kind: GroupStartKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NodeRecordResult {
+    pub reused: bool,
+    pub id: NodeId,
+}
+
+#[allow(dead_code)]
+pub(crate) trait SlotStorage {
+    type Group: Copy + Eq;
+    type ValueSlot: Copy + Eq;
+
+    fn begin_group(&mut self, input: BeginGroupInput<DetachedSubtree>) -> GroupStart<Self::Group>;
+    fn finish_group_body(&mut self) -> FinishGroupResult;
+    fn end_group(&mut self);
+    fn skip_group(&mut self);
+
+    fn set_group_scope(&mut self, group: Self::Group, scope: ScopeId);
+    fn begin_recompose_at_scope(&mut self, scope: ScopeId) -> Option<Self::Group>;
+    fn end_recompose(&mut self);
+
+    fn value_slot<T: 'static>(&mut self, init: impl FnOnce() -> T) -> Self::ValueSlot;
+    fn read_value<T: 'static>(&self, slot: Self::ValueSlot) -> &T;
+    fn read_value_mut<T: 'static>(&mut self, slot: Self::ValueSlot) -> &mut T;
+    fn write_value<T: 'static>(&mut self, slot: Self::ValueSlot, value: T);
+    fn remember<T: 'static>(&mut self, init: impl FnOnce() -> T) -> Owned<T>;
+
+    fn record_node(&mut self, id: NodeId, generation: u32) -> NodeRecordResult;
+    fn nodes_in_current_group(&self) -> Vec<NodeId>;
+
+    fn validate(&self) -> Result<(), SlotInvariantError>;
+    fn debug_snapshot(&self) -> SlotDebugSnapshot;
 }
